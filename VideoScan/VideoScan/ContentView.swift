@@ -8,32 +8,19 @@ struct ContentView: View {
     @EnvironmentObject var model: VideoScanModel
 
     var body: some View {
-        VStack(spacing: 0) {
-            TabView {
-                CatalogView()
-                    .tabItem { Label("Video Catalog", systemImage: "film.stack") }
-                PersonFinderView()
-                    .tabItem { Label("Person Finder", systemImage: "person.crop.rectangle.stack") }
-            }
-
-            // Performance settings bar — always visible at bottom of window
-            HStack {
-                Spacer()
-                PerformancePopover(
-                    settings: Binding(
-                        get: { model.perfSettings },
-                        set: { model.perfSettings = $0 }
-                    ),
-                    totalRAMGB: Int(ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024))
-                )
-                let mem = MemoryPressureMonitor.shared.availableMemoryString()
-                Text(mem)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundColor(.secondary)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 4)
-            .background(Color(NSColor.windowBackgroundColor))
+        TabView {
+            CatalogView()
+                .tabItem { Label("Video Catalog", systemImage: "film.stack") }
+            PersonFinderView()
+                .tabItem { Label("Person Finder", systemImage: "person.crop.rectangle.stack") }
+            SettingsTabView(
+                settings: Binding(
+                    get: { model.perfSettings },
+                    set: { model.perfSettings = $0 }
+                ),
+                totalRAMGB: Int(ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024))
+            )
+            .tabItem { Label("Settings", systemImage: "gearshape") }
         }
         .frame(minWidth: 900, minHeight: 600)
     }
@@ -435,14 +422,12 @@ private struct CatalogToolbar<Dashboard: View>: View {
 
 }
 
-// MARK: - Performance Settings Popover
+// MARK: - Settings Tab
 
-struct PerformancePopover: View {
+struct SettingsTabView: View {
     @Binding var settings: ScanPerformanceSettings
     let totalRAMGB: Int
-    @State private var showPopover = false
 
-    // Color coding: green → yellow → red based on how much RAM the setting consumes
     private func ramDiskColor(_ gb: Int) -> Color {
         let pct = Double(gb) / Double(totalRAMGB)
         if pct > 0.5 { return .red }
@@ -457,130 +442,144 @@ struct PerformancePopover: View {
     }
 
     var body: some View {
-        Button {
-            showPopover.toggle()
-        } label: {
-            Image(systemName: "gearshape")
-                .font(.body)
-        }
-        .buttonStyle(.bordered)
-        .popover(isPresented: $showPopover, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+
+                // Header
+                HStack(spacing: 12) {
                     Image(systemName: "gauge.with.dots.needle.67percent")
-                        .font(.title3)
-                    Text("Performance")
-                        .font(.title3.weight(.semibold))
+                        .font(.largeTitle)
+                        .foregroundColor(.accentColor)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Performance Settings")
+                            .font(.title2.weight(.semibold))
+                        Text("\(totalRAMGB) GB physical RAM")
+                            .font(.callout)
+                            .foregroundColor(.secondary)
+                    }
                     Spacer()
-                    Text("\(totalRAMGB) GB RAM")
-                        .font(.callout)
-                        .foregroundColor(.secondary)
+                    let mem = MemoryPressureMonitor.shared.availableMemoryString()
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text("Available Now")
+                            .font(.caption).foregroundColor(.secondary)
+                        Text(mem)
+                            .font(.system(.title3, design: .monospaced).weight(.medium))
+                            .foregroundColor(.green)
+                    }
                 }
 
                 Divider()
 
-                // Probes per volume
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("Probes / volume")
-                        Spacer()
-                        Text("\(settings.probesPerVolume)")
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundColor(.secondary)
-                    }
-                    Slider(value: Binding(
-                        get: { Double(settings.probesPerVolume) },
-                        set: { settings.probesPerVolume = Int($0) }
-                    ), in: 1...32, step: 1)
-                    Text("Concurrent ffprobe processes per volume")
-                        .font(.caption).foregroundColor(.secondary)
+                // Scanning section
+                VStack(alignment: .leading, spacing: 16) {
+                    Label("Scanning", systemImage: "magnifyingglass")
+                        .font(.headline)
+
+                    settingRow(
+                        title: "Probes per volume",
+                        value: "\(settings.probesPerVolume)",
+                        description: "Concurrent ffprobe processes per volume",
+                        slider: Slider(value: Binding(
+                            get: { Double(settings.probesPerVolume) },
+                            set: { settings.probesPerVolume = Int($0) }
+                        ), in: 1...32, step: 1)
+                    )
+
+                    settingRow(
+                        title: "Memory floor",
+                        value: "\(settings.memoryFloorGB) GB",
+                        valueColor: floorColor(settings.memoryFloorGB),
+                        description: "Auto-pause scanning when free RAM drops below this",
+                        slider: Slider(value: Binding(
+                            get: { Double(settings.memoryFloorGB) },
+                            set: { settings.memoryFloorGB = Int($0) }
+                        ), in: 1...Double(max(1, totalRAMGB / 4)), step: 1)
+                    )
                 }
 
-                // RAM disk size
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("RAM disk")
-                        Spacer()
-                        Text("\(settings.ramDiskGB) GB")
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundColor(ramDiskColor(settings.ramDiskGB))
-                    }
-                    Slider(value: Binding(
-                        get: { Double(settings.ramDiskGB) },
-                        set: { settings.ramDiskGB = Int($0) }
-                    ), in: 1...Double(max(1, totalRAMGB / 2)), step: 1)
-                    Text("For network volume prefetch (allocated at mount)")
-                        .font(.caption).foregroundColor(.secondary)
+                Divider()
+
+                // Network section
+                VStack(alignment: .leading, spacing: 16) {
+                    Label("Network Volumes", systemImage: "network")
+                        .font(.headline)
+
+                    settingRow(
+                        title: "RAM disk size",
+                        value: "\(settings.ramDiskGB) GB",
+                        valueColor: ramDiskColor(settings.ramDiskGB),
+                        description: "Temporary RAM disk for network file prefetch (mounted at /Volumes/VideoScan_Temp)",
+                        slider: Slider(value: Binding(
+                            get: { Double(settings.ramDiskGB) },
+                            set: { settings.ramDiskGB = Int($0) }
+                        ), in: 1...Double(max(1, totalRAMGB / 2)), step: 1)
+                    )
+
+                    settingRow(
+                        title: "Prefetch size",
+                        value: "\(settings.prefetchMB) MB",
+                        description: "Header bytes copied per network file before probing",
+                        slider: Slider(value: Binding(
+                            get: { Double(settings.prefetchMB) },
+                            set: { settings.prefetchMB = Int($0) }
+                        ), in: 10...200, step: 10)
+                    )
                 }
 
-                // Prefetch size
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("Prefetch size")
-                        Spacer()
-                        Text("\(settings.prefetchMB) MB")
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundColor(.secondary)
-                    }
-                    Slider(value: Binding(
-                        get: { Double(settings.prefetchMB) },
-                        set: { settings.prefetchMB = Int($0) }
-                    ), in: 10...200, step: 10)
-                    Text("Header bytes copied per network file")
-                        .font(.caption).foregroundColor(.secondary)
-                }
+                Divider()
 
-                // Combine concurrency
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("Combine tasks")
-                        Spacer()
-                        Text("\(settings.combineConcurrency)")
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundColor(.secondary)
-                    }
-                    Slider(value: Binding(
-                        get: { Double(settings.combineConcurrency) },
-                        set: { settings.combineConcurrency = Int($0) }
-                    ), in: 1...16, step: 1)
-                    Text("Concurrent ffmpeg mux processes")
-                        .font(.caption).foregroundColor(.secondary)
-                }
+                // Combine section
+                VStack(alignment: .leading, spacing: 16) {
+                    Label("Combine / Mux", systemImage: "arrow.triangle.merge")
+                        .font(.headline)
 
-                // Memory floor
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Text("Memory floor")
-                        Spacer()
-                        Text("\(settings.memoryFloorGB) GB")
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundColor(floorColor(settings.memoryFloorGB))
-                    }
-                    Slider(value: Binding(
-                        get: { Double(settings.memoryFloorGB) },
-                        set: { settings.memoryFloorGB = Int($0) }
-                    ), in: 1...Double(max(1, totalRAMGB / 4)), step: 1)
-                    Text("Auto-pause when free RAM drops below this")
-                        .font(.caption).foregroundColor(.secondary)
+                    settingRow(
+                        title: "Combine tasks",
+                        value: "\(settings.combineConcurrency)",
+                        description: "Concurrent ffmpeg mux processes",
+                        slider: Slider(value: Binding(
+                            get: { Double(settings.combineConcurrency) },
+                            set: { settings.combineConcurrency = Int($0) }
+                        ), in: 1...16, step: 1)
+                    )
                 }
 
                 Divider()
 
                 HStack {
-                    Button("Reset Defaults") {
+                    Button("Reset All to Defaults") {
                         settings = ScanPerformanceSettings()
                         settings.save()
                     }
-                    .controlSize(.small)
-                    Spacer()
-                    let mem = MemoryPressureMonitor.shared.availableMemoryString()
-                    Text("Available: \(mem)")
-                        .font(.callout)
-                        .foregroundColor(.secondary)
+                    .controlSize(.large)
                 }
             }
-            .padding(16)
-            .frame(width: 340)
+            .padding(30)
+            .frame(maxWidth: 600, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(NSColor.windowBackgroundColor))
+    }
+
+    private func settingRow(
+        title: String,
+        value: String,
+        valueColor: Color = .secondary,
+        description: String,
+        slider: some View
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(title)
+                    .font(.body)
+                Spacer()
+                Text(value)
+                    .font(.system(.body, design: .monospaced).weight(.medium))
+                    .foregroundColor(valueColor)
+            }
+            slider
+            Text(description)
+                .font(.caption).foregroundColor(.secondary)
         }
     }
 }
