@@ -103,6 +103,77 @@ class VideoRecord: Identifiable {
     }
 }
 
+// MARK: - Catalog Scan Target
+
+enum CatalogTargetStatus: String {
+    case idle        = "Idle"
+    case discovering = "Discovering…"
+    case scanning    = "Scanning"
+    case paused      = "Paused"
+    case complete    = "Complete"
+    case stopped     = "Stopped"
+    case error       = "Error"
+
+    var isIdle: Bool { self == .idle }
+    var isActive: Bool { self == .scanning || self == .paused || self == .discovering }
+    var isPaused: Bool { self == .paused }
+
+    var color: Color {
+        switch self {
+        case .idle:        return .secondary.opacity(0.4)
+        case .discovering: return .yellow
+        case .scanning:    return .green
+        case .paused:      return .yellow
+        case .complete:    return .blue
+        case .stopped:     return .orange
+        case .error:       return .red
+        }
+    }
+}
+
+@Observable
+@MainActor
+final class CatalogScanTarget: Identifiable {
+    let id = UUID()
+    var searchPath: String
+    var status: CatalogTargetStatus = .idle
+    var filesFound: Int = 0
+    var filesScanned: Int = 0
+    var elapsedSecs: Double = 0.0
+
+    var scanTask: Task<Void, Never>?
+    let pauseGate = PauseGate()
+    private var taskStarted: Date?
+    private var timerTask: Task<Void, Never>?
+
+    init(searchPath: String) { self.searchPath = searchPath }
+
+    func startElapsedTimer() {
+        taskStarted = Date()
+        timerTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(500))
+                await MainActor.run { [weak self] in
+                    guard let self, let s = self.taskStarted else { return }
+                    self.elapsedSecs = Date().timeIntervalSince(s)
+                }
+            }
+        }
+    }
+
+    func stopElapsedTimer() {
+        timerTask?.cancel()
+        if let s = taskStarted { elapsedSecs = Date().timeIntervalSince(s) }
+    }
+
+    func reset() {
+        scanTask?.cancel(); timerTask?.cancel()
+        Task { await pauseGate.resume() }
+        status = .idle; filesFound = 0; filesScanned = 0; elapsedSecs = 0
+        scanTask = nil; timerTask = nil; taskStarted = nil
+    }
+}
+
 // MARK: - Dashboard Types
 
 enum ScanPhase: String {

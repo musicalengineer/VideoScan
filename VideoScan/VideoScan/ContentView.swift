@@ -43,7 +43,6 @@ struct ContentView: View {
 
 struct CatalogView: View {
     @EnvironmentObject var model: VideoScanModel
-    @State private var scanPaths: [String] = []
     @State private var selectedIDs: Set<UUID> = []
     @State private var showCombineSheet = false
     @State private var showDashboard = false
@@ -53,50 +52,23 @@ struct CatalogView: View {
     var body: some View {
         VStack(spacing: 0) {
 
-            // MARK: Scan Paths
-            if !scanPaths.isEmpty && !model.isScanning {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(Array(scanPaths.enumerated()), id: \.offset) { i, path in
-                        HStack(spacing: 4) {
-                            Image(systemName: "folder.fill")
-                                .foregroundColor(.blue)
-                                .font(.caption)
-                            Text(path)
-                                .font(.system(.caption, design: .monospaced))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Spacer()
-                            Button(action: { scanPaths.remove(at: i) }) {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundColor(.secondary)
-                                    .font(.caption)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.top, 6)
-                .padding(.bottom, 2)
-            }
+            // MARK: Scan Targets Pane
+            scanTargetsPane
 
-            // MARK: Toolbar
+            Divider()
+
+            // MARK: Toolbar (post-scan actions)
             CatalogToolbar(
                 isScanning: model.isScanning,
                 isCombining: model.isCombining,
-                isPaused: model.isPaused,
                 hasRecords: !model.records.isEmpty,
                 hasCorrelatedPairs: !model.correlatedPairs.isEmpty,
                 outputCSVPath: model.outputCSVPath,
-                scanPaths: $scanPaths,
                 selectedIDs: selectedIDs,
                 showCombineSheet: $showCombineSheet,
                 showDashboard: $showDashboard,
                 searchText: $searchText,
                 cacheCount: model.cacheCount,
-                onScan: { model.startScan(roots: scanPaths) },
-                onStop: { model.stopScan() },
-                onPause: { model.togglePause() },
                 onStopCombine: { model.stopCombine() },
                 onCorrelateAll: {
                     model.log("\nCorrelating all audio-only and video-only files...")
@@ -106,7 +78,6 @@ struct CatalogView: View {
                     model.log("\nCorrelating \(selectedIDs.count) selected files...")
                     model.correlate(selectedIDs: selectedIDs)
                 },
-                onClearPaths: { scanPaths = [] },
                 onClearResults: { model.clearResults() },
                 onClearCache: { _ = model.clearCache() },
                 dashboardContent: {
@@ -158,30 +129,221 @@ struct CatalogView: View {
             CombineSheet(selectedIDs: selectedIDs)
         }
     }
+
+    // MARK: - Scan Targets Pane (matches PersonFinder's jobsSection pattern)
+
+    private var scanTargetsPane: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "externaldrive.connected.to.line.below")
+                    .font(.title3).foregroundColor(.secondary)
+                Text("Scan Targets")
+                    .font(.title3.weight(.semibold))
+                Spacer()
+
+                Button(action: { model.addScanTarget() }) {
+                    Label("Add Volumes…", systemImage: "plus")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+
+                Button(action: { model.startAllTargets() }) {
+                    Label("Start All", systemImage: "play.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(model.scanTargets.isEmpty || model.scanTargets.allSatisfy { $0.status.isActive })
+
+                Button(action: {
+                    if model.hasPausedTargets { model.resumeAllTargets() }
+                    else { model.pauseAllTargets() }
+                }) {
+                    Label(model.hasPausedTargets ? "Resume All" : "Pause All",
+                          systemImage: model.hasPausedTargets ? "play.fill" : "pause.fill")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .disabled(!model.hasActiveTargets && !model.hasPausedTargets)
+
+                Button(action: { model.stopAllTargets() }) {
+                    Label("Stop All", systemImage: "stop.fill")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .disabled(!model.hasActiveTargets)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+
+            if model.scanTargets.isEmpty {
+                VStack(spacing: 6) {
+                    Image(systemName: "externaldrive.badge.plus")
+                        .font(.largeTitle).foregroundColor(.secondary)
+                    Text("No scan targets yet")
+                        .font(.headline).foregroundColor(.secondary)
+                    Text("Click \"Add Volumes…\" to add a drive or folder to scan.")
+                        .font(.callout).foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(24)
+            } else {
+                ScrollView {
+                    VStack(spacing: 6) {
+                        ForEach(model.scanTargets) { target in
+                            CatalogTargetRow(
+                                target: target,
+                                onStart: { model.startTarget(target) },
+                                onStop: { model.stopTarget(target) },
+                                onPause: { model.togglePauseTarget(target) },
+                                onRemove: { model.removeScanTarget(target) }
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                }
+                .frame(minHeight: 60, maxHeight: 220)
+            }
+        }
+        .background(Color(NSColor.controlBackgroundColor))
+    }
 }
 
-// MARK: - Toolbar (reads model state flags via value params — no @ObservedObject)
+// MARK: - Catalog Target Row (per-path controls, matches PersonFinder's ScanJobRow)
+
+private struct CatalogTargetRow: View {
+    @Bindable var target: CatalogScanTarget
+    let onStart: () -> Void
+    let onStop: () -> Void
+    let onPause: () -> Void
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            // Status dot
+            Circle()
+                .fill(target.status.color)
+                .frame(width: 12, height: 12)
+                .shadow(color: target.status.color.opacity(0.5), radius: 3)
+
+            // Path (editable when idle)
+            if target.status.isIdle {
+                HStack(spacing: 8) {
+                    TextField("Volume or folder path…", text: $target.searchPath)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(.body, design: .monospaced))
+                    Button("Browse…") { browsePath() }
+                        .controlSize(.regular)
+                }
+            } else {
+                Text(target.searchPath)
+                    .font(.system(.body, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer()
+
+            // Progress stats
+            if target.status == .discovering {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Discovering…")
+                        .font(.callout).foregroundColor(.secondary)
+                }
+            } else if target.filesFound > 0 {
+                Text("\(target.filesScanned) / \(target.filesFound) files")
+                    .font(.system(.callout, design: .monospaced))
+                    .foregroundColor(.secondary)
+            }
+
+            if target.elapsedSecs > 0 {
+                Text(formatElapsed(target.elapsedSecs))
+                    .font(.system(.callout, design: .monospaced))
+                    .foregroundColor(.secondary)
+            }
+
+            // Action buttons
+            if target.status.isActive {
+                Button(action: onPause) {
+                    Label(target.status.isPaused ? "Resume" : "Pause",
+                          systemImage: target.status.isPaused ? "play.fill" : "pause.fill")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+
+                Button(action: onStop) {
+                    Label("Stop", systemImage: "stop.fill")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+            } else {
+                Button(action: onStart) {
+                    Label("Start", systemImage: "play.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .disabled(target.searchPath.isEmpty)
+
+                if target.status == .complete || target.status == .stopped || target.status == .error {
+                    Button(action: { target.reset() }) {
+                        Label("Reset", systemImage: "arrow.counterclockwise")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.regular)
+                }
+
+                Button(action: onRemove) {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                .foregroundColor(.red)
+            }
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color(NSColor.controlBackgroundColor))
+        )
+    }
+
+    private func browsePath() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Select a volume or folder to scan"
+        panel.prompt = "Select"
+        if panel.runModal() == .OK, let url = panel.url {
+            target.searchPath = url.path
+        }
+    }
+
+    private func formatElapsed(_ secs: Double) -> String {
+        let m = Int(secs) / 60
+        let s = Int(secs) % 60
+        return String(format: "%d:%02d", m, s)
+    }
+}
+
+// MARK: - Toolbar (post-scan actions: correlate, combine, search, export)
 
 private struct CatalogToolbar<Dashboard: View>: View {
     let isScanning: Bool
     let isCombining: Bool
-    let isPaused: Bool
     let hasRecords: Bool
     let hasCorrelatedPairs: Bool
     let outputCSVPath: String
-    @Binding var scanPaths: [String]
     let selectedIDs: Set<UUID>
     @Binding var showCombineSheet: Bool
     @Binding var showDashboard: Bool
     @Binding var searchText: String
     let cacheCount: Int
-    let onScan: () -> Void
-    let onStop: () -> Void
-    let onPause: () -> Void
     let onStopCombine: () -> Void
     let onCorrelateAll: () -> Void
     let onCorrelateSelected: () -> Void
-    let onClearPaths: () -> Void
     let onClearResults: () -> Void
     let onClearCache: () -> Void
     @ViewBuilder let dashboardContent: () -> Dashboard
@@ -193,12 +355,7 @@ private struct CatalogToolbar<Dashboard: View>: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Button("Add Volumes…") { browseForFolders() }
-                .disabled(isScanning)
-
             Menu {
-                Button("Clear Paths") { onClearPaths() }
-                    .disabled(scanPaths.isEmpty)
                 Button("Clear Results") { onClearResults() }
                     .disabled(!hasRecords)
                 Divider()
@@ -210,27 +367,6 @@ private struct CatalogToolbar<Dashboard: View>: View {
             .menuStyle(.borderlessButton)
             .frame(width: 80)
             .disabled(isScanning)
-
-            Divider().frame(height: 22)
-
-            Button(action: onScan) {
-                Label("Scan", systemImage: "play.fill")
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(isScanning || scanPaths.isEmpty)
-
-            Button(action: onPause) {
-                Label(isPaused ? "Resume" : "Pause",
-                      systemImage: isPaused ? "play.fill" : "pause.fill")
-            }
-            .buttonStyle(.bordered)
-            .disabled(!isScanning)
-
-            Button(action: onStop) {
-                Label("Stop", systemImage: "stop.fill")
-            }
-            .buttonStyle(.bordered)
-            .disabled(!isScanning)
 
             Divider().frame(height: 22)
 
@@ -297,22 +433,6 @@ private struct CatalogToolbar<Dashboard: View>: View {
         .background(Color(NSColor.windowBackgroundColor))
     }
 
-    private func browseForFolders() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = true
-        panel.message = "Select volumes or folders to scan (⌘-click for multiple)"
-        panel.prompt = "Add"
-        if panel.runModal() == .OK {
-            for url in panel.urls {
-                let path = url.path
-                if !scanPaths.contains(path) {
-                    scanPaths.append(path)
-                }
-            }
-        }
-    }
 }
 
 // MARK: - Performance Settings Popover
