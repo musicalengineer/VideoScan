@@ -48,6 +48,7 @@ final class VideoScanModel: ObservableObject {
     @Published var records: [VideoRecord] = []
     @Published var isScanning: Bool = false
     @Published var isCombining: Bool = false
+    @Published var scanTargets: [CatalogScanTarget] = []
     @Published var outputCSVPath: String = ""
     @Published var previewImage: NSImage? = nil
     @Published var previewFilename: String = ""
@@ -153,6 +154,234 @@ final class VideoScanModel: ObservableObject {
 
     func togglePause() {
         if isPaused { resumeScan() } else { pauseScan() }
+    }
+
+    // MARK: - Scan Target Management
+
+    func addScanTarget() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = true
+        panel.message = "Select volumes or folders to scan (⌘-click for multiple)"
+        panel.prompt = "Add"
+        if panel.runModal() == .OK {
+            for url in panel.urls {
+                let path = url.path
+                if !scanTargets.contains(where: { $0.searchPath == path }) {
+                    scanTargets.append(CatalogScanTarget(searchPath: path))
+                }
+            }
+        }
+    }
+
+    func removeScanTarget(_ target: CatalogScanTarget) {
+        target.scanTask?.cancel()
+        target.stopElapsedTimer()
+        scanTargets.removeAll { $0.id == target.id }
+    }
+
+    func startTarget(_ target: CatalogScanTarget) {
+        guard !target.searchPath.isEmpty else { return }
+        target.status = .scanning
+        target.filesFound = 0
+        target.filesScanned = 0
+        target.startElapsedTimer()
+
+        // Track global scanning state
+        isScanning = true
+        dashboard.resetForScan()
+
+        target.scanTask = Task {
+            await runScanForTarget(target)
+        }
+    }
+
+    func stopTarget(_ target: CatalogScanTarget) {
+        target.scanTask?.cancel()
+        target.scanTask = nil
+        Task { await target.pauseGate.resume() }
+        target.stopElapsedTimer()
+        target.status = .stopped
+        log("--- Scan stopped for \(URL(fileURLWithPath: target.searchPath).lastPathComponent) ---")
+        updateGlobalScanState()
+    }
+
+    func togglePauseTarget(_ target: CatalogScanTarget) {
+        if target.status == .paused {
+            Task { await target.pauseGate.resume() }
+            target.status = .scanning
+            log("--- Resumed \(URL(fileURLWithPath: target.searchPath).lastPathComponent) ---")
+        } else if target.status == .scanning {
+            Task { await target.pauseGate.pause() }
+            target.status = .paused
+            log("--- Paused \(URL(fileURLWithPath: target.searchPath).lastPathComponent) ---")
+        }
+    }
+
+    func startAllTargets() {
+        for target in scanTargets where target.status.isIdle || target.status == .stopped {
+            startTarget(target)
+        }
+    }
+
+    func stopAllTargets() {
+        for target in scanTargets where target.status.isActive {
+            stopTarget(target)
+        }
+    }
+
+    func pauseAllTargets() {
+        for target in scanTargets where target.status == .scanning {
+            togglePauseTarget(target)
+        }
+    }
+
+    func resumeAllTargets() {
+        for target in scanTargets where target.status == .paused {
+            togglePauseTarget(target)
+        }
+    }
+
+    var hasActiveTargets: Bool { scanTargets.contains { $0.status.isActive } }
+    var hasPausedTargets: Bool { scanTargets.contains { $0.status == .paused } }
+
+    private func updateGlobalScanState() {
+        isScanning = scanTargets.contains { $0.status.isActive }
+    }
+
+    /// Scan a single target's path, appending results to the shared records array
+    private func runScanForTarget(_ target: CatalogScanTarget) async {
+        let root = target.searchPath
+        let volName = URL(fileURLWithPath: root).lastPathComponent
+
+        guard FileManager.default.fileExists(atPath: ffprobePath) else {
+            log("ERROR: ffprobe not found at \(ffprobePath)\nInstall with: brew install ffmpeg")
+            target.status = .error
+            target.stopElapsedTimer()
+            updateGlobalScanState()
+            return
+        }
+
+        let rootIsNetwork = isNetworkPath(root)
+        target.status = .discovering
+        if rootIsNetwork {
+            log("Discovering files on \(volName) (network volume — this may take a moment)…")
+        } else {
+            log("Discovering files on \(volName)…")
+        }
+
+        // Phase 1: Discover files
+        let files = await walkDirectory(root: root)
+        if Task.isCancelled { target.status = .stopped; target.stopElapsedTimer(); updateGlobalScanState(); return }
+
+        target.filesFound = files.count
+        target.status = .scanning
+        log("  Found \(files.count) video files on \(volName)")
+
+        if files.isEmpty {
+            log("  No video files found on \(volName).")
+            target.status = .complete
+            target.stopElapsedTimer()
+            updateGlobalScanState()
+            return
+        }
+
+        // Phase 2: Probe files
+        let probesLimit = perfSettings.probesPerVolume
+
+        var ramMountPoint: String? = nil
+        if rootIsNetwork {
+            let ramDiskMB = perfSettings.ramDiskGB * 1024
+            let mounted = await ramDisk.mount(sizeMB: ramDiskMB)
+            ramMountPoint = await ramDisk.mountPoint
+            if mounted, let mp = ramMountPoint {
+                log("  RAM disk mounted at \(mp) (\(perfSettings.ramDiskGB) GB) for network prefetch")
+            } else {
+                log("  WARN: RAM disk unavailable, probing network files directly")
+            }
+        }
+
+        var targetRecords: [VideoRecord] = []
+        let sem = AsyncSemaphore(limit: probesLimit)
+        let totalFiles = files.count
+        // Track milestones to avoid per-file UI updates (beachball prevention)
+        let milestones = Set([10, 25, 50, 75, 90, 100])
+        var loggedMilestones: Set<Int> = []
+        var completedCount = 0
+
+        await withTaskGroup(of: VideoRecord.self) { probeGroup in
+            for (_, url) in files.enumerated() {
+                if Task.isCancelled { break }
+                probeGroup.addTask { [self] in
+                    await target.pauseGate.waitIfPaused()
+                    await sem.wait()
+                    defer { Task { await sem.signal() } }
+                    if Task.isCancelled {
+                        return await MainActor.run {
+                            let skip = VideoRecord()
+                            skip.filename = url.lastPathComponent
+                            skip.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+                            return skip
+                        }
+                    }
+                    let rec = await self.probeFile(
+                        url: url,
+                        prefetchToRAM: rootIsNetwork,
+                        ramPath: ramMountPoint
+                    )
+                    return rec
+                }
+            }
+            for await rec in probeGroup {
+                targetRecords.append(rec)
+                completedCount += 1
+                // Batch UI updates: only at milestones or every 20 files
+                let pct = totalFiles > 0 ? (completedCount * 100 / totalFiles) : 100
+                let shouldUpdate = completedCount % 20 == 0 || completedCount == totalFiles
+                    || milestones.contains(pct) && !loggedMilestones.contains(pct)
+                if shouldUpdate {
+                    if milestones.contains(pct) { loggedMilestones.insert(pct) }
+                    target.filesScanned = completedCount
+                    log("  [\(volName)] \(completedCount)/\(totalFiles) (\(pct)%)")
+                }
+            }
+        }
+        // Final count sync
+        target.filesScanned = completedCount
+
+        // Unmount RAM disk if we mounted one
+        if rootIsNetwork { await ramDisk.unmount() }
+
+        if Task.isCancelled {
+            target.status = .stopped
+            target.stopElapsedTimer()
+            updateGlobalScanState()
+            return
+        }
+
+        // Append results to shared records
+        records.append(contentsOf: targetRecords)
+
+        let va = targetRecords.filter { $0.streamTypeRaw == StreamType.videoAndAudio.rawValue }.count
+        let vo = targetRecords.filter { $0.streamTypeRaw == StreamType.videoOnly.rawValue }.count
+        let ao = targetRecords.filter { $0.streamTypeRaw == StreamType.audioOnly.rawValue }.count
+
+        log("""
+
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          Scan Complete: \(volName)
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          Total:          \(targetRecords.count)
+          Video+Audio:    \(va)
+          Video only:     \(vo)
+          Audio only:     \(ao)
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        """)
+
+        target.status = .complete
+        target.stopElapsedTimer()
+        updateGlobalScanState()
     }
 
     /// How many bytes to prefetch from network files to RAM disk for ffprobe.
@@ -357,45 +586,49 @@ final class VideoScanModel: ObservableObject {
 
     /// Walk a single directory tree and return all video file URLs
     nonisolated func walkDirectory(root: String) async -> [URL] {
-        var videoFiles: [URL] = []
-        let fm = FileManager.default
-        var dirStack: [URL] = [URL(fileURLWithPath: root)]
+        // Run on a detached task to avoid blocking the cooperative thread pool.
+        // FileManager calls are synchronous and can stall on network volumes.
+        let skipDirs = self.skipDirs
+        let videoExtensions = self.videoExtensions
+        let result = await Task.detached(priority: .userInitiated) {
+            var videoFiles: [URL] = []
+            let fm = FileManager.default
+            var dirStack: [URL] = [URL(fileURLWithPath: root)]
 
-        while !dirStack.isEmpty {
-            if Task.isCancelled { break }
-            let currentDir = dirStack.removeLast()
-            let contents: [URL]
-            do {
-                contents = try fm.contentsOfDirectory(
-                    at: currentDir,
-                    includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isReadableKey],
-                    options: [.skipsHiddenFiles]
-                )
-            } catch {
-                await MainActor.run {
-                    self.log("  WARN: \(currentDir.lastPathComponent) — \(error.localizedDescription)")
-                }
-                continue
-            }
-
-            for url in contents {
+            while !dirStack.isEmpty {
                 if Task.isCancelled { break }
-                guard let rv = try? url.resourceValues(
-                    forKeys: [.isDirectoryKey, .isRegularFileKey, .isReadableKey]
-                ) else { continue }
+                let currentDir = dirStack.removeLast()
+                let contents: [URL]
+                do {
+                    contents = try fm.contentsOfDirectory(
+                        at: currentDir,
+                        includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isReadableKey],
+                        options: [.skipsHiddenFiles]
+                    )
+                } catch {
+                    continue
+                }
 
-                if rv.isDirectory == true {
-                    if !skipDirs.contains(url.lastPathComponent.lowercased()) {
-                        dirStack.append(url)
-                    }
-                } else if rv.isRegularFile == true && rv.isReadable == true {
-                    if videoExtensions.contains(url.pathExtension.lowercased()) {
-                        videoFiles.append(url)
+                for url in contents {
+                    if Task.isCancelled { break }
+                    guard let rv = try? url.resourceValues(
+                        forKeys: [.isDirectoryKey, .isRegularFileKey, .isReadableKey]
+                    ) else { continue }
+
+                    if rv.isDirectory == true {
+                        if !skipDirs.contains(url.lastPathComponent.lowercased()) {
+                            dirStack.append(url)
+                        }
+                    } else if rv.isRegularFile == true && rv.isReadable == true {
+                        if videoExtensions.contains(url.pathExtension.lowercased()) {
+                            videoFiles.append(url)
+                        }
                     }
                 }
             }
-        }
-        return videoFiles
+            return videoFiles
+        }.value
+        return result
     }
 
     /// Probe a single file and return a populated VideoRecord.
