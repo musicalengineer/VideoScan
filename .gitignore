@@ -1,0 +1,31 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Xcode / Swift
+build/
+.deriveddata/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# macOS
+.DS_Store
+*.swp
+
+# Generated outputs
+*.xlsx
+*.csv
+*.zip
+
+# Diagnostic / scratch
+d.txt
+DonnaFaceDetectionTest.png
+
+# Claude Code
+.claude/
+
+# Large test videos (track with Git LFS if needed)
+# tests/fixtures/videos/
