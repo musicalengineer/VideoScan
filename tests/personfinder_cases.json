@@ -1,0 +1,35 @@
+{
+  "defaults": {
+    "script": "./scripts/face_recognize.py",
+    "ref_path": "./tests/fixtures/photos",
+    "threshold": 0.52,
+    "frame_step": 15,
+    "min_conf": 0.55,
+    "pad": 2.0,
+    "min_duration": 1.0,
+    "timeout_sec": 120,
+    "max_rss_mb": 4096
+  },
+  "cases": [
+    {
+      "name": "donna_short_clip",
+      "video": "./tests/fixtures/videos/Donna_dicky-unit-test3.MOV",
+      "expect": {
+        "error": null,
+        "faces_detected_min": 1,
+        "hits_min": 1,
+        "segments_min": 1
+      }
+    },
+    {
+      "name": "donna_medium_clip",
+      "video": "./tests/fixtures/videos/Donna_unit-test2.mov",
+      "expect": {
+        "error": null,
+        "faces_detected_min": 1,
+        "hits_min": 1,
+        "segments_min": 1
+      }
+    }
+  ]
+}
