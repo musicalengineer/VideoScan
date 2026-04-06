@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import Combine
 
 // MARK: - Stream Type
 
@@ -131,15 +132,14 @@ enum CatalogTargetStatus: String {
     }
 }
 
-@Observable
 @MainActor
-final class CatalogScanTarget: Identifiable {
+final class CatalogScanTarget: ObservableObject, Identifiable {
     let id = UUID()
-    var searchPath: String
-    var status: CatalogTargetStatus = .idle
-    var filesFound: Int = 0
-    var filesScanned: Int = 0
-    var elapsedSecs: Double = 0.0
+    @Published var searchPath: String
+    @Published var status: CatalogTargetStatus = .idle
+    @Published var filesFound: Int = 0
+    @Published var filesScanned: Int = 0
+    @Published var elapsedSecs: Double = 0.0
 
     var scanTask: Task<Void, Never>?
     let pauseGate = PauseGate()

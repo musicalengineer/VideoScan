@@ -12,6 +12,13 @@
   },
   "cases": [
     {
+      "name": "engine_self_test",
+      "self_test": true,
+      "expect": {
+        "error": null
+      }
+    },
+    {
       "name": "donna_short_clip",
       "video": "./tests/fixtures/videos/Donna_dicky-unit-test3.MOV",
       "expect": {

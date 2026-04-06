@@ -77,7 +77,7 @@ final class VideoScanModel: ObservableObject {
     private var scanTask: Task<Void, Never>?
     private var combineTask: Task<Void, Never>?
     private var ramDisk = RAMDisk()
-    private let metadataCache = MetadataCache()
+    nonisolated private let metadataCache = MetadataCache()
 
     /// Cooperative pause gate for scan tasks
     let pauseGate = PauseGate()

@@ -8,6 +8,7 @@ import Vision
 import CoreImage
 import CoreGraphics
 import SwiftUI
+import Combine
 
 // MARK: - Settings
 
@@ -48,6 +49,30 @@ struct PersonFinderSettings {
     private static let defaults = UserDefaults.standard
     private static let prefix = "pf_"
 
+    private static func firstExistingPath(_ candidates: [String]) -> String {
+        candidates.first { FileManager.default.isExecutableFile(atPath: $0) } ?? ""
+    }
+
+    private static func firstExistingFile(_ candidates: [String]) -> String {
+        candidates.first { FileManager.default.fileExists(atPath: $0) } ?? ""
+    }
+
+    private static func detectedPythonPath() -> String {
+        let cwd = FileManager.default.currentDirectoryPath
+        return firstExistingPath([
+            (cwd as NSString).appendingPathComponent(".venv/bin/python"),
+            (cwd as NSString).appendingPathComponent("venv/bin/python"),
+            "/usr/bin/python3",
+        ])
+    }
+
+    private static func detectedRecognitionScript() -> String {
+        let cwd = FileManager.default.currentDirectoryPath
+        return firstExistingFile([
+            (cwd as NSString).appendingPathComponent("scripts/face_recognize.py"),
+        ])
+    }
+
     /// Restore settings from UserDefaults. Missing keys use struct defaults.
     static func restored() -> PersonFinderSettings {
         let d = defaults
@@ -73,6 +98,12 @@ struct PersonFinderSettings {
         if d.object(forKey: "\(p)decadeChapters") != nil    { s.decadeChapters = d.bool(forKey: "\(p)decadeChapters") }
         if d.object(forKey: "\(p)skipBundles") != nil       { s.skipBundles = d.bool(forKey: "\(p)skipBundles") }
         if d.object(forKey: "\(p)largestFaceOnly") != nil   { s.largestFaceOnly = d.bool(forKey: "\(p)largestFaceOnly") }
+        if s.pythonPath.isEmpty || !FileManager.default.isExecutableFile(atPath: s.pythonPath) {
+            s.pythonPath = detectedPythonPath()
+        }
+        if s.recognitionScript.isEmpty || !FileManager.default.fileExists(atPath: s.recognitionScript) {
+            s.recognitionScript = detectedRecognitionScript()
+        }
         return s
     }
 
@@ -166,32 +197,31 @@ struct ClipResult: Identifiable {
 
 // MARK: - Scan Job
 
-@Observable
 @MainActor
-final class ScanJob: Identifiable {
+final class ScanJob: ObservableObject, Identifiable {
     let id = UUID()
-    var searchPath: String
+    @Published var searchPath: String
 
-    var status: ScanJobStatus = .idle
-    var progress: Double = 0.0
-    var currentFile: String = ""
-    var videosTotal: Int = 0
-    var videosScanned: Int = 0
-    var videosWithHits: Int = 0
-    var clipsFound: Int = 0
-    var presenceSecs: Double = 0.0
-    var results: [ClipResult] = []
-    var consoleLines: [String] = []
-    var compiledVideoPath: String? = nil
-    var elapsedSecs: Double = 0.0
+    @Published var status: ScanJobStatus = .idle
+    @Published var progress: Double = 0.0
+    @Published var currentFile: String = ""
+    @Published var videosTotal: Int = 0
+    @Published var videosScanned: Int = 0
+    @Published var videosWithHits: Int = 0
+    @Published var clipsFound: Int = 0
+    @Published var presenceSecs: Double = 0.0
+    @Published var results: [ClipResult] = []
+    @Published var consoleLines: [String] = []
+    @Published var compiledVideoPath: String? = nil
+    @Published var elapsedSecs: Double = 0.0
 
     // Live frame preview
-    var liveFrame: CGImage? = nil
-    var liveMatchedRects: [CGRect] = []     // Vision normalized coords, bottom-left origin
-    var liveUnmatchedRects: [CGRect] = []
+    @Published var liveFrame: CGImage? = nil
+    @Published var liveMatchedRects: [CGRect] = []     // Vision normalized coords, bottom-left origin
+    @Published var liveUnmatchedRects: [CGRect] = []
 
     // Best feature-print distance seen across all videos (lower = closer match)
-    var bestDist: Float = .greatestFiniteMagnitude
+    @Published var bestDist: Float = .greatestFiniteMagnitude
 
     fileprivate var scanTask: Task<Void, Never>?
     fileprivate var timerTask: Task<Void, Never>?
@@ -241,17 +271,16 @@ final class ScanJob: Identifiable {
 
 // MARK: - Person Finder Model
 
-@Observable
 @MainActor
-final class PersonFinderModel {
-    var jobs: [ScanJob] = []
-    var settings = PersonFinderSettings.restored() {
+final class PersonFinderModel: ObservableObject {
+    @Published var jobs: [ScanJob] = []
+    @Published var settings = PersonFinderSettings.restored() {
         didSet { settings.save() }
     }
-    var referenceFaces: [ReferenceFace] = []
-    var referenceSources: [String] = []     // display labels for each loaded source folder/file
-    var referenceLoadError: String? = nil
-    var isLoadingReference: Bool = false
+    @Published var referenceFaces: [ReferenceFace] = []
+    @Published var referenceSources: [String] = []     // display labels for each loaded source folder/file
+    @Published var referenceLoadError: String? = nil
+    @Published var isLoadingReference: Bool = false
 
     var referenceFeaturePrints: [VNFeaturePrintObservation] { referenceFaces.map(\.featurePrint) }
     var referencePhotoCount: Int { referenceFaces.count }
@@ -423,8 +452,12 @@ final class PersonFinderModel {
             await job.pauseGate.waitIfPaused()
             if Task.isCancelled { return (idx, nil) }
 
-            // Track this worker globally so cross-job concurrency limits work
-            await MemoryPressureMonitor.shared.incrementWorkers()
+            // Reserve a worker slot atomically so multiple jobs cannot overbook
+            // the same memory budget based on a stale snapshot.
+            await MemoryPressureMonitor.shared.acquireWorkerSlot(
+                requested: settings.concurrency,
+                engine: settings.recognitionEngine
+            )
             defer { Task { await MemoryPressureMonitor.shared.decrementWorkers() } }
 
             let logFn:      @Sendable (String) async -> Void = { line in await job.appendLog(line) }
@@ -474,7 +507,7 @@ final class PersonFinderModel {
                 engine: settings.recognitionEngine
             )
             if scanConcurrency != settings.concurrency {
-                let available = await MemoryPressureMonitor.shared.availableMemoryString()
+                let available = MemoryPressureMonitor.shared.availableMemoryString()
                 await job.appendLog(
                     "Memory guard: using \(scanConcurrency)/\(settings.concurrency) parallel scan(s) for \(settings.recognitionEngine.rawValue) with \(available) free."
                 )
@@ -622,7 +655,7 @@ struct pfSegment {
 }
 
 // Shared CIContext — expensive to create, reuse across calls
-nonisolated(unsafe) private let pfCIContext = CIContext(options: [.useSoftwareRenderer: false])
+private let pfCIContext = CIContext(options: [.useSoftwareRenderer: false])
 
 // MARK: - Reference photo loading
 
@@ -1032,7 +1065,7 @@ private nonisolated func pfProcessVideo(
         let avg = s.2.reduce(0,+) / Float(s.2.count)
         return pfSegment(startSecs: s.0, endSecs: s.1, bestDistance: s.2.min() ?? 0, avgDistance: avg)
     }
-    let presence = segs.map(\.duration).reduce(0,+)
+    let presence = segs.reduce(0) { $0 + ($1.endSecs - $1.startSecs) }
     let bestHitDist = hits.map(\.distance).min() ?? 0
     await logFn("  [\(index)/\(total)] \(filename) → \(hits.count) hits, \(segs.count) seg(s), \(pfFormatDuration(presence)) presence  (faces: \(totalFacesDetected), best dist: \(String(format: "%.3f", bestHitDist)))")
 
@@ -1072,6 +1105,10 @@ private struct DlibResultJSON: Codable {
     }
 }
 
+private func pfDecodeDlibResult(from json: String) -> DlibResultJSON? {
+    try? JSONDecoder().decode(DlibResultJSON.self, from: Data(json.utf8))
+}
+
 private nonisolated func pfProcessVideoWithDlib(
     filePath: String,
     settings: PersonFinderSettings,
@@ -1091,6 +1128,17 @@ private nonisolated func pfProcessVideoWithDlib(
     let filename = (filePath as NSString).lastPathComponent
     await progressFn(filename)
     await logFn("[\(index)/\(total)] \(filename)")
+    await logFn("  dlib: python=\(settings.pythonPath)")
+    await logFn("  dlib: script=\(settings.recognitionScript)")
+
+    guard FileManager.default.isExecutableFile(atPath: settings.pythonPath) else {
+        await logFn("  [\(index)/\(total)] \(filename) — Python executable not found or not executable")
+        return nil
+    }
+    guard FileManager.default.fileExists(atPath: settings.recognitionScript) else {
+        await logFn("  [\(index)/\(total)] \(filename) — recognition script not found")
+        return nil
+    }
 
     let stdout = await ProcessRunner.runStreaming(
         executable: settings.pythonPath,
@@ -1104,14 +1152,21 @@ private nonisolated func pfProcessVideoWithDlib(
             "--pad",            String(format: "%.2f", settings.pad),
             "--min-duration",   String(format: "%.2f", settings.minDuration),
         ],
+        environment: [
+            "FACE_RECOG_MAX_RSS_MB": String(await MemoryPressureMonitor.shared.workerBudgetMB(for: .dlib))
+        ],
         stderrLine: { line in Task { await logFn("  " + line) } }
     )
 
     await progressFn("")
 
-    guard let jsonStr = stdout,
-          let result = try? JSONDecoder().decode(DlibResultJSON.self, from: Data(jsonStr.utf8)) else {
-        await logFn("  [\(index)/\(total)] \(filename) — no JSON output from Python script")
+    guard let jsonStr = stdout else {
+        await logFn("  [\(index)/\(total)] \(filename) — failed to launch Python process")
+        return nil
+    }
+    guard let result = pfDecodeDlibResult(from: jsonStr) else {
+        let snippet = String(jsonStr.prefix(240)).replacingOccurrences(of: "\n", with: " ")
+        await logFn("  [\(index)/\(total)] \(filename) — invalid JSON from Python script: \(snippet)")
         return nil
     }
 

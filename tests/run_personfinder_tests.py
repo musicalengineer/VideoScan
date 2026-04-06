@@ -32,12 +32,18 @@ def abs_path(root: Path, maybe_relative: str) -> str:
     return str(p.resolve())
 
 
-def build_command(root: Path, defaults: dict[str, Any], case: dict[str, Any]) -> list[str]:
+def build_command(root: Path, defaults: dict[str, Any], case: dict[str, Any]) -> tuple[list[str], list[str]]:
     cfg = defaults | case
     python = abs_path(root, cfg["python"]) if "python" in cfg else sys.executable
     script = abs_path(root, cfg["script"])
+    required_paths = [python, script]
+
+    if cfg.get("self_test"):
+        return [python, script, "--self-test"], required_paths
+
     ref_path = abs_path(root, cfg["ref_path"])
     video = abs_path(root, cfg["video"])
+    required_paths.extend([ref_path, video])
 
     return [
         python,
@@ -49,7 +55,7 @@ def build_command(root: Path, defaults: dict[str, Any], case: dict[str, Any]) ->
         "--min-conf", str(cfg["min_conf"]),
         "--pad", str(cfg["pad"]),
         "--min-duration", str(cfg["min_duration"]),
-    ]
+    ], required_paths
 
 
 def check_expectations(result: dict[str, Any], expect: dict[str, Any]) -> list[str]:
@@ -87,7 +93,16 @@ def check_expectations(result: dict[str, Any], expect: dict[str, Any]) -> list[s
 def run_case(root: Path, defaults: dict[str, Any], case: dict[str, Any]) -> dict[str, Any]:
     timeout = int(case.get("timeout_sec", defaults.get("timeout_sec", 120)))
     max_rss_mb = str(case.get("max_rss_mb", defaults.get("max_rss_mb", 4096)))
-    cmd = build_command(root, defaults, case)
+    cmd, required_paths = build_command(root, defaults, case)
+
+    missing = [path for path in required_paths if not Path(path).exists()]
+    if missing:
+        return {
+            "name": case["name"],
+            "ok": True,
+            "skipped": True,
+            "skip_reason": f"missing required path(s): {', '.join(missing)}",
+        }
 
     # Propagate memory ceiling to the child process
     env = os.environ.copy()
@@ -134,6 +149,11 @@ def run_case(root: Path, defaults: dict[str, Any], case: dict[str, Any]) -> dict
 
 
 def print_summary(case_result: dict[str, Any]) -> None:
+    if case_result.get("skipped"):
+        print(f"[SKIP] {case_result['name']}")
+        print(f"  {case_result['skip_reason']}")
+        return
+
     status = "PASS" if case_result["ok"] else "FAIL"
     print(f"[{status}] {case_result['name']}  {case_result['elapsed_sec']:.2f}s")
     if "result" in case_result:
@@ -191,11 +211,14 @@ def main() -> int:
 
     report = []
     failed = 0
+    skipped = 0
     for case in cases:
         result = run_case(root, defaults, case)
         report.append(result)
         print_summary(result)
-        if not result["ok"]:
+        if result.get("skipped"):
+            skipped += 1
+        elif not result["ok"]:
             failed += 1
 
     if args.json_report:
@@ -205,7 +228,8 @@ def main() -> int:
         out_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     print("")
-    print(f"Ran {len(report)} case(s): {len(report) - failed} passed, {failed} failed")
+    passed = len(report) - failed - skipped
+    print(f"Ran {len(report)} case(s): {passed} passed, {skipped} skipped, {failed} failed")
     return 0 if failed == 0 else 1
 
 

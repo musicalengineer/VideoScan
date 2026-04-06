@@ -47,18 +47,31 @@ import platform
 from pathlib import Path
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Memory ceiling — kill this process rather than let it swap the system.
-# Default 4 GB; override with env FACE_RECOG_MAX_RSS_MB.
+# Memory ceiling — ask the OS to cap this process rather than let it
+# grow unchecked. Default 4 GB; override with env FACE_RECOG_MAX_RSS_MB.
 # ─────────────────────────────────────────────────────────────────────────────
 _MAX_RSS_MB = int(os.environ.get("FACE_RECOG_MAX_RSS_MB", "4096"))
-if platform.system() == "Darwin":
-    # macOS setrlimit uses bytes
-    resource.setrlimit(resource.RLIMIT_RSS,
-                       (_MAX_RSS_MB * 1024 * 1024, resource.RLIM_INFINITY))
-else:
-    # Linux RLIMIT_AS (virtual) — RSS limit isn't enforced on most kernels
-    resource.setrlimit(resource.RLIMIT_AS,
-                       (_MAX_RSS_MB * 1024 * 1024, resource.RLIM_INFINITY))
+_MEM_LIMIT_RESULT = {"attempted_mb": _MAX_RSS_MB, "applied_mb": None, "status": "not_applied"}
+
+def _configure_memory_limit() -> None:
+    target_bytes = _MAX_RSS_MB * 1024 * 1024
+    limit_resource = resource.RLIMIT_RSS if platform.system() == "Darwin" else resource.RLIMIT_AS
+
+    try:
+        current_soft, current_hard = resource.getrlimit(limit_resource)
+        if current_hard == resource.RLIM_INFINITY:
+            applied_bytes = target_bytes
+        else:
+            applied_bytes = min(target_bytes, current_hard)
+
+        resource.setrlimit(limit_resource, (applied_bytes, current_hard))
+        _MEM_LIMIT_RESULT["applied_mb"] = int(applied_bytes / (1024 * 1024))
+        _MEM_LIMIT_RESULT["status"] = "applied"
+    except (OSError, ValueError) as exc:
+        _MEM_LIMIT_RESULT["status"] = f"not_applied: {exc}"
+        print(f"[mem] Unable to apply memory limit: {exc}", file=sys.stderr)
+
+_configure_memory_limit()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Imports — fail gracefully so Swift gets a proper JSON error
@@ -75,12 +88,16 @@ def _fatal(video_path: str, msg: str):
     print(json.dumps(result))
     sys.exit(1)
 
+_IMPORT_ERROR = None
 try:
     import cv2
     import face_recognition
     import numpy as np
 except ImportError as e:
-    _fatal("", f"Missing dependency: {e}. Run: pip install face_recognition opencv-python")
+    cv2 = None
+    face_recognition = None
+    np = None
+    _IMPORT_ERROR = str(e)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Args
@@ -88,8 +105,8 @@ except ImportError as e:
 
 def parse_args():
     p = argparse.ArgumentParser(add_help=True)
-    p.add_argument("--ref-path",     required=True, help="Reference photos directory")
-    p.add_argument("--video",        required=True, help="Video file to analyze")
+    p.add_argument("--ref-path",     default="", help="Reference photos directory")
+    p.add_argument("--video",        default="", help="Video file to analyze")
     p.add_argument("--threshold",    type=float, default=0.52)
     p.add_argument("--frame-step",   type=int,   default=5)
     p.add_argument("--min-conf",     type=float, default=0.55,
@@ -100,6 +117,8 @@ def parse_args():
                    help="Minimum segment duration in seconds")
     p.add_argument("--gap-tolerance",type=float, default=0.0,
                    help="Override gap tolerance for segment clustering (0 = auto: 3×frame_interval)")
+    p.add_argument("--self-test",    action="store_true",
+                   help="Validate imports and process setup without loading private media")
     return p.parse_args()
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -342,6 +361,31 @@ def cluster_segments(raw_segments: list, args) -> list:
 
 def main():
     args = parse_args()
+
+    if args.self_test:
+        output = {
+            "video": "",
+            "video_path": "",
+            "duration": 0,
+            "fps": 0,
+            "error": None,
+            "faces_detected": 0,
+            "hits": 0,
+            "best_dist": None,
+            "segments": [],
+            "mode": "self_test",
+            "memory_limit": _MEM_LIMIT_RESULT,
+            "dependencies_ready": _IMPORT_ERROR is None,
+            "dependency_error": _IMPORT_ERROR,
+        }
+        print(json.dumps(output))
+        return
+
+    if _IMPORT_ERROR is not None:
+        _fatal("", f"Missing dependency: {_IMPORT_ERROR}. Run: pip install face_recognition opencv-python")
+
+    if not args.ref_path:
+        _fatal(args.video, "--ref-path is required unless --self-test is used")
 
     if not Path(args.video).exists():
         _fatal(args.video, f"Video file not found: {args.video}")
