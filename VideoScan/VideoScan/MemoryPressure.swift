@@ -64,10 +64,69 @@ actor MemoryPressureMonitor {
     // Each worker increments on start and decrements on finish so that
     // recommendedConcurrency can account for already-running work.
     private var activeWorkers: Int = 0
+    private var slotWaiters: [CheckedContinuation<Void, Never>] = []
 
     func incrementWorkers() { activeWorkers += 1 }
-    func decrementWorkers() { activeWorkers = max(0, activeWorkers - 1) }
+    func decrementWorkers() {
+        activeWorkers = max(0, activeWorkers - 1)
+        resumeWaitersIfPossible()
+    }
     func currentWorkers() -> Int { activeWorkers }
+
+    func workerBudgetMB(for engine: RecognitionEngine) -> Int {
+        switch engine {
+        case .vision:
+            return 3072
+        case .dlib:
+            return 1024
+        }
+    }
+
+    private func hardCap(requested: Int, engine: RecognitionEngine) -> Int {
+        switch engine {
+        case .vision:
+            return min(requested, max(1, ProcessInfo.processInfo.processorCount))
+        case .dlib:
+            return min(requested, 4)
+        }
+    }
+
+    private func bytesPerWorker(for engine: RecognitionEngine) -> UInt64 {
+        UInt64(workerBudgetMB(for: engine)) * 1024 * 1024
+    }
+
+    private func canStartWorker(requested: Int, engine: RecognitionEngine) -> Bool {
+        let requested = max(1, requested)
+        let available = availableMemory()
+        let reserve = lowMemoryThreshold + 2 * 1024 * 1024 * 1024
+        let cap = hardCap(requested: requested, engine: engine)
+        guard activeWorkers < cap else { return false }
+        guard available > reserve else { return activeWorkers == 0 }
+
+        let usable = available - reserve
+        let memoryBound = max(1, Int(usable / bytesPerWorker(for: engine)))
+        return activeWorkers < memoryBound
+    }
+
+    /// Reserve a worker slot atomically so parallel jobs do not all claim the
+    /// same free-memory budget at once.
+    func acquireWorkerSlot(requested: Int, engine: RecognitionEngine) async {
+        while !canStartWorker(requested: requested, engine: engine) {
+            await withCheckedContinuation { cont in
+                slotWaiters.append(cont)
+            }
+        }
+        activeWorkers += 1
+    }
+
+    private func resumeWaitersIfPossible() {
+        guard !slotWaiters.isEmpty else { return }
+        let pending = slotWaiters
+        slotWaiters.removeAll()
+        for cont in pending {
+            cont.resume()
+        }
+    }
 
     /// Recommend a safe parallelism level based on current free RAM.
     /// Keeps a reserve above the configured floor instead of using all memory.
@@ -79,18 +138,8 @@ actor MemoryPressureMonitor {
         guard available > reserve else { return 1 }
 
         let usable = available - reserve
-        let bytesPerWorker: UInt64
-        let hardCap: Int
-        switch engine {
-        case .vision:
-            bytesPerWorker = 3 * 1024 * 1024 * 1024
-            hardCap = min(requested, max(1, ProcessInfo.processInfo.processorCount))
-        case .dlib:
-            bytesPerWorker = 1 * 1024 * 1024 * 1024  // ~900MB measured per Python process
-            hardCap = min(requested, 4)
-        }
-
-        let memoryBound = max(1, Int(usable / bytesPerWorker))
+        let hardCap = hardCap(requested: requested, engine: engine)
+        let memoryBound = max(1, Int(usable / bytesPerWorker(for: engine)))
         // Subtract workers already running globally so concurrent jobs
         // don't each assume they have the full memory budget.
         let available_slots = max(1, memoryBound - activeWorkers)

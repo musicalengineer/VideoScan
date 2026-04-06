@@ -199,7 +199,7 @@ struct CatalogView: View {
 // MARK: - Catalog Target Row (per-path controls, matches PersonFinder's ScanJobRow)
 
 private struct CatalogTargetRow: View {
-    @Bindable var target: CatalogScanTarget
+    @ObservedObject var target: CatalogScanTarget
     let onStart: () -> Void
     let onStop: () -> Void
     let onPause: () -> Void

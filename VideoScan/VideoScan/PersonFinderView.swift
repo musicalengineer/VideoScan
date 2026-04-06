@@ -8,7 +8,7 @@ import PhotosUI
 // MARK: - Main View
 
 struct PersonFinderView: View {
-    @State private var model = PersonFinderModel()
+    @StateObject private var model = PersonFinderModel()
     @State private var selectedJobID: UUID? = nil
     @State private var showSettings = false
     @State private var photosPickerItems: [PhotosPickerItem] = []
@@ -717,7 +717,7 @@ struct ReferenceFaceCard: View {
 // MARK: - Scan Job Row
 
 struct ScanJobRow: View {
-    @Bindable var job: ScanJob
+    @ObservedObject var job: ScanJob
     let isSelected: Bool
     let threshold: Float
     let onStart: () -> Void
@@ -1023,7 +1023,7 @@ struct ScanRingChart: View {
 // MARK: - Separate Preview Window
 
 struct ScanPreviewWindowContent: View {
-    @Bindable var job: ScanJob
+    @ObservedObject var job: ScanJob
 
     var body: some View {
         VStack(spacing: 0) {
