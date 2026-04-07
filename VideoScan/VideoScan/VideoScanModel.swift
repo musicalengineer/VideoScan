@@ -315,22 +315,22 @@ final class VideoScanModel: ObservableObject {
                 if Task.isCancelled { break }
                 probeGroup.addTask { [self] in
                     await target.pauseGate.waitIfPaused()
-                    await sem.wait()
-                    defer { Task { await sem.signal() } }
-                    if Task.isCancelled {
-                        return await MainActor.run {
-                            let skip = VideoRecord()
-                            skip.filename = url.lastPathComponent
-                            skip.streamTypeRaw = StreamType.ffprobeFailed.rawValue
-                            return skip
+                    return await sem.withPermit {
+                        if Task.isCancelled {
+                            return await MainActor.run {
+                                let skip = VideoRecord()
+                                skip.filename = url.lastPathComponent
+                                skip.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+                                return skip
+                            }
                         }
+                        let rec = await self.probeFile(
+                            url: url,
+                            prefetchToRAM: rootIsNetwork,
+                            ramPath: ramMountPoint
+                        )
+                        return rec
                     }
-                    let rec = await self.probeFile(
-                        url: url,
-                        prefetchToRAM: rootIsNetwork,
-                        ramPath: ramMountPoint
-                    )
-                    return rec
                 }
             }
             for await rec in probeGroup {
@@ -493,48 +493,47 @@ final class VideoScanModel: ObservableObject {
                             probeGroup.addTask {
                                 // Pause gate: wait here if user (or memory pressure) paused
                                 await self.pauseGate.waitIfPaused()
-                                await sem.wait()
-                                defer { Task { await sem.signal() } }
-                                if Task.isCancelled {
-                                    return await MainActor.run {
-                                        let skip = VideoRecord()
-                                        skip.filename = url.lastPathComponent
-                                        skip.streamTypeRaw = StreamType.ffprobeFailed.rawValue
-                                        return skip
+                                return await sem.withPermit {
+                                    if Task.isCancelled {
+                                        return await MainActor.run {
+                                            let skip = VideoRecord()
+                                            skip.filename = url.lastPathComponent
+                                            skip.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+                                            return skip
+                                        }
                                     }
-                                }
-                                await MainActor.run {
-                                    self.log("  [\(volName)] [\(i+1)/\(files.count)] \(url.lastPathComponent)")
-                                }
-                                let rec = await self.probeFile(
-                                    url: url,
-                                    prefetchToRAM: rootIsNetwork,
-                                    ramPath: ramMountPoint
-                                )
-                                await MainActor.run {
-                                    let ds = self.dashboard
-                                    ds.scanCompleted += 1
-                                    // Dashboard: update per-volume, cache, stream counts
-                                    if let idx = ds.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
-                                        ds.volumeProgress[idx].completedFiles += 1
+                                    await MainActor.run {
+                                        self.log("  [\(volName)] [\(i+1)/\(files.count)] \(url.lastPathComponent)")
+                                    }
+                                    let rec = await self.probeFile(
+                                        url: url,
+                                        prefetchToRAM: rootIsNetwork,
+                                        ramPath: ramMountPoint
+                                    )
+                                    await MainActor.run {
+                                        let ds = self.dashboard
+                                        ds.scanCompleted += 1
+                                        if let idx = ds.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
+                                            ds.volumeProgress[idx].completedFiles += 1
+                                            if rec.wasCacheHit {
+                                                ds.volumeProgress[idx].cacheHits += 1
+                                            }
+                                            if rec.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
+                                                ds.volumeProgress[idx].errors += 1
+                                            }
+                                        }
                                         if rec.wasCacheHit {
-                                            ds.volumeProgress[idx].cacheHits += 1
+                                            ds.scanCacheHits += 1
+                                        } else {
+                                            ds.scanCacheMisses += 1
                                         }
                                         if rec.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
-                                            ds.volumeProgress[idx].errors += 1
+                                            ds.scanErrors += 1
                                         }
+                                        ds.liveStreamCounts[rec.streamTypeRaw, default: 0] += 1
                                     }
-                                    if rec.wasCacheHit {
-                                        ds.scanCacheHits += 1
-                                    } else {
-                                        ds.scanCacheMisses += 1
-                                    }
-                                    if rec.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
-                                        ds.scanErrors += 1
-                                    }
-                                    ds.liveStreamCounts[rec.streamTypeRaw, default: 0] += 1
+                                    return rec
                                 }
-                                return rec
                             }
                         }
                         for await rec in probeGroup {
@@ -972,90 +971,89 @@ final class VideoScanModel: ObservableObject {
                     let audioPath = audio.fullPath
 
                     group.addTask { [self] in
-                        await semaphore.wait()
-                        defer { Task { await semaphore.signal() } }
+                        return await semaphore.withPermit {
+                            if Task.isCancelled { return (videoFilename, false) }
 
-                        if Task.isCancelled { return (videoFilename, false) }
+                            let baseName = URL(fileURLWithPath: videoPath)
+                                .deletingPathExtension().lastPathComponent
+                            let outName = "\(baseName)_combined.mov"
+                            let outURL = outputFolder.appendingPathComponent(outName)
 
-                        let baseName = URL(fileURLWithPath: videoPath)
-                            .deletingPathExtension().lastPathComponent
-                        let outName = "\(baseName)_combined.mov"
-                        let outURL = outputFolder.appendingPathComponent(outName)
-
-                        await MainActor.run {
-                            self.dashboard.combineCurrentFile = outName
-                            self.log("  [\(self.dashboard.combineCompleted + 1)/\(self.dashboard.combineTotal)] \(outName)")
-                            self.log("    Video: \(videoPath)")
-                            self.log("    Audio: \(audioPath)")
-                        }
-
-                        // Buffer network sources to RAM disk (or /tmp fallback)
-                        let tempDir = tempBase
-                            .appendingPathComponent("VS_\(UUID().uuidString)")
-                        var localVideo = URL(fileURLWithPath: videoPath)
-                        var localAudio = URL(fileURLWithPath: audioPath)
-                        var usedTempDir = false
-
-                        let videoIsNetwork = self.isNetworkPath(videoPath)
-                        let audioIsNetwork = self.isNetworkPath(audioPath)
-
-                        if videoIsNetwork || audioIsNetwork {
-                            do {
-                                try FileManager.default.createDirectory(
-                                    at: tempDir, withIntermediateDirectories: true)
-                                usedTempDir = true
-
-                                if videoIsNetwork {
-                                    let dest = tempDir.appendingPathComponent(videoFilename)
-                                    await MainActor.run {
-                                        self.log("    Buffering video to \(hasRAMDisk ? "RAM disk" : "temp")...")
-                                    }
-                                    try await self.bufferedCopy(
-                                        from: URL(fileURLWithPath: videoPath), to: dest)
-                                    localVideo = dest
-                                }
-                                if audioIsNetwork {
-                                    let dest = tempDir.appendingPathComponent(audioFilename)
-                                    await MainActor.run {
-                                        self.log("    Buffering audio to \(hasRAMDisk ? "RAM disk" : "temp")...")
-                                    }
-                                    try await self.bufferedCopy(
-                                        from: URL(fileURLWithPath: audioPath), to: dest)
-                                    localAudio = dest
-                                }
-                            } catch {
-                                await MainActor.run {
-                                    self.log("    ERROR buffering: \(error.localizedDescription)")
-                                    self.dashboard.combineCompleted += 1
-                                }
-                                if usedTempDir {
-                                    try? FileManager.default.removeItem(at: tempDir)
-                                }
-                                return (videoFilename, false)
+                            await MainActor.run {
+                                self.dashboard.combineCurrentFile = outName
+                                self.log("  [\(self.dashboard.combineCompleted + 1)/\(self.dashboard.combineTotal)] \(outName)")
+                                self.log("    Video: \(videoPath)")
+                                self.log("    Audio: \(audioPath)")
                             }
-                        }
 
-                        // Run ffmpeg: remux into MOV, no re-encode
-                        let success = await self.runFFMpeg(
-                            videoPath: localVideo.path,
-                            audioPath: localAudio.path,
-                            outputPath: outURL.path
-                        )
+                            // Buffer network sources to RAM disk (or /tmp fallback)
+                            let tempDir = tempBase
+                                .appendingPathComponent("VS_\(UUID().uuidString)")
+                            var localVideo = URL(fileURLWithPath: videoPath)
+                            var localAudio = URL(fileURLWithPath: audioPath)
+                            var usedTempDir = false
 
-                        // Clean up temp files
-                        if usedTempDir {
-                            try? FileManager.default.removeItem(at: tempDir)
-                        }
+                            let videoIsNetwork = self.isNetworkPath(videoPath)
+                            let audioIsNetwork = self.isNetworkPath(audioPath)
 
-                        await MainActor.run {
-                            self.dashboard.combineCompleted += 1
-                            if success {
-                                self.log("    ✓ Done: \(outURL.path)")
-                            } else {
-                                self.log("    ✗ FAILED: \(outName)")
+                            if videoIsNetwork || audioIsNetwork {
+                                do {
+                                    try FileManager.default.createDirectory(
+                                        at: tempDir, withIntermediateDirectories: true)
+                                    usedTempDir = true
+
+                                    if videoIsNetwork {
+                                        let dest = tempDir.appendingPathComponent(videoFilename)
+                                        await MainActor.run {
+                                            self.log("    Buffering video to \(hasRAMDisk ? "RAM disk" : "temp")...")
+                                        }
+                                        try await self.bufferedCopy(
+                                            from: URL(fileURLWithPath: videoPath), to: dest)
+                                        localVideo = dest
+                                    }
+                                    if audioIsNetwork {
+                                        let dest = tempDir.appendingPathComponent(audioFilename)
+                                        await MainActor.run {
+                                            self.log("    Buffering audio to \(hasRAMDisk ? "RAM disk" : "temp")...")
+                                        }
+                                        try await self.bufferedCopy(
+                                            from: URL(fileURLWithPath: audioPath), to: dest)
+                                        localAudio = dest
+                                    }
+                                } catch {
+                                    await MainActor.run {
+                                        self.log("    ERROR buffering: \(error.localizedDescription)")
+                                        self.dashboard.combineCompleted += 1
+                                    }
+                                    if usedTempDir {
+                                        try? FileManager.default.removeItem(at: tempDir)
+                                    }
+                                    return (videoFilename, false)
+                                }
                             }
+
+                            // Run ffmpeg: remux into MOV, no re-encode
+                            let success = await self.runFFMpeg(
+                                videoPath: localVideo.path,
+                                audioPath: localAudio.path,
+                                outputPath: outURL.path
+                            )
+
+                            // Clean up temp files
+                            if usedTempDir {
+                                try? FileManager.default.removeItem(at: tempDir)
+                            }
+
+                            await MainActor.run {
+                                self.dashboard.combineCompleted += 1
+                                if success {
+                                    self.log("    ✓ Done: \(outURL.path)")
+                                } else {
+                                    self.log("    ✗ FAILED: \(outName)")
+                                }
+                            }
+                            return (videoFilename, success)
                         }
-                        return (videoFilename, success)
                     }
                 }
 

@@ -29,4 +29,12 @@ actor AsyncSemaphore {
             waiters.removeFirst().resume()
         }
     }
+
+    /// Acquire a permit, run the body, then release — guarantees signal even on cancellation.
+    func withPermit<T: Sendable>(_ body: @Sendable () async -> T) async -> T {
+        await wait()
+        let result = await body()
+        signal()
+        return result
+    }
 }
