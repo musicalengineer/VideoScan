@@ -56,7 +56,6 @@ enum ProcessRunner {
         proc.standardError  = stderrPipe
 
         // Stream stderr asynchronously on a background thread.
-        // Each newline-terminated chunk is split and forwarded to the callback.
         let stderrHandle = stderrPipe.fileHandleForReading
         stderrHandle.readabilityHandler = { handle in
             let data = handle.availableData
@@ -68,10 +67,21 @@ enum ProcessRunner {
             }
         }
 
+        // Drain stdout continuously to prevent pipe buffer deadlock.
+        // Without this, if the subprocess writes >64KB to stdout before
+        // termination, the write blocks and the process hangs forever.
+        let stdoutHandle = stdoutPipe.fileHandleForReading
+        let stdoutCollector = StdoutCollector()
+        stdoutHandle.readabilityHandler = { handle in
+            let data = handle.availableData
+            if !data.isEmpty { stdoutCollector.append(data) }
+        }
+
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 proc.terminationHandler = { _ in
                     stderrHandle.readabilityHandler = nil
+                    stdoutHandle.readabilityHandler = nil
                     // Drain any remaining stderr
                     if let tail = String(data: stderrHandle.readDataToEndOfFile(),
                                         encoding: .utf8) {
@@ -80,18 +90,42 @@ enum ProcessRunner {
                             if !t.isEmpty { stderrLine(t) }
                         }
                     }
-                    let stdout = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                    continuation.resume(returning: String(data: stdout, encoding: .utf8))
+                    // Drain any remaining stdout
+                    let remaining = stdoutHandle.readDataToEndOfFile()
+                    if !remaining.isEmpty { stdoutCollector.append(remaining) }
+                    continuation.resume(returning: stdoutCollector.string)
                 }
                 do    { try proc.run() }
                 catch {
                     stderrHandle.readabilityHandler = nil
+                    stdoutHandle.readabilityHandler = nil
+                    stderrLine("⚠ Could not launch: \(executable) — \(error.localizedDescription)")
                     continuation.resume(returning: nil)
                 }
             }
         } onCancel: {
             stderrHandle.readabilityHandler = nil
+            stdoutHandle.readabilityHandler = nil
             if proc.isRunning { proc.terminate() }
+        }
+    }
+
+    /// Thread-safe collector for stdout data arriving via readabilityHandler.
+    private class StdoutCollector: @unchecked Sendable {
+        private let lock = NSLock()
+        private var data = Data()
+
+        func append(_ chunk: Data) {
+            lock.lock()
+            data.append(chunk)
+            lock.unlock()
+        }
+
+        var string: String? {
+            lock.lock()
+            let result = String(data: data, encoding: .utf8)
+            lock.unlock()
+            return result
         }
     }
 }

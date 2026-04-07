@@ -18,7 +18,7 @@ enum RecognitionEngine: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-struct PersonFinderSettings {
+struct PersonFinderSettings: Equatable {
     var personName: String = "Donna"
     var referencePath: String = ""
     var outputDir: String = ""          // empty → Desktop/<name>_clips
@@ -37,8 +37,25 @@ struct PersonFinderSettings {
 
     // dlib/Python engine
     var recognitionEngine: RecognitionEngine = .vision
-    var pythonPath: String = ""         // e.g. /path/to/venv/bin/python
-    var recognitionScript: String = ""  // e.g. /path/to/face_recognize.py
+    var pythonPath: String = Self.defaultPythonPath
+    var recognitionScript: String = Self.defaultScriptPath
+
+    /// Auto-detect Python venv and script from project layout.
+    private static var defaultPythonPath: String {
+        // Look for venv relative to the app bundle's ancestor dev directory
+        let candidates = [
+            NSHomeDirectory() + "/dev/VideoScan/venv/bin/python3",
+            "/opt/homebrew/bin/python3",
+        ]
+        return candidates.first { FileManager.default.fileExists(atPath: $0) } ?? ""
+    }
+
+    private static var defaultScriptPath: String {
+        let candidates = [
+            NSHomeDirectory() + "/dev/VideoScan/scripts/face_recognize.py",
+        ]
+        return candidates.first { FileManager.default.fileExists(atPath: $0) } ?? ""
+    }
 
     var dlibReady: Bool {
         recognitionEngine == .dlib && !pythonPath.isEmpty && !recognitionScript.isEmpty
@@ -277,10 +294,20 @@ final class PersonFinderModel: ObservableObject {
     @Published var settings = PersonFinderSettings.restored() {
         didSet { settings.save() }
     }
-    @Published var referenceFaces: [ReferenceFace] = []
-    @Published var referenceSources: [String] = []     // display labels for each loaded source folder/file
-    @Published var referenceLoadError: String? = nil
-    @Published var isLoadingReference: Bool = false
+
+    /// Binding wrapper that auto-saves settings on every write.
+    /// Use `model.settingsBinding.threshold` etc. in SwiftUI controls.
+    /// @Observable kills didSet, so we explicitly save here.
+    var settingsBinding: Binding<PersonFinderSettings> {
+        Binding(
+            get: { self.settings },
+            set: { self.settings = $0; $0.save() }
+        )
+    }
+    var referenceFaces: [ReferenceFace] = []
+    var referenceSources: [String] = []     // display labels for each loaded source folder/file
+    var referenceLoadError: String? = nil
+    var isLoadingReference: Bool = false
 
     var referenceFeaturePrints: [VNFeaturePrintObservation] { referenceFaces.map(\.featurePrint) }
     var referencePhotoCount: Int { referenceFaces.count }
@@ -305,9 +332,15 @@ final class PersonFinderModel: ObservableObject {
     func startJob(_ job: ScanJob) {
         guard !job.status.isActive else { return }
 
+        // Ensure settings are saved before we snapshot them for the scan
+        settings.save()
         let settings = self.settings
 
+        job.appendLog("Engine: \(settings.recognitionEngine.rawValue)")
         if settings.recognitionEngine == .dlib {
+            job.appendLog("  Python: \(settings.pythonPath.isEmpty ? "(empty)" : settings.pythonPath)")
+            job.appendLog("  Script: \(settings.recognitionScript.isEmpty ? "(empty)" : settings.recognitionScript)")
+            job.appendLog("  Ref path: \(settings.referencePath.isEmpty ? "(empty)" : settings.referencePath)")
             guard settings.dlibReady else {
                 job.appendLog("⚠ Set Python path and script path in Settings before scanning with dlib.")
                 return
@@ -317,6 +350,7 @@ final class PersonFinderModel: ObservableObject {
                 return
             }
         } else {
+            job.appendLog("  References loaded: \(referenceFaces.count)")
             guard !referenceFaces.isEmpty else {
                 job.appendLog("⚠ Load reference photos first.")
                 return
@@ -426,8 +460,12 @@ final class PersonFinderModel: ObservableObject {
         let path = await job.searchPath
         await job.appendLog("Scanning: \(path)")
 
-        // Find video files
-        let videoFiles = pfFindVideoFiles(at: path, skipBundles: settings.skipBundles)
+        // Find video files — use Task.detached so blocking FileManager calls
+        // don't stall the cooperative thread pool (critical for network volumes)
+        let skipBundles = settings.skipBundles
+        let videoFiles = await Task.detached(priority: .userInitiated) {
+            pfFindVideoFiles(at: path, skipBundles: skipBundles)
+        }.value
         guard !videoFiles.isEmpty else {
             await job.appendLog("No video files found.")
             await MainActor.run { job.status = .failed("No videos found") }
@@ -594,8 +632,11 @@ final class PersonFinderModel: ObservableObject {
         let totalPresence = workResults.map(\.totalPresenceSecs).reduce(0, +)
         let foundClips = workResults.reduce(0) { $0 + $1.clipFiles.filter { !$0.isEmpty }.count }
 
-        // Concat output
+        // Concat output — merge individual clips into one compiled video
         var compiledPath: String? = nil
+        let allClipPaths = workResults.flatMap(\.clipFiles).filter { !$0.isEmpty }
+            .map { (outputDir as NSString).appendingPathComponent($0) }
+
         if foundClips > 0 && (settings.concatOutput || settings.decadeChapters) {
             let df = DateFormatter(); df.dateFormat = "yyyyMMdd_HHmmss"
             let stamp = df.string(from: Date())
@@ -613,6 +654,20 @@ final class PersonFinderModel: ObservableObject {
                 await pfConcatenateClips(results: workResults, outputDir: outputDir, outputPath: outPath,
                                          logFn: { line in await job.appendLog(line) })
                 compiledPath = outPath
+            }
+
+            // Clean up intermediate clip files after successful compilation
+            if let compiled = compiledPath,
+               FileManager.default.fileExists(atPath: compiled) {
+                let fm = FileManager.default
+                var removed = 0
+                for clipPath in allClipPaths {
+                    // Don't delete the compiled file itself
+                    if clipPath == compiled { continue }
+                    try? fm.removeItem(atPath: clipPath)
+                    removed += 1
+                }
+                await job.appendLog("  Cleaned up \(removed) intermediate clip file(s)")
             }
         }
 

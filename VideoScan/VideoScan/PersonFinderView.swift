@@ -50,7 +50,7 @@ struct PersonFinderView: View {
                         .font(.caption).foregroundColor(.secondary)
                 }
 
-                TextField("Folder of reference photos…", text: $model.settings.referencePath)
+                TextField("Folder of reference photos…", text: model.settingsBinding.referencePath)
                     .textFieldStyle(.roundedBorder)
                     .font(.system(.body, design: .monospaced))
                     .onSubmit { Task { await model.loadReference() } }
@@ -111,7 +111,7 @@ struct PersonFinderView: View {
                     Text("Used for filenames")
                         .font(.caption).foregroundColor(.secondary)
                 }
-                TextField("e.g. Donna", text: $model.settings.personName)
+                TextField("e.g. Donna", text: model.settingsBinding.personName)
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 110)
             }
@@ -175,7 +175,7 @@ struct PersonFinderView: View {
 
             TextField(
                 "Default: ~/Desktop/\(pfSanitize(model.settings.personName))_clips",
-                text: $model.settings.outputDir
+                text: model.settingsBinding.outputDir
             )
             .textFieldStyle(.roundedBorder)
             .font(.system(.body, design: .monospaced))
@@ -202,33 +202,33 @@ struct PersonFinderView: View {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 24) {
                     LabeledControl("Match Threshold") {
-                        Slider(value: $model.settings.threshold, in: 0.3...0.9, step: 0.05)
+                        Slider(value: model.settingsBinding.threshold, in: 0.3...0.9, step: 0.05)
                             .frame(width: 130)
                         Text(String(format: "%.2f", model.settings.threshold))
                             .font(.system(.body, design: .monospaced))
                             .frame(width: 38)
                     }
                     LabeledControl("Min Face Confidence") {
-                        Slider(value: $model.settings.minFaceConfidence.asDouble, in: 0.3...1.0, step: 0.05)
+                        Slider(value: model.settingsBinding.minFaceConfidence.asDouble, in: 0.3...1.0, step: 0.05)
                             .frame(width: 110)
                         Text(String(format: "%.2f", model.settings.minFaceConfidence))
                             .font(.system(.body, design: .monospaced))
                             .frame(width: 38)
                     }
                     LabeledControl("Min Presence") {
-                        TextField("", value: $model.settings.minPresenceSecs, format: .number)
+                        TextField("", value: model.settingsBinding.minPresenceSecs, format: .number)
                             .textFieldStyle(.roundedBorder).frame(width: 64)
                         Text("sec")
                     }
                     LabeledControl("Frame Step") {
-                        TextField("", value: $model.settings.frameStep, format: .number)
+                        TextField("", value: model.settingsBinding.frameStep, format: .number)
                             .textFieldStyle(.roundedBorder).frame(width: 54)
                         Text("frames")
                     }
                     LabeledControl("Parallel Jobs") {
-                        TextField("", value: $model.settings.concurrency, format: .number)
+                        TextField("", value: model.settingsBinding.concurrency, format: .number)
                             .textFieldStyle(.roundedBorder).frame(width: 54)
-                        Stepper("", value: $model.settings.concurrency, in: 1...32)
+                        Stepper("", value: model.settingsBinding.concurrency, in: 1...32)
                             .labelsHidden()
                         Text("(max \(ProcessInfo.processInfo.processorCount) cores)")
                             .foregroundStyle(.secondary).font(.caption)
@@ -236,14 +236,14 @@ struct PersonFinderView: View {
                     Spacer()
                 }
                 HStack(spacing: 24) {
-                    Toggle("Primary face only", isOn: $model.settings.requirePrimary)
-                    Toggle("Skip background faces in references", isOn: $model.settings.largestFaceOnly)
-                    Toggle("Compile to one video", isOn: $model.settings.concatOutput)
+                    Toggle("Primary face only", isOn: model.settingsBinding.requirePrimary)
+                    Toggle("Skip background faces in references", isOn: model.settingsBinding.largestFaceOnly)
+                    Toggle("Compile to one video", isOn: model.settingsBinding.concatOutput)
                         .disabled(model.settings.decadeChapters)
-                    Toggle("Decade chapter video", isOn: $model.settings.decadeChapters)
+                    Toggle("Decade chapter video", isOn: model.settingsBinding.decadeChapters)
                     Toggle("Scan iMovie/FCP bundles", isOn: Binding(
                         get: { !model.settings.skipBundles },
-                        set: { model.settings.skipBundles = !$0 }
+                        set: { model.settings.skipBundles = !$0; model.settings.save() }
                     ))
                     Spacer()
                 }
@@ -252,7 +252,7 @@ struct PersonFinderView: View {
                 Divider()
                 HStack(spacing: 24) {
                     LabeledControl("Recognition Engine") {
-                        Picker("", selection: $model.settings.recognitionEngine) {
+                        Picker("", selection: model.settingsBinding.recognitionEngine) {
                             ForEach(RecognitionEngine.allCases) { eng in
                                 Text(eng.rawValue).tag(eng)
                             }
@@ -263,14 +263,14 @@ struct PersonFinderView: View {
 
                     if model.settings.recognitionEngine == .dlib {
                         LabeledControl("Python") {
-                            TextField("venv/bin/python…", text: $model.settings.pythonPath)
+                            TextField("venv/bin/python…", text: model.settingsBinding.pythonPath)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(.body, design: .monospaced))
                                 .frame(width: 260)
                             Button("…") { browsePython() }.controlSize(.small)
                         }
                         LabeledControl("Script") {
-                            TextField("face_recognize.py…", text: $model.settings.recognitionScript)
+                            TextField("face_recognize.py…", text: model.settingsBinding.recognitionScript)
                                 .textFieldStyle(.roundedBorder)
                                 .font(.system(.body, design: .monospaced))
                                 .frame(width: 260)
@@ -316,13 +316,19 @@ struct PersonFinderView: View {
                     .font(.title3.weight(.semibold))
                 Spacer()
 
-                Button(action: { model.addJob() }) {
+                Button(action: {
+                    model.addJob()
+                    selectedJobID = model.jobs.last?.id
+                }) {
                     Label("Add Folder / Volume", systemImage: "plus")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
 
-                Button(action: { model.startAll() }) {
+                Button(action: {
+                    model.startAll()
+                    if selectedJobID == nil { selectedJobID = model.jobs.first?.id }
+                }) {
                     Label("Start All", systemImage: "play.fill")
                 }
                 .buttonStyle(.borderedProminent)
@@ -346,6 +352,17 @@ struct PersonFinderView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.large)
                 .disabled(!model.jobs.contains { $0.status.isActive })
+
+                Divider().frame(height: 20)
+
+                Button {
+                    PreviewWindowController.shared.show(jobs: model.jobs)
+                } label: {
+                    Label("Face Detection", systemImage: "eye.fill")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .disabled(model.jobs.isEmpty)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -369,7 +386,7 @@ struct PersonFinderView: View {
                                 job: job,
                                 isSelected: selectedJobID == job.id,
                                 threshold: model.settings.threshold,
-                                onStart: { model.startJob(job) },
+                                onStart: { selectedJobID = job.id; model.startJob(job) },
                                 onStop: { model.stopJob(job) },
                                 onPause: { model.togglePauseJob(job) },
                                 onReset: { job.reset() },
@@ -510,6 +527,7 @@ struct PersonFinderView: View {
         panel.prompt = "Select"
         if panel.runModal() == .OK, let url = panel.url {
             model.settings.referencePath = url.path
+            model.settings.save()
             Task { await model.loadReference() }
         }
     }
@@ -550,6 +568,7 @@ struct PersonFinderView: View {
         panel.prompt = "Select"
         if panel.runModal() == .OK, let url = panel.url {
             model.settings.outputDir = url.path
+            model.settings.save()
         }
     }
 
@@ -562,6 +581,7 @@ struct PersonFinderView: View {
         panel.prompt = "Select"
         if panel.runModal() == .OK, let url = panel.url {
             model.settings.pythonPath = url.path
+            model.settings.save()
         }
     }
 
@@ -575,6 +595,7 @@ struct PersonFinderView: View {
         panel.prompt = "Select"
         if panel.runModal() == .OK, let url = panel.url {
             model.settings.recognitionScript = url.path
+            model.settings.save()
         }
     }
 
@@ -786,9 +807,9 @@ struct ScanJobRow: View {
 
                     if job.status == .scanning {
                         Button {
-                            PreviewWindowController.shared.show(job: job)
+                            PreviewWindowController.shared.show(jobs: [job])
                         } label: {
-                            Label("Preview", systemImage: "video.fill")
+                            Label("Preview", systemImage: "eye.fill")
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.regular)
@@ -833,6 +854,19 @@ struct ScanJobRow: View {
                     ProgressView().progressViewStyle(.circular).scaleEffect(0.7)
                     Text(job.status.label).font(.caption).foregroundColor(.secondary)
                 }
+            }
+
+            // Inline live frame preview — auto-shows during scanning
+            if job.status.isActive, let frame = job.liveFrame {
+                LiveFramePreview(
+                    frame: frame,
+                    matchedRects: job.liveMatchedRects,
+                    unmatchedRects: job.liveUnmatchedRects
+                )
+                .frame(height: 135)
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .transition(.opacity)
+                .animation(.easeInOut(duration: 0.3), value: job.liveFrame != nil)
             }
 
             // Compiled video path if present
@@ -1020,55 +1054,163 @@ struct ScanRingChart: View {
     }
 }
 
-// MARK: - Separate Preview Window
+// MARK: - Realtime Face Detection Window
 
-struct ScanPreviewWindowContent: View {
-    @ObservedObject var job: ScanJob
+struct RealtimeFaceDetectionContent: View {
+    let jobs: [ScanJob]
+    @State private var selectedJobID: UUID?
+
+    /// Auto-select the first actively scanning job
+    private var activeJob: ScanJob? {
+        if let sel = selectedJobID, let j = jobs.first(where: { $0.id == sel }) { return j }
+        return jobs.first(where: { $0.status == .scanning })
+            ?? jobs.first(where: { $0.status.isActive })
+    }
 
     var body: some View {
         VStack(spacing: 0) {
-            if let frame = job.liveFrame {
-                LiveFramePreview(
-                    frame: frame,
-                    matchedRects: job.liveMatchedRects,
-                    unmatchedRects: job.liveUnmatchedRects
-                )
-            } else {
-                ZStack {
-                    Color.black
-                    VStack(spacing: 10) {
-                        ProgressView().colorScheme(.dark)
-                        Text("Waiting for frames…")
-                            .foregroundColor(.secondary)
+            // Video frame area
+            ZStack {
+                Color.black
+
+                if let job = activeJob, let frame = job.liveFrame {
+                    LiveFramePreview(
+                        frame: frame,
+                        matchedRects: job.liveMatchedRects,
+                        unmatchedRects: job.liveUnmatchedRects
+                    )
+                    // Floating HUD overlay — top left
+                    .overlay(alignment: .topLeading) {
+                        FaceDetectHUD(job: job)
+                            .padding(10)
+                    }
+                    // Legend — top right
+                    .overlay(alignment: .topTrailing) {
+                        FaceDetectLegend()
+                            .padding(10)
+                    }
+                } else {
+                    VStack(spacing: 12) {
+                        Image(systemName: "face.dashed")
+                            .font(.system(size: 48))
+                            .foregroundStyle(.secondary.opacity(0.5))
+                        if jobs.contains(where: { $0.status.isActive }) {
+                            ProgressView().colorScheme(.dark)
+                            Text("Waiting for frames...")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("Start a scan to see realtime face detection")
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
             }
-            // Status bar at bottom
-            HStack(spacing: 12) {
-                Circle()
-                    .fill(job.status == .scanning ? Color.green : Color.secondary)
-                    .frame(width: 8, height: 8)
-                Text(job.status.label)
-                    .font(.caption).foregroundStyle(.secondary)
-                if !job.currentFile.isEmpty {
-                    Text("·").foregroundStyle(.secondary)
-                    Text(job.currentFile)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1).truncationMode(.middle)
+            .aspectRatio(16/9, contentMode: .fit)
+
+            // Bottom status bar
+            HStack(spacing: 10) {
+                // Job picker (when multiple jobs exist)
+                if jobs.count > 1 {
+                    Picker("Job", selection: Binding(
+                        get: { activeJob?.id ?? UUID() },
+                        set: { selectedJobID = $0 }
+                    )) {
+                        ForEach(jobs) { job in
+                            Text((job.searchPath as NSString).lastPathComponent)
+                                .tag(job.id)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 180)
+                }
+
+                if let job = activeJob {
+                    Circle()
+                        .fill(job.status == .scanning ? Color.green : Color.secondary)
+                        .frame(width: 8, height: 8)
+                    Text(job.status.label)
+                        .font(.caption).foregroundStyle(.secondary)
+
+                    if !job.currentFile.isEmpty {
+                        Text(job.currentFile)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.middle)
+                    }
                 }
                 Spacer()
-                if job.videosTotal > 0 {
-                    Text("\(job.videosScanned)/\(job.videosTotal) · \(job.videosWithHits) hit(s)")
+                if let job = activeJob, job.videosTotal > 0 {
+                    Text("\(job.videosScanned)/\(job.videosTotal) videos")
                         .font(.system(.caption, design: .monospaced))
                         .foregroundStyle(.secondary)
+                    Text("\(job.videosWithHits) match(es)")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(job.videosWithHits > 0 ? .green : .secondary)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
             .background(Color(NSColor.windowBackgroundColor))
         }
-        .frame(minWidth: 480, minHeight: 300)
+        .frame(minWidth: 640, minHeight: 400)
+    }
+}
+
+/// Floating HUD showing live detection stats
+private struct FaceDetectHUD: View {
+    @Bindable var job: ScanJob
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "circle.fill")
+                    .font(.system(size: 6))
+                    .foregroundColor(.red)
+                Text("LIVE")
+                    .font(.system(.caption2, design: .monospaced).weight(.bold))
+                    .foregroundColor(.red)
+            }
+            if job.videosTotal > 0 {
+                Text("Video \(job.videosScanned)/\(job.videosTotal)")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundColor(.white)
+            }
+            Text("Hits: \(job.videosWithHits)")
+                .font(.system(.caption, design: .monospaced))
+                .foregroundColor(job.videosWithHits > 0 ? .green : .white)
+            if job.bestDist < .greatestFiniteMagnitude {
+                Text(String(format: "Best: %.3f", job.bestDist))
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundColor(.white)
+            }
+            Text(pfFormatDuration(job.elapsedSecs))
+                .font(.system(.caption, design: .monospaced))
+                .foregroundColor(.white.opacity(0.7))
+        }
+        .padding(8)
+        .background(.black.opacity(0.6))
+        .cornerRadius(6)
+    }
+}
+
+/// Color legend for bounding box colors
+private struct FaceDetectLegend: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
+                RoundedRectangle(cornerRadius: 2).fill(.green)
+                    .frame(width: 10, height: 10)
+                Text("Match").font(.caption2).foregroundColor(.white)
+            }
+            HStack(spacing: 4) {
+                RoundedRectangle(cornerRadius: 2).fill(.yellow)
+                    .frame(width: 10, height: 10)
+                Text("Face (no match)").font(.caption2).foregroundColor(.white)
+            }
+        }
+        .padding(6)
+        .background(.black.opacity(0.5))
+        .cornerRadius(4)
     }
 }
 
@@ -1077,28 +1219,32 @@ class PreviewWindowController {
     static let shared = PreviewWindowController()
     private var window: NSWindow?
 
-    func show(job: ScanJob) {
-        // If already open for same job, just bring to front
+    func show(jobs: [ScanJob]) {
         if let w = window, w.isVisible {
             w.makeKeyAndOrderFront(nil)
             return
         }
         close()
 
-        let hosting = NSHostingView(rootView: ScanPreviewWindowContent(job: job))
+        let content = RealtimeFaceDetectionContent(jobs: jobs)
+        let hosting = NSHostingView(rootView: content)
         let w = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 400),
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
-        w.title = "Face Detect Preview"
-        w.subtitle = (job.searchPath as NSString).lastPathComponent
+        w.title = "Realtime Face Detection"
         w.contentView = hosting
-        w.setFrameAutosaveName("FaceDetectPreview")
+        w.setFrameAutosaveName("RealtimeFaceDetect")
         w.center()
         w.makeKeyAndOrderFront(nil)
         window = w
+    }
+
+    /// Legacy single-job entry point
+    func show(job: ScanJob) {
+        show(jobs: [job])
     }
 
     func close() {
