@@ -873,20 +873,50 @@ struct ScanJobRow: View {
                 .animation(.easeInOut(duration: 0.3), value: job.liveFrame != nil)
             }
 
-            // Compiled video path if present
-            if let compiled = job.compiledVideoPath {
-                HStack(spacing: 6) {
-                    Image(systemName: "film.stack")
-                        .foregroundColor(.accentColor)
-                    Text((compiled as NSString).lastPathComponent)
-                        .font(.system(.callout, design: .monospaced))
-                        .foregroundColor(.accentColor)
-                    Button("Show in Finder") {
-                        NSWorkspace.shared.selectFile(compiled, inFileViewerRootedAtPath: "")
+            // Compiled outputs — one row per bucket. See
+            // docs/compilation-bucketing.md for why this is a list now.
+            if !job.compiledVideoPaths.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "film.stack")
+                            .foregroundColor(.accentColor)
+                        Text("\(job.compiledVideoPaths.count) compilation\(job.compiledVideoPaths.count == 1 ? "" : "s")")
+                            .font(.system(.callout, weight: .semibold))
+                            .foregroundColor(.accentColor)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+                    ForEach(job.compiledVideoPaths) { out in
+                        HStack(spacing: 8) {
+                            Text((out.path as NSString).lastPathComponent)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundColor(.accentColor)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Text("\(out.clipCount) clip\(out.clipCount == 1 ? "" : "s")")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text(pfFormatDuration(out.durationSecs))
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Text(pfFormatBytes(out.bytesOnDisk))
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                            Spacer()
+                            Button("Reveal") {
+                                NSWorkspace.shared.selectFile(out.path, inFileViewerRootedAtPath: "")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            Button("Open") {
+                                NSWorkspace.shared.open(URL(fileURLWithPath: out.path))
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
+                    }
                 }
+                .padding(8)
+                .background(Color.accentColor.opacity(0.08))
+                .cornerRadius(6)
             }
         }
         .padding(.horizontal, 12)
