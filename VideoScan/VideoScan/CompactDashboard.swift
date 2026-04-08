@@ -157,6 +157,9 @@ struct CompactDashboard: View {
                 }
             }
 
+            // Mini silicon chip indicator
+            MiniSiliconChipView(dashboard: dashboard)
+
             // Expand / detach buttons
             Button { isExpanded.toggle() } label: {
                 Image(systemName: isExpanded ? "chevron.up" : "chevron.down")

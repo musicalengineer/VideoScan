@@ -182,6 +182,7 @@ struct CatalogView: View {
                                 onStart: { model.startTarget(target) },
                                 onStop: { model.stopTarget(target) },
                                 onPause: { model.togglePauseTarget(target) },
+                                onReset: { model.resetTarget(target) },
                                 onRemove: { model.removeScanTarget(target) }
                             )
                         }
@@ -203,6 +204,7 @@ private struct CatalogTargetRow: View {
     let onStart: () -> Void
     let onStop: () -> Void
     let onPause: () -> Void
+    let onReset: () -> Void
     let onRemove: () -> Void
 
     var body: some View {
@@ -273,11 +275,12 @@ private struct CatalogTargetRow: View {
                 .disabled(target.searchPath.isEmpty)
 
                 if target.status == .complete || target.status == .stopped || target.status == .error {
-                    Button(action: { target.reset() }) {
+                    Button(action: onReset) {
                         Label("Reset", systemImage: "arrow.counterclockwise")
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.regular)
+                    .help("Reset progress and drop cached probes for this volume so a re-scan re-runs ffprobe")
                 }
 
                 Button(action: onRemove) {

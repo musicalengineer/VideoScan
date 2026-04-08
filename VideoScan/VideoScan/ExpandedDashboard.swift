@@ -56,32 +56,97 @@ struct ExpandedDashboard: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if !isIdle {
-                headerSection
-                if isScanning { scanSections }
-                if isCombining { combineSections }
-            }
-            systemMetricsSection
+        VStack(alignment: .leading, spacing: 10) {
+            scannerPane
+            faceDetectionPane
+            sharedResourcesPane
         }
         .padding(16)
         .frame(minWidth: 560, idealWidth: 600)
         .onReceive(timer) { now = $0 }
     }
 
-    // MARK: - System Metrics (always visible)
+    // MARK: - Pane: Catalog Scanner
 
-    private var memFraction: Double {
-        dashboard.memTotalGB > 0 ? dashboard.memUsedGB / dashboard.memTotalGB : 0
+    private var scannerActive: Bool { isScanning || isCombining }
+
+    private var scannerPane: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(scannerActive ? Color.cyan : Color.gray.opacity(0.4))
+                        .frame(width: 8, height: 8)
+                        .shadow(color: scannerActive ? .cyan.opacity(0.6) : .clear, radius: 4)
+                    Text(scannerActive ? "ACTIVE" : "IDLE")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundColor(scannerActive ? .cyan : .secondary)
+                    Spacer()
+                }
+
+                if scannerActive {
+                    headerSection
+                    if isScanning { scanSections }
+                    if isCombining { combineSections }
+                } else {
+                    Text("No scan in progress.")
+                        .font(.system(size: 13))
+                        .foregroundColor(.secondary)
+                        .padding(.vertical, 4)
+                }
+            }
+            .opacity(scannerActive ? 1.0 : 0.65)
+        } label: {
+            Label("Catalog Scanner", systemImage: "externaldrive.connected.to.line.below")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(.cyan)
+        }
     }
 
-    private var memColor: Color {
-        if memFraction < 0.6 { return .green }
-        if memFraction < 0.8 { return .orange }
-        return .red
+    // MARK: - Pane: Face Detection
+
+    private var fdActive: Bool { dashboard.visionActive }
+
+    private var faceDetectionPane: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(fdActive ? Color.purple : Color.gray.opacity(0.4))
+                        .frame(width: 8, height: 8)
+                        .shadow(color: fdActive ? .purple.opacity(0.6) : .clear, radius: 4)
+                    Text(fdActive ? "ACTIVE" : "IDLE")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundColor(fdActive ? .purple : .secondary)
+                    Spacer()
+                    if fdActive {
+                        Text(String(format: "%.1f fps", dashboard.visionFPS))
+                            .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.purple)
+                        Text(String(format: "%.0f ms/frame", dashboard.visionMsPerFrame))
+                            .font(.system(size: 13, design: .monospaced))
+                            .foregroundColor(.secondary)
+                        if dashboard.visionWorkers > 0 {
+                            Text("\(dashboard.visionWorkers) worker\(dashboard.visionWorkers == 1 ? "" : "s")")
+                                .font(.system(size: 13, design: .monospaced))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+
+                // Apple Silicon visualizer — always visible inside the FD pane
+                SiliconChipView(dashboard: dashboard)
+            }
+        } label: {
+            Label("Face Detection (Vision / ANE)", systemImage: "brain")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(.purple)
+        }
     }
 
-    private var systemMetricsSection: some View {
+    // MARK: - Pane: Shared System Resources
+
+    private var sharedResourcesPane: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
                 // Memory bar
@@ -90,10 +155,10 @@ struct ExpandedDashboard: View {
                         .font(.system(size: 14))
                         .foregroundColor(memColor)
                     Text("Memory")
-                        .font(.system(size: 16, weight: .medium))
+                        .font(.system(size: 15, weight: .medium))
                     Spacer()
                     Text(String(format: "%.1f / %.0f GB", dashboard.memUsedGB, dashboard.memTotalGB))
-                        .font(.system(size: 14, design: .monospaced))
+                        .font(.system(size: 13, design: .monospaced))
                         .foregroundColor(.secondary)
                 }
                 ZStack(alignment: .leading) {
@@ -108,75 +173,55 @@ struct ExpandedDashboard: View {
                     .frame(height: 6)
                 }
 
-                // App RSS + Thermal
-                HStack(spacing: 16) {
+                // App RSS + Thermal + CPU load
+                HStack(spacing: 14) {
                     HStack(spacing: 4) {
                         Image(systemName: "app.dashed")
-                            .font(.system(size: 13))
+                            .font(.system(size: 12))
                             .foregroundColor(.secondary)
                         Text(String(format: "App: %.0f MB", dashboard.appMemoryMB))
-                            .font(.system(size: 14, design: .monospaced))
+                            .font(.system(size: 13, design: .monospaced))
                             .foregroundColor(.secondary)
                     }
                     HStack(spacing: 4) {
                         Image(systemName: "thermometer.medium")
-                            .font(.system(size: 13))
+                            .font(.system(size: 12))
                             .foregroundColor(dashboard.thermalWarning ? .red : .secondary)
-                        Text("Thermal: \(dashboard.thermalLabel)")
-                            .font(.system(size: 14, design: .monospaced))
+                        Text(dashboard.thermalLabel)
+                            .font(.system(size: 13, design: .monospaced))
                             .foregroundColor(dashboard.thermalWarning ? .red : .secondary)
                     }
-                }
-
-                Divider()
-
-                // CPU load
-                HStack(spacing: 6) {
-                    Image(systemName: "cpu")
-                        .font(.system(size: 14))
-                        .foregroundColor(.blue)
-                    Text("CPU Load")
-                        .font(.system(size: 16, weight: .medium))
-                    Spacer()
-                    Text(String(format: "%.1f / %.1f / %.1f",
-                                dashboard.cpuLoad1,
-                                dashboard.cpuLoad5,
-                                dashboard.cpuLoad15))
-                        .font(.system(size: 14, design: .monospaced))
-                        .foregroundColor(.secondary)
-                    Text("(1/5/15m)")
-                        .font(.system(size: 13))
-                        .foregroundColor(.secondary.opacity(0.7))
-                }
-
-                // Vision/ANE section — only during face detection
-                if dashboard.visionActive {
-                    Divider()
-                    HStack(spacing: 6) {
-                        Image(systemName: "brain")
-                            .font(.system(size: 14))
-                            .foregroundColor(.purple)
-                        Text("Vision / ANE")
-                            .font(.system(size: 16, weight: .medium))
-                        Spacer()
-                        Text(String(format: "%.1f fps", dashboard.visionFPS))
-                            .font(.system(size: 14, weight: .medium, design: .monospaced))
-                            .foregroundColor(.purple)
-                        Text(String(format: "%.0f ms/frame", dashboard.visionMsPerFrame))
-                            .font(.system(size: 14, design: .monospaced))
+                    HStack(spacing: 4) {
+                        Image(systemName: "cpu")
+                            .font(.system(size: 12))
+                            .foregroundColor(.blue)
+                        Text(String(format: "%.1f / %.1f / %.1f",
+                                    dashboard.cpuLoad1,
+                                    dashboard.cpuLoad5,
+                                    dashboard.cpuLoad15))
+                            .font(.system(size: 13, design: .monospaced))
                             .foregroundColor(.secondary)
-                        if dashboard.visionWorkers > 0 {
-                            Text("\(dashboard.visionWorkers) worker\(dashboard.visionWorkers == 1 ? "" : "s")")
-                                .font(.system(size: 14, design: .monospaced))
-                                .foregroundColor(.secondary)
-                        }
                     }
+                    Spacer()
                 }
             }
         } label: {
-            Label("System", systemImage: "gauge.with.dots.needle.50percent")
-                .font(.system(size: 16, weight: .medium))
+            Label("Shared Resources", systemImage: "gauge.with.dots.needle.50percent")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundColor(.secondary)
         }
+    }
+
+    // MARK: - System Metrics (always visible)
+
+    private var memFraction: Double {
+        dashboard.memTotalGB > 0 ? dashboard.memUsedGB / dashboard.memTotalGB : 0
+    }
+
+    private var memColor: Color {
+        if memFraction < 0.6 { return .green }
+        if memFraction < 0.8 { return .orange }
+        return .red
     }
 
     // MARK: - Header
