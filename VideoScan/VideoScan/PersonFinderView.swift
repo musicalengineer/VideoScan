@@ -29,10 +29,7 @@ struct PersonFinderView: View {
             Divider()
             jobsSection
             Divider()
-            VSplitView {
-                resultsTable
-                consolePane
-            }
+            resultsTable
         }
         .frame(minWidth: 960, minHeight: 650)
         .onAppear { model.dashboard = dashboard }
@@ -284,6 +281,10 @@ struct PersonFinderView: View {
                         browsePython: browsePython,
                         browseScript: browseScript
                     )
+
+                    Text("Recognition module changes apply to newly started scans. Stop and restart a scan target to switch engines or update engine-specific paths.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
             .font(.body)
@@ -356,6 +357,15 @@ struct PersonFinderView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.large)
                 .disabled(model.jobs.isEmpty)
+
+                Button {
+                    JobConsoleWindowController.shared.show(model: model, focusJobID: selectedJobID)
+                } label: {
+                    Label("Console", systemImage: "terminal")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .disabled(model.jobs.isEmpty)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -387,7 +397,12 @@ struct PersonFinderView: View {
                                 onPreview: { PreviewWindowController.shared.show(model: model, focusJobID: job.id) }
                             )
                             .contentShape(Rectangle())
-                            .onTapGesture { selectedJobID = job.id }
+                            // simultaneousGesture (not onTapGesture) so the row's
+                            // selection tap doesn't steal taps from the per-row
+                            // Start/Stop/Pause/Reset/Trash buttons living inside it.
+                            .simultaneousGesture(
+                                TapGesture().onEnded { selectedJobID = job.id }
+                            )
                         }
                     }
                     .padding(.horizontal, 10)
@@ -467,48 +482,8 @@ struct PersonFinderView: View {
         }
     }
 
-    // MARK: Console pane
-
-    var consolePane: some View {
-        let lines = selectedJob?.consoleLines ?? []
-        return VStack(spacing: 0) {
-            HStack {
-                Image(systemName: "terminal")
-                    .foregroundColor(.secondary)
-                Text(selectedJob.map { "Output — \($0.searchPath)" } ?? "Console Output")
-                    .font(.callout.weight(.medium))
-                    .foregroundColor(.secondary)
-                Spacer()
-                if let job = selectedJob, job.status.isActive {
-                    ProgressView().scaleEffect(0.7)
-                }
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .background(Color(NSColor.windowBackgroundColor))
-
-            Divider()
-
-            ScrollViewReader { proxy in
-                ScrollView {
-                    Text(lines.isEmpty
-                         ? "Select a job above to see its scan output here…"
-                         : lines.joined(separator: "\n"))
-                        .font(.system(.body, design: .monospaced))
-                        .foregroundColor(lines.isEmpty ? .secondary : .primary)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(10)
-                        .id("consoleBottom")
-                }
-                .background(Color(NSColor.textBackgroundColor))
-                .frame(minHeight: 130)
-                .onChange(of: lines.count) {
-                    withAnimation { proxy.scrollTo("consoleBottom", anchor: .bottom) }
-                }
-            }
-        }
-    }
+    // Console pane removed from main window — use the Console toolbar
+    // button which opens a floating window with a per-job picker.
 
     // MARK: Helpers
 
@@ -851,18 +826,9 @@ struct ScanJobRow: View {
                 }
             }
 
-            // Inline live frame preview — auto-shows during scanning
-            if job.status.isActive, let frame = job.liveFrame {
-                LiveFramePreview(
-                    frame: frame,
-                    matchedRects: job.liveMatchedRects,
-                    unmatchedRects: job.liveUnmatchedRects
-                )
-                .frame(height: 135)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .transition(.opacity)
-                .animation(.easeInOut(duration: 0.3), value: job.liveFrame != nil)
-            }
+            // Inline live preview removed — use the Realtime Face Detection
+            // window (toolbar button or per-row "Preview" action), which has
+            // a per-job picker and avoids cluttering the main jobs list.
 
             // Compiled outputs — one row per bucket. See
             // docs/compilation-bucketing.md for why this is a list now.
@@ -1071,6 +1037,10 @@ struct RecognitionEnginePanel: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
+            Text("Live scans use the settings captured when that scan starts. Changing modules while a job is paused or running does not switch the active engine mid-video.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             if showsDlibConfig {
                 Text("Heavy scans are auto-limited based on free RAM to avoid runaway memory use.")
                     .font(.caption)
@@ -1233,7 +1203,8 @@ struct RealtimeFaceDetectionContent: View {
                 ActiveJobFaceDetectView(
                     job: job,
                     jobs: jobs,
-                    selectedJobID: $selectedJobID
+                    selectedJobID: $selectedJobID,
+                    engineTitle: model.settings.recognitionEngine.title
                 )
             } else {
                 VStack(spacing: 0) {
@@ -1269,6 +1240,7 @@ private struct ActiveJobFaceDetectView: View {
     @ObservedObject var job: ScanJob
     let jobs: [ScanJob]
     @Binding var selectedJobID: UUID?
+    let engineTitle: String
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1287,7 +1259,7 @@ private struct ActiveJobFaceDetectView: View {
                             .padding(10)
                     }
                     .overlay(alignment: .topTrailing) {
-                        FaceDetectLegend()
+                        FaceDetectLegend(engineTitle: engineTitle)
                             .padding(10)
                     }
                 } else {
@@ -1422,8 +1394,11 @@ private struct FaceDetectHUD: View {
     }
 }
 
-/// Color legend for bounding box colors
+/// Color legend for bounding box colors. Also shows the active recognition
+/// engine so the demo doesn't need to pop back to Settings to confirm it.
 private struct FaceDetectLegend: View {
+    let engineTitle: String
+
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 6) {
@@ -1439,6 +1414,20 @@ private struct FaceDetectLegend: View {
                 Text("Face (no match)")
                     .font(.system(size: 14))
                     .foregroundColor(.white)
+            }
+            Divider()
+                .background(.white.opacity(0.3))
+                .padding(.vertical, 1)
+            HStack(spacing: 6) {
+                Image(systemName: "cpu")
+                    .font(.system(size: 12))
+                    .foregroundColor(.cyan)
+                Text("Alg:")
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.7))
+                Text(engineTitle)
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.cyan)
             }
         }
         .padding(10)
@@ -1475,6 +1464,145 @@ class PreviewWindowController {
         window = w
     }
 
+
+    func close() {
+        window?.close()
+        window = nil
+    }
+}
+
+// MARK: - Job Console Window
+
+/// Floating console window with a per-job picker. Mirrors the Realtime
+/// Face Detection window pattern: outer view holds the picker selection;
+/// an inner view observes the selected ScanJob so log appends repaint live.
+struct JobConsoleContent: View {
+    @ObservedObject var model: PersonFinderModel
+    let initialJobID: UUID?
+    @State private var selectedJobID: UUID?
+
+    init(model: PersonFinderModel, initialJobID: UUID? = nil) {
+        self.model = model
+        self.initialJobID = initialJobID
+        _selectedJobID = State(initialValue: initialJobID)
+    }
+
+    private var jobs: [ScanJob] { model.jobs }
+
+    /// Auto-pick a sensible default if the user hasn't chosen, preferring
+    /// an actively scanning job.
+    private var resolvedJob: ScanJob? {
+        if let sel = selectedJobID,
+           let j = jobs.first(where: { $0.id == sel }) {
+            return j
+        }
+        return jobs.first(where: { $0.status == .scanning })
+            ?? jobs.first(where: { $0.status.isActive })
+            ?? jobs.first
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "terminal")
+                    .foregroundColor(.secondary)
+                Text("Job:")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.secondary)
+                Picker("", selection: $selectedJobID) {
+                    ForEach(jobs) { job in
+                        Text(jobMenuLabel(job))
+                            .tag(Optional(job.id))
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(maxWidth: 420)
+
+                Spacer()
+
+                if let job = resolvedJob, job.status.isActive {
+                    ProgressView().scaleEffect(0.6)
+                    Text(job.status.label)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+
+                if let job = resolvedJob {
+                    Text("\(job.consoleLines.count) lines")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
+                    Button("Clear") {
+                        job.consoleLines.removeAll()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color(NSColor.windowBackgroundColor))
+            Divider()
+
+            if let job = resolvedJob {
+                JobConsoleBody(job: job)
+            } else {
+                ZStack {
+                    Color(NSColor.textBackgroundColor)
+                    Text("No jobs yet — add a scan target to see console output.")
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .frame(minWidth: 600, idealWidth: 820, minHeight: 320, idealHeight: 480)
+    }
+
+    private func jobMenuLabel(_ job: ScanJob) -> String {
+        let name = (job.searchPath as NSString).lastPathComponent
+        let trimmed = name.isEmpty ? job.searchPath : name
+        return "\(trimmed)  —  \(job.status.label)"
+    }
+}
+
+/// Inner view observes the active ScanJob so SwiftUI re-renders when
+/// consoleLines mutates. The outer JobConsoleContent only owns the picker
+/// state and does not observe individual jobs.
+private struct JobConsoleBody: View {
+    @ObservedObject var job: ScanJob
+
+    var body: some View {
+        ConsoleView(lines: job.consoleLines)
+            .background(Color(NSColor.textBackgroundColor))
+    }
+}
+
+@MainActor
+class JobConsoleWindowController {
+    static let shared = JobConsoleWindowController()
+    private var window: NSWindow?
+
+    func show(model: PersonFinderModel, focusJobID: UUID? = nil) {
+        if let w = window, w.isVisible {
+            w.makeKeyAndOrderFront(nil)
+            return
+        }
+        close()
+
+        let content = JobConsoleContent(model: model, initialJobID: focusJobID)
+        let hosting = NSHostingView(rootView: content)
+        let w = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 820, height: 480),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        w.title = "Face Detection Console"
+        w.contentView = hosting
+        w.setFrameAutosaveName("JobConsoleV1")
+        w.center()
+        w.makeKeyAndOrderFront(nil)
+        window = w
+    }
 
     func close() {
         window?.close()

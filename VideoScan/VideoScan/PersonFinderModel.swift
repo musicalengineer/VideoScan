@@ -33,18 +33,18 @@ enum RecognitionEngine: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .vision: return "Apple Vision"
-        case .dlib: return "dlib via Python"
-        case .hybrid: return "Hybrid Pipeline"
+        case .vision: return "VISION"
+        case .dlib:   return "DLIB"
+        case .hybrid: return "HYBRID"
         }
     }
 
     /// Short label for compact UI / chip overlays.
     var shortLabel: String {
         switch self {
-        case .vision: return "Vision"
-        case .dlib:   return "dlib"
-        case .hybrid: return "Hybrid"
+        case .vision: return "VISION"
+        case .dlib:   return "DLIB"
+        case .hybrid: return "HYBRID"
         }
     }
 
@@ -53,25 +53,25 @@ enum RecognitionEngine: String, CaseIterable, Identifiable {
         case .vision:
             return "Built-in macOS detector for quick whole-library scans."
         case .dlib:
-            return "External recognizer module with higher accuracy and extra setup."
+            return "DLIB recognizer (Python subprocess) — slower but more accurate on hard faces."
         case .hybrid:
-            return "Modular chain that starts with Vision and falls back to dlib when needed."
+            return "VISION first; DLIB second look on videos VISION misses."
         }
     }
 
     var capabilitySummary: String {
         switch self {
-        case .vision: return "Fastest, zero external setup"
-        case .dlib: return "Most accurate, Python-backed"
-        case .hybrid: return "Balanced, multi-engine pipeline"
+        case .vision: return "Fastest — Apple Neural Engine"
+        case .dlib:   return "Most accurate — DLIB / Python"
+        case .hybrid: return "Balanced — multi-engine fallback"
         }
     }
 
     var requirementsSummary: String {
         switch self {
         case .vision: return "No extra dependencies"
-        case .dlib: return "Requires Python executable and recognition script"
-        case .hybrid: return "Optional dlib fallback uses the Python module when available"
+        case .dlib:   return "Requires Python executable and recognition script"
+        case .hybrid: return "Uses DLIB when configured, otherwise VISION-only"
         }
     }
 
@@ -438,7 +438,7 @@ final class PersonFinderModel: ObservableObject {
         settings.save()
         let settings = self.settings
 
-        job.appendLog("Engine: \(settings.recognitionEngine.rawValue)")
+        job.appendLog("Engine: \(settings.recognitionEngine.title)")
         if settings.recognitionEngine == .dlib {
             job.appendLog("  Python: \(settings.pythonPath.isEmpty ? "(empty)" : settings.pythonPath)")
             job.appendLog("  Script: \(settings.recognitionScript.isEmpty ? "(empty)" : settings.recognitionScript)")
