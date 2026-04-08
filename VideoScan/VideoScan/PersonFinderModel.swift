@@ -215,6 +215,22 @@ struct ClipResult: Identifiable {
     let outputDir: String
 }
 
+// MARK: - Compiled Output (one per bucket — see docs/compilation-bucketing.md)
+
+struct CompiledOutput: Identifiable, Equatable, Hashable {
+    let id = UUID()
+    let path: String          // absolute path to the .mp4/.mov on disk
+    let label: String         // shortLabel from CompatKey, e.g. "h264_1080p2997_aac48k_2ch"
+    let clipCount: Int
+    let durationSecs: Double
+    let bytesOnDisk: Int64
+
+    static func == (lhs: CompiledOutput, rhs: CompiledOutput) -> Bool {
+        lhs.id == rhs.id
+    }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
+
 // MARK: - Scan Job
 
 @MainActor
@@ -232,7 +248,7 @@ final class ScanJob: ObservableObject, Identifiable {
     @Published var presenceSecs: Double = 0.0
     @Published var results: [ClipResult] = []
     @Published var consoleLines: [String] = []
-    @Published var compiledVideoPath: String? = nil
+    @Published var compiledVideoPaths: [CompiledOutput] = []
     @Published var elapsedSecs: Double = 0.0
 
     // Live frame preview
@@ -273,7 +289,7 @@ final class ScanJob: ObservableObject, Identifiable {
         videosTotal = 0; videosScanned = 0; videosWithHits = 0
         clipsFound = 0; presenceSecs = 0
         results = []; consoleLines = []
-        compiledVideoPath = nil; elapsedSecs = 0
+        compiledVideoPaths = []; elapsedSecs = 0
         liveFrame = nil; liveMatchedRects = []; liveUnmatchedRects = []
         bestDist = .greatestFiniteMagnitude
         scanTask = nil; timerTask = nil; taskStarted = nil
@@ -665,8 +681,12 @@ final class PersonFinderModel: ObservableObject {
         let totalPresence = workResults.map(\.totalPresenceSecs).reduce(0, +)
         let foundClips = workResults.reduce(0) { $0 + $1.clipFiles.filter { !$0.isEmpty }.count }
 
-        // Concat output — merge individual clips into one compiled video
-        var compiledPath: String? = nil
+        // Bucketed compilation — see docs/compilation-bucketing.md for the
+        // full design. We group consecutive clips by ffprobe-derived
+        // CompatKey, then stream-copy each bucket into its own output file.
+        // This replaces the old single-file libx264 transcode that broke
+        // around the first codec/format boundary in mixed archives.
+        var compiledOutputs: [CompiledOutput] = []
         let allClipPaths = workResults.flatMap(\.clipFiles).filter { !$0.isEmpty }
             .map { (outputDir as NSString).appendingPathComponent($0) }
 
@@ -675,28 +695,27 @@ final class PersonFinderModel: ObservableObject {
             let stamp = df.string(from: Date())
             let name = pfSanitize(settings.personName)
             if settings.decadeChapters {
-                await job.appendLog("\nCreating decade chapter video…")
-                let outPath = (outputDir as NSString).appendingPathComponent("\(name)_by_decade_\(stamp).mp4")
-                await pfConcatenateWithDecadeChapters(results: workResults, outputDir: outputDir,
-                                                      outputPath: outPath,
-                                                      logFn: { line in await job.appendLog(line) })
-                compiledPath = outPath
-            } else {
-                await job.appendLog("\nCreating compiled video…")
-                let outPath = (outputDir as NSString).appendingPathComponent("\(name)_compiled_\(stamp).mp4")
-                await pfConcatenateClips(results: workResults, outputDir: outputDir, outputPath: outPath,
-                                         logFn: { line in await job.appendLog(line) })
-                compiledPath = outPath
+                await job.appendLog("\nNote: decade-chapter output is paused while bucketed")
+                await job.appendLog("compilation lands. See docs/compilation-bucketing.md.")
             }
+            await job.appendLog("\nBuilding compatibility-bucketed compilations…")
+            compiledOutputs = await pfCompileBuckets(
+                results: workResults,
+                outputDir: outputDir,
+                jobName: name,
+                stamp: stamp,
+                logFn: { line in await job.appendLog(line) }
+            )
 
-            // Clean up intermediate clip files after successful compilation
-            if let compiled = compiledPath,
-               FileManager.default.fileExists(atPath: compiled) {
+            // Clean up intermediate clip files after successful compilation.
+            // Skip every output file (defensive — outputs live in the same
+            // dir as clips, but should never collide by name).
+            if !compiledOutputs.isEmpty {
+                let outputPaths = Set(compiledOutputs.map(\.path))
                 let fm = FileManager.default
                 var removed = 0
                 for clipPath in allClipPaths {
-                    // Don't delete the compiled file itself
-                    if clipPath == compiled { continue }
+                    if outputPaths.contains(clipPath) { continue }
                     try? fm.removeItem(atPath: clipPath)
                     removed += 1
                 }
@@ -704,12 +723,12 @@ final class PersonFinderModel: ObservableObject {
             }
         }
 
-        let finalCompiledPath = compiledPath
+        let finalCompiledOutputs = compiledOutputs
         await MainActor.run {
             job.results = clipResults
             job.clipsFound = foundClips
             job.presenceSecs = totalPresence
-            job.compiledVideoPath = finalCompiledPath
+            job.compiledVideoPaths = finalCompiledOutputs
             job.status = .done
             job.progress = 1.0
             job.currentFile = ""
@@ -1582,6 +1601,359 @@ private func pfConcatenateClips(
     }
 }
 
+// MARK: - Compatibility bucketing
+//
+// See docs/compilation-bucketing.md for design rationale. The short version:
+// the ffmpeg concat demuxer requires every input to share identical stream
+// parameters (codec, pix_fmt, resolution, SAR, audio layout, etc). With
+// mixed family-archive material that condition fails about ten minutes
+// into a typical compilation. Instead of forcing a lossy re-encode, we
+// group consecutive clips by a CompatKey and stream-copy each group into
+// its own output file. Multiple files, but every byte preserved.
+
+/// All the stream parameters that the concat demuxer cares about for
+/// stream copy. Two clips are concat-copy compatible iff their CompatKey
+/// values are equal. The fields are intentionally strict — better to
+/// over-bucket than to silently produce a broken file.
+private struct CompatKey: Hashable {
+    // Video
+    let vCodec:      String   // "h264", "hevc", "dvvideo", "mpeg2video", "none"
+    let vProfile:    String   // "High", "Main", ""
+    let pixFmt:      String   // "yuv420p", "yuv422p10le"
+    let width:       Int
+    let height:      Int
+    let sar:         String   // "1:1", "10:11"
+    let fpsRational: String   // "30000/1001", "25/1", "0/0" if VFR
+    let colorSpace:  String
+    let colorRange:  String
+    // Audio
+    let aCodec:      String   // "aac", "pcm_s16le", "ac3", "none"
+    let aSampleRate: Int      // 0 if no audio
+    let aChannels:   Int      // 0 if no audio
+    let aLayout:     String
+    // Container shape
+    let hasAudio:    Bool
+
+    /// Filename-safe short label, e.g. "h264_1080p2997_aac48k_2ch".
+    var shortLabel: String {
+        let codecShort: String = {
+            switch vCodec {
+            case "h264":       return "h264"
+            case "hevc":       return "hevc"
+            case "dvvideo":    return "dv"
+            case "mpeg2video": return "mpeg2"
+            case "prores":     return "prores"
+            case "mjpeg":      return "mjpeg"
+            case "vp9":        return "vp9"
+            case "av1":        return "av1"
+            default:           return vCodec.isEmpty ? "novideo" : vCodec
+            }
+        }()
+        let res = "\(height)p"
+        let fps: String = {
+            // r_frame_rate "num/den" → rounded label
+            let parts = fpsRational.split(separator: "/").compactMap { Double($0) }
+            guard parts.count == 2, parts[1] > 0 else { return "vfr" }
+            let f = parts[0] / parts[1]
+            if abs(f - 23.976) < 0.05 { return "2398" }
+            if abs(f - 24)     < 0.05 { return "24" }
+            if abs(f - 25)     < 0.05 { return "25" }
+            if abs(f - 29.97)  < 0.05 { return "2997" }
+            if abs(f - 30)     < 0.05 { return "30" }
+            if abs(f - 50)     < 0.05 { return "50" }
+            if abs(f - 59.94)  < 0.05 { return "5994" }
+            if abs(f - 60)     < 0.05 { return "60" }
+            return String(format: "%.0f", f)
+        }()
+        let audio: String = {
+            guard hasAudio else { return "noaudio" }
+            let codecShort: String = {
+                switch aCodec {
+                case "aac":       return "aac"
+                case "pcm_s16le": return "pcm"
+                case "pcm_s24le": return "pcm24"
+                case "ac3":       return "ac3"
+                case "eac3":      return "eac3"
+                case "mp3":       return "mp3"
+                case "opus":      return "opus"
+                default:          return aCodec.isEmpty ? "audio" : aCodec
+                }
+            }()
+            let kHz = aSampleRate / 1000
+            return "\(codecShort)\(kHz)k_\(aChannels)ch"
+        }()
+        return pfSanitize("\(codecShort)_\(res)\(fps)_\(audio)")
+    }
+
+    /// True iff every codec/pixfmt in this key can legally live inside an
+    /// `.mp4` (ISO BMFF) container. Anything exotic gets `.mov`, which is
+    /// the more permissive of the two.
+    var preferredExtension: String {
+        let mp4Codecs: Set<String> = ["h264", "hevc", "mpeg2video", "mpeg4", "av1"]
+        let mp4Audio:  Set<String> = ["aac", "ac3", "eac3", "mp3", "opus"]
+        let mp4PixFmt: Set<String> = ["yuv420p", "yuvj420p", "nv12", "yuv420p10le"]
+        if !mp4Codecs.contains(vCodec) { return "mov" }
+        if hasAudio && !mp4Audio.contains(aCodec) { return "mov" }
+        if !mp4PixFmt.contains(pixFmt) { return "mov" }
+        return "mp4"
+    }
+}
+
+/// Run ffprobe on a clip and parse out a CompatKey. Returns nil if the
+/// probe failed or the file lacks a video stream.
+private func pfProbeCompatKey(path: String) async -> CompatKey? {
+    let fm = FileManager.default
+    let ffprobeCandidates = ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe", "/usr/bin/ffprobe"]
+    guard let ffprobePath = ffprobeCandidates.first(where: { fm.fileExists(atPath: $0) }) else { return nil }
+    guard fm.fileExists(atPath: path) else { return nil }
+
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: ffprobePath)
+    proc.arguments = [
+        "-v", "error",
+        "-print_format", "json",
+        "-show_streams",
+        "-show_format",
+        path
+    ]
+    let outPipe = Pipe()
+    proc.standardOutput = outPipe
+    proc.standardError = FileHandle.nullDevice
+    do { try proc.run() } catch { return nil }
+    proc.waitUntilExit()
+    guard proc.terminationStatus == 0 else { return nil }
+
+    let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+    guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let streams = root["streams"] as? [[String: Any]] else { return nil }
+
+    let video = streams.first(where: { ($0["codec_type"] as? String) == "video" })
+    let audio = streams.first(where: { ($0["codec_type"] as? String) == "audio" })
+
+    guard let v = video else { return nil }
+
+    func str(_ d: [String: Any]?, _ k: String) -> String { (d?[k] as? String) ?? "" }
+    func int(_ d: [String: Any]?, _ k: String) -> Int {
+        if let i = d?[k] as? Int { return i }
+        if let s = d?[k] as? String, let i = Int(s) { return i }
+        return 0
+    }
+
+    let vCodec     = str(v, "codec_name")
+    let vProfile   = str(v, "profile")
+    let pixFmt     = str(v, "pix_fmt")
+    let width      = int(v, "width")
+    let height     = int(v, "height")
+    let sar        = str(v, "sample_aspect_ratio").isEmpty ? "1:1" : str(v, "sample_aspect_ratio")
+    let fps        = str(v, "r_frame_rate").isEmpty ? "0/0" : str(v, "r_frame_rate")
+    let colorSpace = str(v, "color_space")
+    let colorRange = str(v, "color_range")
+
+    let hasAudio  = audio != nil
+    let aCodec    = hasAudio ? str(audio, "codec_name")     : "none"
+    let aRate     = hasAudio ? int(audio, "sample_rate")    : 0
+    let aChannels = hasAudio ? int(audio, "channels")       : 0
+    let aLayout   = hasAudio ? str(audio, "channel_layout") : ""
+
+    return CompatKey(
+        vCodec: vCodec, vProfile: vProfile, pixFmt: pixFmt,
+        width: width, height: height, sar: sar, fpsRational: fps,
+        colorSpace: colorSpace, colorRange: colorRange,
+        aCodec: aCodec, aSampleRate: aRate, aChannels: aChannels, aLayout: aLayout,
+        hasAudio: hasAudio
+    )
+}
+
+/// One bucket worth of clips, all sharing a CompatKey, in timeline order.
+private struct pfBucket {
+    let key: CompatKey
+    var entries: [pfClipEntry]
+    var totalDurationSecs: Double
+}
+
+/// Strict-adjacent bucketing: walks the timeline-sorted entries and starts
+/// a new bucket whenever the next clip's key differs from the current
+/// bucket's key, OR appending it would exceed `maxSecs`. Probes via
+/// ffprobe; logs and skips clips that fail to probe.
+private func pfBucketByCompat(
+    entries: [pfClipEntry],
+    maxSecs: Double,
+    logFn: @escaping @Sendable (String) async -> Void
+) async -> [pfBucket] {
+    var buckets: [pfBucket] = []
+    var current: pfBucket? = nil
+
+    for entry in entries {
+        guard let key = await pfProbeCompatKey(path: entry.clipPath) else {
+            await logFn("  ⚠ ffprobe failed for \((entry.clipPath as NSString).lastPathComponent) — skipping")
+            continue
+        }
+        // Cheap duration probe via AVAsset (already used elsewhere in this file).
+        let asset = AVURLAsset(url: URL(fileURLWithPath: entry.clipPath),
+                               options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
+        let dur = (try? await CMTimeGetSeconds(asset.load(.duration))) ?? 0
+
+        if var b = current,
+           b.key == key,
+           b.totalDurationSecs + dur <= maxSecs {
+            b.entries.append(entry)
+            b.totalDurationSecs += dur
+            current = b
+        } else {
+            if let b = current { buckets.append(b) }
+            current = pfBucket(key: key, entries: [entry], totalDurationSecs: dur)
+        }
+    }
+    if let b = current { buckets.append(b) }
+    return buckets
+}
+
+/// Top-level driver for the bucketed compilation pipeline. Returns one
+/// CompiledOutput per bucket actually written to disk.
+private func pfCompileBuckets(
+    results: [pfVideoResult],
+    outputDir: String,
+    jobName: String,
+    stamp: String,
+    logFn: @escaping @Sendable (String) async -> Void
+) async -> [CompiledOutput] {
+    let entries = pfBuildSortedClipEntries(results: results, outputDir: outputDir)
+    guard !entries.isEmpty else {
+        await logFn("  No clips to compile.")
+        return []
+    }
+
+    let maxBucketSecs: Double = 30 * 60   // 30-minute soft cap per bucket
+    let buckets = await pfBucketByCompat(entries: entries, maxSecs: maxBucketSecs, logFn: logFn)
+    guard !buckets.isEmpty else { return [] }
+
+    await logFn("  Found \(entries.count) clip(s) → \(buckets.count) compatibility bucket(s).")
+
+    let fm = FileManager.default
+    let ffmpegCandidates = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
+    guard let ffmpegPath = ffmpegCandidates.first(where: { fm.fileExists(atPath: $0) }) else {
+        await logFn("  ⚠ ffmpeg not found — install via: brew install ffmpeg")
+        return []
+    }
+
+    var outputs: [CompiledOutput] = []
+    for (idx, bucket) in buckets.enumerated() {
+        let ordinal = String(format: "%02d", idx + 1)
+        let label   = bucket.key.shortLabel
+        let ext     = bucket.key.preferredExtension
+        let outName = "\(jobName)_compilation_\(ordinal)_\(label)_\(stamp).\(ext)"
+        let outPath = (outputDir as NSString).appendingPathComponent(outName)
+
+        await logFn("  → Bucket \(ordinal)/\(buckets.count): \(label) — \(bucket.entries.count) clip(s), \(pfFormatDuration(bucket.totalDurationSecs))")
+
+        if let written = await pfStreamCopyConcat(
+            ffmpegPath: ffmpegPath,
+            entries: bucket.entries,
+            outputPath: outPath,
+            logFn: logFn
+        ) {
+            outputs.append(CompiledOutput(
+                path: written,
+                label: label,
+                clipCount: bucket.entries.count,
+                durationSecs: bucket.totalDurationSecs,
+                bytesOnDisk: pfFileSize(at: written)
+            ))
+        }
+    }
+    return outputs
+}
+
+/// Stream-copy a list of clips into one output file via the ffmpeg concat
+/// demuxer. Returns the output path on success, nil on failure.
+private func pfStreamCopyConcat(
+    ffmpegPath: String,
+    entries: [pfClipEntry],
+    outputPath: String,
+    logFn: @escaping @Sendable (String) async -> Void
+) async -> String? {
+    let fm = FileManager.default
+    let tmp = NSTemporaryDirectory()
+    let ts = Int(Date().timeIntervalSince1970 * 1000)
+    let listPath = (tmp as NSString).appendingPathComponent("pf_bucket_\(ts).txt")
+
+    // ffmpeg concat demuxer requires single-quoted paths with internal
+    // single quotes escaped as '\''.
+    let listContent = entries.map { e -> String in
+        let escaped = e.clipPath.replacingOccurrences(of: "'", with: "'\\''")
+        return "file '\(escaped)'"
+    }.joined(separator: "\n")
+    do { try listContent.write(toFile: listPath, atomically: true, encoding: .utf8) }
+    catch {
+        await logFn("  ⚠ Could not write concat list: \(error.localizedDescription)")
+        return nil
+    }
+
+    if fm.fileExists(atPath: outputPath) { try? fm.removeItem(atPath: outputPath) }
+
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: ffmpegPath)
+    proc.arguments = [
+        "-hide_banner", "-nostdin",
+        "-f", "concat", "-safe", "0", "-i", listPath,
+        "-map", "0:v?", "-map", "0:a?",
+        "-c", "copy",
+        "-movflags", "+faststart",
+        "-y", outputPath
+    ]
+    proc.standardOutput = FileHandle.nullDevice
+    let stderrPipe = Pipe()
+    proc.standardError = stderrPipe
+
+    // Drain stderr to prevent the 64KB pipe buffer from deadlocking ffmpeg
+    // when it emits many warnings (mixed-input archives produce a lot).
+    let stderrBox = pfStderrBox()
+    stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+        let chunk = handle.availableData
+        if !chunk.isEmpty { stderrBox.append(chunk) }
+    }
+
+    do { try proc.run() } catch {
+        await logFn("  ⚠ Could not launch ffmpeg: \(error.localizedDescription)")
+        try? fm.removeItem(atPath: listPath)
+        return nil
+    }
+
+    await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+        proc.terminationHandler = { _ in cont.resume() }
+        if !proc.isRunning { cont.resume() }
+    }
+    stderrPipe.fileHandleForReading.readabilityHandler = nil
+    try? fm.removeItem(atPath: listPath)
+
+    if proc.terminationStatus == 0 {
+        await logFn("    ✓ \((outputPath as NSString).lastPathComponent)")
+        return outputPath
+    } else {
+        await logFn("    ⚠ ffmpeg exited with code \(proc.terminationStatus)")
+        if let errStr = String(data: stderrBox.data, encoding: .utf8), !errStr.isEmpty {
+            for line in errStr.components(separatedBy: .newlines).suffix(8) where !line.isEmpty {
+                await logFn("      stderr: \(line)")
+            }
+        }
+        return nil
+    }
+}
+
+/// Tiny reference-type box so the readabilityHandler closure can append
+/// without tripping Swift 6 sendable-capture diagnostics.
+private final class pfStderrBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var buffer = Data()
+    func append(_ chunk: Data) { lock.lock(); buffer.append(chunk); lock.unlock() }
+    var data: Data { lock.lock(); defer { lock.unlock() }; return buffer }
+}
+
+private func pfFileSize(at path: String) -> Int64 {
+    let attrs = try? FileManager.default.attributesOfItem(atPath: path)
+    return (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+}
+
 // MARK: - Utilities
 
 nonisolated func pfSanitize(_ s: String) -> String {
@@ -1594,4 +1966,11 @@ nonisolated func pfSanitize(_ s: String) -> String {
 func pfFormatDuration(_ secs: Double) -> String {
     let t = Int(secs); let h = t/3600; let m = (t%3600)/60; let s = t%60
     return h > 0 ? "\(h)h \(m)m \(s)s" : m > 0 ? "\(m)m \(s)s" : "\(s)s"
+}
+
+func pfFormatBytes(_ bytes: Int64) -> String {
+    let f = ByteCountFormatter()
+    f.allowedUnits = [.useMB, .useGB]
+    f.countStyle = .file
+    return f.string(fromByteCount: bytes)
 }
