@@ -156,6 +156,50 @@ actor MemoryPressureMonitor {
     }
 }
 
+// MARK: - System Metrics Helpers
+
+/// CPU load averages (1, 5, 15 minute) — no sudo required.
+func systemCPULoadAverage() -> (one: Double, five: Double, fifteen: Double) {
+    var loadavg = [Double](repeating: 0, count: 3)
+    getloadavg(&loadavg, 3)
+    return (loadavg[0], loadavg[1], loadavg[2])
+}
+
+/// Current process resident memory in MB — no sudo required.
+func processResidentMemoryMB() -> Double {
+    var info = mach_task_basic_info()
+    var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size / MemoryLayout<natural_t>.size)
+    let result = withUnsafeMutablePointer(to: &info) { ptr in
+        ptr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { intPtr in
+            task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), intPtr, &count)
+        }
+    }
+    guard result == KERN_SUCCESS else { return 0 }
+    return Double(info.resident_size) / (1024 * 1024)
+}
+
+/// System thermal state as a user-facing label + color hint.
+func systemThermalState() -> (label: String, isWarning: Bool) {
+    switch ProcessInfo.processInfo.thermalState {
+    case .nominal:  return ("Normal", false)
+    case .fair:     return ("Fair", false)
+    case .serious:  return ("Serious", true)
+    case .critical: return ("Critical", true)
+    @unknown default: return ("Unknown", false)
+    }
+}
+
+/// Total physical memory in GB.
+func totalPhysicalMemoryGB() -> Double {
+    Double(ProcessInfo.processInfo.physicalMemory) / (1024 * 1024 * 1024)
+}
+
+/// Used physical memory in GB (total - available).
+func usedMemoryGB() -> Double {
+    let available = Double(MemoryPressureMonitor.shared.availableMemory()) / (1024 * 1024 * 1024)
+    return totalPhysicalMemoryGB() - available
+}
+
 // MARK: - Pause Gate
 
 /// Cooperative pause gate for structured concurrency.

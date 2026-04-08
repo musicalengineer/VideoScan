@@ -7,6 +7,33 @@
 
 import SwiftUI
 
+// MARK: - Build Info
+
+enum BuildInfo {
+    static let version: String = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+    static let build: String   = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+    #if DEBUG
+    static let configuration = "Debug"
+    #else
+    static let configuration = "Release"
+    #endif
+    static let buildDate: String = {
+        // __DATE__ and __TIME__ aren't available in Swift, so use the compilation
+        // date of this file by reading its own modification via the embedded timestamp.
+        // Best-practice alternative: Xcode build phase sets BUILD_DATE in Info.plist.
+        // For now, use the bundle's executable creation date as a proxy.
+        if let execURL = Bundle.main.executableURL,
+           let attrs = try? FileManager.default.attributesOfItem(atPath: execURL.path),
+           let date = attrs[.creationDate] as? Date {
+            let fmt = DateFormatter()
+            fmt.dateFormat = "yyyy-MM-dd HH:mm"
+            return fmt.string(from: date)
+        }
+        return "unknown"
+    }()
+    static let summary: String = "v\(version) (\(build)) · \(configuration) · \(buildDate)"
+}
+
 @main
 struct VideoScanApp: App {
     @StateObject private var catalogModel = VideoScanModel()
@@ -126,6 +153,9 @@ struct AboutView: View {
                         VStack(spacing: 4) {
                             Text("Developed By Rick Breen.   Inspired by Donna.")
                                 .font(.headline)
+                            Text(BuildInfo.summary)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.secondary)
                         }
                         Spacer()
                     }

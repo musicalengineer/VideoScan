@@ -8,7 +8,8 @@ import PhotosUI
 // MARK: - Main View
 
 struct PersonFinderView: View {
-    @StateObject private var model = PersonFinderModel()
+    @EnvironmentObject var dashboard: DashboardState
+    @State private var model = PersonFinderModel()
     @State private var selectedJobID: UUID? = nil
     @State private var showSettings = false
     @State private var photosPickerItems: [PhotosPickerItem] = []
@@ -33,6 +34,7 @@ struct PersonFinderView: View {
             }
         }
         .frame(minWidth: 960, minHeight: 650)
+        .onAppear { model.dashboard = dashboard }
     }
 
     // MARK: Reference bar — who are we looking for?
@@ -390,7 +392,8 @@ struct PersonFinderView: View {
                                 onStop: { model.stopJob(job) },
                                 onPause: { model.togglePauseJob(job) },
                                 onReset: { job.reset() },
-                                onRemove: { model.removeJob(job) }
+                                onRemove: { model.removeJob(job) },
+                                onPreview: { PreviewWindowController.shared.show(jobs: [job]) }
                             )
                             .contentShape(Rectangle())
                             .onTapGesture { selectedJobID = job.id }
@@ -746,6 +749,7 @@ struct ScanJobRow: View {
     let onPause: () -> Void
     let onReset: () -> Void
     let onRemove: () -> Void
+    var onPreview: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -805,9 +809,9 @@ struct ScanJobRow: View {
                     .buttonStyle(.bordered)
                     .controlSize(.regular)
 
-                    if job.status == .scanning {
+                    if job.status == .scanning, let onPreview {
                         Button {
-                            PreviewWindowController.shared.show(jobs: [job])
+                            onPreview()
                         } label: {
                             Label("Preview", systemImage: "eye.fill")
                         }
@@ -1107,6 +1111,30 @@ struct RealtimeFaceDetectionContent: View {
             }
             .aspectRatio(16/9, contentMode: .fit)
 
+            // Display Rate toolbar — fixed position above status bar
+            if let job = activeJob, job.status == .scanning {
+                HStack(spacing: 8) {
+                    Text("Display Rate")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    Slider(value: Binding(
+                        get: { Double(job.previewRate) },
+                        set: { job.previewRate = max(1, Int($0)) }
+                    ), in: 1...10, step: 1)
+                        .frame(width: 120)
+                    Text("\(job.previewRate)")
+                        .font(.system(.caption, design: .monospaced))
+                        .frame(width: 16)
+                    Text(job.previewRate == 1 ? "every frame" : "every \(job.previewRate) frames")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .background(Color(NSColor.controlBackgroundColor))
+            }
+
             // Bottom status bar
             HStack(spacing: 10) {
                 // Job picker (when multiple jobs exist)
@@ -1138,6 +1166,7 @@ struct RealtimeFaceDetectionContent: View {
                             .lineLimit(1).truncationMode(.middle)
                     }
                 }
+
                 Spacer()
                 if let job = activeJob, job.videosTotal > 0 {
                     Text("\(job.videosScanned)/\(job.videosTotal) videos")
@@ -1158,7 +1187,7 @@ struct RealtimeFaceDetectionContent: View {
 
 /// Floating HUD showing live detection stats
 private struct FaceDetectHUD: View {
-    @Bindable var job: ScanJob
+    @ObservedObject var job: ScanJob
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {

@@ -34,6 +34,7 @@ struct PersonFinderSettings: Equatable {
     var decadeChapters: Bool = false    // sort by decade with chapter markers
     var skipBundles: Bool = true        // skip .fcpbundle, .imovielibrary, etc.
     var largestFaceOnly: Bool = false   // use only the largest detected face per reference photo
+    var previewRate: Int = 5            // show preview every N sampled frames (1 = every frame)
 
     // dlib/Python engine
     var recognitionEngine: RecognitionEngine = .vision
@@ -115,6 +116,7 @@ struct PersonFinderSettings: Equatable {
         if d.object(forKey: "\(p)decadeChapters") != nil    { s.decadeChapters = d.bool(forKey: "\(p)decadeChapters") }
         if d.object(forKey: "\(p)skipBundles") != nil       { s.skipBundles = d.bool(forKey: "\(p)skipBundles") }
         if d.object(forKey: "\(p)largestFaceOnly") != nil   { s.largestFaceOnly = d.bool(forKey: "\(p)largestFaceOnly") }
+        if d.object(forKey: "\(p)previewRate") != nil      { s.previewRate = max(1, d.integer(forKey: "\(p)previewRate")) }
         if s.pythonPath.isEmpty || !FileManager.default.isExecutableFile(atPath: s.pythonPath) {
             s.pythonPath = detectedPythonPath()
         }
@@ -146,6 +148,7 @@ struct PersonFinderSettings: Equatable {
         d.set(decadeChapters,                 forKey: "\(p)decadeChapters")
         d.set(skipBundles,                    forKey: "\(p)skipBundles")
         d.set(largestFaceOnly,                forKey: "\(p)largestFaceOnly")
+        d.set(previewRate,                    forKey: "\(p)previewRate")
     }
 }
 
@@ -240,6 +243,11 @@ final class ScanJob: ObservableObject, Identifiable {
     // Best feature-print distance seen across all videos (lower = closer match)
     @Published var bestDist: Float = .greatestFiniteMagnitude
 
+    /// Display rate for live preview — adjustable in realtime from UI.
+    /// Read by the scan loop each frame; not part of the snapshot settings.
+    /// nonisolated(unsafe): Int reads are atomic on ARM64; written from MainActor, read from scan loop.
+    nonisolated(unsafe) var previewRate: Int = 5
+
     fileprivate var scanTask: Task<Void, Never>?
     fileprivate var timerTask: Task<Void, Never>?
     fileprivate var taskStarted: Date?
@@ -247,9 +255,13 @@ final class ScanJob: ObservableObject, Identifiable {
     /// Cooperative pause gate — tasks check this between videos
     let pauseGate = PauseGate()
 
+    /// Persistent log file for this scan job — crash-safe, immediate writes.
+    nonisolated(unsafe) var persistentLog: PersistentLog?
+
     init(searchPath: String) { self.searchPath = searchPath }
 
     func appendLog(_ line: String) {
+        persistentLog?.write(line)
         consoleLines.append(line)
         if consoleLines.count > 2000 { consoleLines.removeFirst(consoleLines.count - 2000) }
     }
@@ -294,6 +306,8 @@ final class PersonFinderModel: ObservableObject {
     @Published var settings = PersonFinderSettings.restored() {
         didSet { settings.save() }
     }
+    /// Optional reference to DashboardState for publishing Vision/ANE metrics.
+    weak var dashboard: DashboardState?
 
     /// Binding wrapper that auto-saves settings on every write.
     /// Use `model.settingsBinding.threshold` etc. in SwiftUI controls.
@@ -359,12 +373,20 @@ final class PersonFinderModel: ObservableObject {
 
         job.reset()
         job.status = .scanning
+        job.previewRate = settings.previewRate
+        let log = PersistentLog(name: "facedetect")
+        log.start()
+        job.persistentLog = log
         job.startElapsedTimer()
 
         let prints = settings.recognitionEngine == .vision ? referenceFeaturePrints : []
+        let dash = self.dashboard
         job.scanTask = Task { [weak job] in
             guard let job else { return }
-            await PersonFinderModel.runScan(job: job, prints: prints, settings: settings)
+            await MainActor.run { dash?.visionActive = settings.recognitionEngine == .vision }
+            await PersonFinderModel.runScan(job: job, prints: prints, settings: settings, dashboard: dash)
+            await MainActor.run { dash?.visionActive = false; dash?.visionFPS = 0; dash?.visionMsPerFrame = 0 }
+            log.close()
         }
     }
 
@@ -455,7 +477,8 @@ final class PersonFinderModel: ObservableObject {
     private nonisolated static func runScan(
         job: ScanJob,
         prints: [VNFeaturePrintObservation],
-        settings: PersonFinderSettings
+        settings: PersonFinderSettings,
+        dashboard: DashboardState?
     ) async {
         let path = await job.searchPath
         await job.appendLog("Scanning: \(path)")
@@ -482,6 +505,7 @@ final class PersonFinderModel: ObservableObject {
         // Process concurrently — bounded task group
         let total = videoFiles.count
         var orderedResults = [pfVideoResult?](repeating: nil, count: total)
+        let dash = dashboard
 
         // Closure that dispatches to the right engine — keeps the task group logic identical
         // regardless of which recognition backend is active.
@@ -525,7 +549,16 @@ final class PersonFinderModel: ObservableObject {
                             job.liveUnmatchedRects = unmatched
                         }
                     },
-                    distFn: distFn
+                    distFn: distFn,
+                    visionStatsFn: { fps, msPerFrame in
+                        let workers = await MemoryPressureMonitor.shared.currentWorkers()
+                        await MainActor.run {
+                            dash?.visionFPS = fps
+                            dash?.visionMsPerFrame = msPerFrame
+                            dash?.visionWorkers = workers
+                        }
+                    },
+                    previewRateFn: { job.previewRate }
                 )
             case .dlib:
                 r = await pfProcessVideoWithDlib(
@@ -920,7 +953,9 @@ private nonisolated func pfProcessVideo(
     logFn: @escaping @Sendable (String) async -> Void,
     progressFn: @escaping @Sendable (String) async -> Void,
     frameFn: @escaping @Sendable (CGImage, [CGRect], [CGRect]) async -> Void,
-    distFn: @escaping @Sendable (Float) async -> Void
+    distFn: @escaping @Sendable (Float) async -> Void,
+    visionStatsFn: @escaping @Sendable (Double, Double) async -> Void = { _, _ in },
+    previewRateFn: @escaping @Sendable () -> Int = { 5 }
 ) async -> pfVideoResult? {
     let filename = (filePath as NSString).lastPathComponent
     let asset = AVURLAsset(url: URL(fileURLWithPath: filePath),
@@ -979,6 +1014,7 @@ private nonisolated func pfProcessVideo(
     var sampledSoFar = 0
     let milestones: Set<Int> = [25, 50, 75]             // % checkpoints for console progress lines
     var loggedMilestones = Set<Int>()
+    var visionFrameTimes: [Double] = []                  // per-frame processing times for FPS tracking
 
     while true {
         if Task.isCancelled { reader.cancelReading(); break }
@@ -1016,6 +1052,7 @@ private nonisolated func pfProcessVideo(
             }
 
             // Phase 1: face detection on raw CVPixelBuffer — Vision dispatches to ANE
+            let frameStart = CFAbsoluteTimeGetCurrent()
             let allFaces = pfDetectFacesInBuffer(pixelBuffer, orientation: orientation)
             let candidates: [VNFaceObservation] = settings.requirePrimary
                 ? (allFaces.max(by: { ($0.boundingBox.width * $0.boundingBox.height) < ($1.boundingBox.width * $1.boundingBox.height) }).map { [$0] } ?? [])
@@ -1041,9 +1078,12 @@ private nonisolated func pfProcessVideo(
                 }
                 totalFacesDetected += facesThisFrame
                 sampledSoFar += 1
-                if sampledSoFar % 5 == 0 { previewImage = img }
+                visionFrameTimes.append(CFAbsoluteTimeGetCurrent() - frameStart)
+                let rate = max(1, previewRateFn())
+                if sampledSoFar % rate == 0 { previewImage = img }
             } else {
                 sampledSoFar += 1
+                visionFrameTimes.append(CFAbsoluteTimeGetCurrent() - frameStart)
             }
         }
         // -- autoreleasepool drained: all Obj-C temporaries released --
@@ -1068,6 +1108,14 @@ private nonisolated func pfProcessVideo(
         // Async calls outside autoreleasepool
         if let img = previewImage {
             await frameFn(img, frameMatchedRects, frameUnmatchedRects)
+        }
+
+        // Publish Vision/ANE throughput stats every 10 sampled frames
+        if visionFrameTimes.count >= 10 {
+            let avg = visionFrameTimes.reduce(0, +) / Double(visionFrameTimes.count)
+            let currentFPS = avg > 0 ? 1.0 / avg : 0
+            await visionStatsFn(currentFPS, avg * 1000)  // fps, ms/frame
+            visionFrameTimes.removeAll(keepingCapacity: true)
         }
 
         let pct = duration > 0 ? Int(frameTime / duration * 100) : 0
@@ -1418,8 +1466,18 @@ private func pfConcatenateWithDecadeChapters(
         "-c:a", "aac", "-b:a", "192k",
         "-y", outputPath
     ]
-    process.standardOutput = Pipe()
-    process.standardError  = Pipe()
+    process.standardOutput = FileHandle.nullDevice
+    let stderrPipe = Pipe()
+    process.standardError = stderrPipe
+
+    // Drain stderr asynchronously to prevent pipe buffer deadlock.
+    // ffmpeg can emit thousands of warning lines with mixed-format inputs;
+    // if the 64KB pipe buffer fills, ffmpeg blocks and the output is truncated.
+    var stderrData = Data()
+    stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+        let chunk = handle.availableData
+        if !chunk.isEmpty { stderrData.append(chunk) }
+    }
 
     do { try process.run() } catch {
         await logFn("  ⚠ Could not launch ffmpeg: \(error.localizedDescription)")
@@ -1431,6 +1489,7 @@ private func pfConcatenateWithDecadeChapters(
         process.terminationHandler = { _ in cont.resume() }
         if !process.isRunning { cont.resume() }
     }
+    stderrPipe.fileHandleForReading.readabilityHandler = nil
     try? fm.removeItem(atPath: listPath); try? fm.removeItem(atPath: metaPath)
 
     if process.terminationStatus == 0 {
@@ -1439,6 +1498,12 @@ private func pfConcatenateWithDecadeChapters(
         await logFn("  → Duration: \(pfFormatDuration(totalSecs))  Chapters: \(decadeList)")
     } else {
         await logFn("  ⚠ ffmpeg exited with code \(process.terminationStatus)")
+        if let errStr = String(data: stderrData, encoding: .utf8), !errStr.isEmpty {
+            let lines = errStr.components(separatedBy: .newlines).suffix(10)
+            for line in lines where !line.isEmpty {
+                await logFn("    stderr: \(line)")
+            }
+        }
     }
 }
 
@@ -1480,8 +1545,16 @@ private func pfConcatenateClips(
         "-c:a", "aac", "-b:a", "192k",
         "-y", outputPath
     ]
-    process.standardOutput = Pipe()
-    process.standardError  = Pipe()
+    process.standardOutput = FileHandle.nullDevice
+    let stderrPipe = Pipe()
+    process.standardError = stderrPipe
+
+    // Drain stderr asynchronously to prevent pipe buffer deadlock.
+    var stderrData = Data()
+    stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+        let chunk = handle.availableData
+        if !chunk.isEmpty { stderrData.append(chunk) }
+    }
 
     do { try process.run() } catch {
         await logFn("  ⚠ Could not launch ffmpeg: \(error.localizedDescription)")
@@ -1493,12 +1566,19 @@ private func pfConcatenateClips(
         process.terminationHandler = { _ in cont.resume() }
         if !process.isRunning { cont.resume() }
     }
+    stderrPipe.fileHandleForReading.readabilityHandler = nil
     try? fm.removeItem(atPath: listPath)
 
     if process.terminationStatus == 0 {
         await logFn("  → Compiled video: \(outputPath)")
     } else {
         await logFn("  ⚠ ffmpeg concat exited with code \(process.terminationStatus)")
+        if let errStr = String(data: stderrData, encoding: .utf8), !errStr.isEmpty {
+            let lines = errStr.components(separatedBy: .newlines).suffix(10)
+            for line in lines where !line.isEmpty {
+                await logFn("    stderr: \(line)")
+            }
+        }
     }
 }
 

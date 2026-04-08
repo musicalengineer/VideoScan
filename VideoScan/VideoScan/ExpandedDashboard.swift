@@ -57,43 +57,126 @@ struct ExpandedDashboard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            if isIdle {
-                idleView
-            } else {
+            if !isIdle {
                 headerSection
                 if isScanning { scanSections }
                 if isCombining { combineSections }
             }
+            systemMetricsSection
         }
         .padding(16)
         .frame(width: 420)
         .onReceive(timer) { now = $0 }
     }
 
-    // MARK: - Idle
+    // MARK: - System Metrics (always visible)
 
-    private var idleView: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "gauge.with.dots.needle.0percent")
-                .font(.system(size: 28))
-                .foregroundColor(.secondary)
-            Text("No operation in progress")
-                .font(.system(size: 12))
-                .foregroundColor(.secondary)
-            if dashboard.scanPhase == .complete {
-                VStack(spacing: 4) {
-                    Text("Last scan complete")
-                        .font(.system(size: 11, design: .monospaced))
-                    if dashboard.scanCacheHits > 0 {
-                        Text("\(dashboard.scanCacheHits) cache hits")
+    private var memFraction: Double {
+        dashboard.memTotalGB > 0 ? dashboard.memUsedGB / dashboard.memTotalGB : 0
+    }
+
+    private var memColor: Color {
+        if memFraction < 0.6 { return .green }
+        if memFraction < 0.8 { return .orange }
+        return .red
+    }
+
+    private var systemMetricsSection: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                // Memory bar
+                HStack(spacing: 6) {
+                    Image(systemName: "memorychip")
+                        .font(.system(size: 10))
+                        .foregroundColor(memColor)
+                    Text("Memory")
+                        .font(.system(size: 11, weight: .medium))
+                    Spacer()
+                    Text(String(format: "%.1f / %.0f GB", dashboard.memUsedGB, dashboard.memTotalGB))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(Color.gray.opacity(0.15))
+                        .frame(height: 6)
+                    GeometryReader { geo in
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(memColor)
+                            .frame(width: max(geo.size.width * memFraction, 0), height: 6)
+                    }
+                    .frame(height: 6)
+                }
+
+                // App RSS + Thermal
+                HStack(spacing: 16) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "app.dashed")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                        Text(String(format: "App: %.0f MB", dashboard.appMemoryMB))
                             .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(.yellow)
+                            .foregroundColor(.secondary)
+                    }
+                    HStack(spacing: 4) {
+                        Image(systemName: "thermometer.medium")
+                            .font(.system(size: 9))
+                            .foregroundColor(dashboard.thermalWarning ? .red : .secondary)
+                        Text("Thermal: \(dashboard.thermalLabel)")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(dashboard.thermalWarning ? .red : .secondary)
+                    }
+                }
+
+                Divider()
+
+                // CPU load
+                HStack(spacing: 6) {
+                    Image(systemName: "cpu")
+                        .font(.system(size: 10))
+                        .foregroundColor(.blue)
+                    Text("CPU Load")
+                        .font(.system(size: 11, weight: .medium))
+                    Spacer()
+                    Text(String(format: "%.1f / %.1f / %.1f",
+                                dashboard.cpuLoad1,
+                                dashboard.cpuLoad5,
+                                dashboard.cpuLoad15))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(.secondary)
+                    Text("(1/5/15m)")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary.opacity(0.7))
+                }
+
+                // Vision/ANE section — only during face detection
+                if dashboard.visionActive {
+                    Divider()
+                    HStack(spacing: 6) {
+                        Image(systemName: "brain")
+                            .font(.system(size: 10))
+                            .foregroundColor(.purple)
+                        Text("Vision / ANE")
+                            .font(.system(size: 11, weight: .medium))
+                        Spacer()
+                        Text(String(format: "%.1f fps", dashboard.visionFPS))
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundColor(.purple)
+                        Text(String(format: "%.0f ms/frame", dashboard.visionMsPerFrame))
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(.secondary)
+                        if dashboard.visionWorkers > 0 {
+                            Text("\(dashboard.visionWorkers) worker\(dashboard.visionWorkers == 1 ? "" : "s")")
+                                .font(.system(size: 10, design: .monospaced))
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
             }
+        } label: {
+            Label("System", systemImage: "gauge.with.dots.needle.50percent")
+                .font(.system(size: 11, weight: .medium))
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 20)
     }
 
     // MARK: - Header

@@ -8,14 +8,20 @@ import Combine
 @MainActor
 final class DashboardState: ObservableObject {
 
+    init() {
+        startSystemMetrics()
+    }
+
     // MARK: - Console
 
     @Published var consoleLines: [String] = []
     private let maxConsoleLines = 2000
     private var pendingLines: [String] = []
     private var flushScheduled = false
+    let catalogLog = PersistentLog(name: "catalog")
 
     func log(_ msg: String) {
+        catalogLog.write(msg)
         let newLines = msg.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         pendingLines.append(contentsOf: newLines)
 
@@ -98,9 +104,56 @@ final class DashboardState: ObservableObject {
         throughputTimer = nil
     }
 
+    // MARK: - System Metrics (always-on)
+
+    @Published var memUsedGB: Double = 0
+    @Published var memTotalGB: Double = 0
+    @Published var appMemoryMB: Double = 0
+    @Published var cpuLoad1: Double = 0
+    @Published var cpuLoad5: Double = 0
+    @Published var cpuLoad15: Double = 0
+    @Published var thermalLabel: String = "Normal"
+    @Published var thermalWarning: Bool = false
+
+    // Vision/ANE metrics — updated by PersonFinderModel during scans
+    @Published var visionFPS: Double = 0
+    @Published var visionMsPerFrame: Double = 0
+    @Published var visionWorkers: Int = 0
+    @Published var visionActive: Bool = false
+
+    private var systemMetricsTimer: Timer?
+
+    func startSystemMetrics() {
+        memTotalGB = totalPhysicalMemoryGB()
+        pollSystemMetrics()
+        systemMetricsTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.pollSystemMetrics()
+            }
+        }
+    }
+
+    func stopSystemMetrics() {
+        systemMetricsTimer?.invalidate()
+        systemMetricsTimer = nil
+    }
+
+    private func pollSystemMetrics() {
+        memUsedGB = usedMemoryGB()
+        appMemoryMB = processResidentMemoryMB()
+        let load = systemCPULoadAverage()
+        cpuLoad1 = load.one
+        cpuLoad5 = load.five
+        cpuLoad15 = load.fifteen
+        let thermal = systemThermalState()
+        thermalLabel = thermal.label
+        thermalWarning = thermal.isWarning
+    }
+
     // MARK: - Reset
 
     func resetForScan() {
+        catalogLog.start()
         consoleLines = []
         pendingLines.removeAll()
         flushScheduled = false
