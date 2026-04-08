@@ -358,7 +358,7 @@ struct PersonFinderView: View {
                 Divider().frame(height: 20)
 
                 Button {
-                    PreviewWindowController.shared.show(jobs: model.jobs)
+                    PreviewWindowController.shared.show(model: model)
                 } label: {
                     Label("Face Detection", systemImage: "eye.fill")
                 }
@@ -393,7 +393,7 @@ struct PersonFinderView: View {
                                 onPause: { model.togglePauseJob(job) },
                                 onReset: { job.reset() },
                                 onRemove: { model.removeJob(job) },
-                                onPreview: { PreviewWindowController.shared.show(jobs: [job]) }
+                                onPreview: { PreviewWindowController.shared.show(model: model, focusJobID: job.id) }
                             )
                             .contentShape(Rectangle())
                             .onTapGesture { selectedJobID = job.id }
@@ -1061,15 +1061,77 @@ struct ScanRingChart: View {
 // MARK: - Realtime Face Detection Window
 
 struct RealtimeFaceDetectionContent: View {
-    let jobs: [ScanJob]
+    @ObservedObject var model: PersonFinderModel
+    let initialJobID: UUID?
     @State private var selectedJobID: UUID?
 
-    /// Auto-select the first actively scanning job
+    init(model: PersonFinderModel, initialJobID: UUID? = nil) {
+        self.model = model
+        self.initialJobID = initialJobID
+        _selectedJobID = State(initialValue: initialJobID)
+    }
+
+    private var jobs: [ScanJob] { model.jobs }
+
+    /// Resolve which job to display. If the user explicitly picked one and it
+    /// is still active, honor that. Otherwise auto-pick a scanning job.
     private var activeJob: ScanJob? {
-        if let sel = selectedJobID, let j = jobs.first(where: { $0.id == sel }) { return j }
+        if let sel = selectedJobID,
+           let j = jobs.first(where: { $0.id == sel }),
+           j.status.isActive {
+            return j
+        }
         return jobs.first(where: { $0.status == .scanning })
             ?? jobs.first(where: { $0.status.isActive })
+            ?? (selectedJobID.flatMap { sid in jobs.first(where: { $0.id == sid }) })
+            ?? jobs.first
     }
+
+    var body: some View {
+        // NOTE: The parent only re-renders when @State (selectedJobID) changes.
+        // To get live frame updates, the active job must be observed via
+        // @ObservedObject in a child view — that's ActiveJobFaceDetectView below.
+        Group {
+            if let job = activeJob {
+                ActiveJobFaceDetectView(
+                    job: job,
+                    jobs: jobs,
+                    selectedJobID: $selectedJobID
+                )
+            } else {
+                VStack(spacing: 0) {
+                    ZStack {
+                        Color.black
+                        VStack(spacing: 12) {
+                            Image(systemName: "face.dashed")
+                                .font(.system(size: 48))
+                                .foregroundStyle(.secondary.opacity(0.5))
+                            if jobs.contains(where: { $0.status.isActive }) {
+                                ProgressView().colorScheme(.dark)
+                                Text("Waiting for frames...")
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("Start a scan to see realtime face detection")
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .aspectRatio(16/9, contentMode: .fit)
+                }
+            }
+        }
+        .frame(minWidth: 800, minHeight: 520)
+    }
+}
+
+/// Inner view that owns an @ObservedObject reference to the active ScanJob, so
+/// SwiftUI re-renders when liveFrame / status / counters mutate. The outer
+/// RealtimeFaceDetectionContent does NOT observe the jobs (it just holds a
+/// `let [ScanJob]`), which is why we need this child wrapper.
+private struct ActiveJobFaceDetectView: View {
+    @ObservedObject var job: ScanJob
+    let jobs: [ScanJob]
+    @Binding var selectedJobID: UUID?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1077,18 +1139,16 @@ struct RealtimeFaceDetectionContent: View {
             ZStack {
                 Color.black
 
-                if let job = activeJob, let frame = job.liveFrame {
+                if let frame = job.liveFrame {
                     LiveFramePreview(
                         frame: frame,
                         matchedRects: job.liveMatchedRects,
                         unmatchedRects: job.liveUnmatchedRects
                     )
-                    // Floating HUD overlay — top left
                     .overlay(alignment: .topLeading) {
                         FaceDetectHUD(job: job)
                             .padding(10)
                     }
-                    // Legend — top right
                     .overlay(alignment: .topTrailing) {
                         FaceDetectLegend()
                             .padding(10)
@@ -1098,90 +1158,93 @@ struct RealtimeFaceDetectionContent: View {
                         Image(systemName: "face.dashed")
                             .font(.system(size: 48))
                             .foregroundStyle(.secondary.opacity(0.5))
-                        if jobs.contains(where: { $0.status.isActive }) {
-                            ProgressView().colorScheme(.dark)
-                            Text("Waiting for frames...")
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Text("Start a scan to see realtime face detection")
-                                .foregroundStyle(.secondary)
-                        }
+                        ProgressView().colorScheme(.dark)
+                        Text("Waiting for frames...")
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
             .aspectRatio(16/9, contentMode: .fit)
 
-            // Display Rate toolbar — fixed position above status bar
-            if let job = activeJob, job.status == .scanning {
-                HStack(spacing: 8) {
+            // Display Rate toolbar
+            if job.status == .scanning {
+                HStack(spacing: 10) {
                     Text("Display Rate")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 16, weight: .medium))
                         .foregroundStyle(.secondary)
                     Slider(value: Binding(
                         get: { Double(job.previewRate) },
                         set: { job.previewRate = max(1, Int($0)) }
                     ), in: 1...10, step: 1)
-                        .frame(width: 120)
+                        .frame(width: 160)
                     Text("\(job.previewRate)")
-                        .font(.system(.caption, design: .monospaced))
-                        .frame(width: 16)
+                        .font(.system(size: 16, design: .monospaced))
+                        .frame(width: 24)
                     Text(job.previewRate == 1 ? "every frame" : "every \(job.previewRate) frames")
-                        .font(.system(size: 10))
+                        .font(.system(size: 14))
                         .foregroundStyle(.secondary)
                     Spacer()
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
                 .background(Color(NSColor.controlBackgroundColor))
             }
 
             // Bottom status bar
-            HStack(spacing: 10) {
-                // Job picker (when multiple jobs exist)
+            HStack(spacing: 12) {
                 if jobs.count > 1 {
                     Picker("Job", selection: Binding(
-                        get: { activeJob?.id ?? UUID() },
+                        get: { selectedJobID ?? job.id },
                         set: { selectedJobID = $0 }
                     )) {
-                        ForEach(jobs) { job in
-                            Text((job.searchPath as NSString).lastPathComponent)
-                                .tag(job.id)
+                        ForEach(jobs) { j in
+                            Text((j.searchPath as NSString).lastPathComponent)
+                                .font(.system(size: 14))
+                                .tag(j.id)
                         }
                     }
                     .labelsHidden()
-                    .frame(maxWidth: 180)
+                    .frame(maxWidth: 240)
                 }
 
-                if let job = activeJob {
-                    Circle()
-                        .fill(job.status == .scanning ? Color.green : Color.secondary)
-                        .frame(width: 8, height: 8)
-                    Text(job.status.label)
-                        .font(.caption).foregroundStyle(.secondary)
+                Circle()
+                    .fill(job.status == .scanning ? Color.green : Color.secondary)
+                    .frame(width: 12, height: 12)
+                Text(job.status.label)
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
 
-                    if !job.currentFile.isEmpty {
-                        Text(job.currentFile)
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1).truncationMode(.middle)
-                    }
+                if !job.currentFile.isEmpty {
+                    Text(job.currentFile)
+                        .font(.system(size: 14, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
                 }
 
                 Spacer()
-                if let job = activeJob, job.videosTotal > 0 {
+                if job.videosTotal > 0 {
                     Text("\(job.videosScanned)/\(job.videosTotal) videos")
-                        .font(.system(.caption, design: .monospaced))
+                        .font(.system(size: 14, design: .monospaced))
                         .foregroundStyle(.secondary)
                     Text("\(job.videosWithHits) match(es)")
-                        .font(.system(.caption, design: .monospaced))
+                        .font(.system(size: 14, design: .monospaced))
                         .foregroundStyle(job.videosWithHits > 0 ? .green : .secondary)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
             .background(Color(NSColor.windowBackgroundColor))
         }
-        .frame(minWidth: 640, minHeight: 400)
+        // When the displayed job goes inactive, nudge the parent to re-evaluate
+        // its computed activeJob (e.g. another job is now scanning).
+        .onChange(of: job.status) { _, newStatus in
+            if !newStatus.isActive {
+                if let next = jobs.first(where: { $0.status == .scanning })
+                    ?? jobs.first(where: { $0.status.isActive }) {
+                    selectedJobID = next.id
+                }
+            }
+        }
     }
 }
 
@@ -1190,56 +1253,60 @@ private struct FaceDetectHUD: View {
     @ObservedObject var job: ScanJob
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
                 Image(systemName: "circle.fill")
-                    .font(.system(size: 6))
+                    .font(.system(size: 10))
                     .foregroundColor(.red)
                 Text("LIVE")
-                    .font(.system(.caption2, design: .monospaced).weight(.bold))
+                    .font(.system(size: 14, weight: .bold, design: .monospaced))
                     .foregroundColor(.red)
             }
             if job.videosTotal > 0 {
                 Text("Video \(job.videosScanned)/\(job.videosTotal)")
-                    .font(.system(.caption, design: .monospaced))
+                    .font(.system(size: 16, design: .monospaced))
                     .foregroundColor(.white)
             }
             Text("Hits: \(job.videosWithHits)")
-                .font(.system(.caption, design: .monospaced))
+                .font(.system(size: 16, design: .monospaced))
                 .foregroundColor(job.videosWithHits > 0 ? .green : .white)
             if job.bestDist < .greatestFiniteMagnitude {
                 Text(String(format: "Best: %.3f", job.bestDist))
-                    .font(.system(.caption, design: .monospaced))
+                    .font(.system(size: 16, design: .monospaced))
                     .foregroundColor(.white)
             }
             Text(pfFormatDuration(job.elapsedSecs))
-                .font(.system(.caption, design: .monospaced))
+                .font(.system(size: 14, design: .monospaced))
                 .foregroundColor(.white.opacity(0.7))
         }
-        .padding(8)
+        .padding(12)
         .background(.black.opacity(0.6))
-        .cornerRadius(6)
+        .cornerRadius(8)
     }
 }
 
 /// Color legend for bounding box colors
 private struct FaceDetectLegend: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 4) {
-                RoundedRectangle(cornerRadius: 2).fill(.green)
-                    .frame(width: 10, height: 10)
-                Text("Match").font(.caption2).foregroundColor(.white)
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                RoundedRectangle(cornerRadius: 3).fill(.green)
+                    .frame(width: 16, height: 16)
+                Text("Match")
+                    .font(.system(size: 14))
+                    .foregroundColor(.white)
             }
-            HStack(spacing: 4) {
-                RoundedRectangle(cornerRadius: 2).fill(.yellow)
-                    .frame(width: 10, height: 10)
-                Text("Face (no match)").font(.caption2).foregroundColor(.white)
+            HStack(spacing: 6) {
+                RoundedRectangle(cornerRadius: 3).fill(.yellow)
+                    .frame(width: 16, height: 16)
+                Text("Face (no match)")
+                    .font(.system(size: 14))
+                    .foregroundColor(.white)
             }
         }
-        .padding(6)
+        .padding(10)
         .background(.black.opacity(0.5))
-        .cornerRadius(4)
+        .cornerRadius(6)
     }
 }
 
@@ -1248,33 +1315,29 @@ class PreviewWindowController {
     static let shared = PreviewWindowController()
     private var window: NSWindow?
 
-    func show(jobs: [ScanJob]) {
+    func show(model: PersonFinderModel, focusJobID: UUID? = nil) {
         if let w = window, w.isVisible {
             w.makeKeyAndOrderFront(nil)
             return
         }
         close()
 
-        let content = RealtimeFaceDetectionContent(jobs: jobs)
+        let content = RealtimeFaceDetectionContent(model: model, initialJobID: focusJobID)
         let hosting = NSHostingView(rootView: content)
         let w = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 800, height: 500),
+            contentRect: NSRect(x: 0, y: 0, width: 1000, height: 680),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
         w.title = "Realtime Face Detection"
         w.contentView = hosting
-        w.setFrameAutosaveName("RealtimeFaceDetect")
+        w.setFrameAutosaveName("RealtimeFaceDetectV2")
         w.center()
         w.makeKeyAndOrderFront(nil)
         window = w
     }
 
-    /// Legacy single-job entry point
-    func show(job: ScanJob) {
-        show(jobs: [job])
-    }
 
     func close() {
         window?.close()

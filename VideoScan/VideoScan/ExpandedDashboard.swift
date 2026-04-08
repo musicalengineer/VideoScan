@@ -65,7 +65,7 @@ struct ExpandedDashboard: View {
             systemMetricsSection
         }
         .padding(16)
-        .frame(width: 420)
+        .frame(minWidth: 560, idealWidth: 600)
         .onReceive(timer) { now = $0 }
     }
 
@@ -87,13 +87,13 @@ struct ExpandedDashboard: View {
                 // Memory bar
                 HStack(spacing: 6) {
                     Image(systemName: "memorychip")
-                        .font(.system(size: 10))
+                        .font(.system(size: 14))
                         .foregroundColor(memColor)
                     Text("Memory")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 16, weight: .medium))
                     Spacer()
                     Text(String(format: "%.1f / %.0f GB", dashboard.memUsedGB, dashboard.memTotalGB))
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(.system(size: 14, design: .monospaced))
                         .foregroundColor(.secondary)
                 }
                 ZStack(alignment: .leading) {
@@ -112,18 +112,18 @@ struct ExpandedDashboard: View {
                 HStack(spacing: 16) {
                     HStack(spacing: 4) {
                         Image(systemName: "app.dashed")
-                            .font(.system(size: 9))
+                            .font(.system(size: 13))
                             .foregroundColor(.secondary)
                         Text(String(format: "App: %.0f MB", dashboard.appMemoryMB))
-                            .font(.system(size: 10, design: .monospaced))
+                            .font(.system(size: 14, design: .monospaced))
                             .foregroundColor(.secondary)
                     }
                     HStack(spacing: 4) {
                         Image(systemName: "thermometer.medium")
-                            .font(.system(size: 9))
+                            .font(.system(size: 13))
                             .foregroundColor(dashboard.thermalWarning ? .red : .secondary)
                         Text("Thermal: \(dashboard.thermalLabel)")
-                            .font(.system(size: 10, design: .monospaced))
+                            .font(.system(size: 14, design: .monospaced))
                             .foregroundColor(dashboard.thermalWarning ? .red : .secondary)
                     }
                 }
@@ -133,19 +133,19 @@ struct ExpandedDashboard: View {
                 // CPU load
                 HStack(spacing: 6) {
                     Image(systemName: "cpu")
-                        .font(.system(size: 10))
+                        .font(.system(size: 14))
                         .foregroundColor(.blue)
                     Text("CPU Load")
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 16, weight: .medium))
                     Spacer()
                     Text(String(format: "%.1f / %.1f / %.1f",
                                 dashboard.cpuLoad1,
                                 dashboard.cpuLoad5,
                                 dashboard.cpuLoad15))
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(.system(size: 14, design: .monospaced))
                         .foregroundColor(.secondary)
                     Text("(1/5/15m)")
-                        .font(.system(size: 9))
+                        .font(.system(size: 13))
                         .foregroundColor(.secondary.opacity(0.7))
                 }
 
@@ -154,20 +154,20 @@ struct ExpandedDashboard: View {
                     Divider()
                     HStack(spacing: 6) {
                         Image(systemName: "brain")
-                            .font(.system(size: 10))
+                            .font(.system(size: 14))
                             .foregroundColor(.purple)
                         Text("Vision / ANE")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.system(size: 16, weight: .medium))
                         Spacer()
                         Text(String(format: "%.1f fps", dashboard.visionFPS))
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .font(.system(size: 14, weight: .medium, design: .monospaced))
                             .foregroundColor(.purple)
                         Text(String(format: "%.0f ms/frame", dashboard.visionMsPerFrame))
-                            .font(.system(size: 10, design: .monospaced))
+                            .font(.system(size: 14, design: .monospaced))
                             .foregroundColor(.secondary)
                         if dashboard.visionWorkers > 0 {
                             Text("\(dashboard.visionWorkers) worker\(dashboard.visionWorkers == 1 ? "" : "s")")
-                                .font(.system(size: 10, design: .monospaced))
+                                .font(.system(size: 14, design: .monospaced))
                                 .foregroundColor(.secondary)
                         }
                     }
@@ -175,7 +175,7 @@ struct ExpandedDashboard: View {
             }
         } label: {
             Label("System", systemImage: "gauge.with.dots.needle.50percent")
-                .font(.system(size: 11, weight: .medium))
+                .font(.system(size: 16, weight: .medium))
         }
     }
 
@@ -190,25 +190,25 @@ struct ExpandedDashboard: View {
                             .fill(barColor)
                             .frame(width: 8, height: 8)
                         Text(phaseLabel)
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.system(size: 19, weight: .semibold))
                             .foregroundColor(barColor)
                     }
                     HStack(spacing: 12) {
                         Text("\(completed) / \(total)")
-                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            .font(.system(size: 17, weight: .medium, design: .monospaced))
                         Text("(\(Int(fraction * 100))%)")
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.system(size: 16, design: .monospaced))
                             .foregroundColor(barColor)
                     }
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 2) {
                     Text("Elapsed: \(elapsedStr)")
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(.system(size: 16, design: .monospaced))
                         .foregroundColor(.secondary)
                     if !eta.isEmpty {
                         Text(eta)
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .font(.system(size: 16, weight: .medium, design: .monospaced))
                             .foregroundColor(barColor)
                     }
                 }
@@ -257,12 +257,12 @@ struct ExpandedDashboard: View {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Image(systemName: "bolt.fill")
-                                .font(.system(size: 10))
+                                .font(.system(size: 14))
                                 .foregroundColor(.yellow)
                             Text("Cache: \(dashboard.scanCacheHits) / \(totalProbed) hits")
-                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .font(.system(size: 16, weight: .medium, design: .monospaced))
                             Text("(\(totalProbed > 0 ? Int(Double(dashboard.scanCacheHits) / Double(totalProbed) * 100) : 0)%)")
-                                .font(.system(size: 10, design: .monospaced))
+                                .font(.system(size: 14, design: .monospaced))
                                 .foregroundColor(.yellow)
                         }
                         let cacheFrac = totalProbed > 0 ? Double(dashboard.scanCacheHits) / Double(totalProbed) : 0
@@ -301,7 +301,7 @@ struct ExpandedDashboard: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundColor(.red)
                     Text("\(dashboard.scanErrors) file\(dashboard.scanErrors == 1 ? "" : "s") failed ffprobe")
-                        .font(.system(size: 11))
+                        .font(.system(size: 16))
                         .foregroundColor(.red)
                 }
             }
@@ -318,7 +318,7 @@ struct ExpandedDashboard: View {
                         Image(systemName: "film")
                             .foregroundColor(.blue)
                         Text(dashboard.combineCurrentFile)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.system(size: 16, design: .monospaced))
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
@@ -331,7 +331,7 @@ struct ExpandedDashboard: View {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundColor(.green)
                         Text("\(dashboard.combineSucceeded) succeeded")
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.system(size: 16, design: .monospaced))
                     }
                 }
                 if dashboard.combineFailed > 0 {
@@ -339,7 +339,7 @@ struct ExpandedDashboard: View {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(.red)
                         Text("\(dashboard.combineFailed) failed")
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.system(size: 16, design: .monospaced))
                     }
                 }
             }
@@ -360,36 +360,36 @@ private struct VolumeProgressRow: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Image(systemName: volume.isWalking ? "folder.badge.gearshape" : "externaldrive.fill")
-                    .font(.system(size: 10))
+                    .font(.system(size: 14))
                     .foregroundColor(volume.isWalking ? .orange : .blue)
                 Text(volume.volumeName)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 16, weight: .medium))
                     .lineLimit(1)
                 Spacer()
                 if volume.isWalking {
                     Text("scanning...")
-                        .font(.system(size: 10))
+                        .font(.system(size: 14))
                         .foregroundColor(.orange)
                 } else {
                     Text("\(volume.completedFiles)/\(volume.totalFiles)")
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(.system(size: 14, design: .monospaced))
                         .foregroundColor(.secondary)
                 }
                 if volume.cacheHits > 0 {
                     HStack(spacing: 1) {
                         Image(systemName: "bolt.fill")
-                            .font(.system(size: 7))
+                            .font(.system(size: 10))
                         Text("\(volume.cacheHits)")
-                            .font(.system(size: 9, design: .monospaced))
+                            .font(.system(size: 13, design: .monospaced))
                     }
                     .foregroundColor(.yellow)
                 }
                 if volume.errors > 0 {
                     HStack(spacing: 1) {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 7))
+                            .font(.system(size: 10))
                         Text("\(volume.errors)")
-                            .font(.system(size: 9, design: .monospaced))
+                            .font(.system(size: 13, design: .monospaced))
                     }
                     .foregroundColor(.red)
                 }

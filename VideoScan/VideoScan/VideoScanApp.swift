@@ -131,19 +131,19 @@ struct AboutView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     AboutSection(icon: "heart.fill", color: .pink, title: "What it does") {
-                        Text("VideoScan finds the people you're looking for by scanning folders or your whole computer. You can organize your memories by person or create a catalog for reference.")
+                        Text("VideoScan finds persons in your media so you can organize memories by person or create a catalog for reference.")
                     }
 
                     AboutSection(icon: "person.crop.rectangle.stack", color: .blue, title: "How it works") {
-                        Text("You provide a folder of reference photos (or pick from Apple Photos) and the app detects faces in videos and can generate new videos of that person, optionally creating videos by decade, such as Donna_1990, Donna_2000s.")
+                        Text("You provide a folder of photos (or pick from Apple Photos) and the app detects faces in videos and can compile new videos of that person.")
                     }
 
                     AboutSection(icon: "externaldrive.connected.to.line.below", color: .green, title: "Multi-volume, parallel scanning") {
-                        Text("Add as many volumes or folders as you like. Each runs in parallel with its own progress bar.")
+                        Text("Add as many folders or network volumes as you like and the app scans in parallel.")
                     }
 
                     AboutSection(icon: "waveform.and.magnifyingglass", color: .purple, title: "Handles Any Video Format") {
-                        Text("Supports 40+ video formats including MXF, DV, VHS captures, MOV, MP4, MTS, and more.")
+                        Text("Supports 40+ video formats.")
                     }
 
                     Divider()
