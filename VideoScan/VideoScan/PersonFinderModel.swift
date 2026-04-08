@@ -12,10 +12,33 @@ import Combine
 
 // MARK: - Settings
 
+// MARK: - Recognition Engine Registry
+//
+// To add a new engine:
+//   1. Add a case below.
+//   2. Add a matching case in the `switch settings.recognitionEngine` block
+//      inside `processOne(idx:)` further down in this file.
+//   3. (Optional) Add per-engine memory/concurrency tuning to MemoryPressureMonitor.
+//
+// Each engine implements the same async contract:
+//   (filePath, settings, callbacks) -> pfVideoResult?
+// so the dispatcher and the rest of the pipeline (clipping, compilation,
+// dashboards) stay engine-agnostic.
+
 enum RecognitionEngine: String, CaseIterable, Identifiable {
     case vision = "Vision (fast)"
     case dlib   = "dlib/Python (accurate)"
+    case hybrid = "Hybrid (Vision + dlib fallback)"
     var id: String { rawValue }
+
+    /// Short label for compact UI / chip overlays.
+    var shortLabel: String {
+        switch self {
+        case .vision: return "Vision"
+        case .dlib:   return "dlib"
+        case .hybrid: return "Hybrid"
+        }
+    }
 }
 
 struct PersonFinderSettings: Equatable {
@@ -60,6 +83,12 @@ struct PersonFinderSettings: Equatable {
 
     var dlibReady: Bool {
         recognitionEngine == .dlib && !pythonPath.isEmpty && !recognitionScript.isEmpty
+    }
+
+    /// True when dlib is invokable, regardless of which engine is currently selected.
+    /// Used by `.hybrid` to decide whether the dlib fallback pass can run.
+    var dlibReadyForHybrid: Bool {
+        !pythonPath.isEmpty && !recognitionScript.isEmpty
     }
 
     // MARK: - Persistence
@@ -555,10 +584,9 @@ final class PersonFinderModel: ObservableObject {
                 await progressState.update { if dist < job.bestDist { job.bestDist = dist } }
             }
 
-            let r: pfVideoResult?
-            switch settings.recognitionEngine {
-            case .vision:
-                r = await pfProcessVideo(
+            // Vision branch — used by .vision and as the first pass of .hybrid.
+            @Sendable func runVision() async -> pfVideoResult? {
+                await pfProcessVideo(
                     filePath: videoFiles[idx], prints: prints,
                     settings: settings, index: idx + 1, total: total,
                     pauseGate: job.pauseGate,
@@ -581,13 +609,41 @@ final class PersonFinderModel: ObservableObject {
                     },
                     previewRateFn: { job.previewRate }
                 )
-            case .dlib:
-                r = await pfProcessVideoWithDlib(
+            }
+
+            // dlib branch — used by .dlib and as the fallback pass of .hybrid.
+            @Sendable func runDlib() async -> pfVideoResult? {
+                await pfProcessVideoWithDlib(
                     filePath: videoFiles[idx], settings: settings,
                     index: idx + 1, total: total,
                     pauseGate: job.pauseGate,
                     logFn: logFn, progressFn: progressFn, distFn: distFn
                 )
+            }
+
+            let r: pfVideoResult?
+            switch settings.recognitionEngine {
+            case .vision:
+                r = await runVision()
+            case .dlib:
+                r = await runDlib()
+            case .hybrid:
+                // Pass 1: fast Vision sweep on the ANE.
+                let v = await runVision()
+                if let v, !v.segments.isEmpty {
+                    r = v
+                } else {
+                    // Pass 2: dlib as a "second look" — catches profile / glasses
+                    // / dim-light cases Vision tends to miss. Only runs when Vision
+                    // came up empty, so the common-case path stays fast.
+                    if !settings.dlibReadyForHybrid {
+                        await job.appendLog("[hybrid] Vision: 0 hits — dlib not configured, skipping fallback")
+                        r = v
+                    } else {
+                        await job.appendLog("[hybrid] Vision: 0 hits — falling back to dlib")
+                        r = await runDlib()
+                    }
+                }
             }
             return (idx, r)
         }

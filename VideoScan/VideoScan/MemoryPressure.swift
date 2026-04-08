@@ -79,6 +79,10 @@ actor MemoryPressureMonitor {
             return 3072
         case .dlib:
             return 1024
+        case .hybrid:
+            // Hybrid does a Vision pass and may then do a dlib fallback;
+            // size to the larger of the two so a fallback never OOMs.
+            return 3072
         }
     }
 
@@ -87,6 +91,10 @@ actor MemoryPressureMonitor {
         case .vision:
             return min(requested, max(1, ProcessInfo.processInfo.processorCount))
         case .dlib:
+            return min(requested, 4)
+        case .hybrid:
+            // Cap at the dlib limit so the fallback pass cannot blow the budget
+            // when several videos miss on Vision and converge on dlib at once.
             return min(requested, 4)
         }
     }
