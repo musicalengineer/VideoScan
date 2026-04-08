@@ -17,6 +17,7 @@ struct PersonFinderView: View {
     @State private var autoRejectPct: Int = 60
 
     var selectedJob: ScanJob? { model.jobs.first { $0.id == selectedJobID } }
+    var selectedEngine: RecognitionEngine { model.settings.recognitionEngine }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -252,47 +253,37 @@ struct PersonFinderView: View {
 
                 // Recognition engine selector
                 Divider()
-                HStack(spacing: 24) {
-                    LabeledControl("Recognition Engine") {
-                        Picker("", selection: model.settingsBinding.recognitionEngine) {
-                            ForEach(RecognitionEngine.allCases) { eng in
-                                Text(eng.rawValue).tag(eng)
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .top, spacing: 16) {
+                        LabeledControl("Recognition Module") {
+                            Picker("Recognition Module", selection: model.settingsBinding.recognitionEngine) {
+                                ForEach(RecognitionEngine.allCases) { eng in
+                                    Text(eng.title).tag(eng)
+                                }
+                            }
+                            .labelsHidden()
+                            .pickerStyle(.menu)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(selectedEngine.capabilitySummary)
+                                    .font(.callout.weight(.semibold))
+                                Text(selectedEngine.requirementsSummary)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
                         }
-                        .pickerStyle(.segmented)
-                        .frame(width: 280)
+                        Spacer(minLength: 0)
                     }
 
-                    if model.settings.recognitionEngine == .dlib {
-                        LabeledControl("Python") {
-                            TextField("venv/bin/python…", text: model.settingsBinding.pythonPath)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(.body, design: .monospaced))
-                                .frame(width: 260)
-                            Button("…") { browsePython() }.controlSize(.small)
-                        }
-                        LabeledControl("Script") {
-                            TextField("face_recognize.py…", text: model.settingsBinding.recognitionScript)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.system(.body, design: .monospaced))
-                                .frame(width: 260)
-                            Button("…") { browseScript() }.controlSize(.small)
-                        }
-                        if !model.settings.dlibReady {
-                            Label("Set Python and Script paths to enable dlib scanning",
-                                  systemImage: "exclamationmark.triangle")
-                                .foregroundStyle(.orange)
-                                .font(.caption)
-                        } else {
-                            Label("dlib ready", systemImage: "checkmark.circle")
-                                .foregroundStyle(.green)
-                                .font(.caption)
-                        }
-                        Text("Heavy scans are auto-limited based on free RAM to avoid runaway memory use.")
-                            .foregroundStyle(.secondary)
-                            .font(.caption)
-                    }
-                    Spacer()
+                    RecognitionEnginePanel(
+                        engine: selectedEngine,
+                        pythonPath: model.settingsBinding.pythonPath,
+                        recognitionScript: model.settingsBinding.recognitionScript,
+                        dlibReady: model.settings.dlibReady,
+                        dlibReadyForHybrid: model.settings.dlibReadyForHybrid,
+                        browsePython: browsePython,
+                        browseScript: browseScript
+                    )
                 }
             }
             .font(.body)
@@ -976,6 +967,122 @@ struct LabeledControl<Content: View>: View {
                 .textCase(.uppercase)
             HStack(spacing: 4) { content() }
         }
+    }
+}
+
+struct RecognitionEnginePanel: View {
+    let engine: RecognitionEngine
+    @Binding var pythonPath: String
+    @Binding var recognitionScript: String
+    let dlibReady: Bool
+    let dlibReadyForHybrid: Bool
+    let browsePython: () -> Void
+    let browseScript: () -> Void
+
+    private var statusText: String {
+        switch engine {
+        case .vision:
+            return "Built-in module is ready"
+        case .dlib:
+            return dlibReady ? "Python recognizer is ready" : "Set Python and Script paths to enable this module"
+        case .hybrid:
+            return dlibReadyForHybrid ? "Vision will fall back to dlib when needed" : "Running in Vision-only mode until dlib paths are configured"
+        }
+    }
+
+    private var statusSymbol: String {
+        switch engine {
+        case .vision:
+            return "checkmark.circle"
+        case .dlib:
+            return dlibReady ? "checkmark.circle" : "exclamationmark.triangle"
+        case .hybrid:
+            return dlibReadyForHybrid ? "arrow.triangle.branch" : "info.circle"
+        }
+    }
+
+    private var statusColor: Color {
+        switch engine {
+        case .vision:
+            return .green
+        case .dlib:
+            return dlibReady ? .green : .orange
+        case .hybrid:
+            return dlibReadyForHybrid ? .green : .secondary
+        }
+    }
+
+    private var showsDlibConfig: Bool {
+        engine == .dlib || engine == .hybrid
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 14) {
+                Image(systemName: engine.symbolName)
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 34, height: 34)
+                    .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 10))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        Text(engine.title)
+                            .font(.headline)
+                        Text(engine.shortLabel.uppercased())
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 4)
+                            .background(Color.secondary.opacity(0.12), in: Capsule())
+                    }
+                    Text(engine.subtitle)
+                        .foregroundStyle(.secondary)
+                    Label(statusText, systemImage: statusSymbol)
+                        .font(.caption)
+                        .foregroundStyle(statusColor)
+                }
+                Spacer(minLength: 0)
+            }
+
+            if showsDlibConfig {
+                HStack(alignment: .top, spacing: 24) {
+                    LabeledControl("Python") {
+                        TextField("venv/bin/python…", text: $pythonPath)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(.body, design: .monospaced))
+                            .frame(width: 280)
+                        Button("…") { browsePython() }
+                            .controlSize(.small)
+                    }
+                    LabeledControl("Script") {
+                        TextField("face_recognize.py…", text: $recognitionScript)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.system(.body, design: .monospaced))
+                            .frame(width: 280)
+                        Button("…") { browseScript() }
+                            .controlSize(.small)
+                    }
+                    Spacer(minLength: 0)
+                }
+            }
+
+            Text("Recognition engines are modular. Add a new case to the registry and implement the shared scan contract to plug another backend into this selector.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if showsDlibConfig {
+                Text("Heavy scans are auto-limited based on free RAM to avoid runaway memory use.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(14)
+        .background(Color(NSColor.controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.primary.opacity(0.06), lineWidth: 1)
+        )
     }
 }
 
