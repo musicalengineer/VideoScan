@@ -31,12 +31,55 @@ enum RecognitionEngine: String, CaseIterable, Identifiable {
     case hybrid = "Hybrid (Vision + dlib fallback)"
     var id: String { rawValue }
 
+    var title: String {
+        switch self {
+        case .vision: return "Apple Vision"
+        case .dlib: return "dlib via Python"
+        case .hybrid: return "Hybrid Pipeline"
+        }
+    }
+
     /// Short label for compact UI / chip overlays.
     var shortLabel: String {
         switch self {
         case .vision: return "Vision"
         case .dlib:   return "dlib"
         case .hybrid: return "Hybrid"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .vision:
+            return "Built-in macOS detector for quick whole-library scans."
+        case .dlib:
+            return "External recognizer module with higher accuracy and extra setup."
+        case .hybrid:
+            return "Modular chain that starts with Vision and falls back to dlib when needed."
+        }
+    }
+
+    var capabilitySummary: String {
+        switch self {
+        case .vision: return "Fastest, zero external setup"
+        case .dlib: return "Most accurate, Python-backed"
+        case .hybrid: return "Balanced, multi-engine pipeline"
+        }
+    }
+
+    var requirementsSummary: String {
+        switch self {
+        case .vision: return "No extra dependencies"
+        case .dlib: return "Requires Python executable and recognition script"
+        case .hybrid: return "Optional dlib fallback uses the Python module when available"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .vision: return "video"
+        case .dlib: return "cpu"
+        case .hybrid: return "square.stack.3d.forward.dottedline"
         }
     }
 }
