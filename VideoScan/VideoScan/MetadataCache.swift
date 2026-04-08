@@ -173,6 +173,47 @@ final class MetadataCache {
         lock.lock(); defer { lock.unlock() }
         guard let db = db else { return }
         sqlite3_exec(db, "DELETE FROM probe_cache", nil, nil, nil)
+        sqlite3_exec(db, "VACUUM", nil, nil, nil)
+    }
+
+    /// Delete cached records whose path begins with `prefix`. Returns the number deleted.
+    /// Used when a scan target is reset/removed so a subsequent scan of the same volume
+    /// is forced through ffprobe again instead of returning instantly from cache.
+    @discardableResult
+    func clearForPathPrefix(_ prefix: String) -> Int {
+        lock.lock(); defer { lock.unlock() }
+        guard let db = db else { return 0 }
+        // Normalize prefix so that "/Volumes/Foo" matches "/Volumes/Foo/..." and not "/Volumes/Foobar/...".
+        let normalized = prefix.hasSuffix("/") ? prefix : prefix + "/"
+        let like = normalized.replacingOccurrences(of: "%", with: #"\%"#)
+                             .replacingOccurrences(of: "_", with: #"\_"#) + "%"
+
+        // First count, then delete (so we can report).
+        var stmt: OpaquePointer?
+        var deleted = 0
+        let countSQL = #"SELECT COUNT(*) FROM probe_cache WHERE path = ? OR path LIKE ? ESCAPE '\'"#
+        if sqlite3_prepare_v2(db, countSQL, -1, &stmt, nil) == SQLITE_OK {
+            sqlite3_bind_text(stmt, 1, (prefix as NSString).utf8String, -1,
+                              unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            sqlite3_bind_text(stmt, 2, (like as NSString).utf8String, -1,
+                              unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                deleted = Int(sqlite3_column_int64(stmt, 0))
+            }
+        }
+        sqlite3_finalize(stmt)
+
+        let delSQL = #"DELETE FROM probe_cache WHERE path = ? OR path LIKE ? ESCAPE '\'"#
+        var del: OpaquePointer?
+        if sqlite3_prepare_v2(db, delSQL, -1, &del, nil) == SQLITE_OK {
+            sqlite3_bind_text(del, 1, (prefix as NSString).utf8String, -1,
+                              unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            sqlite3_bind_text(del, 2, (like as NSString).utf8String, -1,
+                              unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+            sqlite3_step(del)
+        }
+        sqlite3_finalize(del)
+        return deleted
     }
 
     /// Number of cached records.

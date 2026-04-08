@@ -9,7 +9,23 @@ import Combine
 final class DashboardState: ObservableObject {
 
     init() {
+        chipName = Self.detectChipName()
         startSystemMetrics()
+    }
+
+    // MARK: - Chip identity / match flash
+
+    @Published var chipName: String = ""
+    @Published var lastMatchFlashAt: Date? = nil
+
+    private static func detectChipName() -> String {
+        var size = 0
+        sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0)
+        guard size > 0 else { return "Apple Silicon" }
+        var buf = [CChar](repeating: 0, count: size)
+        sysctlbyname("machdep.cpu.brand_string", &buf, &size, nil, 0)
+        let s = String(cString: buf).trimmingCharacters(in: .whitespacesAndNewlines)
+        return s.isEmpty ? "Apple Silicon" : s
     }
 
     // MARK: - Console

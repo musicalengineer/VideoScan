@@ -106,10 +106,30 @@ final class VideoScanModel: ObservableObject {
     }
 
     func clearCache() -> Int {
-        let count = metadataCache.count
+        let before = metadataCache.count
         metadataCache.clearAll()
-        log("Metadata cache cleared (\(count) entries removed)")
-        return count
+        let after = metadataCache.count
+        log("━━ Metadata cache cleared: \(before) → \(after) entries (DB VACUUM done) ━━")
+        return before
+    }
+
+    /// Drop cached probe results whose path lives under `target.searchPath`.
+    /// Called from per-target Reset and per-target Trash so a re-scan of the same
+    /// volume actually re-runs ffprobe instead of returning instantly from cache.
+    func clearCacheForTarget(_ target: CatalogScanTarget) {
+        let path = target.searchPath
+        guard !path.isEmpty else { return }
+        let dropped = metadataCache.clearForPathPrefix(path)
+        if dropped > 0 {
+            log("  Dropped \(dropped) cached probe entries under \(path)")
+        }
+    }
+
+    func resetTarget(_ target: CatalogScanTarget) {
+        target.reset()
+        clearCacheForTarget(target)
+        // Also drop in-memory records that came from this target so the table reflects the reset
+        records.removeAll { $0.fullPath.hasPrefix(target.searchPath) }
     }
 
     var cacheCount: Int { metadataCache.count }
@@ -178,6 +198,8 @@ final class VideoScanModel: ObservableObject {
     func removeScanTarget(_ target: CatalogScanTarget) {
         target.scanTask?.cancel()
         target.stopElapsedTimer()
+        clearCacheForTarget(target)
+        records.removeAll { $0.fullPath.hasPrefix(target.searchPath) }
         scanTargets.removeAll { $0.id == target.id }
     }
 

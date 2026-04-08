@@ -425,8 +425,13 @@ final class PersonFinderModel: ObservableObject {
     }
 
     func togglePauseJob(_ job: ScanJob) {
-        if job.status == .paused { resumeJob(job) }
-        else if job.status == .scanning { pauseJob(job) }
+        if job.status == .paused {
+            resumeJob(job)
+        } else if job.status == .scanning {
+            pauseJob(job)
+        } else {
+            job.appendLog("[pause] Ignored — current status is \(job.status.label) (only Scanning/Paused can toggle)")
+        }
     }
 
     func startAll() {
@@ -611,7 +616,10 @@ final class PersonFinderModel: ObservableObject {
                 await MainActor.run {
                     job.videosScanned += 1
                     job.progress = Double(job.videosScanned) / Double(job.videosTotal)
-                    if let r = result, !r.segments.isEmpty { job.videosWithHits += 1 }
+                    if let r = result, !r.segments.isEmpty {
+                        job.videosWithHits += 1
+                        dash?.lastMatchFlashAt = Date()
+                    }
                 }
                 if submitted < total {
                     let nextIdx = submitted
