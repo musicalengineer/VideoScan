@@ -13,7 +13,7 @@ struct DashboardWindow: View {
                 isCombining: model.isCombining
             )
         }
-        .frame(minWidth: 440, idealWidth: 440, minHeight: 300, maxHeight: 600)
+        .frame(minWidth: 600, idealWidth: 600, minHeight: 380, idealHeight: 560, maxHeight: 800)
         .onAppear {
             // Set window to float above other windows
             DispatchQueue.main.async {
