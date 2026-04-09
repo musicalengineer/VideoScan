@@ -6,6 +6,32 @@
 //
 
 import SwiftUI
+import AppKit
+
+// MARK: - App Delegate (RAM disk lifecycle)
+
+/// We use an NSApplicationDelegate solely so we can:
+///   1. Reap any orphaned VideoScan_Temp RAM disks left over from a previous
+///      launch that crashed or was force-quit before unmount could run.
+///   2. Force-detach our RAM disk on a normal Cmd-Q so we never leak one.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        let detached = RAMDisk.cleanupStaleMounts()
+        if !detached.isEmpty {
+            NSLog("VideoScan: reaped %d orphaned RAM disk(s) from previous run: %@",
+                  detached.count, detached.joined(separator: ", "))
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        // Synchronous on purpose — Cmd-Q must not return before the RAM disk
+        // is gone, otherwise it survives in /Volumes.
+        let detached = RAMDisk.cleanupStaleMounts()
+        if !detached.isEmpty {
+            NSLog("VideoScan: detached %d RAM disk(s) on exit", detached.count)
+        }
+    }
+}
 
 // MARK: - Build Info
 
@@ -36,6 +62,7 @@ enum BuildInfo {
 
 @main
 struct VideoScanApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var catalogModel = VideoScanModel()
 
     var body: some Scene {

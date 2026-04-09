@@ -80,4 +80,42 @@ actor RAMDisk {
         try? proc.run()
         proc.waitUntilExit()
     }
+
+    // MARK: - Stale-mount cleanup
+
+    /// Hard-detach any RAM disks left over from previous launches (or crashes).
+    /// Scans `/Volumes` for anything matching the `VideoScan_Temp*` naming pattern
+    /// and force-detaches each via `hdiutil`. Safe to call at app launch and at
+    /// app termination — no-op if nothing is mounted.
+    ///
+    /// Synchronous on purpose: we want it to finish before app exit returns.
+    @discardableResult
+    static func cleanupStaleMounts() -> [String] {
+        let prefix = "VideoScan_Temp"
+        let volumesDir = "/Volumes"
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(atPath: volumesDir) else {
+            return []
+        }
+
+        var detached: [String] = []
+        for name in entries where name.hasPrefix(prefix) {
+            let mountPath = "\(volumesDir)/\(name)"
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+            proc.arguments = ["detach", mountPath, "-force"]
+            proc.standardOutput = Pipe()
+            proc.standardError = Pipe()
+            do {
+                try proc.run()
+                proc.waitUntilExit()
+                if proc.terminationStatus == 0 {
+                    detached.append(mountPath)
+                }
+            } catch {
+                // ignore — best-effort
+            }
+        }
+        return detached
+    }
 }

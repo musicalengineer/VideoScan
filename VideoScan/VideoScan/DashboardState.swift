@@ -78,6 +78,23 @@ final class DashboardState: ObservableObject {
     @Published var liveStreamCounts: [String: Int] = [:]
     @Published var throughputSamples: [ThroughputSample] = []
 
+    /// Live "what is the scanner touching right now" — fed from VideoScanModel
+    /// at the probe site so the Realtime Catalog Scan window can paint a
+    /// running ticker of activity. Kept short on purpose.
+    @Published var scanCurrentFile: String = ""
+    @Published var scanCurrentVolume: String = ""
+    @Published var scanRecentFiles: [String] = []
+    private let maxRecentFiles = 14
+
+    func recordScanFile(volume: String, filename: String) {
+        scanCurrentVolume = volume
+        scanCurrentFile = filename
+        scanRecentFiles.append(filename)
+        if scanRecentFiles.count > maxRecentFiles {
+            scanRecentFiles.removeFirst(scanRecentFiles.count - maxRecentFiles)
+        }
+    }
+
     // MARK: - Combine Progress
 
     @Published var combineTotal: Int = 0
@@ -183,6 +200,9 @@ final class DashboardState: ObservableObject {
         scanErrors = 0
         liveStreamCounts = [:]
         throughputSamples = []
+        scanCurrentFile = ""
+        scanCurrentVolume = ""
+        scanRecentFiles = []
     }
 
     func resetForCombine(total: Int) {
