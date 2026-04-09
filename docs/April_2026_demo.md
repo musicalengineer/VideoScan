@@ -3,7 +3,7 @@ demo (Imaginary customer)
 1. Github repo
 
 2. App
-
+	About ...
 	Catalog Scan, codecs, MXF ethernet, ram cache, architecture 
 	FD, algorithm selection, pipeline, monitoring, future algs, modularity
 
@@ -19,4 +19,5 @@ demo (Imaginary customer)
 	Archival media for long term
 
 5. algs algs algs
+
 
