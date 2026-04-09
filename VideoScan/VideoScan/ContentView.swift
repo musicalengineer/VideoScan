@@ -56,6 +56,7 @@ struct CatalogView: View {
                 showDashboard: $showDashboard,
                 searchText: $searchText,
                 cacheCount: model.cacheCount,
+                dashboard: model.dashboard,
                 onStopCombine: { model.stopCombine() },
                 onCorrelateAll: {
                     model.log("\nCorrelating all audio-only and video-only files...")
@@ -331,6 +332,7 @@ private struct CatalogToolbar<Dashboard: View>: View {
     @Binding var showDashboard: Bool
     @Binding var searchText: String
     let cacheCount: Int
+    let dashboard: DashboardState
     let onStopCombine: () -> Void
     let onCorrelateAll: () -> Void
     let onCorrelateSelected: () -> Void
@@ -384,6 +386,14 @@ private struct CatalogToolbar<Dashboard: View>: View {
                 .buttonStyle(.bordered)
                 .tint(.red)
             }
+
+            Button {
+                CatalogScanWindowController.shared.show(dashboard: dashboard)
+            } label: {
+                Label("Realtime Scan", systemImage: "waveform.path.ecg.rectangle")
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.cyan)
 
             if !outputCSVPath.isEmpty {
                 Button(action: {

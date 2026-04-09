@@ -91,6 +91,26 @@ final class VideoScanModel: ObservableObject {
         }
     }
 
+    private static let savedTargetsKey = "VideoScan.scanTargetPaths"
+
+    init() {
+        restoreScanTargets()
+    }
+
+    private func restoreScanTargets() {
+        let paths = UserDefaults.standard.stringArray(forKey: Self.savedTargetsKey) ?? []
+        for p in paths where !p.isEmpty {
+            if !scanTargets.contains(where: { $0.searchPath == p }) {
+                scanTargets.append(CatalogScanTarget(searchPath: p))
+            }
+        }
+    }
+
+    private func persistScanTargets() {
+        let paths = scanTargets.map { $0.searchPath }
+        UserDefaults.standard.set(paths, forKey: Self.savedTargetsKey)
+    }
+
     // MARK: - Logging (delegates to DashboardState)
 
     func log(_ msg: String) { dashboard.log(msg) }
@@ -192,6 +212,7 @@ final class VideoScanModel: ObservableObject {
                     scanTargets.append(CatalogScanTarget(searchPath: path))
                 }
             }
+            persistScanTargets()
         }
     }
 
@@ -201,6 +222,7 @@ final class VideoScanModel: ObservableObject {
         clearCacheForTarget(target)
         records.removeAll { $0.fullPath.hasPrefix(target.searchPath) }
         scanTargets.removeAll { $0.id == target.id }
+        persistScanTargets()
     }
 
     func startTarget(_ target: CatalogScanTarget) {
@@ -451,8 +473,25 @@ final class VideoScanModel: ObservableObject {
 
         await withTaskGroup(of: (String, [URL]).self) { group in
             for root in roots {
+                let volName = URL(fileURLWithPath: root).lastPathComponent
                 group.addTask { [self] in
-                    let files = await self.walkDirectory(root: root)
+                    let files = await self.walkDirectory(root: root) { currentDir, count, lastFile in
+                        // Heartbeat: stream walk progress to the dashboard so the
+                        // Realtime Catalog Scan window comes alive immediately
+                        // instead of looking frozen during long network walks.
+                        Task { @MainActor in
+                            let ds = self.dashboard
+                            ds.scanCurrentVolume = volName
+                            if let f = lastFile {
+                                ds.recordScanFile(volume: volName, filename: f.lastPathComponent)
+                            } else {
+                                ds.scanCurrentFile = "📂 " + currentDir.lastPathComponent
+                            }
+                            if let idx = ds.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
+                                ds.volumeProgress[idx].totalFiles = count
+                            }
+                        }
+                    }
                     return (root, files)
                 }
             }
@@ -526,6 +565,10 @@ final class VideoScanModel: ObservableObject {
                                     }
                                     await MainActor.run {
                                         self.log("  [\(volName)] [\(i+1)/\(files.count)] \(url.lastPathComponent)")
+                                        self.dashboard.recordScanFile(
+                                            volume: volName,
+                                            filename: url.lastPathComponent
+                                        )
                                     }
                                     let rec = await self.probeFile(
                                         url: url,
@@ -606,7 +649,10 @@ final class VideoScanModel: ObservableObject {
     }
 
     /// Walk a single directory tree and return all video file URLs
-    nonisolated func walkDirectory(root: String) async -> [URL] {
+    nonisolated func walkDirectory(
+        root: String,
+        onProgress: (@Sendable (_ currentDir: URL, _ filesFoundSoFar: Int, _ lastFile: URL?) -> Void)? = nil
+    ) async -> [URL] {
         // Run on a detached task to avoid blocking the cooperative thread pool.
         // FileManager calls are synchronous and can stall on network volumes.
         let skipDirs = self.skipDirs
@@ -619,6 +665,11 @@ final class VideoScanModel: ObservableObject {
             while !dirStack.isEmpty {
                 if Task.isCancelled { break }
                 let currentDir = dirStack.removeLast()
+                // Heartbeat: tell the dashboard which directory we're entering.
+                // This is the only signal a network walk produces — without it
+                // the RT scan window looks frozen during discovery.
+                onProgress?(currentDir, videoFiles.count, nil)
+
                 let contents: [URL]
                 do {
                     contents = try fm.contentsOfDirectory(
@@ -643,6 +694,7 @@ final class VideoScanModel: ObservableObject {
                     } else if rv.isRegularFile == true && rv.isReadable == true {
                         if videoExtensions.contains(url.pathExtension.lowercased()) {
                             videoFiles.append(url)
+                            onProgress?(currentDir, videoFiles.count, url)
                         }
                     }
                 }
