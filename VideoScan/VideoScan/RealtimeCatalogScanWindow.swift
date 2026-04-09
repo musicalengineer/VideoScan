@@ -380,6 +380,7 @@ private struct VolumeMiniRow: View {
 class CatalogScanWindowController {
     static let shared = CatalogScanWindowController()
     private var window: NSWindow?
+    private var closeObserver: NSObjectProtocol?
 
     func show(dashboard: DashboardState) {
         if let w = window, w.isVisible {
@@ -396,15 +397,35 @@ class CatalogScanWindowController {
             backing: .buffered,
             defer: false
         )
+        // NSWindow defaults to isReleasedWhenClosed=true → AppKit double-
+        // releases on close, leaving `self.window` dangling and the next
+        // show() crashes inside objc_retain.
+        w.isReleasedWhenClosed = false
         w.title = "Realtime Catalog Scan"
         w.contentView = hosting
         w.setFrameAutosaveName("RealtimeCatalogScanV1")
         w.center()
         w.makeKeyAndOrderFront(nil)
         window = w
+        closeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: w,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.window = nil
+            if let obs = self.closeObserver {
+                NotificationCenter.default.removeObserver(obs)
+                self.closeObserver = nil
+            }
+        }
     }
 
     func close() {
+        if let obs = closeObserver {
+            NotificationCenter.default.removeObserver(obs)
+            closeObserver = nil
+        }
         window?.close()
         window = nil
     }
