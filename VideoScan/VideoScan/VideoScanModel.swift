@@ -232,9 +232,16 @@ final class VideoScanModel: ObservableObject {
         target.filesScanned = 0
         target.startElapsedTimer()
 
-        // Track global scanning state
+        // Track global scanning state. Only reset the dashboard + start the
+        // throughput timer when this is the *first* active target — otherwise
+        // we'd wipe progress from a sibling target that's already running.
+        let isFirstActive = !scanTargets.contains { $0.id != target.id && $0.status.isActive }
+        if isFirstActive {
+            dashboard.resetForScan()
+            dashboard.scanPhase = .discovering
+            dashboard.startThroughputTimer()
+        }
         isScanning = true
-        dashboard.resetForScan()
 
         target.scanTask = Task {
             await runScanForTarget(target)
@@ -309,6 +316,11 @@ final class VideoScanModel: ObservableObject {
 
         let rootIsNetwork = isNetworkPath(root)
         target.status = .discovering
+        // Register this volume in the dashboard so the Realtime Catalog Scan
+        // window can show per-volume progress for per-target scans.
+        dashboard.volumeProgress.append(
+            VolumeProgress(rootPath: root, volumeName: volName)
+        )
         if rootIsNetwork {
             log("Discovering files on \(volName) (network volume — this may take a moment)…")
         } else {
@@ -322,6 +334,13 @@ final class VideoScanModel: ObservableObject {
         target.filesFound = files.count
         target.status = .scanning
         log("  Found \(files.count) video files on \(volName)")
+        // Update dashboard with discovered count and flip into probing phase.
+        if let idx = dashboard.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
+            dashboard.volumeProgress[idx].totalFiles = files.count
+            dashboard.volumeProgress[idx].isWalking = false
+        }
+        dashboard.scanTotal += files.count
+        dashboard.scanPhase = .probing
 
         if files.isEmpty {
             log("  No video files found on \(volName).")
@@ -368,11 +387,39 @@ final class VideoScanModel: ObservableObject {
                                 return skip
                             }
                         }
+                        await MainActor.run {
+                            self.dashboard.recordScanFile(
+                                volume: volName,
+                                filename: url.lastPathComponent
+                            )
+                        }
                         let rec = await self.probeFile(
                             url: url,
                             prefetchToRAM: rootIsNetwork,
                             ramPath: ramMountPoint
                         )
+                        await MainActor.run {
+                            let ds = self.dashboard
+                            ds.scanCompleted += 1
+                            if let idx = ds.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
+                                ds.volumeProgress[idx].completedFiles += 1
+                                if rec.wasCacheHit {
+                                    ds.volumeProgress[idx].cacheHits += 1
+                                }
+                                if rec.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
+                                    ds.volumeProgress[idx].errors += 1
+                                }
+                            }
+                            if rec.wasCacheHit {
+                                ds.scanCacheHits += 1
+                            } else {
+                                ds.scanCacheMisses += 1
+                            }
+                            if rec.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
+                                ds.scanErrors += 1
+                            }
+                            ds.liveStreamCounts[rec.streamTypeRaw, default: 0] += 1
+                        }
                         return rec
                     }
                 }
@@ -426,6 +473,13 @@ final class VideoScanModel: ObservableObject {
         target.status = .complete
         target.stopElapsedTimer()
         updateGlobalScanState()
+        // If this was the last active target, stop the throughput timer and
+        // mark the dashboard's overall phase complete so the Realtime window
+        // shows a finished scan instead of staying stuck in "probing".
+        if !hasActiveTargets {
+            dashboard.stopThroughputTimer()
+            dashboard.scanPhase = .complete
+        }
     }
 
     /// How many bytes to prefetch from network files to RAM disk for ffprobe.

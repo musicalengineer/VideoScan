@@ -9,7 +9,7 @@ import PhotosUI
 
 struct PersonFinderView: View {
     @EnvironmentObject var dashboard: DashboardState
-    @State private var model = PersonFinderModel()
+    @StateObject private var model = PersonFinderModel()
     @State private var selectedJobID: UUID? = nil
     @State private var showSettings = false
     @State private var photosPickerItems: [PhotosPickerItem] = []
@@ -1440,6 +1440,7 @@ private struct FaceDetectLegend: View {
 class PreviewWindowController {
     static let shared = PreviewWindowController()
     private var window: NSWindow?
+    private var closeObserver: NSObjectProtocol?
 
     func show(model: PersonFinderModel, focusJobID: UUID? = nil) {
         if let w = window, w.isVisible {
@@ -1456,16 +1457,39 @@ class PreviewWindowController {
             backing: .buffered,
             defer: false
         )
+        // CRITICAL: NSWindow defaults to isReleasedWhenClosed=true, which
+        // double-releases the window (AppKit releases on close, ARC releases
+        // when our `window` ref drops). That leaves `self.window` pointing
+        // at freed memory and the next show() crashes inside objc_retain.
+        w.isReleasedWhenClosed = false
         w.title = "Realtime Face Detection"
         w.contentView = hosting
         w.setFrameAutosaveName("RealtimeFaceDetectV2")
         w.center()
         w.makeKeyAndOrderFront(nil)
         window = w
+        // When the user closes via the red button, drop our reference so the
+        // next show() builds a fresh window instead of trying to reopen one.
+        closeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: w,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.window = nil
+            if let obs = self.closeObserver {
+                NotificationCenter.default.removeObserver(obs)
+                self.closeObserver = nil
+            }
+        }
     }
 
 
     func close() {
+        if let obs = closeObserver {
+            NotificationCenter.default.removeObserver(obs)
+            closeObserver = nil
+        }
         window?.close()
         window = nil
     }
@@ -1580,6 +1604,7 @@ private struct JobConsoleBody: View {
 class JobConsoleWindowController {
     static let shared = JobConsoleWindowController()
     private var window: NSWindow?
+    private var closeObserver: NSObjectProtocol?
 
     func show(model: PersonFinderModel, focusJobID: UUID? = nil) {
         if let w = window, w.isVisible {
@@ -1596,15 +1621,32 @@ class JobConsoleWindowController {
             backing: .buffered,
             defer: false
         )
+        w.isReleasedWhenClosed = false  // see PreviewWindowController for rationale
         w.title = "Face Detection Console"
         w.contentView = hosting
         w.setFrameAutosaveName("JobConsoleV1")
         w.center()
         w.makeKeyAndOrderFront(nil)
         window = w
+        closeObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: w,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.window = nil
+            if let obs = self.closeObserver {
+                NotificationCenter.default.removeObserver(obs)
+                self.closeObserver = nil
+            }
+        }
     }
 
     func close() {
+        if let obs = closeObserver {
+            NotificationCenter.default.removeObserver(obs)
+            closeObserver = nil
+        }
         window?.close()
         window = nil
     }

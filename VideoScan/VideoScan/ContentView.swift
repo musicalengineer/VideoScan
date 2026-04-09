@@ -613,7 +613,13 @@ private struct CatalogContent: View {
     @State private var player: AVPlayer?
     @State private var isPlaying = false
 
-    private var filteredRecords: [VideoRecord] {
+    /// Stable snapshot the Table reads from. Decoupled from `records` so the
+    /// Table never sees the data array mutate mid-gesture (which races with
+    /// AppKit's canDragRows / mouseDown handling and crashes inside
+    /// ForEach.IDGenerator with an out-of-bounds subscript).
+    @State private var tableData: [VideoRecord] = []
+
+    private func computeFiltered() -> [VideoRecord] {
         if searchText.isEmpty { return records }
         let q = searchText.lowercased()
         return records.filter {
@@ -626,7 +632,7 @@ private struct CatalogContent: View {
         VSplitView {
 
             // MARK: Results Table
-            Table(filteredRecords, selection: $selectedIDs, sortOrder: $sortOrder) {
+            Table(tableData, selection: $selectedIDs, sortOrder: $sortOrder) {
                 TableColumn("Filename", value: \.filename) { rec in
                     Text(rec.filename)
                         .font(.system(.body, design: .monospaced))
@@ -683,6 +689,7 @@ private struct CatalogContent: View {
             }
             .onChange(of: sortOrder) {
                 onSort(sortOrder)
+                tableData.sort(using: sortOrder)
             }
             .contextMenu(forSelectionType: UUID.self) { ids in
                 if let id = ids.first,
@@ -715,6 +722,9 @@ private struct CatalogContent: View {
                     onClearPreview()
                 }
             }
+            .onAppear { tableData = computeFiltered() }
+            .onChange(of: records.count) { tableData = computeFiltered() }
+            .onChange(of: searchText)    { tableData = computeFiltered() }
             .frame(minHeight: 250)
 
             // MARK: Preview / Player
