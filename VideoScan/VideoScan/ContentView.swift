@@ -700,6 +700,7 @@ private struct CatalogContent: View {
 
     @State private var player: AVPlayer?
     @State private var isPlaying = false
+    @State private var showAdvancedDetails = false
 
     /// Stable snapshot the Table reads from. Decoupled from `records` so the
     /// Table never sees the data array mutate mid-gesture (which races with
@@ -733,61 +734,55 @@ private struct CatalogContent: View {
             // MARK: Results Table
             Table(tableData, selection: $selectedIDs, sortOrder: $sortOrder) {
                 TableColumn("Filename", value: \.filename) { rec in
-                    Text(rec.filename)
-                        .font(.system(.body, design: .monospaced))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 2)
-                }
-                .width(min: 200, ideal: 260)
+                    HStack(spacing: 6) {
+                        if hasAdvancedDetails(rec) {
+                            Button {
+                                toggleDetails(for: rec)
+                            } label: {
+                                Image(systemName: selectedIDs.contains(rec.id) && showAdvancedDetails ? "chevron.down" : "chevron.right")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .frame(width: 12)
+                            }
+                            .buttonStyle(.plain)
+                        } else {
+                            Color.clear
+                                .frame(width: 12, height: 10)
+                        }
 
-                TableColumn("Stream Type") { rec in
+                        Text(rec.filename)
+                            .font(.system(.body, design: .monospaced))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .padding(.vertical, 2)
+                }
+                .width(min: 220, ideal: 300)
+
+                TableColumn("Stream Type", value: \.streamTypeRaw) { rec in
                     Text(rec.streamTypeRaw)
                         .foregroundColor(streamTypeColor(rec.streamType))
                         .bold(rec.streamType.needsCorrelation)
                 }
                 .width(min: 100, ideal: 110)
 
-                TableColumn("Duration") { rec in
+                TableColumn("Duration", value: \.durationSeconds) { rec in
                     Text(rec.duration)
                 }
-                    .width(min: 70, ideal: 80)
+                .width(min: 70, ideal: 80)
 
-                TableColumn("Resolution") { rec in
+                TableColumn("Resolution", value: \.pixelCount) { rec in
                     Text(rec.resolution)
                 }
-                    .width(min: 90, ideal: 100)
-
-                TableColumn("Timecode") { rec in
-                    Text(rec.timecode)
-                }
-                    .width(min: 100, ideal: 110)
-
-                TableColumn("Paired With") { rec in
-                    PairedWithCell(record: rec)
-                }
-                .width(min: 200, ideal: 280)
+                .width(min: 90, ideal: 100)
 
                 TableColumn("Duplicate") { rec in
                     DuplicateDispositionCell(record: rec)
                 }
                 .width(min: 95, ideal: 110)
 
-                TableColumn("Duplicate Match") { rec in
-                    DuplicateMatchCell(record: rec)
-                }
-                .width(min: 180, ideal: 240)
-
-                TableColumn("Size") { rec in
+                TableColumn("Size", value: \.sizeBytes) { rec in
                     Text(rec.size)
                 }
-                    .width(min: 70, ideal: 80)
-
-                TableColumn("Directory", value: \.directory) { rec in
-                    Text(rec.directory)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundColor(.secondary)
-                }
-                .width(min: 200, ideal: 300)
+                .width(min: 70, ideal: 80)
             }
             .onChange(of: sortOrder) {
                 onSort(sortOrder)
@@ -891,28 +886,39 @@ private struct CatalogContent: View {
                         // File info + stop button
                         if let id = selectedIDs.first,
                            let rec = records.first(where: { $0.id == id }) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(previewFilename)
-                                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                    Text("\(rec.resolution)  \(rec.duration)  \(rec.videoCodec)")
-                                        .font(.system(size: 11, design: .monospaced))
-                                        .foregroundColor(.secondary)
-                                }
-                                Spacer()
-                                if isPlaying {
-                                    Button {
-                                        player?.pause()
-                                        player = nil
-                                        isPlaying = false
-                                    } label: {
-                                        Image(systemName: "stop.fill")
-                                            .font(.system(size: 12))
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack(alignment: .top) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(previewFilename)
+                                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                            .lineLimit(1)
+                                            .truncationMode(.middle)
+                                        Text(primarySummary(for: rec))
+                                            .font(.system(size: 11, design: .monospaced))
+                                            .foregroundColor(.secondary)
+                                        Text(detailSummary(for: rec))
+                                            .font(.system(size: 10, design: .monospaced))
+                                            .foregroundColor(.secondary)
+                                            .lineLimit(2)
                                     }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.small)
+                                    Spacer()
+                                    if isPlaying {
+                                        Button {
+                                            player?.pause()
+                                            player = nil
+                                            isPlaying = false
+                                        } label: {
+                                            Image(systemName: "stop.fill")
+                                                .font(.system(size: 12))
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .controlSize(.small)
+                                    }
+                                }
+
+                                if showAdvancedDetails && hasAdvancedDetails(rec) {
+                                    AdvancedRecordDetails(record: rec)
+                                        .padding(.leading, 18)
                                 }
                             }
                         }
@@ -951,6 +957,50 @@ private struct CatalogContent: View {
         case .audioOnly:     return .yellow
         case .ffprobeFailed: return .red
         default:             return .primary
+        }
+    }
+
+    private func detailSummary(for record: VideoRecord) -> String {
+        let created = record.dateCreated.isEmpty ? "Created —" : "Created \(record.dateCreated)"
+        let timecode = record.timecode.isEmpty ? "TC —" : "TC \(record.timecode)"
+        return "\(created)  \(timecode)"
+    }
+
+    private func primarySummary(for record: VideoRecord) -> String {
+        let codec = record.videoCodec.isEmpty ? "Codec —" : record.videoCodec
+        return "\(record.resolution)  \(record.duration)  \(codec)"
+    }
+
+    private func hasAdvancedDetails(_ record: VideoRecord) -> Bool {
+        !advancedDetails(for: record).isEmpty
+    }
+
+    private func advancedDetails(for record: VideoRecord) -> [(String, String)] {
+        [
+            ("Path", record.fullPath),
+            ("Directory", record.directory),
+            ("Created", record.dateCreated),
+            ("Modified", record.dateModified),
+            ("Timecode", record.timecode),
+            ("Video", record.videoCodec),
+            ("Audio", record.audioCodec),
+            ("Tape", record.tapeName),
+            ("Paired", record.pairedWith?.filename ?? ""),
+            ("Duplicate Match", record.duplicateBestMatchFilename),
+            ("Duplicate Notes", record.duplicateReasons),
+            ("Partial MD5", record.partialMD5)
+        ]
+        .filter { !$0.1.isEmpty }
+    }
+
+    private func toggleDetails(for record: VideoRecord) {
+        let isSelected = selectedIDs.contains(record.id)
+        if isSelected {
+            showAdvancedDetails.toggle()
+        } else {
+            selectedIDs = [record.id]
+            onSelect(record.id)
+            showAdvancedDetails = true
         }
     }
 }
@@ -1001,6 +1051,47 @@ private struct DuplicateMatchCell: View {
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(.secondary)
             }
+        }
+    }
+}
+
+private struct AdvancedRecordDetails: View {
+    let record: VideoRecord
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(detailItems, id: \.0) { label, value in
+                detailLine(label, value)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var detailItems: [(String, String)] {
+        [
+            ("Path", record.fullPath),
+            ("Directory", record.directory),
+            ("Created", record.dateCreated),
+            ("Modified", record.dateModified),
+            ("Timecode", record.timecode),
+            ("Video", record.videoCodec),
+            ("Audio", record.audioCodec),
+            ("Tape", record.tapeName),
+            ("Paired", record.pairedWith?.filename ?? ""),
+            ("Duplicate Match", record.duplicateBestMatchFilename),
+            ("Duplicate Notes", record.duplicateReasons),
+            ("Partial MD5", record.partialMD5)
+        ]
+        .filter { !$0.1.isEmpty }
+    }
+
+    @ViewBuilder
+    private func detailLine(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label)
+                .foregroundColor(.secondary)
+            Text(value)
+                .textSelection(.enabled)
         }
     }
 }
