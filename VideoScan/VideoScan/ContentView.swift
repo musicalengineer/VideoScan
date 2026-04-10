@@ -33,6 +33,7 @@ struct CatalogView: View {
     @State private var selectedIDs: Set<UUID> = []
     @State private var showCombineSheet = false
     @State private var showDashboard = false
+    @State private var showInspector = true
     @State private var sortOrder = [KeyPathComparator(\VideoRecord.filename)]
     @State private var searchText: String = ""
     /// Set of scan-target searchPaths whose records the user wants to see in
@@ -61,6 +62,7 @@ struct CatalogView: View {
                 showCombineSheet: $showCombineSheet,
                 showDashboard: $showDashboard,
                 searchText: $searchText,
+                showInspector: $showInspector,
                 cacheCount: model.cacheCount,
                 dashboard: model.dashboard,
                 onStopCombine: { model.stopCombine() },
@@ -103,7 +105,7 @@ struct CatalogView: View {
 
             Divider()
 
-            // MARK: Split — Table top, Preview bottom
+            // MARK: Split — Table + Player left, Inspector right
             CatalogContent(
                 records: model.records,
                 selectedIDs: $selectedIDs,
@@ -113,6 +115,7 @@ struct CatalogView: View {
                 previewImage: model.previewImage,
                 previewFilename: model.previewFilename,
                 previewOfflineVolumeName: model.previewOfflineVolumeName,
+                showInspector: $showInspector,
                 onSort: { model.records.sort(using: $0) },
                 onSelect: { id in
                     if let rec = model.records.first(where: { $0.id == id }),
@@ -404,6 +407,7 @@ private struct CatalogToolbar<Dashboard: View>: View {
     @Binding var showCombineSheet: Bool
     @Binding var showDashboard: Bool
     @Binding var searchText: String
+    @Binding var showInspector: Bool
     let cacheCount: Int
     let dashboard: DashboardState
     let onStopCombine: () -> Void
@@ -512,6 +516,18 @@ private struct CatalogToolbar<Dashboard: View>: View {
             .cornerRadius(6)
 
             Spacer()
+
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showInspector.toggle()
+                }
+            } label: {
+                Image(systemName: showInspector ? "sidebar.right" : "sidebar.right")
+                    .font(.system(size: 14))
+                    .foregroundColor(showInspector ? .accentColor : .secondary)
+            }
+            .buttonStyle(.bordered)
+            .help(showInspector ? "Hide Inspector" : "Show Inspector")
 
             dashboardContent()
         }
@@ -683,7 +699,7 @@ struct SettingsTabView: View {
     }
 }
 
-// MARK: - Table + Preview (NO @ObservedObject — only re-renders when passed values change)
+// MARK: - Table + Preview + Inspector
 
 private struct CatalogContent: View {
     let records: [VideoRecord]
@@ -694,13 +710,13 @@ private struct CatalogContent: View {
     let previewImage: NSImage?
     let previewFilename: String
     let previewOfflineVolumeName: String?
+    @Binding var showInspector: Bool
     let onSort: ([KeyPathComparator<VideoRecord>]) -> Void
     let onSelect: (UUID?) -> Void
     let onClearPreview: () -> Void
 
     @State private var player: AVPlayer?
     @State private var isPlaying = false
-    @State private var showAdvancedDetails = false
 
     /// Stable snapshot the Table reads from. Decoupled from `records` so the
     /// Table never sees the data array mutate mid-gesture (which races with
@@ -708,10 +724,14 @@ private struct CatalogContent: View {
     /// ForEach.IDGenerator with an out-of-bounds subscript).
     @State private var tableData: [VideoRecord] = []
 
+    private var selectedRecord: VideoRecord? {
+        guard let id = selectedIDs.first else { return nil }
+        return records.first(where: { $0.id == id })
+    }
+
     private func computeFiltered() -> [VideoRecord] {
         var out = records
         if !filterTargetPaths.isEmpty {
-            // Show records that live under ANY of the selected volumes.
             let prefixes = Array(filterTargetPaths)
             out = out.filter { rec in
                 prefixes.contains(where: { rec.fullPath.hasPrefix($0) })
@@ -729,224 +749,220 @@ private struct CatalogContent: View {
     }
 
     var body: some View {
-        VSplitView {
+        HSplitView {
+            // MARK: Left side — Table + Player
+            VSplitView {
+                catalogTable
+                    .frame(minHeight: 250)
 
-            // MARK: Results Table
-            Table(tableData, selection: $selectedIDs, sortOrder: $sortOrder) {
-                TableColumn("Filename", value: \.filename) { rec in
-                    HStack(spacing: 6) {
-                        if hasAdvancedDetails(rec) {
-                            Button {
-                                toggleDetails(for: rec)
-                            } label: {
-                                Image(systemName: selectedIDs.contains(rec.id) && showAdvancedDetails ? "chevron.down" : "chevron.right")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .frame(width: 12)
-                            }
-                            .buttonStyle(.plain)
-                        } else {
-                            Color.clear
-                                .frame(width: 12, height: 10)
-                        }
+                previewPlayer
+                    .frame(minHeight: 140, idealHeight: 220)
+                    .background(Color(NSColor.controlBackgroundColor))
+            }
+            .frame(minWidth: 500)
 
-                        Text(rec.filename)
-                            .font(.system(.body, design: .monospaced))
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+            // MARK: Right side — Inspector
+            if showInspector {
+                InspectorPanel(
+                    record: selectedRecord,
+                    previewImage: previewImage,
+                    previewOfflineVolumeName: previewOfflineVolumeName
+                )
+                .frame(minWidth: 260, idealWidth: 300, maxWidth: 400)
+            }
+        }
+        .onChange(of: selectedIDs) {
+            if isPlaying {
+                player?.pause()
+                player = nil
+                isPlaying = false
+            }
+            if let id = selectedIDs.first {
+                onSelect(id)
+            } else {
+                onClearPreview()
+            }
+        }
+    }
+
+    // MARK: - Results Table
+
+    private var catalogTable: some View {
+        Table(tableData, selection: $selectedIDs, sortOrder: $sortOrder) {
+            TableColumn("Filename", value: \.filename) { rec in
+                Text(rec.filename)
+                    .font(.system(.body, design: .monospaced))
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 2)
-                }
-                .width(min: 220, ideal: 300)
-
-                TableColumn("Stream Type", value: \.streamTypeRaw) { rec in
-                    Text(rec.streamTypeRaw)
-                        .foregroundColor(streamTypeColor(rec.streamType))
-                        .bold(rec.streamType.needsCorrelation)
-                }
-                .width(min: 100, ideal: 110)
-
-                TableColumn("Duration", value: \.durationSeconds) { rec in
-                    Text(rec.duration)
-                }
-                .width(min: 70, ideal: 80)
-
-                TableColumn("Resolution", value: \.pixelCount) { rec in
-                    Text(rec.resolution)
-                }
-                .width(min: 90, ideal: 100)
-
-                TableColumn("Duplicate") { rec in
-                    DuplicateDispositionCell(record: rec)
-                }
-                .width(min: 95, ideal: 110)
-
-                TableColumn("Size", value: \.sizeBytes) { rec in
-                    Text(rec.size)
-                }
-                .width(min: 70, ideal: 80)
             }
-            .onChange(of: sortOrder) {
-                onSort(sortOrder)
-                tableData.sort(using: sortOrder)
+            .width(min: 180, ideal: 260)
+
+            TableColumn("Stream", value: \.streamTypeRaw) { rec in
+                Text(rec.streamTypeRaw)
+                    .foregroundColor(streamTypeColor(rec.streamType))
+                    .bold(rec.streamType.needsCorrelation)
             }
-            .contextMenu(forSelectionType: UUID.self) { ids in
-                if let id = ids.first,
-                   let rec = records.first(where: { $0.id == id }) {
-                    Button("Reveal in Finder") {
-                        NSWorkspace.shared.selectFile(rec.fullPath, inFileViewerRootedAtPath: "")
+            .width(min: 90, ideal: 100)
+
+            TableColumn("Duration", value: \.durationSeconds) { rec in
+                Text(rec.duration)
+            }
+            .width(min: 65, ideal: 75)
+
+            TableColumn("Resolution", value: \.pixelCount) { rec in
+                Text(rec.resolution)
+            }
+            .width(min: 80, ideal: 95)
+
+            TableColumn("Codec", value: \.videoCodec) { rec in
+                Text(rec.videoCodec.isEmpty ? "—" : rec.videoCodec)
+                    .foregroundColor(rec.videoCodec.isEmpty ? .secondary : .primary)
+            }
+            .width(min: 60, ideal: 80)
+
+            TableColumn("Size", value: \.sizeBytes) { rec in
+                Text(rec.size)
+            }
+            .width(min: 60, ideal: 75)
+
+            TableColumn("Created", value: \.dateCreatedSortKey) { rec in
+                Text(rec.dateCreated.isEmpty ? "—" : rec.dateCreated)
+                    .foregroundColor(rec.dateCreated.isEmpty ? .secondary : .primary)
+                    .font(.system(size: 11))
+            }
+            .width(min: 80, ideal: 100)
+
+            TableColumn("Duplicate") { rec in
+                DuplicateDispositionCell(record: rec)
+            }
+            .width(min: 80, ideal: 95)
+        }
+        .onChange(of: sortOrder) {
+            onSort(sortOrder)
+            tableData.sort(using: sortOrder)
+        }
+        .contextMenu(forSelectionType: UUID.self) { ids in
+            if let id = ids.first,
+               let rec = records.first(where: { $0.id == id }) {
+                Button("Reveal in Finder") {
+                    NSWorkspace.shared.selectFile(rec.fullPath, inFileViewerRootedAtPath: "")
+                }
+                Button("Open in QuickTime Player") {
+                    if let qtURL = NSWorkspace.shared.urlForApplication(
+                        withBundleIdentifier: "com.apple.QuickTimePlayerX"
+                    ) {
+                        NSWorkspace.shared.open(
+                            [URL(fileURLWithPath: rec.fullPath)],
+                            withApplicationAt: qtURL,
+                            configuration: NSWorkspace.OpenConfiguration()
+                        )
                     }
-                    Button("Open in QuickTime Player") {
-                        if let qtURL = NSWorkspace.shared.urlForApplication(
-                            withBundleIdentifier: "com.apple.QuickTimePlayerX"
-                        ) {
-                            NSWorkspace.shared.open(
-                                [URL(fileURLWithPath: rec.fullPath)],
-                                withApplicationAt: qtURL,
-                                configuration: NSWorkspace.OpenConfiguration()
-                            )
-                        }
-                    }
-                    Divider()
-                    Button("Copy Path") {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(rec.fullPath, forType: .string)
-                    }
+                }
+                Divider()
+                Button("Copy Path") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(rec.fullPath, forType: .string)
                 }
             }
-            .onChange(of: selectedIDs) {
-                if let id = selectedIDs.first {
-                    onSelect(id)
-                } else {
-                    onClearPreview()
-                }
-            }
-            .onAppear { tableData = computeFiltered() }
-            .onChange(of: records.count)     { tableData = computeFiltered() }
-            .onChange(of: searchText)        { tableData = computeFiltered() }
-            .onChange(of: filterTargetPaths) { tableData = computeFiltered() }
-            .frame(minHeight: 250)
+        }
+        .onAppear { tableData = computeFiltered() }
+        .onChange(of: records.count)     { tableData = computeFiltered() }
+        .onChange(of: searchText)        { tableData = computeFiltered() }
+        .onChange(of: filterTargetPaths) { tableData = computeFiltered() }
+    }
 
-            // MARK: Preview / Player
-            VStack(spacing: 0) {
-                if previewOfflineVolumeName != nil {
-                    VStack {
+    // MARK: - Preview / Player
+
+    private var previewPlayer: some View {
+        Group {
+            if previewOfflineVolumeName != nil {
+                VStack {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.black)
+                        Text("MEDIA OFFLINE")
+                            .font(.system(size: 22, weight: .bold, design: .monospaced))
+                            .foregroundColor(.orange)
+                            .tracking(2)
+                    }
+                    .frame(maxWidth: 480, maxHeight: 180)
+                    .aspectRatio(16.0/9.0, contentMode: .fit)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(12)
+            } else if previewImage != nil || !previewFilename.isEmpty {
+                VStack(spacing: 8) {
+                    if isPlaying, let player = player {
+                        VideoPlayer(player: player)
+                            .cornerRadius(6)
+                            .shadow(radius: 3)
+                    } else if let img = previewImage {
                         ZStack {
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(Color.black)
-                            Text("MEDIA OFFLINE")
-                                .font(.system(size: 22, weight: .bold, design: .monospaced))
-                                .foregroundColor(.orange)
-                                .tracking(2)
-                        }
-                        .frame(maxWidth: 480, maxHeight: 180)
-                        .aspectRatio(16.0/9.0, contentMode: .fit)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(12)
-                } else if previewImage != nil || !previewFilename.isEmpty {
-                    VStack(spacing: 8) {
-                        if isPlaying, let player = player {
-                            VideoPlayer(player: player)
+                            Image(nsImage: img)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
                                 .cornerRadius(6)
                                 .shadow(radius: 3)
-                        } else if let img = previewImage {
-                            ZStack {
-                                Image(nsImage: img)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fit)
-                                    .cornerRadius(6)
-                                    .shadow(radius: 3)
 
-                                // Play button overlay
-                                if let id = selectedIDs.first,
-                                   let rec = records.first(where: { $0.id == id }),
-                                   rec.streamType == .videoAndAudio || rec.streamType == .videoOnly {
-                                    Button {
-                                        let url = URL(fileURLWithPath: rec.fullPath)
-                                        player = AVPlayer(url: url)
-                                        isPlaying = true
-                                        player?.play()
-                                    } label: {
-                                        Image(systemName: "play.circle.fill")
-                                            .font(.system(size: 48))
-                                            .foregroundColor(.white.opacity(0.85))
-                                            .shadow(radius: 4)
-                                    }
-                                    .buttonStyle(.plain)
+                            if let rec = selectedRecord,
+                               rec.streamType == .videoAndAudio || rec.streamType == .videoOnly {
+                                Button {
+                                    let url = URL(fileURLWithPath: rec.fullPath)
+                                    player = AVPlayer(url: url)
+                                    isPlaying = true
+                                    player?.play()
+                                } label: {
+                                    Image(systemName: "play.circle.fill")
+                                        .font(.system(size: 48))
+                                        .foregroundColor(.white.opacity(0.85))
+                                        .shadow(radius: 4)
                                 }
-                            }
-                        } else {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(Color.gray.opacity(0.1))
-                                    .frame(width: 240, height: 135)
-                                ProgressView()
+                                .buttonStyle(.plain)
                             }
                         }
-
-                        // File info + stop button
-                        if let id = selectedIDs.first,
-                           let rec = records.first(where: { $0.id == id }) {
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack(alignment: .top) {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(previewFilename)
-                                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                                            .lineLimit(1)
-                                            .truncationMode(.middle)
-                                        Text(primarySummary(for: rec))
-                                            .font(.system(size: 11, design: .monospaced))
-                                            .foregroundColor(.secondary)
-                                        Text(detailSummary(for: rec))
-                                            .font(.system(size: 10, design: .monospaced))
-                                            .foregroundColor(.secondary)
-                                            .lineLimit(2)
-                                    }
-                                    Spacer()
-                                    if isPlaying {
-                                        Button {
-                                            player?.pause()
-                                            player = nil
-                                            isPlaying = false
-                                        } label: {
-                                            Image(systemName: "stop.fill")
-                                                .font(.system(size: 12))
-                                        }
-                                        .buttonStyle(.bordered)
-                                        .controlSize(.small)
-                                    }
-                                }
-
-                                if showAdvancedDetails && hasAdvancedDetails(rec) {
-                                    AdvancedRecordDetails(record: rec)
-                                        .padding(.leading, 18)
-                                }
-                            }
+                    } else {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color.gray.opacity(0.1))
+                                .frame(width: 240, height: 135)
+                            ProgressView()
                         }
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(12)
-                } else {
-                    VStack(spacing: 6) {
-                        Image(systemName: "play.rectangle")
-                            .font(.system(size: 32))
-                            .foregroundColor(.secondary.opacity(0.4))
-                        Text("Select a video to preview")
-                            .font(.system(size: 11))
-                            .foregroundColor(.secondary)
+
+                    // Filename + stop button
+                    HStack {
+                        Text(previewFilename)
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        if isPlaying {
+                            Button {
+                                player?.pause()
+                                player = nil
+                                isPlaying = false
+                            } label: {
+                                Image(systemName: "stop.fill")
+                                    .font(.system(size: 12))
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                        }
                     }
-                    .frame(height: 180)
-                    .frame(maxWidth: .infinity)
                 }
-            }
-            .frame(minHeight: 180, idealHeight: 280)
-            .background(Color(NSColor.controlBackgroundColor))
-            .onChange(of: selectedIDs) {
-                // Stop playback when selection changes
-                if isPlaying {
-                    player?.pause()
-                    player = nil
-                    isPlaying = false
+                .frame(maxWidth: .infinity)
+                .padding(12)
+            } else {
+                VStack(spacing: 6) {
+                    Image(systemName: "play.rectangle")
+                        .font(.system(size: 32))
+                        .foregroundColor(.secondary.opacity(0.4))
+                    Text("Select a video to preview")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
                 }
+                .frame(height: 140)
+                .frame(maxWidth: .infinity)
             }
         }
     }
@@ -959,51 +975,279 @@ private struct CatalogContent: View {
         default:             return .primary
         }
     }
+}
 
-    private func detailSummary(for record: VideoRecord) -> String {
-        let created = record.dateCreated.isEmpty ? "Created —" : "Created \(record.dateCreated)"
-        let timecode = record.timecode.isEmpty ? "TC —" : "TC \(record.timecode)"
-        return "\(created)  \(timecode)"
-    }
+// MARK: - Inspector Panel
 
-    private func primarySummary(for record: VideoRecord) -> String {
-        let codec = record.videoCodec.isEmpty ? "Codec —" : record.videoCodec
-        return "\(record.resolution)  \(record.duration)  \(codec)"
-    }
+private struct InspectorPanel: View {
+    let record: VideoRecord?
+    let previewImage: NSImage?
+    let previewOfflineVolumeName: String?
 
-    private func hasAdvancedDetails(_ record: VideoRecord) -> Bool {
-        !advancedDetails(for: record).isEmpty
-    }
+    var body: some View {
+        if let rec = record {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Thumbnail
+                    inspectorThumbnail(for: rec)
 
-    private func advancedDetails(for record: VideoRecord) -> [(String, String)] {
-        [
-            ("Path", record.fullPath),
-            ("Directory", record.directory),
-            ("Created", record.dateCreated),
-            ("Modified", record.dateModified),
-            ("Timecode", record.timecode),
-            ("Video", record.videoCodec),
-            ("Audio", record.audioCodec),
-            ("Tape", record.tapeName),
-            ("Paired", record.pairedWith?.filename ?? ""),
-            ("Duplicate Match", record.duplicateBestMatchFilename),
-            ("Duplicate Notes", record.duplicateReasons),
-            ("Partial MD5", record.partialMD5)
-        ]
-        .filter { !$0.1.isEmpty }
-    }
+                    // Filename header
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(rec.filename)
+                            .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                            .textSelection(.enabled)
+                            .lineLimit(2)
+                        Text(rec.streamTypeRaw)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(streamTypeColor(rec.streamType))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .fill(streamTypeColor(rec.streamType).opacity(0.12))
+                            )
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
 
-    private func toggleDetails(for record: VideoRecord) {
-        let isSelected = selectedIDs.contains(record.id)
-        if isSelected {
-            showAdvancedDetails.toggle()
+                    Divider().padding(.horizontal, 16)
+
+                    // Sections
+                    inspectorSection("General", systemImage: "doc") {
+                        inspectorRow("Size", rec.size)
+                        inspectorRow("Duration", rec.duration)
+                        inspectorRow("Container", rec.container)
+                        inspectorRow("Extension", rec.ext)
+                    }
+
+                    inspectorSection("Video", systemImage: "film") {
+                        inspectorRow("Resolution", rec.resolution)
+                        inspectorRow("Codec", rec.videoCodec)
+                        inspectorRow("Frame Rate", rec.frameRate)
+                        inspectorRow("Bitrate", rec.videoBitrate)
+                        inspectorRow("Total Bitrate", rec.totalBitrate)
+                        inspectorRow("Color Space", rec.colorSpace)
+                        inspectorRow("Bit Depth", rec.bitDepth)
+                        inspectorRow("Scan Type", rec.scanType)
+                    }
+
+                    inspectorSection("Audio", systemImage: "speaker.wave.2") {
+                        inspectorRow("Codec", rec.audioCodec)
+                        inspectorRow("Channels", rec.audioChannels)
+                        inspectorRow("Sample Rate", rec.audioSampleRate)
+                    }
+
+                    inspectorSection("Timestamps", systemImage: "calendar") {
+                        inspectorRow("Created", rec.dateCreated)
+                        inspectorRow("Modified", rec.dateModified)
+                        inspectorRow("Timecode", rec.timecode)
+                        inspectorRow("Tape Name", rec.tapeName)
+                    }
+
+                    if rec.pairedWith != nil || rec.pairConfidence != nil {
+                        inspectorSection("Correlation", systemImage: "arrow.triangle.2.circlepath") {
+                            if let paired = rec.pairedWith {
+                                inspectorRow("Paired With", paired.filename)
+                            }
+                            if let conf = rec.pairConfidence {
+                                HStack(spacing: 6) {
+                                    Text("Confidence")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.secondary)
+                                        .frame(width: 80, alignment: .trailing)
+                                    Circle()
+                                        .fill(conf.textColor)
+                                        .frame(width: 8, height: 8)
+                                    Text(conf.rawValue)
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundColor(conf.textColor)
+                                    Spacer()
+                                }
+                            }
+                        }
+                    }
+
+                    if rec.duplicateDisposition != .none || !rec.duplicateBestMatchFilename.isEmpty {
+                        inspectorSection("Duplicates", systemImage: "doc.on.doc") {
+                            if rec.duplicateDisposition != .none {
+                                HStack(spacing: 6) {
+                                    Text("Status")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.secondary)
+                                        .frame(width: 80, alignment: .trailing)
+                                    Circle()
+                                        .fill(rec.duplicateDisposition.textColor)
+                                        .frame(width: 8, height: 8)
+                                    Text(rec.duplicateDisposition.rawValue)
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundColor(rec.duplicateDisposition.textColor)
+                                    Spacer()
+                                }
+                            }
+                            inspectorRow("Match", rec.duplicateBestMatchFilename)
+                            inspectorRow("Reasons", rec.duplicateReasons)
+                            if let conf = rec.duplicateConfidence {
+                                HStack(spacing: 6) {
+                                    Text("Confidence")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.secondary)
+                                        .frame(width: 80, alignment: .trailing)
+                                    Circle()
+                                        .fill(conf.textColor)
+                                        .frame(width: 8, height: 8)
+                                    Text(conf.rawValue)
+                                        .font(.system(size: 11, weight: .medium))
+                                        .foregroundColor(conf.textColor)
+                                    Spacer()
+                                }
+                            }
+                        }
+                    }
+
+                    inspectorSection("Location", systemImage: "folder") {
+                        inspectorCopyableRow("Path", rec.fullPath)
+                        inspectorRow("Directory", rec.directory)
+                        inspectorRow("MD5 (partial)", rec.partialMD5)
+                    }
+
+                    Spacer(minLength: 16)
+                }
+            }
+            .background(Color(NSColor.controlBackgroundColor))
         } else {
-            selectedIDs = [record.id]
-            onSelect(record.id)
-            showAdvancedDetails = true
+            VStack(spacing: 8) {
+                Image(systemName: "info.circle")
+                    .font(.system(size: 28))
+                    .foregroundColor(.secondary.opacity(0.4))
+                Text("No Selection")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.secondary)
+                Text("Select a file to view details")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary.opacity(0.7))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(NSColor.controlBackgroundColor))
+        }
+    }
+
+    // MARK: - Thumbnail
+
+    @ViewBuilder
+    private func inspectorThumbnail(for rec: VideoRecord) -> some View {
+        if previewOfflineVolumeName != nil {
+            ZStack {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.black)
+                Text("OFFLINE")
+                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                    .foregroundColor(.orange)
+            }
+            .frame(height: 120)
+            .frame(maxWidth: .infinity)
+            .padding(16)
+        } else if let img = previewImage {
+            Image(nsImage: img)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .cornerRadius(6)
+                .shadow(radius: 2)
+                .frame(maxWidth: .infinity)
+                .padding(16)
+        } else if rec.streamType == .audioOnly {
+            ZStack {
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.secondary.opacity(0.08))
+                Image(systemName: "waveform")
+                    .font(.system(size: 28))
+                    .foregroundColor(.secondary.opacity(0.5))
+            }
+            .frame(height: 80)
+            .frame(maxWidth: .infinity)
+            .padding(16)
+        } else {
+            EmptyView()
+        }
+    }
+
+    // MARK: - Section Builder
+
+    @ViewBuilder
+    private func inspectorSection(_ title: String, systemImage: String, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.secondary)
+                Text(title.uppercased())
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundColor(.secondary)
+                    .tracking(0.5)
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+
+            content()
+                .padding(.horizontal, 16)
+        }
+    }
+
+    // MARK: - Row Helpers
+
+    @ViewBuilder
+    private func inspectorRow(_ label: String, _ value: String) -> some View {
+        if !value.isEmpty {
+            HStack(alignment: .top, spacing: 6) {
+                Text(label)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .frame(width: 80, alignment: .trailing)
+                Text(value)
+                    .font(.system(size: 11))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func inspectorCopyableRow(_ label: String, _ value: String) -> some View {
+        if !value.isEmpty {
+            HStack(alignment: .top, spacing: 6) {
+                Text(label)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .frame(width: 80, alignment: .trailing)
+                Text(value)
+                    .font(.system(size: 11))
+                    .textSelection(.enabled)
+                    .lineLimit(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(value, forType: .string)
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Copy to clipboard")
+            }
+        }
+    }
+
+    private func streamTypeColor(_ st: StreamType) -> Color {
+        switch st {
+        case .videoOnly:     return .orange
+        case .audioOnly:     return .yellow
+        case .ffprobeFailed: return .red
+        default:             return .primary
         }
     }
 }
+
+// MARK: - Table Cell Views
 
 private struct DuplicateDispositionCell: View {
     let record: VideoRecord
@@ -1017,81 +1261,6 @@ private struct DuplicateDispositionCell: View {
             }
             Text(record.duplicateDisposition == .none ? "—" : record.duplicateDisposition.rawValue)
                 .foregroundColor(record.duplicateDisposition.textColor)
-        }
-    }
-}
-
-private struct PairedWithCell: View {
-    let record: VideoRecord
-
-    var body: some View {
-        HStack(spacing: 4) {
-            if let conf = record.pairConfidence {
-                Circle()
-                    .fill(conf.textColor)
-                    .frame(width: 8, height: 8)
-            }
-            Text(record.pairedWith?.filename ?? "—")
-                .foregroundColor(record.pairConfidence?.textColor ?? .secondary)
-                .font(.system(.body, design: .monospaced))
-        }
-    }
-}
-
-private struct DuplicateMatchCell: View {
-    let record: VideoRecord
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(record.duplicateBestMatchFilename.isEmpty ? "—" : record.duplicateBestMatchFilename)
-                .foregroundColor(record.duplicateConfidence?.textColor ?? .secondary)
-                .font(.system(.body, design: .monospaced))
-            if !record.duplicateReasons.isEmpty {
-                Text(record.duplicateReasons)
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(.secondary)
-            }
-        }
-    }
-}
-
-private struct AdvancedRecordDetails: View {
-    let record: VideoRecord
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            ForEach(detailItems, id: \.0) { label, value in
-                detailLine(label, value)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var detailItems: [(String, String)] {
-        [
-            ("Path", record.fullPath),
-            ("Directory", record.directory),
-            ("Created", record.dateCreated),
-            ("Modified", record.dateModified),
-            ("Timecode", record.timecode),
-            ("Video", record.videoCodec),
-            ("Audio", record.audioCodec),
-            ("Tape", record.tapeName),
-            ("Paired", record.pairedWith?.filename ?? ""),
-            ("Duplicate Match", record.duplicateBestMatchFilename),
-            ("Duplicate Notes", record.duplicateReasons),
-            ("Partial MD5", record.partialMD5)
-        ]
-        .filter { !$0.1.isEmpty }
-    }
-
-    @ViewBuilder
-    private func detailLine(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(label)
-                .foregroundColor(.secondary)
-            Text(value)
-                .textSelection(.enabled)
         }
     }
 }
