@@ -216,6 +216,67 @@ final class MetadataCache {
         return deleted
     }
 
+    /// Load every cached record whose path starts with `prefix`. Used to
+    /// backfill `model.records` for offline volumes that were scanned by an
+    /// earlier build (before catalog.json existed) so the user can still
+    /// browse / filter / View-Catalog them when the volume is unmounted.
+    func allRecordsWithPrefix(_ prefix: String) -> [VideoRecord] {
+        lock.lock(); defer { lock.unlock() }
+        guard let db = db else { return [] }
+        let normalized = prefix.hasSuffix("/") ? prefix : prefix + "/"
+        let like = normalized.replacingOccurrences(of: "%", with: #"\%"#)
+                             .replacingOccurrences(of: "_", with: #"\_"#) + "%"
+        let sql = #"SELECT * FROM probe_cache WHERE path = ? OR path LIKE ? ESCAPE '\'"#
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(stmt) }
+        sqlite3_bind_text(stmt, 1, (prefix as NSString).utf8String, -1,
+                          unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+        sqlite3_bind_text(stmt, 2, (like as NSString).utf8String, -1,
+                          unsafeBitCast(-1, to: sqlite3_destructor_type.self))
+
+        var out: [VideoRecord] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let rec = VideoRecord()
+            rec.fullPath        = col(stmt, 0)
+            rec.sizeBytes       = sqlite3_column_int64(stmt, 1)
+            let modRaw          = sqlite3_column_double(stmt, 2)
+            rec.filename        = col(stmt, 3)
+            rec.ext             = col(stmt, 4)
+            rec.streamTypeRaw   = col(stmt, 5)
+            rec.size            = col(stmt, 6)
+            rec.duration        = col(stmt, 7)
+            rec.durationSeconds = sqlite3_column_double(stmt, 8)
+            rec.dateCreated     = col(stmt, 9)
+            rec.dateModified    = col(stmt, 10)
+            let dcRaw           = sqlite3_column_double(stmt, 11)
+            let dmRaw           = sqlite3_column_double(stmt, 12)
+            rec.dateCreatedRaw  = dcRaw  > 0 ? Date(timeIntervalSince1970: dcRaw)  : nil
+            rec.dateModifiedRaw = dmRaw  > 0 ? Date(timeIntervalSince1970: dmRaw)
+                                             : (modRaw > 0 ? Date(timeIntervalSince1970: modRaw) : nil)
+            rec.container       = col(stmt, 13)
+            rec.videoCodec      = col(stmt, 14)
+            rec.resolution      = col(stmt, 15)
+            rec.frameRate       = col(stmt, 16)
+            rec.videoBitrate    = col(stmt, 17)
+            rec.totalBitrate    = col(stmt, 18)
+            rec.colorSpace      = col(stmt, 19)
+            rec.bitDepth        = col(stmt, 20)
+            rec.scanType        = col(stmt, 21)
+            rec.audioCodec      = col(stmt, 22)
+            rec.audioChannels   = col(stmt, 23)
+            rec.audioSampleRate = col(stmt, 24)
+            rec.timecode        = col(stmt, 25)
+            rec.tapeName        = col(stmt, 26)
+            rec.isPlayable      = col(stmt, 27)
+            rec.partialMD5      = col(stmt, 28)
+            rec.directory       = col(stmt, 29)
+            rec.notes           = col(stmt, 30)
+            out.append(rec)
+        }
+        return out
+    }
+
     /// Number of cached records.
     var count: Int {
         lock.lock(); defer { lock.unlock() }

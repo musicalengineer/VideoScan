@@ -15,6 +15,10 @@ import AppKit
 ///      launch that crashed or was force-quit before unmount could run.
 ///   2. Force-detach our RAM disk on a normal Cmd-Q so we never leak one.
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Set by VideoScanApp at launch so the delegate can flush the catalog
+    /// snapshot synchronously on Cmd-Q.
+    weak var catalogModel: VideoScanModel?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         let detached = RAMDisk.cleanupStaleMounts()
         if !detached.isEmpty {
@@ -24,6 +28,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Flush the catalog snapshot first so the user's records survive
+        // an offline-volume relaunch.
+        MainActor.assumeIsolated {
+            catalogModel?.saveCatalogNow()
+        }
         // Synchronous on purpose — Cmd-Q must not return before the RAM disk
         // is gone, otherwise it survives in /Volumes.
         let detached = RAMDisk.cleanupStaleMounts()
@@ -70,6 +79,7 @@ struct VideoScanApp: App {
             ContentView()
                 .environmentObject(catalogModel)
                 .environmentObject(catalogModel.dashboard)
+                .onAppear { appDelegate.catalogModel = catalogModel }
         }
         .commands {
             CommandGroup(replacing: .appInfo) {

@@ -4,7 +4,7 @@ import Combine
 
 // MARK: - Stream Type
 
-enum StreamType: String {
+enum StreamType: String, Codable {
     case videoAndAudio = "Video+Audio"
     case videoOnly     = "Video only"
     case audioOnly     = "Audio only"
@@ -18,7 +18,7 @@ enum StreamType: String {
 
 // MARK: - Pair Confidence
 
-enum PairConfidence: String, Comparable {
+enum PairConfidence: String, Codable, Comparable {
     case high   = "High"
     case medium = "Medium"
     case low    = "Low"
@@ -47,7 +47,7 @@ enum PairConfidence: String, Comparable {
 
 // MARK: - Duplicate Confidence
 
-enum DuplicateConfidence: String, Comparable {
+enum DuplicateConfidence: String, Codable, Comparable {
     case high   = "High"
     case medium = "Medium"
     case low    = "Low"
@@ -66,7 +66,7 @@ enum DuplicateConfidence: String, Comparable {
     }
 }
 
-enum DuplicateDisposition: String {
+enum DuplicateDisposition: String, Codable {
     case none      = ""
     case keep      = "Keep"
     case review    = "Review"
@@ -84,8 +84,8 @@ enum DuplicateDisposition: String {
 
 // MARK: - Video Record
 
-class VideoRecord: Identifiable {
-    let id = UUID()
+class VideoRecord: Identifiable, Codable {
+    var id: UUID = UUID()
 
     var filename: String = ""
     var ext: String = ""
@@ -120,6 +120,9 @@ class VideoRecord: Identifiable {
     var wasCacheHit: Bool = false   // transient — not persisted to SQLite cache
 
     var pairedWith: VideoRecord?
+    /// Set during decode; CatalogStore resolves it to a real `pairedWith`
+    /// reference after the entire array has been decoded.
+    var pendingPairedWithID: UUID?
     var pairGroupID: UUID?
     var pairConfidence: PairConfidence?
     var duplicateGroupID: UUID?
@@ -131,6 +134,109 @@ class VideoRecord: Identifiable {
 
     var streamType: StreamType {
         StreamType(rawValue: streamTypeRaw) ?? .ffprobeFailed
+    }
+
+    init() {}
+
+    // MARK: Codable
+
+    private enum CodingKeys: String, CodingKey {
+        case id, filename, ext, streamTypeRaw, size, sizeBytes, duration, durationSeconds
+        case dateCreated, dateModified, dateCreatedRaw, dateModifiedRaw
+        case container, videoCodec, resolution, frameRate, videoBitrate, totalBitrate
+        case colorSpace, bitDepth, scanType, audioCodec, audioChannels, audioSampleRate
+        case timecode, tapeName, isPlayable, partialMD5, fullPath, directory, notes
+        case pairedWithID, pairGroupID, pairConfidence
+        case duplicateGroupID, duplicateConfidence, duplicateDisposition
+        case duplicateReasons, duplicateBestMatchFilename, duplicateGroupCount
+    }
+
+    required init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id                          = try c.decodeIfPresent(UUID.self,                 forKey: .id) ?? UUID()
+        filename                    = try c.decodeIfPresent(String.self,               forKey: .filename) ?? ""
+        ext                         = try c.decodeIfPresent(String.self,               forKey: .ext) ?? ""
+        streamTypeRaw               = try c.decodeIfPresent(String.self,               forKey: .streamTypeRaw) ?? ""
+        size                        = try c.decodeIfPresent(String.self,               forKey: .size) ?? ""
+        sizeBytes                   = try c.decodeIfPresent(Int64.self,                forKey: .sizeBytes) ?? 0
+        duration                    = try c.decodeIfPresent(String.self,               forKey: .duration) ?? ""
+        durationSeconds             = try c.decodeIfPresent(Double.self,               forKey: .durationSeconds) ?? 0
+        dateCreated                 = try c.decodeIfPresent(String.self,               forKey: .dateCreated) ?? ""
+        dateModified                = try c.decodeIfPresent(String.self,               forKey: .dateModified) ?? ""
+        dateCreatedRaw              = try c.decodeIfPresent(Date.self,                 forKey: .dateCreatedRaw)
+        dateModifiedRaw             = try c.decodeIfPresent(Date.self,                 forKey: .dateModifiedRaw)
+        container                   = try c.decodeIfPresent(String.self,               forKey: .container) ?? ""
+        videoCodec                  = try c.decodeIfPresent(String.self,               forKey: .videoCodec) ?? ""
+        resolution                  = try c.decodeIfPresent(String.self,               forKey: .resolution) ?? ""
+        frameRate                   = try c.decodeIfPresent(String.self,               forKey: .frameRate) ?? ""
+        videoBitrate                = try c.decodeIfPresent(String.self,               forKey: .videoBitrate) ?? ""
+        totalBitrate                = try c.decodeIfPresent(String.self,               forKey: .totalBitrate) ?? ""
+        colorSpace                  = try c.decodeIfPresent(String.self,               forKey: .colorSpace) ?? ""
+        bitDepth                    = try c.decodeIfPresent(String.self,               forKey: .bitDepth) ?? ""
+        scanType                    = try c.decodeIfPresent(String.self,               forKey: .scanType) ?? ""
+        audioCodec                  = try c.decodeIfPresent(String.self,               forKey: .audioCodec) ?? ""
+        audioChannels               = try c.decodeIfPresent(String.self,               forKey: .audioChannels) ?? ""
+        audioSampleRate             = try c.decodeIfPresent(String.self,               forKey: .audioSampleRate) ?? ""
+        timecode                    = try c.decodeIfPresent(String.self,               forKey: .timecode) ?? ""
+        tapeName                    = try c.decodeIfPresent(String.self,               forKey: .tapeName) ?? ""
+        isPlayable                  = try c.decodeIfPresent(String.self,               forKey: .isPlayable) ?? ""
+        partialMD5                  = try c.decodeIfPresent(String.self,               forKey: .partialMD5) ?? ""
+        fullPath                    = try c.decodeIfPresent(String.self,               forKey: .fullPath) ?? ""
+        directory                   = try c.decodeIfPresent(String.self,               forKey: .directory) ?? ""
+        notes                       = try c.decodeIfPresent(String.self,               forKey: .notes) ?? ""
+        pendingPairedWithID         = try c.decodeIfPresent(UUID.self,                 forKey: .pairedWithID)
+        pairGroupID                 = try c.decodeIfPresent(UUID.self,                 forKey: .pairGroupID)
+        pairConfidence              = try c.decodeIfPresent(PairConfidence.self,       forKey: .pairConfidence)
+        duplicateGroupID            = try c.decodeIfPresent(UUID.self,                 forKey: .duplicateGroupID)
+        duplicateConfidence         = try c.decodeIfPresent(DuplicateConfidence.self,  forKey: .duplicateConfidence)
+        duplicateDisposition        = try c.decodeIfPresent(DuplicateDisposition.self, forKey: .duplicateDisposition) ?? .none
+        duplicateReasons            = try c.decodeIfPresent(String.self,               forKey: .duplicateReasons) ?? ""
+        duplicateBestMatchFilename  = try c.decodeIfPresent(String.self,               forKey: .duplicateBestMatchFilename) ?? ""
+        duplicateGroupCount         = try c.decodeIfPresent(Int.self,                  forKey: .duplicateGroupCount) ?? 0
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id,                          forKey: .id)
+        try c.encode(filename,                    forKey: .filename)
+        try c.encode(ext,                         forKey: .ext)
+        try c.encode(streamTypeRaw,               forKey: .streamTypeRaw)
+        try c.encode(size,                        forKey: .size)
+        try c.encode(sizeBytes,                   forKey: .sizeBytes)
+        try c.encode(duration,                    forKey: .duration)
+        try c.encode(durationSeconds,             forKey: .durationSeconds)
+        try c.encode(dateCreated,                 forKey: .dateCreated)
+        try c.encode(dateModified,                forKey: .dateModified)
+        try c.encodeIfPresent(dateCreatedRaw,     forKey: .dateCreatedRaw)
+        try c.encodeIfPresent(dateModifiedRaw,    forKey: .dateModifiedRaw)
+        try c.encode(container,                   forKey: .container)
+        try c.encode(videoCodec,                  forKey: .videoCodec)
+        try c.encode(resolution,                  forKey: .resolution)
+        try c.encode(frameRate,                   forKey: .frameRate)
+        try c.encode(videoBitrate,                forKey: .videoBitrate)
+        try c.encode(totalBitrate,                forKey: .totalBitrate)
+        try c.encode(colorSpace,                  forKey: .colorSpace)
+        try c.encode(bitDepth,                    forKey: .bitDepth)
+        try c.encode(scanType,                    forKey: .scanType)
+        try c.encode(audioCodec,                  forKey: .audioCodec)
+        try c.encode(audioChannels,               forKey: .audioChannels)
+        try c.encode(audioSampleRate,             forKey: .audioSampleRate)
+        try c.encode(timecode,                    forKey: .timecode)
+        try c.encode(tapeName,                    forKey: .tapeName)
+        try c.encode(isPlayable,                  forKey: .isPlayable)
+        try c.encode(partialMD5,                  forKey: .partialMD5)
+        try c.encode(fullPath,                    forKey: .fullPath)
+        try c.encode(directory,                   forKey: .directory)
+        try c.encode(notes,                       forKey: .notes)
+        try c.encodeIfPresent(pairedWith?.id,     forKey: .pairedWithID)
+        try c.encodeIfPresent(pairGroupID,        forKey: .pairGroupID)
+        try c.encodeIfPresent(pairConfidence,     forKey: .pairConfidence)
+        try c.encodeIfPresent(duplicateGroupID,   forKey: .duplicateGroupID)
+        try c.encodeIfPresent(duplicateConfidence, forKey: .duplicateConfidence)
+        try c.encode(duplicateDisposition,        forKey: .duplicateDisposition)
+        try c.encode(duplicateReasons,            forKey: .duplicateReasons)
+        try c.encode(duplicateBestMatchFilename,  forKey: .duplicateBestMatchFilename)
+        try c.encode(duplicateGroupCount,         forKey: .duplicateGroupCount)
     }
 
     var rowColor: Color {
@@ -167,7 +273,7 @@ enum CatalogTargetStatus: String {
         case .idle:        return .secondary.opacity(0.4)
         case .discovering: return .yellow
         case .scanning:    return .green
-        case .paused:      return .yellow
+        case .paused:      return .cyan       // was .yellow — collided with discovering
         case .complete:    return .blue
         case .stopped:     return .orange
         case .error:       return .red
@@ -183,13 +289,19 @@ final class CatalogScanTarget: ObservableObject, Identifiable {
     @Published var filesFound: Int = 0
     @Published var filesScanned: Int = 0
     @Published var elapsedSecs: Double = 0.0
+    /// Whether the search path is currently mounted/reachable. Updated by
+    /// VideoScanModel on launch and on NSWorkspace mount/unmount notifications.
+    @Published var isReachable: Bool = true
 
     var scanTask: Task<Void, Never>?
     let pauseGate = PauseGate()
     private var taskStarted: Date?
     private var timerTask: Task<Void, Never>?
 
-    init(searchPath: String) { self.searchPath = searchPath }
+    init(searchPath: String) {
+        self.searchPath = searchPath
+        self.isReachable = VolumeReachability.isReachable(path: searchPath)
+    }
 
     func startElapsedTimer() {
         taskStarted = Date()
