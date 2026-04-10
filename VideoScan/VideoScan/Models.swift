@@ -45,6 +45,43 @@ enum PairConfidence: String, Comparable {
     }
 }
 
+// MARK: - Duplicate Confidence
+
+enum DuplicateConfidence: String, Comparable {
+    case high   = "High"
+    case medium = "Medium"
+    case low    = "Low"
+
+    var textColor: Color {
+        switch self {
+        case .high:   return .red
+        case .medium: return .orange
+        case .low:    return .yellow
+        }
+    }
+
+    static func < (lhs: DuplicateConfidence, rhs: DuplicateConfidence) -> Bool {
+        let order: [DuplicateConfidence] = [.low, .medium, .high]
+        return order.firstIndex(of: lhs)! < order.firstIndex(of: rhs)!
+    }
+}
+
+enum DuplicateDisposition: String {
+    case none      = ""
+    case keep      = "Keep"
+    case review    = "Review"
+    case extraCopy = "Extra copy"
+
+    var textColor: Color {
+        switch self {
+        case .none:      return .secondary
+        case .keep:      return .green
+        case .review:    return .orange
+        case .extraCopy: return .red
+        }
+    }
+}
+
 // MARK: - Video Record
 
 class VideoRecord: Identifiable {
@@ -85,6 +122,12 @@ class VideoRecord: Identifiable {
     var pairedWith: VideoRecord?
     var pairGroupID: UUID?
     var pairConfidence: PairConfidence?
+    var duplicateGroupID: UUID?
+    var duplicateConfidence: DuplicateConfidence?
+    var duplicateDisposition: DuplicateDisposition = .none
+    var duplicateReasons: String = ""
+    var duplicateBestMatchFilename: String = ""
+    var duplicateGroupCount: Int = 0
 
     var streamType: StreamType {
         StreamType(rawValue: streamTypeRaw) ?? .ffprobeFailed

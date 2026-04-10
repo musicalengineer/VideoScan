@@ -43,6 +43,9 @@ struct VideoRecordTests {
         #expect(rec.pairedWith == nil)
         #expect(rec.pairGroupID == nil)
         #expect(rec.pairConfidence == nil)
+        #expect(rec.duplicateGroupID == nil)
+        #expect(rec.duplicateConfidence == nil)
+        #expect(rec.duplicateDisposition == .none)
         #expect(rec.wasCacheHit == false)
     }
 
@@ -82,6 +85,16 @@ struct PairConfidenceTests {
         #expect(PairConfidence.high.rawValue == "High")
         #expect(PairConfidence.medium.rawValue == "Medium")
         #expect(PairConfidence.low.rawValue == "Low")
+    }
+}
+
+// MARK: - DuplicateConfidence Tests
+
+struct DuplicateConfidenceTests {
+
+    @Test func ordering() {
+        #expect(DuplicateConfidence.low < DuplicateConfidence.medium)
+        #expect(DuplicateConfidence.medium < DuplicateConfidence.high)
     }
 }
 
@@ -287,6 +300,99 @@ struct CorrelatorTests {
     }
 }
 
+// MARK: - DuplicateDetector Tests
+
+struct DuplicateDetectorTests {
+
+    @Test func exactDuplicateHashProducesKeeperAndExtraCopy() {
+        let original = makeDuplicateRecord(
+            filename: "clip.mov",
+            streamType: .videoAndAudio,
+            sizeBytes: 5_000_000_000,
+            durationSeconds: 60,
+            partialMD5: "abc123",
+            resolution: "1920x1080",
+            videoCodec: "prores",
+            audioCodec: "pcm_s16le"
+        )
+
+        let copy = makeDuplicateRecord(
+            filename: "clip copy.mov",
+            streamType: .videoAndAudio,
+            sizeBytes: 5_000_000_000,
+            durationSeconds: 60,
+            partialMD5: "abc123",
+            resolution: "1920x1080",
+            videoCodec: "prores",
+            audioCodec: "pcm_s16le"
+        )
+
+        let summary = DuplicateDetector.analyze(records: [original, copy])
+
+        #expect(summary.groups == 1)
+        #expect(summary.highConfidenceGroups == 1)
+        #expect(original.duplicateDisposition == .keep || copy.duplicateDisposition == .keep)
+        #expect(original.duplicateDisposition == .extraCopy || copy.duplicateDisposition == .extraCopy)
+        #expect(original.duplicateGroupID == copy.duplicateGroupID)
+    }
+
+    @Test func metadataOnlyDuplicateFallsBackToReview() {
+        let a = makeDuplicateRecord(
+            filename: "Interview_01.mov",
+            streamType: .videoAndAudio,
+            sizeBytes: 1_000_000_000,
+            durationSeconds: 42,
+            partialMD5: "",
+            resolution: "1280x720",
+            videoCodec: "h264",
+            audioCodec: "aac",
+            timecode: "01:00:00:00"
+        )
+
+        let b = makeDuplicateRecord(
+            filename: "Interview_01 (1).mov",
+            streamType: .videoAndAudio,
+            sizeBytes: 995_000_000,
+            durationSeconds: 42.4,
+            partialMD5: "",
+            resolution: "1280x720",
+            videoCodec: "h264",
+            audioCodec: "aac",
+            timecode: "01:00:00:00"
+        )
+
+        let summary = DuplicateDetector.analyze(records: [a, b])
+
+        #expect(summary.groups == 1)
+        #expect(summary.reviewItems == 1)
+        #expect(a.duplicateDisposition == .review || b.duplicateDisposition == .review)
+    }
+
+    @Test func mismatchedStreamTypesDoNotGroup() {
+        let withAudio = makeDuplicateRecord(
+            filename: "same.mov",
+            streamType: .videoAndAudio,
+            sizeBytes: 100,
+            durationSeconds: 10,
+            partialMD5: "samehash"
+        )
+
+        let videoOnly = makeDuplicateRecord(
+            filename: "same_copy.mov",
+            streamType: .videoOnly,
+            sizeBytes: 100,
+            durationSeconds: 10,
+            partialMD5: "samehash"
+        )
+
+        let summary = DuplicateDetector.analyze(records: [withAudio, videoOnly])
+
+        #expect(summary.groups == 0)
+        #expect(withAudio.duplicateDisposition == .none)
+        #expect(videoOnly.duplicateDisposition == .none)
+    }
+}
+
 // MARK: - AsyncSemaphore Tests
 
 struct AsyncSemaphoreTests {
@@ -336,6 +442,34 @@ private actor Counter {
     func decrement() {
         value -= 1
     }
+}
+
+private func makeDuplicateRecord(
+    filename: String,
+    streamType: StreamType,
+    sizeBytes: Int64,
+    durationSeconds: Double,
+    partialMD5: String,
+    resolution: String = "",
+    videoCodec: String = "",
+    audioCodec: String = "",
+    timecode: String = ""
+) -> VideoRecord {
+    let record = VideoRecord()
+    record.filename = filename
+    record.streamTypeRaw = streamType.rawValue
+    record.sizeBytes = sizeBytes
+    record.durationSeconds = durationSeconds
+    record.duration = Formatting.duration(durationSeconds)
+    record.partialMD5 = partialMD5
+    record.resolution = resolution
+    record.videoCodec = videoCodec
+    record.audioCodec = audioCodec
+    record.audioChannels = audioCodec.isEmpty ? "" : "2"
+    record.audioSampleRate = audioCodec.isEmpty ? "" : "48000 Hz"
+    record.timecode = timecode
+    record.isPlayable = "Yes"
+    return record
 }
 
 // MARK: - ScanPerformanceSettings Tests

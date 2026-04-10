@@ -66,6 +66,14 @@ struct CatalogView: View {
                     model.log("\nCorrelating \(selectedIDs.count) selected files...")
                     model.correlate(selectedIDs: selectedIDs)
                 },
+                onAnalyzeDuplicatesAll: {
+                    model.log("\nAnalyzing duplicate candidates across all scanned media...")
+                    model.analyzeDuplicates()
+                },
+                onAnalyzeDuplicatesSelected: {
+                    model.log("\nAnalyzing duplicate candidates in \(selectedIDs.count) selected files...")
+                    model.analyzeDuplicates(selectedIDs: selectedIDs)
+                },
                 onClearResults: { model.clearResults() },
                 onClearCache: { _ = model.clearCache() },
                 dashboardContent: {
@@ -336,6 +344,8 @@ private struct CatalogToolbar<Dashboard: View>: View {
     let onStopCombine: () -> Void
     let onCorrelateAll: () -> Void
     let onCorrelateSelected: () -> Void
+    let onAnalyzeDuplicatesAll: () -> Void
+    let onAnalyzeDuplicatesSelected: () -> Void
     let onClearResults: () -> Void
     let onClearCache: () -> Void
     @ViewBuilder let dashboardContent: () -> Dashboard
@@ -371,6 +381,17 @@ private struct CatalogToolbar<Dashboard: View>: View {
             }
             .menuStyle(.borderlessButton)
             .frame(width: 110)
+            .disabled(isScanning || !hasRecords)
+
+            Menu {
+                Button("Analyze All", action: onAnalyzeDuplicatesAll)
+                Button("Analyze Selected", action: onAnalyzeDuplicatesSelected)
+                    .disabled(selectedIDs.isEmpty)
+            } label: {
+                Label("Duplicates", systemImage: "doc.on.doc")
+            }
+            .menuStyle(.borderlessButton)
+            .frame(width: 120)
             .disabled(isScanning || !hasRecords)
 
             Button(action: { showCombineSheet = true }) {
@@ -624,7 +645,10 @@ private struct CatalogContent: View {
         let q = searchText.lowercased()
         return records.filter {
             $0.filename.lowercased().contains(q) ||
-            $0.directory.lowercased().contains(q)
+            $0.directory.lowercased().contains(q) ||
+            $0.duplicateDisposition.rawValue.lowercased().contains(q) ||
+            $0.duplicateBestMatchFilename.lowercased().contains(q) ||
+            $0.duplicateReasons.lowercased().contains(q)
         }
     }
 
@@ -641,44 +665,47 @@ private struct CatalogContent: View {
                 }
                 .width(min: 200, ideal: 260)
 
-                TableColumn("Stream Type", value: \.streamTypeRaw) { rec in
+                TableColumn("Stream Type") { rec in
                     Text(rec.streamTypeRaw)
                         .foregroundColor(streamTypeColor(rec.streamType))
                         .bold(rec.streamType.needsCorrelation)
                 }
                 .width(min: 100, ideal: 110)
 
-                TableColumn("Duration", value: \.duration)
+                TableColumn("Duration") { rec in
+                    Text(rec.duration)
+                }
                     .width(min: 70, ideal: 80)
 
-                TableColumn("Resolution", value: \.resolution)
+                TableColumn("Resolution") { rec in
+                    Text(rec.resolution)
+                }
                     .width(min: 90, ideal: 100)
 
-                TableColumn("Timecode", value: \.timecode)
+                TableColumn("Timecode") { rec in
+                    Text(rec.timecode)
+                }
                     .width(min: 100, ideal: 110)
 
                 TableColumn("Paired With") { rec in
-                    HStack(spacing: 4) {
-                        if let conf = rec.pairConfidence {
-                            Circle()
-                                .fill(conf.textColor)
-                                .frame(width: 8, height: 8)
-                        }
-                        Text(rec.pairedWith?.filename ?? "—")
-                            .foregroundColor(rec.pairConfidence?.textColor ?? .secondary)
-                            .font(.system(.body, design: .monospaced))
-                    }
+                    PairedWithCell(record: rec)
                 }
                 .width(min: 200, ideal: 280)
 
-                TableColumn("Date Created", value: \.dateCreated)
-                    .width(min: 130, ideal: 150)
+                TableColumn("Duplicate") { rec in
+                    DuplicateDispositionCell(record: rec)
+                }
+                .width(min: 95, ideal: 110)
 
-                TableColumn("Size", value: \.size)
+                TableColumn("Duplicate Match") { rec in
+                    DuplicateMatchCell(record: rec)
+                }
+                .width(min: 180, ideal: 240)
+
+                TableColumn("Size") { rec in
+                    Text(rec.size)
+                }
                     .width(min: 70, ideal: 80)
-
-                TableColumn("Video Codec", value: \.videoCodec)
-                    .width(min: 80, ideal: 90)
 
                 TableColumn("Directory", value: \.directory) { rec in
                     Text(rec.directory)
@@ -833,6 +860,56 @@ private struct CatalogContent: View {
         case .audioOnly:     return .yellow
         case .ffprobeFailed: return .red
         default:             return .primary
+        }
+    }
+}
+
+private struct DuplicateDispositionCell: View {
+    let record: VideoRecord
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if let conf = record.duplicateConfidence {
+                Circle()
+                    .fill(conf.textColor)
+                    .frame(width: 8, height: 8)
+            }
+            Text(record.duplicateDisposition == .none ? "—" : record.duplicateDisposition.rawValue)
+                .foregroundColor(record.duplicateDisposition.textColor)
+        }
+    }
+}
+
+private struct PairedWithCell: View {
+    let record: VideoRecord
+
+    var body: some View {
+        HStack(spacing: 4) {
+            if let conf = record.pairConfidence {
+                Circle()
+                    .fill(conf.textColor)
+                    .frame(width: 8, height: 8)
+            }
+            Text(record.pairedWith?.filename ?? "—")
+                .foregroundColor(record.pairConfidence?.textColor ?? .secondary)
+                .font(.system(.body, design: .monospaced))
+        }
+    }
+}
+
+private struct DuplicateMatchCell: View {
+    let record: VideoRecord
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(record.duplicateBestMatchFilename.isEmpty ? "—" : record.duplicateBestMatchFilename)
+                .foregroundColor(record.duplicateConfidence?.textColor ?? .secondary)
+                .font(.system(.body, design: .monospaced))
+            if !record.duplicateReasons.isEmpty {
+                Text(record.duplicateReasons)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(.secondary)
+            }
         }
     }
 }
