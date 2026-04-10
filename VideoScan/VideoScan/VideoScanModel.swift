@@ -52,6 +52,10 @@ final class VideoScanModel: ObservableObject {
     @Published var outputCSVPath: String = ""
     @Published var previewImage: NSImage? = nil
     @Published var previewFilename: String = ""
+    /// Set when the user selects a record whose source volume isn't currently
+    /// mounted. CatalogContent renders an "Volume Offline" placeholder
+    /// instead of trying to load a thumbnail.
+    @Published var previewOfflineVolumeName: String? = nil
 
     /// High-frequency dashboard + console state — separate ObservableObject
     /// so updates don't trigger re-render of the main Table view.
@@ -93,8 +97,82 @@ final class VideoScanModel: ObservableObject {
 
     private static let savedTargetsKey = "VideoScan.scanTargetPaths"
 
+    private let catalogStore = CatalogStore.shared
+
     init() {
         restoreScanTargets()
+        // Restore previously-scanned records so the user can browse the
+        // catalog even when source volumes are offline.
+        let restored = catalogStore.load()
+        if !restored.isEmpty {
+            records = restored
+            log("Restored \(restored.count) records from previous session.")
+        }
+        // Backfill: for any scan target that has zero records in the restored
+        // snapshot, pull whatever the SQLite metadata cache has under that
+        // path. This covers volumes scanned by builds older than catalog.json
+        // persistence — without this, View Catalog shows (0) for offline
+        // volumes even though the ffprobe cache is full of their files.
+        var backfilled = 0
+        for t in scanTargets where !t.searchPath.isEmpty {
+            let already = records.contains { $0.fullPath.hasPrefix(t.searchPath) }
+            if already { continue }
+            let cached = metadataCache.allRecordsWithPrefix(t.searchPath)
+            if !cached.isEmpty {
+                records.append(contentsOf: cached)
+                backfilled += cached.count
+                log("Backfilled \(cached.count) records for \(URL(fileURLWithPath: t.searchPath).lastPathComponent) from metadata cache.")
+            }
+        }
+        if backfilled > 0 {
+            // Persist the merged set so subsequent launches skip the backfill.
+            catalogStore.scheduleSave(records: records)
+        }
+        installVolumeMountObservers()
+        refreshTargetReachability()
+    }
+
+    private var mountObservers: [NSObjectProtocol] = []
+
+    /// Listen for drive mount/unmount events so the Scan Target list can
+    /// flip its offline indicator without polling.
+    private func installVolumeMountObservers() {
+        let nc = NSWorkspace.shared.notificationCenter
+        let mount = nc.addObserver(
+            forName: NSWorkspace.didMountNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.refreshTargetReachability() }
+        }
+        let unmount = nc.addObserver(
+            forName: NSWorkspace.didUnmountNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.refreshTargetReachability() }
+        }
+        mountObservers = [mount, unmount]
+    }
+
+    /// Re-check whether each scan target's path is currently mounted.
+    func refreshTargetReachability() {
+        for t in scanTargets {
+            let r = VolumeReachability.isReachable(path: t.searchPath)
+            if t.isReachable != r { t.isReachable = r }
+        }
+    }
+
+    /// Persist the current records array. Debounced; bursts of mutations
+    /// (e.g. mid-scan) collapse into one disk write.
+    func saveCatalogDebounced() {
+        catalogStore.scheduleSave(records: records)
+    }
+
+    /// Synchronous save — call from `applicationWillTerminate` so the
+    /// snapshot is on disk before the process exits.
+    func saveCatalogNow() {
+        catalogStore.saveNow(records: records)
     }
 
     private func restoreScanTargets() {
@@ -121,6 +199,8 @@ final class VideoScanModel: ObservableObject {
         outputCSVPath = ""
         previewImage = nil
         previewFilename = ""
+        previewOfflineVolumeName = nil
+        saveCatalogNow()
     }
 
     func clearCache() -> Int {
@@ -221,6 +301,7 @@ final class VideoScanModel: ObservableObject {
         records.removeAll { $0.fullPath.hasPrefix(target.searchPath) }
         scanTargets.removeAll { $0.id == target.id }
         persistScanTargets()
+        saveCatalogNow()
     }
 
     func startTarget(_ target: CatalogScanTarget) {
@@ -449,8 +530,9 @@ final class VideoScanModel: ObservableObject {
             return
         }
 
-        // Append results to shared records
+        // Append results to shared records and persist the snapshot.
         records.append(contentsOf: targetRecords)
+        saveCatalogDebounced()
 
         let va = targetRecords.filter { $0.streamTypeRaw == StreamType.videoAndAudio.rawValue }.count
         let vo = targetRecords.filter { $0.streamTypeRaw == StreamType.videoOnly.rawValue }.count
@@ -674,6 +756,7 @@ final class VideoScanModel: ObservableObject {
         let rootLabel = roots.count == 1 ? roots[0] : "MultiVolume"
         let csvPath = writeCSV(records: allRecords, root: rootLabel)
         records = allRecords
+        saveCatalogDebounced()
         outputCSVPath = csvPath ?? ""
         if let p = csvPath { log("CSV saved to:\n\(p)") }
 
@@ -1500,12 +1583,22 @@ final class VideoScanModel: ObservableObject {
     func generateThumbnail(for record: VideoRecord) {
         previewFilename = record.filename
 
-        // Check cache first
+        // Check cache first — works even when the source volume is offline.
         let cacheKey = record.fullPath as NSString
         if let cached = thumbnailCache.object(forKey: cacheKey) {
             previewImage = cached
+            previewOfflineVolumeName = nil
             return
         }
+
+        // If the source volume isn't mounted, don't try to read the file —
+        // surface a clean "Volume Offline" placeholder instead of stalling.
+        if !VolumeReachability.isReachable(path: record.fullPath) {
+            previewImage = nil
+            previewOfflineVolumeName = VolumeReachability.volumeName(forPath: record.fullPath)
+            return
+        }
+        previewOfflineVolumeName = nil
 
         previewImage = nil
         let url = URL(fileURLWithPath: record.fullPath)

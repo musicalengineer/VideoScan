@@ -35,6 +35,12 @@ struct CatalogView: View {
     @State private var showDashboard = false
     @State private var sortOrder = [KeyPathComparator(\VideoRecord.filename)]
     @State private var searchText: String = ""
+    /// Set of scan-target searchPaths whose records the user wants to see in
+    /// the catalog table. Empty set = show all volumes (no filter). Each eye
+    /// toggle in the Scan Targets pane independently flips membership, so the
+    /// user can view 1, 2, or N volumes simultaneously. Works for offline
+    /// volumes too, since records are persisted across launches.
+    @State private var filterTargetPaths: Set<String> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -103,8 +109,10 @@ struct CatalogView: View {
                 selectedIDs: $selectedIDs,
                 sortOrder: $sortOrder,
                 searchText: searchText,
+                filterTargetPaths: filterTargetPaths,
                 previewImage: model.previewImage,
                 previewFilename: model.previewFilename,
+                previewOfflineVolumeName: model.previewOfflineVolumeName,
                 onSort: { model.records.sort(using: $0) },
                 onSelect: { id in
                     if let rec = model.records.first(where: { $0.id == id }),
@@ -113,11 +121,13 @@ struct CatalogView: View {
                     } else {
                         model.previewImage = nil
                         model.previewFilename = ""
+                        model.previewOfflineVolumeName = nil
                     }
                 },
                 onClearPreview: {
                     model.previewImage = nil
                     model.previewFilename = ""
+                    model.previewOfflineVolumeName = nil
                 }
             )
         }
@@ -188,11 +198,22 @@ struct CatalogView: View {
                         ForEach(model.scanTargets) { target in
                             CatalogTargetRow(
                                 target: target,
+                                recordCount: model.records.reduce(into: 0) { count, rec in
+                                    if rec.fullPath.hasPrefix(target.searchPath) { count += 1 }
+                                },
+                                isFiltered: filterTargetPaths.contains(target.searchPath),
                                 onStart: { model.startTarget(target) },
                                 onStop: { model.stopTarget(target) },
                                 onPause: { model.togglePauseTarget(target) },
                                 onReset: { model.resetTarget(target) },
-                                onRemove: { model.removeScanTarget(target) }
+                                onRemove: { model.removeScanTarget(target) },
+                                onViewCatalog: {
+                                    if filterTargetPaths.contains(target.searchPath) {
+                                        filterTargetPaths.remove(target.searchPath)
+                                    } else {
+                                        filterTargetPaths.insert(target.searchPath)
+                                    }
+                                }
                             )
                         }
                     }
@@ -210,11 +231,14 @@ struct CatalogView: View {
 
 private struct CatalogTargetRow: View {
     @ObservedObject var target: CatalogScanTarget
+    let recordCount: Int
+    let isFiltered: Bool
     let onStart: () -> Void
     let onStop: () -> Void
     let onPause: () -> Void
     let onReset: () -> Void
     let onRemove: () -> Void
+    let onViewCatalog: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
@@ -223,6 +247,38 @@ private struct CatalogTargetRow: View {
                 .fill(target.status.color)
                 .frame(width: 12, height: 12)
                 .shadow(color: target.status.color.opacity(0.5), radius: 3)
+
+            // Focus toggle — switches the catalog table between "all volumes"
+            // and "only this volume". eye.fill + accent = focused on this one;
+            // eye + secondary = global (all volumes shown). Record count rides
+            // inside the same control so the row stays clean.
+            Button(action: onViewCatalog) {
+                HStack(spacing: 4) {
+                    Image(systemName: isFiltered ? "eye.fill" : "eye")
+                        .font(.system(size: 13))
+                    if recordCount > 0 {
+                        Text("\(recordCount)")
+                            .font(.system(size: 11, design: .monospaced))
+                    }
+                }
+                .foregroundColor(isFiltered ? .accentColor : .secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(isFiltered ? Color.accentColor.opacity(0.15) : Color.clear)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5)
+                        .stroke(isFiltered ? Color.accentColor.opacity(0.6) : Color.secondary.opacity(0.25), lineWidth: 1)
+                )
+            }
+            .buttonStyle(.plain)
+            .help(isFiltered
+                  ? "Showing only this volume in the catalog — click to show all volumes"
+                  : (recordCount == 0
+                     ? "No catalog data for this volume yet"
+                     : "Show only this volume's catalog data"))
 
             // Path (editable when idle)
             if target.status.isIdle {
@@ -238,6 +294,14 @@ private struct CatalogTargetRow: View {
                     .font(.system(.body, design: .monospaced))
                     .lineLimit(1)
                     .truncationMode(.middle)
+            }
+
+            // Offline indicator — independent of the status dot, which conveys
+            // scan progress. Shown whenever the root path is unreachable.
+            if !target.isReachable {
+                Image(systemName: "externaldrive.badge.exclamationmark")
+                    .foregroundColor(.orange)
+                    .help("Volume offline — \(VolumeReachability.volumeName(forPath: target.searchPath)) is not currently mounted")
             }
 
             Spacer()
@@ -281,7 +345,8 @@ private struct CatalogTargetRow: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.regular)
-                .disabled(target.searchPath.isEmpty)
+                .disabled(target.searchPath.isEmpty || !target.isReachable)
+                .help(target.isReachable ? "" : "Volume offline — mount the drive to scan")
 
                 if target.status == .complete || target.status == .stopped || target.status == .error {
                     Button(action: onReset) {
@@ -625,8 +690,10 @@ private struct CatalogContent: View {
     @Binding var selectedIDs: Set<UUID>
     @Binding var sortOrder: [KeyPathComparator<VideoRecord>]
     let searchText: String
+    let filterTargetPaths: Set<String>
     let previewImage: NSImage?
     let previewFilename: String
+    let previewOfflineVolumeName: String?
     let onSort: ([KeyPathComparator<VideoRecord>]) -> Void
     let onSelect: (UUID?) -> Void
     let onClearPreview: () -> Void
@@ -641,9 +708,17 @@ private struct CatalogContent: View {
     @State private var tableData: [VideoRecord] = []
 
     private func computeFiltered() -> [VideoRecord] {
-        if searchText.isEmpty { return records }
+        var out = records
+        if !filterTargetPaths.isEmpty {
+            // Show records that live under ANY of the selected volumes.
+            let prefixes = Array(filterTargetPaths)
+            out = out.filter { rec in
+                prefixes.contains(where: { rec.fullPath.hasPrefix($0) })
+            }
+        }
+        if searchText.isEmpty { return out }
         let q = searchText.lowercased()
-        return records.filter {
+        return out.filter {
             $0.filename.lowercased().contains(q) ||
             $0.directory.lowercased().contains(q) ||
             $0.duplicateDisposition.rawValue.lowercased().contains(q) ||
@@ -750,13 +825,29 @@ private struct CatalogContent: View {
                 }
             }
             .onAppear { tableData = computeFiltered() }
-            .onChange(of: records.count) { tableData = computeFiltered() }
-            .onChange(of: searchText)    { tableData = computeFiltered() }
+            .onChange(of: records.count)     { tableData = computeFiltered() }
+            .onChange(of: searchText)        { tableData = computeFiltered() }
+            .onChange(of: filterTargetPaths) { tableData = computeFiltered() }
             .frame(minHeight: 250)
 
             // MARK: Preview / Player
             VStack(spacing: 0) {
-                if previewImage != nil || !previewFilename.isEmpty {
+                if previewOfflineVolumeName != nil {
+                    VStack {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color.black)
+                            Text("MEDIA OFFLINE")
+                                .font(.system(size: 22, weight: .bold, design: .monospaced))
+                                .foregroundColor(.orange)
+                                .tracking(2)
+                        }
+                        .frame(maxWidth: 480, maxHeight: 180)
+                        .aspectRatio(16.0/9.0, contentMode: .fit)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(12)
+                } else if previewImage != nil || !previewFilename.isEmpty {
                     VStack(spacing: 8) {
                         if isPlaying, let player = player {
                             VideoPlayer(player: player)
