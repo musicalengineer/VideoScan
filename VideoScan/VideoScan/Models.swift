@@ -136,6 +136,32 @@ class VideoRecord: Identifiable, Codable {
         StreamType(rawValue: streamTypeRaw) ?? .ffprobeFailed
     }
 
+    // MARK: - Sort keys
+    //
+    // SwiftUI Table's `value:` parameter on TableColumn requires a KeyPath
+    // whose value type conforms to `Comparable`. Date? and parsed strings
+    // don't qualify directly, so these computed keys give the table a stable
+    // numeric/Date sort field while the cell content keeps showing the
+    // human-friendly string.
+
+    /// Resolution sorted by total pixel count. Files with no resolution
+    /// (audio-only, ffprobe failed) sort to the bottom.
+    var pixelCount: Int {
+        let parts = resolution.lowercased().split(separator: "x")
+        guard parts.count == 2,
+              let w = Int(parts[0].trimmingCharacters(in: .whitespaces)),
+              let h = Int(parts[1].trimmingCharacters(in: .whitespaces))
+        else { return 0 }
+        return w * h
+    }
+
+    /// Non-optional creation date for sorting; missing dates sort to the
+    /// far past so descending order surfaces real dates first.
+    var dateCreatedSortKey: Date { dateCreatedRaw ?? .distantPast }
+
+    /// Same idea for modification date.
+    var dateModifiedSortKey: Date { dateModifiedRaw ?? .distantPast }
+
     init() {}
 
     // MARK: Codable
