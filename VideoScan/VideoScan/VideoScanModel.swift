@@ -121,8 +121,6 @@ final class VideoScanModel: ObservableObject {
         outputCSVPath = ""
         previewImage = nil
         previewFilename = ""
-        // Clear pairing state
-        for r in records { r.pairedWith = nil; r.pairGroupID = nil; r.pairConfidence = nil }
     }
 
     func clearCache() -> Int {
@@ -1024,6 +1022,30 @@ final class VideoScanModel: ObservableObject {
         records = tmp
     }
 
+    func analyzeDuplicates(selectedIDs: Set<UUID>? = nil) {
+        let scope: [VideoRecord]
+        if let ids = selectedIDs, !ids.isEmpty {
+            scope = records.filter { ids.contains($0.id) }
+            DuplicateDetector.clear(records: scope)
+        } else {
+            scope = records
+        }
+
+        let summary = DuplicateDetector.analyze(records: scope)
+
+        log("""
+
+        Duplicate analysis complete:
+          \(summary.groups) groups
+          \(summary.highConfidenceGroups) high, \(summary.mediumConfidenceGroups) medium, \(summary.lowConfidenceGroups) low confidence
+          \(summary.extraCopies) extra copy candidates, \(summary.reviewItems) review items
+        """)
+
+        let tmp = records
+        records = []
+        records = tmp
+    }
+
     /// Normalize filename by stripping V/A prefix (Avid MXF convention).
     /// Only strips when followed by hex digits (e.g., V01A23BC.mxf → _01A23BC.mxf)
     func filenameCorrelationKey(_ filename: String) -> String {
@@ -1444,7 +1466,8 @@ final class VideoScanModel: ObservableObject {
             "Date Created","Date Modified","Container","Video Codec","Resolution",
             "Frame Rate","Video Bitrate","Total Bitrate","Color Space","Bit Depth",
             "Scan Type","Audio Codec","Audio Channels","Audio Sample Rate","Timecode",
-            "Tape Name","Is Playable","Partial MD5","Full Path","Directory","Notes"
+            "Tape Name","Is Playable","Partial MD5","Duplicate Group","Duplicate Confidence",
+            "Duplicate Disposition","Duplicate Match","Duplicate Reasons","Full Path","Directory","Notes"
         ]
         var lines = [headers.joined(separator: ",")]
         for r in records {
@@ -1454,7 +1477,9 @@ final class VideoScanModel: ObservableObject {
                 r.videoCodec, r.resolution, r.frameRate, r.videoBitrate,
                 r.totalBitrate, r.colorSpace, r.bitDepth, r.scanType,
                 r.audioCodec, r.audioChannels, r.audioSampleRate, r.timecode,
-                r.tapeName, r.isPlayable, r.partialMD5, r.fullPath, r.directory, r.notes
+                r.tapeName, r.isPlayable, r.partialMD5, r.duplicateGroupID?.uuidString ?? "",
+                r.duplicateConfidence?.rawValue ?? "", r.duplicateDisposition.rawValue,
+                r.duplicateBestMatchFilename, r.duplicateReasons, r.fullPath, r.directory, r.notes
             ].map { csvEscape($0) }.joined(separator: ",")
             lines.append(row)
         }
