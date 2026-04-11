@@ -1075,13 +1075,16 @@ final class VideoScanModel: ObservableObject {
                 let reason = stderrTrimmed.isEmpty ? "ffprobe could not decode" : stderrTrimmed
                 rec.notes = "MXF header parsed (ffprobe failed: \(reason))"
             } else {
-                rec.isPlayable    = "ffprobe failed"
-                rec.notes         = stderrTrimmed.isEmpty ? "MXF header parse also failed" : "MXF fallback failed; \(stderrTrimmed)"
+                rec.isPlayable    = "Damaged MXF file"
+                rec.notes         = stderrTrimmed.isEmpty
+                    ? "Neither ffprobe nor MXF header parser could read this file"
+                    : "Damaged MXF — both ffprobe and header parser failed (\(stderrTrimmed))"
                 rec.streamTypeRaw = StreamType.ffprobeFailed.rawValue
             }
         } else {
-            rec.isPlayable    = "ffprobe failed"
-            rec.notes         = stderrTrimmed.isEmpty ? "ffprobe could not read file" : stderrTrimmed
+            let diagnosis = Self.humanReadableDiagnosis(stderr: stderrTrimmed)
+            rec.isPlayable    = diagnosis.label
+            rec.notes         = diagnosis.detail
             rec.streamTypeRaw = StreamType.ffprobeFailed.rawValue
         }
 
@@ -1608,6 +1611,35 @@ final class VideoScanModel: ObservableObject {
         }
         let output = try? JSONDecoder().decode(FFProbeOutput.self, from: data)
         return (output, result.stderr)
+    }
+
+    /// Translate raw ffprobe stderr into a human-readable label + detail.
+    nonisolated private static func humanReadableDiagnosis(stderr: String) -> (label: String, detail: String) {
+        let lower = stderr.lowercased()
+
+        if lower.contains("moov atom not found") {
+            return ("Damaged file",
+                    "File is corrupt or incomplete — missing media index (moov atom not found)")
+        }
+        if lower.contains("invalid data found") {
+            return ("Damaged file",
+                    "File contains invalid or unreadable data (invalid data found when processing input)")
+        }
+        if lower.contains("end of file") || lower.contains("truncated") {
+            return ("Truncated file",
+                    "File appears to be cut short or incomplete (\(stderr))")
+        }
+        if lower.contains("permission denied") {
+            return ("Access denied",
+                    "Cannot read file — permission denied")
+        }
+        if stderr.isEmpty {
+            return ("Unreadable file",
+                    "File could not be analyzed — no additional details available")
+        }
+        // Fallback: use the raw stderr but prefix with a human label
+        return ("Unreadable file",
+                "File could not be analyzed — \(stderr)")
     }
 
     nonisolated func extractMetadata(probe: FFProbeOutput, into rec: VideoRecord) {
