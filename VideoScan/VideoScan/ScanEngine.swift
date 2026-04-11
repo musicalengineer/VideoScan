@@ -122,11 +122,18 @@ enum ScanEngine {
             }
         }
 
-        if let probe = await runFFProbe(url: probeURL) {
+        let probeResult = await runFFProbe(url: probeURL)
+        if let probe = probeResult.output {
             extractMetadata(probe: probe, into: rec)
+            // Capture any ffprobe warnings even on success
+            let stderrTrimmed = probeResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !stderrTrimmed.isEmpty {
+                rec.notes = stderrTrimmed
+            }
         } else {
             rec.isPlayable    = "ffprobe failed"
-            rec.notes         = "ffprobe could not read file"
+            let stderrTrimmed = probeResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            rec.notes         = stderrTrimmed.isEmpty ? "ffprobe could not read file" : stderrTrimmed
             rec.streamTypeRaw = StreamType.ffprobeFailed.rawValue
         }
 
@@ -142,13 +149,16 @@ enum ScanEngine {
     // MARK: - ffprobe Execution
 
     /// Run ffprobe and parse JSON output into `FFProbeOutput`.
-    static func runFFProbe(url: URL) async -> FFProbeOutput? {
-        let args = ["-v", "quiet", "-probesize", "50M", "-analyzeduration", "10M",
+    /// Returns (output, stderrDetail) — stderr is non-empty when ffprobe reports warnings/errors.
+    static func runFFProbe(url: URL) async -> (output: FFProbeOutput?, stderr: String) {
+        let args = ["-v", "warning", "-probesize", "50M", "-analyzeduration", "10M",
                     "-print_format", "json", "-show_format", "-show_streams", url.path]
-        guard let json = await ProcessRunner.run(executable: ffprobePath, arguments: args),
-              let data = json.data(using: .utf8)
-        else { return nil }
-        return try? JSONDecoder().decode(FFProbeOutput.self, from: data)
+        let result = await ProcessRunner.runCapturingStderr(executable: ffprobePath, arguments: args)
+        guard let json = result.stdout, let data = json.data(using: .utf8) else {
+            return (nil, result.stderr)
+        }
+        let output = try? JSONDecoder().decode(FFProbeOutput.self, from: data)
+        return (output, result.stderr)
     }
 
     /// Extract metadata fields from ffprobe output into a `VideoRecord`.

@@ -486,6 +486,20 @@ final class VideoScanModel: ObservableObject {
             target.status = .paused
             log("--- Paused \(URL(fileURLWithPath: target.searchPath).lastPathComponent) ---")
         }
+        updateDashboardPauseState()
+    }
+
+    /// Update dashboard.scanPhase to reflect paused state when all active
+    /// targets are paused, and restore to .probing when any target resumes.
+    private func updateDashboardPauseState() {
+        let active = scanTargets.filter { $0.status.isActive }
+        guard !active.isEmpty else { return }
+        let allPaused = active.allSatisfy { $0.status == .paused }
+        if allPaused && dashboard.scanPhase == .probing {
+            dashboard.scanPhase = .paused
+        } else if !allPaused && dashboard.scanPhase == .paused {
+            dashboard.scanPhase = .probing
+        }
     }
 
     func startAllTargets() {
@@ -645,6 +659,11 @@ final class VideoScanModel: ObservableObject {
             for await rec in probeGroup {
                 targetRecords.append(rec)
                 completedCount += 1
+                // Log ffprobe failures with detail
+                if rec.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
+                    let detail = rec.notes.isEmpty ? "no detail available" : rec.notes
+                    log("  ⚠ FAILED: \(rec.filename) — \(detail)")
+                }
                 // Batch UI updates: only at milestones or every 20 files
                 let pct = totalFiles > 0 ? (completedCount * 100 / totalFiles) : 100
                 let shouldUpdate = completedCount % 20 == 0 || completedCount == totalFiles
@@ -1031,14 +1050,19 @@ final class VideoScanModel: ObservableObject {
             }
         }
 
-        if let probe = await runFFProbe(url: probeURL) {
-            // autoreleasepool for JSON parsing and metadata extraction
+        let probeResult = await runFFProbe(url: probeURL)
+        if let probe = probeResult.output {
             autoreleasepool {
                 extractMetadata(probe: probe, into: rec)
             }
+            let stderrTrimmed = probeResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !stderrTrimmed.isEmpty {
+                rec.notes = stderrTrimmed
+            }
         } else {
             rec.isPlayable    = "ffprobe failed"
-            rec.notes         = "ffprobe could not read file"
+            let stderrTrimmed = probeResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            rec.notes         = stderrTrimmed.isEmpty ? "ffprobe could not read file" : stderrTrimmed
             rec.streamTypeRaw = StreamType.ffprobeFailed.rawValue
         }
 
@@ -1553,12 +1577,15 @@ final class VideoScanModel: ObservableObject {
 
     // MARK: - ffprobe
 
-    nonisolated func runFFProbe(url: URL) async -> FFProbeOutput? {
-        let args = ["-v","quiet","-probesize","50M","-analyzeduration","10M",
+    nonisolated func runFFProbe(url: URL) async -> (output: FFProbeOutput?, stderr: String) {
+        let args = ["-v","warning","-probesize","50M","-analyzeduration","10M",
                     "-print_format","json","-show_format","-show_streams", url.path]
-        guard let json = await runProcess(executable: ffprobePath, arguments: args),
-              let data = json.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(FFProbeOutput.self, from: data)
+        let result = await ProcessRunner.runCapturingStderr(executable: ffprobePath, arguments: args)
+        guard let json = result.stdout, let data = json.data(using: .utf8) else {
+            return (nil, result.stderr)
+        }
+        let output = try? JSONDecoder().decode(FFProbeOutput.self, from: data)
+        return (output, result.stderr)
     }
 
     nonisolated func extractMetadata(probe: FFProbeOutput, into rec: VideoRecord) {

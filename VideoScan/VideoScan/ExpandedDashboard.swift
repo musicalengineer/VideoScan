@@ -22,7 +22,8 @@ struct ExpandedDashboard: View {
     }
 
     private var eta: String {
-        guard completed > 0, total > 0, fraction < 1.0 else { return "" }
+        guard dashboard.scanPhase != .paused,
+              completed > 0, total > 0, fraction < 1.0 else { return "" }
         let secsPerItem = elapsed / Double(completed)
         let remaining = secsPerItem * Double(total - completed)
         if remaining < 60 { return "<1 min left" }
