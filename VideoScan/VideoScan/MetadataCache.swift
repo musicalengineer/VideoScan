@@ -73,7 +73,7 @@ final class MetadataCache {
     func lookup(path: String, fileSize: Int64, modDate: Date) -> VideoRecord? {
         lock.lock(); defer { lock.unlock() }
         guard let db = db else { return nil }
-        let sql = "SELECT * FROM probe_cache WHERE path = ? AND file_size = ? AND mod_date = ?"
+        let sql = "SELECT * FROM probe_cache WHERE path = ? AND file_size = ? AND mod_date = ? AND stream_type != 'ffprobe failed'"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
         defer { sqlite3_finalize(stmt) }

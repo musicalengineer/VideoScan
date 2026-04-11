@@ -123,16 +123,29 @@ enum ScanEngine {
         }
 
         let probeResult = await runFFProbe(url: probeURL)
-        if let probe = probeResult.output {
+        let stderrTrimmed = probeResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let probe = probeResult.output,
+           probe.format != nil || !(probe.streams ?? []).isEmpty {
+            // Genuine success — ffprobe found format/stream data
             extractMetadata(probe: probe, into: rec)
-            // Capture any ffprobe warnings even on success
-            let stderrTrimmed = probeResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             if !stderrTrimmed.isEmpty {
                 rec.notes = stderrTrimmed
             }
+        } else if url.pathExtension.lowercased() == "mxf" {
+            // ffprobe failed on MXF — try native header parser
+            if let mxf = MxfHeaderParser.parse(fileAt: path) {
+                applyMxfMetadata(mxf, into: rec)
+                let reason = stderrTrimmed.isEmpty ? "ffprobe could not decode" : stderrTrimmed
+                rec.notes = "MXF header parsed (ffprobe failed: \(reason))"
+            } else {
+                rec.isPlayable    = "ffprobe failed"
+                rec.notes         = stderrTrimmed.isEmpty ? "MXF header parse also failed" : "MXF fallback failed; \(stderrTrimmed)"
+                rec.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+            }
         } else {
+            // Either no stdout at all, or ffprobe returned empty JSON (no format, no streams)
             rec.isPlayable    = "ffprobe failed"
-            let stderrTrimmed = probeResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             rec.notes         = stderrTrimmed.isEmpty ? "ffprobe could not read file" : stderrTrimmed
             rec.streamTypeRaw = StreamType.ffprobeFailed.rawValue
         }
@@ -141,8 +154,11 @@ enum ScanEngine {
             try? fm.removeItem(at: tmp)
         }
 
-        // Cache the result for next time
-        cache.store(record: rec, fileSize: fileSize, modDate: modDate)
+        // Cache the result — but don't cache ffprobe failures, so future runs
+        // with improved fallback parsers can retry them.
+        if rec.streamTypeRaw != StreamType.ffprobeFailed.rawValue {
+            cache.store(record: rec, fileSize: fileSize, modDate: modDate)
+        }
         return rec
     }
 
@@ -284,5 +300,49 @@ enum ScanEngine {
         }
 
         return md5.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    // MARK: - MXF Header Fallback
+
+    /// Apply metadata extracted from MXF header when ffprobe fails.
+    static func applyMxfMetadata(_ mxf: MxfHeaderParser.MxfMetadata, into rec: VideoRecord) {
+        if mxf.width > 0 && mxf.height > 0 {
+            rec.resolution = "\(mxf.width)x\(mxf.height)"
+        }
+        rec.videoCodec = mxf.codecLabel
+        rec.frameRate = mxf.frameRate
+
+        if mxf.durationSeconds > 0 {
+            rec.durationSeconds = mxf.durationSeconds
+            rec.duration = Formatting.duration(mxf.durationSeconds)
+        }
+
+        if mxf.hasVideo && mxf.hasAudio {
+            rec.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        } else if mxf.hasVideo {
+            rec.streamTypeRaw = StreamType.videoOnly.rawValue
+        } else if mxf.hasAudio {
+            rec.streamTypeRaw = StreamType.audioOnly.rawValue
+        } else {
+            rec.streamTypeRaw = StreamType.noStreams.rawValue
+        }
+
+        if mxf.audioChannels > 0 {
+            rec.audioChannels = "\(mxf.audioChannels)"
+        }
+        if mxf.audioSampleRate > 0 {
+            rec.audioSampleRate = "\(mxf.audioSampleRate) Hz"
+        }
+        if mxf.audioBitDepth > 0 {
+            rec.audioCodec = "PCM \(mxf.audioBitDepth)-bit"
+        }
+
+        // Pixel layout info (e.g., "RGBF 10+10+10+2")
+        if !mxf.pixelLayout.isEmpty {
+            rec.bitDepth = mxf.pixelLayout
+        }
+
+        rec.isPlayable = "Codec unsupported"
+        rec.container = "MXF (\(mxf.descriptorType))"
     }
 }

@@ -1042,26 +1042,45 @@ final class VideoScanModel: ObservableObject {
         var tempFile: URL? = nil
 
         if prefetchToRAM, let rp = ramPath {
+            let prefetchStart = CFAbsoluteTimeGetCurrent()
             let tmpName = "\(UUID().uuidString)_\(url.lastPathComponent)"
             let tmpURL = URL(fileURLWithPath: rp).appendingPathComponent(tmpName)
             if prefetchHeader(from: url, to: tmpURL, bytes: prefetchBytes) {
                 probeURL = tmpURL
                 tempFile = tmpURL
+                let elapsed = CFAbsoluteTimeGetCurrent() - prefetchStart
+                let mbCopied = Double(min(prefetchBytes, Int(fileSize))) / (1024.0 * 1024.0)
+                await MainActor.run { [elapsed, mbCopied] in
+                    self.dashboard.recordNetworkPrefetch(megabytesCopied: mbCopied, seconds: elapsed)
+                }
             }
         }
 
         let probeResult = await runFFProbe(url: probeURL)
-        if let probe = probeResult.output {
+        let stderrTrimmed = probeResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let probe = probeResult.output,
+           probe.format != nil || !(probe.streams ?? []).isEmpty {
+            // Genuine success — ffprobe found format/stream data
             autoreleasepool {
                 extractMetadata(probe: probe, into: rec)
             }
-            let stderrTrimmed = probeResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             if !stderrTrimmed.isEmpty {
                 rec.notes = stderrTrimmed
             }
+        } else if url.pathExtension.lowercased() == "mxf" {
+            // ffprobe failed on MXF — try native header parser
+            if let mxf = MxfHeaderParser.parse(fileAt: path) {
+                ScanEngine.applyMxfMetadata(mxf, into: rec)
+                let reason = stderrTrimmed.isEmpty ? "ffprobe could not decode" : stderrTrimmed
+                rec.notes = "MXF header parsed (ffprobe failed: \(reason))"
+            } else {
+                rec.isPlayable    = "ffprobe failed"
+                rec.notes         = stderrTrimmed.isEmpty ? "MXF header parse also failed" : "MXF fallback failed; \(stderrTrimmed)"
+                rec.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+            }
         } else {
             rec.isPlayable    = "ffprobe failed"
-            let stderrTrimmed = probeResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             rec.notes         = stderrTrimmed.isEmpty ? "ffprobe could not read file" : stderrTrimmed
             rec.streamTypeRaw = StreamType.ffprobeFailed.rawValue
         }
@@ -1071,8 +1090,11 @@ final class VideoScanModel: ObservableObject {
             try? fm.removeItem(at: tmp)
         }
 
-        // Store in cache for next time
-        metadataCache.store(record: rec, fileSize: fileSize, modDate: modDate)
+        // Cache the result — but don't cache ffprobe failures, so future runs
+        // with improved fallback parsers can retry them.
+        if rec.streamTypeRaw != StreamType.ffprobeFailed.rawValue {
+            metadataCache.store(record: rec, fileSize: fileSize, modDate: modDate)
+        }
 
         return rec
     }

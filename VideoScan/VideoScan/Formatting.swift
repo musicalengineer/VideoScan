@@ -30,6 +30,20 @@ enum Formatting {
         return String(format: "%.1f PB", val)
     }
 
+    /// Human-readable size from megabytes (e.g., 12587 MB → "12.3 GB").
+    static func humanMB(_ mb: Double) -> String {
+        if mb < 1024 { return String(format: "%.0f MB", mb) }
+        let gb = mb / 1024
+        if gb < 1024 { return String(format: "%.1f GB", gb) }
+        return String(format: "%.2f TB", gb / 1024)
+    }
+
+    /// Human-readable transfer rate from MB/s (e.g., 1200 MB/s → "1.2 GB/s").
+    static func humanMBps(_ mbps: Double) -> String {
+        if mbps < 1024 { return String(format: "%.0f MB/s", mbps) }
+        return String(format: "%.1f GB/s", mbps / 1024)
+    }
+
     /// Escape a value for CSV output.
     static func csvEscape(_ v: String) -> String {
         if v.contains(",") || v.contains("\"") || v.contains("\n") {

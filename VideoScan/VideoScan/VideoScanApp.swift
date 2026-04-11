@@ -27,6 +27,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            MainWindowHelper.shared.openMainWindow()
+        }
+        return true
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         // Flush the catalog snapshot first so the user's records survive
         // an offline-volume relaunch.
@@ -75,11 +82,13 @@ struct VideoScanApp: App {
     @StateObject private var catalogModel = VideoScanModel()
 
     var body: some Scene {
-        WindowGroup {
-            ContentView()
-                .environmentObject(catalogModel)
-                .environmentObject(catalogModel.dashboard)
-                .onAppear { appDelegate.catalogModel = catalogModel }
+        WindowGroup(id: "main") {
+            MainWindowCapture {
+                ContentView()
+                    .environmentObject(catalogModel)
+                    .environmentObject(catalogModel.dashboard)
+                    .onAppear { appDelegate.catalogModel = catalogModel }
+            }
         }
         .commands {
             CommandGroup(replacing: .appInfo) {
@@ -124,6 +133,11 @@ struct AboutMenuItem: View {
 struct WindowMenuItems: View {
     @Environment(\.openWindow) var openWindow
     var body: some View {
+        Button("Main Window") {
+            MainWindowHelper.shared.openMainWindow()
+        }
+        .keyboardShortcut("0", modifiers: .command)
+
         Button("Dashboard") {
             openWindow(id: "dashboard")
         }
@@ -133,6 +147,58 @@ struct WindowMenuItems: View {
             openWindow(id: "console")
         }
         .keyboardShortcut("c", modifiers: [.command, .shift])
+    }
+}
+
+/// Provides a way to reopen the main WindowGroup window from anywhere.
+/// SwiftUI's WindowGroup destroys windows on close and `openWindow` only
+/// works from a View's Environment. We capture the Environment action on
+/// appear and stash it so non-View code (Dock click, menu) can use it.
+@MainActor
+final class MainWindowHelper {
+    static let shared = MainWindowHelper()
+
+    /// Captured from a View's @Environment(\.openWindow)
+    var openWindowAction: OpenWindowAction?
+
+    /// Known auxiliary window titles — anything else is the main window.
+    private let auxiliaryTitles = ["Dashboard", "Console", "About", "Realtime"]
+
+    func openMainWindow() {
+        // First try to find and unhide an existing main window
+        if let w = findMainWindow() {
+            w.makeKeyAndOrderFront(nil)
+            return
+        }
+        // Otherwise ask SwiftUI to create a new one
+        openWindowAction?(id: "main")
+    }
+
+    private func findMainWindow() -> NSWindow? {
+        NSApp.windows.first { w in
+            // Skip known auxiliary windows and tiny/invisible ones
+            !auxiliaryTitles.contains(where: { w.title.contains($0) })
+            && w.contentView != nil
+            && w.frame.width > 200
+        }
+    }
+}
+
+/// Thin wrapper that captures the SwiftUI openWindow environment action
+/// so non-View code can reopen the main WindowGroup.
+struct MainWindowCapture<Content: View>: View {
+    @Environment(\.openWindow) private var openWindow
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .onAppear {
+                MainWindowHelper.shared.openWindowAction = openWindow
+            }
     }
 }
 
