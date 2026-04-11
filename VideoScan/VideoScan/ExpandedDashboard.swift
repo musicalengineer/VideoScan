@@ -62,18 +62,20 @@ struct ExpandedDashboard: View {
             faceDetectionPane
             sharedResourcesPane
         }
-        .padding(16)
-        .frame(minWidth: 560, idealWidth: 600)
+        .padding(14)
+        .frame(minWidth: 520, idealWidth: 560)
         .onReceive(timer) { now = $0 }
     }
 
     // MARK: - Pane: Catalog Scanner
 
-    private var scannerActive: Bool { isScanning || isCombining }
+    private var scannerActive: Bool {
+        isScanning || isCombining || dashboard.scanPhase != .idle
+    }
 
     private var scannerPane: some View {
         GroupBox {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 6) {
                     Circle()
                         .fill(scannerActive ? Color.cyan : Color.gray.opacity(0.4))
@@ -87,7 +89,7 @@ struct ExpandedDashboard: View {
 
                 if scannerActive {
                     headerSection
-                    if isScanning { scanSections }
+                    if isScanning || dashboard.scanPhase != .idle { scanSections }
                     if isCombining { combineSections }
                 } else {
                     Text("No scan in progress.")
@@ -99,7 +101,7 @@ struct ExpandedDashboard: View {
             .opacity(scannerActive ? 1.0 : 0.65)
         } label: {
             Label("Catalog Scanner", systemImage: "externaldrive.connected.to.line.below")
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundColor(.cyan)
         }
     }
@@ -122,14 +124,14 @@ struct ExpandedDashboard: View {
                     Spacer()
                     if fdActive {
                         Text(String(format: "%.1f fps", dashboard.visionFPS))
-                            .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                            .font(.system(size: 13, weight: .semibold, design: .monospaced))
                             .foregroundColor(.purple)
                         Text(String(format: "%.0f ms/frame", dashboard.visionMsPerFrame))
-                            .font(.system(size: 13, design: .monospaced))
+                            .font(.system(size: 12, design: .monospaced))
                             .foregroundColor(.secondary)
                         if dashboard.visionWorkers > 0 {
                             Text("\(dashboard.visionWorkers) worker\(dashboard.visionWorkers == 1 ? "" : "s")")
-                                .font(.system(size: 13, design: .monospaced))
+                                .font(.system(size: 12, design: .monospaced))
                                 .foregroundColor(.secondary)
                         }
                     }
@@ -140,7 +142,7 @@ struct ExpandedDashboard: View {
             }
         } label: {
             Label("Face Detection (Vision / ANE)", systemImage: "brain")
-                .font(.system(size: 16, weight: .semibold))
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundColor(.purple)
         }
     }
@@ -149,58 +151,58 @@ struct ExpandedDashboard: View {
 
     private var sharedResourcesPane: some View {
         GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 // Memory bar
                 HStack(spacing: 6) {
                     Image(systemName: "memorychip")
-                        .font(.system(size: 14))
+                        .font(.system(size: 13))
                         .foregroundColor(memColor)
                     Text("Memory")
-                        .font(.system(size: 15, weight: .medium))
+                        .font(.system(size: 14, weight: .medium))
                     Spacer()
                     Text(String(format: "%.1f / %.0f GB", dashboard.memUsedGB, dashboard.memTotalGB))
-                        .font(.system(size: 13, design: .monospaced))
+                        .font(.system(size: 12, design: .monospaced))
                         .foregroundColor(.secondary)
                 }
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 3)
                         .fill(Color.gray.opacity(0.15))
-                        .frame(height: 6)
+                        .frame(height: 5)
                     GeometryReader { geo in
                         RoundedRectangle(cornerRadius: 3)
                             .fill(memColor)
-                            .frame(width: max(geo.size.width * memFraction, 0), height: 6)
+                            .frame(width: max(geo.size.width * memFraction, 0), height: 5)
                     }
-                    .frame(height: 6)
+                    .frame(height: 5)
                 }
 
                 // App RSS + Thermal + CPU load
-                HStack(spacing: 14) {
-                    HStack(spacing: 4) {
+                HStack(spacing: 12) {
+                    HStack(spacing: 3) {
                         Image(systemName: "app.dashed")
-                            .font(.system(size: 12))
+                            .font(.system(size: 11))
                             .foregroundColor(.secondary)
                         Text(String(format: "App: %.0f MB", dashboard.appMemoryMB))
-                            .font(.system(size: 13, design: .monospaced))
+                            .font(.system(size: 12, design: .monospaced))
                             .foregroundColor(.secondary)
                     }
-                    HStack(spacing: 4) {
+                    HStack(spacing: 3) {
                         Image(systemName: "thermometer.medium")
-                            .font(.system(size: 12))
+                            .font(.system(size: 11))
                             .foregroundColor(dashboard.thermalWarning ? .red : .secondary)
                         Text(dashboard.thermalLabel)
-                            .font(.system(size: 13, design: .monospaced))
+                            .font(.system(size: 12, design: .monospaced))
                             .foregroundColor(dashboard.thermalWarning ? .red : .secondary)
                     }
-                    HStack(spacing: 4) {
+                    HStack(spacing: 3) {
                         Image(systemName: "cpu")
-                            .font(.system(size: 12))
+                            .font(.system(size: 11))
                             .foregroundColor(.blue)
                         Text(String(format: "%.1f / %.1f / %.1f",
                                     dashboard.cpuLoad1,
                                     dashboard.cpuLoad5,
                                     dashboard.cpuLoad15))
-                            .font(.system(size: 13, design: .monospaced))
+                            .font(.system(size: 12, design: .monospaced))
                             .foregroundColor(.secondary)
                     }
                     Spacer()
@@ -208,7 +210,7 @@ struct ExpandedDashboard: View {
             }
         } label: {
             Label("Shared Resources", systemImage: "gauge.with.dots.needle.50percent")
-                .font(.system(size: 14, weight: .medium))
+                .font(.system(size: 13, weight: .medium))
                 .foregroundColor(.secondary)
         }
     }
@@ -236,25 +238,25 @@ struct ExpandedDashboard: View {
                             .fill(barColor)
                             .frame(width: 8, height: 8)
                         Text(phaseLabel)
-                            .font(.system(size: 19, weight: .semibold))
+                            .font(.system(size: 17, weight: .semibold))
                             .foregroundColor(barColor)
                     }
-                    HStack(spacing: 12) {
+                    HStack(spacing: 10) {
                         Text("\(completed) / \(total)")
-                            .font(.system(size: 17, weight: .medium, design: .monospaced))
+                            .font(.system(size: 15, weight: .medium, design: .monospaced))
                         Text("(\(Int(fraction * 100))%)")
-                            .font(.system(size: 16, design: .monospaced))
+                            .font(.system(size: 14, design: .monospaced))
                             .foregroundColor(barColor)
                     }
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 2) {
                     Text("Elapsed: \(elapsedStr)")
-                        .font(.system(size: 16, design: .monospaced))
+                        .font(.system(size: 14, design: .monospaced))
                         .foregroundColor(.secondary)
                     if !eta.isEmpty {
                         Text(eta)
-                            .font(.system(size: 16, weight: .medium, design: .monospaced))
+                            .font(.system(size: 14, weight: .medium, design: .monospaced))
                             .foregroundColor(barColor)
                     }
                 }
@@ -262,21 +264,21 @@ struct ExpandedDashboard: View {
 
             // Overall progress bar
             ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 4)
+                RoundedRectangle(cornerRadius: 3)
                     .fill(Color.gray.opacity(0.15))
-                    .frame(height: 8)
+                    .frame(height: 6)
                 GeometryReader { geo in
-                    RoundedRectangle(cornerRadius: 4)
+                    RoundedRectangle(cornerRadius: 3)
                         .fill(
                             LinearGradient(
                                 colors: [.blue, .cyan, .green],
                                 startPoint: .leading, endPoint: .trailing
                             )
                         )
-                        .frame(width: max(geo.size.width * fraction, 0), height: 8)
+                        .frame(width: max(geo.size.width * fraction, 0), height: 6)
                         .animation(.easeInOut(duration: 0.3), value: fraction)
                 }
-                .frame(height: 8)
+                .frame(height: 6)
             }
         }
     }
@@ -284,7 +286,7 @@ struct ExpandedDashboard: View {
     // MARK: - Scan Sections
 
     private var scanSections: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             // Per-volume progress
             if !dashboard.volumeProgress.isEmpty {
                 GroupBox("Volumes") {
@@ -303,25 +305,25 @@ struct ExpandedDashboard: View {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Image(systemName: "bolt.fill")
-                                .font(.system(size: 14))
+                                .font(.system(size: 13))
                                 .foregroundColor(.yellow)
                             Text("Cache: \(dashboard.scanCacheHits) / \(totalProbed) hits")
-                                .font(.system(size: 16, weight: .medium, design: .monospaced))
+                                .font(.system(size: 14, weight: .medium, design: .monospaced))
                             Text("(\(totalProbed > 0 ? Int(Double(dashboard.scanCacheHits) / Double(totalProbed) * 100) : 0)%)")
-                                .font(.system(size: 14, design: .monospaced))
+                                .font(.system(size: 13, design: .monospaced))
                                 .foregroundColor(.yellow)
                         }
                         let cacheFrac = totalProbed > 0 ? Double(dashboard.scanCacheHits) / Double(totalProbed) : 0
                         ZStack(alignment: .leading) {
-                            RoundedRectangle(cornerRadius: 3)
+                            RoundedRectangle(cornerRadius: 2)
                                 .fill(Color.gray.opacity(0.15))
-                                .frame(height: 6)
+                                .frame(height: 5)
                             GeometryReader { geo in
-                                RoundedRectangle(cornerRadius: 3)
+                                RoundedRectangle(cornerRadius: 2)
                                     .fill(Color.yellow.opacity(0.7))
-                                    .frame(width: max(geo.size.width * cacheFrac, 0), height: 6)
+                                    .frame(width: max(geo.size.width * cacheFrac, 0), height: 5)
                             }
-                            .frame(height: 6)
+                            .frame(height: 5)
                         }
                     }
                 }
@@ -347,7 +349,7 @@ struct ExpandedDashboard: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundColor(.red)
                     Text("\(dashboard.scanErrors) file\(dashboard.scanErrors == 1 ? "" : "s") failed ffprobe")
-                        .font(.system(size: 16))
+                        .font(.system(size: 14))
                         .foregroundColor(.red)
                 }
             }
@@ -357,27 +359,27 @@ struct ExpandedDashboard: View {
     // MARK: - Combine Sections
 
     private var combineSections: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             if !dashboard.combineCurrentFile.isEmpty {
                 GroupBox {
                     HStack(spacing: 6) {
                         Image(systemName: "film")
                             .foregroundColor(.blue)
                         Text(dashboard.combineCurrentFile)
-                            .font(.system(size: 16, design: .monospaced))
+                            .font(.system(size: 14, design: .monospaced))
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
                 }
             }
 
-            HStack(spacing: 16) {
+            HStack(spacing: 14) {
                 if dashboard.combineSucceeded > 0 {
                     HStack(spacing: 4) {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundColor(.green)
                         Text("\(dashboard.combineSucceeded) succeeded")
-                            .font(.system(size: 16, design: .monospaced))
+                            .font(.system(size: 14, design: .monospaced))
                     }
                 }
                 if dashboard.combineFailed > 0 {
@@ -385,7 +387,7 @@ struct ExpandedDashboard: View {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(.red)
                         Text("\(dashboard.combineFailed) failed")
-                            .font(.system(size: 16, design: .monospaced))
+                            .font(.system(size: 14, design: .monospaced))
                     }
                 }
             }
@@ -406,57 +408,57 @@ private struct VolumeProgressRow: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Image(systemName: volume.isWalking ? "folder.badge.gearshape" : "externaldrive.fill")
-                    .font(.system(size: 14))
+                    .font(.system(size: 13))
                     .foregroundColor(volume.isWalking ? .orange : .blue)
                 Text(volume.volumeName)
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: 14, weight: .medium))
                     .lineLimit(1)
                 Spacer()
                 if volume.isWalking {
                     Text("scanning...")
-                        .font(.system(size: 14))
+                        .font(.system(size: 13))
                         .foregroundColor(.orange)
                 } else {
                     Text("\(volume.completedFiles)/\(volume.totalFiles)")
-                        .font(.system(size: 14, design: .monospaced))
+                        .font(.system(size: 13, design: .monospaced))
                         .foregroundColor(.secondary)
                 }
                 if volume.cacheHits > 0 {
                     HStack(spacing: 1) {
                         Image(systemName: "bolt.fill")
-                            .font(.system(size: 10))
+                            .font(.system(size: 9))
                         Text("\(volume.cacheHits)")
-                            .font(.system(size: 13, design: .monospaced))
+                            .font(.system(size: 12, design: .monospaced))
                     }
                     .foregroundColor(.yellow)
                 }
                 if volume.errors > 0 {
                     HStack(spacing: 1) {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 10))
+                            .font(.system(size: 9))
                         Text("\(volume.errors)")
-                            .font(.system(size: 13, design: .monospaced))
+                            .font(.system(size: 12, design: .monospaced))
                     }
                     .foregroundColor(.red)
                 }
             }
 
             ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 3)
+                RoundedRectangle(cornerRadius: 2)
                     .fill(Color.gray.opacity(0.15))
-                    .frame(height: 6)
+                    .frame(height: 5)
                 GeometryReader { geo in
-                    RoundedRectangle(cornerRadius: 3)
+                    RoundedRectangle(cornerRadius: 2)
                         .fill(
                             LinearGradient(
                                 colors: [.blue, .cyan],
                                 startPoint: .leading, endPoint: .trailing
                             )
                         )
-                        .frame(width: max(geo.size.width * fraction, 0), height: 6)
+                        .frame(width: max(geo.size.width * fraction, 0), height: 5)
                         .animation(.easeInOut(duration: 0.3), value: fraction)
                 }
-                .frame(height: 6)
+                .frame(height: 5)
             }
         }
     }

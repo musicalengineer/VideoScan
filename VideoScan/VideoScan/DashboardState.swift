@@ -95,6 +95,21 @@ final class DashboardState: ObservableObject {
         }
     }
 
+    // MARK: - Network Prefetch Stats
+
+    @Published var netPrefetchCount: Int = 0
+    @Published var netPrefetchTotalMB: Double = 0
+    @Published var netPrefetchTotalSeconds: Double = 0
+    @Published var netPrefetchLastMBps: Double = 0
+
+    /// Record a single network→RAM disk prefetch completion.
+    func recordNetworkPrefetch(megabytesCopied mb: Double, seconds: Double) {
+        netPrefetchCount += 1
+        netPrefetchTotalMB += mb
+        netPrefetchTotalSeconds += seconds
+        netPrefetchLastMBps = seconds > 0 ? mb / seconds : 0
+    }
+
     // MARK: - Combine Progress
 
     @Published var combineTotal: Int = 0
@@ -203,6 +218,10 @@ final class DashboardState: ObservableObject {
         scanCurrentFile = ""
         scanCurrentVolume = ""
         scanRecentFiles = []
+        netPrefetchCount = 0
+        netPrefetchTotalMB = 0
+        netPrefetchTotalSeconds = 0
+        netPrefetchLastMBps = 0
     }
 
     func resetForCombine(total: Int) {

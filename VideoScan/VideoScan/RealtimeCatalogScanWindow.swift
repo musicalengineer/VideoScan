@@ -31,10 +31,6 @@ struct RealtimeCatalogScanContent: View {
         return Double(dashboard.scanCompleted) / Double(dashboard.scanTotal)
     }
 
-    private var lastFps: Double {
-        dashboard.throughputSamples.last?.filesPerSecond ?? 0
-    }
-
     private var avgFps: Double {
         guard !dashboard.throughputSamples.isEmpty else { return 0 }
         let sum = dashboard.throughputSamples.reduce(0.0) { $0 + $1.filesPerSecond }
@@ -51,10 +47,13 @@ struct RealtimeCatalogScanContent: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 12) {
                 phaseHeader
                 statsRow
-                currentFilePane
+                if dashboard.netPrefetchCount > 0 {
+                    networkPrefetchPane
+                }
+                currentFileRow
                 if !dashboard.volumeProgress.isEmpty {
                     volumesPane
                 }
@@ -63,23 +62,23 @@ struct RealtimeCatalogScanContent: View {
                     throughputPane
                 }
             }
-            .padding(16)
+            .padding(14)
         }
-        .frame(minWidth: 760, idealWidth: 920, minHeight: 540, idealHeight: 700)
+        .frame(minWidth: 680, idealWidth: 800, minHeight: 420, idealHeight: 560)
         .background(Color(NSColor.windowBackgroundColor))
     }
 
     // MARK: Phase header
 
     private var phaseHeader: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             ZStack {
                 Circle()
                     .fill(phaseColor.opacity(0.15))
-                    .frame(width: 44, height: 44)
+                    .frame(width: 38, height: 38)
                 Circle()
                     .fill(phaseColor)
-                    .frame(width: 16, height: 16)
+                    .frame(width: 14, height: 14)
                     .shadow(color: phaseColor.opacity(0.6), radius: isActive ? 8 : 0)
                     .scaleEffect(isActive ? 1.1 : 1.0)
                     .animation(
@@ -91,38 +90,27 @@ struct RealtimeCatalogScanContent: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(dashboard.scanPhase.rawValue.uppercased())
-                    .font(.system(size: 19, weight: .bold, design: .rounded))
+                    .font(.system(size: 17, weight: .bold, design: .rounded))
                     .foregroundColor(phaseColor)
                 if dashboard.scanTotal > 0 {
                     Text("\(dashboard.scanCompleted) / \(dashboard.scanTotal)  (\(Int(fraction * 100))%)")
-                        .font(.system(size: 13, design: .monospaced))
+                        .font(.system(size: 14, design: .monospaced))
                         .foregroundColor(.secondary)
                 } else {
                     Text(isActive ? "Walking volumes…" : "Idle")
-                        .font(.system(size: 13))
+                        .font(.system(size: 14))
                         .foregroundColor(.secondary)
                 }
             }
             Spacer()
-            // Big files-per-second number
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(String(format: "%.0f", lastFps))
-                    .font(.system(size: 32, weight: .bold, design: .rounded).monospacedDigit())
-                    .foregroundColor(.cyan)
-                Text("files/sec")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(.secondary)
-            }
         }
-        .padding(.bottom, 4)
-
-        // Progress bar
+        .padding(.bottom, 2)
     }
 
     // MARK: Stats row (cache, errors, avg fps)
 
     private var statsRow: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             statTile(
                 icon: "bolt.fill",
                 color: .yellow,
@@ -155,71 +143,102 @@ struct RealtimeCatalogScanContent: View {
     }
 
     private func statTile(icon: String, color: Color, value: String, label: String, sub: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 4) {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 3) {
                 Image(systemName: icon)
-                    .font(.system(size: 10))
+                    .font(.system(size: 11))
                     .foregroundColor(color)
                 Text(label.uppercased())
-                    .font(.system(size: 9, weight: .semibold))
+                    .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(.secondary)
             }
             Text(value)
-                .font(.system(size: 24, weight: .bold, design: .rounded).monospacedDigit())
+                .font(.system(size: 22, weight: .bold, design: .rounded).monospacedDigit())
                 .foregroundColor(color)
             Text(sub)
-                .font(.system(size: 10))
+                .font(.system(size: 11))
                 .foregroundColor(.secondary)
         }
-        .padding(10)
+        .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(NSColor.controlBackgroundColor))
         .cornerRadius(8)
     }
 
-    // MARK: Current file + ticker
+    // MARK: Network prefetch stats
 
-    private var currentFilePane: some View {
+    private var avgMBps: Double {
+        dashboard.netPrefetchTotalSeconds > 0
+            ? dashboard.netPrefetchTotalMB / dashboard.netPrefetchTotalSeconds
+            : 0
+    }
+
+    private var networkPrefetchPane: some View {
         GroupBox {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack(spacing: 6) {
-                    Image(systemName: "doc.text.magnifyingglass")
-                        .foregroundColor(.cyan)
-                    Text(dashboard.scanCurrentVolume.isEmpty
-                         ? "—"
-                         : dashboard.scanCurrentVolume)
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+            HStack(spacing: 8) {
+                statTile(
+                    icon: "arrow.down.circle.fill",
+                    color: .mint,
+                    value: "\(dashboard.netPrefetchCount)",
+                    label: "prefetched",
+                    sub: "files → RAM"
+                )
+                statTile(
+                    icon: "internaldrive.fill",
+                    color: .mint,
+                    value: Formatting.humanMB(dashboard.netPrefetchTotalMB),
+                    label: "copied",
+                    sub: dashboard.netPrefetchCount > 0
+                        ? "\(Formatting.humanMB(dashboard.netPrefetchTotalMB / Double(dashboard.netPrefetchCount))) avg"
+                        : "—"
+                )
+                statTile(
+                    icon: "speedometer",
+                    color: .mint,
+                    value: Formatting.humanMBps(avgMBps),
+                    label: "throughput",
+                    sub: "\(Formatting.humanMBps(dashboard.netPrefetchLastMBps)) last"
+                )
+                statTile(
+                    icon: "clock.fill",
+                    color: .mint,
+                    value: String(format: "%.1fs", dashboard.netPrefetchTotalSeconds),
+                    label: "I/O time",
+                    sub: "network wait"
+                )
+            }
+        } label: {
+            Label("Network Prefetch (Ethernet → RAM Disk)", systemImage: "network")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.mint)
+        }
+    }
+
+    // MARK: Current file (compact single line)
+
+    private var currentFileRow: some View {
+        GroupBox {
+            HStack(spacing: 6) {
+                Image(systemName: "doc.text.magnifyingglass")
+                    .font(.system(size: 12))
+                    .foregroundColor(.cyan)
+                if !dashboard.scanCurrentVolume.isEmpty {
+                    Text(dashboard.scanCurrentVolume)
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
                         .foregroundColor(.secondary)
-                    Spacer()
                 }
                 Text(dashboard.scanCurrentFile.isEmpty
-                     ? "Waiting for files…"
+                     ? "Waiting…"
                      : dashboard.scanCurrentFile)
-                    .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                    .font(.system(size: 13, weight: .medium, design: .monospaced))
                     .foregroundColor(.cyan)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                Divider()
-
-                // Recent files ticker — newest at top, oldest fades
-                let recent = dashboard.scanRecentFiles.reversed().enumerated().map { ($0, $1) }
-                VStack(alignment: .leading, spacing: 1) {
-                    ForEach(Array(recent), id: \.0) { idx, name in
-                        Text(name)
-                            .font(.system(size: 10, design: .monospaced))
-                            .foregroundColor(.secondary.opacity(max(0.15, 1.0 - Double(idx) * 0.07)))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-                .frame(minHeight: 80, alignment: .topLeading)
+                Spacer()
             }
         } label: {
             Label("Current File", systemImage: "scope")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(.cyan)
         }
     }
@@ -228,14 +247,14 @@ struct RealtimeCatalogScanContent: View {
 
     private var volumesPane: some View {
         GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 ForEach(dashboard.volumeProgress) { vol in
                     VolumeMiniRow(volume: vol)
                 }
             }
         } label: {
             Label("Volumes", systemImage: "externaldrive.connected.to.line.below")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(.blue)
         }
     }
@@ -244,7 +263,7 @@ struct RealtimeCatalogScanContent: View {
 
     private var streamTypesPane: some View {
         GroupBox {
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 ForEach(streamCategories, id: \.key) { cat in
                     let count = dashboard.liveStreamCounts[cat.key] ?? 0
                     streamTile(label: cat.label, count: count, color: cat.color, icon: cat.icon)
@@ -252,7 +271,7 @@ struct RealtimeCatalogScanContent: View {
             }
         } label: {
             Label("Stream Types", systemImage: "film.stack")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(.purple)
         }
     }
@@ -280,13 +299,13 @@ struct RealtimeCatalogScanContent: View {
                 .font(.system(size: 15))
                 .foregroundColor(color)
             Text("\(count)")
-                .font(.system(size: 19, weight: .bold, design: .rounded).monospacedDigit())
+                .font(.system(size: 18, weight: .bold, design: .rounded).monospacedDigit())
                 .foregroundColor(count > 0 ? color : .secondary.opacity(0.5))
             Text(label)
-                .font(.system(size: 9, weight: .medium))
+                .font(.system(size: 10, weight: .medium))
                 .foregroundColor(.secondary)
         }
-        .padding(.vertical, 8)
+        .padding(.vertical, 6)
         .frame(maxWidth: .infinity)
         .background(color.opacity(count > 0 ? 0.08 : 0.0))
         .cornerRadius(6)
@@ -297,10 +316,10 @@ struct RealtimeCatalogScanContent: View {
     private var throughputPane: some View {
         GroupBox {
             SparklineView(samples: dashboard.throughputSamples)
-                .frame(height: 60)
+                .frame(height: 50)
         } label: {
             Label("Throughput (last \(dashboard.throughputSamples.count)s)", systemImage: "waveform.path.ecg")
-                .font(.system(size: 12, weight: .semibold))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundColor(.cyan)
         }
     }
@@ -327,34 +346,34 @@ private struct VolumeMiniRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
+            HStack(spacing: 5) {
                 Image(systemName: icon)
                     .foregroundColor(iconColor)
-                    .font(.system(size: 11))
+                    .font(.system(size: 12))
                 Text(volume.volumeName)
-                    .font(.system(size: 11, weight: .medium))
+                    .font(.system(size: 13, weight: .medium))
                     .lineLimit(1)
                 Spacer()
                 if volume.isWalking {
                     Text("walking…")
-                        .font(.system(size: 10))
+                        .font(.system(size: 12))
                         .foregroundColor(.orange)
                 } else {
                     Text("\(volume.completedFiles)/\(volume.totalFiles)")
-                        .font(.system(size: 10, design: .monospaced))
+                        .font(.system(size: 12, design: .monospaced))
                         .foregroundColor(.secondary)
                 }
                 if volume.cacheHits > 0 {
                     HStack(spacing: 1) {
-                        Image(systemName: "bolt.fill").font(.system(size: 8))
-                        Text("\(volume.cacheHits)").font(.system(size: 10, design: .monospaced))
+                        Image(systemName: "bolt.fill").font(.system(size: 9))
+                        Text("\(volume.cacheHits)").font(.system(size: 11, design: .monospaced))
                     }
                     .foregroundColor(.yellow)
                 }
                 if volume.errors > 0 {
                     HStack(spacing: 1) {
-                        Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 8))
-                        Text("\(volume.errors)").font(.system(size: 10, design: .monospaced))
+                        Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 9))
+                        Text("\(volume.errors)").font(.system(size: 11, design: .monospaced))
                     }
                     .foregroundColor(.red)
                 }
@@ -393,7 +412,7 @@ class CatalogScanWindowController {
         let content = RealtimeCatalogScanContent(dashboard: dashboard)
         let hosting = NSHostingView(rootView: content)
         let w = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 920, height: 700),
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 560),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered,
             defer: false
