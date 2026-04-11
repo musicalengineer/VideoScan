@@ -434,7 +434,7 @@ private struct CatalogToolbar<Dashboard: View>: View {
                 Button("Clear Results") { onClearResults() }
                     .disabled(!hasRecords)
                 Divider()
-                Button("Clear Cache (\(cacheCount) entries)") { onClearCache() }
+                Button("Clear All Cache — All Volumes (\(cacheCount) entries)") { onClearCache() }
                     .disabled(cacheCount == 0)
             } label: {
                 Label("Clear", systemImage: "trash")
