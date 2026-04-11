@@ -818,11 +818,14 @@ private struct CatalogContent: View {
             .width(min: 180, ideal: 260)
 
             TableColumn("Stream", value: \.streamTypeRaw) { rec in
-                Text(rec.streamTypeRaw)
+                let display = rec.streamType == .ffprobeFailed
+                    ? rec.isPlayable
+                    : rec.streamTypeRaw
+                Text(display)
                     .foregroundColor(streamTypeColor(rec.streamType))
                     .bold(rec.streamType.needsCorrelation)
             }
-            .width(min: 90, ideal: 100)
+            .width(min: 90, ideal: 130)
 
             TableColumn("Duration", value: \.durationSeconds) { rec in
                 Text(rec.duration)
@@ -1017,7 +1020,7 @@ private struct InspectorPanel: View {
                             .font(.system(size: 13, weight: .semibold, design: .monospaced))
                             .textSelection(.enabled)
                             .lineLimit(2)
-                        Text(rec.streamTypeRaw)
+                        Text(rec.streamType == .ffprobeFailed ? rec.isPlayable : rec.streamTypeRaw)
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(streamTypeColor(rec.streamType))
                             .padding(.horizontal, 6)
