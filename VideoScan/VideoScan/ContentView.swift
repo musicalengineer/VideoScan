@@ -84,6 +84,8 @@ struct CatalogView: View {
                 },
                 onClearResults: { model.clearResults() },
                 onClearCache: { _ = model.clearCache() },
+                onScanAvidBins: { model.scanAvidBins() },
+                avidBinCount: model.avidBinResults.reduce(0) { $0 + $1.clips.count },
                 dashboardContent: {
                     if model.isScanning || model.isCombining {
                         CompactDashboard(
@@ -417,6 +419,8 @@ private struct CatalogToolbar<Dashboard: View>: View {
     let onAnalyzeDuplicatesSelected: () -> Void
     let onClearResults: () -> Void
     let onClearCache: () -> Void
+    let onScanAvidBins: () -> Void
+    let avidBinCount: Int
     @ViewBuilder let dashboardContent: () -> Dashboard
 
     private var canCombine: Bool {
@@ -462,6 +466,22 @@ private struct CatalogToolbar<Dashboard: View>: View {
             .menuStyle(.borderlessButton)
             .frame(width: 120)
             .disabled(isScanning || !hasRecords)
+
+            Button(action: onScanAvidBins) {
+                HStack(spacing: 4) {
+                    Label("Avid Bins", systemImage: "film.stack")
+                    if avidBinCount > 0 {
+                        Text("\(avidBinCount)")
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.accentColor.opacity(0.2)))
+                    }
+                }
+            }
+            .buttonStyle(.bordered)
+            .disabled(isScanning)
+            .help("Scan target volumes for Avid .avb bin files and cross-reference with MXF media")
 
             Button(action: { showCombineSheet = true }) {
                 Label("Combine", systemImage: "rectangle.stack.badge.plus")
@@ -1101,6 +1121,20 @@ private struct InspectorPanel: View {
                                     Spacer()
                                 }
                             }
+                        }
+                    }
+
+                    if rec.hasAvidMetadata {
+                        inspectorSection("Avid Project", systemImage: "film.stack") {
+                            inspectorRow("Clip Name", rec.avidClipName)
+                            inspectorRow("Mob Type", rec.avidMobType)
+                            inspectorRow("Bin File", rec.avidBinFile)
+                            inspectorRow("Tape", rec.avidTapeName)
+                            inspectorRow("Tracks", rec.avidTracks)
+                            inspectorRow("Edit Rate", rec.avidEditRate > 0 ? String(format: "%.2f fps", rec.avidEditRate) : "")
+                            inspectorCopyableRow("Mob ID", rec.avidMobID)
+                            inspectorCopyableRow("Material UUID", rec.avidMaterialUUID)
+                            inspectorCopyableRow("Original Path", rec.avidMediaPath)
                         }
                     }
 
