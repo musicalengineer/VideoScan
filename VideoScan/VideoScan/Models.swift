@@ -119,6 +119,21 @@ class VideoRecord: Identifiable, Codable {
     var notes: String = ""
     var wasCacheHit: Bool = false   // transient — not persisted to SQLite cache
 
+    // Avid bin metadata (populated by cross-referencing .avb files)
+    var avidClipName: String = ""
+    var avidMobID: String = ""
+    var avidMaterialUUID: String = ""
+    var avidBinFile: String = ""
+    var avidMobType: String = ""
+    var avidMediaPath: String = ""     // original media path from Avid bin
+    var avidTapeName: String = ""
+    var avidEditRate: Double = 0
+    var avidTracks: String = ""        // e.g. "V1, A1-A2"
+
+    var hasAvidMetadata: Bool {
+        !avidClipName.isEmpty || !avidMobID.isEmpty
+    }
+
     var pairedWith: VideoRecord?
     /// Set during decode; CatalogStore resolves it to a real `pairedWith`
     /// reference after the entire array has been decoded.
@@ -172,6 +187,8 @@ class VideoRecord: Identifiable, Codable {
         case container, videoCodec, resolution, frameRate, videoBitrate, totalBitrate
         case colorSpace, bitDepth, scanType, audioCodec, audioChannels, audioSampleRate
         case timecode, tapeName, isPlayable, partialMD5, fullPath, directory, notes
+        case avidClipName, avidMobID, avidMaterialUUID, avidBinFile, avidMobType
+        case avidMediaPath, avidTapeName, avidEditRate, avidTracks
         case pairedWithID, pairGroupID, pairConfidence
         case duplicateGroupID, duplicateConfidence, duplicateDisposition
         case duplicateReasons, duplicateBestMatchFilename, duplicateGroupCount
@@ -210,6 +227,15 @@ class VideoRecord: Identifiable, Codable {
         fullPath                    = try c.decodeIfPresent(String.self,               forKey: .fullPath) ?? ""
         directory                   = try c.decodeIfPresent(String.self,               forKey: .directory) ?? ""
         notes                       = try c.decodeIfPresent(String.self,               forKey: .notes) ?? ""
+        avidClipName                = try c.decodeIfPresent(String.self,               forKey: .avidClipName) ?? ""
+        avidMobID                   = try c.decodeIfPresent(String.self,               forKey: .avidMobID) ?? ""
+        avidMaterialUUID            = try c.decodeIfPresent(String.self,               forKey: .avidMaterialUUID) ?? ""
+        avidBinFile                 = try c.decodeIfPresent(String.self,               forKey: .avidBinFile) ?? ""
+        avidMobType                 = try c.decodeIfPresent(String.self,               forKey: .avidMobType) ?? ""
+        avidMediaPath               = try c.decodeIfPresent(String.self,               forKey: .avidMediaPath) ?? ""
+        avidTapeName                = try c.decodeIfPresent(String.self,               forKey: .avidTapeName) ?? ""
+        avidEditRate                = try c.decodeIfPresent(Double.self,               forKey: .avidEditRate) ?? 0
+        avidTracks                  = try c.decodeIfPresent(String.self,               forKey: .avidTracks) ?? ""
         pendingPairedWithID         = try c.decodeIfPresent(UUID.self,                 forKey: .pairedWithID)
         pairGroupID                 = try c.decodeIfPresent(UUID.self,                 forKey: .pairGroupID)
         pairConfidence              = try c.decodeIfPresent(PairConfidence.self,       forKey: .pairConfidence)
@@ -254,6 +280,15 @@ class VideoRecord: Identifiable, Codable {
         try c.encode(fullPath,                    forKey: .fullPath)
         try c.encode(directory,                   forKey: .directory)
         try c.encode(notes,                       forKey: .notes)
+        try c.encode(avidClipName,                forKey: .avidClipName)
+        try c.encode(avidMobID,                   forKey: .avidMobID)
+        try c.encode(avidMaterialUUID,            forKey: .avidMaterialUUID)
+        try c.encode(avidBinFile,                 forKey: .avidBinFile)
+        try c.encode(avidMobType,                 forKey: .avidMobType)
+        try c.encode(avidMediaPath,               forKey: .avidMediaPath)
+        try c.encode(avidTapeName,                forKey: .avidTapeName)
+        try c.encode(avidEditRate,                forKey: .avidEditRate)
+        try c.encode(avidTracks,                  forKey: .avidTracks)
         try c.encodeIfPresent(pairedWith?.id,     forKey: .pairedWithID)
         try c.encodeIfPresent(pairGroupID,        forKey: .pairGroupID)
         try c.encodeIfPresent(pairConfidence,     forKey: .pairConfidence)
