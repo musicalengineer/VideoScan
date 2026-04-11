@@ -30,7 +30,8 @@ struct CompactDashboard: View {
     }
 
     private var eta: String {
-        guard completed > 0, total > 0, fraction < 1.0 else { return "" }
+        guard dashboard.scanPhase != .paused,
+              completed > 0, total > 0, fraction < 1.0 else { return "" }
         let secsPerItem = elapsed / Double(completed)
         let remaining = secsPerItem * Double(total - completed)
         if remaining < 60 { return "<1m" }
@@ -48,6 +49,7 @@ struct CompactDashboard: View {
     }
 
     private var barColor: Color {
+        if dashboard.scanPhase == .paused { return .cyan }
         if fraction < 0.25 { return .blue }
         if fraction < 0.50 { return .cyan }
         if fraction < 0.75 { return .green }
@@ -60,6 +62,7 @@ struct CompactDashboard: View {
         case .idle:        return "stop.circle"
         case .discovering: return "folder.badge.gearshape"
         case .probing:     return "waveform.badge.magnifyingglass"
+        case .paused:      return "pause.circle.fill"
         case .writingCSV:  return "doc.text"
         case .complete:    return "checkmark.circle.fill"
         }

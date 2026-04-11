@@ -396,6 +396,7 @@ enum ScanPhase: String {
     case idle        = "Idle"
     case discovering = "Discovering"
     case probing     = "Probing"
+    case paused      = "Paused"
     case writingCSV  = "Writing CSV"
     case complete    = "Complete"
 }

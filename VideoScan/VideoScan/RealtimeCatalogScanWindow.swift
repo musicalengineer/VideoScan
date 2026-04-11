@@ -16,13 +16,14 @@ struct RealtimeCatalogScanContent: View {
         case .idle:        return .gray
         case .discovering: return .orange
         case .probing:     return .cyan
+        case .paused:      return .cyan
         case .writingCSV:  return .blue
         case .complete:    return .green
         }
     }
 
     private var isActive: Bool {
-        dashboard.scanPhase == .discovering || dashboard.scanPhase == .probing
+        dashboard.scanPhase == .discovering || dashboard.scanPhase == .probing || dashboard.scanPhase == .paused
     }
 
     private var fraction: Double {
@@ -90,15 +91,15 @@ struct RealtimeCatalogScanContent: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(dashboard.scanPhase.rawValue.uppercased())
-                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .font(.system(size: 19, weight: .bold, design: .rounded))
                     .foregroundColor(phaseColor)
                 if dashboard.scanTotal > 0 {
                     Text("\(dashboard.scanCompleted) / \(dashboard.scanTotal)  (\(Int(fraction * 100))%)")
-                        .font(.system(size: 15, design: .monospaced))
+                        .font(.system(size: 13, design: .monospaced))
                         .foregroundColor(.secondary)
                 } else {
                     Text(isActive ? "Walking volumes…" : "Idle")
-                        .font(.system(size: 15))
+                        .font(.system(size: 13))
                         .foregroundColor(.secondary)
                 }
             }
@@ -106,10 +107,10 @@ struct RealtimeCatalogScanContent: View {
             // Big files-per-second number
             VStack(alignment: .trailing, spacing: 2) {
                 Text(String(format: "%.0f", lastFps))
-                    .font(.system(size: 38, weight: .bold, design: .rounded).monospacedDigit())
+                    .font(.system(size: 32, weight: .bold, design: .rounded).monospacedDigit())
                     .foregroundColor(.cyan)
                 Text("files/sec")
-                    .font(.system(size: 12, weight: .medium))
+                    .font(.system(size: 10, weight: .medium))
                     .foregroundColor(.secondary)
             }
         }
@@ -157,17 +158,17 @@ struct RealtimeCatalogScanContent: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 4) {
                 Image(systemName: icon)
-                    .font(.system(size: 12))
+                    .font(.system(size: 10))
                     .foregroundColor(color)
                 Text(label.uppercased())
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.system(size: 9, weight: .semibold))
                     .foregroundColor(.secondary)
             }
             Text(value)
-                .font(.system(size: 28, weight: .bold, design: .rounded).monospacedDigit())
+                .font(.system(size: 24, weight: .bold, design: .rounded).monospacedDigit())
                 .foregroundColor(color)
             Text(sub)
-                .font(.system(size: 11))
+                .font(.system(size: 10))
                 .foregroundColor(.secondary)
         }
         .padding(10)
@@ -187,14 +188,14 @@ struct RealtimeCatalogScanContent: View {
                     Text(dashboard.scanCurrentVolume.isEmpty
                          ? "—"
                          : dashboard.scanCurrentVolume)
-                        .font(.system(size: 13, weight: .medium, design: .monospaced))
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundColor(.secondary)
                     Spacer()
                 }
                 Text(dashboard.scanCurrentFile.isEmpty
                      ? "Waiting for files…"
                      : dashboard.scanCurrentFile)
-                    .font(.system(size: 18, weight: .semibold, design: .monospaced))
+                    .font(.system(size: 15, weight: .semibold, design: .monospaced))
                     .foregroundColor(.cyan)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -207,7 +208,7 @@ struct RealtimeCatalogScanContent: View {
                 VStack(alignment: .leading, spacing: 1) {
                     ForEach(Array(recent), id: \.0) { idx, name in
                         Text(name)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.system(size: 10, design: .monospaced))
                             .foregroundColor(.secondary.opacity(max(0.15, 1.0 - Double(idx) * 0.07)))
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -218,7 +219,7 @@ struct RealtimeCatalogScanContent: View {
             }
         } label: {
             Label("Current File", systemImage: "scope")
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(.cyan)
         }
     }
@@ -234,7 +235,7 @@ struct RealtimeCatalogScanContent: View {
             }
         } label: {
             Label("Volumes", systemImage: "externaldrive.connected.to.line.below")
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(.blue)
         }
     }
@@ -251,7 +252,7 @@ struct RealtimeCatalogScanContent: View {
             }
         } label: {
             Label("Stream Types", systemImage: "film.stack")
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(.purple)
         }
     }
@@ -276,13 +277,13 @@ struct RealtimeCatalogScanContent: View {
     private func streamTile(label: String, count: Int, color: Color, icon: String) -> some View {
         VStack(spacing: 3) {
             Image(systemName: icon)
-                .font(.system(size: 18))
+                .font(.system(size: 15))
                 .foregroundColor(color)
             Text("\(count)")
-                .font(.system(size: 22, weight: .bold, design: .rounded).monospacedDigit())
+                .font(.system(size: 19, weight: .bold, design: .rounded).monospacedDigit())
                 .foregroundColor(count > 0 ? color : .secondary.opacity(0.5))
             Text(label)
-                .font(.system(size: 10, weight: .medium))
+                .font(.system(size: 9, weight: .medium))
                 .foregroundColor(.secondary)
         }
         .padding(.vertical, 8)
@@ -299,7 +300,7 @@ struct RealtimeCatalogScanContent: View {
                 .frame(height: 60)
         } label: {
             Label("Throughput (last \(dashboard.throughputSamples.count)s)", systemImage: "waveform.path.ecg")
-                .font(.system(size: 14, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundColor(.cyan)
         }
     }
@@ -329,31 +330,31 @@ private struct VolumeMiniRow: View {
             HStack(spacing: 6) {
                 Image(systemName: icon)
                     .foregroundColor(iconColor)
-                    .font(.system(size: 13))
+                    .font(.system(size: 11))
                 Text(volume.volumeName)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 11, weight: .medium))
                     .lineLimit(1)
                 Spacer()
                 if volume.isWalking {
                     Text("walking…")
-                        .font(.system(size: 11))
+                        .font(.system(size: 10))
                         .foregroundColor(.orange)
                 } else {
                     Text("\(volume.completedFiles)/\(volume.totalFiles)")
-                        .font(.system(size: 12, design: .monospaced))
+                        .font(.system(size: 10, design: .monospaced))
                         .foregroundColor(.secondary)
                 }
                 if volume.cacheHits > 0 {
                     HStack(spacing: 1) {
-                        Image(systemName: "bolt.fill").font(.system(size: 9))
-                        Text("\(volume.cacheHits)").font(.system(size: 11, design: .monospaced))
+                        Image(systemName: "bolt.fill").font(.system(size: 8))
+                        Text("\(volume.cacheHits)").font(.system(size: 10, design: .monospaced))
                     }
                     .foregroundColor(.yellow)
                 }
                 if volume.errors > 0 {
                     HStack(spacing: 1) {
-                        Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 9))
-                        Text("\(volume.errors)").font(.system(size: 11, design: .monospaced))
+                        Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 8))
+                        Text("\(volume.errors)").font(.system(size: 10, design: .monospaced))
                     }
                     .foregroundColor(.red)
                 }

@@ -31,6 +31,36 @@ enum ProcessRunner {
         }
     }
 
+    // MARK: - Capture stdout + stderr
+
+    /// Run an executable and return (stdout, stderr) as strings.
+    /// Returns nil stdout on failure or cancellation; stderr is best-effort.
+    static func runCapturingStderr(executable: String, arguments: [String]) async -> (stdout: String?, stderr: String) {
+        let proc = Process()
+        proc.executableURL  = URL(fileURLWithPath: executable)
+        proc.arguments      = arguments
+        let stdoutPipe      = Pipe()
+        let stderrPipe      = Pipe()
+        proc.standardOutput = stdoutPipe
+        proc.standardError  = stderrPipe
+
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                proc.terminationHandler = { _ in
+                    let outData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                    let errData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                    let stdout = String(data: outData, encoding: .utf8)
+                    let stderr = String(data: errData, encoding: .utf8) ?? ""
+                    continuation.resume(returning: (stdout, stderr))
+                }
+                do    { try proc.run() }
+                catch { continuation.resume(returning: (nil, error.localizedDescription)) }
+            }
+        } onCancel: {
+            if proc.isRunning { proc.terminate() }
+        }
+    }
+
     // MARK: - Stream stderr to callback, capture stdout for structured output
 
     /// Run an executable, streaming stderr line-by-line to `stderrLine`,
