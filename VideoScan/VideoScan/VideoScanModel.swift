@@ -627,7 +627,7 @@ final class VideoScanModel: ObservableObject {
                                 filename: url.lastPathComponent
                             )
                         }
-                        let rec = await self.probeFile(
+                        let rec = await self.probeFileWithTimeout(
                             url: url,
                             prefetchToRAM: rootIsNetwork,
                             ramPath: ramMountPoint
@@ -999,12 +999,64 @@ final class VideoScanModel: ObservableObject {
         return result
     }
 
+    /// Per-file probe timeout (seconds). Prevents the scan from stalling on
+    /// network files that block indefinitely on read/open.
+    private let probeTimeoutSeconds: UInt64 = 60
+
+    /// Wrapper that races probeFile against a timeout. If probeFile takes
+    /// longer than probeTimeoutSeconds, returns a timed-out record so the
+    /// scan can move past stuck network files.
+    nonisolated func probeFileWithTimeout(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil) async -> VideoRecord {
+        do {
+            return try await withThrowingTaskGroup(of: VideoRecord.self) { group in
+                group.addTask {
+                    await self.probeFile(url: url, prefetchToRAM: prefetchToRAM, ramPath: ramPath)
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: self.probeTimeoutSeconds * 1_000_000_000)
+                    throw CancellationError()
+                }
+                // First to finish wins — cancel the other
+                let result = try await group.next()!
+                group.cancelAll()
+                return result
+            }
+        } catch {
+            // Timeout fired before probeFile completed
+            let rec = VideoRecord()
+            rec.filename      = url.lastPathComponent
+            rec.ext           = url.pathExtension.uppercased()
+            rec.fullPath      = url.path
+            rec.directory     = url.deletingLastPathComponent().path
+            rec.isPlayable    = "Timed out"
+            rec.notes         = "File probe exceeded \(probeTimeoutSeconds)s — network I/O may be stalled"
+            rec.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+            return rec
+        }
+    }
+
     /// Probe a single file and return a populated VideoRecord.
     /// If prefetchToRAM is true and ramPath is available, copies the first 10MB
     /// to the RAM disk so ffprobe reads at memory speed instead of network speed.
     nonisolated func probeFile(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil) async -> VideoRecord {
         let fm = FileManager.default
         let path = url.path
+
+        // Quick existence check — on network volumes, files discovered during
+        // the walk phase can vanish by the time we probe (symlinks, aliases,
+        // unmounted subdirs). Skip immediately rather than wasting time on
+        // ffprobe which will also fail.
+        guard fm.isReadableFile(atPath: path) else {
+            let rec = VideoRecord()
+            rec.filename      = url.lastPathComponent
+            rec.ext           = url.pathExtension.uppercased()
+            rec.fullPath      = path
+            rec.directory     = url.deletingLastPathComponent().path
+            rec.isPlayable    = "File not found"
+            rec.notes         = "File was discovered during scan but is no longer accessible"
+            rec.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+            return rec
+        }
 
         // Get file attributes for cache key and record population
         let attrs = try? fm.attributesOfItem(atPath: path)
@@ -1646,6 +1698,14 @@ final class VideoScanModel: ObservableObject {
         if lower.contains("permission denied") {
             return ("Access denied",
                     "Cannot read file — permission denied")
+        }
+        if lower.contains("operation timed out") {
+            return ("Network timeout",
+                    "File read timed out — network volume may be slow or unreachable")
+        }
+        if lower.contains("no such file") {
+            return ("File not found",
+                    "File was discovered during scan but is no longer accessible")
         }
         if stderr.isEmpty {
             return ("Unreadable file",
