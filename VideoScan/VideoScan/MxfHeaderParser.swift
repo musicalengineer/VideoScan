@@ -47,7 +47,8 @@ enum MxfHeaderParser {
         let headerSize = 256 * 1024
         let data: Data
 
-        // Try mmap first (fast for local files), fall back to read() for network volumes
+        // Use read() instead of mmap() — mmap on network files can SIGBUS
+        // (KERN_MEMORY_ERROR) if the remote volume becomes unreachable mid-read.
         let fd = open(path, O_RDONLY)
         guard fd >= 0 else { return nil }
 
@@ -55,21 +56,13 @@ enum MxfHeaderParser {
         guard fstat(fd, &sb) == 0, sb.st_size > 16 else { close(fd); return nil }
         let readLen = min(headerSize, Int(sb.st_size))
 
-        if let ptr = mmap(nil, readLen, PROT_READ, MAP_PRIVATE, fd, 0),
-           ptr != MAP_FAILED {
-            data = Data(bytes: ptr, count: readLen)  // copy out of mmap
-            munmap(ptr, readLen)
-            close(fd)
-        } else {
-            // mmap failed (network volume, etc.) — fall back to read()
-            var buf = Data(count: readLen)
-            let bytesRead = buf.withUnsafeMutableBytes { rawBuf in
-                Darwin.read(fd, rawBuf.baseAddress!, readLen)
-            }
-            close(fd)
-            guard bytesRead > 16 else { return nil }
-            data = buf.prefix(bytesRead)
+        var buf = Data(count: readLen)
+        let bytesRead = buf.withUnsafeMutableBytes { rawBuf in
+            Darwin.read(fd, rawBuf.baseAddress!, readLen)
         }
+        close(fd)
+        guard bytesRead > 16 else { return nil }
+        data = buf.prefix(bytesRead)
 
         // Verify MXF partition pack key at offset 0
         let mxfPrefix: [UInt8] = [0x06, 0x0e, 0x2b, 0x34]

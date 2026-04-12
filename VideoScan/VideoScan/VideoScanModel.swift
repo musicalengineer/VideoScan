@@ -1107,22 +1107,30 @@ final class VideoScanModel: ObservableObject {
     /// Copy the first N bytes of a file to a destination. Used to prefetch
     /// network file headers to RAM disk for fast ffprobe access.
     nonisolated func prefetchHeader(from src: URL, to dst: URL, bytes: Int) -> Bool {
+        // Use read() instead of mmap() — mmap on network files can SIGBUS
+        // if the remote volume becomes unreachable mid-read.
         let fd = open(src.path, O_RDONLY)
         guard fd >= 0 else { return false }
         defer { close(fd) }
 
-        // Get actual file size — prefetch the smaller of requested bytes or full file
         var sb = stat()
         guard fstat(fd, &sb) == 0 else { return false }
         let readLen = min(bytes, Int(sb.st_size))
+        guard readLen > 0 else { return false }
 
-        // mmap source for fast read
-        guard let ptr = mmap(nil, readLen, PROT_READ, MAP_PRIVATE, fd, 0),
-              ptr != MAP_FAILED else { return false }
-        defer { munmap(ptr, readLen) }
+        // Read into buffer then write to RAM disk
+        let buf = UnsafeMutableRawPointer.allocate(byteCount: readLen, alignment: 16)
+        defer { buf.deallocate() }
 
-        // Write to RAM disk
-        let data = Data(bytesNoCopy: ptr, count: readLen, deallocator: .none)
+        var totalRead = 0
+        while totalRead < readLen {
+            let n = read(fd, buf.advanced(by: totalRead), readLen - totalRead)
+            if n <= 0 { break }
+            totalRead += n
+        }
+        guard totalRead > 0 else { return false }
+
+        let data = Data(bytesNoCopy: buf, count: totalRead, deallocator: .none)
         do {
             try data.write(to: dst)
             return true
@@ -1723,9 +1731,12 @@ final class VideoScanModel: ObservableObject {
         }
     }
 
-    // MARK: - Partial MD5 (mmap-based for speed)
+    // MARK: - Partial MD5
 
     nonisolated func partialMD5(path: String, chunkSize: Int = 65536) -> String {
+        // Use read() instead of mmap() — mmap on network files can SIGBUS
+        // (KERN_MEMORY_ERROR) if the remote volume becomes unreachable mid-read.
+        // read() returns -1 on I/O errors instead of crashing.
         let fd = open(path, O_RDONLY)
         guard fd >= 0 else { return "" }
         defer { close(fd) }
@@ -1736,32 +1747,22 @@ final class VideoScanModel: ObservableObject {
         guard fileSize > 0 else { return "" }
 
         var md5 = Insecure.MD5()
+        let buf = UnsafeMutableRawPointer.allocate(byteCount: chunkSize, alignment: 16)
+        defer { buf.deallocate() }
 
-        // Hash first chunk via mmap
+        // Hash first chunk
         let headLen = min(chunkSize, fileSize)
-        if let ptr = mmap(nil, headLen, PROT_READ, MAP_PRIVATE, fd, 0) {
-            if ptr != MAP_FAILED {
-                md5.update(bufferPointer: UnsafeRawBufferPointer(start: ptr, count: headLen))
-                munmap(ptr, headLen)
-            }
-        }
+        let headRead = read(fd, buf, headLen)
+        guard headRead > 0 else { return "" }
+        md5.update(bufferPointer: UnsafeRawBufferPointer(start: buf, count: headRead))
 
         // Hash last chunk if file is large enough
         if fileSize > chunkSize * 2 {
-            let tailOffset = fileSize - chunkSize
-            // mmap offset must be page-aligned
-            let pageSize = Int(getpagesize())
-            let alignedOffset = (tailOffset / pageSize) * pageSize
-            let mapLen = fileSize - alignedOffset
-            let offsetInMap = tailOffset - alignedOffset
-
-            if let ptr = mmap(nil, mapLen, PROT_READ, MAP_PRIVATE, fd, off_t(alignedOffset)) {
-                if ptr != MAP_FAILED {
-                    md5.update(bufferPointer: UnsafeRawBufferPointer(
-                        start: ptr.advanced(by: offsetInMap), count: chunkSize))
-                    munmap(ptr, mapLen)
-                }
-            }
+            let tailOffset = off_t(fileSize - chunkSize)
+            guard lseek(fd, tailOffset, SEEK_SET) == tailOffset else { return "" }
+            let tailRead = read(fd, buf, chunkSize)
+            guard tailRead > 0 else { return "" }
+            md5.update(bufferPointer: UnsafeRawBufferPointer(start: buf, count: tailRead))
         }
 
         return md5.finalize().map { String(format: "%02x", $0) }.joined()
