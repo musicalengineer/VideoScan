@@ -987,7 +987,13 @@ final class VideoScanModel: ObservableObject {
                             dirStack.append(url)
                         }
                     } else if rv.isRegularFile == true && rv.isReadable == true {
-                        if videoExtensions.contains(url.pathExtension.lowercased()) {
+                        let ext = url.pathExtension.lowercased()
+                        if videoExtensions.contains(ext) {
+                            // .ts and .mts collide with TypeScript — verify MPEG-TS
+                            // magic byte (0x47 sync byte) before including.
+                            if (ext == "ts" || ext == "mts") && !Self.isMpegTS(url) {
+                                continue
+                            }
                             videoFiles.append(url)
                             onProgress?(currentDir, videoFiles.count, url)
                         }
@@ -997,6 +1003,17 @@ final class VideoScanModel: ObservableObject {
             return videoFiles
         }.value
         return result
+    }
+
+    /// Check if a .ts/.mts file is actually an MPEG transport stream (not TypeScript).
+    /// MPEG-TS files start with sync byte 0x47. TypeScript source files start with ASCII.
+    nonisolated private static func isMpegTS(_ url: URL) -> Bool {
+        let fd = open(url.path, O_RDONLY)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var byte: UInt8 = 0
+        let n = read(fd, &byte, 1)
+        return n == 1 && byte == 0x47
     }
 
     /// Per-file probe timeout (seconds). Prevents the scan from stalling on
