@@ -48,6 +48,8 @@ final class VideoScanModel: ObservableObject {
     @Published var records: [VideoRecord] = []
     @Published var isScanning: Bool = false
     @Published var isCombining: Bool = false
+    @Published var isCorrelating: Bool = false
+    @Published var isAnalyzingDuplicates: Bool = false
     @Published var avidBinResults: [AvbBinResult] = []
     @Published var scanTargets: [CatalogScanTarget] = []
     @Published var outputCSVPath: String = ""
@@ -1138,6 +1140,8 @@ final class VideoScanModel: ObservableObject {
 
     /// Correlate all records, or only those whose IDs are in `selectedIDs` (if non-nil/non-empty).
     func correlate(selectedIDs: Set<UUID>? = nil) {
+        isCorrelating = true
+        defer { isCorrelating = false }
         let scope: [VideoRecord]
         if let ids = selectedIDs, !ids.isEmpty {
             scope = records.filter { ids.contains($0.id) }
@@ -1294,6 +1298,8 @@ final class VideoScanModel: ObservableObject {
     }
 
     func analyzeDuplicates(selectedIDs: Set<UUID>? = nil) {
+        isAnalyzingDuplicates = true
+        defer { isAnalyzingDuplicates = false }
         let scope: [VideoRecord]
         if let ids = selectedIDs, !ids.isEmpty {
             scope = records.filter { ids.contains($0.id) }

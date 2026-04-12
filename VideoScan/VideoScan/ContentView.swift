@@ -55,6 +55,8 @@ struct CatalogView: View {
             CatalogToolbar(
                 isScanning: model.isScanning,
                 isCombining: model.isCombining,
+                isCorrelating: model.isCorrelating,
+                isAnalyzingDuplicates: model.isAnalyzingDuplicates,
                 hasRecords: !model.records.isEmpty,
                 hasCorrelatedPairs: !model.correlatedPairs.isEmpty,
                 outputCSVPath: model.outputCSVPath,
@@ -402,6 +404,8 @@ private struct CatalogTargetRow: View {
 private struct CatalogToolbar<Dashboard: View>: View {
     let isScanning: Bool
     let isCombining: Bool
+    let isCorrelating: Bool
+    let isAnalyzingDuplicates: Bool
     let hasRecords: Bool
     let hasCorrelatedPairs: Bool
     let outputCSVPath: String
@@ -451,11 +455,18 @@ private struct CatalogToolbar<Dashboard: View>: View {
                 Button("Correlate Selected", action: onCorrelateSelected)
                     .disabled(selectedIDs.isEmpty)
             } label: {
-                Label("Correlate", systemImage: "arrow.triangle.2.circlepath")
+                if isCorrelating {
+                    HStack(spacing: 4) {
+                        ProgressView().controlSize(.small)
+                        Text("Correlating…")
+                    }
+                } else {
+                    Label("Correlate", systemImage: "arrow.triangle.2.circlepath")
+                }
             }
             .menuStyle(.borderlessButton)
-            .frame(width: 110)
-            .disabled(isScanning || !hasRecords)
+            .frame(width: 120)
+            .disabled(isScanning || isCorrelating || !hasRecords)
             .help("Match video-only files with their corresponding audio-only files (e.g. Avid MXF pairs)")
 
             Menu {
@@ -463,11 +474,18 @@ private struct CatalogToolbar<Dashboard: View>: View {
                 Button("Analyze Selected", action: onAnalyzeDuplicatesSelected)
                     .disabled(selectedIDs.isEmpty)
             } label: {
-                Label("Duplicates", systemImage: "doc.on.doc")
+                if isAnalyzingDuplicates {
+                    HStack(spacing: 4) {
+                        ProgressView().controlSize(.small)
+                        Text("Analyzing…")
+                    }
+                } else {
+                    Label("Duplicates", systemImage: "doc.on.doc")
+                }
             }
             .menuStyle(.borderlessButton)
             .frame(width: 120)
-            .disabled(isScanning || !hasRecords)
+            .disabled(isScanning || isAnalyzingDuplicates || !hasRecords)
             .help("Find duplicate files by comparing hash, duration, filename, resolution, and other signals")
 
             Button(action: onScanAvidBins) {
