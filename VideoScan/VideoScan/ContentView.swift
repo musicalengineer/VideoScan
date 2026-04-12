@@ -541,7 +541,7 @@ private struct CatalogToolbar<Dashboard: View>: View {
             HStack(spacing: 4) {
                 Image(systemName: "magnifyingglass")
                     .foregroundColor(.secondary)
-                TextField("Search filenames…", text: $searchText)
+                TextField("Search files, codecs, notes…", text: $searchText)
                     .textFieldStyle(.plain)
                     .frame(width: 160)
                 if !searchText.isEmpty {
@@ -784,6 +784,10 @@ private struct CatalogContent: View {
         return out.filter {
             $0.filename.lowercased().contains(q) ||
             $0.directory.lowercased().contains(q) ||
+            $0.streamTypeRaw.lowercased().contains(q) ||
+            $0.isPlayable.lowercased().contains(q) ||
+            $0.notes.lowercased().contains(q) ||
+            $0.videoCodec.lowercased().contains(q) ||
             $0.duplicateDisposition.rawValue.lowercased().contains(q) ||
             $0.duplicateBestMatchFilename.lowercased().contains(q) ||
             $0.duplicateReasons.lowercased().contains(q)
