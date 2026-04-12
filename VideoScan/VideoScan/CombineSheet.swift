@@ -45,7 +45,7 @@ struct CombineSheet: View {
                 .frame(maxHeight: 200)
             }
 
-            Text("Output: .mov container, stream copy (no re-encode)")
+            Text("Output: {filename}_combined.mov — stream copy, no re-encode")
                 .font(.caption)
                 .foregroundColor(.secondary)
 
