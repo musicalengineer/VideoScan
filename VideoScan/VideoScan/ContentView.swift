@@ -442,6 +442,7 @@ private struct CatalogToolbar<Dashboard: View>: View {
             .menuStyle(.borderlessButton)
             .frame(width: 80)
             .disabled(isScanning)
+            .help("Clear catalog results or cached probe data")
 
             Divider().frame(height: 22)
 
@@ -455,6 +456,7 @@ private struct CatalogToolbar<Dashboard: View>: View {
             .menuStyle(.borderlessButton)
             .frame(width: 110)
             .disabled(isScanning || !hasRecords)
+            .help("Match video-only files with their corresponding audio-only files (e.g. Avid MXF pairs)")
 
             Menu {
                 Button("Analyze All", action: onAnalyzeDuplicatesAll)
@@ -466,6 +468,7 @@ private struct CatalogToolbar<Dashboard: View>: View {
             .menuStyle(.borderlessButton)
             .frame(width: 120)
             .disabled(isScanning || !hasRecords)
+            .help("Find duplicate files by comparing hash, duration, filename, resolution, and other signals")
 
             Button(action: onScanAvidBins) {
                 HStack(spacing: 4) {
@@ -488,6 +491,7 @@ private struct CatalogToolbar<Dashboard: View>: View {
             }
             .buttonStyle(.bordered)
             .disabled(!canCombine && !isCombining)
+            .help("Mux correlated video + audio pairs into combined files using ffmpeg (no re-encode)")
 
             if isCombining {
                 Button(action: onStopCombine) {
@@ -814,6 +818,7 @@ private struct CatalogContent: View {
                     .font(.system(.body, design: .monospaced))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 2)
+                    .help("Media filename from disk")
             }
             .width(min: 180, ideal: 260)
 
@@ -824,27 +829,32 @@ private struct CatalogContent: View {
                 Text(display)
                     .foregroundColor(streamTypeColor(rec.streamType))
                     .bold(rec.streamType.needsCorrelation)
+                    .help("V+A = video and audio, V-only/A-only = single stream, or file status if damaged")
             }
             .width(min: 90, ideal: 130)
 
             TableColumn("Duration", value: \.durationSeconds) { rec in
                 Text(rec.duration)
+                    .help("Playback duration (HH:MM:SS)")
             }
             .width(min: 65, ideal: 75)
 
             TableColumn("Resolution", value: \.pixelCount) { rec in
                 Text(rec.resolution)
+                    .help("Video frame size (width x height)")
             }
             .width(min: 80, ideal: 95)
 
             TableColumn("Codec", value: \.videoCodec) { rec in
                 Text(rec.videoCodec.isEmpty ? "—" : rec.videoCodec)
                     .foregroundColor(rec.videoCodec.isEmpty ? .secondary : .primary)
+                    .help("Video codec (e.g. h264, prores, mpeg2video)")
             }
             .width(min: 60, ideal: 80)
 
             TableColumn("Size", value: \.sizeBytes) { rec in
                 Text(rec.size)
+                    .help("File size on disk")
             }
             .width(min: 60, ideal: 75)
 
@@ -852,11 +862,15 @@ private struct CatalogContent: View {
                 Text(rec.dateCreated.isEmpty ? "—" : rec.dateCreated)
                     .foregroundColor(rec.dateCreated.isEmpty ? .secondary : .primary)
                     .font(.system(size: 11))
+                    .help("File creation date from filesystem metadata")
             }
             .width(min: 80, ideal: 100)
 
             TableColumn("Duplicate") { rec in
                 DuplicateDispositionCell(record: rec)
+                    .help(rec.duplicateDisposition == .none
+                          ? "Run Duplicates analysis to check for copies"
+                          : "Keep = best copy, Review = check manually, Extra copy = safe to remove")
             }
             .width(min: 80, ideal: 95)
         }
