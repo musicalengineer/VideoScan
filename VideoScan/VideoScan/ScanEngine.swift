@@ -239,6 +239,8 @@ enum ScanEngine {
     /// Copy the first N bytes of a file to a destination via mmap.
     /// Used to prefetch network file headers to RAM disk for fast ffprobe access.
     static func prefetchHeader(from src: URL, to dst: URL, bytes: Int) -> Bool {
+        // Use read() instead of mmap() — mmap on network files can SIGBUS
+        // if the remote volume becomes unreachable mid-read.
         let fd = open(src.path, O_RDONLY)
         guard fd >= 0 else { return false }
         defer { close(fd) }
@@ -246,12 +248,20 @@ enum ScanEngine {
         var sb = Darwin.stat()
         guard fstat(fd, &sb) == 0 else { return false }
         let readLen = min(bytes, Int(sb.st_size))
+        guard readLen > 0 else { return false }
 
-        guard let ptr = mmap(nil, readLen, PROT_READ, MAP_PRIVATE, fd, 0),
-              ptr != MAP_FAILED else { return false }
-        defer { munmap(ptr, readLen) }
+        let buf = UnsafeMutableRawPointer.allocate(byteCount: readLen, alignment: 16)
+        defer { buf.deallocate() }
 
-        let data = Data(bytesNoCopy: ptr, count: readLen, deallocator: .none)
+        var totalRead = 0
+        while totalRead < readLen {
+            let n = Darwin.read(fd, buf.advanced(by: totalRead), readLen - totalRead)
+            if n <= 0 { break }
+            totalRead += n
+        }
+        guard totalRead > 0 else { return false }
+
+        let data = Data(bytesNoCopy: buf, count: totalRead, deallocator: .none)
         do {
             try data.write(to: dst)
             return true
@@ -260,10 +270,11 @@ enum ScanEngine {
         }
     }
 
-    // MARK: - Partial MD5 (mmap-based)
+    // MARK: - Partial MD5
 
     /// Compute a partial MD5 hash (first + last 64KB) for duplicate detection.
     static func partialMD5(path: String, chunkSize: Int = 65536) -> String {
+        // Use read() instead of mmap() — mmap on network files can SIGBUS.
         let fd = open(path, O_RDONLY)
         guard fd >= 0 else { return "" }
         defer { close(fd) }
@@ -274,29 +285,20 @@ enum ScanEngine {
         guard fileSize > 0 else { return "" }
 
         var md5 = Insecure.MD5()
+        let buf = UnsafeMutableRawPointer.allocate(byteCount: chunkSize, alignment: 16)
+        defer { buf.deallocate() }
 
         let headLen = min(chunkSize, fileSize)
-        if let ptr = mmap(nil, headLen, PROT_READ, MAP_PRIVATE, fd, 0) {
-            if ptr != MAP_FAILED {
-                md5.update(bufferPointer: UnsafeRawBufferPointer(start: ptr, count: headLen))
-                munmap(ptr, headLen)
-            }
-        }
+        let headRead = Darwin.read(fd, buf, headLen)
+        guard headRead > 0 else { return "" }
+        md5.update(bufferPointer: UnsafeRawBufferPointer(start: buf, count: headRead))
 
         if fileSize > chunkSize * 2 {
-            let tailOffset = fileSize - chunkSize
-            let pageSize = Int(getpagesize())
-            let alignedOffset = (tailOffset / pageSize) * pageSize
-            let mapLen = fileSize - alignedOffset
-            let offsetInMap = tailOffset - alignedOffset
-
-            if let ptr = mmap(nil, mapLen, PROT_READ, MAP_PRIVATE, fd, off_t(alignedOffset)) {
-                if ptr != MAP_FAILED {
-                    md5.update(bufferPointer: UnsafeRawBufferPointer(
-                        start: ptr.advanced(by: offsetInMap), count: chunkSize))
-                    munmap(ptr, mapLen)
-                }
-            }
+            let tailOffset = off_t(fileSize - chunkSize)
+            guard lseek(fd, tailOffset, SEEK_SET) == tailOffset else { return "" }
+            let tailRead = Darwin.read(fd, buf, chunkSize)
+            guard tailRead > 0 else { return "" }
+            md5.update(bufferPointer: UnsafeRawBufferPointer(start: buf, count: tailRead))
         }
 
         return md5.finalize().map { String(format: "%02x", $0) }.joined()
