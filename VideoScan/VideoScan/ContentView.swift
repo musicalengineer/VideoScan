@@ -492,7 +492,7 @@ private struct CatalogToolbar<Dashboard: View>: View {
                 HStack(spacing: 4) {
                     Label("Avid Bins", systemImage: "film.stack")
                     if avidBinCount > 0 {
-                        Text("\(avidBinCount)")
+                        Text("\(avidBinCount) clips")
                             .font(.system(size: 10, weight: .semibold, design: .monospaced))
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
@@ -502,7 +502,7 @@ private struct CatalogToolbar<Dashboard: View>: View {
             }
             .buttonStyle(.bordered)
             .disabled(isScanning)
-            .help("Scan target volumes for Avid .avb bin files and cross-reference with MXF media")
+            .help("Scan for Avid .avb bin files and extract clip metadata — badge shows total clips found across all bins")
 
             Button(action: { showCombineSheet = true }) {
                 Label("Combine", systemImage: "rectangle.stack.badge.plus")
