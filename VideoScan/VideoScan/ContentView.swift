@@ -1,6 +1,7 @@
 import SwiftUI
 import Combine
 import AVKit
+import IOKit
 
 // MARK: - Root (Tab switcher)
 
@@ -627,27 +628,7 @@ struct SettingsTabView: View {
             VStack(alignment: .leading, spacing: 24) {
 
                 // Header
-                HStack(spacing: 12) {
-                    Image(systemName: "gauge.with.dots.needle.67percent")
-                        .font(.largeTitle)
-                        .foregroundColor(.accentColor)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Performance Settings")
-                            .font(.title2.weight(.semibold))
-                        Text("\(totalRAMGB) GB physical RAM")
-                            .font(.callout)
-                            .foregroundColor(.secondary)
-                    }
-                    Spacer()
-                    let mem = MemoryPressureMonitor.shared.availableMemoryString()
-                    VStack(alignment: .trailing, spacing: 2) {
-                        Text("Available Now")
-                            .font(.caption).foregroundColor(.secondary)
-                        Text(mem)
-                            .font(.system(.title3, design: .monospaced).weight(.medium))
-                            .foregroundColor(.green)
-                    }
-                }
+                settingsHeader
 
                 Divider()
 
@@ -655,6 +636,7 @@ struct SettingsTabView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Label("Scanning", systemImage: "magnifyingglass")
                         .font(.headline)
+                        .foregroundColor(.blue)
 
                     settingRow(
                         title: "Probes per volume",
@@ -663,7 +645,8 @@ struct SettingsTabView: View {
                         slider: Slider(value: Binding(
                             get: { Double(settings.probesPerVolume) },
                             set: { settings.probesPerVolume = Int($0) }
-                        ), in: 1...32, step: 1)
+                        ), in: 1...32, step: 1),
+                        accentColor: .blue
                     )
 
                     settingRow(
@@ -674,7 +657,8 @@ struct SettingsTabView: View {
                         slider: Slider(value: Binding(
                             get: { Double(settings.memoryFloorGB) },
                             set: { settings.memoryFloorGB = Int($0) }
-                        ), in: 1...Double(max(1, totalRAMGB / 4)), step: 1)
+                        ), in: 1...Double(max(1, totalRAMGB / 4)), step: 1),
+                        accentColor: .blue
                     )
                 }
 
@@ -684,6 +668,7 @@ struct SettingsTabView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     Label("Network Volumes", systemImage: "network")
                         .font(.headline)
+                        .foregroundColor(.mint)
 
                     settingRow(
                         title: "RAM disk size",
@@ -693,7 +678,8 @@ struct SettingsTabView: View {
                         slider: Slider(value: Binding(
                             get: { Double(settings.ramDiskGB) },
                             set: { settings.ramDiskGB = Int($0) }
-                        ), in: 1...Double(max(1, totalRAMGB / 2)), step: 1)
+                        ), in: 1...Double(max(1, totalRAMGB / 2)), step: 1),
+                        accentColor: .mint
                     )
 
                     settingRow(
@@ -703,25 +689,28 @@ struct SettingsTabView: View {
                         slider: Slider(value: Binding(
                             get: { Double(settings.prefetchMB) },
                             set: { settings.prefetchMB = Int($0) }
-                        ), in: 10...200, step: 10)
+                        ), in: 10...200, step: 10),
+                        accentColor: .mint
                     )
                 }
 
                 Divider()
 
-                // Combine section
+                // Video Combiner section
                 VStack(alignment: .leading, spacing: 16) {
-                    Label("Combine / Mux", systemImage: "arrow.triangle.merge")
+                    Label("Video Combiner", systemImage: "arrow.triangle.merge")
                         .font(.headline)
+                        .foregroundColor(.orange)
 
                     settingRow(
-                        title: "Combine tasks",
+                        title: "Concurrent tasks",
                         value: "\(settings.combineConcurrency)",
-                        description: "Concurrent ffmpeg mux processes",
+                        description: "Parallel ffmpeg processes for combining video + audio pairs",
                         slider: Slider(value: Binding(
                             get: { Double(settings.combineConcurrency) },
                             set: { settings.combineConcurrency = Int($0) }
-                        ), in: 1...16, step: 1)
+                        ), in: 1...16, step: 1),
+                        accentColor: .orange
                     )
                 }
 
@@ -742,12 +731,149 @@ struct SettingsTabView: View {
         .background(Color(NSColor.windowBackgroundColor))
     }
 
+    // MARK: - Settings Header (chip + RAM info)
+
+    private var settingsHeader: some View {
+        let info = Self.chipInfo()
+        let freeGB = Int(MemoryPressureMonitor.shared.availableMemory() / (1024 * 1024 * 1024))
+        let freeColor: Color = freeGB < 4 ? .red : freeGB < 8 ? .yellow : .green
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("Performance Settings")
+                .font(.title2.weight(.semibold))
+            HStack {
+                Image(systemName: "cpu.fill")
+                    .font(.system(size: 18))
+                    .foregroundColor(.blue)
+                Text(info.name)
+                    .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                Spacer()
+                chipTile("\(info.pCores)", label: "P-cores", color: .blue, icon: "bolt.fill")
+                Spacer()
+                chipTile("\(info.eCores)", label: "E-cores", color: .green, icon: "leaf.fill")
+                Spacer()
+                if info.gpuCores > 0 {
+                    chipTile("\(info.gpuCores)", label: "GPU", color: .purple, icon: "gpu")
+                    Spacer()
+                }
+                if info.neuralCores > 0 {
+                    chipTile("\(info.neuralCores)", label: "Neural", color: .orange, icon: "brain")
+                    Spacer()
+                }
+                // RAM tile — unified: total on top, free below
+                VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "memorychip")
+                                .font(.system(size: 10))
+                            Text("\(totalRAMGB) GB RAM")
+                                .font(.system(size: 14, weight: .bold, design: .monospaced))
+                        }
+                        .foregroundColor(.cyan)
+                        HStack(spacing: 3) {
+                            Image(systemName: "memorychip")
+                                .font(.system(size: 10))
+                                .hidden()
+                            Text("\(freeGB) GB Free")
+                                .font(.system(size: 14, weight: .bold, design: .monospaced))
+                                .foregroundColor(freeColor)
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(Color.cyan.opacity(0.10))
+                    .cornerRadius(6)
+            }
+        }
+    }
+
+    private func chipTile(_ value: String, label: String, color: Color, icon: String) -> some View {
+        VStack(spacing: 2) {
+            HStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 10))
+                Text(value)
+                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+            }
+            Text(label)
+                .font(.system(size: 12, weight: .bold))
+        }
+        .foregroundColor(color)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(color.opacity(0.10))
+        .cornerRadius(6)
+    }
+
+    private struct ChipInfo {
+        let name: String
+        let pCores: Int
+        let eCores: Int
+        let gpuCores: Int
+        let neuralCores: Int
+    }
+
+    private static func chipInfo() -> ChipInfo {
+        func sysctl(_ key: String) -> Int {
+            var val: Int = 0
+            var size = MemoryLayout<Int>.size
+            sysctlbyname(key, &val, &size, nil, 0)
+            return val
+        }
+
+        func sysctlString(_ key: String) -> String {
+            var size = 0
+            sysctlbyname(key, nil, &size, nil, 0)
+            guard size > 0 else { return "" }
+            var buf = [CChar](repeating: 0, count: size)
+            sysctlbyname(key, &buf, &size, nil, 0)
+            return String(cString: buf).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let name = sysctlString("machdep.cpu.brand_string")
+            .replacingOccurrences(of: "Apple ", with: "")
+
+        // perflevel0 = Performance cores, perflevel1 = Efficiency cores
+        let pCores = sysctl("hw.perflevel0.physicalcpu")
+        let eCores = sysctl("hw.perflevel1.physicalcpu")
+
+        // GPU core count from IORegistry
+        var gpuCores = 0
+        let matchDict = IOServiceMatching("AGXAccelerator")
+        var iterator: io_iterator_t = 0
+        if IOServiceGetMatchingServices(kIOMasterPortDefault, matchDict, &iterator) == KERN_SUCCESS {
+            var entry = IOIteratorNext(iterator)
+            while entry != 0 {
+                if let prop = IORegistryEntryCreateCFProperty(entry, "gpu-core-count" as CFString, kCFAllocatorDefault, 0) {
+                    gpuCores = (prop.takeRetainedValue() as? Int) ?? 0
+                }
+                IOObjectRelease(entry)
+                entry = IOIteratorNext(iterator)
+            }
+            IOObjectRelease(iterator)
+        }
+
+        // Neural Engine: not exposed via sysctl, derive from chip model
+        let neuralCores = Self.neuralCoresForChip(name)
+
+        return ChipInfo(name: name, pCores: pCores, eCores: eCores,
+                        gpuCores: gpuCores, neuralCores: neuralCores)
+    }
+
+    private static func neuralCoresForChip(_ name: String) -> Int {
+        let lower = name.lowercased()
+        if lower.contains("m4")  { return 16 }
+        if lower.contains("m3")  { return 16 }
+        if lower.contains("m2")  { return 16 }
+        if lower.contains("m1")  { return 16 }
+        return 0
+    }
+
     private func settingRow(
         title: String,
         value: String,
         valueColor: Color = .secondary,
         description: String,
-        slider: some View
+        slider: some View,
+        accentColor: Color = .accentColor
     ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
@@ -759,8 +885,9 @@ struct SettingsTabView: View {
                     .foregroundColor(valueColor)
             }
             slider
+                .tint(accentColor)
             Text(description)
-                .font(.caption).foregroundColor(.secondary)
+                .font(.footnote).foregroundColor(.secondary)
         }
     }
 }
