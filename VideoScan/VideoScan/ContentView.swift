@@ -42,6 +42,9 @@ struct CatalogView: View {
     /// user can view 1, 2, or N volumes simultaneously. Works for offline
     /// volumes too, since records are persisted across launches.
     @State private var filterTargetPaths: Set<String> = []
+    /// The searchPath of the volume containing the currently selected file.
+    /// Used to highlight the matching volume row in the Scan Targets pane.
+    @State private var highlightedTargetPath: String = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -137,6 +140,18 @@ struct CatalogView: View {
                     model.previewOfflineVolumeName = nil
                 }
             )
+            .onChange(of: selectedIDs) {
+                // Update volume highlight when table selection changes
+                if let id = selectedIDs.first,
+                   let rec = model.records.first(where: { $0.id == id }) {
+                    let path = rec.fullPath
+                    highlightedTargetPath = model.scanTargets
+                        .first(where: { !$0.searchPath.isEmpty && path.hasPrefix($0.searchPath) })?
+                        .searchPath ?? ""
+                } else {
+                    highlightedTargetPath = ""
+                }
+            }
         }
         .sheet(isPresented: $showCombineSheet) {
             CombineSheet(selectedIDs: selectedIDs)
@@ -209,6 +224,7 @@ struct CatalogView: View {
                                     if rec.fullPath.hasPrefix(target.searchPath) { count += 1 }
                                 },
                                 isFiltered: filterTargetPaths.contains(target.searchPath),
+                                isHighlighted: highlightedTargetPath == target.searchPath,
                                 onStart: { model.startTarget(target) },
                                 onStop: { model.stopTarget(target) },
                                 onPause: { model.togglePauseTarget(target) },
@@ -240,6 +256,7 @@ private struct CatalogTargetRow: View {
     @ObservedObject var target: CatalogScanTarget
     let recordCount: Int
     let isFiltered: Bool
+    let isHighlighted: Bool
     let onStart: () -> Void
     let onStop: () -> Void
     let onPause: () -> Void
@@ -376,8 +393,15 @@ private struct CatalogTargetRow: View {
         .padding(.horizontal, 10)
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(Color(NSColor.controlBackgroundColor))
+                .fill(isHighlighted
+                      ? Color.accentColor.opacity(0.12)
+                      : Color(NSColor.controlBackgroundColor))
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(isHighlighted ? Color.accentColor.opacity(0.5) : Color.clear, lineWidth: 1.5)
+        )
+        .animation(.easeInOut(duration: 0.25), value: isHighlighted)
     }
 
     private func browsePath() {
@@ -840,7 +864,7 @@ private struct CatalogContent: View {
                     .font(.system(.body, design: .monospaced))
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 2)
-                    .help("Media filename from disk")
+                    .help(rec.directory)
             }
             .width(min: 180, ideal: 260)
 
