@@ -1173,6 +1173,16 @@ private struct InspectorPanel: View {
                         }
                     }
 
+                    if !rec.notes.isEmpty {
+                        inspectorSection("Notes", systemImage: "exclamationmark.bubble") {
+                            Text(rec.notes)
+                                .font(.system(size: 12))
+                                .foregroundColor(rec.streamType == .ffprobeFailed ? .red : .secondary)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+
                     inspectorSection("Location", systemImage: "folder") {
                         inspectorCopyableRow("Path", rec.fullPath)
                         inspectorRow("Directory", rec.directory)
