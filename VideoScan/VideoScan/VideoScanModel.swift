@@ -50,6 +50,9 @@ final class VideoScanModel: ObservableObject {
     @Published var isCombining: Bool = false
     @Published var isCorrelating: Bool = false
     @Published var isAnalyzingDuplicates: Bool = false
+    /// Progress text shown in toolbar during correlate/duplicate operations
+    @Published var correlateStatus: String = ""
+    @Published var duplicateStatus: String = ""
     @Published var avidBinResults: [AvbBinResult] = []
     @Published var scanTargets: [CatalogScanTarget] = []
     @Published var outputCSVPath: String = ""
@@ -1218,6 +1221,7 @@ final class VideoScanModel: ObservableObject {
     /// Correlate all records, or only those whose IDs are in `selectedIDs` (if non-nil/non-empty).
     func correlate(selectedIDs: Set<UUID>? = nil) {
         isCorrelating = true
+        correlateStatus = ""
         defer { isCorrelating = false }
         let scope: [VideoRecord]
         if let ids = selectedIDs, !ids.isEmpty {
@@ -1242,6 +1246,7 @@ final class VideoScanModel: ObservableObject {
         let allAudios = needsPairing.filter { $0.streamType == .audioOnly }
         var matched: Set<UUID> = []
 
+        correlateStatus = "\(allVideos.count) video + \(allAudios.count) audio candidates"
         log("  Correlating \(allVideos.count) video-only + \(allAudios.count) audio-only files...")
 
         // Two-phase approach to avoid O(N*M) memory:
@@ -1361,6 +1366,8 @@ final class VideoScanModel: ObservableObject {
         let lowCount       = records.filter { $0.pairConfidence == .low }.count / 2
         let stillUnmatched = needsPairing.filter { !matched.contains($0.id) }.count
 
+        correlateStatus = "\(totalPairs) pairs · \(stillUnmatched) unmatched"
+
         log("""
 
         Correlation complete:
@@ -1376,7 +1383,13 @@ final class VideoScanModel: ObservableObject {
 
     func analyzeDuplicates(selectedIDs: Set<UUID>? = nil) {
         isAnalyzingDuplicates = true
-        defer { isAnalyzingDuplicates = false }
+        duplicateStatus = ""
+        defer {
+            isAnalyzingDuplicates = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in
+                if self?.isAnalyzingDuplicates == false { self?.duplicateStatus = "" }
+            }
+        }
         let scope: [VideoRecord]
         if let ids = selectedIDs, !ids.isEmpty {
             scope = records.filter { ids.contains($0.id) }
@@ -1385,7 +1398,11 @@ final class VideoScanModel: ObservableObject {
             scope = records
         }
 
+        duplicateStatus = "Analyzing \(scope.count) files…"
+
         let summary = DuplicateDetector.analyze(records: scope)
+
+        duplicateStatus = "\(summary.extraCopies) duplicates in \(summary.groups) groups"
 
         log("""
 
@@ -1434,13 +1451,24 @@ final class VideoScanModel: ObservableObject {
         return pairs
     }
 
+    func combineSelectedPairs(_ pairs: [(video: VideoRecord, audio: VideoRecord)], outputFolder: URL, maxConcurrency: Int? = nil) {
+        guard !pairs.isEmpty else {
+            log("No pairs selected to combine.")
+            return
+        }
+        combineAllPairsInternal(pairs: pairs, outputFolder: outputFolder, maxConcurrency: maxConcurrency)
+    }
+
     func combineAllPairs(outputFolder: URL, maxConcurrency: Int? = nil) {
         let pairs = correlatedPairs
         guard !pairs.isEmpty else {
             log("No correlated pairs to combine.")
             return
         }
+        combineAllPairsInternal(pairs: pairs, outputFolder: outputFolder, maxConcurrency: maxConcurrency)
+    }
 
+    private func combineAllPairsInternal(pairs: [(video: VideoRecord, audio: VideoRecord)], outputFolder: URL, maxConcurrency: Int? = nil) {
         isCombining = true
         dashboard.resetForCombine(total: pairs.count)
 
