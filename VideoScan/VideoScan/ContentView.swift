@@ -61,6 +61,10 @@ struct CatalogView: View {
                 isCombining: model.isCombining,
                 isCorrelating: model.isCorrelating,
                 isAnalyzingDuplicates: model.isAnalyzingDuplicates,
+                correlateStatus: model.correlateStatus,
+                duplicateStatus: model.duplicateStatus,
+                videoOnlyCount: model.records.filter { $0.streamType == .videoOnly }.count,
+                audioOnlyCount: model.records.filter { $0.streamType == .audioOnly }.count,
                 hasRecords: !model.records.isEmpty,
                 hasCorrelatedPairs: !model.correlatedPairs.isEmpty,
                 outputCSVPath: model.outputCSVPath,
@@ -92,6 +96,7 @@ struct CatalogView: View {
                 onClearCache: { _ = model.clearCache() },
                 onScanAvidBins: { model.scanAvidBins() },
                 avidBinCount: model.avidBinResults.reduce(0) { $0 + $1.clips.count },
+                avidBinFiles: model.avidBinResults.count,
                 dashboardContent: {
                     if model.isScanning || model.isCombining {
                         CompactDashboard(
@@ -431,6 +436,10 @@ private struct CatalogToolbar<Dashboard: View>: View {
     let isCombining: Bool
     let isCorrelating: Bool
     let isAnalyzingDuplicates: Bool
+    let correlateStatus: String
+    let duplicateStatus: String
+    let videoOnlyCount: Int
+    let audioOnlyCount: Int
     let hasRecords: Bool
     let hasCorrelatedPairs: Bool
     let outputCSVPath: String
@@ -450,6 +459,7 @@ private struct CatalogToolbar<Dashboard: View>: View {
     let onClearCache: () -> Void
     let onScanAvidBins: () -> Void
     let avidBinCount: Int
+    let avidBinFiles: Int
     @ViewBuilder let dashboardContent: () -> Dashboard
 
     private var canCombine: Bool {
@@ -475,59 +485,91 @@ private struct CatalogToolbar<Dashboard: View>: View {
 
             Divider().frame(height: 22)
 
-            Menu {
-                Button("Correlate All", action: onCorrelateAll)
-                Button("Correlate Selected", action: onCorrelateSelected)
-                    .disabled(selectedIDs.isEmpty)
-            } label: {
-                if isCorrelating {
-                    HStack(spacing: 4) {
-                        ProgressView().controlSize(.small)
-                        Text("Correlating…")
+            VStack(spacing: 2) {
+                Menu {
+                    Button("Correlate All", action: onCorrelateAll)
+                    Button("Correlate Selected", action: onCorrelateSelected)
+                        .disabled(selectedIDs.isEmpty)
+                } label: {
+                    if isCorrelating {
+                        HStack(spacing: 4) {
+                            ProgressView().controlSize(.small)
+                            Text("Correlating…")
+                        }
+                    } else {
+                        Label("Correlate", systemImage: "arrow.triangle.2.circlepath")
                     }
-                } else {
-                    Label("Correlate", systemImage: "arrow.triangle.2.circlepath")
                 }
-            }
-            .menuStyle(.borderlessButton)
-            .frame(width: 120)
-            .disabled(isScanning || isCorrelating || !hasRecords)
-            .help("Match video-only files with their corresponding audio-only files (e.g. Avid MXF pairs)")
+                .menuStyle(.borderlessButton)
+                .disabled(isScanning || isCorrelating || !hasRecords)
+                .help("Match video-only files with their corresponding audio-only files (e.g. Avid MXF pairs)")
 
-            Menu {
-                Button("Analyze All", action: onAnalyzeDuplicatesAll)
-                Button("Analyze Selected", action: onAnalyzeDuplicatesSelected)
-                    .disabled(selectedIDs.isEmpty)
-            } label: {
-                if isAnalyzingDuplicates {
-                    HStack(spacing: 4) {
-                        ProgressView().controlSize(.small)
-                        Text("Analyzing…")
-                    }
-                } else {
-                    Label("Duplicates", systemImage: "doc.on.doc")
+                if !correlateStatus.isEmpty {
+                    Text(correlateStatus)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(isCorrelating ? .secondary : .green)
+                        .lineLimit(1)
+                } else if videoOnlyCount > 0 || audioOnlyCount > 0 {
+                    Text("\(videoOnlyCount)V + \(audioOnlyCount)A candidates")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
                 }
             }
-            .menuStyle(.borderlessButton)
-            .frame(width: 120)
-            .disabled(isScanning || isAnalyzingDuplicates || !hasRecords)
-            .help("Find duplicate files by comparing hash, duration, filename, resolution, and other signals")
+            .frame(minWidth: 120)
 
-            Button(action: onScanAvidBins) {
-                HStack(spacing: 4) {
-                    Label("Avid Bins", systemImage: "film.stack")
-                    if avidBinCount > 0 {
-                        Text("\(avidBinCount) clips")
-                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.2)))
+            VStack(spacing: 2) {
+                Menu {
+                    Button("Analyze All", action: onAnalyzeDuplicatesAll)
+                    Button("Analyze Selected", action: onAnalyzeDuplicatesSelected)
+                        .disabled(selectedIDs.isEmpty)
+                } label: {
+                    if isAnalyzingDuplicates {
+                        HStack(spacing: 4) {
+                            ProgressView().controlSize(.small)
+                            Text("Analyzing…")
+                        }
+                    } else {
+                        Label("Duplicates", systemImage: "doc.on.doc")
                     }
                 }
+                .menuStyle(.borderlessButton)
+                .disabled(isScanning || isAnalyzingDuplicates || !hasRecords)
+                .help("Find duplicate files by comparing hash, duration, filename, resolution, and other signals")
+
+                if !duplicateStatus.isEmpty {
+                    Text(duplicateStatus)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(isAnalyzingDuplicates ? .secondary : .yellow)
+                        .lineLimit(1)
+                }
             }
-            .buttonStyle(.bordered)
-            .disabled(isScanning)
-            .help("Scan for Avid .avb bin files and extract clip metadata — badge shows total clips found across all bins")
+            .frame(minWidth: 120)
+
+            VStack(spacing: 2) {
+                Button(action: onScanAvidBins) {
+                    HStack(spacing: 4) {
+                        Label("Avid Bins", systemImage: "film.stack")
+                        if avidBinCount > 0 {
+                            Text("\(avidBinCount) clips")
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(Capsule().fill(Color.accentColor.opacity(0.2)))
+                        }
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(isScanning)
+                .help("Scan for Avid .avb bin files and extract clip metadata — badge shows total clips found across all bins")
+
+                if avidBinFiles > 0 {
+                    Text("\(avidBinFiles) bins · \(avidBinCount) clips")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(.cyan)
+                        .lineLimit(1)
+                }
+            }
 
             Button(action: { showCombineSheet = true }) {
                 Label("Combine", systemImage: "rectangle.stack.badge.plus")
@@ -839,7 +881,7 @@ struct SettingsTabView: View {
         var gpuCores = 0
         let matchDict = IOServiceMatching("AGXAccelerator")
         var iterator: io_iterator_t = 0
-        if IOServiceGetMatchingServices(kIOMasterPortDefault, matchDict, &iterator) == KERN_SUCCESS {
+        if IOServiceGetMatchingServices(kIOMainPortDefault, matchDict, &iterator) == KERN_SUCCESS {
             var entry = IOIteratorNext(iterator)
             while entry != 0 {
                 if let prop = IORegistryEntryCreateCFProperty(entry, "gpu-core-count" as CFString, kCFAllocatorDefault, 0) {

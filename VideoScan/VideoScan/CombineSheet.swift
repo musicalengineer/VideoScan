@@ -7,57 +7,106 @@ struct CombineSheet: View {
     @Environment(\.dismiss) var dismiss
 
     @State private var outputFolder: URL?
+    @State private var checkedPairs: Set<Int> = []
 
     var pairs: [(video: VideoRecord, audio: VideoRecord)] {
         model.correlatedPairs
     }
+
+    private var allChecked: Bool { checkedPairs.count == pairs.count }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Combine Correlated Pairs")
                 .font(.headline)
 
-            GroupBox("Correlated Pairs (\(pairs.count))") {
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(Array(pairs.enumerated()), id: \.offset) { i, pair in
-                            HStack(spacing: 4) {
-                                Text("\(i + 1).")
-                                    .foregroundColor(.secondary)
-                                    .frame(width: 24, alignment: .trailing)
-                                Image(systemName: "film")
-                                    .foregroundColor(.blue)
-                                Text(pair.video.filename)
-                                    .font(.system(.caption, design: .monospaced))
-                                    .lineLimit(1)
-                                Text("+")
-                                    .foregroundColor(.secondary)
-                                Image(systemName: "waveform")
-                                    .foregroundColor(.orange)
-                                Text(pair.audio.filename)
-                                    .font(.system(.caption, design: .monospaced))
-                                    .lineLimit(1)
+            GroupBox {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Correlated Pairs (\(pairs.count))")
+                            .font(.subheadline.weight(.semibold))
+                        Spacer()
+                        Button(allChecked ? "Select None" : "Select All") {
+                            if allChecked {
+                                checkedPairs.removeAll()
+                            } else {
+                                checkedPairs = Set(0..<pairs.count)
                             }
                         }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+
+                        if !checkedPairs.isEmpty {
+                            Text("\(checkedPairs.count) selected")
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .foregroundColor(.green)
+                        }
                     }
-                    .padding(6)
+
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(Array(pairs.enumerated()), id: \.offset) { i, pair in
+                                HStack(spacing: 4) {
+                                    Toggle("", isOn: Binding(
+                                        get: { checkedPairs.contains(i) },
+                                        set: { on in
+                                            if on { checkedPairs.insert(i) }
+                                            else  { checkedPairs.remove(i) }
+                                        }
+                                    ))
+                                    .toggleStyle(.checkbox)
+                                    .labelsHidden()
+
+                                    Text("\(i + 1).")
+                                        .foregroundColor(.secondary)
+                                        .frame(width: 24, alignment: .trailing)
+                                    Image(systemName: "film")
+                                        .foregroundColor(.blue)
+                                    Text(pair.video.filename)
+                                        .font(.system(.caption, design: .monospaced))
+                                        .lineLimit(1)
+                                    Text("+")
+                                        .foregroundColor(.secondary)
+                                    Image(systemName: "waveform")
+                                        .foregroundColor(.orange)
+                                    Text(pair.audio.filename)
+                                        .font(.system(.caption, design: .monospaced))
+                                        .lineLimit(1)
+                                }
+                            }
+                        }
+                        .padding(6)
+                    }
+                    .frame(maxHeight: 200)
                 }
-                .frame(maxHeight: 200)
             }
 
-            Text("Output: {filename}_combined.mov — stream copy, no re-encode")
-                .font(.caption)
-                .foregroundColor(.secondary)
-
-            HStack {
-                Text("Output folder:")
-                Text(outputFolder?.path ?? "Not chosen")
-                    .foregroundColor(.secondary)
-                    .font(.system(.caption, design: .monospaced))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer()
-                Button("Choose…") { chooseOutputFolder() }
+            GroupBox {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: "folder.fill")
+                            .foregroundColor(.orange)
+                        Text("Output Folder")
+                            .font(.headline)
+                        Spacer()
+                        Button("Choose…") { chooseOutputFolder() }
+                    }
+                    if let folder = outputFolder {
+                        Text(folder.path)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    } else {
+                        Text("No folder selected — click Choose to set output destination")
+                            .font(.caption)
+                            .foregroundColor(.red)
+                    }
+                    Text("Each pair creates {video_filename}_combined.mov — stream copy, no re-encode")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(4)
             }
 
             if model.isCombining {
@@ -74,18 +123,25 @@ struct CombineSheet: View {
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.escape)
 
-                Button("Combine All") {
+                Button("Combine \(checkedPairs.count == pairs.count ? "All" : "\(checkedPairs.count)") Pair\(checkedPairs.count == 1 ? "" : "s")") {
                     guard let folder = outputFolder else { return }
-                    model.combineAllPairs(outputFolder: folder)
+                    let selectedPairs = checkedPairs.sorted().compactMap { i in
+                        i < pairs.count ? pairs[i] : nil
+                    }
+                    model.combineSelectedPairs(selectedPairs, outputFolder: folder)
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(pairs.isEmpty || outputFolder == nil || model.isCombining)
+                .disabled(checkedPairs.isEmpty || outputFolder == nil || model.isCombining)
                 .keyboardShortcut(.return)
             }
         }
         .padding(20)
-        .frame(width: 560)
+        .frame(width: 620)
+        .onAppear {
+            // Default: all pairs checked
+            checkedPairs = Set(0..<pairs.count)
+        }
     }
 
     private func chooseOutputFolder() {
