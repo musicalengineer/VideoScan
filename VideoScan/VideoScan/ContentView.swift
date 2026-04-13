@@ -37,6 +37,9 @@ struct CatalogView: View {
     @State private var showInspector = true
     @State private var sortOrder = [KeyPathComparator(\VideoRecord.filename)]
     @State private var searchText: String = ""
+    @State private var showDeleteDuplicatesConfirm = false
+    @State private var deleteTargetVolume: String = ""
+    @State private var deleteTargetCount: Int = 0
     /// Set of scan-target searchPaths whose records the user wants to see in
     /// the catalog table. Empty set = show all volumes (no filter). Each eye
     /// toggle in the Scan Targets pane independently flips membership, so the
@@ -91,6 +94,12 @@ struct CatalogView: View {
                 onAnalyzeDuplicatesSelected: {
                     model.log("\nAnalyzing duplicate candidates in \(selectedIDs.count) selected files...")
                     model.analyzeDuplicates(selectedIDs: selectedIDs)
+                },
+                volumesWithDeletableDups: model.volumesWithDeletableDuplicates(),
+                onDeleteDuplicates: { path, count in
+                    deleteTargetVolume = path
+                    deleteTargetCount = count
+                    showDeleteDuplicatesConfirm = true
                 },
                 onClearResults: { model.clearResults() },
                 onClearCache: { _ = model.clearCache() },
@@ -161,6 +170,14 @@ struct CatalogView: View {
         }
         .sheet(isPresented: $showCombineSheet) {
             CombineSheet(selectedIDs: selectedIDs)
+        }
+        .alert("Delete Duplicates", isPresented: $showDeleteDuplicatesConfirm) {
+            Button("Delete \(deleteTargetCount) Files", role: .destructive) {
+                model.deleteDuplicates(onVolume: deleteTargetVolume)
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This will permanently delete \(deleteTargetCount) high-confidence duplicate(s) on:\n\n\(deleteTargetVolume)\n\nOnly duplicates whose keeper is also on this same volume will be deleted. Cross-volume duplicates are never touched.\n\nAre you sure? Do you have backups and/or are these really junk or duplicates?")
         }
     }
 
@@ -455,6 +472,8 @@ private struct CatalogToolbar<Dashboard: View>: View {
     let onCorrelateSelected: () -> Void
     let onAnalyzeDuplicatesAll: () -> Void
     let onAnalyzeDuplicatesSelected: () -> Void
+    let volumesWithDeletableDups: [(path: String, count: Int)]
+    let onDeleteDuplicates: (String, Int) -> Void
     let onClearResults: () -> Void
     let onClearCache: () -> Void
     let onScanAvidBins: () -> Void
@@ -523,6 +542,17 @@ private struct CatalogToolbar<Dashboard: View>: View {
                     Button("Analyze All", action: onAnalyzeDuplicatesAll)
                     Button("Analyze Selected", action: onAnalyzeDuplicatesSelected)
                         .disabled(selectedIDs.isEmpty)
+
+                    if !volumesWithDeletableDups.isEmpty {
+                        Divider()
+                        Menu("Delete Duplicates on Volume…") {
+                            ForEach(volumesWithDeletableDups, id: \.path) { vol in
+                                Button("\(URL(fileURLWithPath: vol.path).lastPathComponent) — \(vol.count) file\(vol.count == 1 ? "" : "s")") {
+                                    onDeleteDuplicates(vol.path, vol.count)
+                                }
+                            }
+                        }
+                    }
                 } label: {
                     if isAnalyzingDuplicates {
                         HStack(spacing: 4) {

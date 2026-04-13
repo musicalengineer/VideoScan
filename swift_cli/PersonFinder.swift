@@ -917,6 +917,7 @@ func concatenateWithDecadeChapters(results: [VideoResult], config: Config) async
     let process = Process()
     process.executableURL = URL(fileURLWithPath: ffmpegPath)
     process.arguments = [
+        "-hide_banner", "-nostdin",
         "-f", "concat", "-safe", "0", "-i", listPath,
         "-i", metaPath,
         "-map_metadata", "1",
@@ -924,10 +925,16 @@ func concatenateWithDecadeChapters(results: [VideoResult], config: Config) async
         "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30000/1001",
         "-c:v", "libx264", "-preset", "fast", "-crf", "18",
         "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "+faststart",
         "-y", outputPath
     ]
-    process.standardOutput = Pipe()  // suppress ffmpeg stdout
-    process.standardError  = Pipe()  // suppress ffmpeg stderr
+    process.standardOutput = FileHandle.nullDevice
+    // Drain stderr to prevent 64KB pipe buffer deadlock
+    let chapterStderrPipe = Pipe()
+    process.standardError = chapterStderrPipe
+    chapterStderrPipe.fileHandleForReading.readabilityHandler = { handle in
+        _ = handle.availableData  // discard but drain
+    }
 
     do { try process.run() } catch {
         fputs("  ⚠ Could not launch ffmpeg: \(error.localizedDescription)\n", stderr)
@@ -940,6 +947,7 @@ func concatenateWithDecadeChapters(results: [VideoResult], config: Config) async
         process.terminationHandler = { _ in cont.resume() }
         if !process.isRunning { cont.resume() }  // already done edge case
     }
+    chapterStderrPipe.fileHandleForReading.readabilityHandler = nil
     try? fm.removeItem(atPath: listPath); try? fm.removeItem(atPath: metaPath)
 
     if process.terminationStatus == 0 {
@@ -991,18 +999,29 @@ func concatenateClips(results: [VideoResult], config: Config) async {
     if fm.fileExists(atPath: outputPath) { try? fm.removeItem(atPath: outputPath) }
 
     print("  Normalising and compiling \(clipPaths.count) clips via ffmpeg…")
+    print("  Re-encoding to uniform H.264 1280x720 @ 29.97fps to avoid codec mismatch corruption")
 
     let process = Process()
     process.executableURL = URL(fileURLWithPath: ffmpegPath)
     process.arguments = [
+        "-hide_banner", "-nostdin",
         "-f", "concat", "-safe", "0", "-i", listPath,
         "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30000/1001",
         "-c:v", "libx264", "-preset", "fast", "-crf", "18",
         "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "+faststart",
         "-y", outputPath
     ]
-    process.standardOutput = Pipe()
-    process.standardError  = Pipe()
+    process.standardOutput = FileHandle.nullDevice
+    // Drain stderr asynchronously to prevent 64KB pipe buffer deadlock
+    // when ffmpeg emits many warnings with mixed-format inputs.
+    let stderrPipe = Pipe()
+    process.standardError = stderrPipe
+    let stderrBox = StderrBox()
+    stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+        let chunk = handle.availableData
+        if !chunk.isEmpty { stderrBox.append(chunk) }
+    }
 
     do { try process.run() } catch {
         fputs("  ⚠ Could not launch ffmpeg: \(error.localizedDescription)\n", stderr)
@@ -1014,12 +1033,18 @@ func concatenateClips(results: [VideoResult], config: Config) async {
         process.terminationHandler = { _ in cont.resume() }
         if !process.isRunning { cont.resume() }
     }
+    stderrPipe.fileHandleForReading.readabilityHandler = nil
     try? fm.removeItem(atPath: listPath)
 
     if process.terminationStatus == 0 {
         print("  → Compiled video saved: \(outputPath)")
     } else {
+        let errText = stderrBox.text
         fputs("  ⚠ ffmpeg exited with code \(process.terminationStatus)\n", stderr)
+        if !errText.isEmpty {
+            let lastLines = errText.split(separator: "\n").suffix(10).joined(separator: "\n")
+            fputs("  stderr (last 10 lines):\n\(lastLines)\n", stderr)
+        }
     }
 }
 
@@ -1292,6 +1317,14 @@ func main() async {
 
 // MARK: - Entry Point
 // Run main() inside a Task so async/await works in a top-level Swift script.
+/// Thread-safe box for capturing stderr data from ffmpeg subprocesses.
+private final class StderrBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var buffer = Data()
+    func append(_ chunk: Data) { lock.lock(); buffer.append(chunk); lock.unlock() }
+    var text: String { lock.lock(); defer { lock.unlock() }; return String(data: buffer, encoding: .utf8) ?? "" }
+}
+
 let _sema = DispatchSemaphore(value: 0)
 Task {
     await main()
