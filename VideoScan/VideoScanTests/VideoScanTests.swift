@@ -336,12 +336,15 @@ struct DuplicateDetectorTests {
         #expect(original.duplicateGroupID == copy.duplicateGroupID)
     }
 
-    @Test func metadataOnlyDuplicateFallsBackToReview() {
+    @Test func metadataOnlyDuplicateWithStrongSignals() {
+        // No hash match, but timecode + filename + duration + resolution + codec + audio
+        // all match. Durations must be close enough to land in the same bucket
+        // (durationBucket = Int((secs*2).rounded()), so 42.0→84 and 42.1→84 = same bucket).
         let a = makeDuplicateRecord(
             filename: "Interview_01.mov",
             streamType: .videoAndAudio,
             sizeBytes: 1_000_000_000,
-            durationSeconds: 42,
+            durationSeconds: 42.0,
             partialMD5: "",
             resolution: "1280x720",
             videoCodec: "h264",
@@ -353,7 +356,7 @@ struct DuplicateDetectorTests {
             filename: "Interview_01 (1).mov",
             streamType: .videoAndAudio,
             sizeBytes: 995_000_000,
-            durationSeconds: 42.4,
+            durationSeconds: 42.1,  // same duration bucket as 42.0
             partialMD5: "",
             resolution: "1280x720",
             videoCodec: "h264",
@@ -363,9 +366,12 @@ struct DuplicateDetectorTests {
 
         let summary = DuplicateDetector.analyze(records: [a, b])
 
+        // timecode(4) + filename(3) + duration-exact(3) + resolution(2) + vcodec(2) + audio(2) = 16 → high
         #expect(summary.groups == 1)
-        #expect(summary.reviewItems == 1)
-        #expect(a.duplicateDisposition == .review || b.duplicateDisposition == .review)
+        #expect(summary.highConfidenceGroups == 1)
+        #expect(summary.extraCopies == 1)
+        #expect(a.duplicateDisposition == .keep || b.duplicateDisposition == .keep)
+        #expect(a.duplicateDisposition == .extraCopy || b.duplicateDisposition == .extraCopy)
     }
 
     @Test func mismatchedStreamTypesDoNotGroup() {
@@ -597,5 +603,187 @@ struct VideoDiscoveryTests {
         let found = pfFindVideoFiles(at: tmp.path, skipBundles: false)
         #expect(found.count == 1)
         #expect(found[0].contains("good.mov"))
+    }
+}
+
+// MARK: - VolumeReachability Tests
+
+struct VolumeReachabilityTests {
+
+    @Test func emptyPathIsUnreachable() {
+        #expect(VolumeReachability.isReachable(path: "") == false)
+    }
+
+    @Test func nonexistentPathIsUnreachable() {
+        #expect(VolumeReachability.isReachable(path: "/Volumes/NoSuchVolume_\(UUID())") == false)
+    }
+
+    @Test func existingPathIsReachable() {
+        #expect(VolumeReachability.isReachable(path: NSTemporaryDirectory()) == true)
+    }
+
+    @Test func volumeNameFromVolumePath() {
+        #expect(VolumeReachability.volumeName(forPath: "/Volumes/MediaArchive/clips/foo.mov") == "MediaArchive")
+        #expect(VolumeReachability.volumeName(forPath: "/Volumes/Backup") == "Backup")
+    }
+
+    @Test func volumeNameFromLocalPath() {
+        let name = VolumeReachability.volumeName(forPath: "/Users/rick/videos/clip.mov")
+        #expect(name == "clip.mov") // lastPathComponent for non-Volume paths
+    }
+}
+
+// MARK: - DuplicateDetector Same-Volume Safety Tests
+
+struct DuplicateDeletionSafetyTests {
+
+    @Test func keeperOnSameVolumeIsDeletable() {
+        let keeper = makeDuplicateRecord(
+            filename: "original.mov", streamType: .videoAndAudio,
+            sizeBytes: 5_000_000, durationSeconds: 60,
+            partialMD5: "aaa", resolution: "1920x1080",
+            videoCodec: "h264", audioCodec: "aac"
+        )
+        keeper.fullPath = "/Volumes/MyDrive/videos/original.mov"
+
+        let extra = makeDuplicateRecord(
+            filename: "original copy.mov", streamType: .videoAndAudio,
+            sizeBytes: 5_000_000, durationSeconds: 60,
+            partialMD5: "aaa", resolution: "1920x1080",
+            videoCodec: "h264", audioCodec: "aac"
+        )
+        extra.fullPath = "/Volumes/MyDrive/videos/original copy.mov"
+
+        let summary = DuplicateDetector.analyze(records: [keeper, extra])
+        #expect(summary.groups == 1)
+        #expect(summary.highConfidenceGroups == 1)
+
+        // Both files on same volume — the extra copy should be identified
+        let keepRec = [keeper, extra].first { $0.duplicateDisposition == .keep }
+        let extraRec = [keeper, extra].first { $0.duplicateDisposition == .extraCopy }
+        #expect(keepRec != nil)
+        #expect(extraRec != nil)
+        #expect(keepRec?.duplicateGroupID == extraRec?.duplicateGroupID)
+    }
+
+    @Test func duplicateGroupIDAssignment() {
+        let a = makeDuplicateRecord(
+            filename: "clip.mov", streamType: .videoAndAudio,
+            sizeBytes: 1_000_000, durationSeconds: 30,
+            partialMD5: "hash1", resolution: "1280x720",
+            videoCodec: "h264", audioCodec: "aac"
+        )
+        let b = makeDuplicateRecord(
+            filename: "clip (1).mov", streamType: .videoAndAudio,
+            sizeBytes: 1_000_000, durationSeconds: 30,
+            partialMD5: "hash1", resolution: "1280x720",
+            videoCodec: "h264", audioCodec: "aac"
+        )
+        let c = makeDuplicateRecord(
+            filename: "unrelated.mov", streamType: .videoAndAudio,
+            sizeBytes: 2_000_000, durationSeconds: 120,
+            partialMD5: "hash2", resolution: "1920x1080",
+            videoCodec: "prores", audioCodec: "pcm_s16le"
+        )
+
+        _ = DuplicateDetector.analyze(records: [a, b, c])
+
+        // a and b should share a group ID
+        #expect(a.duplicateGroupID != nil)
+        #expect(a.duplicateGroupID == b.duplicateGroupID)
+        // c should not be in any group
+        #expect(c.duplicateGroupID == nil)
+    }
+
+    @Test func clearResetsAllDuplicateFields() {
+        let rec = makeDuplicateRecord(
+            filename: "test.mov", streamType: .videoAndAudio,
+            sizeBytes: 1_000, durationSeconds: 10, partialMD5: "x"
+        )
+        rec.duplicateGroupID = UUID()
+        rec.duplicateConfidence = .high
+        rec.duplicateDisposition = .extraCopy
+        rec.duplicateReasons = "hash+duration"
+        rec.duplicateBestMatchFilename = "other.mov"
+        rec.duplicateGroupCount = 2
+
+        DuplicateDetector.clear(records: [rec])
+
+        #expect(rec.duplicateGroupID == nil)
+        #expect(rec.duplicateConfidence == nil)
+        #expect(rec.duplicateDisposition == .none)
+        #expect(rec.duplicateReasons == "")
+        #expect(rec.duplicateBestMatchFilename == "")
+        #expect(rec.duplicateGroupCount == 0)
+    }
+}
+
+// MARK: - RecognitionEngine Tests
+
+struct RecognitionEngineTests {
+
+    @Test func allCasesExist() {
+        let engines = RecognitionEngine.allCases
+        #expect(engines.count == 3)
+        #expect(engines.contains(.vision))
+        #expect(engines.contains(.dlib))
+        #expect(engines.contains(.hybrid))
+    }
+
+    @Test func titlesAreNonEmpty() {
+        for engine in RecognitionEngine.allCases {
+            #expect(!engine.title.isEmpty, "\(engine) has empty title")
+            #expect(!engine.shortLabel.isEmpty, "\(engine) has empty shortLabel")
+        }
+    }
+
+    @Test func symbolNamesAreValid() {
+        for engine in RecognitionEngine.allCases {
+            #expect(!engine.symbolName.isEmpty, "\(engine) has empty symbolName")
+        }
+    }
+}
+
+// MARK: - CatalogScanTarget Tests
+
+@MainActor
+struct CatalogScanTargetStatusExtendedTests {
+
+    @Test func scanTargetInitialState() {
+        // Use /tmp which exists, so isReachable == true
+        let target = CatalogScanTarget(searchPath: NSTemporaryDirectory())
+        #expect(target.searchPath == NSTemporaryDirectory())
+        #expect(target.status == .idle)
+        #expect(target.filesFound == 0)
+        #expect(target.filesScanned == 0)
+        #expect(target.isReachable == true)
+    }
+
+    @Test func scanTargetOfflineVolume() {
+        let target = CatalogScanTarget(searchPath: "/Volumes/NoSuchVolume_\(UUID())")
+        #expect(target.status == .idle)
+        #expect(target.isReachable == false)
+    }
+}
+
+// MARK: - Formatting Extended Tests
+
+struct FormattingExtendedTests {
+
+    @Test func durationEdgeCases() {
+        #expect(Formatting.duration(0) == "00:00:00")
+        #expect(Formatting.duration(0.5) == "00:00:00") // Int truncation
+        #expect(Formatting.duration(59) == "00:00:59")
+        #expect(Formatting.duration(60) == "00:01:00")
+        #expect(Formatting.duration(3600) == "01:00:00")
+        #expect(Formatting.duration(3661) == "01:01:01")
+        #expect(Formatting.duration(86400) == "24:00:00") // full day
+    }
+
+    @Test func humanSizeEdgeCases() {
+        #expect(Formatting.humanSize(0) == "0.0 B")
+        #expect(Formatting.humanSize(1) == "1.0 B")
+        #expect(Formatting.humanSize(1023) == "1023.0 B")
+        #expect(Formatting.humanSize(2_500_000_000) == "2.3 GB")
     }
 }
