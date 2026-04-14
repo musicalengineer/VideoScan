@@ -40,7 +40,6 @@ jobs:
 
       - name: Run Unit Tests
         run: |
-          set -o pipefail
           xcodebuild test \
             -project VideoScan/VideoScan.xcodeproj \
             -scheme VideoScan \
@@ -51,7 +50,15 @@ jobs:
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
-            2>&1 | tee xcodebuild.log | grep -E "Test case|passed|failed|error:|BUILD"
+            2>&1 | tee xcodebuild-test.log
+          # Show summary
+          grep -E "Test case|passed|failed|error:|BUILD|Testing failed" xcodebuild-test.log || true
+          # Fail if tests failed
+          if grep -q "Testing failed" xcodebuild-test.log; then
+            echo "::error::Tests failed — see log above"
+            grep -B5 "Testing failed" xcodebuild-test.log
+            exit 1
+          fi
 
       - name: Coverage Summary
         if: always()
