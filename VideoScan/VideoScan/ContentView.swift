@@ -994,6 +994,13 @@ private struct CatalogContent: View {
         return records.first(where: { $0.id == id })
     }
 
+    /// All records sharing the selected record's duplicate group (excluding the selected record itself)
+    private var duplicateGroupMembers: [VideoRecord] {
+        guard let rec = selectedRecord,
+              let groupID = rec.duplicateGroupID else { return [] }
+        return records.filter { $0.duplicateGroupID == groupID && $0.id != rec.id }
+    }
+
     private func computeFiltered() -> [VideoRecord] {
         var out = records
         if !filterTargetPaths.isEmpty {
@@ -1034,6 +1041,7 @@ private struct CatalogContent: View {
             if showInspector {
                 InspectorPanel(
                     record: selectedRecord,
+                    duplicateGroupMembers: duplicateGroupMembers,
                     previewImage: previewImage,
                     previewOfflineVolumeName: previewOfflineVolumeName
                 )
@@ -1263,6 +1271,7 @@ private struct CatalogContent: View {
 
 private struct InspectorPanel: View {
     let record: VideoRecord?
+    let duplicateGroupMembers: [VideoRecord]
     let previewImage: NSImage?
     let previewOfflineVolumeName: String?
 
@@ -1366,7 +1375,6 @@ private struct InspectorPanel: View {
                                     Spacer()
                                 }
                             }
-                            inspectorRow("Match", rec.duplicateBestMatchFilename)
                             inspectorRow("Reasons", rec.duplicateReasons)
                             if let conf = rec.duplicateConfidence {
                                 HStack(spacing: 6) {
@@ -1381,6 +1389,42 @@ private struct InspectorPanel: View {
                                         .font(.system(size: 11, weight: .medium))
                                         .foregroundColor(conf.textColor)
                                     Spacer()
+                                }
+                            }
+
+                            // Show all copies in this duplicate group
+                            if !duplicateGroupMembers.isEmpty {
+                                let thisVolume = VolumeReachability.volumeName(forPath: rec.fullPath)
+
+                                Divider().padding(.vertical, 4)
+
+                                Text("All Copies (\(duplicateGroupMembers.count + 1) total)")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundColor(.primary)
+                                    .padding(.leading, 4)
+
+                                // This record (selected)
+                                duplicateCopyRow(
+                                    filename: rec.filename,
+                                    volumeName: thisVolume,
+                                    directory: (rec.fullPath as NSString).deletingLastPathComponent,
+                                    disposition: rec.duplicateDisposition,
+                                    isSameVolume: true,
+                                    isSelected: true
+                                )
+
+                                // Other group members
+                                ForEach(duplicateGroupMembers, id: \.id) { member in
+                                    let memberVolume = VolumeReachability.volumeName(forPath: member.fullPath)
+                                    let sameVolume = (memberVolume == thisVolume)
+                                    duplicateCopyRow(
+                                        filename: member.filename,
+                                        volumeName: memberVolume,
+                                        directory: (member.fullPath as NSString).deletingLastPathComponent,
+                                        disposition: member.duplicateDisposition,
+                                        isSameVolume: sameVolume,
+                                        isSelected: false
+                                    )
                                 }
                             }
                         }
@@ -1550,6 +1594,61 @@ private struct InspectorPanel: View {
         case .ffprobeFailed: return .red
         default:             return .primary
         }
+    }
+
+    // MARK: - Duplicate Copy Row
+
+    @ViewBuilder
+    private func duplicateCopyRow(
+        filename: String,
+        volumeName: String,
+        directory: String,
+        disposition: DuplicateDisposition,
+        isSameVolume: Bool,
+        isSelected: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(disposition.textColor)
+                    .frame(width: 6, height: 6)
+                Text(filename)
+                    .font(.system(size: 11, weight: isSelected ? .semibold : .regular, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                if isSelected {
+                    Text("(selected)")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+            }
+            HStack(spacing: 4) {
+                Image(systemName: isSameVolume ? "internaldrive" : "externaldrive")
+                    .font(.system(size: 9))
+                    .foregroundColor(isSameVolume ? .secondary : .orange)
+                Text(volumeName)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(isSameVolume ? .secondary : .orange)
+                if !isSameVolume {
+                    Text("(different volume)")
+                        .font(.system(size: 9))
+                        .foregroundColor(.orange)
+                }
+            }
+            Text(directory)
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundColor(.secondary)
+                .lineLimit(2)
+                .truncationMode(.head)
+                .textSelection(.enabled)
+        }
+        .padding(.vertical, 3)
+        .padding(.horizontal, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(isSelected ? Color.accentColor.opacity(0.08) : Color.clear)
+        )
     }
 }
 
