@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # Allow manual trigger from GitHub Actions tab
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: Build & Test
+    runs-on: macos-15
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer
+
+      - name: Show environment
+        run: |
+          xcodebuild -version
+          swift --version
+          system_profiler SPHardwareDataType | grep "Chip\|Memory"
+
+      - name: Build
+        run: |
+          xcodebuild build \
+            -project VideoScan/VideoScan.xcodeproj \
+            -scheme VideoScan \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcpretty || true
+
+      - name: Run Unit Tests
+        run: |
+          xcodebuild test \
+            -project VideoScan/VideoScan.xcodeproj \
+            -scheme VideoScan \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -only-testing:VideoScanTests \
+            -enableCodeCoverage YES \
+            -resultBundlePath TestResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            | xcpretty --report junit || true
+
+      - name: Coverage Summary
+        if: always()
+        run: |
+          if [ -d TestResults.xcresult ]; then
+            echo "## Coverage by File" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            xcrun xccov view --report --files-for-target VideoScan.app TestResults.xcresult \
+              | awk -F'  +' 'NR>2 && $3 != "" {printf "%-50s %s\n", $2, $3}' \
+              >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "(coverage data unavailable)" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+
+            echo ""
+            echo "## Overall"
+            xcrun xccov view --report --only-targets TestResults.xcresult
+          fi
+
+      - name: Upload Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults.xcresult
+          retention-days: 14

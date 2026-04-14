@@ -439,6 +439,73 @@ final class VideoScanModel: ObservableObject {
         }
     }
 
+    /// Discover all mounted volumes (local + network) and return them grouped by type.
+    /// Excludes system volumes (Data, Preboot, Recovery, VM, etc.) and already-added targets.
+    func discoverVolumes() -> [DiscoveredVolume] {
+        let fm = FileManager.default
+        let systemExclusions: Set<String> = [
+            "Macintosh HD", "Macintosh HD - Data",
+            "Data", "Preboot", "Recovery", "VM", "Update",
+            "com.apple.TimeMachine.localsnapshots",
+        ]
+
+        guard let contents = try? fm.contentsOfDirectory(atPath: "/Volumes") else { return [] }
+
+        let existingPaths = Set(scanTargets.map { $0.searchPath })
+
+        return contents.compactMap { name in
+            guard !systemExclusions.contains(name) else { return nil }
+            let path = "/Volumes/\(name)"
+
+            // Resolve symlinks — /Volumes/Macintosh HD is a symlink to /
+            let resolved = (path as NSString).resolvingSymlinksInPath
+            guard resolved != "/" else { return nil }
+            guard fm.isReadableFile(atPath: path) else { return nil }
+
+            let alreadyAdded = existingPaths.contains(path)
+            let isNetwork = isNetworkVolume(path: path)
+
+            // Get volume size info
+            let attrs = try? fm.attributesOfFileSystem(forPath: path)
+            let totalBytes = attrs?[.systemSize] as? Int64 ?? 0
+            let freeBytes = attrs?[.systemFreeSize] as? Int64 ?? 0
+
+            return DiscoveredVolume(
+                name: name,
+                path: path,
+                isNetwork: isNetwork,
+                totalBytes: totalBytes,
+                freeBytes: freeBytes,
+                alreadyAdded: alreadyAdded
+            )
+        }
+        .sorted { a, b in
+            if a.isNetwork != b.isNetwork { return !a.isNetwork }
+            return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+        }
+    }
+
+    /// Add discovered volumes as scan targets
+    func addDiscoveredVolumes(_ volumes: [DiscoveredVolume]) {
+        for vol in volumes {
+            if !scanTargets.contains(where: { $0.searchPath == vol.path }) {
+                scanTargets.append(CatalogScanTarget(searchPath: vol.path))
+            }
+        }
+        persistScanTargets()
+    }
+
+    private func isNetworkVolume(path: String) -> Bool {
+        var statBuf = statfs()
+        guard statfs(path, &statBuf) == 0 else { return false }
+        let fsType = withUnsafePointer(to: &statBuf.f_fstypename) {
+            $0.withMemoryRebound(to: CChar.self, capacity: Int(MFSTYPENAMELEN)) {
+                String(cString: $0)
+            }
+        }
+        return ["smbfs", "nfs", "afpfs", "webdav"].contains(fsType)
+    }
+
     func removeScanTarget(_ target: CatalogScanTarget) {
         target.scanTask?.cancel()
         target.stopElapsedTimer()
@@ -1513,7 +1580,7 @@ final class VideoScanModel: ObservableObject {
     }
 
     /// Build a lookup from duplicate group ID to the keeper record in that group.
-    private func keepersByGroupID() -> [UUID: VideoRecord] {
+    func keepersByGroupID() -> [UUID: VideoRecord] {
         var result: [UUID: VideoRecord] = [:]
         for record in records {
             if record.duplicateDisposition == .keep, let groupID = record.duplicateGroupID {
@@ -1523,7 +1590,7 @@ final class VideoScanModel: ObservableObject {
         return result
     }
 
-    private func volumeRoot(for path: String) -> String {
+    func volumeRoot(for path: String) -> String {
         if path.hasPrefix("/Volumes/") {
             let parts = path.split(separator: "/", maxSplits: 3)
             if parts.count >= 2 {
