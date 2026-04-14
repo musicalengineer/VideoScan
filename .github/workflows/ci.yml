@@ -35,6 +35,7 @@ jobs:
             -configuration Debug \
             -destination 'platform=macOS' \
             CODE_SIGNING_ALLOWED=NO \
+            MACOSX_DEPLOYMENT_TARGET=15.0 \
             | xcpretty || true
 
       - name: Run Unit Tests
@@ -49,6 +50,7 @@ jobs:
             -enableCodeCoverage YES \
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
+            MACOSX_DEPLOYMENT_TARGET=15.0 \
             2>&1 | tee xcodebuild.log | grep -E "Test case|passed|failed|error:|BUILD"
 
       - name: Coverage Summary
