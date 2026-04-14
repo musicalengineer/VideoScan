@@ -260,7 +260,7 @@ enum MxfHeaderParser {
 
     /// Map a Picture Essence Coding UL to a human-readable codec name.
     /// The UL encodes the codec family in bytes 8-15 per SMPTE RP 224.
-    private static func identifyCodec(ul: String) -> String {
+    static func identifyCodec(ul: String) -> String {
         // UL format: 060e2b34.0401.01xx.0401.0202.xx.xx.xx.xx.xx.xx
         // Bytes 12-15 identify the codec
 
@@ -332,7 +332,7 @@ enum MxfHeaderParser {
     /// Decode the Pixel Layout array into a readable string.
     /// Format: pairs of (component_code, bit_depth) terminated by (0,0)
     /// Component codes: 'R'=0x52, 'G'=0x47, 'B'=0x42, 'F'(fill)=0x46, 'A'(alpha)=0x41
-    private static func decodePixelLayout(data: Data, pos: Int, len: Int) -> String {
+    static func decodePixelLayout(data: Data, pos: Int, len: Int) -> String {
         var components: [(String, Int)] = []
         var i = pos
         let end = pos + len
@@ -361,16 +361,16 @@ enum MxfHeaderParser {
 
     // MARK: - Binary Helpers
 
-    private static func readU16BE(data: Data, pos: Int) -> UInt16 {
+    static func readU16BE(data: Data, pos: Int) -> UInt16 {
         UInt16(data[pos]) << 8 | UInt16(data[pos + 1])
     }
 
-    private static func readU32BE(data: Data, pos: Int) -> UInt32 {
+    static func readU32BE(data: Data, pos: Int) -> UInt32 {
         UInt32(data[pos]) << 24 | UInt32(data[pos+1]) << 16 |
         UInt32(data[pos+2]) << 8 | UInt32(data[pos+3])
     }
 
-    private static func readU64BE(data: Data, pos: Int) -> UInt64 {
+    static func readU64BE(data: Data, pos: Int) -> UInt64 {
         UInt64(data[pos]) << 56 | UInt64(data[pos+1]) << 48 |
         UInt64(data[pos+2]) << 40 | UInt64(data[pos+3]) << 32 |
         UInt64(data[pos+4]) << 24 | UInt64(data[pos+5]) << 16 |
@@ -378,7 +378,7 @@ enum MxfHeaderParser {
     }
 
     /// Read a BER-encoded length. Returns (length, newPosition) or nil on error.
-    private static func readBER(data: Data, pos: Int) -> (Int, Int)? {
+    static func readBER(data: Data, pos: Int) -> (Int, Int)? {
         guard pos < data.count else { return nil }
         let first = data[pos]
         if first < 0x80 {
