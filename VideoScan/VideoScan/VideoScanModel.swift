@@ -1856,49 +1856,19 @@ final class VideoScanModel: ObservableObject {
     /// Run ffmpeg to remux video+audio into MOV. Returns true on success.
     /// Cancellation-aware: terminates ffmpeg immediately when task is cancelled.
     func runFFMpeg(videoPath: String, audioPath: String, outputPath: String) async -> Bool {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: ffmpegPath)
-        proc.arguments = [
-            "-y",
-            "-probesize", "50M",        // larger probe for MXF
-            "-analyzeduration", "10M",
-            "-i", videoPath,
-            "-i", audioPath,
-            "-map", "0:v",
-            "-map", "1:a",
-            "-c:v", "copy",
-            "-c:a", "copy",
-            "-movflags", "+faststart",
-            "-f", "mov",
-            outputPath
-        ]
-
-        let errPipe = Pipe()
-        proc.standardError = errPipe
-        proc.standardOutput = Pipe()
-
-        errPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            if let text = String(data: handle.availableData, encoding: .utf8), !text.isEmpty {
-                DispatchQueue.main.async { self?.log(text.trimmingCharacters(in: .newlines)) }
-            }
+        let logFn: @Sendable (String) -> Void = { [weak self] msg in
+            DispatchQueue.main.async { self?.log(msg) }
         }
-
-        return await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                proc.terminationHandler = { p in
-                    errPipe.fileHandleForReading.readabilityHandler = nil
-                    let remaining = errPipe.fileHandleForReading.readDataToEndOfFile()
-                    if let text = String(data: remaining, encoding: .utf8), !text.isEmpty {
-                        DispatchQueue.main.async { self.log(text.trimmingCharacters(in: .newlines)) }
-                    }
-                    continuation.resume(returning: p.terminationStatus == 0)
-                }
-                do    { try proc.run() }
-                catch { continuation.resume(returning: false) }
-            }
-        } onCancel: {
-            if proc.isRunning { proc.terminate() }
+        let result = await CombineEngine.runFFMpeg(
+            videoPath: videoPath,
+            audioPath: audioPath,
+            outputPath: outputPath,
+            log: logFn
+        )
+        if !result.success {
+            log("ffmpeg exit code \(result.exitCode)")
         }
+        return result.success
     }
 
     // MARK: - ffprobe

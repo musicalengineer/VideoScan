@@ -41,6 +41,8 @@ struct CatalogView: View {
     @State private var deleteTargetVolume: String = ""
     @State private var deleteTargetCount: Int = 0
     @State private var showDiscoverVolumes = false
+    @State private var showPairsOnly = false
+    @State private var combinePairItem: CombinePairItem?
     /// Set of scan-target searchPaths whose records the user wants to see in
     /// the catalog table. Empty set = show all volumes (no filter). Each eye
     /// toggle in the Scan Targets pane independently flips membership, so the
@@ -107,6 +109,7 @@ struct CatalogView: View {
                 onScanAvidBins: { model.scanAvidBins() },
                 avidBinCount: model.avidBinResults.reduce(0) { $0 + $1.clips.count },
                 avidBinFiles: model.avidBinResults.count,
+                showPairsOnly: $showPairsOnly,
                 dashboardContent: {
                     if model.isScanning || model.isCombining {
                         CompactDashboard(
@@ -135,6 +138,7 @@ struct CatalogView: View {
                 sortOrder: $sortOrder,
                 searchText: searchText,
                 filterTargetPaths: filterTargetPaths,
+                showPairsOnly: showPairsOnly,
                 previewImage: model.previewImage,
                 previewFilename: model.previewFilename,
                 previewOfflineVolumeName: model.previewOfflineVolumeName,
@@ -154,6 +158,12 @@ struct CatalogView: View {
                     model.previewImage = nil
                     model.previewFilename = ""
                     model.previewOfflineVolumeName = nil
+                },
+                onCombinePair: { video, audio in
+                    // Delay sheet presentation to let the context menu dismiss first
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        combinePairItem = CombinePairItem(video: video, audio: audio)
+                    }
                 }
             )
             .onChange(of: selectedIDs) {
@@ -171,6 +181,9 @@ struct CatalogView: View {
         }
         .sheet(isPresented: $showCombineSheet) {
             CombineSheet(selectedIDs: selectedIDs)
+        }
+        .sheet(item: $combinePairItem) { item in
+            CombinePairSheet(video: item.video, audio: item.audio)
         }
         .alert("Delete Duplicates", isPresented: $showDeleteDuplicatesConfirm) {
             Button("Delete \(deleteTargetCount) Files", role: .destructive) {
@@ -491,6 +504,7 @@ private struct CatalogToolbar<Dashboard: View>: View {
     let onScanAvidBins: () -> Void
     let avidBinCount: Int
     let avidBinFiles: Int
+    @Binding var showPairsOnly: Bool
     @ViewBuilder let dashboardContent: () -> Dashboard
 
     private var canCombine: Bool {
@@ -521,6 +535,9 @@ private struct CatalogToolbar<Dashboard: View>: View {
                     Button("Correlate All", action: onCorrelateAll)
                     Button("Correlate Selected", action: onCorrelateSelected)
                         .disabled(selectedIDs.isEmpty)
+                    Divider()
+                    Toggle("Show Pairs Only", isOn: $showPairsOnly)
+                        .disabled(!hasCorrelatedPairs)
                 } label: {
                     if isCorrelating {
                         HStack(spacing: 4) {
@@ -984,6 +1001,7 @@ private struct CatalogContent: View {
     @Binding var sortOrder: [KeyPathComparator<VideoRecord>]
     let searchText: String
     let filterTargetPaths: Set<String>
+    let showPairsOnly: Bool
     let previewImage: NSImage?
     let previewFilename: String
     let previewOfflineVolumeName: String?
@@ -991,6 +1009,7 @@ private struct CatalogContent: View {
     let onSort: ([KeyPathComparator<VideoRecord>]) -> Void
     let onSelect: (UUID?) -> Void
     let onClearPreview: () -> Void
+    var onCombinePair: ((VideoRecord, VideoRecord) -> Void)? = nil
 
     @State private var player: AVPlayer?
     @State private var isPlaying = false
@@ -1021,19 +1040,40 @@ private struct CatalogContent: View {
                 prefixes.contains(where: { rec.fullPath.hasPrefix($0) })
             }
         }
-        if searchText.isEmpty { return out }
-        let q = searchText.lowercased()
-        return out.filter {
-            $0.filename.lowercased().contains(q) ||
-            $0.directory.lowercased().contains(q) ||
-            $0.streamTypeRaw.lowercased().contains(q) ||
-            $0.isPlayable.lowercased().contains(q) ||
-            $0.notes.lowercased().contains(q) ||
-            $0.videoCodec.lowercased().contains(q) ||
-            $0.duplicateDisposition.rawValue.lowercased().contains(q) ||
-            $0.duplicateBestMatchFilename.lowercased().contains(q) ||
-            $0.duplicateReasons.lowercased().contains(q)
+        if !searchText.isEmpty {
+            let q = searchText.lowercased()
+            out = out.filter {
+                $0.filename.lowercased().contains(q) ||
+                $0.directory.lowercased().contains(q) ||
+                $0.streamTypeRaw.lowercased().contains(q) ||
+                $0.isPlayable.lowercased().contains(q) ||
+                $0.notes.lowercased().contains(q) ||
+                $0.videoCodec.lowercased().contains(q) ||
+                $0.duplicateDisposition.rawValue.lowercased().contains(q) ||
+                $0.duplicateBestMatchFilename.lowercased().contains(q) ||
+                $0.duplicateReasons.lowercased().contains(q)
+            }
         }
+        if showPairsOnly {
+            // Only show records that have a correlated partner
+            let pairedIDs = Set(out.compactMap { $0.pairedWith != nil ? $0.id : nil })
+            let partnerIDs = Set(out.compactMap { $0.pairedWith?.id })
+            let allPairIDs = pairedIDs.union(partnerIDs)
+            out = out.filter { allPairIDs.contains($0.id) }
+
+            // Collect video records (one per pair), sort by current table sort
+            var videos = out.filter { $0.streamType == .videoOnly && $0.pairedWith != nil }
+            videos.sort(using: sortOrder)
+
+            // Flatten: video then its audio partner, in sort order
+            var result: [VideoRecord] = []
+            for v in videos {
+                result.append(v)
+                if let a = v.pairedWith { result.append(a) }
+            }
+            out = result
+        }
+        return out
     }
 
     var body: some View {
@@ -1055,7 +1095,11 @@ private struct CatalogContent: View {
                     record: selectedRecord,
                     duplicateGroupMembers: duplicateGroupMembers,
                     previewImage: previewImage,
-                    previewOfflineVolumeName: previewOfflineVolumeName
+                    previewOfflineVolumeName: previewOfflineVolumeName,
+                    onSelectRecord: { id in
+                        selectedIDs = [id]
+                        onSelect(id)
+                    }
                 )
                 .frame(minWidth: 260, idealWidth: 300, maxWidth: 400)
             }
@@ -1079,11 +1123,21 @@ private struct CatalogContent: View {
     private var catalogTable: some View {
         Table(tableData, selection: $selectedIDs, sortOrder: $sortOrder) {
             TableColumn("Filename", value: \.filename) { rec in
-                Text(rec.filename)
-                    .font(.system(.body, design: .monospaced))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 2)
-                    .help(rec.directory)
+                HStack(spacing: 4) {
+                    if showPairsOnly && rec.pairedWith != nil {
+                        Image(systemName: rec.streamType == .videoOnly ? "film" : "waveform")
+                            .font(.system(size: 10))
+                            .foregroundColor(rec.streamType == .videoOnly ? .blue : .green)
+                    }
+                    Text(rec.filename)
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundColor(showPairsOnly && rec.pairedWith != nil
+                            ? (rec.streamType == .videoOnly ? .blue : .green)
+                            : .primary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 2)
+                .help(rec.directory)
             }
             .width(min: 180, ideal: 260)
 
@@ -1160,6 +1214,18 @@ private struct CatalogContent: View {
                         )
                     }
                 }
+                if let partner = rec.pairedWith {
+                    Divider()
+                    Button(rec.streamType == .videoOnly ? "Find Matched Audio" : "Find Matched Video") {
+                        selectedIDs = [partner.id]
+                        onSelect(partner.id)
+                    }
+                    Button("Combine This Pair…") {
+                        let video = rec.streamType == .videoOnly ? rec : partner
+                        let audio = rec.streamType == .audioOnly ? rec : partner
+                        onCombinePair?(video, audio)
+                    }
+                }
                 Divider()
                 Button("Copy Path") {
                     NSPasteboard.general.clearContents()
@@ -1171,6 +1237,7 @@ private struct CatalogContent: View {
         .onChange(of: records.count)     { tableData = computeFiltered() }
         .onChange(of: searchText)        { tableData = computeFiltered() }
         .onChange(of: filterTargetPaths) { tableData = computeFiltered() }
+        .onChange(of: showPairsOnly)     { tableData = computeFiltered() }
     }
 
     // MARK: - Preview / Player
@@ -1286,6 +1353,7 @@ private struct InspectorPanel: View {
     let duplicateGroupMembers: [VideoRecord]
     let previewImage: NSImage?
     let previewOfflineVolumeName: String?
+    var onSelectRecord: ((UUID) -> Void)? = nil
 
     var body: some View {
         if let rec = record {
@@ -1350,7 +1418,42 @@ private struct InspectorPanel: View {
                     if rec.pairedWith != nil || rec.pairConfidence != nil {
                         inspectorSection("Correlation", systemImage: "arrow.triangle.2.circlepath") {
                             if let paired = rec.pairedWith {
-                                inspectorRow("Paired With", paired.filename)
+                                HStack(alignment: .top, spacing: 6) {
+                                    Text("Paired With")
+                                        .font(.system(size: 11))
+                                        .foregroundColor(.secondary)
+                                        .frame(width: 80, alignment: .trailing)
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Button {
+                                            onSelectRecord?(paired.id)
+                                        } label: {
+                                            HStack(spacing: 4) {
+                                                Image(systemName: paired.streamType == .audioOnly
+                                                      ? "waveform" : "film")
+                                                    .font(.system(size: 9))
+                                                Text(paired.filename)
+                                                    .font(.system(size: 11, weight: .medium))
+                                                    .lineLimit(1)
+                                                    .truncationMode(.middle)
+                                            }
+                                            .foregroundColor(.accentColor)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .onHover { hovering in
+                                            if hovering {
+                                                NSCursor.pointingHand.push()
+                                            } else {
+                                                NSCursor.pop()
+                                            }
+                                        }
+                                        Text(paired.directory)
+                                            .font(.system(size: 9, design: .monospaced))
+                                            .foregroundColor(.secondary)
+                                            .lineLimit(1)
+                                            .truncationMode(.head)
+                                    }
+                                    Spacer()
+                                }
                             }
                             if let conf = rec.pairConfidence {
                                 HStack(spacing: 6) {
