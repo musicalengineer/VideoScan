@@ -1139,3 +1139,372 @@ struct AvbDataModelTests {
         #expect(result.errors.isEmpty)
     }
 }
+
+// MARK: - Media Fixture Tests (ffprobe integration)
+
+/// Tests that exercise ffprobe against real media files in tests/fixtures/videos/.
+/// These are 5-second SMPTE color bar + sine tone files generated via ffmpeg.
+@MainActor
+struct FFProbeIntegrationTests {
+
+    /// Path to the test fixtures directory.
+    /// Works from both Xcode (srcroot) and command-line (relative to repo root).
+    static let fixturesDir: String = {
+        // Walk up from the test bundle to find the repo root
+        let thisFile = #filePath
+        // thisFile = .../VideoScan/VideoScanTests/VideoScanTests.swift
+        let repoRoot = URL(fileURLWithPath: thisFile)
+            .deletingLastPathComponent()  // VideoScanTests/
+            .deletingLastPathComponent()  // VideoScan/
+            .deletingLastPathComponent()  // repo root
+        return repoRoot.appendingPathComponent("tests/fixtures/videos").path
+    }()
+
+    private func fixturePath(_ name: String) -> String {
+        "\(Self.fixturesDir)/\(name)"
+    }
+
+    // MARK: - Video + Audio
+
+    @Test func probeMP4VideoAudio() async {
+        let model = VideoScanModel()
+        let url = URL(fileURLWithPath: fixturePath("test_video_audio.mp4"))
+        let (output, stderr) = await model.runFFProbe(url: url)
+        #expect(output != nil, "ffprobe should parse MP4: \(stderr)")
+
+        let rec = VideoRecord()
+        model.extractMetadata(probe: output!, into: rec)
+        #expect(rec.streamType == .videoAndAudio)
+        #expect(rec.videoCodec == "h264")
+        #expect(!rec.resolution.isEmpty)
+        #expect(rec.durationSeconds > 4.0 && rec.durationSeconds < 6.0)
+        #expect(!rec.audioCodec.isEmpty)
+    }
+
+    @Test func probeMOVVideoAudio() async {
+        let model = VideoScanModel()
+        let url = URL(fileURLWithPath: fixturePath("test_video_audio.mov"))
+        let (output, stderr) = await model.runFFProbe(url: url)
+        #expect(output != nil, "ffprobe should parse MOV: \(stderr)")
+
+        let rec = VideoRecord()
+        model.extractMetadata(probe: output!, into: rec)
+        #expect(rec.streamType == .videoAndAudio)
+        #expect(rec.videoCodec == "h264")
+        #expect(rec.durationSeconds > 4.0)
+    }
+
+    @Test func probeMKVVideoAudio() async {
+        let model = VideoScanModel()
+        let url = URL(fileURLWithPath: fixturePath("test_video_audio.mkv"))
+        let (output, stderr) = await model.runFFProbe(url: url)
+        #expect(output != nil, "ffprobe should parse MKV: \(stderr)")
+
+        let rec = VideoRecord()
+        model.extractMetadata(probe: output!, into: rec)
+        #expect(rec.streamType == .videoAndAudio)
+        #expect(rec.videoCodec == "h264")
+    }
+
+    @Test func probeMXFVideoAudio() async {
+        let model = VideoScanModel()
+        let url = URL(fileURLWithPath: fixturePath("test_video_audio.mxf"))
+        let (output, stderr) = await model.runFFProbe(url: url)
+        #expect(output != nil, "ffprobe should parse MXF: \(stderr)")
+
+        let rec = VideoRecord()
+        model.extractMetadata(probe: output!, into: rec)
+        #expect(rec.streamType == .videoAndAudio)
+        #expect(rec.videoCodec == "mpeg2video")
+        #expect(rec.durationSeconds > 4.0)
+        #expect(!rec.audioCodec.isEmpty)
+    }
+
+    // MARK: - Video Only
+
+    @Test func probeMP4VideoOnly() async {
+        let model = VideoScanModel()
+        let url = URL(fileURLWithPath: fixturePath("test_video_only.mp4"))
+        let (output, stderr) = await model.runFFProbe(url: url)
+        #expect(output != nil, "ffprobe should parse video-only MP4: \(stderr)")
+
+        let rec = VideoRecord()
+        model.extractMetadata(probe: output!, into: rec)
+        #expect(rec.streamType == .videoOnly)
+        #expect(rec.videoCodec == "h264")
+        #expect(rec.audioCodec.isEmpty)
+    }
+
+    @Test func probeMXFVideoOnly() async {
+        let model = VideoScanModel()
+        let url = URL(fileURLWithPath: fixturePath("test_video_only.mxf"))
+        let (output, stderr) = await model.runFFProbe(url: url)
+        #expect(output != nil, "ffprobe should parse video-only MXF: \(stderr)")
+
+        let rec = VideoRecord()
+        model.extractMetadata(probe: output!, into: rec)
+        #expect(rec.streamType == .videoOnly)
+        #expect(rec.videoCodec == "mpeg2video")
+        #expect(rec.audioCodec.isEmpty)
+    }
+
+    // MARK: - Audio Only
+
+    @Test func probeM4AAudioOnly() async {
+        let model = VideoScanModel()
+        let url = URL(fileURLWithPath: fixturePath("test_audio_only.m4a"))
+        let (output, stderr) = await model.runFFProbe(url: url)
+        #expect(output != nil, "ffprobe should parse M4A: \(stderr)")
+
+        let rec = VideoRecord()
+        model.extractMetadata(probe: output!, into: rec)
+        #expect(rec.streamType == .audioOnly)
+        #expect(rec.audioCodec == "aac")
+        #expect(rec.videoCodec.isEmpty)
+    }
+
+    @Test func probeWAVAudioOnly() async {
+        let model = VideoScanModel()
+        let url = URL(fileURLWithPath: fixturePath("test_audio_only.wav"))
+        let (output, stderr) = await model.runFFProbe(url: url)
+        #expect(output != nil, "ffprobe should parse WAV: \(stderr)")
+
+        let rec = VideoRecord()
+        model.extractMetadata(probe: output!, into: rec)
+        #expect(rec.streamType == .audioOnly)
+        #expect(!rec.audioCodec.isEmpty)
+        #expect(rec.videoCodec.isEmpty)
+    }
+
+    // MARK: - Real Avid MXF files (skipped if not present)
+
+    @Test func probeAvidMXFVideoOnly() async {
+        let path = fixturePath("video-only-test-1.mxf")
+        guard FileManager.default.fileExists(atPath: path) else { return }
+
+        let model = VideoScanModel()
+        let url = URL(fileURLWithPath: path)
+        let (output, stderr) = await model.runFFProbe(url: url)
+        #expect(output != nil, "ffprobe should parse Avid video MXF: \(stderr)")
+
+        let rec = VideoRecord()
+        model.extractMetadata(probe: output!, into: rec)
+        #expect(rec.streamType == .videoOnly)
+        #expect(!rec.videoCodec.isEmpty)
+        #expect(rec.audioCodec.isEmpty)
+        #expect(rec.durationSeconds > 0)
+    }
+
+    @Test func probeAvidMXFAudioOnly() async {
+        let path = fixturePath("audio-only-test-1.mxf")
+        guard FileManager.default.fileExists(atPath: path) else { return }
+
+        let model = VideoScanModel()
+        let url = URL(fileURLWithPath: path)
+        let (output, stderr) = await model.runFFProbe(url: url)
+        #expect(output != nil, "ffprobe should parse Avid audio MXF: \(stderr)")
+
+        let rec = VideoRecord()
+        model.extractMetadata(probe: output!, into: rec)
+        #expect(rec.streamType == .audioOnly)
+        #expect(!rec.audioCodec.isEmpty)
+        #expect(rec.videoCodec.isEmpty)
+    }
+
+    // MARK: - Full probeFile pipeline
+
+    @Test func probeFilePipelineMP4() async {
+        let model = VideoScanModel()
+        let url = URL(fileURLWithPath: fixturePath("test_video_audio.mp4"))
+        let rec = await model.probeFile(url: url)
+        #expect(rec.filename == "test_video_audio.mp4")
+        #expect(rec.ext == "MP4")
+        #expect(rec.streamType == .videoAndAudio)
+        #expect(rec.fullPath == url.path)
+        #expect(rec.sizeBytes > 0)
+        #expect(rec.durationSeconds > 4.0)
+        #expect(!rec.partialMD5.isEmpty)
+    }
+
+    @Test func probeFilePipelineMXF() async {
+        let model = VideoScanModel()
+        let url = URL(fileURLWithPath: fixturePath("test_video_audio.mxf"))
+        let rec = await model.probeFile(url: url)
+        #expect(rec.filename == "test_video_audio.mxf")
+        #expect(rec.ext == "MXF")
+        #expect(rec.streamType == .videoAndAudio)
+        #expect(rec.sizeBytes > 0)
+    }
+
+    @Test func probeFileNonexistent() async {
+        let model = VideoScanModel()
+        let url = URL(fileURLWithPath: "/nonexistent/file_\(UUID()).mp4")
+        let rec = await model.probeFile(url: url)
+        #expect(rec.streamType == .ffprobeFailed || rec.streamType == .noStreams)
+    }
+}
+
+// MARK: - CombineEngine Tests
+
+struct CombineEngineTests {
+
+    static let fixturesDir: String = {
+        let thisFile = #filePath
+        let repoRoot = URL(fileURLWithPath: thisFile)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return repoRoot.appendingPathComponent("tests/fixtures/videos").path
+    }()
+
+    @Test func combineMP4VideoWithM4AAudio() async throws {
+        let videoPath = "\(Self.fixturesDir)/test_video_only.mp4"
+        let audioPath = "\(Self.fixturesDir)/test_audio_only.m4a"
+        let outputPath = NSTemporaryDirectory() + "combine_test_\(UUID()).mov"
+        defer { try? FileManager.default.removeItem(atPath: outputPath) }
+
+        var logLines: [String] = []
+        let result = await CombineEngine.runFFMpeg(
+            videoPath: videoPath,
+            audioPath: audioPath,
+            outputPath: outputPath,
+            log: { logLines.append($0) }
+        )
+
+        #expect(result.success, "Combine should succeed: exit \(result.exitCode)\n\(result.stderr)")
+        #expect(FileManager.default.fileExists(atPath: outputPath))
+
+        // Verify the output has both streams
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/ffprobe")
+        proc.arguments = ["-v", "quiet", "-print_format", "json", "-show_streams", outputPath]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = Pipe()
+        try proc.run()
+        proc.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let json = try JSONDecoder().decode(FFProbeOutput.self, from: data)
+        let types = (json.streams ?? []).compactMap { $0.codec_type }
+        #expect(types.contains("video"), "Output should have video stream")
+        #expect(types.contains("audio"), "Output should have audio stream")
+    }
+
+    @Test func combineFailsWithMissingInput() async {
+        let result = await CombineEngine.runFFMpeg(
+            videoPath: "/nonexistent/video.mp4",
+            audioPath: "/nonexistent/audio.m4a",
+            outputPath: NSTemporaryDirectory() + "should_not_exist.mov",
+            log: { _ in }
+        )
+        #expect(!result.success)
+        #expect(result.exitCode != 0)
+        #expect(result.stderr.contains("No such file"))
+    }
+
+    @Test func combineResultCapturesStderr() async {
+        // Even successful runs produce stderr (ffmpeg version info)
+        let videoPath = "\(Self.fixturesDir)/test_video_only.mp4"
+        let audioPath = "\(Self.fixturesDir)/test_audio_only.m4a"
+        let outputPath = NSTemporaryDirectory() + "combine_stderr_\(UUID()).mov"
+        defer { try? FileManager.default.removeItem(atPath: outputPath) }
+
+        let result = await CombineEngine.runFFMpeg(
+            videoPath: videoPath,
+            audioPath: audioPath,
+            outputPath: outputPath,
+            log: { _ in }
+        )
+        // ffmpeg always writes version/config info to stderr
+        #expect(!result.stderr.isEmpty, "stderr should capture ffmpeg output")
+    }
+
+    @Test func combineAvidMXFPair() async throws {
+        let videoPath = "\(Self.fixturesDir)/video-only-test-1.mxf"
+        let audioPath = "\(Self.fixturesDir)/audio-only-test-1.mxf"
+
+        // Skip if real Avid MXF fixtures aren't present (too large for git)
+        guard FileManager.default.fileExists(atPath: videoPath),
+              FileManager.default.fileExists(atPath: audioPath) else {
+            return  // silently skip — CI won't have these files
+        }
+
+        let outputPath = NSTemporaryDirectory() + "combine_avid_mxf_\(UUID()).mov"
+        defer { try? FileManager.default.removeItem(atPath: outputPath) }
+
+        let result = await CombineEngine.runFFMpeg(
+            videoPath: videoPath,
+            audioPath: audioPath,
+            outputPath: outputPath,
+            log: { _ in }
+        )
+
+        #expect(result.success, "Avid MXF combine should succeed: exit \(result.exitCode)\n\(result.stderr)")
+        #expect(FileManager.default.fileExists(atPath: outputPath))
+
+        // Verify output has both streams
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/ffprobe")
+        proc.arguments = ["-v", "quiet", "-print_format", "json", "-show_streams", outputPath]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = Pipe()
+        try proc.run()
+        proc.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let json = try JSONDecoder().decode(FFProbeOutput.self, from: data)
+        let types = (json.streams ?? []).compactMap { $0.codec_type }
+        #expect(types.contains("video"), "Combined output should have video stream")
+        #expect(types.contains("audio"), "Combined output should have audio stream")
+    }
+}
+
+// MARK: - MXF Header Parser with Real MXF Files
+
+struct MxfParserIntegrationTests {
+
+    static let fixturesDir: String = {
+        let thisFile = #filePath
+        let repoRoot = URL(fileURLWithPath: thisFile)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return repoRoot.appendingPathComponent("tests/fixtures/videos").path
+    }()
+
+    @Test func parseMXFVideoAudio() {
+        let path = "\(Self.fixturesDir)/test_video_audio.mxf"
+        // Our generated MXF is standard MPEG-2 — the native parser is designed
+        // for Avid MXF, so it may return nil or partial results. The key assertion
+        // is that it doesn't crash on valid MXF data.
+        _ = MxfHeaderParser.parse(fileAt: path)
+        // No crash = pass
+    }
+
+    @Test func parseMXFVideoOnly() {
+        let path = "\(Self.fixturesDir)/test_video_only.mxf"
+        let result = MxfHeaderParser.parse(fileAt: path)
+        if let meta = result {
+            #expect(meta.audioChannels == 0, "Video-only MXF should have no audio channels")
+        }
+    }
+}
+
+// MARK: - CombinePairItem Tests
+
+struct CombinePairItemTests {
+
+    @Test func storesVideoAndAudio() {
+        let v = VideoRecord()
+        v.filename = "video.mxf"
+        v.fullPath = "/Volumes/Drive/video.mxf"
+        let a = VideoRecord()
+        a.filename = "audio.mxf"
+        a.fullPath = "/Volumes/Drive/audio.mxf"
+
+        let item = CombinePairItem(video: v, audio: a)
+        #expect(item.video.filename == "video.mxf")
+        #expect(item.audio.fullPath == "/Volumes/Drive/audio.mxf")
+        #expect(item.id != UUID()) // has a unique ID
+    }
+}
