@@ -342,6 +342,23 @@ enum CatalogTargetStatus: String {
     }
 }
 
+// MARK: - Discovered Volume
+
+struct DiscoveredVolume: Identifiable {
+    let id = UUID()
+    let name: String
+    let path: String
+    let isNetwork: Bool
+    let totalBytes: Int64
+    let freeBytes: Int64
+    let alreadyAdded: Bool
+
+    var totalFormatted: String { Formatting.humanSize(totalBytes) }
+    var usedFormatted: String { Formatting.humanSize(totalBytes - freeBytes) }
+}
+
+// MARK: - Catalog Scan Target
+
 @MainActor
 final class CatalogScanTarget: ObservableObject, Identifiable {
     let id = UUID()

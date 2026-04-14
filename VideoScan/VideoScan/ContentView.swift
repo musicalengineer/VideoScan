@@ -40,6 +40,7 @@ struct CatalogView: View {
     @State private var showDeleteDuplicatesConfirm = false
     @State private var deleteTargetVolume: String = ""
     @State private var deleteTargetCount: Int = 0
+    @State private var showDiscoverVolumes = false
     /// Set of scan-target searchPaths whose records the user wants to see in
     /// the catalog table. Empty set = show all volumes (no filter). Each eye
     /// toggle in the Scan Targets pane independently flips membership, so the
@@ -179,24 +180,22 @@ struct CatalogView: View {
         } message: {
             Text("This will permanently delete \(deleteTargetCount) high-confidence duplicate(s) on:\n\n\(deleteTargetVolume)\n\nOnly duplicates whose keeper is also on this same volume will be deleted. Cross-volume duplicates are never touched.\n\nAre you sure? Do you have backups and/or are these really junk or duplicates?")
         }
+        .sheet(isPresented: $showDiscoverVolumes) {
+            DiscoverVolumesSheet(model: model)
+        }
     }
 
     // MARK: - Scan Targets Pane (matches PersonFinder's jobsSection pattern)
 
     private var scanTargetsPane: some View {
         VStack(spacing: 0) {
+            // Title row with scan controls on the right
             HStack(spacing: 10) {
                 Image(systemName: "externaldrive.connected.to.line.below")
                     .font(.title3).foregroundColor(.secondary)
                 Text("Scan Targets")
                     .font(.title3.weight(.semibold))
                 Spacer()
-
-                Button(action: { model.addScanTarget() }) {
-                    Label("Add Volumes…", systemImage: "plus")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
 
                 Button(action: { model.startAllTargets() }) {
                     Label("Start All", systemImage: "play.fill")
@@ -226,13 +225,31 @@ struct CatalogView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
 
+            // Centered Add / Discover row
+            HStack(spacing: 12) {
+                Spacer()
+                Button(action: { model.addScanTarget() }) {
+                    Label("Add Volumes…", systemImage: "plus")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+
+                Button(action: { showDiscoverVolumes = true }) {
+                    Label("Discover…", systemImage: "network")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                Spacer()
+            }
+            .padding(.bottom, 8)
+
             if model.scanTargets.isEmpty {
                 VStack(spacing: 6) {
                     Image(systemName: "externaldrive.badge.plus")
                         .font(.largeTitle).foregroundColor(.secondary)
                     Text("No scan targets yet")
                         .font(.headline).foregroundColor(.secondary)
-                    Text("Click \"Add Volumes…\" to add a drive or folder to scan.")
+                    Text("Add volumes manually or use Discover to find mounted drives.")
                         .font(.callout).foregroundColor(.secondary)
                 }
                 .frame(maxWidth: .infinity)
@@ -1667,5 +1684,131 @@ private struct DuplicateDispositionCell: View {
             Text(record.duplicateDisposition == .none ? "—" : record.duplicateDisposition.rawValue)
                 .foregroundColor(record.duplicateDisposition.textColor)
         }
+    }
+}
+
+// MARK: - Discover Volumes Sheet
+
+private struct DiscoverVolumesSheet: View {
+    @ObservedObject var model: VideoScanModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var volumes: [DiscoveredVolume] = []
+    @State private var selected: Set<UUID> = []
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Image(systemName: "network")
+                    .font(.title2)
+                    .foregroundColor(.accentColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Discover Volumes")
+                        .font(.headline)
+                    Text("Mounted local and network volumes")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Button(action: refresh) {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding()
+
+            Divider()
+
+            if volumes.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "externaldrive.badge.questionmark")
+                        .font(.largeTitle)
+                        .foregroundColor(.secondary)
+                    Text("No volumes found")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                    Text("Mount a drive or network share and click Refresh.")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(volumes, selection: $selected) { vol in
+                    HStack(spacing: 10) {
+                        Image(systemName: vol.isNetwork ? "network" : "internaldrive")
+                            .font(.title3)
+                            .foregroundColor(vol.isNetwork ? .blue : .secondary)
+                            .frame(width: 24)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text(vol.name)
+                                    .font(.system(size: 13, weight: .semibold))
+                                if vol.isNetwork {
+                                    Text("Network")
+                                        .font(.system(size: 9, weight: .medium))
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 1)
+                                        .background(Color.blue.opacity(0.15))
+                                        .cornerRadius(3)
+                                        .foregroundColor(.blue)
+                                }
+                                if vol.alreadyAdded {
+                                    Text("Already added")
+                                        .font(.system(size: 9, weight: .medium))
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 1)
+                                        .background(Color.green.opacity(0.15))
+                                        .cornerRadius(3)
+                                        .foregroundColor(.green)
+                                }
+                            }
+                            Text(vol.path)
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                            if vol.totalBytes > 0 {
+                                Text("\(vol.usedFormatted) used of \(vol.totalFormatted)")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+
+                        Spacer()
+                    }
+                    .padding(.vertical, 2)
+                    .tag(vol.id)
+                }
+                .listStyle(.inset(alternatesRowBackgrounds: true))
+            }
+
+            Divider()
+
+            // Footer
+            HStack {
+                Text("\(volumes.count) volume(s) found")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Add Selected (\(selected.count))") {
+                    let toAdd = volumes.filter { selected.contains($0.id) && !$0.alreadyAdded }
+                    model.addDiscoveredVolumes(toAdd)
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(selected.isEmpty)
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding()
+        }
+        .frame(width: 550, height: 420)
+        .onAppear { refresh() }
+    }
+
+    private func refresh() {
+        volumes = model.discoverVolumes()
+        selected = []
     }
 }
