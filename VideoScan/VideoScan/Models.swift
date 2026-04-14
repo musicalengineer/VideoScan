@@ -342,6 +342,14 @@ enum CatalogTargetStatus: String {
     }
 }
 
+// MARK: - Combine Pair Item
+
+struct CombinePairItem: Identifiable {
+    let id = UUID()
+    let video: VideoRecord
+    let audio: VideoRecord
+}
+
 // MARK: - Discovered Volume
 
 struct DiscoveredVolume: Identifiable {

@@ -6,16 +6,22 @@ enum CombineEngine {
 
     static let ffmpegPath = "/opt/homebrew/bin/ffmpeg"
 
+    struct CombineResult: Sendable {
+        let success: Bool
+        let stderr: String
+        let exitCode: Int32
+    }
+
     // MARK: - ffmpeg Remux
 
-    /// Run ffmpeg to remux video+audio into MOV. Returns true on success.
+    /// Run ffmpeg to remux video+audio into MOV. Returns result with success/failure and stderr.
     /// Cancellation-aware: terminates ffmpeg immediately when task is cancelled.
     static func runFFMpeg(
         videoPath: String,
         audioPath: String,
         outputPath: String,
         log: @escaping @Sendable (String) -> Void
-    ) async -> Bool {
+    ) async -> CombineResult {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: ffmpegPath)
         proc.arguments = [
@@ -37,9 +43,13 @@ enum CombineEngine {
         proc.standardError = errPipe
         proc.standardOutput = Pipe()
 
+        let collected = StderrCollector()
+
         errPipe.fileHandleForReading.readabilityHandler = { handle in
             if let text = String(data: handle.availableData, encoding: .utf8), !text.isEmpty {
-                DispatchQueue.main.async { log(text.trimmingCharacters(in: .newlines)) }
+                let trimmed = text.trimmingCharacters(in: .newlines)
+                collected.append(trimmed)
+                DispatchQueue.main.async { log(trimmed) }
             }
         }
 
@@ -49,15 +59,46 @@ enum CombineEngine {
                     errPipe.fileHandleForReading.readabilityHandler = nil
                     let remaining = errPipe.fileHandleForReading.readDataToEndOfFile()
                     if let text = String(data: remaining, encoding: .utf8), !text.isEmpty {
-                        DispatchQueue.main.async { log(text.trimmingCharacters(in: .newlines)) }
+                        let trimmed = text.trimmingCharacters(in: .newlines)
+                        collected.append(trimmed)
+                        DispatchQueue.main.async { log(trimmed) }
                     }
-                    continuation.resume(returning: p.terminationStatus == 0)
+                    let result = CombineResult(
+                        success: p.terminationStatus == 0,
+                        stderr: collected.text,
+                        exitCode: p.terminationStatus
+                    )
+                    continuation.resume(returning: result)
                 }
                 do    { try proc.run() }
-                catch { continuation.resume(returning: false) }
+                catch {
+                    continuation.resume(returning: CombineResult(
+                        success: false,
+                        stderr: "Failed to launch ffmpeg: \(error.localizedDescription)",
+                        exitCode: -1
+                    ))
+                }
             }
         } onCancel: {
             if proc.isRunning { proc.terminate() }
+        }
+    }
+
+    /// Thread-safe stderr collector.
+    private final class StderrCollector: @unchecked Sendable {
+        private let lock = NSLock()
+        private var lines: [String] = []
+
+        func append(_ line: String) {
+            lock.lock()
+            lines.append(line)
+            lock.unlock()
+        }
+
+        var text: String {
+            lock.lock()
+            defer { lock.unlock() }
+            return lines.joined(separator: "\n")
         }
     }
 
