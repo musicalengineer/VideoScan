@@ -27,5 +27,7 @@ DonnaFaceDetectionTest.png
 # Claude Code
 .claude/
 
-# Test videos (large, personal family media)
-tests/fixtures/videos/
+# Test media — allow small generated fixtures, block large real media
+# The pre-commit hook also rejects any staged file > 75 MB
+tests/fixtures/videos/*-test-*.mxf
+!tests/fixtures/videos/test_*
