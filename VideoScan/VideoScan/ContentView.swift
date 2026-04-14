@@ -189,13 +189,26 @@ struct CatalogView: View {
 
     private var scanTargetsPane: some View {
         VStack(spacing: 0) {
-            // Title row with scan controls on the right
             HStack(spacing: 10) {
                 Image(systemName: "externaldrive.connected.to.line.below")
                     .font(.title3).foregroundColor(.secondary)
                 Text("Scan Targets")
                     .font(.title3.weight(.semibold))
-                Spacer()
+                    .padding(.trailing, 12)
+
+                Button(action: { model.addScanTarget() }) {
+                    Label("Local Volumes…", systemImage: "internaldrive")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+
+                Button(action: { showDiscoverVolumes = true }) {
+                    Label("Network Volumes…", systemImage: "network")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+
+                Spacer().frame(minWidth: 20)
 
                 Button(action: { model.startAllTargets() }) {
                     Label("Start All", systemImage: "play.fill")
@@ -224,24 +237,6 @@ struct CatalogView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-
-            // Centered Add / Discover row
-            HStack(spacing: 12) {
-                Spacer()
-                Button(action: { model.addScanTarget() }) {
-                    Label("Add Volumes…", systemImage: "plus")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-
-                Button(action: { showDiscoverVolumes = true }) {
-                    Label("Discover…", systemImage: "network")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                Spacer()
-            }
-            .padding(.bottom, 8)
 
             if model.scanTargets.isEmpty {
                 VStack(spacing: 6) {
