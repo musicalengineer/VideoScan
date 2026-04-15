@@ -8,6 +8,7 @@ struct CombineSheet: View {
 
     @State private var outputFolder: URL?
     @State private var checkedPairs: Set<Int> = []
+    @State private var combineStarted = false
 
     var pairs: [(video: VideoRecord, audio: VideoRecord)] {
         model.correlatedPairs
@@ -15,111 +16,288 @@ struct CombineSheet: View {
 
     private var allChecked: Bool { checkedPairs.count == pairs.count }
 
+    /// Estimated output size: stream copy ≈ video + audio source sizes.
+    private var estimatedOutputBytes: Int64 {
+        checkedPairs.reduce(Int64(0)) { total, i in
+            guard i < pairs.count else { return total }
+            return total + pairs[i].video.sizeBytes + pairs[i].audio.sizeBytes
+        }
+    }
+
+    /// Free space on the output folder's volume.
+    private var freeSpaceBytes: Int64? {
+        guard let folder = outputFolder else { return nil }
+        let values = try? folder.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey])
+        if let free = values?.volumeAvailableCapacityForImportantUsage {
+            return free
+        }
+        let vals2 = try? folder.resourceValues(forKeys: [.volumeAvailableCapacityKey])
+        return vals2?.volumeAvailableCapacity.map { Int64($0) }
+    }
+
+    private var insufficientSpace: Bool {
+        guard let free = freeSpaceBytes else { return false }
+        return estimatedOutputBytes > free
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Combine Correlated Pairs")
                 .font(.headline)
 
-            GroupBox {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text("Correlated Pairs (\(pairs.count))")
-                            .font(.subheadline.weight(.semibold))
-                        Spacer()
-                        Button(allChecked ? "Select None" : "Select All") {
-                            if allChecked {
-                                checkedPairs.removeAll()
-                            } else {
-                                checkedPairs = Set(0..<pairs.count)
+            if !combineStarted {
+                pairSelectionSection
+                outputFolderSection
+                storageEstimateSection
+            }
+
+            if combineStarted {
+                combineProgressSection
+            }
+
+            buttonBar
+        }
+        .padding(20)
+        .frame(width: 620)
+        .onAppear {
+            checkedPairs = Set(0..<pairs.count)
+        }
+    }
+
+    // MARK: - Pair Selection
+
+    private var pairSelectionSection: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text("Correlated Pairs (\(pairs.count))")
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Button(allChecked ? "Select None" : "Select All") {
+                        if allChecked {
+                            checkedPairs.removeAll()
+                        } else {
+                            checkedPairs = Set(0..<pairs.count)
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+
+                    if !checkedPairs.isEmpty {
+                        Text("\(checkedPairs.count) selected")
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundColor(.green)
+                    }
+                }
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(Array(pairs.enumerated()), id: \.offset) { i, pair in
+                            HStack(spacing: 4) {
+                                Toggle("", isOn: Binding(
+                                    get: { checkedPairs.contains(i) },
+                                    set: { on in
+                                        if on { checkedPairs.insert(i) }
+                                        else  { checkedPairs.remove(i) }
+                                    }
+                                ))
+                                .toggleStyle(.checkbox)
+                                .labelsHidden()
+
+                                Text("\(i + 1).")
+                                    .foregroundColor(.secondary)
+                                    .frame(width: 24, alignment: .trailing)
+                                Image(systemName: "film")
+                                    .foregroundColor(.blue)
+                                Text(pair.video.filename)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .lineLimit(1)
+                                Text("+")
+                                    .foregroundColor(.secondary)
+                                Image(systemName: "waveform")
+                                    .foregroundColor(.orange)
+                                Text(pair.audio.filename)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .lineLimit(1)
                             }
                         }
-                        .buttonStyle(.borderless)
-                        .font(.caption)
+                    }
+                    .padding(6)
+                }
+                .frame(maxHeight: 200)
+            }
+        }
+    }
 
-                        if !checkedPairs.isEmpty {
-                            Text("\(checkedPairs.count) selected")
-                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+    // MARK: - Output Folder
+
+    private var outputFolderSection: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "folder.fill")
+                        .foregroundColor(.orange)
+                    Text("Output Folder")
+                        .font(.headline)
+                    Spacer()
+                    Button("Choose…") { chooseOutputFolder() }
+                }
+                if let folder = outputFolder {
+                    Text(folder.path)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } else {
+                    Text("No folder selected — click Choose to set output destination")
+                        .font(.caption)
+                        .foregroundColor(.red)
+                }
+                Text("Each pair creates {video_filename}_combined.mov — stream copy, no re-encode")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(4)
+        }
+    }
+
+    // MARK: - Storage Estimate
+
+    private var storageEstimateSection: some View {
+        Group {
+            if !checkedPairs.isEmpty {
+                HStack(spacing: 12) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "externaldrive")
+                            .foregroundColor(.secondary)
+                            .font(.system(size: 11))
+                        Text("Est. output:")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary)
+                        Text(Formatting.humanSize(estimatedOutputBytes))
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    }
+
+                    if let free = freeSpaceBytes {
+                        HStack(spacing: 4) {
+                            Text("Free:")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                            Text(Formatting.humanSize(free))
+                                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                .foregroundColor(insufficientSpace ? .red : .green)
+                        }
+                    }
+
+                    if insufficientSpace {
+                        HStack(spacing: 3) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.red)
+                                .font(.system(size: 10))
+                            Text("Not enough space!")
+                                .font(.system(size: 11, weight: .bold))
+                                .foregroundColor(.red)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Combine Progress
+
+    private var combineProgressSection: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                // Progress bar
+                let completed = model.dashboard.combineCompleted
+                let total = model.dashboard.combineTotal
+                let fraction = total > 0 ? Double(completed) / Double(total) : 0
+
+                HStack {
+                    Text(model.isCombinePaused ? "Paused" : "Combining")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(model.isCombinePaused ? .orange : .primary)
+                    Spacer()
+                    Text("\(completed)/\(total)")
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+
+                ProgressView(value: fraction)
+                    .tint(model.isCombinePaused ? .orange : .blue)
+
+                // Current file
+                if !model.dashboard.combineCurrentFile.isEmpty && !model.isCombinePaused {
+                    HStack(spacing: 4) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(model.dashboard.combineCurrentFile)
+                            .font(.system(size: 11, design: .monospaced))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                // Succeeded / Failed counts
+                HStack(spacing: 14) {
+                    if model.dashboard.combineSucceeded > 0 {
+                        HStack(spacing: 3) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(.green)
+                                .font(.system(size: 11))
+                            Text("\(model.dashboard.combineSucceeded) succeeded")
+                                .font(.system(size: 11, design: .monospaced))
                                 .foregroundColor(.green)
                         }
                     }
-
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(Array(pairs.enumerated()), id: \.offset) { i, pair in
-                                HStack(spacing: 4) {
-                                    Toggle("", isOn: Binding(
-                                        get: { checkedPairs.contains(i) },
-                                        set: { on in
-                                            if on { checkedPairs.insert(i) }
-                                            else  { checkedPairs.remove(i) }
-                                        }
-                                    ))
-                                    .toggleStyle(.checkbox)
-                                    .labelsHidden()
-
-                                    Text("\(i + 1).")
-                                        .foregroundColor(.secondary)
-                                        .frame(width: 24, alignment: .trailing)
-                                    Image(systemName: "film")
-                                        .foregroundColor(.blue)
-                                    Text(pair.video.filename)
-                                        .font(.system(.caption, design: .monospaced))
-                                        .lineLimit(1)
-                                    Text("+")
-                                        .foregroundColor(.secondary)
-                                    Image(systemName: "waveform")
-                                        .foregroundColor(.orange)
-                                    Text(pair.audio.filename)
-                                        .font(.system(.caption, design: .monospaced))
-                                        .lineLimit(1)
-                                }
-                            }
+                    if model.dashboard.combineFailed > 0 {
+                        HStack(spacing: 3) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.red)
+                                .font(.system(size: 11))
+                            Text("\(model.dashboard.combineFailed) failed")
+                                .font(.system(size: 11, design: .monospaced))
+                                .foregroundColor(.red)
                         }
-                        .padding(6)
                     }
-                    .frame(maxHeight: 200)
                 }
             }
+            .padding(4)
+        }
+    }
 
-            GroupBox {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Image(systemName: "folder.fill")
-                            .foregroundColor(.orange)
-                        Text("Output Folder")
-                            .font(.headline)
-                        Spacer()
-                        Button("Choose…") { chooseOutputFolder() }
-                    }
-                    if let folder = outputFolder {
-                        Text(folder.path)
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+    // MARK: - Button Bar
+
+    private var buttonBar: some View {
+        HStack {
+            Spacer()
+
+            if combineStarted && !model.isCombining {
+                // Combine finished
+                Button("Done") { dismiss() }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.return)
+            } else if combineStarted && model.isCombining {
+                // Combine in progress
+                Button("Stop") {
+                    model.stopCombine()
+                }
+                .foregroundColor(.red)
+
+                Button(model.isCombinePaused ? "Resume" : "Pause") {
+                    if model.isCombinePaused {
+                        model.resumeCombine()
                     } else {
-                        Text("No folder selected — click Choose to set output destination")
-                            .font(.caption)
-                            .foregroundColor(.red)
+                        model.pauseCombine()
                     }
-                    Text("Each pair creates {video_filename}_combined.mov — stream copy, no re-encode")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
                 }
-                .padding(4)
-            }
 
-            if model.isCombining {
-                CompactDashboard(
-                    dashboard: model.dashboard,
-                    isScanning: false,
-                    isCombining: true,
-                    isExpanded: .constant(false)
-                )
-            }
-
-            HStack {
-                Spacer()
+                Button("Background") { dismiss() }
+                    .keyboardShortcut(.escape)
+            } else {
+                // Not started yet
                 Button("Cancel") { dismiss() }
                     .keyboardShortcut(.escape)
 
@@ -128,19 +306,13 @@ struct CombineSheet: View {
                     let selectedPairs = checkedPairs.sorted().compactMap { i in
                         i < pairs.count ? pairs[i] : nil
                     }
+                    combineStarted = true
                     model.combineSelectedPairs(selectedPairs, outputFolder: folder)
-                    dismiss()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(checkedPairs.isEmpty || outputFolder == nil || model.isCombining)
+                .disabled(checkedPairs.isEmpty || outputFolder == nil || insufficientSpace)
                 .keyboardShortcut(.return)
             }
-        }
-        .padding(20)
-        .frame(width: 620)
-        .onAppear {
-            // Default: all pairs checked
-            checkedPairs = Set(0..<pairs.count)
         }
     }
 
