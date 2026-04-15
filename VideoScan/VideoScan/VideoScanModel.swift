@@ -94,6 +94,10 @@ final class VideoScanModel: ObservableObject {
     let pauseGate = PauseGate()
     @Published var isPaused: Bool = false
 
+    /// Cooperative pause gate for combine tasks
+    let combinePauseGate = PauseGate()
+    @Published var isCombinePaused: Bool = false
+
     /// Tuneable performance settings — persisted via UserDefaults
     @Published var perfSettings = ScanPerformanceSettings.restored() {
         didSet {
@@ -1696,10 +1700,23 @@ final class VideoScanModel: ObservableObject {
                         return await semaphore.withPermit {
                             if Task.isCancelled { return (videoFilename, false) }
 
+                            // Wait if paused — blocks here until resumed
+                            await self.combinePauseGate.waitIfPaused()
+                            if Task.isCancelled { return (videoFilename, false) }
+
                             let baseName = URL(fileURLWithPath: videoPath)
                                 .deletingPathExtension().lastPathComponent
                             let outName = "\(baseName)_combined.mov"
                             let outURL = outputFolder.appendingPathComponent(outName)
+
+                            // Skip if already completed (resume after pause)
+                            if FileManager.default.fileExists(atPath: outURL.path) {
+                                await MainActor.run {
+                                    self.dashboard.combineCompleted += 1
+                                    self.log("  [\(self.dashboard.combineCompleted)/\(self.dashboard.combineTotal)] \(outName) — already exists, skipping")
+                                }
+                                return (videoFilename, true)
+                            }
 
                             await MainActor.run {
                                 self.dashboard.combineCurrentFile = outName
@@ -1766,6 +1783,11 @@ final class VideoScanModel: ObservableObject {
                                 try? FileManager.default.removeItem(at: tempDir)
                             }
 
+                            // If ffmpeg failed or was cancelled, delete partial output
+                            if !success {
+                                try? FileManager.default.removeItem(at: outURL)
+                            }
+
                             await MainActor.run {
                                 self.dashboard.combineCompleted += 1
                                 if success {
@@ -1806,12 +1828,28 @@ final class VideoScanModel: ObservableObject {
         }
     }
 
+    func pauseCombine() {
+        isCombinePaused = true
+        Task { await combinePauseGate.pause() }
+        log("--- Combine paused ---")
+    }
+
+    func resumeCombine() {
+        isCombinePaused = false
+        Task { await combinePauseGate.resume() }
+        log("--- Combine resumed ---")
+    }
+
     func stopCombine() {
         combineTask?.cancel()
         combineTask = nil
-        Task { await ramDisk.unmount() }
+        Task {
+            await combinePauseGate.resume()  // release any waiters before cancel
+            await ramDisk.unmount()
+        }
         log("--- Combine stopped by user ---")
         isCombining = false
+        isCombinePaused = false
         dashboard.combineCurrentFile = ""
     }
 
