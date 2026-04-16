@@ -15,6 +15,8 @@ struct PersonFinderView: View {
     @State private var photosPickerItems: [PhotosPickerItem] = []
     @State private var isImportingFromPhotos = false
     @State private var autoRejectPct: Int = 60
+    @State private var selectedResultIDs = Set<UUID>()
+    @State private var inspectedResult: ClipResult? = nil
 
     var selectedJob: ScanJob? { model.jobs.first { $0.id == selectedJobID } }
     var selectedEngine: RecognitionEngine { model.settings.recognitionEngine }
@@ -434,11 +436,12 @@ struct PersonFinderView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                Table(results) {
+                Table(results, selection: $selectedResultIDs) {
                     TableColumn("Video File") { r in
                         Text(r.videoFilename)
                             .font(.system(.body, design: .monospaced))
                             .lineLimit(1)
+                            .help(r.videoPath)
                     }
                     .width(min: 200, ideal: 300)
 
@@ -467,23 +470,96 @@ struct PersonFinderView: View {
                             .foregroundColor(r.bestDistance < 0.5 ? .green : r.bestDistance < 0.65 ? .yellow : .orange)
                     }
                     .width(min: 80, ideal: 90)
-
-                    TableColumn("Actions") { r in
-                        Button("Show in Finder") {
-                            revealClips(for: r)
+                }
+                .contextMenu(forSelectionType: UUID.self) { ids in
+                    if let id = ids.first,
+                       let rec = results.first(where: { $0.id == id }) {
+                        Button("Reveal in Finder") {
+                            NSWorkspace.shared.selectFile(rec.videoPath, inFileViewerRootedAtPath: "")
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
+                        Button("Open in QuickTime Player") {
+                            if let qtURL = NSWorkspace.shared.urlForApplication(
+                                withBundleIdentifier: "com.apple.QuickTimePlayerX"
+                            ) {
+                                NSWorkspace.shared.open(
+                                    [URL(fileURLWithPath: rec.videoPath)],
+                                    withApplicationAt: qtURL,
+                                    configuration: NSWorkspace.OpenConfiguration()
+                                )
+                            }
+                        }
+                        if !rec.clipFiles.isEmpty {
+                            Button("Reveal Clips in Finder") {
+                                revealClips(for: rec)
+                            }
+                        }
+                        Divider()
+                        Button("More Info…") {
+                            inspectedResult = rec
+                        }
+                        Divider()
+                        Button("Copy Path") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(rec.videoPath, forType: .string)
+                        }
                     }
-                    .width(min: 110, ideal: 120)
                 }
                 .frame(minHeight: 160)
+                .popover(item: $inspectedResult, arrowEdge: .trailing) { rec in
+                    resultInfoPopover(rec)
+                }
             }
         }
     }
 
     // Console pane removed from main window — use the Console toolbar
     // button which opens a floating window with a per-job picker.
+
+    // MARK: Result Info Popover
+
+    func resultInfoPopover(_ rec: ClipResult) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(rec.videoFilename)
+                .font(.headline)
+            Divider()
+            infoRow("Path", rec.videoPath)
+            infoRow("Duration", pfFormatDuration(rec.videoDuration))
+            infoRow("Presence", pfFormatDuration(rec.presenceSecs))
+            infoRow("Clips", "\(rec.segmentCount)")
+            infoRow("Best Match", String(format: "%.3f", rec.bestDistance))
+            if !rec.outputDir.isEmpty {
+                infoRow("Output Dir", rec.outputDir)
+            }
+            if !rec.clipFiles.isEmpty {
+                Divider()
+                Text("Clip Files")
+                    .font(.subheadline.weight(.medium))
+                ForEach(rec.clipFiles, id: \.self) { clip in
+                    Text(clip)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+        }
+        .padding()
+        .frame(minWidth: 320, maxWidth: 480)
+    }
+
+    private func infoRow(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .frame(width: 80, alignment: .trailing)
+            Text(value)
+                .font(.system(size: 11, design: .monospaced))
+                .textSelection(.enabled)
+                .lineLimit(2)
+                .truncationMode(.middle)
+        }
+    }
 
     // MARK: Helpers
 
