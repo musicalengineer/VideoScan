@@ -942,16 +942,19 @@ nonisolated func pfFindVideoFiles(at searchPath: String, skipBundles: Bool) -> [
         "imovieproject","dvdproj","prproj","aep","aet","fcp"
     ]
     let pfVideoExtensions: Set<String> = [
-        "mov","qt","mp4","m4v","m4p","m4b","avi","divx","wmv","asf","mkv","webm","mxf",
-        "mts","m2ts","ts","m2t","trp","tp","mpg","mpeg","mpe","mpv","m2v","m2p","mp2v","vob","dat",
+        "mov","qt","mp4","m4v","avi","divx","wmv","asf","mkv","webm","mxf",
+        "mts","m2ts","m2t","trp","tp","mpg","mpeg","mpe","mpv","m2v","m2p","mp2v","vob",
         "dv","dif","3gp","3g2","3gpp","3gpp2","flv","f4v","mod","tod","ogv","ogm",
-        "mjpeg","mjpg","hevc","h264","h265","264","265","rm","rmvb","amv","wtv","dvr-ms"
+        "mjpeg","mjpg","hevc","h264","h265","264","265","rm","rmvb","amv","wtv","dvr-ms",
+        "braw","r3d","vro"
     ]
+    // Excluded: m4p/m4b (DRM audio), dat (FINDER.DAT junk), ts (conflicts with TypeScript)
     let fm = FileManager.default
     var isDir: ObjCBool = false
     guard fm.fileExists(atPath: searchPath, isDirectory: &isDir) else { return [] }
     if !isDir.boolValue {
-        return pfVideoExtensions.contains((searchPath as NSString).pathExtension.lowercased()) ? [searchPath] : []
+        let ext = (searchPath as NSString).pathExtension.lowercased()
+        return (pfVideoExtensions.contains(ext) || ext == "ts") ? [searchPath] : []
     }
     var files: [String] = []
     guard let e = fm.enumerator(atPath: searchPath) else { return [] }
@@ -970,7 +973,14 @@ nonisolated func pfFindVideoFiles(at searchPath: String, skipBundles: Bool) -> [
                 e.skipDescendants(); continue
             }
         }
-        if pfVideoExtensions.contains((el as NSString).pathExtension.lowercased()) {
+        let ext = (el as NSString).pathExtension.lowercased()
+        if pfVideoExtensions.contains(ext) || ext == "ts" {
+            // Skip TypeScript files masquerading as .ts video
+            if ext == "ts" {
+                let name = (el as NSString).lastPathComponent
+                if name.hasSuffix(".d.ts") || name.hasSuffix(".spec.ts") ||
+                   el.contains("node_modules") { continue }
+            }
             let base = searchPath.hasSuffix("/") ? searchPath : searchPath + "/"
             files.append(base + el)
         }
