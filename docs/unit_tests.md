@@ -41,18 +41,17 @@ Each run shows:
 | Deployment target override | `MACOSX_DEPLOYMENT_TARGET=15.0` |
 | Code signing | Disabled (`CODE_SIGNING_ALLOWED=NO`) |
 
-### Why CI was failing (fixed April 17, 2026)
+### Why CI was failing (fixed April 17–18, 2026)
 
-**Root cause**: Swift concurrency strictness difference between Xcode 26.4 (local) and Xcode 16 (CI).
+Four issues prevented CI from passing, fixed across commits `1c92f1a`–`33018b6`:
 
-In `CombineSheet.swift`, a closure passed to `CombineEngine.runFFMpeg(log:)` called `model.log(msg)` directly. The `log:` parameter is `@Sendable`, and `model.log()` is `@MainActor`-isolated. 
+1. **Swift concurrency strictness** (`1c92f1a`): In `CombineSheet.swift`, a `@Sendable` closure called `model.log(msg)` directly (a `@MainActor`-isolated method). Xcode 26.4 (local) treats this as a warning; Xcode 16 (CI) treats it as a hard error. Fix: wrap in `Task { @MainActor in ... }`.
 
-- **Xcode 26.4** (local): treats this as a warning ("this is an error in the Swift 6 language mode")
-- **Xcode 16** (CI): treats this as a hard error
+2. **Build step masking** (`bc89d52`): The build step piped through `xcpretty || true`, which masked build failures. Changed to `tee` + explicit `BUILD FAILED` grep check.
 
-**Fix**: Wrap the call in `Task { @MainActor in model.log(msg) }` to properly hop to the main actor.
+3. **Deployment target mismatch** (`bc89d52`, `0def646`): Project targeted macOS 26.2 (doesn't exist on CI). Lowered to 14.0, then added `#available(macOS 15.0, *)` fallback for `AVAssetExportSession.export(to:as:)`. Later bumped CI override to 15.0 to match the macos-15 runner.
 
-**Additional fix**: The CI build step was piping through `xcpretty || true`, which masked build failures — the build would fail but the step would succeed, then the test step would try to build again and fail with a confusing error. Changed to `tee` + explicit `BUILD FAILED` check.
+4. **Test host crash on headless runner** (`33018b6`): The app-hosted test target tried to launch the full SwiftUI app, which crashed with "signal trap" on the headless CI runner (no display server). Fix: replaced `@main` attribute with `main.swift` that detects the test environment via `NSClassFromString("XCTestCase")` and runs a minimal `NSApplication.run()` loop instead. Guards were also added to `DashboardState.init()` and `AppDelegate.applicationDidFinishLaunching` to skip timer/cleanup code in test mode.
 
 ## Test Categories
 
