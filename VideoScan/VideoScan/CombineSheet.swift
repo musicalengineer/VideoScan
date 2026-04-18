@@ -538,7 +538,7 @@ struct CombinePairSheet: View {
                 videoPath: vPath,
                 audioPath: aPath,
                 outputPath: outputPath,
-                log: { msg in model.log(msg) }
+                log: { msg in Task { @MainActor in model.log(msg) } }
             )
             await MainActor.run {
                 if result.success {
