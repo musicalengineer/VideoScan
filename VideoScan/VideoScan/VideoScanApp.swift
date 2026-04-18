@@ -82,7 +82,6 @@ enum BuildInfo {
     static let summary: String = "v\(version) (\(build)) · \(configuration) · \(buildDate)"
 }
 
-@main
 struct VideoScanApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var catalogModel = VideoScanModel()
