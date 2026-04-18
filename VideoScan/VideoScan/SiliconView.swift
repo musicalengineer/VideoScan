@@ -40,14 +40,14 @@ struct SiliconChipView: View {
     }
 
     /// Vision/ANE intensity 0..1, mapped from fps (30 fps ≈ saturated).
+    /// Shows green (idle) when paused or FPS too low to be meaningful.
     private var aneLoad: Double {
-        guard dashboard.visionActive else { return 0 }
+        guard dashboard.visionActive, dashboard.visionFPS > 0.5 else { return 0 }
         return min(1.0, dashboard.visionFPS / 30.0)
     }
 
     private var gpuLoad: Double {
-        // No direct signal; co-light with ANE since Vision uses GPU passes.
-        guard dashboard.visionActive else { return 0 }
+        guard dashboard.visionActive, dashboard.visionFPS > 0.5 else { return 0 }
         return min(1.0, dashboard.visionFPS / 45.0)
     }
 
