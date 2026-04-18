@@ -19,7 +19,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// snapshot synchronously on Cmd-Q.
     weak var catalogModel: VideoScanModel?
 
+    /// True when the app is launched as a test host (unit tests).
+    static var isRunningTests: Bool {
+        NSClassFromString("XCTestCase") != nil
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
+        guard !Self.isRunningTests else { return }
         let detached = RAMDisk.cleanupStaleMounts()
         if !detached.isEmpty {
             NSLog("VideoScan: reaped %d orphaned RAM disk(s) from previous run: %@",
