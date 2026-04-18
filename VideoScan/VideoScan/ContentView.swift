@@ -11,9 +11,9 @@ struct ContentView: View {
     var body: some View {
         TabView {
             CatalogView()
-                .tabItem { Label("Video Catalog", systemImage: "film.stack") }
+                .tabItem { Label("Media", systemImage: "film.stack") }
             PersonFinderView()
-                .tabItem { Label("Person Finder", systemImage: "person.crop.rectangle.stack") }
+                .tabItem { Label("People", systemImage: "person.2.fill") }
             SettingsTabView(
                 settings: Binding(
                     get: { model.perfSettings },
@@ -1244,80 +1244,105 @@ private struct CatalogContent: View {
 
     private var previewPlayer: some View {
         Group {
-            if previewOfflineVolumeName != nil {
-                VStack {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: 6)
-                            .fill(Color.black)
-                        Text("MEDIA OFFLINE")
-                            .font(.system(size: 22, weight: .bold, design: .monospaced))
-                            .foregroundColor(.orange)
-                            .tracking(2)
+            if selectedRecord != nil {
+                HStack(spacing: 0) {
+                    // Volume name — always visible when a file is selected
+                    if let rec = selectedRecord {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Image(systemName: "externaldrive.fill")
+                                .font(.system(size: 14))
+                                .foregroundColor(.accentColor)
+                            Text(VolumeReachability.volumeName(forPath: rec.fullPath))
+                                .font(.system(size: 16, weight: .bold))
+                                .foregroundColor(.primary)
+                                .lineLimit(2)
+                            if isPlaying {
+                                Button {
+                                    player?.pause()
+                                    player = nil
+                                    isPlaying = false
+                                } label: {
+                                    Label("Stop", systemImage: "stop.fill")
+                                        .font(.system(size: 11))
+                                }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .padding(.top, 4)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxWidth: 480, maxHeight: 180)
-                    .aspectRatio(16.0/9.0, contentMode: .fit)
-                }
-                .frame(maxWidth: .infinity)
-                .padding(12)
-            } else if previewImage != nil || !previewFilename.isEmpty {
-                VStack(spacing: 8) {
-                    if isPlaying, let player = player {
-                        VideoPlayer(player: player)
-                            .cornerRadius(6)
-                            .shadow(radius: 3)
-                    } else if let img = previewImage {
-                        ZStack {
-                            Image(nsImage: img)
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
+
+                    // Media preview — center
+                    VStack(spacing: 0) {
+                        if previewOfflineVolumeName != nil
+                            || (selectedRecord != nil && !VolumeReachability.isReachable(path: selectedRecord!.fullPath)) {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(Color.black)
+                                Text("MEDIA OFFLINE")
+                                    .font(.system(size: 22, weight: .bold, design: .monospaced))
+                                    .foregroundColor(.orange)
+                                    .tracking(2)
+                            }
+                            .frame(maxWidth: 480, maxHeight: 180)
+                            .aspectRatio(16.0/9.0, contentMode: .fit)
+                        } else if isPlaying, let player = player {
+                            VideoPlayer(player: player)
                                 .cornerRadius(6)
                                 .shadow(radius: 3)
+                        } else if let img = previewImage {
+                            ZStack {
+                                Image(nsImage: img)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fit)
+                                    .cornerRadius(6)
+                                    .shadow(radius: 3)
 
-                            if let rec = selectedRecord,
-                               rec.streamType == .videoAndAudio || rec.streamType == .videoOnly {
-                                Button {
-                                    let url = URL(fileURLWithPath: rec.fullPath)
-                                    player = AVPlayer(url: url)
-                                    isPlaying = true
-                                    player?.play()
-                                } label: {
-                                    Image(systemName: "play.circle.fill")
-                                        .font(.system(size: 48))
-                                        .foregroundColor(.white.opacity(0.85))
-                                        .shadow(radius: 4)
+                                if let rec = selectedRecord,
+                                   rec.streamType == .videoAndAudio || rec.streamType == .videoOnly {
+                                    Button {
+                                        let url = URL(fileURLWithPath: rec.fullPath)
+                                        player = AVPlayer(url: url)
+                                        isPlaying = true
+                                        player?.play()
+                                    } label: {
+                                        Image(systemName: "play.circle.fill")
+                                            .font(.system(size: 48))
+                                            .foregroundColor(.white.opacity(0.85))
+                                            .shadow(radius: 4)
+                                    }
+                                    .buttonStyle(.plain)
                                 }
-                                .buttonStyle(.plain)
                             }
-                        }
-                    } else {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(Color.gray.opacity(0.1))
-                                .frame(width: 240, height: 135)
-                            ProgressView()
+                        } else if selectedRecord?.streamType == .audioOnly {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(Color.black)
+                                VStack(spacing: 6) {
+                                    Image(systemName: "waveform")
+                                        .font(.system(size: 36))
+                                        .foregroundColor(.yellow.opacity(0.7))
+                                    Text("AUDIO ONLY")
+                                        .font(.system(size: 16, weight: .bold, design: .monospaced))
+                                        .foregroundColor(.yellow)
+                                }
+                            }
+                            .frame(maxWidth: 480, maxHeight: 180)
+                            .aspectRatio(16.0/9.0, contentMode: .fit)
+                        } else {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(Color.gray.opacity(0.1))
+                                    .frame(width: 240, height: 135)
+                                ProgressView()
+                            }
                         }
                     }
 
-                    // Filename + stop button
-                    HStack {
-                        Text(previewFilename)
-                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Spacer()
-                        if isPlaying {
-                            Button {
-                                player?.pause()
-                                player = nil
-                                isPlaying = false
-                            } label: {
-                                Image(systemName: "stop.fill")
-                                    .font(.system(size: 12))
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        }
-                    }
+                    // Balance — right side
+                    Spacer()
+                        .frame(maxWidth: .infinity)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(12)
@@ -1326,7 +1351,7 @@ private struct CatalogContent: View {
                     Image(systemName: "play.rectangle")
                         .font(.system(size: 32))
                         .foregroundColor(.secondary.opacity(0.4))
-                    Text("Select a video to preview")
+                    Text("Select a file to preview")
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }
@@ -1368,15 +1393,28 @@ private struct InspectorPanel: View {
                             .font(.system(size: 13, weight: .semibold, design: .monospaced))
                             .textSelection(.enabled)
                             .lineLimit(2)
-                        Text(rec.streamType == .ffprobeFailed ? rec.isPlayable : rec.streamTypeRaw)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(streamTypeColor(rec.streamType))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(
-                                RoundedRectangle(cornerRadius: 4)
-                                    .fill(streamTypeColor(rec.streamType).opacity(0.12))
-                            )
+                        HStack(spacing: 8) {
+                            Text(rec.streamType == .ffprobeFailed ? rec.isPlayable : rec.streamTypeRaw)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(streamTypeColor(rec.streamType))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .fill(streamTypeColor(rec.streamType).opacity(0.12))
+                                )
+                        }
+                        // Volume name — prominent
+                        HStack(spacing: 4) {
+                            Image(systemName: "externaldrive.fill")
+                                .font(.system(size: 11))
+                                .foregroundColor(.accentColor)
+                            Text(VolumeReachability.volumeName(forPath: rec.fullPath))
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundColor(.primary)
+                                .textSelection(.enabled)
+                        }
+                        .padding(.top, 2)
                     }
                     .padding(.horizontal, 16)
                     .padding(.bottom, 12)
