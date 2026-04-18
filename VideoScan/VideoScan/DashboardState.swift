@@ -168,6 +168,7 @@ final class DashboardState: ObservableObject {
     @Published var visionMsPerFrame: Double = 0
     @Published var visionWorkers: Int = 0
     @Published var visionActive: Bool = false
+    @Published var activeEngineLabel: String = "Vision / ANE"
 
     private var systemMetricsTimer: Timer?
 
