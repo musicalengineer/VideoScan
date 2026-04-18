@@ -17,6 +17,9 @@ struct PersonFinderView: View {
     @State private var autoRejectPct: Int = 60
     @State private var selectedResultIDs = Set<UUID>()
     @State private var inspectedResult: ClipResult? = nil
+    @State private var resultSortOrder = [KeyPathComparator(\ClipResult.videoFilename)]
+    @State private var inspectedFace: ReferenceFace? = nil
+    @State private var showFailures = false
 
     var selectedJob: ScanJob? { model.jobs.first { $0.id == selectedJobID } }
     var selectedEngine: RecognitionEngine { model.settings.recognitionEngine }
@@ -34,45 +37,76 @@ struct PersonFinderView: View {
             resultsTable
         }
         .frame(minWidth: 960, minHeight: 650)
-        .onAppear { model.dashboard = dashboard }
+        .onAppear {
+            model.dashboard = dashboard
+            // Auto-load last reference photos if path is set and faces not yet loaded
+            if !model.settings.referencePath.isEmpty && model.referenceFaces.isEmpty {
+                Task { await model.loadReference() }
+            }
+        }
     }
 
     // MARK: Reference bar — who are we looking for?
 
     var referenceBar: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 12) {
+            HStack(spacing: 10) {
                 Image(systemName: "person.crop.rectangle.stack")
                     .font(.title2)
                     .foregroundColor(.accentColor)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Reference Photos").font(.headline)
-                    Text("Add photos from any source — they accumulate")
-                        .font(.caption).foregroundColor(.secondary)
-                }
-
-                TextField("Folder of reference photos…", text: model.settingsBinding.referencePath)
+                // Person name
+                Text("Person")
+                    .font(.headline)
+                TextField("e.g. Donna", text: model.settingsBinding.personName)
                     .textFieldStyle(.roundedBorder)
-                    .font(.system(.body, design: .monospaced))
-                    .onSubmit { Task { await model.loadReference() } }
+                    .frame(width: 110)
 
-                Button("Browse Folder…") { browseForReference() }
-                    .controlSize(.large)
+                Divider().frame(height: 24)
 
-                Button("Add Folder") {
-                    Task { await model.loadReference() }
+                // Save / Load profile
+                Button { model.saveCurrentPOI() } label: {
+                    Label("Save", systemImage: "square.and.arrow.down")
                 }
-                .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .disabled(model.settings.referencePath.isEmpty || model.isLoadingReference)
+                .disabled(model.settings.personName.trimmingCharacters(in: .whitespaces).isEmpty)
+                .help("Save this person's profile (photos, settings) for later recall")
+
+                if !model.savedProfiles.isEmpty {
+                    Menu {
+                        ForEach(model.savedProfiles) { profile in
+                            Button(profile.name) {
+                                Task { await model.loadPOI(profile) }
+                            }
+                        }
+                        Divider()
+                        Menu("Delete…") {
+                            ForEach(model.savedProfiles) { profile in
+                                Button(profile.name, role: .destructive) {
+                                    model.deletePOI(profile)
+                                }
+                            }
+                        }
+                    } label: {
+                        Label("Load", systemImage: "person.crop.rectangle.stack.fill")
+                    }
+                    .controlSize(.large)
+                    .help("Load a saved person profile")
+                }
+
+                Divider().frame(height: 24)
+
+                // Add reference photos
+                Button("Browse\u{2026}") { browseForReference() }
+                    .controlSize(.large)
+                    .help("Browse for a folder of reference photos")
 
                 PhotosPicker(
                     selection: $photosPickerItems,
                     maxSelectionCount: 50,
                     matching: .images
                 ) {
-                    Label(isImportingFromPhotos ? "Importing…" : "Add from Apple Photos",
+                    Label(isImportingFromPhotos ? "Importing\u{2026}" : "Apple Photos",
                           systemImage: "photo.on.rectangle.angled")
                 }
                 .controlSize(.large)
@@ -87,39 +121,32 @@ struct PersonFinderView: View {
                 }
 
                 if !model.referenceFaces.isEmpty {
+                    Divider().frame(height: 24)
+
                     HStack(spacing: 4) {
-                        Text("Remove <")
+                        Text("Quality <")
                             .font(.callout).foregroundStyle(.secondary)
                         TextField("", value: $autoRejectPct, format: .number)
                             .textFieldStyle(.roundedBorder)
-                            .frame(width: 44)
+                            .frame(width: 40)
                         Stepper("", value: $autoRejectPct, in: 1...99).labelsHidden()
                         Text("%")
                             .font(.callout).foregroundStyle(.secondary)
-                        Button("Apply") {
+                        Button("Remove") {
                             model.removeReferenceFaces(belowConfidence: Float(autoRejectPct) / 100.0)
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.regular)
                     }
+                    .help("Remove reference photos below this confidence threshold")
+
                     Button("Clear All", role: .destructive) { model.clearReference() }
                         .controlSize(.large)
                 }
-
-                Divider().frame(height: 28)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Person Name").font(.headline)
-                    Text("Used for filenames")
-                        .font(.caption).foregroundColor(.secondary)
-                }
-                TextField("e.g. Donna", text: model.settingsBinding.personName)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 110)
             }
 
             // Status row + face grid
-            if !model.referenceFaces.isEmpty || model.referenceLoadError != nil {
+            if !model.referenceFaces.isEmpty || model.referenceLoadError != nil || !model.referenceLoadFailures.isEmpty {
                 HStack(spacing: 8) {
                     if !model.referenceFaces.isEmpty {
                         Label("\(model.referencePhotoCount) face(s) from \(model.referenceSources.count) source(s)",
@@ -134,9 +161,41 @@ struct PersonFinderView: View {
                         if poor > 0 { Text("\(poor) poor").foregroundColor(.red).font(.caption) }
                     }
                     if let err = model.referenceLoadError {
-                        Label(err, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundColor(.red)
+                        Label(err, systemImage: "info.circle.fill")
+                            .foregroundColor(.orange)
                             .font(.callout)
+                    }
+                    if !model.referenceLoadFailures.isEmpty {
+                        Button {
+                            showFailures.toggle()
+                        } label: {
+                            Label("\(model.referenceLoadFailures.count) skipped", systemImage: "exclamationmark.triangle.fill")
+                                .font(.callout)
+                                .foregroundColor(.red)
+                        }
+                        .buttonStyle(.plain)
+                        .popover(isPresented: $showFailures) {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Photos Without Usable Faces")
+                                    .font(.headline)
+                                    .padding(.bottom, 4)
+                                ForEach(model.referenceLoadFailures) { f in
+                                    HStack(spacing: 6) {
+                                        Image(systemName: "xmark.circle.fill")
+                                            .foregroundColor(.red)
+                                            .font(.system(size: 11))
+                                        Text(f.filename)
+                                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                            .lineLimit(1)
+                                        Text("— \(f.reason)")
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                            }
+                            .padding(12)
+                            .frame(minWidth: 320, maxHeight: 300)
+                        }
                     }
                     Spacer()
                 }
@@ -145,8 +204,11 @@ struct PersonFinderView: View {
                 ScrollView(.horizontal) {
                     HStack(spacing: 8) {
                         ForEach(model.referenceFaces) { face in
-                            ReferenceFaceCard(face: face) {
+                            ReferenceFaceCard(face: face, onRemove: {
                                 model.removeReferenceFace(id: face.id)
+                            })
+                            .onTapGesture(count: 2) {
+                                inspectedFace = face
                             }
                         }
                     }
@@ -154,6 +216,9 @@ struct PersonFinderView: View {
                     .padding(.vertical, 4)
                 }
                 .frame(minHeight: 124)
+                .popover(item: $inspectedFace) { face in
+                    faceDetailPopover(face)
+                }
             }
         }
         .padding(.horizontal, 16)
@@ -297,6 +362,8 @@ struct PersonFinderView: View {
                 .font(.body.weight(.medium))
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
         }
         .background(Color(NSColor.windowBackgroundColor))
     }
@@ -436,8 +503,8 @@ struct PersonFinderView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                Table(results, selection: $selectedResultIDs) {
-                    TableColumn("Video File") { r in
+                Table(results.sorted(using: resultSortOrder), selection: $selectedResultIDs, sortOrder: $resultSortOrder) {
+                    TableColumn("Video File", value: \.videoFilename) { r in
                         Text(r.videoFilename)
                             .font(.system(.body, design: .monospaced))
                             .lineLimit(1)
@@ -445,26 +512,26 @@ struct PersonFinderView: View {
                     }
                     .width(min: 200, ideal: 300)
 
-                    TableColumn("Duration") { r in
+                    TableColumn("Duration", value: \.videoDuration) { r in
                         Text(pfFormatDuration(r.videoDuration))
                             .font(.system(.body, design: .monospaced))
                     }
                     .width(min: 70, ideal: 80)
 
-                    TableColumn("Presence") { r in
+                    TableColumn("Presence", value: \.presenceSecs) { r in
                         Text(pfFormatDuration(r.presenceSecs))
                             .font(.system(.body, design: .monospaced).weight(.medium))
                             .foregroundColor(.green)
                     }
                     .width(min: 70, ideal: 80)
 
-                    TableColumn("Clips") { r in
+                    TableColumn("Clips", value: \.segmentCount) { r in
                         Text("\(r.segmentCount)")
                             .font(.body)
                     }
                     .width(min: 50, ideal: 60)
 
-                    TableColumn("Best Match") { r in
+                    TableColumn("Best Match", value: \.bestDistance) { r in
                         Text(String(format: "%.3f", r.bestDistance))
                             .font(.system(.body, design: .monospaced))
                             .foregroundColor(r.bestDistance < 0.5 ? .green : r.bestDistance < 0.65 ? .yellow : .orange)
@@ -559,6 +626,40 @@ struct PersonFinderView: View {
                 .lineLimit(2)
                 .truncationMode(.middle)
         }
+    }
+
+    func faceDetailPopover(_ face: ReferenceFace) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Image(nsImage: NSImage(cgImage: face.thumbnail, size: NSSize(width: 120, height: 120)))
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 120, height: 120)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(face.sourceFilename)
+                        .font(.headline)
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(face.quality == .good ? .green : face.quality == .fair ? .orange : .red)
+                            .frame(width: 8, height: 8)
+                        Text(face.quality == .good ? "Good" : face.quality == .fair ? "Fair" : "Poor")
+                            .font(.callout.weight(.medium))
+                    }
+                    Text(face.angleDescription)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            Divider()
+            infoRow("Confidence", String(format: "%.0f%%", face.confidence * 100))
+            infoRow("Yaw", String(format: "%.1f°", face.yawDeg))
+            infoRow("Pitch", String(format: "%.1f°", face.pitchDeg))
+            infoRow("Roll", String(format: "%.1f°", face.rollDeg))
+            infoRow("Face Area", String(format: "%.1f%% of image", face.faceAreaPct))
+        }
+        .padding()
+        .frame(minWidth: 300, maxWidth: 400)
     }
 
     // MARK: Helpers
@@ -777,6 +878,7 @@ struct ReferenceFaceCard: View {
         .padding(4)
         .background(Color(NSColor.controlBackgroundColor))
         .cornerRadius(8)
+        .help(face.sourceFilename)
     }
 }
 
@@ -1025,6 +1127,8 @@ struct RecognitionEnginePanel: View {
         switch engine {
         case .vision:
             return "Built-in module is ready"
+        case .arcface:
+            return "ArcFace CoreML — local face identity model on ANE"
         case .dlib:
             return dlibReady ? "Python recognizer is ready" : "Set Python and Script paths to enable this module"
         case .hybrid:
@@ -1036,6 +1140,8 @@ struct RecognitionEnginePanel: View {
         switch engine {
         case .vision:
             return "checkmark.circle"
+        case .arcface:
+            return "brain"
         case .dlib:
             return dlibReady ? "checkmark.circle" : "exclamationmark.triangle"
         case .hybrid:
@@ -1046,6 +1152,8 @@ struct RecognitionEnginePanel: View {
     private var statusColor: Color {
         switch engine {
         case .vision:
+            return .green
+        case .arcface:
             return .green
         case .dlib:
             return dlibReady ? .green : .orange
@@ -1280,7 +1388,8 @@ struct RealtimeFaceDetectionContent: View {
                     job: job,
                     jobs: jobs,
                     selectedJobID: $selectedJobID,
-                    engineTitle: model.settings.recognitionEngine.title
+                    engineTitle: model.settings.recognitionEngine.title,
+                    personName: model.settings.personName
                 )
             } else {
                 VStack(spacing: 0) {
@@ -1317,6 +1426,7 @@ private struct ActiveJobFaceDetectView: View {
     let jobs: [ScanJob]
     @Binding var selectedJobID: UUID?
     let engineTitle: String
+    let personName: String
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1324,7 +1434,32 @@ private struct ActiveJobFaceDetectView: View {
             ZStack {
                 Color.black
 
-                if let frame = job.liveFrame {
+                if job.status == .done || job.status == .extracting {
+                    // Scan finished — clear the frame and show completion message
+                    VStack(spacing: 16) {
+                        Image(systemName: job.status == .extracting ? "scissors" : "checkmark.circle")
+                            .font(.system(size: 52))
+                            .foregroundStyle(job.status == .extracting ? .orange : .green)
+                        Text("Face Detection Done")
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(.white)
+                        if job.status == .extracting {
+                            Text("Generating Clips of \"\(personName.isEmpty ? "Person" : personName)\"")
+                                .font(.system(size: 17))
+                                .foregroundStyle(.white.opacity(0.8))
+                            ProgressView()
+                                .colorScheme(.dark)
+                                .scaleEffect(1.2)
+                        }
+                        HStack(spacing: 20) {
+                            Text("\(job.videosScanned) videos scanned")
+                                .foregroundStyle(.white.opacity(0.6))
+                            Text("\(job.videosWithHits) with matches")
+                                .foregroundStyle(job.videosWithHits > 0 ? .green : .white.opacity(0.6))
+                        }
+                        .font(.system(size: 14, design: .monospaced))
+                    }
+                } else if let frame = job.liveFrame {
                     LiveFramePreview(
                         frame: frame,
                         matchedRects: job.liveMatchedRects,
@@ -1433,80 +1568,73 @@ private struct ActiveJobFaceDetectView: View {
     }
 }
 
-/// Floating HUD showing live detection stats
+/// Floating HUD showing live detection stats — compact single-line top-left badge
+/// plus key stats below.
 private struct FaceDetectHUD: View {
     @ObservedObject var job: ScanJob
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
                 Image(systemName: "circle.fill")
-                    .font(.system(size: 10))
+                    .font(.system(size: 7))
                     .foregroundColor(.red)
                 Text("LIVE")
-                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundColor(.red)
+                if job.videosTotal > 0 {
+                    Text("\(job.videosScanned)/\(job.videosTotal)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.8))
+                }
+                Text(pfFormatDuration(job.elapsedSecs))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.6))
             }
-            if job.videosTotal > 0 {
-                Text("Video \(job.videosScanned)/\(job.videosTotal)")
-                    .font(.system(size: 16, design: .monospaced))
-                    .foregroundColor(.white)
+            HStack(spacing: 10) {
+                Text("Hits \(job.videosWithHits)")
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundColor(job.videosWithHits > 0 ? .green : .white.opacity(0.7))
+                if job.bestDist < .greatestFiniteMagnitude {
+                    Text(String(format: "Best %.3f", job.bestDist))
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.8))
+                }
             }
-            Text("Hits: \(job.videosWithHits)")
-                .font(.system(size: 16, design: .monospaced))
-                .foregroundColor(job.videosWithHits > 0 ? .green : .white)
-            if job.bestDist < .greatestFiniteMagnitude {
-                Text(String(format: "Best: %.3f", job.bestDist))
-                    .font(.system(size: 16, design: .monospaced))
-                    .foregroundColor(.white)
-            }
-            Text(pfFormatDuration(job.elapsedSecs))
-                .font(.system(size: 14, design: .monospaced))
-                .foregroundColor(.white.opacity(0.7))
         }
-        .padding(12)
-        .background(.black.opacity(0.6))
-        .cornerRadius(8)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(.black.opacity(0.55))
+        .cornerRadius(6)
     }
 }
 
-/// Color legend for bounding box colors. Also shows the active recognition
-/// engine so the demo doesn't need to pop back to Settings to confirm it.
+/// Compact engine + legend badge — top-right corner.
 private struct FaceDetectLegend: View {
     let engineTitle: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 6) {
-                RoundedRectangle(cornerRadius: 3).fill(.green)
-                    .frame(width: 16, height: 16)
+        HStack(spacing: 8) {
+            HStack(spacing: 4) {
+                RoundedRectangle(cornerRadius: 2).fill(.green)
+                    .frame(width: 10, height: 10)
                 Text("Match")
-                    .font(.system(size: 14))
-                    .foregroundColor(.white)
+                    .font(.system(size: 11))
+                    .foregroundColor(.white.opacity(0.8))
             }
-            HStack(spacing: 6) {
-                RoundedRectangle(cornerRadius: 3).fill(.yellow)
-                    .frame(width: 16, height: 16)
-                Text("Face (no match)")
-                    .font(.system(size: 14))
-                    .foregroundColor(.white)
+            HStack(spacing: 4) {
+                RoundedRectangle(cornerRadius: 2).fill(.yellow)
+                    .frame(width: 10, height: 10)
+                Text("Face")
+                    .font(.system(size: 11))
+                    .foregroundColor(.white.opacity(0.8))
             }
-            Divider()
-                .background(.white.opacity(0.3))
-                .padding(.vertical, 1)
-            HStack(spacing: 6) {
-                Image(systemName: "cpu")
-                    .font(.system(size: 12))
-                    .foregroundColor(.cyan)
-                Text("Alg:")
-                    .font(.system(size: 12))
-                    .foregroundColor(.white.opacity(0.7))
-                Text(engineTitle)
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                    .foregroundColor(.cyan)
-            }
+            Text(engineTitle)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundColor(.cyan)
         }
-        .padding(10)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
         .background(.black.opacity(0.5))
         .cornerRadius(6)
     }
