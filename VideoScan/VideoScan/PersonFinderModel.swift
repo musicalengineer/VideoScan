@@ -7,6 +7,7 @@ import AVFoundation
 import Vision
 import CoreImage
 import CoreGraphics
+import CoreML
 import SwiftUI
 import Combine
 
@@ -26,25 +27,28 @@ import Combine
 // dashboards) stay engine-agnostic.
 
 enum RecognitionEngine: String, CaseIterable, Identifiable {
-    case vision = "Vision (fast)"
-    case dlib   = "dlib/Python (accurate)"
-    case hybrid = "Hybrid (Vision + dlib fallback)"
+    case vision  = "Vision (fast)"
+    case arcface = "ArcFace (CoreML)"
+    case dlib    = "dlib/Python (accurate)"
+    case hybrid  = "Hybrid (Vision + dlib fallback)"
     var id: String { rawValue }
 
     var title: String {
         switch self {
-        case .vision: return "VISION"
-        case .dlib:   return "DLIB"
-        case .hybrid: return "HYBRID"
+        case .vision:  return "VISION"
+        case .arcface: return "ARCFACE"
+        case .dlib:    return "DLIB"
+        case .hybrid:  return "HYBRID"
         }
     }
 
     /// Short label for compact UI / chip overlays.
     var shortLabel: String {
         switch self {
-        case .vision: return "VISION"
-        case .dlib:   return "DLIB"
-        case .hybrid: return "HYBRID"
+        case .vision:  return "VISION"
+        case .arcface: return "ARCFACE"
+        case .dlib:    return "DLIB"
+        case .hybrid:  return "HYBRID"
         }
     }
 
@@ -52,6 +56,8 @@ enum RecognitionEngine: String, CaseIterable, Identifiable {
         switch self {
         case .vision:
             return "Built-in macOS detector for quick whole-library scans."
+        case .arcface:
+            return "ArcFace face identity model via CoreML — accurate, runs on ANE, fully local."
         case .dlib:
             return "DLIB recognizer (Python subprocess) — slower but more accurate on hard faces."
         case .hybrid:
@@ -61,25 +67,28 @@ enum RecognitionEngine: String, CaseIterable, Identifiable {
 
     var capabilitySummary: String {
         switch self {
-        case .vision: return "Fastest — Apple Neural Engine"
-        case .dlib:   return "Most accurate — DLIB / Python"
-        case .hybrid: return "Balanced — multi-engine fallback"
+        case .vision:  return "Fastest — Apple Neural Engine"
+        case .arcface: return "Accurate — ArcFace on ANE (local CoreML)"
+        case .dlib:    return "Most accurate — DLIB / Python"
+        case .hybrid:  return "Balanced — multi-engine fallback"
         }
     }
 
     var requirementsSummary: String {
         switch self {
-        case .vision: return "No extra dependencies"
-        case .dlib:   return "Requires Python executable and recognition script"
-        case .hybrid: return "Uses DLIB when configured, otherwise VISION-only"
+        case .vision:  return "No extra dependencies"
+        case .arcface: return "Requires w600k_r50.mlpackage in models/ directory"
+        case .dlib:    return "Requires Python executable and recognition script"
+        case .hybrid:  return "Uses DLIB when configured, otherwise VISION-only"
         }
     }
 
     var symbolName: String {
         switch self {
-        case .vision: return "video"
-        case .dlib: return "cpu"
-        case .hybrid: return "square.stack.3d.forward.dottedline"
+        case .vision:  return "video"
+        case .arcface: return "brain"
+        case .dlib:    return "cpu"
+        case .hybrid:  return "square.stack.3d.forward.dottedline"
         }
     }
 }
@@ -101,6 +110,12 @@ struct PersonFinderSettings: Equatable {
     var skipBundles: Bool = true        // skip .fcpbundle, .imovielibrary, etc.
     var largestFaceOnly: Bool = false   // use only the largest detected face per reference photo
     var previewRate: Int = 5            // show preview every N sampled frames (1 = every frame)
+
+    // Reference photo management
+    var rejectedReferenceFiles: [String] = []  // filenames removed by user, excluded on reload
+
+    // ArcFace engine
+    var arcfaceThreshold: Float = 0.40    // cosine similarity threshold (higher = stricter)
 
     // dlib/Python engine
     var recognitionEngine: RecognitionEngine = .vision
@@ -188,7 +203,9 @@ struct PersonFinderSettings: Equatable {
         if d.object(forKey: "\(p)decadeChapters") != nil    { s.decadeChapters = d.bool(forKey: "\(p)decadeChapters") }
         if d.object(forKey: "\(p)skipBundles") != nil       { s.skipBundles = d.bool(forKey: "\(p)skipBundles") }
         if d.object(forKey: "\(p)largestFaceOnly") != nil   { s.largestFaceOnly = d.bool(forKey: "\(p)largestFaceOnly") }
-        if d.object(forKey: "\(p)previewRate") != nil      { s.previewRate = max(1, d.integer(forKey: "\(p)previewRate")) }
+        if d.object(forKey: "\(p)previewRate") != nil       { s.previewRate = max(1, d.integer(forKey: "\(p)previewRate")) }
+        if d.object(forKey: "\(p)arcfaceThreshold") != nil { s.arcfaceThreshold = d.float(forKey: "\(p)arcfaceThreshold") }
+        if let rejected = d.stringArray(forKey: "\(p)rejectedReferenceFiles") { s.rejectedReferenceFiles = rejected }
         if s.pythonPath.isEmpty || !FileManager.default.isExecutableFile(atPath: s.pythonPath) {
             s.pythonPath = detectedPythonPath()
         }
@@ -196,6 +213,34 @@ struct PersonFinderSettings: Equatable {
             s.recognitionScript = detectedRecognitionScript()
         }
         return s
+    }
+
+    /// Extract a POI profile from the current settings.
+    func toProfile() -> POIProfile {
+        POIProfile(
+            name: personName,
+            referencePath: referencePath,
+            rejectedFiles: rejectedReferenceFiles,
+            engine: recognitionEngine.rawValue,
+            visionThreshold: threshold,
+            arcfaceThreshold: arcfaceThreshold,
+            minFaceConfidence: minFaceConfidence,
+            largestFaceOnly: largestFaceOnly
+        )
+    }
+
+    /// Apply a POI profile to these settings.
+    mutating func applyProfile(_ profile: POIProfile) {
+        personName = profile.name
+        referencePath = profile.referencePath
+        rejectedReferenceFiles = profile.rejectedFiles
+        if let eng = RecognitionEngine(rawValue: profile.engine) {
+            recognitionEngine = eng
+        }
+        threshold = profile.visionThreshold
+        arcfaceThreshold = profile.arcfaceThreshold
+        minFaceConfidence = profile.minFaceConfidence
+        largestFaceOnly = profile.largestFaceOnly
     }
 
     /// Save all settings to UserDefaults.
@@ -221,6 +266,63 @@ struct PersonFinderSettings: Equatable {
         d.set(skipBundles,                    forKey: "\(p)skipBundles")
         d.set(largestFaceOnly,                forKey: "\(p)largestFaceOnly")
         d.set(previewRate,                    forKey: "\(p)previewRate")
+        d.set(arcfaceThreshold,               forKey: "\(p)arcfaceThreshold")
+        d.set(rejectedReferenceFiles,         forKey: "\(p)rejectedReferenceFiles")
+    }
+}
+
+// MARK: - POI Profile (Person of Interest)
+
+struct POIProfile: Codable, Identifiable, Equatable {
+    var id: String { name.lowercased() }
+    var name: String
+    var referencePath: String
+    var rejectedFiles: [String] = []
+    var engine: String = RecognitionEngine.vision.rawValue
+    var visionThreshold: Float = 0.52
+    var arcfaceThreshold: Float = 0.40
+    var minFaceConfidence: Float = 0.55
+    var largestFaceOnly: Bool = false
+
+    // MARK: File-based persistence
+
+    private static var profilesDir: URL {
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("dev/VideoScan/poi_profiles")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private static func fileURL(for name: String) -> URL {
+        profilesDir.appendingPathComponent(name.lowercased()
+            .replacingOccurrences(of: " ", with: "_") + ".json")
+    }
+
+    func save() throws {
+        let data = try JSONEncoder().encode(self)
+        try data.write(to: Self.fileURL(for: name), options: .atomic)
+    }
+
+    static func load(name: String) throws -> POIProfile {
+        let data = try Data(contentsOf: fileURL(for: name))
+        return try JSONDecoder().decode(POIProfile.self, from: data)
+    }
+
+    static func delete(name: String) throws {
+        let url = fileURL(for: name)
+        if FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.removeItem(at: url)
+        }
+    }
+
+    static func listAll() -> [POIProfile] {
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: profilesDir, includingPropertiesForKeys: nil
+        ) else { return [] }
+        return files
+            .filter { $0.pathExtension == "json" }
+            .compactMap { try? JSONDecoder().decode(POIProfile.self, from: Data(contentsOf: $0)) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 }
 
@@ -271,6 +373,23 @@ struct ReferenceFace: Identifiable {
         if confidence >= 0.60 { return .fair }   // confidence is the primary gate; angle is a bonus
         return .poor
     }
+
+    var angleDescription: String {
+        var parts: [String] = []
+        if abs(yawDeg) < 15 { parts.append("frontal") }
+        else if yawDeg < -15 { parts.append("left profile") }
+        else { parts.append("right profile") }
+        if abs(pitchDeg) > 20 { parts.append(pitchDeg > 0 ? "looking up" : "looking down") }
+        if abs(rollDeg) > 20 { parts.append("tilted") }
+        return parts.joined(separator: ", ")
+    }
+}
+
+/// A reference photo that failed face detection — surfaced to the user.
+struct ReferenceLoadFailure: Identifiable {
+    let id = UUID()
+    let filename: String
+    let reason: String
 }
 
 // MARK: - Clip Result (shown in results table)
@@ -409,6 +528,7 @@ final class PersonFinderModel: ObservableObject {
     var referenceFaces: [ReferenceFace] = []
     var referenceSources: [String] = []     // display labels for each loaded source folder/file
     var referenceLoadError: String? = nil
+    @Published var referenceLoadFailures: [ReferenceLoadFailure] = []
     var isLoadingReference: Bool = false
 
     var referenceFeaturePrints: [VNFeaturePrintObservation] { referenceFaces.map(\.featurePrint) }
@@ -471,7 +591,10 @@ final class PersonFinderModel: ObservableObject {
         let dash = self.dashboard
         job.scanTask = Task { [weak job] in
             guard let job else { return }
-            await MainActor.run { dash?.visionActive = settings.recognitionEngine == .vision }
+            await MainActor.run {
+                dash?.visionActive = settings.recognitionEngine == .vision || settings.recognitionEngine == .arcface
+                dash?.activeEngineLabel = settings.recognitionEngine == .arcface ? "ArcFace / CoreML + ANE" : "Vision / ANE"
+            }
             await PersonFinderModel.runScan(job: job, prints: prints, settings: settings, dashboard: dash)
             await MainActor.run { dash?.visionActive = false; dash?.visionFPS = 0; dash?.visionMsPerFrame = 0 }
             log.close()
@@ -534,26 +657,52 @@ final class PersonFinderModel: ObservableObject {
         referenceLoadError = nil
 
         let largestOnly = settings.largestFaceOnly
-        let (faces, errMsg) = await Task.detached(priority: .userInitiated) {
+        let rejected = Set(settings.rejectedReferenceFiles)
+        let (faces, failures, errMsg) = await Task.detached(priority: .userInitiated) {
             pfLoadReferencePhotos(from: p, largestFaceOnly: largestOnly)
         }.value
+
+        // Surface load failures (photos that couldn't produce a face)
+        let newFailures = rejected.isEmpty
+            ? failures
+            : failures.filter { !rejected.contains($0.filename) }
+        referenceLoadFailures.append(contentsOf: newFailures)
 
         if let err = errMsg {
             referenceLoadError = err
         } else {
-            referenceFaces.append(contentsOf: faces)
+            let filtered = rejected.isEmpty ? faces : faces.filter { !rejected.contains($0.sourceFilename) }
+            referenceFaces.append(contentsOf: filtered)
             let label = (p as NSString).lastPathComponent
             if !referenceSources.contains(label) { referenceSources.append(label) }
+            var infoParts: [String] = []
+            if !rejected.isEmpty && filtered.count < faces.count {
+                let skipped = faces.count - filtered.count
+                infoParts.append("\(skipped) previously removed")
+            }
+            if !newFailures.isEmpty {
+                infoParts.append("\(newFailures.count) photo(s) had no usable face")
+            }
+            if !infoParts.isEmpty {
+                referenceLoadError = infoParts.joined(separator: " · ")
+            }
         }
         isLoadingReference = false
     }
 
     func removeReferenceFace(id: UUID) {
+        if let face = referenceFaces.first(where: { $0.id == id }) {
+            settings.rejectedReferenceFiles.append(face.sourceFilename)
+            settings.save()
+        }
         referenceFaces.removeAll { $0.id == id }
         if referenceFaces.isEmpty { referenceSources = [] }
     }
 
     func removeReferenceFaces(belowConfidence threshold: Float) {
+        let rejected = referenceFaces.filter { $0.confidence < threshold }.map(\.sourceFilename)
+        settings.rejectedReferenceFiles.append(contentsOf: rejected)
+        settings.save()
         referenceFaces.removeAll { $0.confidence < threshold }
         if referenceFaces.isEmpty { referenceSources = [] }
     }
@@ -562,7 +711,43 @@ final class PersonFinderModel: ObservableObject {
         referenceFaces = []
         referenceSources = []
         referenceLoadError = nil
+        referenceLoadFailures = []
         settings.referencePath = ""
+        settings.rejectedReferenceFiles = []
+        settings.save()
+    }
+
+    // MARK: - POI Profile management
+
+    @Published var savedProfiles: [POIProfile] = POIProfile.listAll()
+
+    func saveCurrentPOI() {
+        let profile = settings.toProfile()
+        guard !profile.name.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        try? profile.save()
+        savedProfiles = POIProfile.listAll()
+        referenceLoadError = nil   // clear stale info messages
+    }
+
+    func loadPOI(_ profile: POIProfile) async {
+        // Clear current reference state
+        referenceFaces = []
+        referenceSources = []
+        referenceLoadError = nil
+
+        // Apply profile to settings
+        settings.applyProfile(profile)
+        settings.save()
+
+        // Reload reference photos for this person
+        if !settings.referencePath.isEmpty {
+            await loadReference()
+        }
+    }
+
+    func deletePOI(_ profile: POIProfile) {
+        try? POIProfile.delete(name: profile.name)
+        savedProfiles = POIProfile.listAll()
     }
 
     // MARK: Core scan (nonisolated — runs on cooperative thread pool, NOT on MainActor)
@@ -654,6 +839,49 @@ final class PersonFinderModel: ObservableObject {
                 )
             }
 
+            // ArcFace branch — Vision detection + CoreML ArcFace recognition.
+            @Sendable func runArcFace() async -> pfVideoResult? {
+                let (mlModel, err) = await ArcFaceModelLoader.shared.getModel()
+                guard let mlModel else {
+                    await logFn("[arcface] Model load failed: \(err ?? "unknown")")
+                    return nil
+                }
+                // Load reference embeddings from the same reference photos
+                let (refEmbeddings, refErr) = arcfaceLoadReferenceEmbeddings(
+                    from: settings.referencePath,
+                    largestFaceOnly: settings.largestFaceOnly,
+                    model: mlModel
+                )
+                if let refErr {
+                    await logFn("[arcface] Reference loading failed: \(refErr)")
+                    return nil
+                }
+                return await pfProcessVideoWithArcFace(
+                    filePath: videoFiles[idx], referenceEmbeddings: refEmbeddings,
+                    settings: settings, model: mlModel,
+                    index: idx + 1, total: total,
+                    pauseGate: job.pauseGate,
+                    logFn: logFn, progressFn: progressFn,
+                    frameFn: { img, matched, unmatched in
+                        await progressState.update {
+                            job.liveFrame = img
+                            job.liveMatchedRects = matched
+                            job.liveUnmatchedRects = unmatched
+                        }
+                    },
+                    distFn: distFn,
+                    visionStatsFn: { fps, msPerFrame in
+                        let workers = await MemoryPressureMonitor.shared.currentWorkers()
+                        await MainActor.run {
+                            dash?.visionFPS = fps
+                            dash?.visionMsPerFrame = msPerFrame
+                            dash?.visionWorkers = workers
+                        }
+                    },
+                    previewRateFn: { job.previewRate }
+                )
+            }
+
             // dlib branch — used by .dlib and as the fallback pass of .hybrid.
             @Sendable func runDlib() async -> pfVideoResult? {
                 await pfProcessVideoWithDlib(
@@ -668,6 +896,8 @@ final class PersonFinderModel: ObservableObject {
             switch settings.recognitionEngine {
             case .vision:
                 r = await runVision()
+            case .arcface:
+                r = await runArcFace()
             case .dlib:
                 r = await runDlib()
             case .hybrid:
@@ -874,14 +1104,14 @@ private let pfCIContext = CIContext(options: [.useSoftwareRenderer: false])
 // MARK: - Reference photo loading
 
 // Returns ([ReferenceFace], errorMessage) — errorMessage is nil on success.
-private nonisolated func pfLoadReferencePhotos(from path: String, largestFaceOnly: Bool) -> ([ReferenceFace], String?) {
+private nonisolated func pfLoadReferencePhotos(from path: String, largestFaceOnly: Bool) -> ([ReferenceFace], [ReferenceLoadFailure], String?) {
     let fm = FileManager.default
     let imageExts: Set<String> = ["jpg","jpeg","png","heic","heif","tiff","tif","bmp","gif"]
     var imagePaths: [String] = []
     var isDir: ObjCBool = false
     fm.fileExists(atPath: path, isDirectory: &isDir)
     if isDir.boolValue {
-        guard let e = fm.enumerator(atPath: path) else { return ([], "Cannot enumerate \(path)") }
+        guard let e = fm.enumerator(atPath: path) else { return ([], [], "Cannot enumerate \(path)") }
         while let el = e.nextObject() as? String {
             if imageExts.contains((el as NSString).pathExtension.lowercased()) {
                 imagePaths.append((path as NSString).appendingPathComponent(el))
@@ -891,28 +1121,51 @@ private nonisolated func pfLoadReferencePhotos(from path: String, largestFaceOnl
     } else {
         imagePaths = [path]
     }
-    guard !imagePaths.isEmpty else { return ([], "No images found in \(path)") }
+    guard !imagePaths.isEmpty else { return ([], [], "No images found in \(path)") }
 
     var faces: [ReferenceFace] = []
+    var failures: [ReferenceLoadFailure] = []
     for imgPath in imagePaths {
+        let filename = (imgPath as NSString).lastPathComponent
         guard let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: imgPath) as CFURL, nil),
-              let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else { continue }
+              let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
+            failures.append(ReferenceLoadFailure(filename: filename, reason: "Could not read image"))
+            continue
+        }
         let req = VNDetectFaceRectanglesRequest(); req.revision = 3
         let handler = VNImageRequestHandler(cgImage: img, options: [:])
-        try? handler.perform([req])
+        do {
+            try handler.perform([req])
+        } catch {
+            failures.append(ReferenceLoadFailure(filename: filename, reason: "Vision error: \(error.localizedDescription)"))
+            continue
+        }
 
-        var candidates = (req.results ?? []).filter { $0.confidence >= 0.5 }
+        let allResults = req.results ?? []
+        if allResults.isEmpty {
+            failures.append(ReferenceLoadFailure(filename: filename, reason: "No face detected"))
+            continue
+        }
+
+        var candidates = allResults.filter { $0.confidence >= 0.5 }
+        if candidates.isEmpty {
+            let best = allResults.map { $0.confidence }.max() ?? 0
+            failures.append(ReferenceLoadFailure(filename: filename, reason: "Face confidence too low (\(Int(best * 100))%)"))
+            continue
+        }
+
         if largestFaceOnly, let largest = candidates.max(by: {
             ($0.boundingBox.width * $0.boundingBox.height) < ($1.boundingBox.width * $1.boundingBox.height)
         }) { candidates = [largest] }
 
+        var addedFromThisImage = false
         for obs in candidates {
             guard let cropped = pfNormalizeFaceCrop(from: img, observation: obs),
                   let fp = pfGenerateFeaturePrint(for: cropped) else { continue }
             let face = ReferenceFace(
                 featurePrint: fp,
                 thumbnail: cropped,
-                sourceFilename: (imgPath as NSString).lastPathComponent,
+                sourceFilename: filename,
                 confidence: obs.confidence,
                 rollDeg: (obs.roll?.doubleValue ?? 0) * 180 / .pi,
                 yawDeg: (obs.yaw?.doubleValue ?? 0) * 180 / .pi,
@@ -920,10 +1173,14 @@ private nonisolated func pfLoadReferencePhotos(from path: String, largestFaceOnl
                 faceAreaPct: Float(obs.boundingBox.width * obs.boundingBox.height * 100)
             )
             faces.append(face)
+            addedFromThisImage = true
+        }
+        if !addedFromThisImage {
+            failures.append(ReferenceLoadFailure(filename: filename, reason: "Face crop or feature print failed"))
         }
     }
-    guard !faces.isEmpty else { return ([], "No faces detected in reference photos") }
-    return (faces, nil)
+    guard !faces.isEmpty else { return ([], failures, "No faces detected in reference photos") }
+    return (faces, failures, nil)
 }
 
 // MARK: - Video discovery
@@ -1002,7 +1259,7 @@ private func pfDetectFaces(in image: CGImage) -> [VNFaceObservation] {
     return (req.results ?? []).sorted { $0.confidence > $1.confidence }
 }
 
-private nonisolated func pfNormalizeFaceCrop(from source: CGImage, observation: VNFaceObservation, outputSize: Int = 256) -> CGImage? {
+nonisolated func pfNormalizeFaceCrop(from source: CGImage, observation: VNFaceObservation, outputSize: Int = 256) -> CGImage? {
     let imgW = CGFloat(source.width)
     let imgH = CGFloat(source.height)
     let bbox = observation.boundingBox
@@ -1047,7 +1304,7 @@ private nonisolated func pfGenerateFeaturePrint(for image: CGImage) -> VNFeature
 }
 
 /// Map a track's preferredTransform to the CGImagePropertyOrientation Vision expects.
-private nonisolated func pfOrientationFromTransform(_ t: CGAffineTransform) -> CGImagePropertyOrientation {
+nonisolated func pfOrientationFromTransform(_ t: CGAffineTransform) -> CGImagePropertyOrientation {
     switch (t.a, t.b, t.c, t.d) {
     case (0,  1, -1,  0): return .right  // 90° CW  — phone portrait, home-button right
     case (0, -1,  1,  0): return .left   // 90° CCW — phone portrait, home-button left
@@ -1058,8 +1315,8 @@ private nonisolated func pfOrientationFromTransform(_ t: CGAffineTransform) -> C
 
 /// Phase-1 face detection: run Vision directly on the CVPixelBuffer (no CGImage needed).
 /// Vision handles YpCbCr natively and dispatches to the Neural Engine / ANE.
-private nonisolated func pfDetectFacesInBuffer(_ buffer: CVPixelBuffer,
-                                               orientation: CGImagePropertyOrientation) -> [VNFaceObservation] {
+nonisolated func pfDetectFacesInBuffer(_ buffer: CVPixelBuffer,
+                                      orientation: CGImagePropertyOrientation) -> [VNFaceObservation] {
     let req = VNDetectFaceRectanglesRequest(); req.revision = 3
     let handler = VNImageRequestHandler(cvPixelBuffer: buffer, orientation: orientation, options: [:])
     try? handler.perform([req])
@@ -1068,7 +1325,7 @@ private nonisolated func pfDetectFacesInBuffer(_ buffer: CVPixelBuffer,
 
 /// Phase-2 image: apply the track's preferredTransform so the CGImage is right-side-up,
 /// matching the oriented coordinate space Vision used for bounding boxes.
-private nonisolated func pfOrientedCGImage(from buffer: CVPixelBuffer,
+nonisolated func pfOrientedCGImage(from buffer: CVPixelBuffer,
                                            transform: CGAffineTransform) -> CGImage? {
     var ci = CIImage(cvPixelBuffer: buffer).transformed(by: transform)
     // Transform may shift the extent off-origin — translate back to (0,0)
