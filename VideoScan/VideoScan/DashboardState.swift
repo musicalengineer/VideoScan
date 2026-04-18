@@ -10,7 +10,10 @@ final class DashboardState: ObservableObject {
 
     init() {
         chipName = Self.detectChipName()
-        startSystemMetrics()
+        // Skip timer-based polling when running as a test host
+        if NSClassFromString("XCTestCase") == nil {
+            startSystemMetrics()
+        }
     }
 
     // MARK: - Chip identity / match flash
