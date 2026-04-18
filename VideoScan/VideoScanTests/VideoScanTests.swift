@@ -724,8 +724,9 @@ struct RecognitionEngineTests {
 
     @Test func allCasesExist() {
         let engines = RecognitionEngine.allCases
-        #expect(engines.count == 3)
+        #expect(engines.count == 4)
         #expect(engines.contains(.vision))
+        #expect(engines.contains(.arcface))
         #expect(engines.contains(.dlib))
         #expect(engines.contains(.hybrid))
     }
