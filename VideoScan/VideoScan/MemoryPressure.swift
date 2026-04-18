@@ -77,6 +77,8 @@ actor MemoryPressureMonitor {
         switch engine {
         case .vision:
             return 3072
+        case .arcface:
+            return 2048   // CoreML model ~200MB + Vision detection overhead
         case .dlib:
             return 1024
         case .hybrid:
@@ -89,6 +91,9 @@ actor MemoryPressureMonitor {
     private func hardCap(requested: Int, engine: RecognitionEngine) -> Int {
         switch engine {
         case .vision:
+            return min(requested, max(1, ProcessInfo.processInfo.processorCount))
+        case .arcface:
+            // CoreML handles its own ANE scheduling; allow moderate parallelism
             return min(requested, max(1, ProcessInfo.processInfo.processorCount))
         case .dlib:
             return min(requested, 4)
