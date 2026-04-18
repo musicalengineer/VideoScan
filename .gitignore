@@ -27,6 +27,9 @@ DonnaFaceDetectionTest.png
 # Claude Code
 .claude/
 
+# ML models (too large for git, downloaded separately)
+models/
+
 # Test media — allow small generated fixtures, block large real media
 # The pre-commit hook also rejects any staged file > 75 MB
 tests/fixtures/videos/*-test-*.mxf
