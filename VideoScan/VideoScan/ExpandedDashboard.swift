@@ -141,7 +141,7 @@ struct ExpandedDashboard: View {
                 SiliconChipView(dashboard: dashboard)
             }
         } label: {
-            Label("Face Detection (Vision / ANE)", systemImage: "brain")
+            Label("Face Detection (\(dashboard.activeEngineLabel))", systemImage: "brain")
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundColor(.purple)
         }
