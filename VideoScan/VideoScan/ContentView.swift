@@ -7,13 +7,16 @@ import IOKit
 
 struct ContentView: View {
     @EnvironmentObject var model: VideoScanModel
+    @AppStorage("selectedTab") private var selectedTab: Int = 0
 
     var body: some View {
-        TabView {
+        TabView(selection: $selectedTab) {
             CatalogView()
                 .tabItem { Label("Media", systemImage: "film.stack") }
+                .tag(0)
             PersonFinderView()
                 .tabItem { Label("People", systemImage: "person.2.fill") }
+                .tag(1)
             SettingsTabView(
                 settings: Binding(
                     get: { model.perfSettings },
@@ -22,6 +25,7 @@ struct ContentView: View {
                 totalRAMGB: Int(ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024))
             )
             .tabItem { Label("Settings", systemImage: "gearshape") }
+            .tag(2)
         }
         .frame(minWidth: 900, minHeight: 600)
     }

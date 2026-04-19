@@ -216,7 +216,7 @@ struct PersonFinderSettings: Equatable {
     }
 
     /// Extract a POI profile from the current settings.
-    func toProfile() -> POIProfile {
+    func toProfile(coverImageFilename: String? = nil, notes: String = "", aliases: [String] = []) -> POIProfile {
         POIProfile(
             name: personName,
             referencePath: referencePath,
@@ -225,7 +225,10 @@ struct PersonFinderSettings: Equatable {
             visionThreshold: threshold,
             arcfaceThreshold: arcfaceThreshold,
             minFaceConfidence: minFaceConfidence,
-            largestFaceOnly: largestFaceOnly
+            largestFaceOnly: largestFaceOnly,
+            coverImageFilename: coverImageFilename,
+            notes: notes,
+            aliases: aliases
         )
     }
 
@@ -283,6 +286,59 @@ struct POIProfile: Codable, Identifiable, Equatable {
     var arcfaceThreshold: Float = 0.40
     var minFaceConfidence: Float = 0.55
     var largestFaceOnly: Bool = false
+    /// Filename of the best reference photo — used as the avatar in the People gallery.
+    var coverImageFilename: String?
+    /// Free-form notes about this person (relationship, maiden name, etc.)
+    var notes: String = ""
+    /// Alternate names / spellings that might appear in video filenames or metadata.
+    var aliases: [String] = []
+    /// Cover photo crop: pan offset (normalized, 0 = centered).
+    var coverCropOffsetX: Double = 0
+    var coverCropOffsetY: Double = 0
+    /// Cover photo crop: zoom scale (1.0 = fill, >1 = zoomed in).
+    var coverCropScale: Double = 1.0
+
+    // MARK: Codable — tolerate missing keys from older JSON files
+
+    init(name: String, referencePath: String, rejectedFiles: [String] = [],
+         engine: String = RecognitionEngine.vision.rawValue,
+         visionThreshold: Float = 0.52, arcfaceThreshold: Float = 0.40,
+         minFaceConfidence: Float = 0.55, largestFaceOnly: Bool = false,
+         coverImageFilename: String? = nil, notes: String = "", aliases: [String] = [],
+         coverCropOffsetX: Double = 0, coverCropOffsetY: Double = 0, coverCropScale: Double = 1.0) {
+        self.name = name
+        self.referencePath = referencePath
+        self.rejectedFiles = rejectedFiles
+        self.engine = engine
+        self.visionThreshold = visionThreshold
+        self.arcfaceThreshold = arcfaceThreshold
+        self.minFaceConfidence = minFaceConfidence
+        self.largestFaceOnly = largestFaceOnly
+        self.coverImageFilename = coverImageFilename
+        self.notes = notes
+        self.aliases = aliases
+        self.coverCropOffsetX = coverCropOffsetX
+        self.coverCropOffsetY = coverCropOffsetY
+        self.coverCropScale = coverCropScale
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name              = try c.decode(String.self, forKey: .name)
+        referencePath     = try c.decode(String.self, forKey: .referencePath)
+        rejectedFiles     = try c.decodeIfPresent([String].self, forKey: .rejectedFiles) ?? []
+        engine            = try c.decodeIfPresent(String.self, forKey: .engine) ?? RecognitionEngine.vision.rawValue
+        visionThreshold   = try c.decodeIfPresent(Float.self, forKey: .visionThreshold) ?? 0.52
+        arcfaceThreshold  = try c.decodeIfPresent(Float.self, forKey: .arcfaceThreshold) ?? 0.40
+        minFaceConfidence = try c.decodeIfPresent(Float.self, forKey: .minFaceConfidence) ?? 0.55
+        largestFaceOnly   = try c.decodeIfPresent(Bool.self, forKey: .largestFaceOnly) ?? false
+        coverImageFilename = try c.decodeIfPresent(String.self, forKey: .coverImageFilename)
+        notes             = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        aliases           = try c.decodeIfPresent([String].self, forKey: .aliases) ?? []
+        coverCropOffsetX  = try c.decodeIfPresent(Double.self, forKey: .coverCropOffsetX) ?? 0
+        coverCropOffsetY  = try c.decodeIfPresent(Double.self, forKey: .coverCropOffsetY) ?? 0
+        coverCropScale    = try c.decodeIfPresent(Double.self, forKey: .coverCropScale) ?? 1.0
+    }
 
     // MARK: File-based persistence
 
@@ -323,6 +379,53 @@ struct POIProfile: Codable, Identifiable, Equatable {
             .filter { $0.pathExtension == "json" }
             .compactMap { try? JSONDecoder().decode(POIProfile.self, from: Data(contentsOf: $0)) }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// Resolve the cover image to an NSImage by looking in the reference folder.
+    /// Returns nil if no cover is set or the file doesn't exist.
+    var coverImage: NSImage? {
+        guard let filename = coverImageFilename else { return nil }
+        let url = URL(fileURLWithPath: referencePath).appendingPathComponent(filename)
+        return NSImage(contentsOf: url)
+    }
+
+    /// Whether custom crop parameters have been set.
+    var hasCoverCrop: Bool {
+        coverCropScale != 1.0 || coverCropOffsetX != 0 || coverCropOffsetY != 0
+    }
+
+    /// List image filenames in the reference folder (for cover photo picking).
+    var referenceImageFilenames: [String] {
+        guard !referencePath.isEmpty else { return [] }
+        let url = URL(fileURLWithPath: referencePath)
+        let exts: Set<String> = ["jpg", "jpeg", "png", "heic", "heif", "tiff", "tif", "bmp"]
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: url, includingPropertiesForKeys: nil
+        ) else { return [] }
+        return contents
+            .filter { exts.contains($0.pathExtension.lowercased()) }
+            .map { $0.lastPathComponent }
+            .sorted()
+    }
+
+    /// Load an NSImage for a filename in the reference folder.
+    func referenceImage(named filename: String) -> NSImage? {
+        let url = URL(fileURLWithPath: referencePath).appendingPathComponent(filename)
+        return NSImage(contentsOf: url)
+    }
+
+    /// Pick the best reference photo filename for the cover — highest confidence, frontal.
+    static func bestCoverFilename(from faces: [ReferenceFace]) -> String? {
+        faces.sorted { a, b in
+            // Prefer good quality, then highest confidence, then most frontal
+            if a.quality != b.quality {
+                let rank: (ReferenceFace.Quality) -> Int = { q in
+                    switch q { case .good: return 2; case .fair: return 1; case .poor: return 0 }
+                }
+                return rank(a.quality) > rank(b.quality)
+            }
+            return a.confidence > b.confidence
+        }.first?.sourceFilename
     }
 }
 
@@ -527,6 +630,8 @@ final class PersonFinderModel: ObservableObject {
     }
     var referenceFaces: [ReferenceFace] = []
     var referenceSources: [String] = []     // display labels for each loaded source folder/file
+    /// Name of the person being actively scanned — set at scan start, cleared when all jobs finish.
+    @Published var scanningPersonName: String? = nil
     var referenceLoadError: String? = nil
     @Published var referenceLoadFailures: [ReferenceLoadFailure] = []
     var isLoadingReference: Bool = false
@@ -581,6 +686,7 @@ final class PersonFinderModel: ObservableObject {
 
         job.reset()
         job.status = .scanning
+        scanningPersonName = settings.personName
         job.previewRate = settings.previewRate
         let log = PersistentLog(name: "facedetect")
         log.start()
@@ -589,14 +695,20 @@ final class PersonFinderModel: ObservableObject {
 
         let prints = settings.recognitionEngine == .vision ? referenceFeaturePrints : []
         let dash = self.dashboard
-        job.scanTask = Task { [weak job] in
+        job.scanTask = Task { [weak self, weak job] in
             guard let job else { return }
             await MainActor.run {
                 dash?.visionActive = settings.recognitionEngine == .vision || settings.recognitionEngine == .arcface
                 dash?.activeEngineLabel = settings.recognitionEngine == .arcface ? "ArcFace / CoreML + ANE" : "Vision / ANE"
             }
             await PersonFinderModel.runScan(job: job, prints: prints, settings: settings, dashboard: dash)
-            await MainActor.run { dash?.visionActive = false; dash?.visionFPS = 0; dash?.visionMsPerFrame = 0 }
+            await MainActor.run {
+                dash?.visionActive = false; dash?.visionFPS = 0; dash?.visionMsPerFrame = 0
+                // Clear scanningPersonName when no jobs are still scanning
+                if let self, !self.jobs.contains(where: { $0.status == .scanning }) {
+                    self.scanningPersonName = nil
+                }
+            }
             log.close()
         }
     }
@@ -697,6 +809,7 @@ final class PersonFinderModel: ObservableObject {
         }
         referenceFaces.removeAll { $0.id == id }
         if referenceFaces.isEmpty { referenceSources = [] }
+        syncRejectionsToProfile()
     }
 
     func removeReferenceFaces(belowConfidence threshold: Float) {
@@ -705,6 +818,18 @@ final class PersonFinderModel: ObservableObject {
         settings.save()
         referenceFaces.removeAll { $0.confidence < threshold }
         if referenceFaces.isEmpty { referenceSources = [] }
+        syncRejectionsToProfile()
+    }
+
+    /// Sync the current rejection list back to the active POI profile on disk.
+    private func syncRejectionsToProfile() {
+        let name = settings.personName
+        guard !name.isEmpty,
+              var profile = savedProfiles.first(where: { $0.name.lowercased() == name.lowercased() })
+        else { return }
+        profile.rejectedFiles = settings.rejectedReferenceFiles
+        try? profile.save()
+        savedProfiles = POIProfile.listAll()
     }
 
     func clearReference() {
@@ -722,7 +847,8 @@ final class PersonFinderModel: ObservableObject {
     @Published var savedProfiles: [POIProfile] = POIProfile.listAll()
 
     func saveCurrentPOI() {
-        let profile = settings.toProfile()
+        let cover = POIProfile.bestCoverFilename(from: referenceFaces)
+        let profile = settings.toProfile(coverImageFilename: cover)
         guard !profile.name.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         try? profile.save()
         savedProfiles = POIProfile.listAll()
@@ -742,6 +868,22 @@ final class PersonFinderModel: ObservableObject {
         // Reload reference photos for this person
         if !settings.referencePath.isEmpty {
             await loadReference()
+        }
+    }
+
+    /// Save an edited profile back to disk and refresh the gallery.
+    /// If the name changed, delete the old file first.
+    func updateProfile(_ updated: POIProfile, oldName: String? = nil) {
+        if let old = oldName, old.lowercased() != updated.name.lowercased() {
+            try? POIProfile.delete(name: old)
+        }
+        try? updated.save()
+        savedProfiles = POIProfile.listAll()
+
+        // If the edited person is the currently active one, sync settings
+        if settings.personName.lowercased() == (oldName ?? updated.name).lowercased() {
+            settings.applyProfile(updated)
+            settings.save()
         }
     }
 
