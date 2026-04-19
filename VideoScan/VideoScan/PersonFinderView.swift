@@ -12,21 +12,19 @@ struct PersonFinderView: View {
     @StateObject private var model = PersonFinderModel()
     @State private var selectedJobID: UUID? = nil
     @State private var showSettings = false
-    @State private var photosPickerItems: [PhotosPickerItem] = []
-    @State private var isImportingFromPhotos = false
-    @State private var autoRejectPct: Int = 60
+    @State private var scanPulse: CGFloat = 1.0
     @State private var selectedResultIDs = Set<UUID>()
     @State private var inspectedResult: ClipResult? = nil
     @State private var resultSortOrder = [KeyPathComparator(\ClipResult.videoFilename)]
-    @State private var inspectedFace: ReferenceFace? = nil
-    @State private var showFailures = false
 
     var selectedJob: ScanJob? { model.jobs.first { $0.id == selectedJobID } }
     var selectedEngine: RecognitionEngine { model.settings.recognitionEngine }
 
     var body: some View {
         VStack(spacing: 0) {
-            referenceBar
+            peopleGallery
+            Divider()
+            loadedFacesStrip
             Divider()
             outputBar
             Divider()
@@ -46,131 +44,220 @@ struct PersonFinderView: View {
         }
     }
 
-    // MARK: Reference bar — who are we looking for?
+    // MARK: People Gallery — saved family profiles
 
-    var referenceBar: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                Image(systemName: "person.crop.rectangle.stack")
-                    .font(.title2)
+    @State private var confirmDeleteProfile: POIProfile? = nil
+    @State private var editingProfile: POIProfile? = nil
+    /// The original name of the profile being edited (nil when adding new).
+    @State private var editingOriginalName: String? = nil
+    /// Briefly set after a profile save to flash confirmation on the card.
+    @State private var justSavedProfileID: String? = nil
+    /// Alert message shown when user tries to edit/switch during a scan.
+    @State private var scanLockMessage: String? = nil
+
+    var peopleGallery: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Image(systemName: "person.2.fill")
+                    .font(.title3)
                     .foregroundColor(.accentColor)
-
-                // Person name
-                Text("Person")
+                Text("Family")
                     .font(.headline)
-                TextField("e.g. Donna", text: model.settingsBinding.personName)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 110)
-
-                Divider().frame(height: 24)
-
-                // Save / Load profile
-                Button { model.saveCurrentPOI() } label: {
-                    Label("Save", systemImage: "square.and.arrow.down")
-                }
-                .controlSize(.large)
-                .disabled(model.settings.personName.trimmingCharacters(in: .whitespaces).isEmpty)
-                .help("Save this person's profile (photos, settings) for later recall")
-
+                Spacer()
                 if !model.savedProfiles.isEmpty {
-                    Menu {
-                        ForEach(model.savedProfiles) { profile in
-                            Button(profile.name) {
-                                Task { await model.loadPOI(profile) }
-                            }
-                        }
-                        Divider()
-                        Menu("Delete…") {
-                            ForEach(model.savedProfiles) { profile in
-                                Button(profile.name, role: .destructive) {
-                                    model.deletePOI(profile)
-                                }
-                            }
-                        }
-                    } label: {
-                        Label("Load", systemImage: "person.crop.rectangle.stack.fill")
-                    }
-                    .controlSize(.large)
-                    .help("Load a saved person profile")
-                }
-
-                Divider().frame(height: 24)
-
-                // Add reference photos
-                Button("Browse\u{2026}") { browseForReference() }
-                    .controlSize(.large)
-                    .help("Browse for a folder of reference photos")
-
-                PhotosPicker(
-                    selection: $photosPickerItems,
-                    maxSelectionCount: 50,
-                    matching: .images
-                ) {
-                    Label(isImportingFromPhotos ? "Importing\u{2026}" : "Apple Photos",
-                          systemImage: "photo.on.rectangle.angled")
-                }
-                .controlSize(.large)
-                .disabled(isImportingFromPhotos)
-                .onChange(of: photosPickerItems) {
-                    guard !photosPickerItems.isEmpty else { return }
-                    Task { await importFromApplePhotos(photosPickerItems) }
-                }
-
-                if model.isLoadingReference || isImportingFromPhotos {
-                    ProgressView().scaleEffect(0.8)
-                }
-
-                if !model.referenceFaces.isEmpty {
-                    Divider().frame(height: 24)
-
-                    HStack(spacing: 4) {
-                        Text("Quality <")
-                            .font(.callout).foregroundStyle(.secondary)
-                        TextField("", value: $autoRejectPct, format: .number)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 40)
-                        Stepper("", value: $autoRejectPct, in: 1...99).labelsHidden()
-                        Text("%")
-                            .font(.callout).foregroundStyle(.secondary)
-                        Button("Remove") {
-                            model.removeReferenceFaces(belowConfidence: Float(autoRejectPct) / 100.0)
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.regular)
-                    }
-                    .help("Remove reference photos below this confidence threshold")
-
-                    Button("Clear All", role: .destructive) { model.clearReference() }
-                        .controlSize(.large)
+                    Text("\(model.savedProfiles.count) people")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
                 }
             }
 
-            // Status row + face grid
-            if !model.referenceFaces.isEmpty || model.referenceLoadError != nil || !model.referenceLoadFailures.isEmpty {
+            if model.savedProfiles.isEmpty {
+                // Empty state — prominent Add Person button
+                VStack(spacing: 10) {
+                    Button {
+                        editingOriginalName = nil
+                        editingProfile = POIProfile(name: "", referencePath: "")
+                    } label: {
+                        Label("Add Person\u{2026}", systemImage: "person.badge.plus")
+                            .font(.title3.weight(.medium))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+
+                    Text("Add family members, choose their reference photos, and scan your video library to find them")
+                        .font(.caption)
+                        .foregroundColor(.secondary.opacity(0.8))
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 400)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        // Add Person — always left-aligned
+                        Button {
+                            editingOriginalName = nil
+                            editingProfile = POIProfile(name: "", referencePath: "")
+                        } label: {
+                            VStack(spacing: 6) {
+                                ZStack {
+                                    Circle()
+                                        .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [5, 3]))
+                                        .foregroundColor(.secondary.opacity(0.4))
+                                        .frame(width: 64, height: 64)
+                                    Image(systemName: "plus")
+                                        .font(.system(size: 22, weight: .medium))
+                                        .foregroundColor(.secondary)
+                                }
+                                Text("Add Person")
+                                    .font(.system(size: 11, weight: .medium))
+                                    .foregroundColor(.secondary)
+                            }
+                            .frame(width: 80)
+                            .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.plain)
+
+                        let scanningName = model.scanningPersonName?.lowercased()
+                        ForEach(model.savedProfiles) { profile in
+                            let isActive = model.settings.personName.lowercased() == profile.name.lowercased()
+                            let isBeingScanned = scanningName == profile.name.lowercased()
+                            PersonCard(profile: profile, isActive: isActive, justSaved: justSavedProfileID == profile.id)
+                                .opacity(isBeingScanned ? 0.7 : 1.0)
+                                .onTapGesture {
+                                    if isBeingScanned {
+                                        scanLockMessage = "Cannot edit \(profile.name) while scanning for \(profile.name)."
+                                        return
+                                    }
+                                    editingOriginalName = profile.name
+                                    editingProfile = profile
+                                }
+                                .contextMenu {
+                                    Button("Edit \(profile.name)\u{2026}") {
+                                        editingOriginalName = profile.name
+                                        editingProfile = profile
+                                    }
+                                    if isActive && !model.referenceFaces.isEmpty {
+                                        Divider()
+                                        Menu("Remove Low-Confidence Photos") {
+                                            let poorCount = model.referenceFaces.filter { $0.confidence < 0.60 }.count
+                                            let belowGoodCount = model.referenceFaces.filter { $0.confidence < 0.80 }.count
+                                            Button("Below Fair (< 60%) — \(poorCount) photo\(poorCount == 1 ? "" : "s")") {
+                                                model.removeReferenceFaces(belowConfidence: 0.60)
+                                            }
+                                            .disabled(poorCount == 0)
+                                            Button("Below Good (< 80%) — \(belowGoodCount) photo\(belowGoodCount == 1 ? "" : "s")") {
+                                                model.removeReferenceFaces(belowConfidence: 0.80)
+                                            }
+                                            .disabled(belowGoodCount == 0)
+                                        }
+                                    }
+                                    Divider()
+                                    Button("Delete \(profile.name)", role: .destructive) {
+                                        confirmDeleteProfile = profile
+                                    }
+                                }
+                        }
+                    }
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 4)
+                }
+                .frame(height: 110)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Color(NSColor.windowBackgroundColor))
+        .alert("Delete Person", isPresented: Binding(
+            get: { confirmDeleteProfile != nil },
+            set: { if !$0 { confirmDeleteProfile = nil } }
+        )) {
+            Button("Cancel", role: .cancel) { confirmDeleteProfile = nil }
+            Button("Delete", role: .destructive) {
+                if let p = confirmDeleteProfile {
+                    model.deletePOI(p)
+                    confirmDeleteProfile = nil
+                }
+            }
+        } message: {
+            Text("Delete \(confirmDeleteProfile?.name ?? "")? This removes the saved profile but not the reference photos.")
+        }
+        .alert("Scan in Progress", isPresented: Binding(
+            get: { scanLockMessage != nil },
+            set: { if !$0 { scanLockMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { scanLockMessage = nil }
+        } message: {
+            Text(scanLockMessage ?? "")
+        }
+        .sheet(item: $editingProfile) { profile in
+            PersonEditSheet(profile: profile) { updated in
+                model.updateProfile(updated, oldName: editingOriginalName)
+                // If this person is now the active POI, reload their faces
+                if model.settings.personName.lowercased() == updated.name.lowercased() {
+                    Task { await model.loadPOI(updated) }
+                }
+                // Flash the saved indicator on the card
+                justSavedProfileID = updated.id
+                Task {
+                    try? await Task.sleep(for: .seconds(2))
+                    justSavedProfileID = nil
+                }
+            }
+        }
+    }
+
+    // MARK: Loaded Faces Strip — compact scan-readiness indicator
+
+    @State private var showFailures = false
+    @AppStorage("faceThumbnailSize") private var thumbSize: Double = 58
+    @AppStorage("facesStripHeight") private var facesStripHeight: Double = 90
+    @State private var inspectedFace: ReferenceFace? = nil
+
+    @ViewBuilder
+    var loadedFacesStrip: some View {
+        if !model.referenceFaces.isEmpty || model.isLoadingReference || model.referenceLoadError != nil {
+            VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
-                    if !model.referenceFaces.isEmpty {
-                        Label("\(model.referencePhotoCount) face(s) from \(model.referenceSources.count) source(s)",
-                              systemImage: "checkmark.circle.fill")
+                    if model.isLoadingReference {
+                        ProgressView().scaleEffect(0.7)
+                        Text("Loading reference photos\u{2026}")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    } else if !model.referenceFaces.isEmpty {
+                        Image(systemName: "checkmark.circle.fill")
                             .foregroundColor(.green)
-                            .font(.callout.weight(.medium))
+                            .font(.callout)
+                        Text("\(model.settings.personName)")
+                            .font(.callout.weight(.semibold))
+                        Text("\u{2014} \(model.referencePhotoCount) faces loaded")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+
                         let good = model.referenceFaces.filter { $0.quality == .good }.count
                         let fair = model.referenceFaces.filter { $0.quality == .fair }.count
                         let poor = model.referenceFaces.filter { $0.quality == .poor }.count
-                        if good > 0 { Text("\(good) good").foregroundColor(.green).font(.caption) }
-                        if fair > 0 { Text("\(fair) fair").foregroundColor(.yellow).font(.caption) }
-                        if poor > 0 { Text("\(poor) poor").foregroundColor(.red).font(.caption) }
+                        HStack(spacing: 6) {
+                            if good > 0 { Text("\(good) good").foregroundColor(.green).font(.caption) }
+                            if fair > 0 { Text("\(fair) fair").foregroundColor(.yellow).font(.caption) }
+                            if poor > 0 { Text("\(poor) poor").foregroundColor(.red).font(.caption) }
+                        }
                     }
+
                     if let err = model.referenceLoadError {
                         Label(err, systemImage: "info.circle.fill")
                             .foregroundColor(.orange)
                             .font(.callout)
                     }
+
                     if !model.referenceLoadFailures.isEmpty {
                         Button {
                             showFailures.toggle()
                         } label: {
-                            Label("\(model.referenceLoadFailures.count) skipped", systemImage: "exclamationmark.triangle.fill")
-                                .font(.callout)
+                            Label("\(model.referenceLoadFailures.count) skipped",
+                                  systemImage: "exclamationmark.triangle.fill")
+                                .font(.caption)
                                 .foregroundColor(.red)
                         }
                         .buttonStyle(.plain)
@@ -187,7 +274,7 @@ struct PersonFinderView: View {
                                         Text(f.filename)
                                             .font(.system(size: 11, weight: .medium, design: .monospaced))
                                             .lineLimit(1)
-                                        Text("— \(f.reason)")
+                                        Text("\u{2014} \(f.reason)")
                                             .font(.system(size: 11))
                                             .foregroundColor(.secondary)
                                     }
@@ -198,32 +285,68 @@ struct PersonFinderView: View {
                         }
                     }
                     Spacer()
-                }
-                .padding(.horizontal, 4)
 
-                ScrollView(.horizontal) {
-                    HStack(spacing: 8) {
-                        ForEach(model.referenceFaces) { face in
-                            ReferenceFaceCard(face: face, onRemove: {
-                                model.removeReferenceFace(id: face.id)
-                            })
-                            .onTapGesture(count: 2) {
-                                inspectedFace = face
-                            }
+                    // Thumbnail size slider
+                    if !model.referenceFaces.isEmpty {
+                        HStack(spacing: 4) {
+                            Image(systemName: "photo")
+                                .font(.system(size: 9))
+                                .foregroundStyle(.secondary)
+                            Slider(value: $thumbSize, in: 40...140, step: 2)
+                                .frame(width: 80)
+                            Image(systemName: "photo")
+                                .font(.system(size: 14))
+                                .foregroundStyle(.secondary)
                         }
                     }
-                    .padding(.horizontal, 4)
-                    .padding(.vertical, 4)
                 }
-                .frame(minHeight: 124)
-                .popover(item: $inspectedFace) { face in
-                    faceDetailPopover(face)
+
+                // Face thumbnails — wrapping grid in a resizable pane
+                if !model.referenceFaces.isEmpty {
+                    let cellSize = CGFloat(thumbSize)
+                    let columns = [GridItem(.adaptive(minimum: cellSize + 4), spacing: 6)]
+                    ScrollView(.vertical, showsIndicators: true) {
+                        LazyVGrid(columns: columns, spacing: 6) {
+                            ForEach(model.referenceFaces) { face in
+                                CompactFaceThumbnail(face: face, size: cellSize, onRemove: {
+                                    model.removeReferenceFace(id: face.id)
+                                })
+                                .onTapGesture(count: 2) {
+                                    inspectedFace = face
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 2)
+                        .padding(.bottom, 4)
+                    }
+                    .frame(height: facesStripHeight)
+                    .popover(item: $inspectedFace) { face in
+                        faceDetailPopover(face)
+                    }
                 }
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Color(NSColor.controlBackgroundColor))
+
+            // Drag handle to resize the faces pane
+            if !model.referenceFaces.isEmpty {
+                Rectangle()
+                    .fill(Color(NSColor.separatorColor))
+                    .frame(height: 5)
+                    .contentShape(Rectangle())
+                    .onHover { inside in
+                        if inside { NSCursor.resizeUpDown.push() }
+                        else { NSCursor.pop() }
+                    }
+                    .gesture(
+                        DragGesture(minimumDistance: 1)
+                            .onChanged { value in
+                                facesStripHeight = max(60, min(500, facesStripHeight + value.translation.height))
+                            }
+                    )
+            }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .background(Color(NSColor.windowBackgroundColor))
     }
 
     // MARK: Output bar — where does output go?
@@ -364,6 +487,7 @@ struct PersonFinderView: View {
                 .padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
+                .onTapGesture { withAnimation { showSettings.toggle() } }
         }
         .background(Color(NSColor.windowBackgroundColor))
     }
@@ -371,13 +495,33 @@ struct PersonFinderView: View {
     // MARK: Jobs section
 
     var jobsSection: some View {
-        VStack(spacing: 0) {
+        let isScanning = model.jobs.contains { $0.status == .scanning }
+        return VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "externaldrive.connected.to.line.below")
                     .font(.title3).foregroundColor(.secondary)
                 Text("Scan Targets")
                     .font(.title3.weight(.semibold))
+
                 Spacer()
+
+                Menu {
+                    ForEach(model.savedProfiles) { profile in
+                        Button {
+                            Task { await model.loadPOI(profile) }
+                        } label: {
+                            Label(profile.name, systemImage: profile.name.lowercased() == model.settings.personName.lowercased() ? "checkmark.circle.fill" : "person.circle")
+                        }
+                    }
+                    if model.savedProfiles.isEmpty {
+                        Text("No people added yet")
+                    }
+                } label: {
+                    Label("Find Person\u{2026}", systemImage: "person.fill.viewfinder")
+                }
+                .menuStyle(.borderedButton)
+                .controlSize(.large)
+                .disabled(isScanning)
 
                 Button(action: {
                     model.addJob()
@@ -438,6 +582,88 @@ struct PersonFinderView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
+
+            // Active search card — shows who we're looking for
+            if let scanName = model.scanningPersonName ?? (model.settings.personName.isEmpty ? nil : model.settings.personName) {
+                let profile = model.savedProfiles.first(where: { $0.name.lowercased() == scanName.lowercased() })
+                HStack(spacing: 12) {
+                    // Normalized avatar
+                    ZStack {
+                        if let img = profile?.coverImage {
+                            Image(nsImage: img)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: 36, height: 36)
+                                .clipShape(Circle())
+                        } else {
+                            Circle()
+                                .fill(Color.accentColor.opacity(0.15))
+                                .frame(width: 36, height: 36)
+                                .overlay(
+                                    Text(String(scanName.prefix(1)).uppercased())
+                                        .font(.system(size: 16, weight: .bold, design: .rounded))
+                                        .foregroundColor(.accentColor)
+                                )
+                        }
+                        if isScanning {
+                            Circle()
+                                .stroke(Color.blue.opacity(0.4), lineWidth: 2)
+                                .frame(width: 42, height: 42)
+                                .scaleEffect(scanPulse)
+                                .opacity(2.0 - Double(scanPulse))
+                                .onAppear {
+                                    withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: false)) {
+                                        scanPulse = 1.8
+                                    }
+                                }
+                                .onDisappear { scanPulse = 1.0 }
+                        }
+                    }
+                    .frame(width: 44)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(isScanning ? "Searching for" : "Ready to search for")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(scanName)
+                            .font(.headline)
+                    }
+
+                    Text("on \(model.jobs.count) volume\(model.jobs.count == 1 ? "" : "s")")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+
+                    if !model.referenceFaces.isEmpty {
+                        Text("\u{2014} \(model.referenceFaces.count) reference faces")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+
+                    Spacer()
+
+                    if !isScanning && !model.settings.personName.isEmpty {
+                        Button(role: .destructive) {
+                            model.settings.personName = ""
+                            model.settings.save()
+                            model.referenceFaces = []
+                            model.referenceSources = []
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Clear person selection")
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(isScanning ? Color.blue.opacity(0.06) : Color.accentColor.opacity(0.04))
+                )
+                .padding(.horizontal, 16)
+                .padding(.top, 4)
+            }
 
             if model.jobs.isEmpty {
                 VStack(spacing: 6) {
@@ -664,46 +890,6 @@ struct PersonFinderView: View {
 
     // MARK: Helpers
 
-    func browseForReference() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = true
-        panel.allowsMultipleSelection = false
-        panel.message = "Select a folder of reference photos, or a single photo of the person"
-        panel.prompt = "Select"
-        if panel.runModal() == .OK, let url = panel.url {
-            model.settings.referencePath = url.path
-            model.settings.save()
-            Task { await model.loadReference() }
-        }
-    }
-
-    func importFromApplePhotos(_ items: [PhotosPickerItem]) async {
-        isImportingFromPhotos = true
-        defer { isImportingFromPhotos = false }
-
-        let name = pfSanitize(model.settings.personName.isEmpty ? "reference" : model.settings.personName)
-        let destDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("PersonFinderRef_\(name)")
-        try? FileManager.default.createDirectory(at: destDir, withIntermediateDirectories: true)
-
-        var saved = 0
-        for (i, item) in items.enumerated() {
-            // Try HEIC/JPG/PNG data transfer
-            if let data = try? await item.loadTransferable(type: Data.self) {
-                let ext = (item.supportedContentTypes.first?.preferredFilenameExtension) ?? "jpg"
-                let dest = destDir.appendingPathComponent("ref_\(i).\(ext)")
-                try? data.write(to: dest)
-                saved += 1
-            }
-        }
-
-        if saved > 0 {
-            await model.loadReference(from: destDir.path)
-        }
-        photosPickerItems = []
-    }
-
     func browseForOutput() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -879,6 +1065,666 @@ struct ReferenceFaceCard: View {
         .background(Color(NSColor.controlBackgroundColor))
         .cornerRadius(8)
         .help(face.sourceFilename)
+    }
+}
+
+// MARK: - Person Card (People Gallery)
+
+struct PersonCard: View {
+    let profile: POIProfile
+    let isActive: Bool
+    var justSaved: Bool = false
+
+    private var ringGradient: AngularGradient {
+        AngularGradient(
+            colors: [.blue, .cyan, .blue.opacity(0.7), .cyan, .blue],
+            center: .center
+        )
+    }
+
+    private var savedGradient: AngularGradient {
+        AngularGradient(
+            colors: [.green, .mint, .green.opacity(0.7), .mint, .green],
+            center: .center
+        )
+    }
+
+    var body: some View {
+        VStack(spacing: 4) {
+            ZStack {
+                if let img = profile.coverImage {
+                    CroppedCircleImage(
+                        image: img,
+                        scale: profile.coverCropScale,
+                        offset: CGSize(width: profile.coverCropOffsetX, height: profile.coverCropOffsetY)
+                    )
+                    .frame(width: 64, height: 64)
+                } else {
+                    Circle()
+                        .fill(Color.accentColor.opacity(0.15))
+                        .frame(width: 64, height: 64)
+                    Text(String(profile.name.prefix(1)).uppercased())
+                        .font(.system(size: 26, weight: .bold, design: .rounded))
+                        .foregroundColor(.accentColor)
+                }
+            }
+            .overlay(
+                Circle()
+                    .stroke(
+                        justSaved ? savedGradient
+                            : isActive ? ringGradient
+                            : AngularGradient(colors: [.clear], center: .center),
+                        lineWidth: (justSaved || isActive) ? 3.5 : 0
+                    )
+                    .animation(.easeInOut(duration: 0.3), value: justSaved)
+            )
+            .shadow(color: justSaved ? Color.green.opacity(0.6) : isActive ? Color.blue.opacity(0.5) : .clear,
+                    radius: 6, y: 1)
+            .animation(.easeInOut(duration: 0.3), value: justSaved)
+
+            HStack(spacing: 3) {
+                if justSaved {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 9))
+                        .foregroundColor(.green)
+                        .transition(.scale.combined(with: .opacity))
+                }
+                Text(justSaved ? "Saved" : profile.name)
+                    .font(.system(size: 11, weight: isActive ? .bold : .medium))
+                    .lineLimit(1)
+                    .foregroundColor(justSaved ? .green : isActive ? .blue : .primary)
+            }
+            .animation(.easeInOut(duration: 0.3), value: justSaved)
+        }
+        .frame(width: 80)
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+    }
+}
+
+// MARK: - Compact Face Thumbnail (for loaded-faces strip)
+
+struct CompactFaceThumbnail: View {
+    let face: ReferenceFace
+    var size: CGFloat = 58
+    var onRemove: (() -> Void)? = nil
+
+    private var borderColor: Color {
+        switch face.quality {
+        case .good: return .green
+        case .fair: return .orange
+        case .poor: return .red
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 2) {
+            ZStack(alignment: .topTrailing) {
+                Image(nsImage: NSImage(cgImage: face.thumbnail, size: NSSize(width: size, height: size)))
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: size, height: size)
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5)
+                            .stroke(borderColor, lineWidth: size > 80 ? 3 : 2)
+                    )
+                if let onRemove {
+                    Button(action: onRemove) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: size > 80 ? 16 : 14))
+                            .symbolRenderingMode(.palette)
+                            .foregroundStyle(Color.white, Color.black.opacity(0.55))
+                    }
+                    .buttonStyle(.plain)
+                    .offset(x: 4, y: -4)
+                }
+            }
+            Text(String(format: "%.0f%%", face.confidence * 100))
+                .font(.system(size: size > 80 ? 11 : 9, weight: .medium, design: .monospaced))
+                .foregroundColor(borderColor)
+        }
+        .contextMenu {
+            if let onRemove {
+                Button("Remove This Face", role: .destructive) { onRemove() }
+            }
+            Button("Info") {}
+                .disabled(true)
+            Text("\(face.sourceFilename)")
+            Text(face.quality == .good ? "Good quality" : face.quality == .fair ? "Fair quality" : "Poor quality")
+        }
+        .help("\(face.sourceFilename) — \(String(format: "%.0f%%", face.confidence * 100))")
+    }
+}
+
+// MARK: - Person Edit Sheet
+
+struct PersonEditSheet: View {
+    let originalProfile: POIProfile
+    let onSave: (POIProfile) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var name: String
+    @State private var notes: String
+    @State private var aliasText: String
+    @State private var coverFilename: String?
+    @State private var referencePath: String
+    // Photo import
+    @State private var photosPickerItems: [PhotosPickerItem] = []
+    @State private var isImporting = false
+    @State private var imageFilenamesCache: [String]? = nil
+
+    // Cover crop
+    @State private var cropScale: Double
+    @State private var cropOffset: CGSize
+    @State private var showCropEditor = false
+
+    init(profile: POIProfile, onSave: @escaping (POIProfile) -> Void) {
+        self.originalProfile = profile
+        self.onSave = onSave
+        _name = State(initialValue: profile.name)
+        _notes = State(initialValue: profile.notes)
+        _aliasText = State(initialValue: profile.aliases.joined(separator: ", "))
+        _coverFilename = State(initialValue: profile.coverImageFilename)
+        _referencePath = State(initialValue: profile.referencePath)
+        _cropScale = State(initialValue: profile.coverCropScale)
+        _cropOffset = State(initialValue: CGSize(width: profile.coverCropOffsetX, height: profile.coverCropOffsetY))
+    }
+
+    private var imageFilenames: [String] {
+        if let cached = imageFilenamesCache { return cached }
+        return currentProfile.referenceImageFilenames
+    }
+
+    /// Build a profile from current sheet state (does NOT write to disk).
+    private var currentProfile: POIProfile {
+        var p = originalProfile
+        p.name = name.trimmingCharacters(in: .whitespaces)
+        p.notes = notes
+        p.aliases = aliasText
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        p.coverImageFilename = coverFilename
+        p.referencePath = referencePath
+        p.coverCropScale = cropScale
+        p.coverCropOffsetX = cropOffset.width
+        p.coverCropOffsetY = cropOffset.height
+        return p
+    }
+
+    private var isNewPerson: Bool {
+        originalProfile.name.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack(spacing: 12) {
+                coverAvatar
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(isNewPerson ? "Add Person" : "Edit Person")
+                        .font(.title2.weight(.semibold))
+                    if !isNewPerson {
+                        Text(originalProfile.name)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+            }
+            .padding(20)
+            .background(Color(NSColor.windowBackgroundColor))
+
+            Divider()
+
+            // Form content
+            Form {
+                Section("Identity") {
+                    TextField("Name", text: $name)
+                        .textFieldStyle(.roundedBorder)
+                    TextField("Aliases (comma-separated)", text: $aliasText)
+                        .textFieldStyle(.roundedBorder)
+                        .help("Alternate names that might appear in video filenames or metadata")
+                }
+
+                Section("Notes") {
+                    TextEditor(text: $notes)
+                        .font(.body)
+                        .frame(minHeight: 60, maxHeight: 120)
+                        .scrollContentBackground(.hidden)
+                        .padding(4)
+                        .background(Color(NSColor.controlBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6)
+                                .stroke(Color(NSColor.separatorColor), lineWidth: 0.5)
+                        )
+                }
+
+                Section {
+                    // Folder path
+                    HStack {
+                        Image(systemName: "folder")
+                            .foregroundStyle(.secondary)
+                        Text(referencePath.isEmpty ? "No folder selected" : referencePath)
+                            .font(.system(.body, design: .monospaced))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .foregroundStyle(referencePath.isEmpty ? .secondary : .primary)
+                        Spacer()
+                    }
+
+                    // Action buttons
+                    HStack(spacing: 10) {
+                        Button("Browse Photos\u{2026}") { browseForReferenceFolder() }
+                            .controlSize(.regular)
+
+                        PhotosPicker(
+                            selection: $photosPickerItems,
+                            maxSelectionCount: 50,
+                            matching: .images
+                        ) {
+                            Label(isImporting ? "Importing\u{2026}" : "Apple Photos",
+                                  systemImage: "photo.on.rectangle.angled")
+                        }
+                        .controlSize(.regular)
+                        .disabled(isImporting)
+                        .onChange(of: photosPickerItems) {
+                            guard !photosPickerItems.isEmpty else { return }
+                            Task { await importFromApplePhotos() }
+                        }
+
+                        if isImporting {
+                            ProgressView().scaleEffect(0.7)
+                        }
+
+                        Spacer()
+                    }
+
+                    // Photo grid with cover selection
+                    if !imageFilenames.isEmpty {
+                        referencePhotoGrid
+                    }
+                } header: {
+                    Text("Reference Photos")
+                } footer: {
+                    if !imageFilenames.isEmpty {
+                        Text("Click a photo to set it as the cover image. \(imageFilenames.count) photo\(imageFilenames.count == 1 ? "" : "s") available.")
+                    }
+                }
+
+
+            }
+            .formStyle(.grouped)
+
+            Divider()
+
+            // Action buttons
+            HStack {
+                Button("Cancel", role: .cancel) {
+                    dismiss()
+                }
+                .keyboardShortcut(.cancelAction)
+
+                Spacer()
+
+                Button("Save") {
+                    onSave(currentProfile)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            .padding(16)
+            .background(Color(NSColor.windowBackgroundColor))
+        }
+        .frame(width: 560, height: 720)
+    }
+
+    // MARK: Cover avatar in header
+
+    @ViewBuilder
+    private var coverAvatar: some View {
+        let profile = currentProfile
+        ZStack {
+            if let filename = coverFilename,
+               let img = profile.referenceImage(named: filename) {
+                CroppedCircleImage(image: img, scale: cropScale, offset: cropOffset)
+                    .frame(width: 64, height: 64)
+            } else {
+                Circle()
+                    .fill(Color.accentColor.opacity(0.15))
+                    .frame(width: 64, height: 64)
+                if !name.isEmpty {
+                    Text(String(name.prefix(1)).uppercased())
+                        .font(.system(size: 26, weight: .bold, design: .rounded))
+                        .foregroundColor(.accentColor)
+                } else {
+                    Image(systemName: "person.fill")
+                        .font(.system(size: 24))
+                        .foregroundColor(.accentColor.opacity(0.5))
+                }
+            }
+        }
+        .overlay(Circle().stroke(Color.accentColor, lineWidth: 2))
+        .overlay(alignment: .bottomTrailing) {
+            if coverFilename != nil {
+                Button { showCropEditor = true } label: {
+                    Image(systemName: "crop")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundColor(.white)
+                        .padding(4)
+                        .background(Color.accentColor, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .offset(x: 2, y: 2)
+            }
+        }
+        .popover(isPresented: $showCropEditor) {
+            if let filename = coverFilename,
+               let img = currentProfile.referenceImage(named: filename) {
+                CoverCropEditor(image: img, scale: $cropScale, offset: $cropOffset)
+            }
+        }
+    }
+
+    // MARK: Reference photo grid (doubles as cover picker)
+
+    @ViewBuilder
+    private var referencePhotoGrid: some View {
+        let filenames = imageFilenames
+        let columns = [GridItem(.adaptive(minimum: 72, maximum: 80), spacing: 8)]
+        LazyVGrid(columns: columns, spacing: 8) {
+            ForEach(filenames, id: \.self) { filename in
+                referencePhotoTile(filename)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func referencePhotoTile(_ filename: String) -> some View {
+        let isCover = coverFilename == filename
+        let profile = currentProfile
+        return Button {
+            coverFilename = isCover ? nil : filename
+        } label: {
+            ZStack(alignment: .bottomTrailing) {
+                Group {
+                    if let img = profile.referenceImage(named: filename) {
+                        Image(nsImage: img)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 72, height: 72)
+                            .clipped()
+                    } else {
+                        Color.secondary.opacity(0.2)
+                            .frame(width: 72, height: 72)
+                            .overlay(Image(systemName: "photo")
+                                .foregroundStyle(.secondary))
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(isCover ? Color.accentColor : Color.clear, lineWidth: 3)
+                )
+                .shadow(color: isCover ? Color.accentColor.opacity(0.3) : .clear, radius: 3)
+
+                if isCover {
+                    Image(systemName: "star.circle.fill")
+                        .font(.system(size: 16))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(.white, Color.accentColor)
+                        .offset(x: 4, y: 4)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .help(isCover ? "\(filename) (cover photo)" : filename)
+    }
+
+    // MARK: Browse & Import
+
+    /// Canonical local folder for this person's reference photos.
+    /// Always under ~/dev/VideoScan/poi_photos/<name>/.
+    private func ensureLocalPhotoFolder() -> URL {
+        let sanitized = name.trimmingCharacters(in: .whitespaces)
+            .lowercased().replacingOccurrences(of: " ", with: "_")
+        let folderName = sanitized.isEmpty ? "reference" : sanitized
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("dev/VideoScan/poi_photos/\(folderName)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// Copy image files from a source folder into the local poi_photos folder.
+    private func copyPhotosToLocal(from sourceURL: URL) {
+        let fm = FileManager.default
+        let destDir = ensureLocalPhotoFolder()
+        let imageExts: Set<String> = ["jpg", "jpeg", "png", "heic", "heif", "tiff", "tif", "bmp"]
+
+        var sourceFiles: [URL] = []
+        if sourceURL.hasDirectoryPath || (try? sourceURL.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+            sourceFiles = (try? fm.contentsOfDirectory(at: sourceURL, includingPropertiesForKeys: nil)) ?? []
+            sourceFiles = sourceFiles.filter { imageExts.contains($0.pathExtension.lowercased()) }
+        } else if imageExts.contains(sourceURL.pathExtension.lowercased()) {
+            sourceFiles = [sourceURL]
+        }
+
+        for file in sourceFiles {
+            let destFile = destDir.appendingPathComponent(file.lastPathComponent)
+            if fm.fileExists(atPath: destFile.path) { continue }  // skip duplicates by name
+            try? fm.copyItem(at: file, to: destFile)
+        }
+
+        referencePath = destDir.path
+        imageFilenamesCache = nil
+    }
+
+    private func browseForReferenceFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = true
+        panel.message = "Select photos or a folder of reference photos for \(name.isEmpty ? "this person" : name)"
+        panel.prompt = "Select"
+        if panel.runModal() == .OK, !panel.urls.isEmpty {
+            for url in panel.urls {
+                copyPhotosToLocal(from: url)
+            }
+        }
+    }
+
+    private func importFromApplePhotos() async {
+        isImporting = true
+        defer {
+            isImporting = false
+            photosPickerItems = []
+        }
+
+        let destDir = ensureLocalPhotoFolder()
+        referencePath = destDir.path
+
+        // Use a timestamp prefix to avoid overwriting previous imports
+        let stamp = Int(Date().timeIntervalSince1970)
+        for (i, item) in photosPickerItems.enumerated() {
+            if let data = try? await item.loadTransferable(type: Data.self) {
+                let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "jpg"
+                let dest = destDir.appendingPathComponent("apple_\(stamp)_\(i).\(ext)")
+                try? data.write(to: dest)
+            }
+        }
+
+        imageFilenamesCache = nil  // force refresh
+    }
+}
+
+// MARK: - Cropped Circle Image
+
+/// Displays an image inside a circle with pan/zoom crop applied.
+struct CroppedCircleImage: View {
+    let image: NSImage
+    var scale: Double = 1.0
+    var offset: CGSize = .zero
+
+    var body: some View {
+        GeometryReader { geo in
+            let size = min(geo.size.width, geo.size.height)
+            Image(nsImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .scaleEffect(max(1.0, scale))
+                .offset(offset)
+                .frame(width: size, height: size)
+                .clipShape(Circle())
+        }
+    }
+}
+
+// MARK: - Cover Crop Editor
+
+/// Apple Contacts-style crop: drag to pan, scroll to zoom inside a circle.
+struct CoverCropEditor: View {
+    let image: NSImage
+    @Binding var scale: Double
+    @Binding var offset: CGSize
+    @GestureState private var dragOffset: CGSize = .zero
+
+    private let previewSize: CGFloat = 200
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Text("Adjust Cover Photo")
+                .font(.headline)
+
+            ZStack {
+                Color(NSColor.controlBackgroundColor)
+
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .scaleEffect(max(1.0, scale))
+                    .offset(CGSize(
+                        width: offset.width + dragOffset.width,
+                        height: offset.height + dragOffset.height
+                    ))
+                    .frame(width: previewSize, height: previewSize)
+                    .clipShape(Circle())
+                    .gesture(
+                        DragGesture()
+                            .updating($dragOffset) { value, state, _ in
+                                state = value.translation
+                            }
+                            .onEnded { value in
+                                offset = CGSize(
+                                    width: offset.width + value.translation.width,
+                                    height: offset.height + value.translation.height
+                                )
+                            }
+                    )
+
+                // Circle guide ring
+                Circle()
+                    .stroke(Color.accentColor.opacity(0.5), lineWidth: 1.5)
+                    .frame(width: previewSize, height: previewSize)
+            }
+            .frame(width: previewSize + 24, height: previewSize + 24)
+
+            HStack(spacing: 8) {
+                Image(systemName: "minus.magnifyingglass")
+                    .foregroundStyle(.secondary)
+                Slider(value: $scale, in: 1.0...3.0, step: 0.1)
+                    .frame(width: 140)
+                Image(systemName: "plus.magnifyingglass")
+                    .foregroundStyle(.secondary)
+            }
+
+            Button("Reset") {
+                scale = 1.0
+                offset = .zero
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        .padding(16)
+        .frame(width: 280)
+    }
+}
+
+// MARK: - Scan Target POI Badge
+
+/// Shows who we're searching for next to "Scan Targets".
+/// Pulsates the ring when a scan is actively running.
+struct ScanTargetPOIBadge: View {
+    let personName: String
+    let coverImage: NSImage?
+    let isScanning: Bool
+    let faceCount: Int
+
+    @State private var pulseScale: CGFloat = 1.0
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text("for")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+
+            ZStack {
+                // Pulse ring (behind avatar)
+                if isScanning {
+                    Circle()
+                        .stroke(Color.blue.opacity(0.3), lineWidth: 2)
+                        .frame(width: 32, height: 32)
+                        .scaleEffect(pulseScale)
+                        .opacity(2.0 - Double(pulseScale))
+                }
+
+                if let img = coverImage {
+                    Image(nsImage: img)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 28, height: 28)
+                        .clipShape(Circle())
+                        .overlay(Circle().stroke(Color.blue, lineWidth: isScanning ? 2 : 1.5))
+                } else {
+                    Circle()
+                        .fill(Color.accentColor.opacity(0.15))
+                        .frame(width: 28, height: 28)
+                        .overlay(
+                            Text(String(personName.prefix(1)).uppercased())
+                                .font(.system(size: 13, weight: .bold, design: .rounded))
+                                .foregroundColor(.accentColor)
+                        )
+                        .overlay(Circle().stroke(Color.blue, lineWidth: isScanning ? 2 : 1.5))
+                }
+            }
+
+            Text(personName)
+                .font(.callout.weight(.semibold))
+                .foregroundColor(.blue)
+
+            if faceCount > 0 {
+                Text("(\(faceCount) faces)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .onAppear { startPulse() }
+        .onChange(of: isScanning) { _, scanning in
+            if scanning { startPulse() }
+        }
+    }
+
+    private func startPulse() {
+        guard isScanning else {
+            pulseScale = 1.0
+            return
+        }
+        pulseScale = 1.0
+        withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: false)) {
+            pulseScale = 1.6
+        }
     }
 }
 
