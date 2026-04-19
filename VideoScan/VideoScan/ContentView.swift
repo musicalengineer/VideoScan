@@ -7,25 +7,80 @@ import IOKit
 
 struct ContentView: View {
     @EnvironmentObject var model: VideoScanModel
+    @StateObject private var personFinderModel = PersonFinderModel()
     @AppStorage("selectedTab") private var selectedTab: Int = 0
+    private let tabFontSize: Double = 18
+
+    private let tabs: [(label: String, icon: String, tag: Int)] = [
+        ("People", "person.2.fill", 0),
+        ("Media", "film.stack", 1),
+        ("Settings", "gearshape", 2),
+    ]
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            CatalogView()
-                .tabItem { Label("Media", systemImage: "film.stack") }
-                .tag(0)
-            PersonFinderView()
-                .tabItem { Label("People", systemImage: "person.2.fill") }
-                .tag(1)
-            SettingsTabView(
-                settings: Binding(
-                    get: { model.perfSettings },
-                    set: { model.perfSettings = $0 }
-                ),
-                totalRAMGB: Int(ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024))
-            )
-            .tabItem { Label("Settings", systemImage: "gearshape") }
-            .tag(2)
+        VStack(spacing: 0) {
+            // Custom tab bar — centered with traffic-light inset
+            HStack(spacing: 0) {
+                // Reserve space for window traffic-light buttons
+                Color.clear.frame(width: 76, height: 1)
+
+                Spacer()
+                HStack(spacing: 24) {
+                    ForEach(tabs, id: \.tag) { tab in
+                        Button {
+                            selectedTab = tab.tag
+                        } label: {
+                            Label(tab.label, systemImage: tab.icon)
+                                .font(.system(size: tabFontSize, weight: selectedTab == tab.tag ? .bold : .regular))
+                                .foregroundStyle(selectedTab == tab.tag ? .primary : .secondary)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .background(
+                            selectedTab == tab.tag
+                                ? Color.accentColor.opacity(0.12)
+                                : Color.clear
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .overlay(alignment: .bottom) {
+                            if selectedTab == tab.tag {
+                                RoundedRectangle(cornerRadius: 1)
+                                    .fill(Color.accentColor)
+                                    .frame(height: 2.5)
+                            }
+                        }
+                    }
+                }
+                Spacer()
+            }
+            .padding(.vertical, 6)
+            .background(Color(NSColor.windowBackgroundColor))
+            Divider()
+
+            // Tab content — fill all available space to prevent layout jumps
+            Group {
+                switch selectedTab {
+                case 0:
+                    PersonFinderView()
+                        .environmentObject(personFinderModel)
+                case 1:
+                    CatalogView()
+                case 2:
+                    SettingsTabView(
+                        settings: Binding(
+                            get: { model.perfSettings },
+                            set: { model.perfSettings = $0 }
+                        ),
+                        totalRAMGB: Int(ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024))
+                    )
+                default:
+                    PersonFinderView()
+                        .environmentObject(personFinderModel)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(minWidth: 900, minHeight: 600)
     }

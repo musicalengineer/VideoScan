@@ -532,6 +532,20 @@ final class ScanJob: ObservableObject, Identifiable {
     let id = UUID()
     @Published var searchPath: String
 
+    /// Per-job person assignment — nil means use global person.
+    @Published var assignedProfile: POIProfile? = nil
+    var assignedFaces: [ReferenceFace] = []
+    var personLabel: String { assignedProfile?.name ?? "" }
+
+    /// Per-job engine override — nil means use profile's engine or global default.
+    @Published var assignedEngine: RecognitionEngine? = nil
+    /// Resolved engine: job override > profile > global default
+    var effectiveEngine: RecognitionEngine {
+        if let e = assignedEngine { return e }
+        if let p = assignedProfile, let e = RecognitionEngine(rawValue: p.engine) { return e }
+        return .vision
+    }
+
     @Published var status: ScanJobStatus = .idle
     @Published var progress: Double = 0.0
     @Published var currentFile: String = ""
@@ -616,6 +630,10 @@ final class PersonFinderModel: ObservableObject {
     @Published var settings = PersonFinderSettings.restored() {
         didSet { settings.save() }
     }
+    /// UI state preserved across tab switches (model outlives the view).
+    @Published var selectedJobID: UUID? = nil
+    @Published var expandedJobIDs = Set<UUID>()
+
     /// Optional reference to DashboardState for publishing Vision/ANE metrics.
     weak var dashboard: DashboardState?
 
@@ -632,6 +650,8 @@ final class PersonFinderModel: ObservableObject {
     var referenceSources: [String] = []     // display labels for each loaded source folder/file
     /// Name of the person being actively scanned — set at scan start, cleared when all jobs finish.
     @Published var scanningPersonName: String? = nil
+    /// The person that will be assigned to newly created jobs.
+    @Published var selectedPersonForNewJobs: POIProfile? = nil
     var referenceLoadError: String? = nil
     @Published var referenceLoadFailures: [ReferenceLoadFailure] = []
     var isLoadingReference: Bool = false
@@ -647,7 +667,25 @@ final class PersonFinderModel: ObservableObject {
     // MARK: Job management
 
     func addJob(path: String = "") {
-        jobs.append(ScanJob(searchPath: path))
+        let job = ScanJob(searchPath: path)
+        if let person = selectedPersonForNewJobs {
+            job.assignedProfile = person
+        }
+        jobs.append(job)
+    }
+
+    /// Load reference faces for a specific job's assigned person.
+    func loadFacesForJob(_ job: ScanJob) async {
+        guard let profile = job.assignedProfile else { return }
+        guard job.status == .idle else { return }
+        job.status = .loading
+        let largestOnly = profile.largestFaceOnly
+        let (faces, _, _) = await Task.detached(priority: .userInitiated) {
+            pfLoadReferencePhotos(from: profile.referencePath, largestFaceOnly: largestOnly)
+        }.value
+        let rejected = Set(profile.rejectedFiles)
+        job.assignedFaces = rejected.isEmpty ? faces : faces.filter { !rejected.contains($0.sourceFilename) }
+        job.status = .idle
     }
 
     func removeJob(_ job: ScanJob) {
@@ -659,41 +697,67 @@ final class PersonFinderModel: ObservableObject {
     func startJob(_ job: ScanJob) {
         guard !job.status.isActive else { return }
 
-        // Ensure settings are saved before we snapshot them for the scan
-        settings.save()
-        let settings = self.settings
+        // If job has an assigned profile but no faces loaded yet, load them first
+        if job.assignedProfile != nil && job.assignedFaces.isEmpty {
+            Task {
+                await loadFacesForJob(job)
+                startJobAfterLoad(job)
+            }
+            return
+        }
+        startJobAfterLoad(job)
+    }
 
-        job.appendLog("Engine: \(settings.recognitionEngine.title)")
-        if settings.recognitionEngine == .dlib {
-            job.appendLog("  Python: \(settings.pythonPath.isEmpty ? "(empty)" : settings.pythonPath)")
-            job.appendLog("  Script: \(settings.recognitionScript.isEmpty ? "(empty)" : settings.recognitionScript)")
-            job.appendLog("  Ref path: \(settings.referencePath.isEmpty ? "(empty)" : settings.referencePath)")
-            guard settings.dlibReady else {
+    private func startJobAfterLoad(_ job: ScanJob) {
+        guard !job.status.isActive else { return }
+
+        // Build per-job settings: overlay assigned profile if present
+        settings.save()
+        var jobSettings = self.settings
+        if let profile = job.assignedProfile {
+            jobSettings.applyProfile(profile)
+        }
+        // Per-job engine override takes priority over profile engine
+        if let engineOverride = job.assignedEngine {
+            jobSettings.recognitionEngine = engineOverride
+        }
+
+        // Pick reference faces: job-specific or global
+        let faces = job.assignedProfile != nil ? job.assignedFaces : self.referenceFaces
+
+        job.appendLog("Person: \(jobSettings.personName)")
+        job.appendLog("Engine: \(jobSettings.recognitionEngine.title)")
+        if jobSettings.recognitionEngine == .dlib {
+            job.appendLog("  Python: \(jobSettings.pythonPath.isEmpty ? "(empty)" : jobSettings.pythonPath)")
+            job.appendLog("  Script: \(jobSettings.recognitionScript.isEmpty ? "(empty)" : jobSettings.recognitionScript)")
+            job.appendLog("  Ref path: \(jobSettings.referencePath.isEmpty ? "(empty)" : jobSettings.referencePath)")
+            guard jobSettings.dlibReady else {
                 job.appendLog("⚠ Set Python path and script path in Settings before scanning with dlib.")
                 return
             }
-            guard !settings.referencePath.isEmpty else {
+            guard !jobSettings.referencePath.isEmpty else {
                 job.appendLog("⚠ Set reference photos path first.")
                 return
             }
         } else {
-            job.appendLog("  References loaded: \(referenceFaces.count)")
-            guard !referenceFaces.isEmpty else {
-                job.appendLog("⚠ Load reference photos first.")
+            job.appendLog("  References loaded: \(faces.count)")
+            guard !faces.isEmpty else {
+                job.appendLog("⚠ Load reference photos first. Select a person with \"Find Person\" or load photos globally.")
                 return
             }
         }
 
         job.reset()
         job.status = .scanning
-        scanningPersonName = settings.personName
-        job.previewRate = settings.previewRate
+        scanningPersonName = jobSettings.personName
+        job.previewRate = jobSettings.previewRate
         let log = PersistentLog(name: "facedetect")
         log.start()
         job.persistentLog = log
         job.startElapsedTimer()
 
-        let prints = settings.recognitionEngine == .vision ? referenceFeaturePrints : []
+        let prints = jobSettings.recognitionEngine == .vision ? faces.map(\.featurePrint) : []
+        let settings = jobSettings
         let dash = self.dashboard
         job.scanTask = Task { [weak self, weak job] in
             guard let job else { return }
@@ -742,7 +806,13 @@ final class PersonFinderModel: ObservableObject {
     }
 
     func startAll() {
-        for job in jobs where job.status.isIdle { startJob(job) }
+        // Load faces for jobs with assigned profiles that don't have faces yet
+        Task {
+            for job in jobs where job.status.isIdle && job.assignedProfile != nil && job.assignedFaces.isEmpty {
+                await loadFacesForJob(job)
+            }
+            for job in jobs where job.status.isIdle { startJob(job) }
+        }
     }
 
     func stopAll() { for job in jobs { stopJob(job) } }
