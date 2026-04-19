@@ -95,6 +95,7 @@ struct VideoScanApp: App {
                     .onAppear { appDelegate.catalogModel = catalogModel }
             }
         }
+        .windowStyle(.hiddenTitleBar)
         .commands {
             CommandGroup(replacing: .appInfo) {
                 AboutMenuItem()

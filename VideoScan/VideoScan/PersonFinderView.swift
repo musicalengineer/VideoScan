@@ -9,16 +9,24 @@ import PhotosUI
 
 struct PersonFinderView: View {
     @EnvironmentObject var dashboard: DashboardState
-    @StateObject private var model = PersonFinderModel()
-    @State private var selectedJobID: UUID? = nil
+    @EnvironmentObject var model: PersonFinderModel
     @State private var showSettings = false
     @State private var scanPulse: CGFloat = 1.0
     @State private var selectedResultIDs = Set<UUID>()
     @State private var inspectedResult: ClipResult? = nil
     @State private var resultSortOrder = [KeyPathComparator(\ClipResult.videoFilename)]
 
+    var selectedJobID: UUID? {
+        get { model.selectedJobID }
+        nonmutating set { model.selectedJobID = newValue }
+    }
+    var expandedJobIDs: Set<UUID> {
+        get { model.expandedJobIDs }
+        nonmutating set { model.expandedJobIDs = newValue }
+    }
     var selectedJob: ScanJob? { model.jobs.first { $0.id == selectedJobID } }
     var selectedEngine: RecognitionEngine { model.settings.recognitionEngine }
+    var hasAnyResults: Bool { model.jobs.contains { !$0.results.isEmpty } }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -28,19 +36,14 @@ struct PersonFinderView: View {
             Divider()
             outputBar
             Divider()
-            settingsBar
-            Divider()
             jobsSection
             Divider()
             resultsTable
         }
-        .frame(minWidth: 960, minHeight: 650)
+        .frame(minWidth: 960, maxHeight: .infinity, alignment: .top)
         .onAppear {
             model.dashboard = dashboard
-            // Auto-load last reference photos if path is set and faces not yet loaded
-            if !model.settings.referencePath.isEmpty && model.referenceFaces.isEmpty {
-                Task { await model.loadReference() }
-            }
+            // Don't auto-load a person on launch — let user choose via gallery or Find Person
         }
     }
 
@@ -119,10 +122,11 @@ struct PersonFinderView: View {
                         }
                         .buttonStyle(.plain)
 
-                        let scanningName = model.scanningPersonName?.lowercased()
+                        // Build set of all people currently being scanned across all active jobs
+                        let scanningNames = Set(model.jobs.filter { $0.status.isActive }.compactMap { $0.assignedProfile?.name.lowercased() })
                         ForEach(model.savedProfiles) { profile in
-                            let isActive = model.settings.personName.lowercased() == profile.name.lowercased()
-                            let isBeingScanned = scanningName == profile.name.lowercased()
+                            let isBeingScanned = scanningNames.contains(profile.name.lowercased())
+                            let isActive = isBeingScanned
                             PersonCard(profile: profile, isActive: isActive, justSaved: justSavedProfileID == profile.id)
                                 .opacity(isBeingScanned ? 0.7 : 1.0)
                                 .onTapGesture {
@@ -130,15 +134,24 @@ struct PersonFinderView: View {
                                         scanLockMessage = "Cannot edit \(profile.name) while scanning for \(profile.name)."
                                         return
                                     }
-                                    editingOriginalName = profile.name
-                                    editingProfile = profile
+                                    // Load this person's reference faces into the strip for inspection
+                                    model.settings.personName = profile.name
+                                    model.settings.referencePath = profile.referencePath
+                                    model.settings.save()
+                                    model.referenceFaces.removeAll()
+                                    model.referenceLoadFailures.removeAll()
+                                    Task { await model.loadReference() }
                                 }
                                 .contextMenu {
+                                    Button("Search for \(profile.name)\u{2026}") {
+                                        addJobForPerson(profile)
+                                    }
+                                    Divider()
                                     Button("Edit \(profile.name)\u{2026}") {
                                         editingOriginalName = profile.name
                                         editingProfile = profile
                                     }
-                                    if isActive && !model.referenceFaces.isEmpty {
+                                    if !model.referenceFaces.isEmpty && model.settings.personName.lowercased() == profile.name.lowercased() {
                                         Divider()
                                         Menu("Remove Low-Confidence Photos") {
                                             let poorCount = model.referenceFaces.filter { $0.confidence < 0.60 }.count
@@ -217,7 +230,21 @@ struct PersonFinderView: View {
 
     @ViewBuilder
     var loadedFacesStrip: some View {
-        if !model.referenceFaces.isEmpty || model.isLoadingReference || model.referenceLoadError != nil {
+        if model.referenceFaces.isEmpty && !model.isLoadingReference && model.referenceLoadError == nil {
+            // Empty state — no person loaded yet
+            HStack(spacing: 8) {
+                Image(systemName: "photo.on.rectangle.angled")
+                    .font(.body)
+                    .foregroundColor(.secondary)
+                Text("Click a person above to load their reference faces, or use Find Person below to start a search")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Color(NSColor.controlBackgroundColor))
+        } else {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 8) {
                     if model.isLoadingReference {
@@ -228,20 +255,20 @@ struct PersonFinderView: View {
                     } else if !model.referenceFaces.isEmpty {
                         Image(systemName: "checkmark.circle.fill")
                             .foregroundColor(.green)
-                            .font(.callout)
+                            .font(.body)
                         Text("\(model.settings.personName)")
-                            .font(.callout.weight(.semibold))
+                            .font(.body.weight(.semibold))
                         Text("\u{2014} \(model.referencePhotoCount) faces loaded")
-                            .font(.callout)
+                            .font(.body)
                             .foregroundStyle(.secondary)
 
                         let good = model.referenceFaces.filter { $0.quality == .good }.count
                         let fair = model.referenceFaces.filter { $0.quality == .fair }.count
                         let poor = model.referenceFaces.filter { $0.quality == .poor }.count
                         HStack(spacing: 6) {
-                            if good > 0 { Text("\(good) good").foregroundColor(.green).font(.caption) }
-                            if fair > 0 { Text("\(fair) fair").foregroundColor(.yellow).font(.caption) }
-                            if poor > 0 { Text("\(poor) poor").foregroundColor(.red).font(.caption) }
+                            if good > 0 { Text("\(good) good").foregroundColor(.green).font(.callout) }
+                            if fair > 0 { Text("\(fair) fair").foregroundColor(.yellow).font(.callout) }
+                            if poor > 0 { Text("\(poor) poor").foregroundColor(.red).font(.callout) }
                         }
                     }
 
@@ -346,7 +373,7 @@ struct PersonFinderView: View {
                             }
                     )
             }
-        }
+        } // else (faces loaded)
     }
 
     // MARK: Output bar — where does output go?
@@ -495,70 +522,48 @@ struct PersonFinderView: View {
     // MARK: Jobs section
 
     var jobsSection: some View {
-        let isScanning = model.jobs.contains { $0.status == .scanning }
         return VStack(spacing: 0) {
+            // Compact header: + Find Person, batch controls, windows
             HStack(spacing: 10) {
-                Image(systemName: "externaldrive.connected.to.line.below")
-                    .font(.title3).foregroundColor(.secondary)
-                Text("Scan Targets")
-                    .font(.title3.weight(.semibold))
-
-                Spacer()
-
                 Menu {
                     ForEach(model.savedProfiles) { profile in
                         Button {
-                            Task { await model.loadPOI(profile) }
+                            addJobForPerson(profile)
                         } label: {
-                            Label(profile.name, systemImage: profile.name.lowercased() == model.settings.personName.lowercased() ? "checkmark.circle.fill" : "person.circle")
+                            Label(profile.name, systemImage: "person.circle")
                         }
                     }
                     if model.savedProfiles.isEmpty {
-                        Text("No people added yet")
+                        Text("Add people in the gallery above first")
                     }
                 } label: {
-                    Label("Find Person\u{2026}", systemImage: "person.fill.viewfinder")
+                    Label("Find Person", systemImage: "person.fill.viewfinder")
+                        .font(.title3.weight(.semibold))
                 }
                 .menuStyle(.borderedButton)
                 .controlSize(.large)
-                .disabled(isScanning)
+                .disabled(model.savedProfiles.isEmpty)
 
-                Button(action: {
-                    model.addJob()
-                    selectedJobID = model.jobs.last?.id
-                }) {
-                    Label("Add Folder / Volume", systemImage: "plus")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
+                Spacer()
 
-                Button(action: {
-                    model.startAll()
-                    if selectedJobID == nil { selectedJobID = model.jobs.first?.id }
-                }) {
-                    Label("Start All", systemImage: "play.fill")
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(model.jobs.isEmpty || model.referenceFaces.isEmpty)
+                if model.jobs.count > 1 {
+                    Button(action: {
+                        model.startAll()
+                        if selectedJobID == nil { selectedJobID = model.jobs.first?.id }
+                    }) {
+                        Label("Start All", systemImage: "play.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    .disabled(model.jobs.isEmpty)
 
-                Button(action: {
-                    if model.hasPausedJobs { model.resumeAll() }
-                    else { model.pauseAll() }
-                }) {
-                    Label(model.hasPausedJobs ? "Resume All" : "Pause All",
-                          systemImage: model.hasPausedJobs ? "play.fill" : "pause.fill")
+                    Button(action: { model.stopAll() }) {
+                        Label("Stop All", systemImage: "stop.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    .disabled(!model.jobs.contains { $0.status.isActive })
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .disabled(!model.hasActiveJobs && !model.hasPausedJobs)
-
-                Button(action: { model.stopAll() }) {
-                    Label("Stop All", systemImage: "stop.fill")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .disabled(!model.jobs.contains { $0.status.isActive })
 
                 Divider().frame(height: 20)
 
@@ -583,112 +588,40 @@ struct PersonFinderView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
 
-            // Active search card — shows who we're looking for
-            if let scanName = model.scanningPersonName ?? (model.settings.personName.isEmpty ? nil : model.settings.personName) {
-                let profile = model.savedProfiles.first(where: { $0.name.lowercased() == scanName.lowercased() })
-                HStack(spacing: 12) {
-                    // Normalized avatar
-                    ZStack {
-                        if let img = profile?.coverImage {
-                            Image(nsImage: img)
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(width: 36, height: 36)
-                                .clipShape(Circle())
-                        } else {
-                            Circle()
-                                .fill(Color.accentColor.opacity(0.15))
-                                .frame(width: 36, height: 36)
-                                .overlay(
-                                    Text(String(scanName.prefix(1)).uppercased())
-                                        .font(.system(size: 16, weight: .bold, design: .rounded))
-                                        .foregroundColor(.accentColor)
-                                )
-                        }
-                        if isScanning {
-                            Circle()
-                                .stroke(Color.blue.opacity(0.4), lineWidth: 2)
-                                .frame(width: 42, height: 42)
-                                .scaleEffect(scanPulse)
-                                .opacity(2.0 - Double(scanPulse))
-                                .onAppear {
-                                    withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: false)) {
-                                        scanPulse = 1.8
-                                    }
-                                }
-                                .onDisappear { scanPulse = 1.0 }
-                        }
-                    }
-                    .frame(width: 44)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(isScanning ? "Searching for" : "Ready to search for")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(scanName)
-                            .font(.headline)
-                    }
-
-                    Text("on \(model.jobs.count) volume\(model.jobs.count == 1 ? "" : "s")")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-
-                    if !model.referenceFaces.isEmpty {
-                        Text("\u{2014} \(model.referenceFaces.count) reference faces")
-                            .font(.caption)
-                            .foregroundStyle(.tertiary)
-                    }
-
-                    Spacer()
-
-                    if !isScanning && !model.settings.personName.isEmpty {
-                        Button(role: .destructive) {
-                            model.settings.personName = ""
-                            model.settings.save()
-                            model.referenceFaces = []
-                            model.referenceSources = []
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Clear person selection")
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .background(
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(isScanning ? Color.blue.opacity(0.06) : Color.accentColor.opacity(0.04))
-                )
-                .padding(.horizontal, 16)
-                .padding(.top, 4)
-            }
-
             if model.jobs.isEmpty {
-                VStack(spacing: 6) {
-                    Image(systemName: "externaldrive.badge.plus")
-                        .font(.largeTitle).foregroundColor(.secondary)
-                    Text("No scan targets yet")
-                        .font(.headline).foregroundColor(.secondary)
-                    Text("Click \"Add Folder / Volume\" to add a drive or folder to search.")
-                        .font(.callout).foregroundColor(.secondary)
+                HStack(spacing: 8) {
+                    Image(systemName: "arrow.up.left")
+                        .font(.body).foregroundColor(.secondary)
+                    Text("Click \"Find Person\" to start searching")
+                        .font(.body).foregroundColor(.secondary)
                 }
                 .frame(maxWidth: .infinity)
-                .padding(24)
+                .padding(.vertical, 12)
             } else {
                 ScrollView {
                     VStack(spacing: 6) {
                         ForEach(model.jobs) { job in
                             ScanJobRow(
                                 job: job,
+                                model: model,
                                 isSelected: selectedJobID == job.id,
+                                isExpanded: expandedJobIDs.contains(job.id),
                                 threshold: model.settings.threshold,
-                                onStart: { selectedJobID = job.id; model.startJob(job) },
+                                savedProfiles: model.savedProfiles,
+                                onToggleExpand: {
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        if expandedJobIDs.contains(job.id) {
+                                            expandedJobIDs.remove(job.id)
+                                        } else {
+                                            expandedJobIDs.insert(job.id)
+                                        }
+                                    }
+                                },
+                                onStart: { selectedJobID = job.id; expandedJobIDs.insert(job.id); model.startJob(job) },
                                 onStop: { model.stopJob(job) },
                                 onPause: { model.togglePauseJob(job) },
                                 onReset: { job.reset() },
-                                onRemove: { model.removeJob(job) },
+                                onRemove: { expandedJobIDs.remove(job.id); model.removeJob(job) },
                                 onPreview: { PreviewWindowController.shared.show(model: model, focusJobID: job.id) }
                             )
                             .contentShape(Rectangle())
@@ -703,10 +636,11 @@ struct PersonFinderView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                 }
-                .frame(minHeight: 90, maxHeight: 260)
+                .frame(minHeight: 90, maxHeight: hasAnyResults ? 260 : .infinity)
             }
         }
         .background(Color(NSColor.controlBackgroundColor))
+        .fixedSize(horizontal: false, vertical: model.jobs.isEmpty)
     }
 
     // MARK: Results table
@@ -715,19 +649,22 @@ struct PersonFinderView: View {
         let results = selectedJob?.results ?? model.jobs.flatMap { $0.results }
         return Group {
             if results.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: selectedJob == nil ? "play.circle" : "person.slash")
-                        .font(.largeTitle).foregroundColor(.secondary)
-                    Text(selectedJob == nil
-                         ? "Run a scan to find matching videos"
-                         : "No videos with matching face found yet")
-                        .font(.headline).foregroundColor(.secondary)
-                    if selectedJob == nil {
-                        Text("Click a job row above to see its results, or Start All to begin.")
-                            .font(.callout).foregroundColor(.secondary)
-                    }
+                HStack(spacing: 6) {
+                    let anyDone = model.jobs.contains { $0.status == .done || $0.status == .cancelled }
+                    let anyActive = model.jobs.contains { $0.status.isActive }
+                    Image(systemName: anyDone && !anyActive ? "tray" : "tray")
+                        .foregroundColor(.secondary)
+                    Text(anyDone && !anyActive
+                         ? "No matches found"
+                         : anyActive
+                         ? "Results will appear as matches are found"
+                         : "Results will appear here when matches are found")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .frame(maxWidth: .infinity)
+                .frame(height: 36)
+                .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
             } else {
                 Table(results.sorted(using: resultSortOrder), selection: $selectedResultIDs, sortOrder: $resultSortOrder) {
                     TableColumn("Video File", value: \.videoFilename) { r in
@@ -890,6 +827,40 @@ struct PersonFinderView: View {
 
     // MARK: Helpers
 
+    /// Add a search row for a specific person, expanded and ready for volume selection.
+    func addJobForPerson(_ profile: POIProfile) {
+        model.selectedPersonForNewJobs = profile
+        model.addJob()
+        if let job = model.jobs.last {
+            expandedJobIDs.insert(job.id)
+            selectedJobID = job.id
+        }
+    }
+
+    /// Mounted volumes (excluding system volumes) for the volume picker.
+    static var mountedVolumes: [URL] {
+        let fm = FileManager.default
+        let keys: [URLResourceKey] = [.volumeNameKey, .volumeIsLocalKey, .volumeIsRemovableKey]
+        guard let vols = fm.mountedVolumeURLs(includingResourceValuesForKeys: keys,
+                                               options: [.skipHiddenVolumes]) else { return [] }
+        return vols.filter { url in
+            // Skip the boot volume (/) and system partials
+            url.path != "/" && !url.path.hasPrefix("/System")
+        }
+    }
+
+    /// Recently used search paths, persisted across sessions.
+    static let recentPathsKey = "PersonFinder.recentSearchPaths"
+    static var recentPaths: [String] {
+        UserDefaults.standard.stringArray(forKey: recentPathsKey) ?? []
+    }
+    static func recordRecentPath(_ path: String) {
+        var paths = recentPaths.filter { $0 != path }
+        paths.insert(path, at: 0)
+        if paths.count > 10 { paths = Array(paths.prefix(10)) }
+        UserDefaults.standard.set(paths, forKey: recentPathsKey)
+    }
+
     func browseForOutput() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -898,9 +869,11 @@ struct PersonFinderView: View {
         panel.allowsMultipleSelection = false
         panel.message = "Choose folder where clips and compiled video will be saved"
         panel.prompt = "Select"
-        if panel.runModal() == .OK, let url = panel.url {
-            model.settings.outputDir = url.path
-            model.settings.save()
+        panel.begin { [model] response in
+            if response == .OK, let url = panel.url {
+                model.settings.outputDir = url.path
+                model.settings.save()
+            }
         }
     }
 
@@ -911,9 +884,11 @@ struct PersonFinderView: View {
         panel.allowsMultipleSelection = false
         panel.message = "Select the Python executable (e.g. venv/bin/python)"
         panel.prompt = "Select"
-        if panel.runModal() == .OK, let url = panel.url {
-            model.settings.pythonPath = url.path
-            model.settings.save()
+        panel.begin { [model] response in
+            if response == .OK, let url = panel.url {
+                model.settings.pythonPath = url.path
+                model.settings.save()
+            }
         }
     }
 
@@ -925,9 +900,11 @@ struct PersonFinderView: View {
         panel.allowedContentTypes = [.plainText]
         panel.message = "Select the face_recognize.py script"
         panel.prompt = "Select"
-        if panel.runModal() == .OK, let url = panel.url {
-            model.settings.recognitionScript = url.path
-            model.settings.save()
+        panel.begin { [model] response in
+            if response == .OK, let url = panel.url {
+                model.settings.recognitionScript = url.path
+                model.settings.save()
+            }
         }
     }
 
@@ -1130,7 +1107,7 @@ struct PersonCard: View {
                         .transition(.scale.combined(with: .opacity))
                 }
                 Text(justSaved ? "Saved" : profile.name)
-                    .font(.system(size: 11, weight: isActive ? .bold : .medium))
+                    .font(.system(size: 13, weight: isActive ? .bold : .medium))
                     .lineLimit(1)
                     .foregroundColor(justSaved ? .green : isActive ? .blue : .primary)
             }
@@ -1529,9 +1506,11 @@ struct PersonEditSheet: View {
         panel.allowsMultipleSelection = true
         panel.message = "Select photos or a folder of reference photos for \(name.isEmpty ? "this person" : name)"
         panel.prompt = "Select"
-        if panel.runModal() == .OK, !panel.urls.isEmpty {
-            for url in panel.urls {
-                copyPhotosToLocal(from: url)
+        panel.begin { response in
+            if response == .OK, !panel.urls.isEmpty {
+                for url in panel.urls {
+                    self.copyPhotosToLocal(from: url)
+                }
             }
         }
     }
@@ -1728,12 +1707,45 @@ struct ScanTargetPOIBadge: View {
     }
 }
 
+// MARK: - Pulsating Ring (self-contained animation)
+
+/// A spinning arc indicator — rotation animations are reliable on macOS SwiftUI.
+struct SpinningRing: View {
+    let color: Color
+    var size: CGFloat = 22
+    @State private var rotation: Double = 0
+
+    var body: some View {
+        ZStack {
+            // Faint background track
+            Circle()
+                .stroke(color.opacity(0.15), lineWidth: 2.5)
+                .frame(width: size, height: size)
+            // Spinning arc
+            Circle()
+                .trim(from: 0, to: 0.3)
+                .stroke(color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .frame(width: size, height: size)
+                .rotationEffect(.degrees(rotation))
+        }
+        .onAppear {
+            withAnimation(.linear(duration: 1.0).repeatForever(autoreverses: false)) {
+                rotation = 360
+            }
+        }
+    }
+}
+
 // MARK: - Scan Job Row
 
 struct ScanJobRow: View {
     @ObservedObject var job: ScanJob
+    @ObservedObject var model: PersonFinderModel
     let isSelected: Bool
+    let isExpanded: Bool
     let threshold: Float
+    let savedProfiles: [POIProfile]
+    let onToggleExpand: () -> Void
     let onStart: () -> Void
     let onStop: () -> Void
     let onPause: () -> Void
@@ -1741,163 +1753,30 @@ struct ScanJobRow: View {
     let onRemove: () -> Void
     var onPreview: (() -> Void)? = nil
 
+    @State private var dotPulse = false
+    @State private var showSettingsPopover = false
+    @State private var startAlert: String? = nil
+
+    private var isIdle: Bool { job.status.isIdle }
+    private var isActive: Bool { job.status.isActive }
+    private var isScanning: Bool { job.status == .scanning }
+
+    private var personName: String { job.assignedProfile?.name ?? "—" }
+    private var volName: String { (job.searchPath as NSString).lastPathComponent }
+    private var engineName: String { job.effectiveEngine.rawValue }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 10) {
-                // Status dot
-                Circle()
-                    .fill(statusColor)
-                    .frame(width: 12, height: 12)
-                    .shadow(color: statusColor.opacity(0.5), radius: 3)
+        VStack(alignment: .leading, spacing: 0) {
+            // Always visible: collapsed summary row
+            collapsedRow
+                .contentShape(Rectangle())
+                .onTapGesture { onToggleExpand() }
 
-                // Path (editable when idle)
-                if job.status.isIdle {
-                    HStack(spacing: 8) {
-                        TextField("Volume or folder path…", text: $job.searchPath)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.system(.body, design: .monospaced))
-                        Button("Browse…") { browsePath() }
-                            .controlSize(.regular)
-                    }
-                } else {
-                    Text(job.searchPath)
-                        .font(.system(.body, design: .monospaced))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-
-                Spacer()
-
-                // Stats badges
-                if job.videosTotal > 0 {
-                    Label("\(job.videosWithHits) matches", systemImage: "person.fill.checkmark")
-                        .font(.callout.weight(.medium))
-                        .foregroundColor(.green)
-                    Text("\(job.videosScanned) / \(job.videosTotal) videos")
-                        .font(.system(.callout, design: .monospaced))
-                        .foregroundColor(.secondary)
-                }
-
-                if job.elapsedSecs > 0 {
-                    Text(formatElapsed(job.elapsedSecs))
-                        .font(.system(.callout, design: .monospaced))
-                        .foregroundColor(.secondary)
-                }
-
-                // Action buttons
-                if job.status.isActive {
-                    Button(action: onPause) {
-                        Label(job.status.isPaused ? "Resume" : "Pause",
-                              systemImage: job.status.isPaused ? "play.fill" : "pause.fill")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.regular)
-
-                    Button(action: onStop) {
-                        Label("Stop", systemImage: "stop.fill")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.regular)
-
-                    if job.status == .scanning, let onPreview {
-                        Button {
-                            onPreview()
-                        } label: {
-                            Label("Preview", systemImage: "eye.fill")
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.regular)
-                    }
-                } else {
-                    Button(action: onStart) {
-                        Label("Start", systemImage: "play.fill")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.regular)
-                    .disabled(job.searchPath.isEmpty)
-
-                    if !job.status.isIdle {
-                        Button(action: onReset) {
-                            Label("Reset", systemImage: "arrow.counterclockwise")
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.regular)
-                    }
-                    Button(action: onRemove) {
-                        Image(systemName: "trash")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.regular)
-                    .foregroundColor(.red)
-                }
-            }
-
-            // Progress: ring chart when videos are known, spinner when discovering
-            if job.videosTotal > 0 {
-                ScanRingChart(
-                    total: job.videosTotal,
-                    scanned: job.videosScanned,
-                    hits: job.videosWithHits,
-                    elapsedSecs: job.elapsedSecs,
-                    currentFile: job.status.isActive ? job.currentFile : "",
-                    bestDist: job.bestDist,
-                    threshold: threshold
-                )
-            } else if job.status.isActive {
-                HStack(spacing: 8) {
-                    ProgressView().progressViewStyle(.circular).scaleEffect(0.7)
-                    Text(job.status.label).font(.caption).foregroundColor(.secondary)
-                }
-            }
-
-            // Inline live preview removed — use the Realtime Face Detection
-            // window (toolbar button or per-row "Preview" action), which has
-            // a per-job picker and avoids cluttering the main jobs list.
-
-            // Compiled outputs — one row per bucket. See
-            // docs/compilation-bucketing.md for why this is a list now.
-            if !job.compiledVideoPaths.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "film.stack")
-                            .foregroundColor(.accentColor)
-                        Text("\(job.compiledVideoPaths.count) compilation\(job.compiledVideoPaths.count == 1 ? "" : "s")")
-                            .font(.system(.callout, weight: .semibold))
-                            .foregroundColor(.accentColor)
-                    }
-                    ForEach(job.compiledVideoPaths) { out in
-                        HStack(spacing: 8) {
-                            Text((out.path as NSString).lastPathComponent)
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundColor(.accentColor)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Text("\(out.clipCount) clip\(out.clipCount == 1 ? "" : "s")")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Text(pfFormatDuration(out.durationSecs))
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Text(pfFormatBytes(out.bytesOnDisk))
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                            Spacer()
-                            Button("Reveal") {
-                                NSWorkspace.shared.selectFile(out.path, inFileViewerRootedAtPath: "")
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                            Button("Open") {
-                                NSWorkspace.shared.open(URL(fileURLWithPath: out.path))
-                            }
-                            .buttonStyle(.bordered)
-                            .controlSize(.small)
-                        }
-                    }
-                }
-                .padding(8)
-                .background(Color.accentColor.opacity(0.08))
-                .cornerRadius(6)
+            // Expanded detail area
+            if isExpanded {
+                Divider().padding(.vertical, 4)
+                expandedDetail
+                    .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
         .padding(.horizontal, 12)
@@ -1908,6 +1787,597 @@ struct ScanJobRow: View {
             RoundedRectangle(cornerRadius: 8)
                 .stroke(isSelected ? Color.accentColor.opacity(0.4) : Color.clear, lineWidth: 1.5)
         )
+        .alert("Cannot Start", isPresented: Binding(
+            get: { startAlert != nil },
+            set: { if !$0 { startAlert = nil } }
+        )) {
+            Button("OK") { startAlert = nil }
+        } message: {
+            Text(startAlert ?? "")
+        }
+    }
+
+    // MARK: - Collapsed row (always visible)
+
+    private var collapsedRow: some View {
+        HStack(spacing: 8) {
+            // Chevron
+            Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(.secondary)
+                .frame(width: 16)
+
+            // Status indicator — only on collapsed row (expanded has its own)
+            if !isExpanded {
+                if isScanning {
+                    SpinningRing(color: statusColor, size: 14)
+                } else {
+                    Circle()
+                        .fill(statusColor)
+                        .frame(width: 10, height: 10)
+                }
+            }
+
+            if isIdle {
+                // Idle: show inline pickers right on the collapsed row
+                inlinePersonPicker
+                inlineVolumePicker
+                inlineEnginePicker
+            } else if !isExpanded {
+                // Active/done: read-only summary text (hidden when expanded — shown in expandedDetail instead)
+                let prefix: String = {
+                    switch job.status {
+                    case .done: return "Done:"
+                    case .cancelled: return "Stopped:"
+                    case .failed: return "Failed:"
+                    case .scanning, .extracting: return "Searching for"
+                    case .paused: return "Paused:"
+                    default: return ""
+                    }
+                }()
+                Text(prefix)
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                Text(personName)
+                    .font(.title3.weight(.semibold))
+                    .lineLimit(1)
+
+                if !volName.isEmpty {
+                    Text("on")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                    Text(volName)
+                        .font(.title3.weight(.medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+
+                Text("using")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                Text(engineName)
+                    .font(.title3.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            // Compact stats on collapsed row
+            if job.videosTotal > 0 {
+                Text("\(job.videosWithHits)")
+                    .font(.system(.body, design: .monospaced).weight(.bold))
+                    .foregroundColor(.green)
+                Text("/")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+                Text("\(job.videosScanned)")
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundColor(.secondary)
+            }
+
+            if job.elapsedSecs > 0 {
+                Text(formatElapsed(job.elapsedSecs))
+                    .font(.system(.callout, design: .monospaced))
+                    .foregroundColor(.secondary)
+            }
+
+            // Status badge
+            statusBadge
+
+            // Compact action buttons — only when collapsed to avoid duplication
+            if !isExpanded {
+                if isActive {
+                    Button(action: onPause) {
+                        Image(systemName: job.status.isPaused ? "play.fill" : "pause.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.regular)
+
+                    Button(action: onStop) {
+                        Image(systemName: "stop.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.regular)
+                } else if isIdle {
+                    Button {
+                        if job.assignedProfile == nil {
+                            startAlert = "Select a person to search for"
+                        } else if job.searchPath.isEmpty {
+                            startAlert = "Select a volume to be scanned"
+                        } else {
+                            onStart()
+                        }
+                    } label: {
+                        Image(systemName: "play.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+
+                    Button(action: onRemove) {
+                        Image(systemName: "trash")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.regular)
+                    .foregroundColor(.red)
+                }
+            }
+        }
+    }
+
+    // MARK: - Inline pickers (collapsed row, idle state)
+
+    private var inlinePersonPicker: some View {
+        Menu {
+            ForEach(savedProfiles) { profile in
+                Button {
+                    job.assignedProfile = profile
+                    if job.assignedEngine == nil,
+                       let eng = RecognitionEngine(rawValue: profile.engine) {
+                        job.assignedEngine = eng
+                    }
+                } label: {
+                    Label(profile.name, systemImage: job.assignedProfile?.id == profile.id ? "checkmark.circle.fill" : "person.circle")
+                }
+            }
+            if savedProfiles.isEmpty {
+                Text("No people added yet")
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "person.fill")
+                    .foregroundColor(job.assignedProfile != nil ? .accentColor : .secondary)
+                Text(job.assignedProfile?.name ?? "Person…")
+                    .fontWeight(job.assignedProfile != nil ? .medium : .regular)
+                    .foregroundColor(job.assignedProfile != nil ? .primary : .secondary)
+            }
+            .font(.body)
+        }
+        .menuStyle(.borderedButton)
+        .fixedSize()
+    }
+
+    private var inlineVolumePicker: some View {
+        Menu {
+            let vols = PersonFinderView.mountedVolumes
+            if !vols.isEmpty {
+                Section("Mounted Volumes") {
+                    ForEach(vols, id: \.path) { vol in
+                        Button(vol.lastPathComponent) {
+                            job.searchPath = vol.path
+                            PersonFinderView.recordRecentPath(vol.path)
+                        }
+                    }
+                }
+            }
+            let recents = PersonFinderView.recentPaths
+            if !recents.isEmpty {
+                Section("Recent") {
+                    ForEach(recents, id: \.self) { path in
+                        Button((path as NSString).lastPathComponent) {
+                            job.searchPath = path
+                        }
+                    }
+                }
+            }
+            Divider()
+            Button("Browse…") {
+                browsePath()
+                if !job.searchPath.isEmpty {
+                    PersonFinderView.recordRecentPath(job.searchPath)
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "folder.fill")
+                    .foregroundColor(!job.searchPath.isEmpty ? .accentColor : .secondary)
+                Text(!job.searchPath.isEmpty ? (job.searchPath as NSString).lastPathComponent : "Volume…")
+                    .fontWeight(!job.searchPath.isEmpty ? .medium : .regular)
+                    .foregroundColor(!job.searchPath.isEmpty ? .primary : .secondary)
+                    .lineLimit(1)
+            }
+            .font(.body)
+        }
+        .menuStyle(.borderedButton)
+        .fixedSize()
+    }
+
+    private var inlineEnginePicker: some View {
+        HStack(spacing: 4) {
+            Picker("", selection: Binding(
+                get: { job.effectiveEngine },
+                set: { job.assignedEngine = $0 }
+            )) {
+                ForEach(RecognitionEngine.allCases) { eng in
+                    Text(eng.rawValue).tag(eng)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .fixedSize()
+
+            Button {
+                showSettingsPopover.toggle()
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.body)
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
+            .popover(isPresented: $showSettingsPopover, arrowEdge: .bottom) {
+                engineSettingsPopover
+            }
+        }
+    }
+
+    // MARK: - Per-row engine settings popover
+
+    private var engineSettingsPopover: some View {
+        let engine = job.effectiveEngine
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("Settings — \(engine.rawValue)")
+                .font(.headline)
+
+            // Common settings
+            Group {
+                LabeledControl("Match Threshold") {
+                    Slider(value: model.settingsBinding.threshold, in: 0.3...0.9, step: 0.05)
+                        .frame(width: 140)
+                    Text(String(format: "%.2f", model.settings.threshold))
+                        .font(.system(.body, design: .monospaced))
+                        .frame(width: 38)
+                }
+                LabeledControl("Min Face Confidence") {
+                    Slider(value: model.settingsBinding.minFaceConfidence.asDouble, in: 0.3...1.0, step: 0.05)
+                        .frame(width: 140)
+                    Text(String(format: "%.2f", model.settings.minFaceConfidence))
+                        .font(.system(.body, design: .monospaced))
+                        .frame(width: 38)
+                }
+                LabeledControl("Frame Step") {
+                    TextField("", value: model.settingsBinding.frameStep, format: .number)
+                        .textFieldStyle(.roundedBorder).frame(width: 54)
+                    Text("frames")
+                }
+                LabeledControl("Min Presence") {
+                    TextField("", value: model.settingsBinding.minPresenceSecs, format: .number)
+                        .textFieldStyle(.roundedBorder).frame(width: 64)
+                    Text("sec")
+                }
+            }
+
+            Divider()
+
+            Toggle("Primary face only", isOn: model.settingsBinding.requirePrimary)
+            Toggle("Skip background faces", isOn: model.settingsBinding.largestFaceOnly)
+
+            Divider()
+
+            // Engine-specific settings
+            if engine == .dlib || engine == .hybrid {
+                LabeledControl("Python Path") {
+                    TextField("", text: model.settingsBinding.pythonPath)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 200)
+                }
+                LabeledControl("Recognition Script") {
+                    TextField("", text: model.settingsBinding.recognitionScript)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 200)
+                }
+                if engine == .dlib {
+                    HStack(spacing: 4) {
+                        Image(systemName: model.settings.dlibReady ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .foregroundColor(model.settings.dlibReady ? .green : .red)
+                        Text(model.settings.dlibReady ? "dlib ready" : "dlib not configured")
+                            .font(.callout)
+                    }
+                }
+            }
+
+            Divider()
+
+            // Compile options
+            Toggle("Compile to one video", isOn: model.settingsBinding.concatOutput)
+                .disabled(model.settings.decadeChapters)
+            Toggle("Decade chapter video", isOn: model.settingsBinding.decadeChapters)
+
+            Divider()
+
+            LabeledControl("Parallel Jobs") {
+                TextField("", value: model.settingsBinding.concurrency, format: .number)
+                    .textFieldStyle(.roundedBorder).frame(width: 54)
+                Stepper("", value: model.settingsBinding.concurrency, in: 1...32)
+                    .labelsHidden()
+            }
+
+            Text("Settings apply when scan starts.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(16)
+        .frame(width: 340)
+    }
+
+    // MARK: - Status badge
+
+    @ViewBuilder
+    private var statusBadge: some View {
+        switch job.status {
+        case .done:
+            Label("Done", systemImage: "checkmark.circle.fill")
+                .font(.body.weight(.semibold))
+                .foregroundColor(.green)
+        case .scanning:
+            Text("Scanning")
+                .font(.body.weight(.semibold))
+                .foregroundColor(.blue)
+        case .paused:
+            Text("Paused")
+                .font(.body.weight(.semibold))
+                .foregroundColor(.yellow)
+        case .extracting:
+            Text("Extracting")
+                .font(.body.weight(.semibold))
+                .foregroundColor(.orange)
+        case .failed:
+            Text("Failed")
+                .font(.body.weight(.semibold))
+                .foregroundColor(.red)
+        case .cancelled:
+            Text("Stopped")
+                .font(.body.weight(.semibold))
+                .foregroundColor(.secondary)
+        default:
+            EmptyView()
+        }
+    }
+
+    // MARK: - Pulsating status dot
+
+    private var pulsatingDot: some View {
+        ZStack {
+            if isScanning {
+                Circle()
+                    .fill(statusColor.opacity(0.3))
+                    .frame(width: 12, height: 12)
+                    .scaleEffect(dotPulse ? 2.0 : 1.0)
+                    .opacity(dotPulse ? 0.0 : 0.5)
+            }
+            Circle()
+                .fill(statusColor)
+                .frame(width: 12, height: 12)
+        }
+        .shadow(color: statusColor.opacity(0.5), radius: isScanning ? 3 : 0)
+        .onChange(of: isScanning) { scanning in
+            if scanning {
+                dotPulse = false
+                withAnimation(.easeOut(duration: 1.2).repeatForever(autoreverses: false)) {
+                    dotPulse = true
+                }
+            } else {
+                withAnimation(.default) { dotPulse = false }
+            }
+        }
+        .onAppear {
+            if isScanning {
+                withAnimation(.easeOut(duration: 1.2).repeatForever(autoreverses: false)) {
+                    dotPulse = true
+                }
+            }
+        }
+    }
+
+    // MARK: - Expanded detail
+
+    private var expandedDetail: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Status summary line for non-idle jobs
+            if !isIdle {
+                HStack(spacing: 10) {
+                    if isScanning {
+                        SpinningRing(color: statusColor, size: 22)
+                    }
+
+                    let prefix: String = {
+                        switch job.status {
+                        case .done: return "Done:"
+                        case .cancelled: return "Stopped:"
+                        case .failed: return "Failed:"
+                        case .scanning, .extracting: return "Searching for"
+                        case .paused: return "Paused:"
+                        default: return ""
+                        }
+                    }()
+                    Text(prefix)
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                    Text(personName)
+                        .font(.title2.weight(.bold))
+                    if !volName.isEmpty {
+                        Text("on")
+                            .font(.title2)
+                            .foregroundStyle(.secondary)
+                        Text(volName)
+                            .font(.title2.weight(.medium))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Text("using")
+                        .font(.title2)
+                        .foregroundStyle(.secondary)
+                    Text(engineName)
+                        .font(.title2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            // Stats + full action buttons
+            HStack(spacing: 10) {
+                if job.videosTotal > 0 {
+                    Label("\(job.videosWithHits) matches", systemImage: "person.fill.checkmark")
+                        .font(.body.weight(.medium))
+                        .foregroundColor(.green)
+                    Text("\(job.videosScanned) / \(job.videosTotal) videos")
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+                if job.elapsedSecs > 0 {
+                    Text(formatElapsed(job.elapsedSecs))
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
+
+                expandedActionButtons
+            }
+
+            // Progress ring
+            if job.videosTotal > 0 {
+                ScanRingChart(
+                    total: job.videosTotal,
+                    scanned: job.videosScanned,
+                    hits: job.videosWithHits,
+                    elapsedSecs: job.elapsedSecs,
+                    currentFile: isActive ? job.currentFile : "",
+                    bestDist: job.bestDist,
+                    threshold: threshold
+                )
+            } else if isActive {
+                HStack(spacing: 8) {
+                    ProgressView().progressViewStyle(.circular).scaleEffect(0.7)
+                    Text(job.status.label).font(.callout).foregroundColor(.secondary)
+                }
+            }
+
+            // Compiled outputs
+            if !job.compiledVideoPaths.isEmpty {
+                compiledOutputsView
+            }
+        }
+    }
+
+    // MARK: - Expanded action buttons (full labels)
+
+    @ViewBuilder
+    private var expandedActionButtons: some View {
+        if isActive {
+            Button(action: onPause) {
+                Label(job.status.isPaused ? "Resume" : "Pause",
+                      systemImage: job.status.isPaused ? "play.fill" : "pause.fill")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
+
+            Button(action: onStop) {
+                Label("Stop", systemImage: "stop.fill")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
+
+            if job.status == .scanning, let onPreview {
+                Button { onPreview() } label: {
+                    Label("Preview", systemImage: "eye.fill")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+            }
+        } else {
+            Button {
+                if job.assignedProfile == nil {
+                    startAlert = "Select a person to search for"
+                } else if job.searchPath.isEmpty {
+                    startAlert = "Select a volume to be scanned"
+                } else {
+                    onStart()
+                }
+            } label: {
+                Label("Start", systemImage: "play.fill")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
+
+            if !isIdle {
+                Button(action: onReset) {
+                    Label("Reset", systemImage: "arrow.counterclockwise")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+            }
+            Button(action: onRemove) {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.regular)
+            .foregroundColor(.red)
+        }
+    }
+
+    // MARK: - Compiled outputs
+
+    private var compiledOutputsView: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "film.stack")
+                    .foregroundColor(.accentColor)
+                Text("\(job.compiledVideoPaths.count) compilation\(job.compiledVideoPaths.count == 1 ? "" : "s")")
+                    .font(.system(.callout, weight: .semibold))
+                    .foregroundColor(.accentColor)
+            }
+            ForEach(job.compiledVideoPaths) { out in
+                HStack(spacing: 8) {
+                    Text((out.path as NSString).lastPathComponent)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.accentColor)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text("\(out.clipCount) clip\(out.clipCount == 1 ? "" : "s")")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(pfFormatDuration(out.durationSecs))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Text(pfFormatBytes(out.bytesOnDisk))
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Button("Reveal") {
+                        NSWorkspace.shared.selectFile(out.path, inFileViewerRootedAtPath: "")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    Button("Open") {
+                        NSWorkspace.shared.open(URL(fileURLWithPath: out.path))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+        }
+        .padding(8)
+        .background(Color.accentColor.opacity(0.08))
+        .cornerRadius(6)
     }
 
     var statusColor: Color {
@@ -1930,8 +2400,11 @@ struct ScanJobRow: View {
         panel.allowsMultipleSelection = false
         panel.message = "Select a volume or folder to scan"
         panel.prompt = "Select"
-        if panel.runModal() == .OK, let url = panel.url {
-            job.searchPath = url.path
+        panel.begin { response in
+            if response == .OK, let url = panel.url {
+                self.job.searchPath = url.path
+                PersonFinderView.recordRecentPath(url.path)
+            }
         }
     }
 
@@ -2210,17 +2683,15 @@ struct RealtimeFaceDetectionContent: View {
 
     private var jobs: [ScanJob] { model.jobs }
 
-    /// Resolve which job to display. If the user explicitly picked one and it
-    /// is still active, honor that. Otherwise auto-pick a scanning job.
+    /// Resolve which job to display. Honor the user's explicit pick always.
+    /// Otherwise auto-pick a scanning job.
     private var activeJob: ScanJob? {
         if let sel = selectedJobID,
-           let j = jobs.first(where: { $0.id == sel }),
-           j.status.isActive {
+           let j = jobs.first(where: { $0.id == sel }) {
             return j
         }
         return jobs.first(where: { $0.status == .scanning })
             ?? jobs.first(where: { $0.status.isActive })
-            ?? (selectedJobID.flatMap { sid in jobs.first(where: { $0.id == sid }) })
             ?? jobs.first
     }
 
@@ -2234,8 +2705,8 @@ struct RealtimeFaceDetectionContent: View {
                     job: job,
                     jobs: jobs,
                     selectedJobID: $selectedJobID,
-                    engineTitle: model.settings.recognitionEngine.title,
-                    personName: model.settings.personName
+                    fallbackEngineTitle: model.settings.recognitionEngine.title,
+                    fallbackPersonName: model.settings.personName
                 )
             } else {
                 VStack(spacing: 0) {
@@ -2271,8 +2742,20 @@ private struct ActiveJobFaceDetectView: View {
     @ObservedObject var job: ScanJob
     let jobs: [ScanJob]
     @Binding var selectedJobID: UUID?
-    let engineTitle: String
-    let personName: String
+    let fallbackEngineTitle: String
+    let fallbackPersonName: String
+
+    private var personName: String { job.assignedProfile?.name ?? fallbackPersonName }
+    private func formatElapsed(_ secs: Double) -> String {
+        let t = Int(secs); let h = t/3600; let m = (t%3600)/60; let s = t%60
+        return h > 0 ? "\(h)h \(m)m \(s)s" : m > 0 ? "\(m)m \(s)s" : "\(s)s"
+    }
+    private var engineTitle: String {
+        if let eng = job.assignedProfile?.engine, let re = RecognitionEngine(rawValue: eng) {
+            return re.title
+        }
+        return fallbackEngineTitle
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -2282,28 +2765,93 @@ private struct ActiveJobFaceDetectView: View {
 
                 if job.status == .done || job.status == .extracting {
                     // Scan finished — clear the frame and show completion message
-                    VStack(spacing: 16) {
+                    VStack(spacing: 14) {
                         Image(systemName: job.status == .extracting ? "scissors" : "checkmark.circle")
-                            .font(.system(size: 52))
+                            .font(.system(size: 56))
                             .foregroundStyle(job.status == .extracting ? .orange : .green)
-                        Text("Face Detection Done")
-                            .font(.system(size: 22, weight: .semibold))
-                            .foregroundStyle(.white)
+
                         if job.status == .extracting {
-                            Text("Generating Clips of \"\(personName.isEmpty ? "Person" : personName)\"")
-                                .font(.system(size: 17))
-                                .foregroundStyle(.white.opacity(0.8))
+                            Text("Generating Clips")
+                                .font(.system(size: 24, weight: .semibold))
+                                .foregroundStyle(.white)
+                            if !personName.isEmpty {
+                                Text("for \(personName)")
+                                    .font(.system(size: 18, weight: .medium))
+                                    .foregroundStyle(.white.opacity(0.8))
+                            }
                             ProgressView()
                                 .colorScheme(.dark)
                                 .scaleEffect(1.2)
+                        } else {
+                            Text("Search Complete")
+                                .font(.system(size: 24, weight: .semibold))
+                                .foregroundStyle(.white)
+                            if !personName.isEmpty {
+                                Text(personName)
+                                    .font(.system(size: 20, weight: .medium))
+                                    .foregroundStyle(.white.opacity(0.85))
+                            }
+                            Text(engineTitle)
+                                .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(.cyan)
+                                .padding(.top, -6)
                         }
-                        HStack(spacing: 20) {
-                            Text("\(job.videosScanned) videos scanned")
-                                .foregroundStyle(.white.opacity(0.6))
-                            Text("\(job.videosWithHits) with matches")
-                                .foregroundStyle(job.videosWithHits > 0 ? .green : .white.opacity(0.6))
+
+                        // Stats grid
+                        HStack(spacing: 24) {
+                            VStack(spacing: 2) {
+                                Text("\(job.videosScanned)")
+                                    .font(.system(size: 20, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(.white)
+                                Text("videos scanned")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.white.opacity(0.5))
+                            }
+                            VStack(spacing: 2) {
+                                Text("\(job.videosWithHits)")
+                                    .font(.system(size: 20, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(job.videosWithHits > 0 ? .green : .white)
+                                Text("with matches")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.white.opacity(0.5))
+                            }
+                            VStack(spacing: 2) {
+                                Text("\(job.clipsFound)")
+                                    .font(.system(size: 20, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(job.clipsFound > 0 ? .green : .white)
+                                Text("clips found")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.white.opacity(0.5))
+                            }
+                            if job.presenceSecs > 0 {
+                                VStack(spacing: 2) {
+                                    Text(formatElapsed(job.presenceSecs))
+                                        .font(.system(size: 20, weight: .bold, design: .monospaced))
+                                        .foregroundStyle(.green)
+                                    Text("presence")
+                                        .font(.system(size: 12))
+                                        .foregroundStyle(.white.opacity(0.5))
+                                }
+                            }
+                            VStack(spacing: 2) {
+                                Text(formatElapsed(job.elapsedSecs))
+                                    .font(.system(size: 20, weight: .bold, design: .monospaced))
+                                    .foregroundStyle(.white)
+                                Text("elapsed")
+                                    .font(.system(size: 12))
+                                    .foregroundStyle(.white.opacity(0.5))
+                            }
                         }
-                        .font(.system(size: 14, design: .monospaced))
+                        .padding(.top, 4)
+
+                        // Volume path
+                        let vol = (job.searchPath as NSString).lastPathComponent
+                        if !vol.isEmpty {
+                            Text(vol)
+                                .font(.system(size: 13, design: .monospaced))
+                                .foregroundStyle(.white.opacity(0.4))
+                                .padding(.top, 2)
+                        }
                     }
                 } else if let frame = job.liveFrame {
                     LiveFramePreview(
@@ -2316,7 +2864,7 @@ private struct ActiveJobFaceDetectView: View {
                             .padding(10)
                     }
                     .overlay(alignment: .topTrailing) {
-                        FaceDetectLegend(engineTitle: engineTitle)
+                        FaceDetectLegend(engineTitle: engineTitle, personName: personName)
                             .padding(10)
                     }
                 } else {
@@ -2364,18 +2912,32 @@ private struct ActiveJobFaceDetectView: View {
                         set: { selectedJobID = $0 }
                     )) {
                         ForEach(jobs) { j in
-                            Text((j.searchPath as NSString).lastPathComponent)
+                            let vol = (j.searchPath as NSString).lastPathComponent
+                            let person = j.assignedProfile?.name
+                            let status = j.status == .done ? " [Done]" :
+                                         j.status == .scanning ? " [Scanning]" :
+                                         j.status.isActive ? " [Active]" : ""
+                            Text((person != nil ? "\(person!) — \(vol)" : vol) + status)
                                 .font(.system(size: 14))
                                 .tag(j.id)
                         }
                     }
                     .labelsHidden()
-                    .frame(maxWidth: 240)
+                    .frame(maxWidth: 350)
                 }
 
                 Circle()
-                    .fill(job.status == .scanning ? Color.green : Color.secondary)
+                    .fill(job.status == .scanning ? Color.green :
+                          job.status == .done ? Color.green.opacity(0.5) : Color.secondary)
                     .frame(width: 12, height: 12)
+
+                // Person being searched
+                if !personName.isEmpty {
+                    Text(personName)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(.primary)
+                }
+
                 Text(job.status.label)
                     .font(.system(size: 14))
                     .foregroundStyle(.secondary)
@@ -2458,9 +3020,18 @@ private struct FaceDetectHUD: View {
 /// Compact engine + legend badge — top-right corner.
 private struct FaceDetectLegend: View {
     let engineTitle: String
+    var personName: String = ""
 
     var body: some View {
         HStack(spacing: 8) {
+            if !personName.isEmpty {
+                Text(personName)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(.white)
+            }
+            Text(engineTitle)
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundColor(.cyan)
             HStack(spacing: 4) {
                 RoundedRectangle(cornerRadius: 2).fill(.green)
                     .frame(width: 10, height: 10)
@@ -2475,9 +3046,6 @@ private struct FaceDetectLegend: View {
                     .font(.system(size: 11))
                     .foregroundColor(.white.opacity(0.8))
             }
-            Text(engineTitle)
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundColor(.cyan)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
