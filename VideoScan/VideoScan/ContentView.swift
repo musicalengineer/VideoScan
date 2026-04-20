@@ -280,6 +280,18 @@ struct CatalogView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.large)
 
+                Button(action: {
+                    let count = model.restoreTargetsFromCatalog()
+                    if count == 0 {
+                        model.log("All catalog volumes are already in the target list.")
+                    }
+                }) {
+                    Label("All Volumes Ever Scanned", systemImage: "clock.arrow.circlepath")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .help("Re-add scan targets for all volumes found in the catalog history (including offline)")
+
                 Spacer().frame(minWidth: 20)
 
                 Button(action: { model.startAllTargets() }) {

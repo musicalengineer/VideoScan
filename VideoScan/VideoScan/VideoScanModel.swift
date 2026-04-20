@@ -499,6 +499,42 @@ final class VideoScanModel: ObservableObject {
         persistScanTargets()
     }
 
+    /// Scan catalog records for volume roots that aren't in the current scan target
+    /// list and re-add them. This recovers targets lost due to UserDefaults resets or
+    /// key name changes. Returns the number of targets restored.
+    @discardableResult
+    func restoreTargetsFromCatalog() -> Int {
+        let existingPaths = Set(scanTargets.map { $0.searchPath })
+        var volumeRoots = Set<String>()
+
+        for rec in records {
+            let path = rec.fullPath
+            guard !path.isEmpty else { continue }
+            // Extract volume root: /Volumes/VolumeName
+            if path.hasPrefix("/Volumes/") {
+                let parts = path.split(separator: "/", maxSplits: 3)
+                if parts.count >= 2 {
+                    let root = "/Volumes/" + String(parts[1])
+                    volumeRoots.insert(root)
+                }
+            }
+        }
+
+        var restored = 0
+        for root in volumeRoots.sorted() where !existingPaths.contains(root) {
+            let target = CatalogScanTarget(searchPath: root)
+            scanTargets.append(target)
+            restored += 1
+        }
+
+        if restored > 0 {
+            persistScanTargets()
+            refreshTargetReachability()
+            log("Restored \(restored) scan target(s) from catalog history.")
+        }
+        return restored
+    }
+
     private func isNetworkVolume(path: String) -> Bool {
         var statBuf = statfs()
         guard statfs(path, &statBuf) == 0 else { return false }
