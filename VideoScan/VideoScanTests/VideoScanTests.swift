@@ -2035,3 +2035,74 @@ struct VolumeCompareTests {
         #expect(result.missingBytes == 300)
     }
 }
+
+// MARK: - Test Media Generator Tests
+
+struct TestMediaGeneratorTests {
+
+    @Test func ffmpegAvailable() {
+        #expect(TestMediaGenerator.isAvailable, "ffmpeg must be installed for media generation tests")
+    }
+
+    @Test func generateVideoAndAudio() throws {
+        guard TestMediaGenerator.isAvailable else { return }
+        let path = try TestMediaGenerator.generate(container: "mp4", streams: .videoAndAudio, duration: 2.0)
+        defer { TestMediaGenerator.cleanup(path) }
+
+        #expect(FileManager.default.fileExists(atPath: path))
+        let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
+        #expect(size > 1000, "Generated file should have meaningful content, got \(size) bytes")
+    }
+
+    @Test func generateVideoOnly() throws {
+        guard TestMediaGenerator.isAvailable else { return }
+        let path = try TestMediaGenerator.generate(container: "mp4", streams: .videoOnly, duration: 2.0)
+        defer { TestMediaGenerator.cleanup(path) }
+
+        #expect(FileManager.default.fileExists(atPath: path))
+    }
+
+    @Test func generateAudioOnly() throws {
+        guard TestMediaGenerator.isAvailable else { return }
+        let path = try TestMediaGenerator.generate(container: "wav", streams: .audioOnly, duration: 2.0)
+        defer { TestMediaGenerator.cleanup(path) }
+
+        #expect(FileManager.default.fileExists(atPath: path))
+    }
+
+    @Test func generateMXFVideoAndWAVAudio() throws {
+        guard TestMediaGenerator.isAvailable else { return }
+        // MXF audio-only not supported by ffmpeg; use MXF video + WAV audio (real Avid workflow)
+        let (video, audio) = try TestMediaGenerator.createPair(
+            videoCodec: "mpeg2video",
+            audioCodec: "pcm_s16le",
+            videoContainer: "mxf",
+            audioContainer: "wav",
+            duration: 2.0
+        )
+        defer { TestMediaGenerator.cleanup(video, audio) }
+
+        #expect(FileManager.default.fileExists(atPath: video))
+        #expect(FileManager.default.fileExists(atPath: audio))
+    }
+
+    @Test func generatedFileProbesCorrectly() async throws {
+        guard TestMediaGenerator.isAvailable else { return }
+        let path = try TestMediaGenerator.generate(container: "mov", streams: .videoAndAudio, duration: 3.0)
+        defer { TestMediaGenerator.cleanup(path) }
+
+        let model = await VideoScanModel()
+        let url = URL(fileURLWithPath: path)
+        let (output, stderr) = await model.runFFProbe(url: url)
+        #expect(output != nil, "ffprobe should parse generated MOV: \(stderr)")
+    }
+
+    @Test func cleanupRemovesFiles() throws {
+        guard TestMediaGenerator.isAvailable else { return }
+        let path = try TestMediaGenerator.generate(container: "mp4", streams: .videoOnly, duration: 1.0)
+        #expect(FileManager.default.fileExists(atPath: path))
+
+        TestMediaGenerator.cleanup(path)
+        #expect(!FileManager.default.fileExists(atPath: path))
+    }
+}
