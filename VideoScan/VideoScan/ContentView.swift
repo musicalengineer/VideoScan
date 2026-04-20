@@ -101,6 +101,8 @@ struct CatalogView: View {
     @State private var deleteTargetCount: Int = 0
     @State private var showDiscoverVolumes = false
     @State private var showVolumeCompare = false
+    @State private var scanTargetsPaneHeight: CGFloat = 180
+    @State private var dragStartHeight: CGFloat = 180
     @State private var showPairsOnly = false
     @State private var combinePairItem: CombinePairItem?
     /// Set of scan-target searchPaths whose records the user wants to see in
@@ -119,7 +121,24 @@ struct CatalogView: View {
             // MARK: Scan Targets Pane
             scanTargetsPane
 
-            Divider()
+            // Draggable resize handle
+            Rectangle()
+                .fill(Color(NSColor.separatorColor))
+                .frame(height: 5)
+                .contentShape(Rectangle())
+                .onHover { hovering in
+                    if hovering { NSCursor.resizeUpDown.push() }
+                    else { NSCursor.pop() }
+                }
+                .gesture(
+                    DragGesture(minimumDistance: 1)
+                        .onChanged { value in
+                            scanTargetsPaneHeight = max(60, dragStartHeight + value.translation.height)
+                        }
+                        .onEnded { _ in
+                            dragStartHeight = scanTargetsPaneHeight
+                        }
+                )
 
             // MARK: Toolbar (post-scan actions)
             CatalogToolbar(
@@ -373,7 +392,7 @@ struct CatalogView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                 }
-                .frame(minHeight: 60, maxHeight: 220)
+                .frame(height: max(60, scanTargetsPaneHeight))
             }
         }
         .background(Color(NSColor.controlBackgroundColor))
