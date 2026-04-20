@@ -174,6 +174,31 @@ final class VideoScanModel: ObservableObject {
         }
     }
 
+    /// Attempt to wake/access an offline volume. For network shares this may trigger
+    /// automount; for sleeping USB drives it can spin them up. After a brief delay,
+    /// re-check reachability and update the target's status.
+    func wakeVolume(_ target: CatalogScanTarget) {
+        let path = target.searchPath
+        log("Attempting to wake \(URL(fileURLWithPath: path).lastPathComponent)…")
+        Task.detached(priority: .userInitiated) {
+            // Touch the path to trigger automount / spin-up
+            let fm = FileManager.default
+            _ = fm.fileExists(atPath: path)
+            _ = try? fm.contentsOfDirectory(atPath: path)
+            // Give the OS a moment to mount
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            await MainActor.run { [weak self] in
+                let reachable = VolumeReachability.isReachable(path: path)
+                target.isReachable = reachable
+                if reachable {
+                    self?.log("  \(URL(fileURLWithPath: path).lastPathComponent) is now online.")
+                } else {
+                    self?.log("  \(URL(fileURLWithPath: path).lastPathComponent) did not respond — still offline.")
+                }
+            }
+        }
+    }
+
     /// Persist the current records array. Debounced; bursts of mutations
     /// (e.g. mid-scan) collapse into one disk write.
     func saveCatalogDebounced() {
