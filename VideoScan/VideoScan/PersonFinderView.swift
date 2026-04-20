@@ -1422,15 +1422,24 @@ struct PersonEditSheet: View {
         let destDir = ensureLocalPhotoFolder()
         referencePath = destDir.path
 
-        // Use a timestamp prefix to avoid overwriting previous imports
+        // Use a timestamp prefix to avoid overwriting previous imports.
+        // Load photos concurrently via TaskGroup on a detached priority so we
+        // don't compete with scan jobs for the cooperative thread pool.
         let stamp = Int(Date().timeIntervalSince1970)
-        for (i, item) in photosPickerItems.enumerated() {
-            if let data = try? await item.loadTransferable(type: Data.self) {
-                let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "jpg"
-                let dest = destDir.appendingPathComponent("apple_\(stamp)_\(i).\(ext)")
-                try? data.write(to: dest)
+        let items = photosPickerItems
+        await Task.detached(priority: .userInitiated) {
+            await withTaskGroup(of: Void.self) { group in
+                for (i, item) in items.enumerated() {
+                    group.addTask {
+                        if let data = try? await item.loadTransferable(type: Data.self) {
+                            let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "jpg"
+                            let dest = destDir.appendingPathComponent("apple_\(stamp)_\(i).\(ext)")
+                            try? data.write(to: dest)
+                        }
+                    }
+                }
             }
-        }
+        }.value
 
         imageFilenamesCache = nil  // force refresh
     }
