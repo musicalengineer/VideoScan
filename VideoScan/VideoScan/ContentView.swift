@@ -1151,6 +1151,9 @@ private struct CatalogContent: View {
 
     @State private var player: AVPlayer?
     @State private var isPlaying = false
+    @State private var showRenameSheet = false
+    @State private var renameTarget: VideoRecord?
+    @State private var renameText: String = ""
 
     /// Stable snapshot the Table reads from. Decoupled from `records` so the
     /// Table never sees the data array mutate mid-gesture (which races with
@@ -1283,6 +1286,46 @@ private struct CatalogContent: View {
                 onClearPreview()
             }
         }
+        .sheet(isPresented: $showRenameSheet) {
+            RenameSheet(
+                filename: $renameText,
+                originalExt: (renameTarget?.filename as NSString?)?.pathExtension ?? "",
+                onConfirm: { performRename() },
+                onCancel: { showRenameSheet = false }
+            )
+        }
+    }
+
+    private func performRename() {
+        guard let rec = renameTarget else { return }
+        let ext = (rec.filename as NSString).pathExtension
+        let newFilename = renameText.trimmingCharacters(in: .whitespaces) + "." + ext
+        guard newFilename != rec.filename, !renameText.isEmpty else {
+            showRenameSheet = false
+            return
+        }
+
+        let oldPath = rec.fullPath
+        let dir = (oldPath as NSString).deletingLastPathComponent
+        let newPath = (dir as NSString).appendingPathComponent(newFilename)
+
+        // Check destination doesn't already exist
+        guard !FileManager.default.fileExists(atPath: newPath) else {
+            showRenameSheet = false
+            return
+        }
+
+        do {
+            try FileManager.default.moveItem(atPath: oldPath, toPath: newPath)
+            // Update the catalog record in-place
+            rec.filename = newFilename
+            rec.fullPath = newPath
+            // Trigger table refresh
+            tableData = computeFiltered()
+        } catch {
+            // Silent fail — file may be on offline volume or locked
+        }
+        showRenameSheet = false
     }
 
     // MARK: - Results Table
@@ -1381,6 +1424,30 @@ private struct CatalogContent: View {
                         )
                     }
                 }
+
+                Divider()
+
+                Button("Rename…") {
+                    renameTarget = rec
+                    renameText = (rec.filename as NSString).deletingPathExtension
+                    showRenameSheet = true
+                }
+
+                // Show copies / duplicates
+                let copies = records.filter {
+                    $0.id != rec.id && $0.duplicateGroupID != nil && $0.duplicateGroupID == rec.duplicateGroupID
+                }
+                if !copies.isEmpty {
+                    Menu("Copies (\(copies.count))") {
+                        ForEach(copies) { dup in
+                            Button("\(dup.filename) — \(VolumeReachability.volumeName(forPath: dup.fullPath))") {
+                                selectedIDs = [dup.id]
+                                onSelect(dup.id)
+                            }
+                        }
+                    }
+                }
+
                 if let partner = rec.pairedWith {
                     Divider()
                     Button(rec.streamType == .videoOnly ? "Find Matched Audio" : "Find Matched Video") {
@@ -1562,6 +1629,40 @@ private struct CatalogContent: View {
     }
 }
 
+// MARK: - Rename Sheet
+
+private struct RenameSheet: View {
+    @Binding var filename: String
+    let originalExt: String
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Text("Rename File")
+                .font(.headline)
+            HStack {
+                TextField("New name", text: $filename)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+                Text(".\(originalExt)")
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundColor(.secondary)
+            }
+            HStack {
+                Button("Cancel", role: .cancel, action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Rename", action: onConfirm)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(filename.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 400)
+    }
+}
+
 // MARK: - Inspector Panel
 
 private struct InspectorPanel: View {
@@ -1575,15 +1676,13 @@ private struct InspectorPanel: View {
         if let rec = record {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    // Thumbnail
-                    inspectorThumbnail(for: rec)
-
                     // Filename header
                     VStack(alignment: .leading, spacing: 4) {
                         Text(rec.filename)
                             .font(.system(size: 13, weight: .semibold, design: .monospaced))
                             .textSelection(.enabled)
                             .lineLimit(2)
+                            .padding(.top, 12)
                         HStack(spacing: 8) {
                             Text(rec.streamType == .ffprobeFailed ? rec.isPlayable : rec.streamTypeRaw)
                                 .font(.system(size: 11, weight: .medium))
