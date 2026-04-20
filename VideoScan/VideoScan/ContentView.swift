@@ -100,6 +100,7 @@ struct CatalogView: View {
     @State private var deleteTargetVolume: String = ""
     @State private var deleteTargetCount: Int = 0
     @State private var showDiscoverVolumes = false
+    @State private var showVolumeCompare = false
     @State private var showPairsOnly = false
     @State private var combinePairItem: CombinePairItem?
     /// Set of scan-target searchPaths whose records the user wants to see in
@@ -255,6 +256,9 @@ struct CatalogView: View {
         .sheet(isPresented: $showDiscoverVolumes) {
             DiscoverVolumesSheet(model: model)
         }
+        .sheet(isPresented: $showVolumeCompare) {
+            VolumeCompareSheet(model: model)
+        }
     }
 
     // MARK: - Scan Targets Pane (matches PersonFinder's jobsSection pattern)
@@ -291,6 +295,13 @@ struct CatalogView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.large)
                 .help("Re-add scan targets for all volumes found in the catalog history (including offline)")
+
+                Button(action: { showVolumeCompare = true }) {
+                    Label("Compare & Rescue", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .help("Compare two volumes and copy unique media files from old drives to new ones")
 
                 Spacer().frame(minWidth: 20)
 

@@ -1954,3 +1954,84 @@ struct CatalogSkipSetTests {
         #expect(settings.skipCatalogBadFiles == true)
     }
 }
+
+// MARK: - Volume Compare Tests
+
+struct VolumeCompareTests {
+
+    private func makeRecord(filename: String, path: String, md5: String, size: Int64, streamType: StreamType = .videoAndAudio) -> VideoRecord {
+        let rec = VideoRecord()
+        rec.filename = filename
+        rec.fullPath = path
+        rec.partialMD5 = md5
+        rec.sizeBytes = size
+        rec.streamTypeRaw = streamType.rawValue
+        return rec
+    }
+
+    @Test func identicalFilesAreAlreadySafe() {
+        let src = [makeRecord(filename: "clip.mov", path: "/Volumes/Old/clip.mov", md5: "abc123", size: 1000)]
+        let dst = [makeRecord(filename: "clip.mov", path: "/Volumes/New/clip.mov", md5: "abc123", size: 1000)]
+
+        let result = VolumeComparer.compare(sourceRecords: src, destRecords: dst, sourcePath: "/Volumes/Old", destPath: "/Volumes/New")
+
+        #expect(result.alreadySafeCount == 1)
+        #expect(result.sourceOnly == 0)
+    }
+
+    @Test func renamedFileMatchesByHash() {
+        let src = [makeRecord(filename: "original.mov", path: "/Volumes/Old/original.mov", md5: "abc123", size: 5000)]
+        let dst = [makeRecord(filename: "renamed.mov", path: "/Volumes/New/renamed.mov", md5: "abc123", size: 5000)]
+
+        let result = VolumeComparer.compare(sourceRecords: src, destRecords: dst, sourcePath: "/Volumes/Old", destPath: "/Volumes/New")
+
+        #expect(result.alreadySafeCount == 1)
+        #expect(result.sourceOnly == 0)
+    }
+
+    @Test func uniqueFileIsMissing() {
+        let src = [
+            makeRecord(filename: "shared.mov", path: "/Volumes/Old/shared.mov", md5: "aaa", size: 1000),
+            makeRecord(filename: "unique.mov", path: "/Volumes/Old/unique.mov", md5: "bbb", size: 2000),
+        ]
+        let dst = [makeRecord(filename: "shared.mov", path: "/Volumes/New/shared.mov", md5: "aaa", size: 1000)]
+
+        let result = VolumeComparer.compare(sourceRecords: src, destRecords: dst, sourcePath: "/Volumes/Old", destPath: "/Volumes/New")
+
+        #expect(result.alreadySafeCount == 1)
+        #expect(result.sourceOnly == 1)
+        #expect(result.missingFiles.first?.filename == "unique.mov")
+        #expect(result.missingBytes == 2000)
+    }
+
+    @Test func fallbackMatchesByNameAndSize() {
+        // No MD5 on source — should still match by filename + size
+        let src = [makeRecord(filename: "clip.mov", path: "/Volumes/Old/clip.mov", md5: "", size: 3000)]
+        let dst = [makeRecord(filename: "clip.mov", path: "/Volumes/New/clip.mov", md5: "xyz", size: 3000)]
+
+        let result = VolumeComparer.compare(sourceRecords: src, destRecords: dst, sourcePath: "/Volumes/Old", destPath: "/Volumes/New")
+
+        #expect(result.alreadySafeCount == 1)
+        #expect(result.sourceOnly == 0)
+    }
+
+    @Test func differentSizeSameNameIsMissing() {
+        let src = [makeRecord(filename: "clip.mov", path: "/Volumes/Old/clip.mov", md5: "aaa", size: 3000)]
+        let dst = [makeRecord(filename: "clip.mov", path: "/Volumes/New/clip.mov", md5: "bbb", size: 5000)]
+
+        let result = VolumeComparer.compare(sourceRecords: src, destRecords: dst, sourcePath: "/Volumes/Old", destPath: "/Volumes/New")
+
+        #expect(result.sourceOnly == 1, "Same filename but different size+hash should be missing")
+    }
+
+    @Test func emptyDestinationMeansAllMissing() {
+        let src = [
+            makeRecord(filename: "a.mov", path: "/Volumes/Old/a.mov", md5: "x", size: 100),
+            makeRecord(filename: "b.mov", path: "/Volumes/Old/b.mov", md5: "y", size: 200),
+        ]
+        let result = VolumeComparer.compare(sourceRecords: src, destRecords: [], sourcePath: "/Volumes/Old", destPath: "/Volumes/New")
+
+        #expect(result.sourceOnly == 2)
+        #expect(result.missingBytes == 300)
+    }
+}
