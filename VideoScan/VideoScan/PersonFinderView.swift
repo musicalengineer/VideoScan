@@ -5,13 +5,19 @@ import SwiftUI
 import AppKit
 import PhotosUI
 
+// MARK: - Helpers
+
+/// Format elapsed seconds as "1h 23m 45s" / "23m 45s" / "45s".
+private func formatElapsed(_ secs: Double) -> String {
+    let t = Int(secs); let h = t/3600; let m = (t%3600)/60; let s = t%60
+    return h > 0 ? "\(h)h \(m)m \(s)s" : m > 0 ? "\(m)m \(s)s" : "\(s)s"
+}
+
 // MARK: - Main View
 
 struct PersonFinderView: View {
     @EnvironmentObject var dashboard: DashboardState
     @EnvironmentObject var model: PersonFinderModel
-    @State private var showSettings = false
-    @State private var scanPulse: CGFloat = 1.0
     @State private var selectedResultIDs = Set<UUID>()
     @State private var inspectedResult: ClipResult? = nil
     @State private var resultSortOrder = [KeyPathComparator(\ClipResult.videoFilename)]
@@ -25,7 +31,6 @@ struct PersonFinderView: View {
         nonmutating set { model.expandedJobIDs = newValue }
     }
     var selectedJob: ScanJob? { model.jobs.first { $0.id == selectedJobID } }
-    var selectedEngine: RecognitionEngine { model.settings.recognitionEngine }
     var hasAnyResults: Bool { model.jobs.contains { !$0.results.isEmpty } }
 
     var body: some View {
@@ -135,8 +140,7 @@ struct PersonFinderView: View {
                                         return
                                     }
                                     // Load this person's reference faces into the strip for inspection
-                                    model.settings.personName = profile.name
-                                    model.settings.referencePath = profile.referencePath
+                                    model.settings.applyProfile(profile)
                                     model.settings.save()
                                     model.referenceFaces.removeAll()
                                     model.referenceLoadFailures.removeAll()
@@ -412,113 +416,6 @@ struct PersonFinderView: View {
         .background(Color(NSColor.windowBackgroundColor))
     }
 
-    // MARK: Settings bar
-
-    var settingsBar: some View {
-        DisclosureGroup(isExpanded: $showSettings) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 24) {
-                    LabeledControl("Match Threshold") {
-                        Slider(value: model.settingsBinding.threshold, in: 0.3...0.9, step: 0.05)
-                            .frame(width: 130)
-                        Text(String(format: "%.2f", model.settings.threshold))
-                            .font(.system(.body, design: .monospaced))
-                            .frame(width: 38)
-                    }
-                    LabeledControl("Min Face Confidence") {
-                        Slider(value: model.settingsBinding.minFaceConfidence.asDouble, in: 0.3...1.0, step: 0.05)
-                            .frame(width: 110)
-                        Text(String(format: "%.2f", model.settings.minFaceConfidence))
-                            .font(.system(.body, design: .monospaced))
-                            .frame(width: 38)
-                    }
-                    LabeledControl("Min Presence") {
-                        TextField("", value: model.settingsBinding.minPresenceSecs, format: .number)
-                            .textFieldStyle(.roundedBorder).frame(width: 64)
-                        Text("sec")
-                    }
-                    LabeledControl("Frame Step") {
-                        TextField("", value: model.settingsBinding.frameStep, format: .number)
-                            .textFieldStyle(.roundedBorder).frame(width: 54)
-                        Text("frames")
-                    }
-                    LabeledControl("Parallel Jobs") {
-                        TextField("", value: model.settingsBinding.concurrency, format: .number)
-                            .textFieldStyle(.roundedBorder).frame(width: 54)
-                        Stepper("", value: model.settingsBinding.concurrency, in: 1...32)
-                            .labelsHidden()
-                        Text("(max \(ProcessInfo.processInfo.processorCount) cores)")
-                            .foregroundStyle(.secondary).font(.caption)
-                    }
-                    Spacer()
-                }
-                HStack(spacing: 24) {
-                    Toggle("Primary face only", isOn: model.settingsBinding.requirePrimary)
-                    Toggle("Skip background faces in references", isOn: model.settingsBinding.largestFaceOnly)
-                    Toggle("Compile to one video", isOn: model.settingsBinding.concatOutput)
-                        .disabled(model.settings.decadeChapters)
-                    Toggle("Decade chapter video", isOn: model.settingsBinding.decadeChapters)
-                    Toggle("Scan iMovie/FCP bundles", isOn: Binding(
-                        get: { !model.settings.skipBundles },
-                        set: { model.settings.skipBundles = !$0; model.settings.save() }
-                    ))
-                    Spacer()
-                }
-
-                // Recognition engine selector
-                Divider()
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(alignment: .top, spacing: 16) {
-                        LabeledControl("Recognition Module") {
-                            Picker("Recognition Module", selection: model.settingsBinding.recognitionEngine) {
-                                ForEach(RecognitionEngine.allCases) { eng in
-                                    Text(eng.title).tag(eng)
-                                }
-                            }
-                            .labelsHidden()
-                            .pickerStyle(.menu)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(selectedEngine.capabilitySummary)
-                                    .font(.callout.weight(.semibold))
-                                Text(selectedEngine.requirementsSummary)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        Spacer(minLength: 0)
-                    }
-
-                    RecognitionEnginePanel(
-                        engine: selectedEngine,
-                        pythonPath: model.settingsBinding.pythonPath,
-                        recognitionScript: model.settingsBinding.recognitionScript,
-                        dlibReady: model.settings.dlibReady,
-                        dlibReadyForHybrid: model.settings.dlibReadyForHybrid,
-                        browsePython: browsePython,
-                        browseScript: browseScript
-                    )
-
-                    Text("Recognition module changes apply to newly started scans. Stop and restart a scan target to switch engines or update engine-specific paths.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .font(.body)
-            .padding(.horizontal, 16)
-            .padding(.bottom, 10)
-        } label: {
-            Label("Face Detection Settings", systemImage: "slider.horizontal.3")
-                .font(.body.weight(.medium))
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-                .onTapGesture { withAnimation { showSettings.toggle() } }
-        }
-        .background(Color(NSColor.windowBackgroundColor))
-    }
-
     // MARK: Jobs section
 
     var jobsSection: some View {
@@ -652,7 +549,7 @@ struct PersonFinderView: View {
                 HStack(spacing: 6) {
                     let anyDone = model.jobs.contains { $0.status == .done || $0.status == .cancelled }
                     let anyActive = model.jobs.contains { $0.status.isActive }
-                    Image(systemName: anyDone && !anyActive ? "tray" : "tray")
+                    Image(systemName: "tray")
                         .foregroundColor(.secondary)
                     Text(anyDone && !anyActive
                          ? "No matches found"
@@ -1753,7 +1650,6 @@ struct ScanJobRow: View {
     let onRemove: () -> Void
     var onPreview: (() -> Void)? = nil
 
-    @State private var dotPulse = false
     @State private var showSettingsPopover = false
     @State private var startAlert: String? = nil
 
@@ -2153,41 +2049,6 @@ struct ScanJobRow: View {
         }
     }
 
-    // MARK: - Pulsating status dot
-
-    private var pulsatingDot: some View {
-        ZStack {
-            if isScanning {
-                Circle()
-                    .fill(statusColor.opacity(0.3))
-                    .frame(width: 12, height: 12)
-                    .scaleEffect(dotPulse ? 2.0 : 1.0)
-                    .opacity(dotPulse ? 0.0 : 0.5)
-            }
-            Circle()
-                .fill(statusColor)
-                .frame(width: 12, height: 12)
-        }
-        .shadow(color: statusColor.opacity(0.5), radius: isScanning ? 3 : 0)
-        .onChange(of: isScanning) { scanning in
-            if scanning {
-                dotPulse = false
-                withAnimation(.easeOut(duration: 1.2).repeatForever(autoreverses: false)) {
-                    dotPulse = true
-                }
-            } else {
-                withAnimation(.default) { dotPulse = false }
-            }
-        }
-        .onAppear {
-            if isScanning {
-                withAnimation(.easeOut(duration: 1.2).repeatForever(autoreverses: false)) {
-                    dotPulse = true
-                }
-            }
-        }
-    }
-
     // MARK: - Expanded detail
 
     private var expandedDetail: some View {
@@ -2408,10 +2269,6 @@ struct ScanJobRow: View {
         }
     }
 
-    func formatElapsed(_ secs: Double) -> String {
-        let t = Int(secs); let h = t/3600; let m = (t%3600)/60; let s = t%60
-        return h > 0 ? "\(h)h \(m)m \(s)s" : m > 0 ? "\(m)m \(s)s" : "\(s)s"
-    }
 }
 
 // MARK: - Helper Views
@@ -2746,10 +2603,6 @@ private struct ActiveJobFaceDetectView: View {
     let fallbackPersonName: String
 
     private var personName: String { job.assignedProfile?.name ?? fallbackPersonName }
-    private func formatElapsed(_ secs: Double) -> String {
-        let t = Int(secs); let h = t/3600; let m = (t%3600)/60; let s = t%60
-        return h > 0 ? "\(h)h \(m)m \(s)s" : m > 0 ? "\(m)m \(s)s" : "\(s)s"
-    }
     private var engineTitle: String {
         if let eng = job.assignedProfile?.engine, let re = RecognitionEngine(rawValue: eng) {
             return re.title
