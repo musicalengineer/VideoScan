@@ -89,6 +89,20 @@ enum VolumeComparer {
     }
 }
 
+// MARK: - Copy Mode
+
+enum RescueCopyMode: String, CaseIterable {
+    case fast = "Fast (no verification)"
+    case verified = "Verified (rsync --checksum)"
+
+    var description: String {
+        switch self {
+        case .fast: return "Uses system copy — fastest, no post-copy checksum"
+        case .verified: return "Uses rsync with checksums — slower but guarantees integrity"
+        }
+    }
+}
+
 // MARK: - Copy Engine
 
 @MainActor
@@ -106,7 +120,7 @@ final class VolumeRescueOperation: ObservableObject {
 
     /// Copy missing files from source volume to a destination folder.
     /// Preserves relative directory structure under the volume root.
-    func start(files: [VideoRecord], sourcePath: String, destPath: String) {
+    func start(files: [VideoRecord], sourcePath: String, destPath: String, mode: RescueCopyMode = .verified) {
         guard !isRunning else { return }
         isRunning = true
         isDone = false
@@ -124,60 +138,12 @@ final class VolumeRescueOperation: ObservableObject {
             let rescueDir = (destPath as NSString).appendingPathComponent("Rescued")
             try? fm.createDirectory(atPath: rescueDir, withIntermediateDirectories: true)
 
-            for (idx, rec) in files.enumerated() {
-                if Task.isCancelled { break }
-
-                let srcFile = rec.fullPath
-                // Relative path from volume root
-                let relative: String
-                if srcFile.hasPrefix(sourcePath) {
-                    let start = srcFile.index(srcFile.startIndex, offsetBy: sourcePath.count)
-                    relative = String(srcFile[start...]).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-                } else {
-                    relative = rec.filename
-                }
-
-                let destFile = (rescueDir as NSString).appendingPathComponent(relative)
-                let destDir = (destFile as NSString).deletingLastPathComponent
-
-                await MainActor.run { [weak self] in
-                    self?.currentFile = rec.filename
-                    self?.progress = Double(idx) / Double(total)
-                }
-
-                // Create intermediate directories
-                do {
-                    try fm.createDirectory(atPath: destDir, withIntermediateDirectories: true)
-                } catch {
-                    await MainActor.run { [weak self] in
-                        self?.filesFailed += 1
-                        self?.errors.append("mkdir failed: \(relative) — \(error.localizedDescription)")
-                    }
-                    continue
-                }
-
-                // Skip if already exists at destination
-                if fm.fileExists(atPath: destFile) {
-                    await MainActor.run { [weak self] in
-                        self?.filesCopied += 1
-                        self?.bytesWritten += rec.sizeBytes
-                    }
-                    continue
-                }
-
-                // Copy
-                do {
-                    try fm.copyItem(atPath: srcFile, toPath: destFile)
-                    await MainActor.run { [weak self] in
-                        self?.filesCopied += 1
-                        self?.bytesWritten += rec.sizeBytes
-                    }
-                } catch {
-                    await MainActor.run { [weak self] in
-                        self?.filesFailed += 1
-                        self?.errors.append("\(relative) — \(error.localizedDescription)")
-                    }
-                }
+            if mode == .verified {
+                // rsync mode: batch copy with checksum verification
+                await self?.rsyncCopy(files: files, sourcePath: sourcePath, rescueDir: rescueDir, total: total)
+            } else {
+                // Fast mode: FileManager copy, no verification
+                await self?.fastCopy(files: files, sourcePath: sourcePath, rescueDir: rescueDir, total: total)
             }
 
             await MainActor.run { [weak self] in
@@ -193,6 +159,140 @@ final class VolumeRescueOperation: ObservableObject {
         task?.cancel()
         isRunning = false
     }
+
+    // MARK: - Fast Copy (FileManager)
+
+    private nonisolated func fastCopy(files: [VideoRecord], sourcePath: String, rescueDir: String, total: Int) async {
+        let fm = FileManager.default
+
+        for (idx, rec) in files.enumerated() {
+            if Task.isCancelled { break }
+
+            let srcFile = rec.fullPath
+            let relative = Self.relativePath(srcFile, under: sourcePath, fallback: rec.filename)
+            let destFile = (rescueDir as NSString).appendingPathComponent(relative)
+            let destDir = (destFile as NSString).deletingLastPathComponent
+
+            await MainActor.run { [weak self] in
+                self?.currentFile = rec.filename
+                self?.progress = Double(idx) / Double(total)
+            }
+
+            do {
+                try fm.createDirectory(atPath: destDir, withIntermediateDirectories: true)
+            } catch {
+                await MainActor.run { [weak self] in
+                    self?.filesFailed += 1
+                    self?.errors.append("mkdir failed: \(relative) — \(error.localizedDescription)")
+                }
+                continue
+            }
+
+            if fm.fileExists(atPath: destFile) {
+                await MainActor.run { [weak self] in
+                    self?.filesCopied += 1
+                    self?.bytesWritten += rec.sizeBytes
+                }
+                continue
+            }
+
+            do {
+                try fm.copyItem(atPath: srcFile, toPath: destFile)
+                await MainActor.run { [weak self] in
+                    self?.filesCopied += 1
+                    self?.bytesWritten += rec.sizeBytes
+                }
+            } catch {
+                await MainActor.run { [weak self] in
+                    self?.filesFailed += 1
+                    self?.errors.append("\(relative) — \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    // MARK: - Verified Copy (rsync)
+
+    private nonisolated func rsyncCopy(files: [VideoRecord], sourcePath: String, rescueDir: String, total: Int) async {
+        // rsync individual files to preserve per-file progress reporting
+        // and handle errors per-file rather than aborting the whole batch
+        for (idx, rec) in files.enumerated() {
+            if Task.isCancelled { break }
+
+            let srcFile = rec.fullPath
+            let relative = Self.relativePath(srcFile, under: sourcePath, fallback: rec.filename)
+            let destFile = (rescueDir as NSString).appendingPathComponent(relative)
+            let destDir = (destFile as NSString).deletingLastPathComponent
+
+            await MainActor.run { [weak self] in
+                self?.currentFile = rec.filename
+                self?.progress = Double(idx) / Double(total)
+            }
+
+            // Create destination directory
+            let mkdirProc = Process()
+            mkdirProc.executableURL = URL(fileURLWithPath: "/bin/mkdir")
+            mkdirProc.arguments = ["-p", destDir]
+            do {
+                try mkdirProc.run()
+                mkdirProc.waitUntilExit()
+            } catch {
+                await MainActor.run { [weak self] in
+                    self?.filesFailed += 1
+                    self?.errors.append("mkdir failed: \(relative) — \(error.localizedDescription)")
+                }
+                continue
+            }
+
+            // rsync with checksum verification
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/usr/bin/rsync")
+            proc.arguments = [
+                "--checksum",       // verify with checksum, not just size/mtime
+                "--partial",        // keep partial transfers for resume
+                "--times",          // preserve modification times
+                srcFile,
+                destFile
+            ]
+
+            let errPipe = Pipe()
+            proc.standardError = errPipe
+
+            do {
+                try proc.run()
+                proc.waitUntilExit()
+
+                if proc.terminationStatus == 0 {
+                    await MainActor.run { [weak self] in
+                        self?.filesCopied += 1
+                        self?.bytesWritten += rec.sizeBytes
+                    }
+                } else {
+                    let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+                    let errMsg = String(data: errData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "exit \(proc.terminationStatus)"
+                    await MainActor.run { [weak self] in
+                        self?.filesFailed += 1
+                        self?.errors.append("\(relative) — rsync: \(errMsg)")
+                    }
+                }
+            } catch {
+                await MainActor.run { [weak self] in
+                    self?.filesFailed += 1
+                    self?.errors.append("\(relative) — \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
+    private nonisolated static func relativePath(_ fullPath: String, under basePath: String, fallback: String) -> String {
+        if fullPath.hasPrefix(basePath) {
+            let start = fullPath.index(fullPath.startIndex, offsetBy: basePath.count)
+            return String(fullPath[start...]).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        }
+        return fallback
+    }
 }
 
 // MARK: - Compare Sheet View
@@ -205,6 +305,7 @@ struct VolumeCompareSheet: View {
     @State private var result: VolumeCompareResult?
     @State private var isComparing = false
     @StateObject private var rescue = VolumeRescueOperation()
+    @State private var copyMode: RescueCopyMode = .verified
     @State private var showCopyConfirm = false
 
     private var volumes: [(label: String, path: String)] {
@@ -286,7 +387,7 @@ struct VolumeCompareSheet: View {
         .alert("Copy Missing Files?", isPresented: $showCopyConfirm) {
             Button("Copy", role: .destructive) {
                 if let r = result {
-                    rescue.start(files: r.missingFiles, sourcePath: r.sourcePath, destPath: r.destPath)
+                    rescue.start(files: r.missingFiles, sourcePath: r.sourcePath, destPath: r.destPath, mode: copyMode)
                 }
             }
             Button("Cancel", role: .cancel) {}
@@ -365,7 +466,17 @@ struct VolumeCompareSheet: View {
                         }
                     } else {
                         let srcOnline = model.scanTargets.first(where: { $0.searchPath == r.sourcePath })?.isReachable ?? false
-                        Button("Copy \(r.sourceOnly) Missing Files to Destination") {
+
+                        Picker("Copy Mode:", selection: $copyMode) {
+                            ForEach(RescueCopyMode.allCases, id: \.self) { mode in
+                                Text(mode.rawValue).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(maxWidth: 320)
+                        .help(copyMode.description)
+
+                        Button("Copy \(r.sourceOnly) Missing Files") {
                             showCopyConfirm = true
                         }
                         .buttonStyle(.borderedProminent)
