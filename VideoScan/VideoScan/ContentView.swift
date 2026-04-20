@@ -561,12 +561,12 @@ private struct CatalogTargetRow: View {
         .animation(.easeInOut(duration: 0.25), value: isHighlighted)
     }
 
-    /// Compact summary: "1,234 · 45.2 GB · Apr 18"
+    /// Compact summary: "1,234 · 12.3 MB · Apr 18"
     private var catalogSummary: String {
         var parts: [String] = []
         parts.append("\(recordCount)")
         if catalogBytes > 0 {
-            parts.append(humanSizeShort(catalogBytes))
+            parts.append(catalogSizeMB)
         }
         if let date = catalogDate {
             parts.append(shortDate(date))
@@ -574,11 +574,13 @@ private struct CatalogTargetRow: View {
         return parts.joined(separator: " · ")
     }
 
-    private func humanSizeShort(_ bytes: Int64) -> String {
-        if bytes < 1_000_000_000 {
-            return String(format: "%.0f MB", Double(bytes) / 1_048_576)
+    /// Catalog data size estimate (each record ~2KB in JSON)
+    private var catalogSizeMB: String {
+        let estimatedBytes = Int64(recordCount) * 2048  // ~2KB per record in catalog.json
+        if estimatedBytes < 1_048_576 {
+            return String(format: "%.0f KB", Double(estimatedBytes) / 1024)
         } else {
-            return String(format: "%.1f GB", Double(bytes) / 1_073_741_824)
+            return String(format: "%.1f MB", Double(estimatedBytes) / 1_048_576)
         }
     }
 
@@ -1168,6 +1170,35 @@ private struct CatalogContent: View {
         return records.filter { $0.duplicateGroupID == groupID && $0.id != rec.id }
     }
 
+    private func volumeRoot(for path: String) -> String {
+        if path.hasPrefix("/Volumes/") {
+            let parts = path.split(separator: "/", maxSplits: 3)
+            if parts.count >= 2 { return "/Volumes/" + String(parts[1]) }
+        }
+        return "/"
+    }
+
+    private func volumeDiskSize(path: String) -> String {
+        guard let attrs = try? FileManager.default.attributesOfFileSystem(forPath: path),
+              let total = attrs[.systemSize] as? Int64, total > 0 else { return "" }
+        return formatBytes(total)
+    }
+
+    private func mediaOnVolume(path: String) -> String {
+        let bytes = records.filter { $0.fullPath.hasPrefix(path) }
+            .reduce(into: Int64(0)) { $0 += $1.sizeBytes }
+        guard bytes > 0 else { return "0 MB" }
+        return formatBytes(bytes)
+    }
+
+    private func formatBytes(_ bytes: Int64) -> String {
+        if bytes < 1_073_741_824 {
+            return String(format: "%.0f MB", Double(bytes) / 1_048_576)
+        } else {
+            return String(format: "%.1f GB", Double(bytes) / 1_073_741_824)
+        }
+    }
+
     private func computeFiltered() -> [VideoRecord] {
         var out = records
         if !filterTargetPaths.isEmpty {
@@ -1382,16 +1413,40 @@ private struct CatalogContent: View {
         Group {
             if selectedRecord != nil {
                 HStack(spacing: 0) {
-                    // Volume name — always visible when a file is selected
+                    // Volume info — lower left
                     if let rec = selectedRecord {
                         VStack(alignment: .leading, spacing: 4) {
-                            Image(systemName: "externaldrive.fill")
-                                .font(.system(size: 14))
-                                .foregroundColor(.accentColor)
-                            Text(VolumeReachability.volumeName(forPath: rec.fullPath))
-                                .font(.system(size: 16, weight: .bold))
-                                .foregroundColor(.primary)
-                                .lineLimit(2)
+                            HStack(spacing: 5) {
+                                Image(systemName: "externaldrive.fill")
+                                    .font(.system(size: 14))
+                                    .foregroundColor(.accentColor)
+                                Text(VolumeReachability.volumeName(forPath: rec.fullPath))
+                                    .font(.system(size: 16, weight: .bold))
+                                    .foregroundColor(.primary)
+                                    .lineLimit(1)
+                                if !VolumeReachability.isReachable(path: rec.fullPath) {
+                                    Text("OFFLINE")
+                                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                        .foregroundColor(.orange)
+                                        .padding(.horizontal, 4)
+                                        .padding(.vertical, 1)
+                                        .background(Color.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 3))
+                                }
+                            }
+                            // Volume size + media cataloged
+                            VStack(alignment: .leading, spacing: 2) {
+                                let volPath = volumeRoot(for: rec.fullPath)
+                                let volSize = volumeDiskSize(path: volPath)
+                                if !volSize.isEmpty {
+                                    Text("Volume: \(volSize)")
+                                        .font(.system(size: 11, design: .monospaced))
+                                        .foregroundColor(.secondary)
+                                }
+                                let mediaSize = mediaOnVolume(path: volPath)
+                                Text("Media cataloged: \(mediaSize)")
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                            }
                             if isPlaying {
                                 Button {
                                     player?.pause()
