@@ -367,11 +367,12 @@ struct CatalogView: View {
                 ScrollView {
                     VStack(spacing: 6) {
                         ForEach(model.scanTargets) { target in
+                            let targetRecords = model.records.filter { $0.fullPath.hasPrefix(target.searchPath) }
                             CatalogTargetRow(
                                 target: target,
-                                recordCount: model.records.reduce(into: 0) { count, rec in
-                                    if rec.fullPath.hasPrefix(target.searchPath) { count += 1 }
-                                },
+                                recordCount: targetRecords.count,
+                                catalogBytes: targetRecords.reduce(into: Int64(0)) { $0 += $1.sizeBytes },
+                                catalogDate: targetRecords.compactMap({ $0.dateModifiedRaw }).max(),
                                 isFiltered: filterTargetPaths.contains(target.searchPath),
                                 isHighlighted: highlightedTargetPath == target.searchPath,
                                 onStart: { model.startTarget(target) },
@@ -385,7 +386,8 @@ struct CatalogView: View {
                                     } else {
                                         filterTargetPaths.insert(target.searchPath)
                                     }
-                                }
+                                },
+                                onWake: { model.wakeVolume(target) }
                             )
                         }
                     }
@@ -404,6 +406,8 @@ struct CatalogView: View {
 private struct CatalogTargetRow: View {
     @ObservedObject var target: CatalogScanTarget
     let recordCount: Int
+    let catalogBytes: Int64
+    let catalogDate: Date?
     let isFiltered: Bool
     let isHighlighted: Bool
     let onStart: () -> Void
@@ -412,6 +416,7 @@ private struct CatalogTargetRow: View {
     let onReset: () -> Void
     let onRemove: () -> Void
     let onViewCatalog: () -> Void
+    let onWake: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
@@ -421,16 +426,13 @@ private struct CatalogTargetRow: View {
                 .frame(width: 12, height: 12)
                 .shadow(color: target.status.color.opacity(0.5), radius: 3)
 
-            // Focus toggle — switches the catalog table between "all volumes"
-            // and "only this volume". eye.fill + accent = focused on this one;
-            // eye + secondary = global (all volumes shown). Record count rides
-            // inside the same control so the row stays clean.
+            // Focus toggle + catalog stats
             Button(action: onViewCatalog) {
                 HStack(spacing: 4) {
                     Image(systemName: isFiltered ? "eye.fill" : "eye")
                         .font(.system(size: 13))
                     if recordCount > 0 {
-                        Text("\(recordCount)")
+                        Text(catalogSummary)
                             .font(.system(size: 11, design: .monospaced))
                     }
                 }
@@ -469,12 +471,18 @@ private struct CatalogTargetRow: View {
                     .truncationMode(.middle)
             }
 
-            // Offline indicator — independent of the status dot, which conveys
-            // scan progress. Shown whenever the root path is unreachable.
+            // Offline button — tries to wake/touch the volume when clicked
             if !target.isReachable {
-                Image(systemName: "externaldrive.badge.exclamationmark")
+                Button(action: onWake) {
+                    HStack(spacing: 3) {
+                        Image(systemName: "externaldrive.badge.exclamationmark")
+                        Text("OFFLINE")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    }
                     .foregroundColor(.orange)
-                    .help("Volume offline — \(VolumeReachability.volumeName(forPath: target.searchPath)) is not currently mounted")
+                }
+                .buttonStyle(.plain)
+                .help("Click to try waking \(VolumeReachability.volumeName(forPath: target.searchPath)) — will attempt to access the mount point")
             }
 
             Spacer()
@@ -551,6 +559,33 @@ private struct CatalogTargetRow: View {
                 .stroke(isHighlighted ? Color.accentColor.opacity(0.5) : Color.clear, lineWidth: 1.5)
         )
         .animation(.easeInOut(duration: 0.25), value: isHighlighted)
+    }
+
+    /// Compact summary: "1,234 · 45.2 GB · Apr 18"
+    private var catalogSummary: String {
+        var parts: [String] = []
+        parts.append("\(recordCount)")
+        if catalogBytes > 0 {
+            parts.append(humanSizeShort(catalogBytes))
+        }
+        if let date = catalogDate {
+            parts.append(shortDate(date))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private func humanSizeShort(_ bytes: Int64) -> String {
+        if bytes < 1_000_000_000 {
+            return String(format: "%.0f MB", Double(bytes) / 1_048_576)
+        } else {
+            return String(format: "%.1f GB", Double(bytes) / 1_073_741_824)
+        }
+    }
+
+    private func shortDate(_ date: Date) -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "MMM d"
+        return fmt.string(from: date)
     }
 
     private func browsePath() {
