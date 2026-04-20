@@ -108,6 +108,7 @@ struct PersonFinderSettings: Equatable {
     var concatOutput: Bool = true
     var decadeChapters: Bool = false    // sort by decade with chapter markers
     var skipBundles: Bool = true        // skip .fcpbundle, .imovielibrary, etc.
+    var skipCatalogBadFiles: Bool = true // skip audio-only, no-streams, ffprobe-failed from catalog
     var largestFaceOnly: Bool = false   // use only the largest detected face per reference photo
     var previewRate: Int = 5            // show preview every N sampled frames (1 = every frame)
 
@@ -202,6 +203,7 @@ struct PersonFinderSettings: Equatable {
         if d.object(forKey: "\(p)concatOutput") != nil      { s.concatOutput = d.bool(forKey: "\(p)concatOutput") }
         if d.object(forKey: "\(p)decadeChapters") != nil    { s.decadeChapters = d.bool(forKey: "\(p)decadeChapters") }
         if d.object(forKey: "\(p)skipBundles") != nil       { s.skipBundles = d.bool(forKey: "\(p)skipBundles") }
+        if d.object(forKey: "\(p)skipCatalogBadFiles") != nil { s.skipCatalogBadFiles = d.bool(forKey: "\(p)skipCatalogBadFiles") }
         if d.object(forKey: "\(p)largestFaceOnly") != nil   { s.largestFaceOnly = d.bool(forKey: "\(p)largestFaceOnly") }
         if d.object(forKey: "\(p)previewRate") != nil       { s.previewRate = max(1, d.integer(forKey: "\(p)previewRate")) }
         if d.object(forKey: "\(p)arcfaceThreshold") != nil { s.arcfaceThreshold = d.float(forKey: "\(p)arcfaceThreshold") }
@@ -267,6 +269,7 @@ struct PersonFinderSettings: Equatable {
         d.set(concatOutput,                   forKey: "\(p)concatOutput")
         d.set(decadeChapters,                 forKey: "\(p)decadeChapters")
         d.set(skipBundles,                    forKey: "\(p)skipBundles")
+        d.set(skipCatalogBadFiles,            forKey: "\(p)skipCatalogBadFiles")
         d.set(largestFaceOnly,                forKey: "\(p)largestFaceOnly")
         d.set(previewRate,                    forKey: "\(p)previewRate")
         d.set(arcfaceThreshold,               forKey: "\(p)arcfaceThreshold")
@@ -987,13 +990,31 @@ final class PersonFinderModel: ObservableObject {
         // Find video files — use Task.detached so blocking FileManager calls
         // don't stall the cooperative thread pool (critical for network volumes)
         let skipBundles = settings.skipBundles
-        let videoFiles = await Task.detached(priority: .userInitiated) {
+        var videoFiles = await Task.detached(priority: .userInitiated) {
             pfFindVideoFiles(at: path, skipBundles: skipBundles)
         }.value
         guard !videoFiles.isEmpty else {
             await job.appendLog("No video files found.")
             await MainActor.run { job.status = .failed("No videos found") }
             return
+        }
+
+        // Filter out catalog-known-bad files (audio-only, no streams, ffprobe failed)
+        if settings.skipCatalogBadFiles {
+            let skipSet = await MainActor.run { pfCatalogSkipSet() }
+            if !skipSet.isEmpty {
+                let before = videoFiles.count
+                videoFiles.removeAll { skipSet.contains($0) }
+                let skipped = before - videoFiles.count
+                if skipped > 0 {
+                    await job.appendLog("Skipped \(skipped) catalog-known-bad file(s) (audio-only, broken, etc.)")
+                }
+                if videoFiles.isEmpty {
+                    await job.appendLog("No scannable video files remain after catalog filter.")
+                    await MainActor.run { job.status = .failed("All files filtered by catalog") }
+                    return
+                }
+            }
         }
 
         await MainActor.run {
@@ -1404,6 +1425,27 @@ private nonisolated func pfLoadReferencePhotos(from path: String, largestFaceOnl
     }
     guard !faces.isEmpty else { return ([], failures, "No faces detected in reference photos") }
     return (faces, failures, nil)
+}
+
+// MARK: - Catalog skip set
+
+/// Build a set of full paths that should be skipped during person search because
+/// they are known from prior catalog scans to be unscannable (audio-only, no streams,
+/// ffprobe failures). Must be called on MainActor since CatalogStore is MainActor-isolated.
+@MainActor
+func pfCatalogSkipSet() -> Set<String> {
+    let records = CatalogStore.shared.load()
+    guard !records.isEmpty else { return [] }
+    var skip = Set<String>()
+    for rec in records {
+        switch rec.streamType {
+        case .audioOnly, .noStreams, .ffprobeFailed:
+            if !rec.fullPath.isEmpty { skip.insert(rec.fullPath) }
+        case .videoAndAudio, .videoOnly:
+            break
+        }
+    }
+    return skip
 }
 
 // MARK: - Video discovery

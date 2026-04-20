@@ -1847,3 +1847,110 @@ struct ScanConfigurationTests {
         model.stopAll()
     }
 }
+
+// MARK: - Catalog Skip Set Tests
+
+struct CatalogSkipSetTests {
+
+    @Test func skipSetFiltersAudioOnly() async {
+        // Create records with various stream types
+        let rec1 = VideoRecord()
+        rec1.fullPath = "/vol/video1.mov"
+        rec1.streamTypeRaw = StreamType.videoAndAudio.rawValue
+
+        let rec2 = VideoRecord()
+        rec2.fullPath = "/vol/audio.wav"
+        rec2.streamTypeRaw = StreamType.audioOnly.rawValue
+
+        let rec3 = VideoRecord()
+        rec3.fullPath = "/vol/broken.mxf"
+        rec3.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+
+        let rec4 = VideoRecord()
+        rec4.fullPath = "/vol/empty.avi"
+        rec4.streamTypeRaw = StreamType.noStreams.rawValue
+
+        let rec5 = VideoRecord()
+        rec5.fullPath = "/vol/video2.mp4"
+        rec5.streamTypeRaw = StreamType.videoOnly.rawValue
+
+        // Build skip set the same way pfCatalogSkipSet does
+        var skip = Set<String>()
+        for rec in [rec1, rec2, rec3, rec4, rec5] {
+            switch rec.streamType {
+            case .audioOnly, .noStreams, .ffprobeFailed:
+                if !rec.fullPath.isEmpty { skip.insert(rec.fullPath) }
+            case .videoAndAudio, .videoOnly:
+                break
+            }
+        }
+
+        #expect(skip.count == 3)
+        #expect(skip.contains("/vol/audio.wav"))
+        #expect(skip.contains("/vol/broken.mxf"))
+        #expect(skip.contains("/vol/empty.avi"))
+        #expect(!skip.contains("/vol/video1.mov"))
+        #expect(!skip.contains("/vol/video2.mp4"))
+    }
+
+    @Test func skipSetFilteringReducesFileList() async {
+        let allFiles = [
+            "/vol/video1.mov",
+            "/vol/audio.wav",
+            "/vol/broken.mxf",
+            "/vol/video2.mp4",
+            "/vol/empty.avi",
+        ]
+        let skipSet: Set<String> = ["/vol/audio.wav", "/vol/broken.mxf", "/vol/empty.avi"]
+
+        var filtered = allFiles
+        filtered.removeAll { skipSet.contains($0) }
+
+        #expect(filtered.count == 2)
+        #expect(filtered.contains("/vol/video1.mov"))
+        #expect(filtered.contains("/vol/video2.mp4"))
+    }
+
+    @Test func skipSetEmptyWhenNoBadFiles() async {
+        let rec1 = VideoRecord()
+        rec1.fullPath = "/vol/good1.mov"
+        rec1.streamTypeRaw = StreamType.videoAndAudio.rawValue
+
+        let rec2 = VideoRecord()
+        rec2.fullPath = "/vol/good2.mp4"
+        rec2.streamTypeRaw = StreamType.videoOnly.rawValue
+
+        var skip = Set<String>()
+        for rec in [rec1, rec2] {
+            switch rec.streamType {
+            case .audioOnly, .noStreams, .ffprobeFailed:
+                if !rec.fullPath.isEmpty { skip.insert(rec.fullPath) }
+            case .videoAndAudio, .videoOnly:
+                break
+            }
+        }
+
+        #expect(skip.isEmpty)
+    }
+
+    @Test func skipSetIgnoresEmptyPaths() async {
+        let rec = VideoRecord()
+        rec.fullPath = ""
+        rec.streamTypeRaw = StreamType.audioOnly.rawValue
+
+        var skip = Set<String>()
+        switch rec.streamType {
+        case .audioOnly, .noStreams, .ffprobeFailed:
+            if !rec.fullPath.isEmpty { skip.insert(rec.fullPath) }
+        case .videoAndAudio, .videoOnly:
+            break
+        }
+
+        #expect(skip.isEmpty, "Empty paths should not be added to skip set")
+    }
+
+    @Test func settingDefaultsToTrue() {
+        let settings = PersonFinderSettings()
+        #expect(settings.skipCatalogBadFiles == true)
+    }
+}
