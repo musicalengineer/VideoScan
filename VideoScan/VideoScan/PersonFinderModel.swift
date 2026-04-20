@@ -725,12 +725,8 @@ final class PersonFinderModel: ObservableObject {
         // Pick reference faces: job-specific or global
         let faces = job.assignedProfile != nil ? job.assignedFaces : self.referenceFaces
 
-        job.appendLog("Person: \(jobSettings.personName)")
-        job.appendLog("Engine: \(jobSettings.recognitionEngine.title)")
+        // Pre-flight checks (before reset clears console)
         if jobSettings.recognitionEngine == .dlib {
-            job.appendLog("  Python: \(jobSettings.pythonPath.isEmpty ? "(empty)" : jobSettings.pythonPath)")
-            job.appendLog("  Script: \(jobSettings.recognitionScript.isEmpty ? "(empty)" : jobSettings.recognitionScript)")
-            job.appendLog("  Ref path: \(jobSettings.referencePath.isEmpty ? "(empty)" : jobSettings.referencePath)")
             guard jobSettings.dlibReady else {
                 job.appendLog("⚠ Set Python path and script path in Settings before scanning with dlib.")
                 return
@@ -740,7 +736,6 @@ final class PersonFinderModel: ObservableObject {
                 return
             }
         } else {
-            job.appendLog("  References loaded: \(faces.count)")
             guard !faces.isEmpty else {
                 job.appendLog("⚠ Load reference photos first. Select a person with \"Find Person\" or load photos globally.")
                 return
@@ -757,6 +752,22 @@ final class PersonFinderModel: ObservableObject {
         job.startElapsedTimer()
 
         let prints = jobSettings.recognitionEngine == .vision ? faces.map(\.featurePrint) : []
+
+        // Diagnostic log — after reset so these survive in the console
+        job.appendLog("Person: \(jobSettings.personName)")
+        job.appendLog("Engine: \(jobSettings.recognitionEngine.title)")
+        job.appendLog("  Threshold: \(String(format: "%.2f", jobSettings.threshold)), Confidence: \(String(format: "%.2f", jobSettings.minFaceConfidence))")
+        job.appendLog("  FrameStep: \(jobSettings.frameStep), Concurrency: \(jobSettings.concurrency)")
+        if let profile = job.assignedProfile {
+            job.appendLog("  Profile rejected: \(profile.rejectedFiles.count) files")
+        }
+        job.appendLog("  References loaded: \(faces.count)")
+        job.appendLog("  Feature prints for matching: \(prints.count)")
+        if jobSettings.recognitionEngine == .dlib {
+            job.appendLog("  Python: \(jobSettings.pythonPath.isEmpty ? "(empty)" : jobSettings.pythonPath)")
+            job.appendLog("  Script: \(jobSettings.recognitionScript.isEmpty ? "(empty)" : jobSettings.recognitionScript)")
+            job.appendLog("  Ref path: \(jobSettings.referencePath.isEmpty ? "(empty)" : jobSettings.referencePath)")
+        }
         let settings = jobSettings
         let dash = self.dashboard
         job.scanTask = Task { [weak self, weak job] in
