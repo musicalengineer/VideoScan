@@ -1528,6 +1528,17 @@ struct ScanConfigurationTests {
         return repoRoot.appendingPathComponent("tests/fixtures/photos").path
     }()
 
+    /// True when running on CI (GitHub Actions) where Vision/ANE is too slow
+    /// for face-loading tests. The pure logic tests still run everywhere.
+    /// GitHub Actions sets CI=true globally — inherited by the test host process.
+    nonisolated static var isCI: Bool {
+        ProcessInfo.processInfo.environment["CI"] != nil
+    }
+
+    /// Time limit for Vision-heavy tests. Locally they finish in ~2s.
+    /// If they exceed this, something is wrong (hung, no ANE, etc.)
+    static let visionTimeLimit = TimeLimitTrait.Duration.minutes(2)
+
     // MARK: applyProfile
 
     @Test func applyProfileSetsEngine() {
@@ -1591,8 +1602,11 @@ struct ScanConfigurationTests {
     }
 
     // MARK: Face loading with rejection filtering
+    // These tests run Vision face detection on real photos — too slow for CI runners
+    // without ANE. They run locally and catch regressions before push.
 
-    @Test func loadFacesForJobFiltersRejectedFiles() async {
+    @Test(.disabled(if: isCI, "Vision face detection too slow on CI runners"), .timeLimit(visionTimeLimit))
+    func loadFacesForJobFiltersRejectedFiles() async {
         let photosDir = Self.photosDir
         guard FileManager.default.fileExists(atPath: photosDir) else { return }
 
@@ -1615,7 +1629,8 @@ struct ScanConfigurationTests {
         #expect(!job.assignedFaces.isEmpty, "Should have loaded some faces")
     }
 
-    @Test func loadFacesForJobLoadsAllWhenNoRejections() async {
+    @Test(.disabled(if: isCI, "Vision face detection too slow on CI runners"), .timeLimit(visionTimeLimit))
+    func loadFacesForJobLoadsAllWhenNoRejections() async {
         let photosDir = Self.photosDir
         guard FileManager.default.fileExists(atPath: photosDir) else { return }
 
@@ -1637,7 +1652,8 @@ struct ScanConfigurationTests {
                 "No rejections should load more faces than with rejections")
     }
 
-    @Test func loadFacesForJobSetsStatusBackToIdle() async {
+    @Test(.disabled(if: isCI, "Vision face detection too slow on CI runners"), .timeLimit(visionTimeLimit))
+    func loadFacesForJobSetsStatusBackToIdle() async {
         let photosDir = Self.photosDir
         guard FileManager.default.fileExists(atPath: photosDir) else { return }
 
@@ -1663,8 +1679,10 @@ struct ScanConfigurationTests {
     }
 
     // MARK: startJobAfterLoad console log verification
+    // These also load faces via Vision — skipped on CI.
 
-    @Test func startJobLogsCorrectEngine() async {
+    @Test(.disabled(if: isCI, "Vision face detection too slow on CI runners"), .timeLimit(visionTimeLimit))
+    func startJobLogsCorrectEngine() async {
         let photosDir = Self.photosDir
         guard FileManager.default.fileExists(atPath: photosDir) else { return }
 
@@ -1699,7 +1717,8 @@ struct ScanConfigurationTests {
         model.stopJob(job)
     }
 
-    @Test func startJobWithEngineOverride() async {
+    @Test(.disabled(if: isCI, "Vision face detection too slow on CI runners"), .timeLimit(visionTimeLimit))
+    func startJobWithEngineOverride() async {
         let photosDir = Self.photosDir
         guard FileManager.default.fileExists(atPath: photosDir) else { return }
 
@@ -1724,7 +1743,8 @@ struct ScanConfigurationTests {
         model.stopJob(job)
     }
 
-    @Test func startJobLogsPrintCount() async {
+    @Test(.disabled(if: isCI, "Vision face detection too slow on CI runners"), .timeLimit(visionTimeLimit))
+    func startJobLogsPrintCount() async {
         let photosDir = Self.photosDir
         guard FileManager.default.fileExists(atPath: photosDir) else { return }
 
@@ -1752,7 +1772,8 @@ struct ScanConfigurationTests {
         model.stopJob(job)
     }
 
-    @Test func startJobWithNoProfileUsesGlobalFaces() async {
+    @Test(.disabled(if: isCI, "Vision face detection too slow on CI runners"), .timeLimit(visionTimeLimit))
+    func startJobWithNoProfileUsesGlobalFaces() async {
         let photosDir = Self.photosDir
         guard FileManager.default.fileExists(atPath: photosDir) else { return }
 
@@ -1781,7 +1802,8 @@ struct ScanConfigurationTests {
 
     // MARK: Rejected files regression guard
 
-    @Test func profileRejectedFilesAppliedDuringScan() async {
+    @Test(.disabled(if: isCI, "Vision face detection too slow on CI runners"), .timeLimit(visionTimeLimit))
+    func profileRejectedFilesAppliedDuringScan() async {
         let photosDir = Self.photosDir
         guard FileManager.default.fileExists(atPath: photosDir) else { return }
 
