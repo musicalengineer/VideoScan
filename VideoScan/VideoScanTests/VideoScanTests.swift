@@ -397,6 +397,98 @@ struct DuplicateDetectorTests {
         #expect(withAudio.duplicateDisposition == .none)
         #expect(videoOnly.duplicateDisposition == .none)
     }
+
+    // MARK: - Threshold & confidence banding regression tests
+    //
+    // These guard the numeric boundaries in the scoring table: the
+    // threshold (7) below which no group is formed, and the two band
+    // cut-offs (9 and 12) that separate low / medium / high. If a future
+    // refactor tweaks a rule's point value without updating these bands,
+    // one of these tests will fail.
+
+    @Test func scoreBelowThresholdProducesNoGroup() {
+        // Only filename(3) + duration-exact(3) = 6 → below threshold (7).
+        // Audio codecs differ so the audio signature does NOT match.
+        let a = makeDuplicateRecord(
+            filename: "clip.mov",
+            streamType: .videoAndAudio,
+            sizeBytes: 100,
+            durationSeconds: 30.0,
+            partialMD5: "",
+            audioCodec: "aac"
+        )
+        let b = makeDuplicateRecord(
+            filename: "clip.mov",
+            streamType: .videoAndAudio,
+            sizeBytes: 200,
+            durationSeconds: 30.0,
+            partialMD5: "",
+            audioCodec: "mp3"
+        )
+
+        let summary = DuplicateDetector.analyze(records: [a, b])
+
+        #expect(summary.groups == 0)
+        #expect(a.duplicateDisposition == .none)
+        #expect(b.duplicateDisposition == .none)
+    }
+
+    @Test func scoreInLowBandProducesLowConfidenceGroup() {
+        // filename(3) + duration-exact(3) + audio(2) = 8 → low band (7-8).
+        // Matching audioCodec makes the audio signature match.
+        let a = makeDuplicateRecord(
+            filename: "clip.mov",
+            streamType: .videoAndAudio,
+            sizeBytes: 100,
+            durationSeconds: 30.0,
+            partialMD5: "",
+            audioCodec: "aac"
+        )
+        let b = makeDuplicateRecord(
+            filename: "clip.mov",
+            streamType: .videoAndAudio,
+            sizeBytes: 200,
+            durationSeconds: 30.0,
+            partialMD5: "",
+            audioCodec: "aac"
+        )
+
+        let summary = DuplicateDetector.analyze(records: [a, b])
+
+        #expect(summary.groups == 1)
+        #expect(summary.lowConfidenceGroups == 1)
+        #expect(summary.mediumConfidenceGroups == 0)
+        #expect(summary.highConfidenceGroups == 0)
+    }
+
+    @Test func scoreInMediumBandProducesMediumConfidenceGroup() {
+        // filename(3) + duration-exact(3) + audio(2) + resolution(2) = 10 → medium (9-11).
+        let a = makeDuplicateRecord(
+            filename: "clip.mov",
+            streamType: .videoAndAudio,
+            sizeBytes: 100,
+            durationSeconds: 30.0,
+            partialMD5: "",
+            resolution: "1920x1080",
+            audioCodec: "aac"
+        )
+        let b = makeDuplicateRecord(
+            filename: "clip.mov",
+            streamType: .videoAndAudio,
+            sizeBytes: 200,
+            durationSeconds: 30.0,
+            partialMD5: "",
+            resolution: "1920x1080",
+            audioCodec: "aac"
+        )
+
+        let summary = DuplicateDetector.analyze(records: [a, b])
+
+        #expect(summary.groups == 1)
+        #expect(summary.mediumConfidenceGroups == 1)
+        #expect(summary.lowConfidenceGroups == 0)
+        #expect(summary.highConfidenceGroups == 0)
+    }
 }
 
 // MARK: - AsyncSemaphore Tests
