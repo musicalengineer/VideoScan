@@ -749,9 +749,20 @@ final class PersonFinderModel: ObservableObject {
         job.status = .scanning
         scanningPersonName = jobSettings.personName
         job.previewRate = jobSettings.previewRate
-        let log = PersistentLog(name: "facedetect")
+        // One log per person so a later scan of a different person can't
+        // wipe the previous run's evidence. Sanitize the person name for a
+        // safe filename (spaces → underscores, strip anything non-alphanum).
+        let safePerson: String = {
+            let allowed = CharacterSet.alphanumerics.union(.init(charactersIn: "-_"))
+            let underscored = jobSettings.personName.replacingOccurrences(of: " ", with: "_")
+            let scalars = underscored.unicodeScalars.filter { allowed.contains($0) }
+            let s = String(String.UnicodeScalarView(scalars))
+            return s.isEmpty ? "unknown" : s
+        }()
+        let log = PersistentLog(name: "facedetect_\(safePerson)")
         log.start()
         job.persistentLog = log
+        job.appendLog("Log file: ~/Library/Logs/VideoScan/facedetect_\(safePerson).log")
         job.startElapsedTimer()
 
         let prints = jobSettings.recognitionEngine == .vision ? faces.map(\.featurePrint) : []
