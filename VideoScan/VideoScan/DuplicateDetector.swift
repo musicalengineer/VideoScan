@@ -181,76 +181,90 @@ enum DuplicateDetector {
         return Array(byHash.values) + Array(byTimecode.values) + Array(byStem.values)
     }
 
+    // MARK: - Scoring rules
+    //
+    // Each rule inspects a pair of records and returns either the points
+    // earned or nil when the rule does not apply. `score(left:right:)` runs
+    // every rule, sums the points, and collects the reason tags for UI.
+    // Rules are independent — reordering or adding a rule does not affect
+    // any other rule. To tune duplicate detection, edit the rule table or
+    // the confidence thresholds below.
+
+    private struct ScoringRule {
+        let reason: String
+        let evaluate: (VideoRecord, VideoRecord) -> Int?
+    }
+
+    private static let scoreThreshold = 7
+    private static let mediumConfidenceScore = 9
+    private static let highConfidenceScore = 12
+
+    private static let scoringRules: [ScoringRule] = [
+        // Byte-identical content: same hash AND same size. Strongest signal.
+        ScoringRule(reason: "hash") { l, r in
+            guard !l.partialMD5.isEmpty,
+                  l.partialMD5 == r.partialMD5,
+                  l.sizeBytes == r.sizeBytes else { return nil }
+            return 8
+        },
+        // Same embedded timecode → almost certainly same source capture.
+        ScoringRule(reason: "timecode") { l, r in
+            (!l.timecode.isEmpty && l.timecode == r.timecode) ? 4 : nil
+        },
+        // Filename stems match after stripping "copy", numeric suffixes, etc.
+        ScoringRule(reason: "filename") { l, r in
+            Self.normalizedStem(l.filename) == Self.normalizedStem(r.filename) ? 3 : nil
+        },
+        // Duration — tiered: very close is worth more than merely close.
+        ScoringRule(reason: "duration") { l, r in
+            guard l.durationSeconds > 0, r.durationSeconds > 0 else { return nil }
+            let delta = abs(l.durationSeconds - r.durationSeconds)
+            if delta <= Self.durationToleranceExact { return 3 }
+            if delta <= Self.durationToleranceLoose { return 2 }
+            return nil
+        },
+        ScoringRule(reason: "resolution") { l, r in
+            (!l.resolution.isEmpty && l.resolution == r.resolution) ? 2 : nil
+        },
+        ScoringRule(reason: "vcodec") { l, r in
+            (!l.videoCodec.isEmpty && l.videoCodec == r.videoCodec) ? 2 : nil
+        },
+        ScoringRule(reason: "audio") { l, r in
+            Self.audioSignature(l) == Self.audioSignature(r) ? 2 : nil
+        },
+        ScoringRule(reason: "tape") { l, r in
+            (!l.tapeName.isEmpty && l.tapeName == r.tapeName) ? 1 : nil
+        },
+        // Capture timestamps within a few minutes → likely the same event.
+        ScoringRule(reason: "created") { l, r in
+            guard let lDate = l.dateCreatedRaw, let rDate = r.dateCreatedRaw,
+                  abs(lDate.timeIntervalSince(rDate)) <= Self.creationTolerance else { return nil }
+            return 1
+        },
+    ]
+
     private static func score(left: VideoRecord, right: VideoRecord) -> Candidate? {
         guard left.streamType == right.streamType else { return nil }
 
-        var score = 0
+        var total = 0
         var reasons: [String] = []
-
-        if !left.partialMD5.isEmpty && left.partialMD5 == right.partialMD5 && left.sizeBytes == right.sizeBytes {
-            score += 8
-            reasons.append("hash")
-        }
-
-        if !left.timecode.isEmpty && left.timecode == right.timecode {
-            score += 4
-            reasons.append("timecode")
-        }
-
-        if normalizedStem(left.filename) == normalizedStem(right.filename) {
-            score += 3
-            reasons.append("filename")
-        }
-
-        let durationDelta = abs(left.durationSeconds - right.durationSeconds)
-        if left.durationSeconds > 0 && right.durationSeconds > 0 {
-            if durationDelta <= durationToleranceExact {
-                score += 3
-                reasons.append("duration")
-            } else if durationDelta <= durationToleranceLoose {
-                score += 2
-                reasons.append("duration")
+        for rule in scoringRules {
+            if let points = rule.evaluate(left, right) {
+                total += points
+                reasons.append(rule.reason)
             }
         }
 
-        if !left.resolution.isEmpty && left.resolution == right.resolution {
-            score += 2
-            reasons.append("resolution")
-        }
-
-        if !left.videoCodec.isEmpty && left.videoCodec == right.videoCodec {
-            score += 2
-            reasons.append("vcodec")
-        }
-
-        if audioSignature(left) == audioSignature(right) {
-            score += 2
-            reasons.append("audio")
-        }
-
-        if !left.tapeName.isEmpty && left.tapeName == right.tapeName {
-            score += 1
-            reasons.append("tape")
-        }
-
-        if let leftDate = left.dateCreatedRaw, let rightDate = right.dateCreatedRaw,
-           abs(leftDate.timeIntervalSince(rightDate)) <= creationTolerance {
-            score += 1
-            reasons.append("created")
-        }
-
-        guard score >= 7 else { return nil }
+        guard total >= scoreThreshold else { return nil }
 
         let confidence: DuplicateConfidence
-        if score >= 12 {
-            confidence = .high
-        } else if score >= 9 {
-            confidence = .medium
-        } else {
-            confidence = .low
+        switch total {
+        case highConfidenceScore...:   confidence = .high
+        case mediumConfidenceScore...: confidence = .medium
+        default:                       confidence = .low
         }
 
-        return Candidate(left: left, right: right, score: score, confidence: confidence, reasons: reasons)
+        return Candidate(left: left, right: right, score: total, confidence: confidence, reasons: reasons)
     }
 
     private static func bestConfidence(for record: VideoRecord, in componentIDs: [UUID], pairByIDs: [PairKey: Candidate]) -> DuplicateConfidence? {
