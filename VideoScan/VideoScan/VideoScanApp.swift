@@ -60,16 +60,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 enum BuildInfo {
     static let version: String = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
     static let build: String   = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
-    #if DEBUG
-    static let configuration = "Debug"
-    #else
-    static let configuration = "Release"
-    #endif
+
     static let buildDate: String = {
-        // __DATE__ and __TIME__ aren't available in Swift, so use the compilation
-        // date of this file by reading its own modification via the embedded timestamp.
-        // Best-practice alternative: Xcode build phase sets BUILD_DATE in Info.plist.
-        // For now, use the bundle's executable creation date as a proxy.
+        // __DATE__ and __TIME__ aren't available in Swift, so use the
+        // bundle executable's creation date as a proxy for "when did I
+        // last build this". Accurate enough to answer "am I running the
+        // build I just made?".
         if let execURL = Bundle.main.executableURL,
            let attrs = try? FileManager.default.attributesOfItem(atPath: execURL.path),
            let date = attrs[.creationDate] as? Date {
@@ -79,7 +75,35 @@ enum BuildInfo {
         }
         return "unknown"
     }()
-    static let summary: String = "v\(version) (\(build)) · \(configuration) · \(buildDate)"
+
+    /// Git branch baked in at build time via `#filePath`. Walks up from
+    /// this source file to find `.git/HEAD`. Works for Debug and Release
+    /// builds as long as the app runs on the machine that built it (the
+    /// source path is embedded in the binary via #filePath).
+    /// Returns "unknown" if the source tree isn't reachable (e.g. a build
+    /// shipped to another machine).
+    static let gitBranch: String = {
+        var url = URL(fileURLWithPath: #filePath)
+        // Up to 8 levels should cover any reasonable project layout.
+        for _ in 0..<8 {
+            url.deleteLastPathComponent()
+            if url.path == "/" { break }
+            let gitDir = url.appendingPathComponent(".git")
+            guard FileManager.default.fileExists(atPath: gitDir.path) else { continue }
+            let head = gitDir.appendingPathComponent("HEAD")
+            guard let contents = try? String(contentsOf: head, encoding: .utf8) else { break }
+            let trimmed = contents.trimmingCharacters(in: .whitespacesAndNewlines)
+            let prefix = "ref: refs/heads/"
+            if trimmed.hasPrefix(prefix) {
+                return String(trimmed.dropFirst(prefix.count))
+            }
+            // Detached HEAD — show the first 8 chars of the SHA.
+            return "detached@\(trimmed.prefix(8))"
+        }
+        return "unknown"
+    }()
+
+    static let summary: String = "v\(version) · \(gitBranch) · \(buildDate)"
 }
 
 struct VideoScanApp: App {
