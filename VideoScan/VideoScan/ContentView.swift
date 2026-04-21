@@ -14,7 +14,6 @@ struct ContentView: View {
     private let tabs: [(label: String, icon: String, tag: Int)] = [
         ("People", "person.2.fill", 0),
         ("Media", "film.stack", 1),
-        ("Settings", "gearshape", 2),
     ]
 
     var body: some View {
@@ -67,14 +66,6 @@ struct ContentView: View {
                         .environmentObject(personFinderModel)
                 case 1:
                     CatalogView()
-                case 2:
-                    SettingsTabView(
-                        settings: Binding(
-                            get: { model.perfSettings },
-                            set: { model.perfSettings = $0 }
-                        ),
-                        totalRAMGB: Int(ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024))
-                    )
                 default:
                     PersonFinderView()
                         .environmentObject(personFinderModel)
