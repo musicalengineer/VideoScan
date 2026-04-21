@@ -467,6 +467,15 @@ struct CatalogContent: View {
             }
             .width(min: 180, ideal: 260)
 
+            TableColumn("Volume", value: \.volumeName) { rec in
+                Text(rec.volumeName)
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .help(rec.fullPath)
+            }
+            .width(min: 80, ideal: 120)
+
             TableColumn("Stream", value: \.streamTypeRaw) { rec in
                 let display = rec.streamType == .ffprobeFailed
                     ? rec.isPlayable
