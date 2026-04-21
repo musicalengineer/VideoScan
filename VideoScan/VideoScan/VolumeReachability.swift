@@ -24,6 +24,19 @@ enum VolumeReachability {
     /// "/Volumes/MediaArchive/clips/foo.mov" → "MediaArchive".
     /// For internal paths or anything not under /Volumes, returns the last
     /// component of the path itself.
+    /// True if the path resides on a network filesystem (SMB, NFS, AFP, WebDAV).
+    static func isNetworkVolume(path: String) -> Bool {
+        guard !path.isEmpty else { return false }
+        var buf = statfs()
+        guard statfs(path, &buf) == 0 else { return false }
+        let fsType = withUnsafePointer(to: &buf.f_fstypename) {
+            $0.withMemoryRebound(to: CChar.self, capacity: Int(MFSTYPENAMELEN)) {
+                String(cString: $0)
+            }
+        }
+        return ["smbfs", "nfs", "afpfs", "webdav"].contains(fsType)
+    }
+
     static func volumeName(forPath path: String) -> String {
         let comps = (path as NSString).pathComponents
         if comps.count >= 3, comps[1] == "Volumes" {

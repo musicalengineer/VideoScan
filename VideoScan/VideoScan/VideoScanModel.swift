@@ -107,6 +107,7 @@ final class VideoScanModel: ObservableObject {
     }
 
     private static let savedTargetsKey = "VideoScan.scanTargetPaths"
+    private static let savedDatesKey = "VideoScan.scanTargetDates"
 
     private let catalogStore = CatalogStore.shared
 
@@ -146,15 +147,30 @@ final class VideoScanModel: ObservableObject {
     private var mountObservers: [NSObjectProtocol] = []
 
     /// Listen for drive mount/unmount events so the Scan Target list can
-    /// flip its offline indicator without polling.
+    /// flip its offline indicator without polling, and auto-add newly mounted volumes.
     private func installVolumeMountObservers() {
         let nc = NSWorkspace.shared.notificationCenter
         let mount = nc.addObserver(
             forName: NSWorkspace.didMountNotification,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in self?.refreshTargetReachability() }
+        ) { [weak self] note in
+            Task { @MainActor in
+                self?.refreshTargetReachability()
+                // Auto-add newly mounted volume as a scan target (skip RAM disk)
+                if let url = note.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL {
+                    let path = url.path
+                    if !path.isEmpty,
+                       !url.lastPathComponent.hasPrefix("VideoScan_Temp"),
+                       self?.scanTargets.contains(where: { $0.searchPath == path }) == false {
+                        let target = CatalogScanTarget(searchPath: path)
+                        target.isReachable = true
+                        self?.scanTargets.append(target)
+                        self?.persistScanTargets()
+                        self?.log("Auto-added mounted volume: \(url.lastPathComponent)")
+                    }
+                }
+            }
         }
         let unmount = nc.addObserver(
             forName: NSWorkspace.didUnmountNotification,
@@ -199,6 +215,127 @@ final class VideoScanModel: ObservableObject {
         }
     }
 
+    /// Eject a mounted volume. Uses NSWorkspace to safely unmount and eject.
+    func ejectVolume(_ target: CatalogScanTarget) {
+        let path = target.searchPath
+        // Extract the volume root (e.g. /Volumes/MyDrive)
+        let components = path.split(separator: "/", maxSplits: 3)
+        guard components.count >= 2, components[0] == "Volumes" else {
+            log("Cannot eject — not a /Volumes/ path: \(path)")
+            return
+        }
+        let volumeRoot = "/\(components[0])/\(components[1])"
+        let volumeName = String(components[1])
+        log("Ejecting \(volumeName)…")
+        let url = URL(fileURLWithPath: volumeRoot)
+        Task.detached(priority: .userInitiated) {
+            do {
+                try await NSWorkspace.shared.unmountAndEjectDevice(at: url)
+                await MainActor.run { [weak self] in
+                    self?.log("  \(volumeName) ejected.")
+                    target.isReachable = false
+                }
+            } catch {
+                await MainActor.run { [weak self] in
+                    self?.log("  Failed to eject \(volumeName): \(error.localizedDescription)")
+                }
+            }
+        }
+    }
+
+    /// Delete all catalog records for a specific scan target's volume.
+    func deleteCatalogForTarget(_ target: CatalogScanTarget) {
+        let path = target.searchPath
+        let volName = VolumeReachability.volumeName(forPath: path)
+        let before = records.count
+        records.removeAll { $0.fullPath.hasPrefix(path) }
+        let removed = before - records.count
+        clearCacheForTarget(target)
+        target.filesFound = 0
+        target.filesScanned = 0
+        if target.status == .complete || target.status == .stopped || target.status == .error {
+            target.status = .idle
+        }
+        saveCatalogNow()
+        log("Deleted \(removed) catalog record(s) for \(volName).")
+    }
+
+    /// Export volume info as CSV via a save panel.
+    func exportVolumeInfo() {
+        // Gather per-volume stats
+        var volumePaths = Set<String>()
+        for rec in records {
+            let path = rec.fullPath
+            if path.hasPrefix("/Volumes/") {
+                let parts = path.split(separator: "/", maxSplits: 3)
+                if parts.count >= 2 { volumePaths.insert("/Volumes/" + String(parts[1])) }
+            }
+        }
+        // Also include scan targets that may have no records yet
+        for t in scanTargets where !t.searchPath.isEmpty {
+            volumePaths.insert(t.searchPath)
+        }
+
+        var csv = "Volume,Status,Files,Video+Audio,Video Only,Audio Only,Errors,Media Size,Codecs,Containers,Last Scanned\n"
+
+        for vol in volumePaths.sorted() {
+            let volRecords = records.filter { $0.fullPath.hasPrefix(vol) }
+            let name = VolumeReachability.volumeName(forPath: vol)
+            let target = scanTargets.first { $0.searchPath == vol }
+            let status = target?.isReachable == true ? "Connected" : "Offline"
+            let total = volRecords.count
+            let va = volRecords.filter { $0.streamType == .videoAndAudio }.count
+            let vo = volRecords.filter { $0.streamType == .videoOnly }.count
+            let ao = volRecords.filter { $0.streamType == .audioOnly }.count
+            let failed = volRecords.filter { $0.streamType == .ffprobeFailed }.count
+            let bytes = volRecords.reduce(into: Int64(0)) { $0 += $1.sizeBytes }
+            let mediaSize = bytes < 1_073_741_824
+                ? String(format: "%.1f MB", Double(bytes) / 1_048_576)
+                : String(format: "%.1f GB", Double(bytes) / 1_073_741_824)
+            let codecs = Set(volRecords.compactMap { $0.videoCodec.isEmpty ? nil : $0.videoCodec }).sorted().joined(separator: "; ")
+            let containers = Set(volRecords.compactMap { $0.container.isEmpty ? nil : $0.container }).sorted().joined(separator: "; ")
+            let lastScan: String
+            if let date = target?.lastScannedDate {
+                let fmt = DateFormatter()
+                fmt.dateStyle = .medium
+                fmt.timeStyle = .short
+                lastScan = fmt.string(from: date)
+            } else {
+                lastScan = ""
+            }
+            csv += "\"\(name)\",\(status),\(total),\(va),\(vo),\(ao),\(failed),\"\(mediaSize)\",\"\(codecs)\",\"\(containers)\",\"\(lastScan)\"\n"
+        }
+
+        let panel = NSSavePanel()
+        panel.title = "Export Volume Info"
+        panel.nameFieldStringValue = "VideoScan_Volumes.csv"
+        panel.allowedContentTypes = [.commaSeparatedText]
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try csv.write(to: url, atomically: true, encoding: .utf8)
+            log("Exported volume info to \(url.lastPathComponent)")
+        } catch {
+            log("Export failed: \(error.localizedDescription)")
+        }
+    }
+
+    /// Delete all catalog records across all volumes.
+    func deleteAllCatalog() {
+        let count = records.count
+        records.removeAll()
+        for target in scanTargets {
+            clearCacheForTarget(target)
+            target.filesFound = 0
+            target.filesScanned = 0
+            if target.status == .complete || target.status == .stopped || target.status == .error {
+                target.status = .idle
+            }
+        }
+        saveCatalogNow()
+        log("Deleted all \(count) catalog record(s).")
+    }
+
     /// Persist the current records array. Debounced; bursts of mutations
     /// (e.g. mid-scan) collapse into one disk write.
     func saveCatalogDebounced() {
@@ -213,9 +350,12 @@ final class VideoScanModel: ObservableObject {
 
     private func restoreScanTargets() {
         let paths = UserDefaults.standard.stringArray(forKey: Self.savedTargetsKey) ?? []
+        let dates = UserDefaults.standard.dictionary(forKey: Self.savedDatesKey) as? [String: Date] ?? [:]
         for p in paths where !p.isEmpty {
             if !scanTargets.contains(where: { $0.searchPath == p }) {
-                scanTargets.append(CatalogScanTarget(searchPath: p))
+                let t = CatalogScanTarget(searchPath: p)
+                t.lastScannedDate = dates[p]
+                scanTargets.append(t)
             }
         }
     }
@@ -223,6 +363,17 @@ final class VideoScanModel: ObservableObject {
     private func persistScanTargets() {
         let paths = scanTargets.map { $0.searchPath }
         UserDefaults.standard.set(paths, forKey: Self.savedTargetsKey)
+    }
+
+    /// Save scan-completion dates so they survive relaunch.
+    private func persistScanDates() {
+        var dates: [String: Date] = [:]
+        for t in scanTargets {
+            if let d = t.lastScannedDate {
+                dates[t.searchPath] = d
+            }
+        }
+        UserDefaults.standard.set(dates, forKey: Self.savedDatesKey)
     }
 
     // MARK: - Logging (delegates to DashboardState)
@@ -715,6 +866,7 @@ final class VideoScanModel: ObservableObject {
         if files.isEmpty {
             log("  No video files found on \(volName).")
             target.status = .complete
+            target.lastScannedDate = Date()
             target.stopElapsedTimer()
             updateGlobalScanState()
             return
@@ -847,7 +999,9 @@ final class VideoScanModel: ObservableObject {
         """)
 
         target.status = .complete
+        target.lastScannedDate = Date()
         target.stopElapsedTimer()
+        persistScanDates()
         updateGlobalScanState()
         // If this was the last active target, stop the throughput timer and
         // mark the dashboard's overall phase complete so the Realtime window

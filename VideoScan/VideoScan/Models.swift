@@ -378,6 +378,8 @@ final class CatalogScanTarget: ObservableObject, Identifiable {
     /// Whether the search path is currently mounted/reachable. Updated by
     /// VideoScanModel on launch and on NSWorkspace mount/unmount notifications.
     @Published var isReachable: Bool = true
+    /// When this volume's catalog was last updated (scan completed).
+    @Published var lastScannedDate: Date?
 
     var scanTask: Task<Void, Never>?
     let pauseGate = PauseGate()
