@@ -113,11 +113,13 @@ struct CatalogView: View {
     @State private var showPairsOnly = false
     @State private var combinePairItem: CombinePairItem?
     /// Set of scan-target searchPaths whose records the user wants to see in
-    /// the catalog table. Empty set = show all volumes (no filter). Each eye
-    /// toggle in the Scan Targets pane independently flips membership, so the
-    /// user can view 1, 2, or N volumes simultaneously. Works for offline
-    /// volumes too, since records are persisted across launches.
-    @State private var filterTargetPaths: Set<String> = []
+    /// the catalog table. Derived from `selectedVolumeIDs` so that selecting
+    /// a volume row (single-click) filters the catalog to that volume, and
+    /// multi-select (Cmd-click or Shift-click) expands the filter. Empty
+    /// selection = show all volumes.
+    private var filterTargetPaths: Set<String> {
+        Set(selectedVolumeIDs.compactMap { target(for: $0)?.searchPath })
+    }
     /// The searchPath of the volume containing the currently selected file.
     /// Used to highlight the matching volume row in the Scan Targets pane.
     @State private var highlightedTargetPath: String = ""
@@ -824,14 +826,6 @@ struct CatalogView: View {
         }
         .contextMenu(forSelectionType: UUID.self) { ids in
             volumeContextMenu(for: ids)
-        } primaryAction: { ids in
-            // Double-click: filter catalog to that volume
-            guard let id = ids.first, let t = target(for: id) else { return }
-            if filterTargetPaths.contains(t.searchPath) {
-                filterTargetPaths.remove(t.searchPath)
-            } else {
-                filterTargetPaths.insert(t.searchPath)
-            }
         }
         .font(.system(size: 14))
     }
