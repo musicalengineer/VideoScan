@@ -11,6 +11,9 @@ developer who needs to understand a non-obvious decision.
 
 | Doc | Subsystem | Status |
 |---|---|---|
+| [architecture-overview.md](architecture-overview.md) | Full app architecture, file inventory, data flow, key decisions | Living document |
+| [refactor-view-extraction.md](refactor-view-extraction.md) | View file extraction from god objects (phase 1) | Shipped |
+| [settings-apple-menu.md](settings-apple-menu.md) | Settings window via Cmd+, (not SwiftUI Settings scene) | Shipped |
 | [compilation-bucketing.md](compilation-bucketing.md) | Person Finder → compilation output | Implemented (initial cut), under test |
 | [catalog-aided-face-detection.md](catalog-aided-face-detection.md) | Catalog metadata → face-detection priors, negative cache, junk triage | Idea / design exploration |
 
