@@ -64,6 +64,14 @@ final class VideoScanModel: ObservableObject {
     /// instead of trying to load a thumbnail.
     @Published var previewOfflineVolumeName: String? = nil
 
+    /// Force SwiftUI to recompute volumeTableRows when target properties
+    /// (phase, reachability, etc.) change. Reassigning the array triggers
+    /// @Published even though the contents are the same references —
+    /// this is the nuclear option that works through NSSplitView hosting.
+    func notifyTargetsChanged() {
+        scanTargets = scanTargets
+    }
+
     /// High-frequency dashboard + console state — separate ObservableObject
     /// so updates don't trigger re-render of the main Table view.
     let dashboard = DashboardState()
@@ -108,6 +116,7 @@ final class VideoScanModel: ObservableObject {
 
     private static let savedTargetsKey = "VideoScan.scanTargetPaths"
     private static let savedDatesKey = "VideoScan.scanTargetDates"
+    private static let savedPhasesKey = "VideoScan.scanTargetPhases"
 
     private let catalogStore = CatalogStore.shared
 
@@ -127,6 +136,8 @@ final class VideoScanModel: ObservableObject {
         // volumes even though the ffprobe cache is full of their files.
         var backfilled = 0
         for t in scanTargets where !t.searchPath.isEmpty {
+            // Don't backfill volumes whose catalog was explicitly deleted
+            if t.phase == .noCatalog { continue }
             let already = records.contains { $0.fullPath.hasPrefix(t.searchPath) }
             if already { continue }
             let cached = metadataCache.allRecordsWithPrefix(t.searchPath)
@@ -139,6 +150,15 @@ final class VideoScanModel: ObservableObject {
         if backfilled > 0 {
             // Persist the merged set so subsequent launches skip the backfill.
             catalogStore.scheduleSave(records: records)
+        }
+        // Consistency check: if a target claims "Cataloged" but has zero
+        // records, the catalog was deleted or lost — reset to NO CATALOG.
+        for t in scanTargets where t.phase == .cataloged {
+            let hasRecords = records.contains { $0.fullPath.hasPrefix(t.searchPath) }
+            if !hasRecords {
+                t.phase = .noCatalog
+                t.lastScannedDate = nil
+            }
         }
         installVolumeMountObservers()
         refreshTargetReachability()
@@ -156,20 +176,26 @@ final class VideoScanModel: ObservableObject {
             queue: .main
         ) { [weak self] note in
             Task { @MainActor in
-                self?.refreshTargetReachability()
+                guard let self else { return }
+                self.refreshTargetReachability()
                 // Auto-add newly mounted volume as a scan target (skip RAM disk)
                 if let url = note.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL {
                     let path = url.path
+                    let volumeRoot = url.path
+                    for t in self.scanTargets where t.searchPath.hasPrefix(volumeRoot) {
+                        t.isReachable = VolumeReachability.isReachable(path: t.searchPath)
+                    }
                     if !path.isEmpty,
                        !url.lastPathComponent.hasPrefix("VideoScan_Temp"),
-                       self?.scanTargets.contains(where: { $0.searchPath == path }) == false {
+                       self.scanTargets.contains(where: { $0.searchPath == path }) == false {
                         let target = CatalogScanTarget(searchPath: path)
                         target.isReachable = true
-                        self?.scanTargets.append(target)
-                        self?.persistScanTargets()
-                        self?.log("Auto-added mounted volume: \(url.lastPathComponent)")
+                        self.scanTargets.append(target)
+                        self.persistScanTargets()
+                        self.log("Auto-added mounted volume: \(url.lastPathComponent)")
                     }
                 }
+                self.notifyTargetsChanged()
             }
         }
         let unmount = nc.addObserver(
@@ -177,7 +203,10 @@ final class VideoScanModel: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.refreshTargetReachability() }
+            Task { @MainActor in
+                self?.refreshTargetReachability()
+                self?.notifyTargetsChanged()
+            }
         }
         mountObservers = [mount, unmount]
     }
@@ -195,22 +224,37 @@ final class VideoScanModel: ObservableObject {
     /// re-check reachability and update the target's status.
     func wakeVolume(_ target: CatalogScanTarget) {
         let path = target.searchPath
-        log("Attempting to wake \(URL(fileURLWithPath: path).lastPathComponent)…")
+        let volName = URL(fileURLWithPath: path).lastPathComponent
+        log("Attempting to wake \(volName)…")
         Task.detached(priority: .userInitiated) {
-            // Touch the path to trigger automount / spin-up
-            let fm = FileManager.default
-            _ = fm.fileExists(atPath: path)
-            _ = try? fm.contentsOfDirectory(atPath: path)
-            // Give the OS a moment to mount
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            // Strategy 1: open() the volume root — this is what actually triggers
+            // macOS disk arbitration to spin up sleeping USB/TB drives and triggers
+            // automountd for network shares. fileExists alone only checks the cache.
+            let fd = open(path, O_RDONLY | O_NONBLOCK)
+            if fd >= 0 { close(fd) }
+
+            // Strategy 2: For network volumes under /Volumes, ask Finder to open
+            // the path via NSWorkspace. Finder knows saved credentials and can
+            // remount SMB/AFP shares that automountd won't.
+            let url = URL(fileURLWithPath: path)
+            if path.hasPrefix("/Volumes/") {
+                await NSWorkspace.shared.open(url)
+                // Give Finder a moment to mount the share
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+            } else {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+
             await MainActor.run { [weak self] in
                 let reachable = VolumeReachability.isReachable(path: path)
                 target.isReachable = reachable
                 if reachable {
-                    self?.log("  \(URL(fileURLWithPath: path).lastPathComponent) is now online.")
+                    self?.log("  \(volName) is now online.")
                 } else {
-                    self?.log("  \(URL(fileURLWithPath: path).lastPathComponent) did not respond — still offline.")
+                    self?.log("  \(volName) did not respond — try opening it in Finder.")
                 }
+                self?.refreshTargetReachability()
+                self?.notifyTargetsChanged()
             }
         }
     }
@@ -234,6 +278,8 @@ final class VideoScanModel: ObservableObject {
                 await MainActor.run { [weak self] in
                     self?.log("  \(volumeName) ejected.")
                     target.isReachable = false
+                    self?.refreshTargetReachability()
+                    self?.notifyTargetsChanged()
                 }
             } catch {
                 await MainActor.run { [weak self] in
@@ -247,16 +293,22 @@ final class VideoScanModel: ObservableObject {
     func deleteCatalogForTarget(_ target: CatalogScanTarget) {
         let path = target.searchPath
         let volName = VolumeReachability.volumeName(forPath: path)
-        let before = records.count
-        records.removeAll { $0.fullPath.hasPrefix(path) }
-        let removed = before - records.count
-        clearCacheForTarget(target)
+        // Reset target state BEFORE touching records so the UI picks up
+        // the phase change on the same objectWillChange cycle.
+        target.phase = .noCatalog
+        target.lastScannedDate = nil
         target.filesFound = 0
         target.filesScanned = 0
         if target.status == .complete || target.status == .stopped || target.status == .error {
             target.status = .idle
         }
+        let before = records.count
+        records.removeAll { $0.fullPath.hasPrefix(path) }
+        let removed = before - records.count
+        clearCacheForTarget(target)
+        persistScanDates()
         saveCatalogNow()
+        notifyTargetsChanged()
         log("Deleted \(removed) catalog record(s) for \(volName).")
     }
 
@@ -322,17 +374,22 @@ final class VideoScanModel: ObservableObject {
 
     /// Delete all catalog records across all volumes.
     func deleteAllCatalog() {
-        let count = records.count
-        records.removeAll()
+        // Reset all target state BEFORE touching records
         for target in scanTargets {
-            clearCacheForTarget(target)
+            target.phase = .noCatalog
+            target.lastScannedDate = nil
             target.filesFound = 0
             target.filesScanned = 0
             if target.status == .complete || target.status == .stopped || target.status == .error {
                 target.status = .idle
             }
+            clearCacheForTarget(target)
         }
+        let count = records.count
+        records.removeAll()
+        persistScanDates()
         saveCatalogNow()
+        notifyTargetsChanged()
         log("Deleted all \(count) catalog record(s).")
     }
 
@@ -351,10 +408,18 @@ final class VideoScanModel: ObservableObject {
     private func restoreScanTargets() {
         let paths = UserDefaults.standard.stringArray(forKey: Self.savedTargetsKey) ?? []
         let dates = UserDefaults.standard.dictionary(forKey: Self.savedDatesKey) as? [String: Date] ?? [:]
+        let phases = UserDefaults.standard.dictionary(forKey: Self.savedPhasesKey) as? [String: String] ?? [:]
         for p in paths where !p.isEmpty {
             if !scanTargets.contains(where: { $0.searchPath == p }) {
                 let t = CatalogScanTarget(searchPath: p)
                 t.lastScannedDate = dates[p]
+                if let raw = phases[p] {
+                    if let phase = VolumePhase(rawValue: raw) {
+                        t.phase = phase
+                    } else if raw == "New" {
+                        t.phase = .noCatalog
+                    }
+                }
                 scanTargets.append(t)
             }
         }
@@ -365,15 +430,25 @@ final class VideoScanModel: ObservableObject {
         UserDefaults.standard.set(paths, forKey: Self.savedTargetsKey)
     }
 
-    /// Save scan-completion dates so they survive relaunch.
+    /// Save scan-completion dates and phases so they survive relaunch.
     private func persistScanDates() {
         var dates: [String: Date] = [:]
+        var phases: [String: String] = [:]
         for t in scanTargets {
             if let d = t.lastScannedDate {
                 dates[t.searchPath] = d
             }
+            phases[t.searchPath] = t.phase.rawValue
         }
         UserDefaults.standard.set(dates, forKey: Self.savedDatesKey)
+        UserDefaults.standard.set(phases, forKey: Self.savedPhasesKey)
+    }
+
+    /// Update a volume's lifecycle phase and persist.
+    func setPhase(_ phase: VolumePhase, for target: CatalogScanTarget) {
+        target.phase = phase
+        persistScanDates()
+        notifyTargetsChanged()
     }
 
     // MARK: - Logging (delegates to DashboardState)
@@ -734,6 +809,9 @@ final class VideoScanModel: ObservableObject {
 
     func startTarget(_ target: CatalogScanTarget) {
         guard !target.searchPath.isEmpty else { return }
+        // Clear any existing catalog records for this volume so a rescan
+        // doesn't create duplicates. The cache is kept (probes are reused).
+        records.removeAll { $0.fullPath.hasPrefix(target.searchPath) }
         target.status = .scanning
         target.filesFound = 0
         target.filesScanned = 0
@@ -793,6 +871,8 @@ final class VideoScanModel: ObservableObject {
 
     func startAllTargets() {
         for target in scanTargets where target.status.isIdle || target.status == .stopped {
+            guard !target.searchPath.contains("VideoScan_Temp") else { continue }
+            guard target.isReachable else { continue }
             startTarget(target)
         }
     }
@@ -1000,8 +1080,10 @@ final class VideoScanModel: ObservableObject {
 
         target.status = .complete
         target.lastScannedDate = Date()
+        if target.phase == .noCatalog { target.phase = .cataloged }
         target.stopElapsedTimer()
         persistScanDates()
+        notifyTargetsChanged()
         updateGlobalScanState()
         // If this was the last active target, stop the throughput timer and
         // mark the dashboard's overall phase complete so the Realtime window
