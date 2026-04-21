@@ -100,6 +100,9 @@ struct VideoScanApp: App {
             CommandGroup(replacing: .appInfo) {
                 AboutMenuItem()
             }
+            CommandGroup(replacing: .appSettings) {
+                SettingsMenuItem()
+            }
             CommandGroup(after: .saveItem) {
                 Button("Export Volume Info…") {
                     catalogModel.exportVolumeInfo()
@@ -130,6 +133,19 @@ struct VideoScanApp: App {
                 .environmentObject(catalogModel.dashboard)
         }
         .defaultPosition(.bottomTrailing)
+
+        Window("Settings", id: "settings") {
+            SettingsTabView(
+                settings: Binding(
+                    get: { catalogModel.perfSettings },
+                    set: { catalogModel.perfSettings = $0 }
+                ),
+                totalRAMGB: Int(ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024))
+            )
+            .frame(minWidth: 500, idealWidth: 620, minHeight: 400, idealHeight: 620)
+        }
+        .windowResizability(.contentMinSize)
+        .defaultPosition(.center)
     }
 }
 
@@ -139,6 +155,16 @@ struct AboutMenuItem: View {
         Button("About VideoScan") {
             openWindow(id: "about")
         }
+    }
+}
+
+struct SettingsMenuItem: View {
+    @Environment(\.openWindow) var openWindow
+    var body: some View {
+        Button("Settings…") {
+            openWindow(id: "settings")
+        }
+        .keyboardShortcut(",", modifiers: .command)
     }
 }
 
