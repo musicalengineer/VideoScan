@@ -372,6 +372,162 @@ final class VideoScanModel: ObservableObject {
         }
     }
 
+    // MARK: - Catalog Import / Export
+    //
+    // Purpose: let the same user keep one catalog across multiple Macs. Rick
+    // scans on the Mac Studio, exports the catalog JSON, AirDrops it to the
+    // MBP on the couch, and imports it there — now he can browse and search
+    // the full library from the laptop, and walk back upstairs only when he
+    // needs the actual media file.
+    //
+    // Merge policy: content-identity dedup. `partialMD5 + sizeBytes` is the
+    // strong key; when the import has no MD5 (e.g. an ffprobe-failed row) we
+    // fall back to `filename + sizeBytes + floor(durationSeconds)`. Records
+    // with neither identity are always added — better a rare duplicate than
+    // a silently dropped row.
+
+    struct CatalogImportResult {
+        var added: Int
+        var skipped: Int
+        var sourceHost: String
+    }
+
+    /// Write the current `records` array to `url` as a v2 snapshot tagged
+    /// with the current machine's name. Throws on write failure.
+    func exportCatalog(to url: URL) throws {
+        let snapshot = CatalogSnapshot(
+            version: CatalogSnapshot.currentVersion,
+            savedAt: Date(),
+            records: records,
+            savedFromHost: CatalogHost.currentName
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(snapshot)
+        try data.write(to: url, options: .atomic)
+    }
+
+    /// Decode a catalog snapshot at `url` and merge its records into the
+    /// current catalog, deduping by content identity. Each newly added
+    /// record gets `sourceHost` stamped so the origin is traceable.
+    /// Throws on decode failure.
+    @discardableResult
+    func importCatalog(from url: URL) throws -> CatalogImportResult {
+        let data = try Data(contentsOf: url)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let snapshot = try decoder.decode(CatalogSnapshot.self, from: data)
+
+        // Rewire pairedWith back-references within the imported array so
+        // imported pairs keep pointing at each other, not at nothing.
+        let importedByID = Dictionary(uniqueKeysWithValues: snapshot.records.map { ($0.id, $0) })
+        for rec in snapshot.records {
+            if let pid = rec.pendingPairedWithID {
+                rec.pairedWith = importedByID[pid]
+                rec.pendingPairedWithID = nil
+            }
+        }
+
+        // Seed identity set from existing records so an import can't create
+        // a duplicate of something we already have locally.
+        var seen = Set<String>()
+        for rec in records {
+            if let key = Self.identityKey(for: rec) { seen.insert(key) }
+        }
+
+        // Fall back to filename-without-extension if the file forgot to stamp
+        // savedFromHost (v1 snapshot or manual JSON).
+        let effectiveHost: String = {
+            if !snapshot.savedFromHost.isEmpty { return snapshot.savedFromHost }
+            return url.deletingPathExtension().lastPathComponent
+        }()
+
+        var added = 0
+        var skipped = 0
+        for rec in snapshot.records {
+            if let key = Self.identityKey(for: rec), seen.contains(key) {
+                skipped += 1
+                continue
+            }
+            if rec.sourceHost.isEmpty {
+                rec.sourceHost = effectiveHost
+            }
+            records.append(rec)
+            if let key = Self.identityKey(for: rec) { seen.insert(key) }
+            added += 1
+        }
+
+        saveCatalogNow()
+        return CatalogImportResult(added: added, skipped: skipped, sourceHost: effectiveHost)
+    }
+
+    private static func showErrorAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    /// Stable content identity for a record.
+    /// Primary: partial-MD5 + size. Fallback: filename + size + duration.
+    /// Returns nil if the record has no identifying info at all — such
+    /// records are always added rather than silently dropped.
+    static func identityKey(for rec: VideoRecord) -> String? {
+        if !rec.partialMD5.isEmpty && rec.sizeBytes > 0 {
+            return "md5:\(rec.partialMD5):\(rec.sizeBytes)"
+        }
+        if rec.sizeBytes > 0 && !rec.filename.isEmpty {
+            return "fn:\(rec.filename):\(rec.sizeBytes):\(Int(rec.durationSeconds))"
+        }
+        return nil
+    }
+
+    /// Show a save panel, then export. UI entry point.
+    func exportCatalogViaPanel() {
+        let panel = NSSavePanel()
+        panel.title = "Export Catalog"
+        panel.message = "Save the full catalog so you can import it on another Mac."
+        let host = CatalogHost.currentName.replacingOccurrences(of: " ", with: "_")
+        let dateStr = ISO8601DateFormatter().string(from: Date()).prefix(10)
+        panel.nameFieldStringValue = "VideoScan_catalog_\(host)_\(dateStr).json"
+        panel.allowedContentTypes = [.json]
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try exportCatalog(to: url)
+            log("Exported \(records.count) record(s) to \(url.lastPathComponent)")
+        } catch {
+            log("Export failed: \(error.localizedDescription)")
+            Self.showErrorAlert(title: "Export Failed", message: error.localizedDescription)
+        }
+    }
+
+    /// Show an open panel, then import. UI entry point.
+    func importCatalogViaPanel() {
+        let panel = NSOpenPanel()
+        panel.title = "Import Catalog"
+        panel.message = "Import a catalog exported from another Mac. Records already present here are skipped."
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let result = try importCatalog(from: url)
+            log("Imported \(result.added) new record(s) from \(result.sourceHost); skipped \(result.skipped) duplicate(s).")
+            let alert = NSAlert()
+            alert.messageText = "Catalog Imported"
+            alert.informativeText = "Added \(result.added) new record(s) from \(result.sourceHost).\nSkipped \(result.skipped) record(s) already in this catalog."
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        } catch {
+            log("Import failed: \(error.localizedDescription)")
+            Self.showErrorAlert(title: "Import Failed", message: error.localizedDescription)
+        }
+    }
+
     /// Delete all catalog records across all volumes.
     func deleteAllCatalog() {
         // Reset all target state BEFORE touching records

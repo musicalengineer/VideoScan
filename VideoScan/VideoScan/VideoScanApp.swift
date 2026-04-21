@@ -108,6 +108,18 @@ struct VideoScanApp: App {
                     catalogModel.exportVolumeInfo()
                 }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button("Export Catalog…") {
+                    catalogModel.exportCatalogViaPanel()
+                }
+                .keyboardShortcut("e", modifiers: [.command, .option])
+
+                Button("Import Catalog…") {
+                    catalogModel.importCatalogViaPanel()
+                }
+                .keyboardShortcut("i", modifiers: [.command, .option])
             }
             CommandGroup(after: .windowArrangement) {
                 WindowMenuItems()

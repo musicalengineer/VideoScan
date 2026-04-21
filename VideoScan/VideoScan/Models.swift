@@ -147,6 +147,11 @@ class VideoRecord: Identifiable, Codable {
     var duplicateBestMatchFilename: String = ""
     var duplicateGroupCount: Int = 0
 
+    /// Hostname of the machine that originally cataloged this record.
+    /// Empty on records scanned locally; populated on import from another
+    /// machine's exported catalog so the UI can show "from <host>".
+    var sourceHost: String = ""
+
     var streamType: StreamType {
         StreamType(rawValue: streamTypeRaw) ?? .ffprobeFailed
     }
@@ -192,6 +197,7 @@ class VideoRecord: Identifiable, Codable {
         case pairedWithID, pairGroupID, pairConfidence
         case duplicateGroupID, duplicateConfidence, duplicateDisposition
         case duplicateReasons, duplicateBestMatchFilename, duplicateGroupCount
+        case sourceHost
     }
 
     required init(from decoder: Decoder) throws {
@@ -245,6 +251,7 @@ class VideoRecord: Identifiable, Codable {
         duplicateReasons            = try c.decodeIfPresent(String.self,               forKey: .duplicateReasons) ?? ""
         duplicateBestMatchFilename  = try c.decodeIfPresent(String.self,               forKey: .duplicateBestMatchFilename) ?? ""
         duplicateGroupCount         = try c.decodeIfPresent(Int.self,                  forKey: .duplicateGroupCount) ?? 0
+        sourceHost                  = try c.decodeIfPresent(String.self,               forKey: .sourceHost) ?? ""
     }
 
     func encode(to encoder: Encoder) throws {
@@ -298,6 +305,7 @@ class VideoRecord: Identifiable, Codable {
         try c.encode(duplicateReasons,            forKey: .duplicateReasons)
         try c.encode(duplicateBestMatchFilename,  forKey: .duplicateBestMatchFilename)
         try c.encode(duplicateGroupCount,         forKey: .duplicateGroupCount)
+        try c.encode(sourceHost,                  forKey: .sourceHost)
     }
 
     var rowColor: Color {

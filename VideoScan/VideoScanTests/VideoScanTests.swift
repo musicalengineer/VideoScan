@@ -2198,3 +2198,83 @@ struct TestMediaGeneratorTests {
         #expect(!FileManager.default.fileExists(atPath: path))
     }
 }
+
+// MARK: - Catalog Import/Export Tests
+//
+// Covers the cross-machine catalog sharing feature: records exported from
+// one Mac and imported on another should merge without creating duplicates,
+// while records genuinely new to the local catalog should be added and
+// tagged with the source host.
+
+@MainActor
+struct CatalogImportExportTests {
+
+    /// Helper: build a minimal record with content identity.
+    private func makeRec(name: String, md5: String, size: Int64, duration: Double = 10) -> VideoRecord {
+        let r = VideoRecord()
+        r.filename = name
+        r.partialMD5 = md5
+        r.sizeBytes = size
+        r.durationSeconds = duration
+        r.streamTypeRaw = "Video+Audio"
+        r.fullPath = "/Volumes/RemoteDrive/\(name)"
+        return r
+    }
+
+    /// Round-trip: export, import into an empty catalog, confirm all records land.
+    @Test func exportThenImportIntoEmptyCatalogAddsEverything() throws {
+        let source = VideoScanModel()
+        // Isolate the test from any persisted catalog on this machine.
+        source.records = []
+        source.records = [
+            makeRec(name: "a.mov", md5: "AAAA", size: 100),
+            makeRec(name: "b.mov", md5: "BBBB", size: 200)
+        ]
+
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("videoscan_test_\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try source.exportCatalog(to: tmp)
+
+        let dest = VideoScanModel()
+        dest.records = []
+        let result = try dest.importCatalog(from: tmp)
+
+        #expect(result.added == 2)
+        #expect(result.skipped == 0)
+        #expect(dest.records.count == 2)
+        // Imported records get stamped with the exporting host.
+        #expect(dest.records.allSatisfy { !$0.sourceHost.isEmpty })
+    }
+
+    /// Content-identity dedup: importing a record the local catalog already has
+    /// (same partialMD5 + sizeBytes) must skip it rather than duplicating.
+    @Test func importSkipsRecordsAlreadyPresentByContentIdentity() throws {
+        let source = VideoScanModel()
+        source.records = [
+            makeRec(name: "shared.mov", md5: "SAME", size: 500),
+            makeRec(name: "new.mov",    md5: "NEW",  size: 700)
+        ]
+
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("videoscan_test_\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try source.exportCatalog(to: tmp)
+
+        // Destination already has the same file (same MD5 + size), different path.
+        let dest = VideoScanModel()
+        let existing = makeRec(name: "shared.mov", md5: "SAME", size: 500)
+        existing.fullPath = "/Volumes/LocalDrive/shared.mov"
+        dest.records = [existing]
+
+        let result = try dest.importCatalog(from: tmp)
+
+        #expect(result.added == 1)
+        #expect(result.skipped == 1)
+        #expect(dest.records.count == 2)
+        // The local record was preserved — the import did not overwrite its path.
+        #expect(dest.records.contains { $0.fullPath == "/Volumes/LocalDrive/shared.mov" })
+        // The new record from the import is present.
+        #expect(dest.records.contains { $0.partialMD5 == "NEW" })
+    }
+}
