@@ -86,6 +86,26 @@ struct ContentView: View {
     }
 }
 
+// MARK: - Volume Filter
+
+enum VolumeFilter: String, CaseIterable, Hashable {
+    case connected      = "Connected"
+    case network        = "Network Drives"
+    case allScanned     = "All Ever Scanned"
+    case uncataloged    = "Uncataloged"
+    case withErrors     = "With Errors"
+
+    var icon: String {
+        switch self {
+        case .connected:   return "externaldrive.fill"
+        case .network:     return "network"
+        case .allScanned:  return "clock.arrow.circlepath"
+        case .uncataloged: return "questionmark.folder"
+        case .withErrors:  return "exclamationmark.triangle"
+        }
+    }
+}
+
 // MARK: - Catalog Tab
 
 struct CatalogView: View {
@@ -114,6 +134,11 @@ struct CatalogView: View {
     /// The searchPath of the volume containing the currently selected file.
     /// Used to highlight the matching volume row in the Scan Targets pane.
     @State private var highlightedTargetPath: String = ""
+    /// Volume Options filter — controls which scan targets are visible.
+    @State private var volumeFilters: Set<VolumeFilter> = [.connected]
+    @State private var showDeleteAllCatalogConfirm = false
+    @State private var showDeleteVolumeCatalogConfirm = false
+    @State private var deleteVolumeCatalogTarget: CatalogScanTarget?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -278,6 +303,229 @@ struct CatalogView: View {
         .sheet(isPresented: $showVolumeCompare) {
             VolumeCompareSheet(model: model)
         }
+        .alert("Delete Catalog", isPresented: $showDeleteAllCatalogConfirm) {
+            Button("Delete All", role: .destructive) {
+                model.deleteAllCatalog()
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This will delete all \(model.records.count) catalog records across every volume. The probe cache is unaffected.\n\nAre you sure?")
+        }
+        .alert("Delete Volume Catalog", isPresented: $showDeleteVolumeCatalogConfirm) {
+            Button("Delete", role: .destructive) {
+                if let target = deleteVolumeCatalogTarget {
+                    model.deleteCatalogForTarget(target)
+                }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            if let target = deleteVolumeCatalogTarget {
+                let count = model.records.filter { $0.fullPath.hasPrefix(target.searchPath) }.count
+                Text("Delete \(count) catalog record(s) for \(VolumeReachability.volumeName(forPath: target.searchPath))?\n\nThe probe cache is unaffected — a re-scan will replay quickly from cache.")
+            } else {
+                Text("Delete catalog records for this volume?")
+            }
+        }
+    }
+
+    // MARK: - Volume Filter Helpers
+
+    private func toggleVolumeFilter(_ filter: VolumeFilter) {
+        if filter == .allScanned {
+            // "All Ever Scanned" also restores catalog-only volumes
+            let count = model.restoreTargetsFromCatalog()
+            if count > 0 {
+                model.log("Restored \(count) volume(s) from catalog history.")
+            }
+        }
+        if volumeFilters.contains(filter) {
+            volumeFilters.remove(filter)
+        } else {
+            volumeFilters.insert(filter)
+        }
+        // If nothing is checked, default back to Connected
+        if volumeFilters.isEmpty {
+            volumeFilters = [.connected]
+        }
+    }
+
+    static func buildCatalogStatus(records: [VideoRecord], target: CatalogScanTarget) -> String {
+        guard !records.isEmpty else { return "No catalog data for this volume." }
+
+        let totalBytes = records.reduce(into: Int64(0)) { $0 += $1.sizeBytes }
+        let va = records.filter { $0.streamType == .videoAndAudio }.count
+        let vo = records.filter { $0.streamType == .videoOnly }.count
+        let ao = records.filter { $0.streamType == .audioOnly }.count
+        let failedRecs = records.filter { $0.streamType == .ffprobeFailed }
+        let noStreams = records.filter { $0.streamType == .noStreams }.count
+
+        // Catalog size estimate
+        let catBytes = records.count * 2048
+        let catSize: String
+        if catBytes < 1_048_576 {
+            catSize = String(format: "%.0f KB", Double(catBytes) / 1024)
+        } else {
+            catSize = String(format: "%.1f MB", Double(catBytes) / 1_048_576)
+        }
+
+        // Media size
+        let mediaSize: String
+        if totalBytes < 1_073_741_824 {
+            mediaSize = String(format: "%.1f MB", Double(totalBytes) / 1_048_576)
+        } else {
+            mediaSize = String(format: "%.1f GB", Double(totalBytes) / 1_073_741_824)
+        }
+
+        // Unique codecs, containers, resolutions
+        let codecs = Set(records.compactMap { $0.videoCodec.isEmpty ? nil : $0.videoCodec })
+        let containers = Set(records.compactMap { $0.container.isEmpty ? nil : $0.container })
+        let resolutions = Set(records.compactMap { $0.resolution.isEmpty ? nil : $0.resolution })
+        let audioCodecs = Set(records.compactMap { $0.audioCodec.isEmpty ? nil : $0.audioCodec })
+
+        // Total duration
+        let totalDuration = records.reduce(0.0) { $0 + $1.durationSeconds }
+        let hours = Int(totalDuration) / 3600
+        let mins = (Int(totalDuration) % 3600) / 60
+        let durationStr = hours > 0 ? "\(hours)h \(mins)m" : "\(mins)m"
+
+        // Extensions breakdown
+        let extCounts = Dictionary(grouping: records, by: { $0.ext.lowercased() })
+            .mapValues { $0.count }
+            .sorted { $0.value > $1.value }
+            .prefix(8)
+            .map { "\($0.key) (\($0.value))" }
+
+        var lines: [String] = []
+        lines.append("Files: \(records.count)")
+        lines.append("Total Duration: \(durationStr)")
+        lines.append("Media Size: \(mediaSize)")
+        lines.append("Catalog Size: \(catSize)")
+        if let date = target.lastScannedDate {
+            let fmt = DateFormatter()
+            fmt.dateStyle = .medium
+            fmt.timeStyle = .short
+            lines.append("Last Scanned: \(fmt.string(from: date))")
+        }
+
+        lines.append("")
+        lines.append("— Stream Types —")
+        lines.append("Video + Audio: \(va)")
+        lines.append("Video Only: \(vo)")
+        lines.append("Audio Only: \(ao)")
+        if noStreams > 0 { lines.append("No Streams: \(noStreams)") }
+
+        if !extCounts.isEmpty {
+            lines.append("")
+            lines.append("— File Types —")
+            lines.append(extCounts.joined(separator: ", "))
+        }
+
+        if !codecs.isEmpty {
+            lines.append("")
+            lines.append("— Video Codecs —")
+            lines.append(codecs.sorted().joined(separator: ", "))
+        }
+        if !audioCodecs.isEmpty {
+            lines.append("— Audio Codecs —")
+            lines.append(audioCodecs.sorted().joined(separator: ", "))
+        }
+        if !containers.isEmpty {
+            lines.append("— Containers —")
+            lines.append(containers.sorted().joined(separator: ", "))
+        }
+        if !resolutions.isEmpty {
+            lines.append("— Resolutions —")
+            lines.append(resolutions.sorted().joined(separator: ", "))
+        }
+
+        // Error details
+        if !failedRecs.isEmpty {
+            lines.append("")
+            lines.append("— Errors (\(failedRecs.count)) —")
+
+            // Group by error reason (from isPlayable + notes)
+            var reasonCounts: [String: Int] = [:]
+            for rec in failedRecs {
+                let reason: String
+                if !rec.notes.isEmpty {
+                    // Truncate long stderr to a recognizable prefix
+                    let trimmed = rec.notes.prefix(80)
+                    reason = String(trimmed)
+                } else if !rec.isPlayable.isEmpty {
+                    reason = rec.isPlayable
+                } else {
+                    reason = "Unknown error"
+                }
+                reasonCounts[reason, default: 0] += 1
+            }
+            for (reason, count) in reasonCounts.sorted(by: { $0.value > $1.value }).prefix(10) {
+                lines.append("  \(count)x  \(reason)")
+            }
+
+            // Show a few example filenames
+            let examples = failedRecs.prefix(5).map { $0.filename }
+            lines.append("")
+            lines.append("Example files:")
+            for name in examples {
+                lines.append("  \(name)")
+            }
+            if failedRecs.count > 5 {
+                lines.append("  … and \(failedRecs.count - 5) more")
+            }
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    private func browsePath(for target: CatalogScanTarget) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Select a volume or folder to scan"
+        panel.prompt = "Select"
+        if panel.runModal() == .OK, let url = panel.url {
+            target.searchPath = url.path
+        }
+    }
+
+    /// Targets that pass the current Volume Options filters.
+    /// Always hides the RAM disk (VideoScan_Temp).
+    private var filteredScanTargets: [CatalogScanTarget] {
+        let base = model.scanTargets.filter {
+            !$0.searchPath.contains("VideoScan_Temp")
+        }
+
+        // "All Ever Scanned" = show everything, no filtering
+        if volumeFilters.contains(.allScanned) {
+            return base
+        }
+
+        return base.filter { target in
+            let path = target.searchPath
+            let hasRecords = model.records.contains { $0.fullPath.hasPrefix(path) }
+            let hasBadFiles = model.records.contains {
+                $0.fullPath.hasPrefix(path) && $0.streamTypeRaw == StreamType.ffprobeFailed.rawValue
+            }
+            let isNetwork = VolumeReachability.isNetworkVolume(path: path)
+
+            // Target passes if ANY active filter matches
+            for filter in volumeFilters {
+                switch filter {
+                case .connected:
+                    if target.isReachable { return true }
+                case .network:
+                    if isNetwork { return true }
+                case .allScanned:
+                    return true // handled above
+                case .uncataloged:
+                    if !hasRecords && target.isReachable { return true }
+                case .withErrors:
+                    if hasBadFiles { return true }
+                }
+            }
+            return false
+        }
     }
 
     // MARK: - Scan Targets Pane (matches PersonFinder's jobsSection pattern)
@@ -287,7 +535,7 @@ struct CatalogView: View {
             HStack(spacing: 10) {
                 Image(systemName: "externaldrive.connected.to.line.below")
                     .font(.title3).foregroundColor(.secondary)
-                Text("Scan Targets")
+                Text("Scan Volumes")
                     .font(.title3.weight(.semibold))
                     .padding(.trailing, 12)
 
@@ -303,17 +551,68 @@ struct CatalogView: View {
                 .buttonStyle(.bordered)
                 .controlSize(.large)
 
-                Button(action: {
-                    let count = model.restoreTargetsFromCatalog()
-                    if count == 0 {
-                        model.log("All catalog volumes are already in the target list.")
+                Menu {
+                    ForEach(VolumeFilter.allCases, id: \.self) { filter in
+                        Button(action: { toggleVolumeFilter(filter) }) {
+                            HStack {
+                                if volumeFilters.contains(filter) {
+                                    Image(systemName: "checkmark")
+                                }
+                                Label(filter.rawValue, systemImage: filter.icon)
+                            }
+                        }
                     }
-                }) {
-                    Label("All Volumes Ever Scanned", systemImage: "clock.arrow.circlepath")
+                } label: {
+                    Label("View", systemImage: "line.3.horizontal.decrease.circle")
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .help("Re-add scan targets for all volumes found in the catalog history (including offline)")
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Filter which volumes appear in the list")
+
+                Menu {
+                    Section("Scan") {
+                        Button(action: { model.startAllTargets() }) {
+                            Label("Scan All Volumes", systemImage: "arrow.clockwise")
+                        }
+                        .disabled(model.scanTargets.isEmpty)
+
+                        ForEach(model.scanTargets.filter { $0.status.isIdle && $0.isReachable && !$0.searchPath.contains("VideoScan_Temp") }) { target in
+                            Button(action: { model.startTarget(target) }) {
+                                Label(VolumeReachability.volumeName(forPath: target.searchPath),
+                                      systemImage: "play.fill")
+                            }
+                        }
+                    }
+
+                    Section("Delete") {
+                        ForEach(model.scanTargets.filter { target in
+                            model.records.contains { $0.fullPath.hasPrefix(target.searchPath) }
+                        }) { target in
+                            let count = model.records.filter { $0.fullPath.hasPrefix(target.searchPath) }.count
+                            Button(role: .destructive, action: {
+                                deleteVolumeCatalogTarget = target
+                                showDeleteVolumeCatalogConfirm = true
+                            }) {
+                                Label("\(VolumeReachability.volumeName(forPath: target.searchPath)) (\(count))",
+                                      systemImage: "trash")
+                            }
+                        }
+
+                        Divider()
+
+                        Button(role: .destructive, action: {
+                            showDeleteAllCatalogConfirm = true
+                        }) {
+                            Label("Delete All (\(model.records.count))", systemImage: "trash.fill")
+                        }
+                        .disabled(model.records.isEmpty)
+                    }
+                } label: {
+                    Label("Catalog Options", systemImage: "doc.text.magnifyingglass")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Update or delete catalog data")
 
                 Button(action: { showVolumeCompare = true }) {
                     Label("Compare & Rescue", systemImage: "arrow.triangle.2.circlepath")
@@ -325,7 +624,7 @@ struct CatalogView: View {
                 Spacer().frame(minWidth: 20)
 
                 Button(action: { model.startAllTargets() }) {
-                    Label("Start All", systemImage: "play.fill")
+                    Label("Scan All", systemImage: "play.fill")
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
@@ -343,7 +642,7 @@ struct CatalogView: View {
                 .disabled(!model.hasActiveTargets && !model.hasPausedTargets)
 
                 Button(action: { model.stopAllTargets() }) {
-                    Label("Stop All", systemImage: "stop.fill")
+                    Label("Stop All Scanning", systemImage: "stop.fill")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
@@ -352,13 +651,15 @@ struct CatalogView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
 
-            if model.scanTargets.isEmpty {
+            if filteredScanTargets.isEmpty {
                 VStack(spacing: 6) {
-                    Image(systemName: "externaldrive.badge.plus")
+                    Image(systemName: model.scanTargets.isEmpty ? "externaldrive.badge.plus" : "line.3.horizontal.decrease.circle")
                         .font(.largeTitle).foregroundColor(.secondary)
-                    Text("No scan targets yet")
+                    Text(model.scanTargets.isEmpty ? "No scan volumes yet" : "No volumes match current filters")
                         .font(.headline).foregroundColor(.secondary)
-                    Text("Add volumes manually or use Discover to find mounted drives.")
+                    Text(model.scanTargets.isEmpty
+                         ? "Add volumes manually or use Discover to find mounted drives."
+                         : "Try adjusting View filters to see more volumes.")
                         .font(.callout).foregroundColor(.secondary)
                 }
                 .frame(maxWidth: .infinity)
@@ -366,16 +667,17 @@ struct CatalogView: View {
             } else {
                 ScrollView {
                     VStack(spacing: 6) {
-                        ForEach(model.scanTargets) { target in
+                        ForEach(filteredScanTargets) { target in
                             let targetRecords = model.records.filter { $0.fullPath.hasPrefix(target.searchPath) }
+                            let statusText = Self.buildCatalogStatus(records: targetRecords, target: target)
                             CatalogTargetRow(
                                 target: target,
                                 recordCount: targetRecords.count,
                                 catalogBytes: targetRecords.reduce(into: Int64(0)) { $0 += $1.sizeBytes },
-                                catalogDate: targetRecords.compactMap({ $0.dateModifiedRaw }).max(),
+                                hasErrors: targetRecords.contains { $0.streamTypeRaw == StreamType.ffprobeFailed.rawValue },
                                 isFiltered: filterTargetPaths.contains(target.searchPath),
                                 isHighlighted: highlightedTargetPath == target.searchPath,
-                                onStart: { model.startTarget(target) },
+                                onScan: { model.startTarget(target) },
                                 onStop: { model.stopTarget(target) },
                                 onPause: { model.togglePauseTarget(target) },
                                 onReset: { model.resetTarget(target) },
@@ -387,7 +689,15 @@ struct CatalogView: View {
                                         filterTargetPaths.insert(target.searchPath)
                                     }
                                 },
-                                onWake: { model.wakeVolume(target) }
+                                onWake: { model.wakeVolume(target) },
+                                onEject: { model.ejectVolume(target) },
+                                onDeleteCatalog: {
+                                    deleteVolumeCatalogTarget = target
+                                    showDeleteVolumeCatalogConfirm = true
+                                },
+                                onBrowse: { browsePath(for: target) },
+                                isNetwork: VolumeReachability.isNetworkVolume(path: target.searchPath),
+                                catalogStatusText: statusText
                             )
                         }
                     }
@@ -401,39 +711,65 @@ struct CatalogView: View {
     }
 }
 
-// MARK: - Catalog Target Row (per-path controls, matches PersonFinder's ScanJobRow)
+// MARK: - Catalog Target Row (clean, compact volume row)
 
 private struct CatalogTargetRow: View {
     @ObservedObject var target: CatalogScanTarget
     let recordCount: Int
     let catalogBytes: Int64
-    let catalogDate: Date?
+    let hasErrors: Bool
     let isFiltered: Bool
     let isHighlighted: Bool
-    let onStart: () -> Void
+    let onScan: () -> Void
     let onStop: () -> Void
     let onPause: () -> Void
     let onReset: () -> Void
     let onRemove: () -> Void
     let onViewCatalog: () -> Void
     let onWake: () -> Void
+    let onEject: () -> Void
+    let onDeleteCatalog: () -> Void
+    let onBrowse: () -> Void
+    let isNetwork: Bool
+    let catalogStatusText: String
+
+    @State private var showCatalogStatus = false
+
+    /// Volume name color encodes scan state — replaces the status dot.
+    /// Errors don't turn the name red — that's for scan failures only.
+    /// Use right-click "Show Catalog Status" to see error details.
+    private var volumeNameColor: Color {
+        switch target.status {
+        case .scanning, .discovering: return .green
+        case .paused:                 return .cyan
+        case .complete:               return .blue
+        case .error:                  return .red
+        case .stopped:                return .orange
+        case .idle:                   return .primary
+        }
+    }
+
+    /// Connection status badge
+    private var connectionBadge: (String, Color)? {
+        if !target.isReachable {
+            return ("OFFLINE", .orange)
+        } else if isNetwork {
+            return ("REMOTE", .purple)
+        } else {
+            return nil  // connected local — no badge needed, name is already visible
+        }
+    }
 
     var body: some View {
         HStack(spacing: 10) {
-            // Status dot
-            Circle()
-                .fill(target.status.color)
-                .frame(width: 12, height: 12)
-                .shadow(color: target.status.color.opacity(0.5), radius: 3)
-
-            // Focus toggle + catalog stats
+            // Eye toggle + catalog size & date
             Button(action: onViewCatalog) {
                 HStack(spacing: 4) {
                     Image(systemName: isFiltered ? "eye.fill" : "eye")
                         .font(.system(size: 13))
                     if recordCount > 0 {
                         Text(catalogSummary)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.system(size: 13, design: .monospaced))
                     }
                 }
                 .foregroundColor(isFiltered ? .accentColor : .secondary)
@@ -450,39 +786,30 @@ private struct CatalogTargetRow: View {
             }
             .buttonStyle(.plain)
             .help(isFiltered
-                  ? "Showing only this volume in the catalog — click to show all volumes"
+                  ? "Showing only this volume — click to show all"
                   : (recordCount == 0
-                     ? "No catalog data for this volume yet"
-                     : "Show only this volume's catalog data"))
+                     ? "No catalog data yet"
+                     : "Filter catalog to this volume"))
 
-            // Path (editable when idle)
-            if target.status.isIdle {
-                HStack(spacing: 8) {
-                    TextField("Volume or folder path…", text: $target.searchPath)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(.body, design: .monospaced))
-                    Button("Browse…") { browsePath() }
-                        .controlSize(.regular)
-                }
-            } else {
-                Text(target.searchPath)
-                    .font(.system(.body, design: .monospaced))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
+            // Volume name — color-coded by scan state
+            Text(volumeDisplayName)
+                .font(.system(.body, design: .monospaced).weight(.medium))
+                .foregroundColor(volumeNameColor)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(target.searchPath)
 
-            // Offline button — tries to wake/touch the volume when clicked
-            if !target.isReachable {
-                Button(action: onWake) {
-                    HStack(spacing: 3) {
-                        Image(systemName: "externaldrive.badge.exclamationmark")
-                        Text("OFFLINE")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    }
-                    .foregroundColor(.orange)
-                }
-                .buttonStyle(.plain)
-                .help("Click to try waking \(VolumeReachability.volumeName(forPath: target.searchPath)) — will attempt to access the mount point")
+            // Connection status badge
+            if let (label, color) = connectionBadge {
+                Text(label)
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundColor(color)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(color.opacity(0.12))
+                    )
             }
 
             Spacer()
@@ -494,19 +821,19 @@ private struct CatalogTargetRow: View {
                     Text("Discovering…")
                         .font(.callout).foregroundColor(.secondary)
                 }
-            } else if target.filesFound > 0 {
-                Text("\(target.filesScanned) / \(target.filesFound) files")
+            } else if target.status.isActive, target.filesFound > 0 {
+                Text("\(target.filesScanned) / \(target.filesFound)")
                     .font(.system(.callout, design: .monospaced))
                     .foregroundColor(.secondary)
             }
 
-            if target.elapsedSecs > 0 {
+            if target.status.isActive, target.elapsedSecs > 0 {
                 Text(formatElapsed(target.elapsedSecs))
                     .font(.system(.callout, design: .monospaced))
                     .foregroundColor(.secondary)
             }
 
-            // Action buttons
+            // Action buttons — Scan / Pause+Stop
             if target.status.isActive {
                 Button(action: onPause) {
                     Label(target.status.isPaused ? "Resume" : "Pause",
@@ -516,34 +843,18 @@ private struct CatalogTargetRow: View {
                 .controlSize(.regular)
 
                 Button(action: onStop) {
-                    Label("Stop", systemImage: "stop.fill")
+                    Label("Stop Scanning", systemImage: "stop.fill")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.regular)
             } else {
-                Button(action: onStart) {
-                    Label("Start", systemImage: "play.fill")
+                Button(action: onScan) {
+                    Label("Scan", systemImage: "play.fill")
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.regular)
                 .disabled(target.searchPath.isEmpty || !target.isReachable)
                 .help(target.isReachable ? "" : "Volume offline — mount the drive to scan")
-
-                if target.status == .complete || target.status == .stopped || target.status == .error {
-                    Button(action: onReset) {
-                        Label("Reset", systemImage: "arrow.counterclockwise")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.regular)
-                    .help("Reset progress and drop cached probes for this volume so a re-scan re-runs ffprobe")
-                }
-
-                Button(action: onRemove) {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.regular)
-                .foregroundColor(.red)
             }
         }
         .padding(.vertical, 6)
@@ -559,16 +870,73 @@ private struct CatalogTargetRow: View {
                 .stroke(isHighlighted ? Color.accentColor.opacity(0.5) : Color.clear, lineWidth: 1.5)
         )
         .animation(.easeInOut(duration: 0.25), value: isHighlighted)
+        .alert("Catalog Status — \(volumeDisplayName)", isPresented: $showCatalogStatus) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(catalogStatusText)
+        }
+        .contextMenu {
+            Section("Catalog") {
+                Button(action: { showCatalogStatus = true }) {
+                    Label("Show Catalog Status", systemImage: "info.circle")
+                }
+                .disabled(recordCount == 0)
+
+                Button(action: onScan) {
+                    Label("Scan / Update Catalog", systemImage: "arrow.clockwise")
+                }
+                .disabled(target.searchPath.isEmpty || !target.isReachable || target.status.isActive)
+
+                Button(role: .destructive, action: onDeleteCatalog) {
+                    Label("Delete Catalog", systemImage: "trash")
+                }
+                .disabled(recordCount == 0)
+
+                if target.status == .complete || target.status == .stopped || target.status == .error {
+                    Button(action: onReset) {
+                        Label("Reset & Re-probe", systemImage: "arrow.counterclockwise")
+                    }
+                    .help("Drop cached probes so a re-scan re-runs ffprobe from scratch")
+                }
+            }
+
+            Divider()
+
+            Section("Volume") {
+                Button(action: onBrowse) {
+                    Label("Browse…", systemImage: "folder")
+                }
+                .disabled(!target.status.isIdle)
+
+                if !target.isReachable {
+                    Button(action: onWake) {
+                        Label("Wake Volume", systemImage: "bolt.fill")
+                    }
+                } else if target.searchPath.hasPrefix("/Volumes/") {
+                    Button(action: onEject) {
+                        Label("Eject", systemImage: "eject.fill")
+                    }
+                }
+
+                Button(role: .destructive, action: onRemove) {
+                    Label("Remove from List", systemImage: "minus.circle")
+                }
+            }
+        }
     }
 
-    /// Compact summary: "1,234 · 12.3 MB · Apr 18"
+    // MARK: - Helpers
+
+    /// Friendly volume name: "Maxtor750" instead of "/Volumes/Maxtor750"
+    private var volumeDisplayName: String {
+        VolumeReachability.volumeName(forPath: target.searchPath)
+    }
+
+    /// Catalog summary: "2.4 MB · Apr 20" — size + last scan date
     private var catalogSummary: String {
         var parts: [String] = []
-        parts.append("\(recordCount)")
-        if catalogBytes > 0 {
-            parts.append(catalogSizeMB)
-        }
-        if let date = catalogDate {
+        parts.append(catalogSizeMB)
+        if let date = target.lastScannedDate {
             parts.append(shortDate(date))
         }
         return parts.joined(separator: " · ")
@@ -576,7 +944,7 @@ private struct CatalogTargetRow: View {
 
     /// Catalog data size estimate (each record ~2KB in JSON)
     private var catalogSizeMB: String {
-        let estimatedBytes = Int64(recordCount) * 2048  // ~2KB per record in catalog.json
+        let estimatedBytes = Int64(recordCount) * 2048
         if estimatedBytes < 1_048_576 {
             return String(format: "%.0f KB", Double(estimatedBytes) / 1024)
         } else {
@@ -586,20 +954,13 @@ private struct CatalogTargetRow: View {
 
     private func shortDate(_ date: Date) -> String {
         let fmt = DateFormatter()
-        fmt.dateFormat = "MMM d"
-        return fmt.string(from: date)
-    }
-
-    private func browsePath() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.message = "Select a volume or folder to scan"
-        panel.prompt = "Select"
-        if panel.runModal() == .OK, let url = panel.url {
-            target.searchPath = url.path
+        let cal = Calendar.current
+        if cal.component(.year, from: date) == cal.component(.year, from: Date()) {
+            fmt.dateFormat = "MMM d"
+        } else {
+            fmt.dateFormat = "MMM d, yyyy"
         }
+        return fmt.string(from: date)
     }
 
     private func formatElapsed(_ secs: Double) -> String {
@@ -1195,10 +1556,18 @@ private struct CatalogContent: View {
     }
 
     private func formatBytes(_ bytes: Int64) -> String {
-        if bytes < 1_073_741_824 {
-            return String(format: "%.0f MB", Double(bytes) / 1_048_576)
+        let kb: Int64 = 1_024
+        let mb: Int64 = 1_048_576
+        let gb: Int64 = 1_073_741_824
+        let tb: Int64 = 1_099_511_627_776
+        if bytes < mb {
+            return String(format: "%.0f KB", Double(bytes) / Double(kb))
+        } else if bytes < gb {
+            return String(format: "%.1f MB", Double(bytes) / Double(mb))
+        } else if bytes < tb {
+            return String(format: "%.1f GB", Double(bytes) / Double(gb))
         } else {
-            return String(format: "%.1f GB", Double(bytes) / 1_073_741_824)
+            return String(format: "%.2f TB", Double(bytes) / Double(tb))
         }
     }
 
@@ -1505,13 +1874,13 @@ private struct CatalogContent: View {
                                 let volPath = volumeRoot(for: rec.fullPath)
                                 let volSize = volumeDiskSize(path: volPath)
                                 if !volSize.isEmpty {
-                                    Text("Volume: \(volSize)")
-                                        .font(.system(size: 11, design: .monospaced))
+                                    Text("Volume Size: \(volSize)")
+                                        .font(.system(size: 13, design: .monospaced))
                                         .foregroundColor(.secondary)
                                 }
                                 let mediaSize = mediaOnVolume(path: volPath)
-                                Text("Media cataloged: \(mediaSize)")
-                                    .font(.system(size: 11, design: .monospaced))
+                                Text("Media Cataloged: \(mediaSize)")
+                                    .font(.system(size: 13, design: .monospaced))
                                     .foregroundColor(.secondary)
                             }
                             if isPlaying {

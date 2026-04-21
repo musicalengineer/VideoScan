@@ -100,6 +100,12 @@ struct VideoScanApp: App {
             CommandGroup(replacing: .appInfo) {
                 AboutMenuItem()
             }
+            CommandGroup(after: .saveItem) {
+                Button("Export Volume Info…") {
+                    catalogModel.exportVolumeInfo()
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+            }
             CommandGroup(after: .windowArrangement) {
                 WindowMenuItems()
             }
