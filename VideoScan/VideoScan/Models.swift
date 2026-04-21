@@ -182,6 +182,14 @@ class VideoRecord: Identifiable, Codable {
     /// Same idea for modification date.
     var dateModifiedSortKey: Date { dateModifiedRaw ?? .distantPast }
 
+    /// Human-readable volume name pulled from `fullPath`. For paths under
+    /// `/Volumes/<X>/…` this is `X`; for anything else it's the last path
+    /// component. Used as a sortable/displayable column in the results
+    /// table so the user can group-browse by volume.
+    var volumeName: String {
+        VolumeReachability.volumeName(forPath: fullPath)
+    }
+
     init() {}
 
     // MARK: Codable
