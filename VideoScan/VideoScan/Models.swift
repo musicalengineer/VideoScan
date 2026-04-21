@@ -314,6 +314,73 @@ class VideoRecord: Identifiable, Codable {
     }
 }
 
+// MARK: - Volume Phase (lifecycle)
+
+enum VolumePhase: String, CaseIterable, Codable {
+    case noCatalog    = "NO CATALOG"
+    case cataloged    = "Cataloged"
+    case reviewed     = "Reviewed"
+    case consolidated = "Consolidated"
+    case archived     = "Archived"
+
+    // Legacy decoding: "New" → .noCatalog
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        if raw == "New" { self = .noCatalog; return }
+        guard let v = VolumePhase(rawValue: raw) else {
+            throw DecodingError.dataCorruptedError(in: try decoder.singleValueContainer(),
+                                                    debugDescription: "Unknown VolumePhase: \(raw)")
+        }
+        self = v
+    }
+
+    var icon: String {
+        switch self {
+        case .noCatalog:    return "circle"
+        case .cataloged:    return "list.bullet"
+        case .reviewed:     return "checkmark.circle"
+        case .consolidated: return "arrow.triangle.merge"
+        case .archived:     return "archivebox"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .noCatalog:    return .secondary
+        case .cataloged:    return .blue
+        case .reviewed:     return .green
+        case .consolidated: return .purple
+        case .archived:     return .mint
+        }
+    }
+
+    /// Next phase in the lifecycle, or nil if already archived.
+    var next: VolumePhase? {
+        guard let idx = Self.allCases.firstIndex(of: self),
+              idx + 1 < Self.allCases.count else { return nil }
+        return Self.allCases[idx + 1]
+    }
+}
+
+// MARK: - Volume Row (value type for Table display)
+
+struct VolumeRow: Identifiable {
+    let id: UUID                    // matches CatalogScanTarget.id
+    let name: String                // friendly volume name
+    let path: String                // full search path
+    let status: CatalogTargetStatus
+    let connection: String          // "Connected", "Offline", "Remote"
+    let connectionColor: Color
+    let files: Int
+    let errors: Int
+    let mediaBytes: Int64
+    let phase: VolumePhase
+    let lastScanned: Date?
+    let isReachable: Bool
+    let isNetwork: Bool
+    let catalogStatusText: String
+}
+
 // MARK: - Catalog Scan Target
 
 enum CatalogTargetStatus: String {
@@ -380,6 +447,8 @@ final class CatalogScanTarget: ObservableObject, Identifiable {
     @Published var isReachable: Bool = true
     /// When this volume's catalog was last updated (scan completed).
     @Published var lastScannedDate: Date?
+    /// Lifecycle phase — user-assigned workflow state.
+    @Published var phase: VolumePhase = .noCatalog
 
     var scanTask: Task<Void, Never>?
     let pauseGate = PauseGate()

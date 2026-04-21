@@ -49,13 +49,13 @@ struct RealtimeCatalogScanContent: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
                 phaseHeader
+                if !dashboard.volumeProgress.isEmpty {
+                    volumesPane
+                }
+                currentFileRow
                 statsRow
                 if dashboard.netPrefetchCount > 0 {
                     networkPrefetchPane
-                }
-                currentFileRow
-                if !dashboard.volumeProgress.isEmpty {
-                    volumesPane
                 }
                 streamTypesPane
                 if dashboard.throughputSamples.count > 2 {
@@ -247,14 +247,14 @@ struct RealtimeCatalogScanContent: View {
 
     private var volumesPane: some View {
         GroupBox {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 10) {
                 ForEach(dashboard.volumeProgress) { vol in
                     VolumeMiniRow(volume: vol)
                 }
             }
         } label: {
-            Label("Volumes", systemImage: "externaldrive.connected.to.line.below")
-                .font(.system(size: 13, weight: .semibold))
+            Label("Volumes (\(dashboard.volumeProgress.count))", systemImage: "externaldrive.connected.to.line.below")
+                .font(.system(size: 15, weight: .bold))
                 .foregroundColor(.blue)
         }
     }
@@ -345,52 +345,56 @@ private struct VolumeMiniRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 5) {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
                 Image(systemName: icon)
                     .foregroundColor(iconColor)
-                    .font(.system(size: 12))
+                    .font(.system(size: 16))
                 Text(volume.volumeName)
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.system(size: 16, weight: .semibold))
                     .lineLimit(1)
                 Spacer()
                 if volume.isWalking {
-                    Text("walking…")
-                        .font(.system(size: 12))
+                    Text("discovering…")
+                        .font(.system(size: 14, weight: .medium))
                         .foregroundColor(.orange)
                 } else {
-                    Text("\(volume.completedFiles)/\(volume.totalFiles)")
-                        .font(.system(size: 12, design: .monospaced))
+                    Text("\(volume.completedFiles) / \(volume.totalFiles)")
+                        .font(.system(size: 14, weight: .medium, design: .monospaced))
                         .foregroundColor(.secondary)
+                    Text("(\(Int(fraction * 100))%)")
+                        .font(.system(size: 14, weight: .bold, design: .monospaced))
+                        .foregroundColor(fraction >= 1.0 ? .green : .cyan)
                 }
                 if volume.cacheHits > 0 {
-                    HStack(spacing: 1) {
-                        Image(systemName: "bolt.fill").font(.system(size: 9))
-                        Text("\(volume.cacheHits)").font(.system(size: 11, design: .monospaced))
+                    HStack(spacing: 2) {
+                        Image(systemName: "bolt.fill").font(.system(size: 10))
+                        Text("\(volume.cacheHits)").font(.system(size: 12, design: .monospaced))
                     }
                     .foregroundColor(.yellow)
                 }
                 if volume.errors > 0 {
-                    HStack(spacing: 1) {
-                        Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 9))
-                        Text("\(volume.errors)").font(.system(size: 11, design: .monospaced))
+                    HStack(spacing: 2) {
+                        Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 10))
+                        Text("\(volume.errors)").font(.system(size: 12, design: .monospaced))
                     }
                     .foregroundColor(.red)
                 }
             }
             ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 2)
+                RoundedRectangle(cornerRadius: 4)
                     .fill(Color.gray.opacity(0.15))
-                    .frame(height: 5)
+                    .frame(height: 10)
                 GeometryReader { geo in
-                    RoundedRectangle(cornerRadius: 2)
+                    RoundedRectangle(cornerRadius: 4)
                         .fill(LinearGradient(colors: [.blue, .cyan], startPoint: .leading, endPoint: .trailing))
-                        .frame(width: max(geo.size.width * fraction, 0), height: 5)
+                        .frame(width: max(geo.size.width * fraction, 0), height: 10)
                         .animation(.easeInOut(duration: 0.3), value: fraction)
                 }
-                .frame(height: 5)
+                .frame(height: 10)
             }
         }
+        .padding(.vertical, 2)
     }
 }
 
