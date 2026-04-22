@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>VideoScan — Code-health dashboard</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<!-- Chart.js from jsdelivr (pinned major). No build step, no NPM. -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #151a21;
+    --border: #2a2f38;
+    --fg: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --good: #56d364;
+    --warn: #e3b341;
+    --bad:  #f85149;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    background: var(--bg); color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  }
+  h1 { margin: 0 0 4px 0; font-size: 22px; }
+  .sub { color: var(--muted); margin-bottom: 24px; font-size: 13px; }
+  .sub a { color: var(--accent); }
+
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px; margin-bottom: 24px;
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px;
+  }
+  .card .label { font-size: 11px; text-transform: uppercase; color: var(--muted); letter-spacing: .5px; }
+  .card .value { font-size: 22px; font-weight: 600; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .card .delta { font-size: 12px; margin-top: 2px; color: var(--muted); }
+  .delta.up-good   { color: var(--good); }
+  .delta.up-bad    { color: var(--bad);  }
+  .delta.down-good { color: var(--good); }
+  .delta.down-bad  { color: var(--bad);  }
+
+  .charts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+    gap: 16px;
+  }
+  .chart-box {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px;
+  }
+  .chart-box h2 { margin: 0 0 8px 0; font-size: 14px; font-weight: 500; color: var(--muted); }
+  canvas { width: 100% !important; height: 220px !important; }
+
+  #status { color: var(--muted); font-size: 12px; margin: 12px 0 20px; }
+  #status.error { color: var(--bad); }
+</style>
+</head>
+<body>
+
+<h1>VideoScan — code-health trend</h1>
+<div class="sub">
+  Auto-updated on every CI run (main branch pushes). Data:
+  <a href="https://github.com/musicalengineer/VideoScan/blob/metrics/metrics/history.jsonl" target="_blank">history.jsonl</a>
+  on the <code>metrics</code> branch.
+</div>
+
+<div id="status">Loading metrics…</div>
+
+<!-- Latest-value cards at top -->
+<div class="cards" id="cards"></div>
+
+<!-- Time-series charts -->
+<div class="charts">
+  <div class="chart-box"><h2>Logic-only coverage %</h2><canvas id="chart-coverage"></canvas></div>
+  <div class="chart-box"><h2>SwiftLint — warnings + errors</h2><canvas id="chart-swiftlint"></canvas></div>
+  <div class="chart-box"><h2>Periphery — unused-code findings</h2><canvas id="chart-periphery"></canvas></div>
+  <div class="chart-box"><h2>Total Swift LOC</h2><canvas id="chart-loc"></canvas></div>
+  <div class="chart-box"><h2>Files over 1000 lines</h2><canvas id="chart-fat-files"></canvas></div>
+  <div class="chart-box"><h2>Test count</h2><canvas id="chart-tests"></canvas></div>
+</div>
+
+<script>
+// ------ config ---------------------------------------------------------
+const OWNER  = "musicalengineer";
+const REPO   = "VideoScan";
+const BRANCH = "metrics";
+const PATH   = "metrics/history.jsonl";
+
+// Raw content URL. Cache-bust via ?t=now so a fresh CI run shows up
+// without manual refresh-bypass.
+const URL = `https://raw.githubusercontent.com/${OWNER}/${REPO}/${BRANCH}/${PATH}?t=${Date.now()}`;
+
+// ------ helpers --------------------------------------------------------
+const $status = document.getElementById("status");
+function fail(msg) { $status.classList.add("error"); $status.textContent = msg; }
+
+function parseJsonl(text) {
+  return text.split("\n")
+    .map(l => l.trim())
+    .filter(l => l.length > 0)
+    .map(l => { try { return JSON.parse(l); } catch (e) { return null; } })
+    .filter(r => r !== null);
+}
+
+// Color matching by "is lower better?" rule.
+function deltaClass(older, newer, lowerIsBetter) {
+  if (older == null || newer == null || older === newer) return "";
+  const rising = newer > older;
+  if (lowerIsBetter) return rising ? "up-bad" : "down-good";
+  return rising ? "up-good" : "down-bad";
+}
+function fmtDelta(older, newer) {
+  if (older == null || newer == null) return "";
+  const d = newer - older;
+  if (d === 0) return "unchanged";
+  const sign = d > 0 ? "+" : "";
+  return `${sign}${Number.isInteger(d) ? d : d.toFixed(2)} vs prev`;
+}
+
+function card(label, value, older, newer, lowerIsBetter) {
+  const el = document.createElement("div");
+  el.className = "card";
+  el.innerHTML = `
+    <div class="label">${label}</div>
+    <div class="value">${value == null ? "—" : value}</div>
+    <div class="delta ${deltaClass(older, newer, lowerIsBetter)}">${fmtDelta(older, newer)}</div>
+  `;
+  return el;
+}
+
+// Shared chart options tuned for dark mode.
+const chartOpts = {
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: {
+    legend: { display: false },
+    tooltip: { mode: "index", intersect: false },
+  },
+  scales: {
+    x: { ticks: { color: "#8b949e", maxRotation: 0, autoSkipPadding: 20 },
+         grid:  { color: "#2a2f38" } },
+    y: { ticks: { color: "#8b949e" }, grid: { color: "#2a2f38" }, beginAtZero: true },
+  },
+  elements: { point: { radius: 2 }, line: { borderWidth: 2, tension: 0.1 } },
+};
+
+function drawLine(canvasId, labels, datasets) {
+  new Chart(document.getElementById(canvasId), {
+    type: "line",
+    data: { labels, datasets },
+    options: chartOpts,
+  });
+}
+
+// ------ main -----------------------------------------------------------
+fetch(URL)
+  .then(r => {
+    if (!r.ok) throw new Error(`HTTP ${r.status} fetching ${URL}`);
+    return r.text();
+  })
+  .then(text => {
+    const rows = parseJsonl(text);
+    if (rows.length === 0) {
+      fail("No metrics data yet — waiting for first CI run to populate the metrics branch.");
+      return;
+    }
+
+    // Newest last. ISO timestamps sort lexicographically, so the file
+    // is already time-ordered if CI only appends. Guard anyway.
+    rows.sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
+
+    const last = rows[rows.length - 1];
+    const prev = rows.length > 1 ? rows[rows.length - 2] : {};
+    $status.textContent = `${rows.length} data point${rows.length === 1 ? "" : "s"}, last update ${last.ts} (sha ${last.sha})`;
+
+    // --- latest-value cards ---
+    const cardsEl = document.getElementById("cards");
+    cardsEl.appendChild(card("Logic coverage",
+      last.coverage_logic_pct != null ? last.coverage_logic_pct.toFixed(2) + "%" : "—",
+      prev.coverage_logic_pct, last.coverage_logic_pct, /*lowerIsBetter*/ false));
+    cardsEl.appendChild(card("SwiftLint warnings",
+      last.swiftlint_warnings, prev.swiftlint_warnings, last.swiftlint_warnings, true));
+    cardsEl.appendChild(card("SwiftLint errors",
+      last.swiftlint_errors, prev.swiftlint_errors, last.swiftlint_errors, true));
+    cardsEl.appendChild(card("Periphery findings",
+      last.periphery_findings, prev.periphery_findings, last.periphery_findings, true));
+    cardsEl.appendChild(card("Total Swift LOC",
+      last.total_swift_lines, prev.total_swift_lines, last.total_swift_lines, false));
+    cardsEl.appendChild(card("Test count",
+      last.test_count, prev.test_count, last.test_count, false));
+    cardsEl.appendChild(card("Files > 1000 lines",
+      last.files_over_1000, prev.files_over_1000, last.files_over_1000, true));
+    cardsEl.appendChild(card("Worst file", last.worst_file, null, null, false));
+
+    // --- charts ---
+    const labels   = rows.map(r => (r.ts || "").slice(5, 16).replace("T", " "));
+    const col = (key) => rows.map(r => r[key]);
+
+    drawLine("chart-coverage", labels, [
+      { label: "coverage %", data: col("coverage_logic_pct"),
+        borderColor: "#56d364", backgroundColor: "#56d36433", fill: true },
+    ]);
+    drawLine("chart-swiftlint", labels, [
+      { label: "warnings", data: col("swiftlint_warnings"),
+        borderColor: "#e3b341", backgroundColor: "#e3b34133", fill: true },
+      { label: "errors",   data: col("swiftlint_errors"),
+        borderColor: "#f85149", backgroundColor: "#f8514933", fill: true },
+    ]);
+    drawLine("chart-periphery", labels, [
+      { label: "findings", data: col("periphery_findings"),
+        borderColor: "#58a6ff", backgroundColor: "#58a6ff33", fill: true },
+    ]);
+    drawLine("chart-loc", labels, [
+      { label: "total LOC", data: col("total_swift_lines"),
+        borderColor: "#8b949e", backgroundColor: "#8b949e33", fill: true },
+    ]);
+    drawLine("chart-fat-files", labels, [
+      { label: "files > 1000", data: col("files_over_1000"),
+        borderColor: "#f85149", backgroundColor: "#f8514933", fill: true },
+    ]);
+    drawLine("chart-tests", labels, [
+      { label: "test count", data: col("test_count"),
+        borderColor: "#56d364", backgroundColor: "#56d36433", fill: true },
+    ]);
+  })
+  .catch(err => {
+    fail(`Failed to load metrics: ${err.message}. If this is the first deploy, run CI once to populate the metrics branch.`);
+    console.error(err);
+  });
+</script>
+</body>
+</html>
