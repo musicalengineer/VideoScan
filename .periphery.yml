@@ -1,0 +1,31 @@
+# Periphery configuration for VideoScan.
+#
+# Periphery finds unused code (functions, properties, types) by analyzing
+# the compiler index. It has a few quirks on SwiftUI + Codable projects;
+# the retention rules here suppress common false positives.
+#
+# Run:                 periphery scan
+# Update baseline:     (reserved — not using baseline yet)
+
+project: VideoScan/VideoScan.xcodeproj
+schemes:
+  - VideoScan
+
+# Skip test targets from analysis — they're allowed to have unused helpers.
+exclude_tests: true
+
+# Don't complain about symbols that SwiftUI and Codable need:
+# - SwiftUI `body` property and related implicit conformances
+# - Codable stored properties only "read" by JSON encoder/decoder
+# - @objc exposed APIs (AppKit callbacks, etc.)
+retain_public: false                # app target has no public API surface
+retain_objc_accessible: true        # keep NSMenu / target-action callbacks
+retain_unused_protocol_func_params: true
+
+# Properties initialized but seemingly never read — usually correct, but
+# Codable structs and @State/@StateObject can false-positive.
+# Leave detection on; triage case-by-case.
+# retain_assign_only_properties: false   # (default)
+
+# Report formatting — Xcode format lets violations click-through in the IDE.
+format: xcode

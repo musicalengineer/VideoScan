@@ -1,0 +1,102 @@
+# SwiftLint configuration for VideoScan.
+#
+# Philosophy: catch real code-health problems (god objects, deeply branching
+# functions, huge files) without style-nagging. Most default rules are opted
+# out so the signal-to-noise ratio stays high for a single-dev project.
+#
+# To run locally:         swiftlint
+# To auto-fix where safe: swiftlint --fix
+#
+# Escalation path:
+#   1. Today: warnings only, CI non-blocking. Baseline has ~80 real warnings.
+#   2. After refactors reduce big files/functions: switch CI to --strict.
+
+included:
+  - VideoScan/VideoScan
+  - VideoScan/VideoScanTests
+  - swift_cli
+
+excluded:
+  - VideoScan/build
+  - build
+  - .build
+  - DerivedData
+  - venv
+  - tests/fixtures
+
+# Disable all the style-police rules — they create noise without catching bugs.
+# Every rule here was triggering on real code that is fine as-is.
+disabled_rules:
+  - trailing_whitespace
+  - opening_brace
+  - line_length
+  - todo
+  - identifier_name
+  - type_name
+  - nesting
+  - force_cast
+  - force_try
+  - shorthand_operator
+  - statement_position
+  - vertical_whitespace
+  - comma
+  - colon
+  - control_statement
+  - return_arrow_whitespace
+  - redundant_string_enum_value
+  - redundant_void_return
+  - unused_closure_parameter
+  - unused_optional_binding
+  - for_where
+  - empty_enum_arguments
+  - function_parameter_count
+  - large_tuple
+  - trailing_comma
+  - legacy_constructor
+  - legacy_hashing
+  - implicit_optional_initialization
+  - multiple_closures_with_trailing_closure
+  - vertical_parameter_alignment
+  - switch_case_alignment
+  - trailing_newline
+  - unused_enumerated
+  - redundant_discardable_let
+  - blanket_disable_command
+  - orphaned_doc_comment
+
+# --- Size / complexity rules: the reason we're running this tool at all. ---
+
+file_length:
+  warning: 1000
+  error: 3000          # VideoScanModel (2559), PersonFinderModel (2634) ride just under
+
+type_body_length:
+  warning: 600
+  error: 3000
+
+function_body_length:
+  warning: 80
+  error: 300           # PersonFinderModel has one 274-line function today; set error above that
+                       # so existing code warns but new >300-line functions fail.
+
+cyclomatic_complexity:
+  warning: 15
+  error: 30
+
+# --- Opt-in rules worth having on ---
+opt_in_rules:
+  - empty_count            # .count == 0 → isEmpty
+  - empty_string           # "" comparisons
+  - first_where
+  - contains_over_first_not_nil
+  - contains_over_filter_count
+  - last_where
+  - toggle_bool
+  - redundant_nil_coalescing
+  - sorted_first_last
+  - fatal_error_message
+  - force_unwrapping       # must be in opt_in_rules for the severity config below to apply
+
+# force_unwrapping warn-only (not error). Tests get a lot of legitimate `!`.
+force_unwrapping:
+  severity: warning

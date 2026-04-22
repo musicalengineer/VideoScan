@@ -13,10 +13,18 @@ jobs:
     name: Build & Test
     runs-on: macos-15
     timeout-minutes: 15
+    # Allow this job to push to the `metrics` branch (history.jsonl for the
+    # trend dashboard). Scoped to contents only — no packages/actions/etc.
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Need full history? No — shallow is fine. But we DO need the token
+          # persisted in git config so the later push step can auth.
+          persist-credentials: true
 
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer
@@ -26,6 +34,24 @@ jobs:
           xcodebuild -version
           swift --version
           system_profiler SPHardwareDataType | grep "Chip\|Memory"
+
+      - name: Install SwiftLint & Periphery
+        run: |
+          brew install swiftlint periphery
+
+      - name: SwiftLint (warn-only for now)
+        # Non-blocking so we can ratchet down violations gradually.
+        # To make this blocking, replace `|| true` with `--strict`.
+        # Also captures raw Xcode-format output to a file so the metrics
+        # collector can count warnings/errors.
+        run: |
+          echo "## SwiftLint Report" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          swiftlint lint --reporter emoji 2>&1 | tee -a $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          # Raw output for metrics (Xcode reporter = one finding per line with ": warning:" / ": error:")
+          swiftlint lint --reporter xcode > swiftlint-raw.txt 2>&1 || true
+          echo "SWIFTLINT_OUTPUT=$(pwd)/swiftlint-raw.txt" >> $GITHUB_ENV
 
       - name: Build
         run: |
@@ -43,6 +69,20 @@ jobs:
             grep 'error:' xcodebuild-build.log | head -20
             exit 1
           fi
+
+      - name: Periphery — unused code report (non-blocking)
+        # Periphery analyzes the compiler index produced by the Build step above.
+        # Runs in --skip-build mode to reuse that index.
+        continue-on-error: true
+        run: |
+          echo "## Periphery — unused code" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          periphery scan --project VideoScan/VideoScan.xcodeproj \
+                         --schemes VideoScan \
+                         --targets VideoScan \
+                         --skip-build 2>&1 | tee periphery-raw.txt | tee -a $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "PERIPHERY_OUTPUT=$(pwd)/periphery-raw.txt" >> $GITHUB_ENV
 
       - name: Run Unit Tests
         run: |
@@ -91,3 +131,70 @@ jobs:
           name: test-results
           path: TestResults.xcresult
           retention-days: 14
+
+      # ---------------------------------------------------------------
+      # Collect code-quality metrics and append to the `metrics` branch.
+      #
+      # We store history in a DEDICATED ORPHAN BRANCH (`metrics`) so the
+      # main-branch history stays clean — the dashboard only appends,
+      # never modifies source. The branch holds exactly one file:
+      #   metrics/history.jsonl — one JSON row per CI run.
+      #
+      # First run auto-bootstraps the branch if it doesn't exist.
+      # ---------------------------------------------------------------
+      - name: Collect metrics + push to `metrics` branch
+        if: always() && github.event_name != 'pull_request'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+
+          # Run the collector against the CI workspace. It reads
+          # TestResults.xcresult + $SWIFTLINT_OUTPUT + $PERIPHERY_OUTPUT
+          # (env vars set by earlier steps) and writes ONE json line.
+          chmod +x scripts/collect_metrics.sh
+          ROW=$(scripts/collect_metrics.sh)
+          echo "Metrics row:"
+          echo "$ROW"
+
+          # Set up a separate work dir so we don't disturb the main checkout.
+          WORK=$(mktemp -d)
+          cd "$WORK"
+
+          # Clone only the metrics branch. If it doesn't exist, bootstrap it.
+          git clone --branch metrics --single-branch --depth 1 \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" metrics-repo \
+            2>/dev/null || {
+              echo "metrics branch does not exist — bootstrapping"
+              git clone --depth 1 \
+                "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" metrics-repo
+              cd metrics-repo
+              git checkout --orphan metrics
+              git rm -rf . 2>/dev/null || true
+              mkdir -p metrics
+              echo "# Metrics history" > README.md
+              echo "One JSON row per CI run. Consumed by the dashboard at docs/index.html on main." >> README.md
+              touch metrics/history.jsonl
+              git add README.md metrics/history.jsonl
+              git -c user.email="ci@videoscan" -c user.name="VideoScan CI" \
+                commit -m "Bootstrap metrics branch [skip ci]"
+              git push -u origin metrics
+              cd ..
+            }
+
+          cd metrics-repo
+          mkdir -p metrics
+          echo "$ROW" >> metrics/history.jsonl
+
+          git -c user.email="ci@videoscan" -c user.name="VideoScan CI" \
+              add metrics/history.jsonl
+          git -c user.email="ci@videoscan" -c user.name="VideoScan CI" \
+              commit -m "metrics: ${GITHUB_SHA:0:8} on ${GITHUB_REF_NAME} [skip ci]"
+
+          # Retry once on push race (another CI run may have just pushed).
+          git push origin metrics || {
+              echo "push failed — pulling and retrying once"
+              git pull --rebase origin metrics
+              git push origin metrics
+          }
