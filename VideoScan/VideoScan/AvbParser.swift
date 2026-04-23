@@ -270,21 +270,21 @@ private class AvbObject {
 final class AvbParser {
 
     /// Parse a single .avb file at the given path.
-    static func parse(fileAt path: String) -> AvbBinResult {
-        let url = URL(fileURLWithPath: path)
-        let binName = url.deletingPathExtension().lastPathComponent
-        let errors: [String] = []
+    // MARK: - parse() decomposition
 
-        guard let fileData = try? Data(contentsOf: url) else {
-            return AvbBinResult(filePath: path, binName: binName, creatorVersion: "",
-                                lastSave: nil, clips: [], errors: ["Cannot read file"])
-        }
+    /// Result of header parsing: either (reader positioned past header, info) or an error string.
+    private struct AvbHeader {
+        let reader: BinaryReader
+        let creatorVersion: String
+        let lastSave: Date?
+        let numObjects: UInt32
+        let rootIndex: UInt32
+        let isLE: Bool
+    }
 
-        guard fileData.count >= 8 else {
-            return AvbBinResult(filePath: path, binName: binName, creatorVersion: "",
-                                lastSave: nil, clips: [], errors: ["File too small"])
-        }
-
+    /// Parse and validate the .avb file header. Returns (header, nil) on success
+    /// or (nil, errorMessage) on any validation failure.
+    private static func parseHeader(fileData: Data) -> (AvbHeader?, String?) {
         // Detect byte order from first 2 bytes
         let orderBytes = [fileData[0], fileData[1]]
         let isLE: Bool
@@ -293,91 +293,247 @@ final class AvbParser {
         } else if orderBytes == [0x00, 0x06] {
             isLE = false
         } else {
-            return AvbBinResult(filePath: path, binName: binName, creatorVersion: "",
-                                lastSave: nil, clips: [], errors: ["Not an AVB file (bad magic)"])
+            return (nil, "Not an AVB file (bad magic)")
         }
 
         let reader = BinaryReader(data: fileData, littleEndian: isLE)
         reader.skip(2) // byte order already read
 
-        // Verify "Domain" magic
         guard let magic = reader.readBytes(6),
               String(data: magic, encoding: .ascii) == "Domain" else {
-            return AvbBinResult(filePath: path, binName: binName, creatorVersion: "",
-                                lastSave: nil, clips: [], errors: ["Not an AVB file (bad header)"])
+            return (nil, "Not an AVB file (bad header)")
         }
-
-        // Read OBJD header
         guard let headerCC = reader.readFourCC(), headerCC == "OBJD" else {
-            return AvbBinResult(filePath: path, binName: binName, creatorVersion: "",
-                                lastSave: nil, clips: [], errors: ["Missing OBJD header"])
+            return (nil, "Missing OBJD header")
         }
-
-        guard let _className = reader.readString(), _className == "AObjDoc" else {
-            return AvbBinResult(filePath: path, binName: binName, creatorVersion: "",
-                                lastSave: nil, clips: [], errors: ["Bad class name"])
+        guard let className = reader.readString(), className == "AObjDoc" else {
+            return (nil, "Bad class name")
         }
-        _ = _className
-
         guard reader.assertTag(0x04) else {
-            return AvbBinResult(filePath: path, binName: binName, creatorVersion: "",
-                                lastSave: nil, clips: [], errors: ["Bad version tag"])
+            return (nil, "Bad version tag")
         }
-
-        let _lastSaveStr = reader.readString() ?? ""
-        _ = _lastSaveStr
+        _ = reader.readString() ?? "" // lastSaveStr, unused
 
         guard let numObjects = reader.readU32(),
               let rootIndex = reader.readU32() else {
-            return AvbBinResult(filePath: path, binName: binName, creatorVersion: "",
-                                lastSave: nil, clips: [], errors: ["Truncated header"])
+            return (nil, "Truncated header")
         }
-
-        // Skip byte-order marker u32
-        _ = reader.readU32()
-
+        _ = reader.readU32()                // byte-order marker u32
         let lastSave = reader.readDateTime()
+        reader.skip(4)                      // reserved
 
-        // Skip 4 reserved bytes
-        reader.skip(4)
-
-        // ATob + ATve
         guard reader.readFourCC() == "ATob", reader.readFourCC() == "ATve" else {
-            return AvbBinResult(filePath: path, binName: binName, creatorVersion: "",
-                                lastSave: lastSave, clips: [], errors: ["Missing ATob/ATve"])
+            return (nil, "Missing ATob/ATve")
         }
-
-        // Creator version string: u16 length (always 30) + data + pad to 32 + 16 reserved
         guard let verLen = reader.readU16() else {
-            return AvbBinResult(filePath: path, binName: binName, creatorVersion: "",
-                                lastSave: lastSave, clips: [], errors: ["Truncated version"])
+            return (nil, "Truncated version")
         }
         let verData = reader.readBytes(Int(verLen)) ?? Data()
-        let creatorVersion = String(data: verData.filter { $0 != 0x20 && $0 != 0 }, encoding: .macOSRoman) ?? ""
-        // Pad to 32 total
+        let creatorVersion = String(data: verData.filter { $0 != 0x20 && $0 != 0 },
+                                    encoding: .macOSRoman) ?? ""
         let padNeeded = 32 - 2 - Int(verLen)
         if padNeeded > 0 { reader.skip(padNeeded) }
         reader.skip(16) // reserved
 
-        // Build object position table
-        var objectPositions: [Int] = [0] // index 0 = root chunk (not a real object)
+        return (AvbHeader(reader: reader,
+                          creatorVersion: creatorVersion,
+                          lastSave: lastSave,
+                          numObjects: numObjects,
+                          rootIndex: rootIndex,
+                          isLE: isLE),
+                nil)
+    }
+
+    /// Build the object-position lookup table by walking past each object's
+    /// class_id (4) + size (4) + size bytes of payload.
+    private static func buildObjectPositions(reader: BinaryReader, numObjects: UInt32) -> [Int] {
+        var positions: [Int] = [0] // index 0 = root chunk (not a real object)
         for _ in 0..<numObjects {
-            objectPositions.append(reader.offset)
-            // Read class_id (4) + size (4), skip size bytes
+            positions.append(reader.offset)
             reader.skip(4) // class_id
             guard let size = reader.readU32() else { break }
             reader.skip(Int(size))
         }
+        return positions
+    }
 
-        // Now parse objects on demand from the position table
+    /// For a MasterMob, chase each SourceClip track to the matching SourceMob
+    /// and fill in any missing media-path / descriptor-type / tape-name fields.
+    /// State flows through inout parameters — this is exactly what the original
+    /// nested loop did, just isolated for readability and testability.
+    private static func chaseMasterMobDescriptors(
+        mobObj: AvbObject,
+        objectPositions: [Int],
+        readObj: (Int) -> AvbObject?,
+        mediaPath: inout String,
+        mediaPathPosix: inout String,
+        descriptorType: inout String,
+        tapeName: inout String
+    ) {
+        let trackRefs = mobObj.properties["track_component_refs"]
+            as? [(index: Int, componentRef: Int)] ?? []
+        for (_, compRef) in trackRefs {
+            guard compRef > 0,
+                  let compObj = readObj(compRef),
+                  compObj.classID == "SCLP" else { continue }
+            let srcMobIDUrn = compObj.string("mob_id_urn")
+            guard !srcMobIDUrn.isEmpty else { continue }
+
+            for idx in 1..<objectPositions.count {
+                guard let candidate = readObj(idx),
+                      candidate.classID == "CMPO",
+                      candidate.string("mob_id_urn") == srcMobIDUrn else { continue }
+
+                let dRef = candidate.ref("descriptor_ref")
+                if dRef > 0, let dObj = readObj(dRef) {
+                    if mediaPath.isEmpty {
+                        let lRef = dObj.ref("locator_ref")
+                        if lRef > 0, let lObj = readObj(lRef) {
+                            mediaPath = lObj.string("path")
+                            mediaPathPosix = lObj.string("path_posix")
+                        }
+                    }
+                    if descriptorType.isEmpty || descriptorType == "MDES" {
+                        descriptorType = dObj.classID
+                    }
+                    if tapeName.isEmpty && dObj.classID == "MDTP" {
+                        tapeName = candidate.string("name")
+                    }
+                }
+                break
+            }
+        }
+    }
+
+    private static func mobTypeLabel(_ id: Int) -> String {
+        switch id {
+        case 1: return "CompositionMob"
+        case 2: return "MasterMob"
+        case 3: return "SourceMob"
+        default: return "Unknown(\(id))"
+        }
+    }
+
+    private static func mediaKindLabel(_ id: Int) -> String {
+        switch id {
+        case 1: return "picture"
+        case 2: return "sound"
+        case 3: return "timecode"
+        case 4: return "edgecode"
+        case 5: return "data"
+        default: return "unknown(\(id))"
+        }
+    }
+
+    /// Build the list of tracks for a mob by walking its track_component_refs.
+    private static func buildTracks(mobObj: AvbObject,
+                                    readObj: (Int) -> AvbObject?) -> [AvbTrack] {
+        var tracks: [AvbTrack] = []
+        let trackRefs = mobObj.properties["track_component_refs"]
+            as? [(index: Int, componentRef: Int)] ?? []
+        for (trackIdx, compRef) in trackRefs {
+            guard compRef > 0, let compObj = readObj(compRef) else { continue }
+            tracks.append(AvbTrack(
+                index: trackIdx,
+                mediaKind: mediaKindLabel(compObj.int("media_kind_id")),
+                startPos: compObj.int("start_pos"),
+                length: compObj.int("length"),
+                sourceClipMobID: compObj.classID == "SCLP" ? compObj.string("mob_id_urn") : "",
+                sourceTrackID: compObj.int("track_id")
+            ))
+        }
+        return tracks
+    }
+
+    /// Assemble a single AvbClip from a CMPO object.
+    private static func extractClip(
+        from mobObj: AvbObject,
+        objectPositions: [Int],
+        readObj: (Int) -> AvbObject?,
+        binFileName: String
+    ) -> AvbClip {
+        let mobTypeID = mobObj.int("mob_type_id")
+
+        // Chase the direct descriptor (applies to SourceMobs)
+        var mediaPath = ""
+        var mediaPathPosix = ""
+        var tapeName = ""
+        var descriptorType = ""
+
+        let descRef = mobObj.ref("descriptor_ref")
+        if descRef > 0, let descObj = readObj(descRef) {
+            descriptorType = descObj.classID
+            let locRef = descObj.ref("locator_ref")
+            if locRef > 0, let locObj = readObj(locRef) {
+                mediaPath = locObj.string("path")
+                mediaPathPosix = locObj.string("path_posix")
+            }
+            if descObj.classID == "MDTP" {
+                tapeName = mobObj.string("name")
+            }
+        }
+
+        // MasterMobs don't own a descriptor directly — chase SourceClip tracks.
+        if mobTypeID == 2 {
+            chaseMasterMobDescriptors(
+                mobObj: mobObj,
+                objectPositions: objectPositions,
+                readObj: readObj,
+                mediaPath: &mediaPath,
+                mediaPathPosix: &mediaPathPosix,
+                descriptorType: &descriptorType,
+                tapeName: &tapeName
+            )
+        }
+
+        return AvbClip(
+            clipName: mobObj.string("name"),
+            mobType: mobTypeLabel(mobTypeID),
+            mobID: mobObj.string("mob_id_urn"),
+            materialUUID: mobObj.string("material_uuid"),
+            tapeName: tapeName,
+            creationDate: mobObj.date("creation_time"),
+            lastModified: mobObj.date("last_modified"),
+            editRate: mobObj.double("edit_rate"),
+            duration: mobObj.int("length"),
+            tracks: buildTracks(mobObj: mobObj, readObj: readObj),
+            mediaPath: mediaPath,
+            mediaPathPosix: mediaPathPosix,
+            descriptorType: descriptorType,
+            binFileName: binFileName
+        )
+    }
+
+    // MARK: - parse()
+
+    static func parse(fileAt path: String) -> AvbBinResult {
+        let url = URL(fileURLWithPath: path)
+        let binName = url.deletingPathExtension().lastPathComponent
+
+        func fail(_ message: String, creatorVersion: String = "", lastSave: Date? = nil) -> AvbBinResult {
+            AvbBinResult(filePath: path, binName: binName, creatorVersion: creatorVersion,
+                         lastSave: lastSave, clips: [], errors: [message])
+        }
+
+        guard let fileData = try? Data(contentsOf: url) else { return fail("Cannot read file") }
+        guard fileData.count >= 8 else { return fail("File too small") }
+
+        let (headerOpt, headerErr) = parseHeader(fileData: fileData)
+        guard let header = headerOpt else {
+            return fail(headerErr ?? "Header parse failed")
+        }
+
+        let reader = header.reader
+        let isLE = header.isLE
+        let objectPositions = buildObjectPositions(reader: reader, numObjects: header.numObjects)
+
+        // Parse objects on demand from the position table.
         var objectCache: [Int: AvbObject] = [:]
-
         func readObject(at index: Int) -> AvbObject? {
             guard index > 0, index < objectPositions.count else { return nil }
             if let cached = objectCache[index] { return cached }
 
-            let pos = objectPositions[index]
-            reader.seek(to: pos)
+            reader.seek(to: objectPositions[index])
 
             guard let rawCC = reader.readBytes(4) else { return nil }
             let classID: String
@@ -388,173 +544,44 @@ final class AvbParser {
             }
 
             guard let size = reader.readU32() else { return nil }
-            let dataStart = reader.offset
-            let dataEnd = dataStart + Int(size)
+            let dataEnd = reader.offset + Int(size)
 
             let obj = AvbObject(classID: classID, objectIndex: index)
-
-            // Parse known class types to extract the properties we need
             switch classID {
-            case "ABIN", "BINF":
-                parseBin(reader: reader, obj: obj, isLE: isLE, readObj: readObject)
-            case "CMPO":
-                parseComposition(reader: reader, obj: obj, readObj: readObject)
-            case "MDES":
-                parseMediaDescriptor(reader: reader, obj: obj, readObj: readObject)
-            case "MDFL":
-                parseMediaFileDescriptor(reader: reader, obj: obj, readObj: readObject)
-            case "MDTP":
-                parseTapeDescriptor(reader: reader, obj: obj, readObj: readObject)
-            case "FILE", "WINF":
-                parseFileLocator(reader: reader, obj: obj)
-            case "SCLP":
-                parseSourceClip(reader: reader, obj: obj)
-            case "TRKG":
-                parseTrackGroup(reader: reader, obj: obj, readObj: readObject)
-            default:
-                break // Skip unknown types
+            case "ABIN", "BINF": parseBin(reader: reader, obj: obj, isLE: isLE, readObj: readObject)
+            case "CMPO":         parseComposition(reader: reader, obj: obj, readObj: readObject)
+            case "MDES":         parseMediaDescriptor(reader: reader, obj: obj, readObj: readObject)
+            case "MDFL":         parseMediaFileDescriptor(reader: reader, obj: obj, readObj: readObject)
+            case "MDTP":         parseTapeDescriptor(reader: reader, obj: obj, readObj: readObject)
+            case "FILE", "WINF": parseFileLocator(reader: reader, obj: obj)
+            case "SCLP":         parseSourceClip(reader: reader, obj: obj)
+            case "TRKG":         parseTrackGroup(reader: reader, obj: obj, readObj: readObject)
+            default:             break
             }
 
-            // Ensure reader is past this object's data for safety
             reader.seek(to: dataEnd)
-
             objectCache[index] = obj
             return obj
         }
 
-        // Read the root object (bin)
-        guard let rootObj = readObject(at: Int(rootIndex)) else {
-            return AvbBinResult(filePath: path, binName: binName, creatorVersion: creatorVersion,
-                                lastSave: lastSave, clips: [], errors: ["Failed to read root bin object"])
+        guard let rootObj = readObject(at: Int(header.rootIndex)) else {
+            return fail("Failed to read root bin object",
+                        creatorVersion: header.creatorVersion, lastSave: header.lastSave)
         }
 
-        // Extract clips from bin items
         var clips: [AvbClip] = []
         let itemRefs = rootObj.properties["item_refs"] as? [Int] ?? []
-
         for mobRef in itemRefs {
-            guard let mobObj = readObject(at: mobRef) else { continue }
-            guard mobObj.classID == "CMPO" else { continue }
-
-            let mobTypeID = mobObj.int("mob_type_id")
-            let mobType: String
-            switch mobTypeID {
-            case 1: mobType = "CompositionMob"
-            case 2: mobType = "MasterMob"
-            case 3: mobType = "SourceMob"
-            default: mobType = "Unknown(\(mobTypeID))"
-            }
-
-            let mobIDStr = mobObj.string("mob_id_urn")
-            let materialUUID = mobObj.string("material_uuid")
-
-            // Chase descriptor for SourceMobs to get media path and tape name
-            var mediaPath = ""
-            var mediaPathPosix = ""
-            var tapeName = ""
-            var descriptorType = ""
-
-            let descRef = mobObj.ref("descriptor_ref")
-            if descRef > 0, let descObj = readObject(at: descRef) {
-                descriptorType = descObj.classID
-
-                // Get locator (file path)
-                let locRef = descObj.ref("locator_ref")
-                if locRef > 0, let locObj = readObject(at: locRef) {
-                    mediaPath = locObj.string("path")
-                    mediaPathPosix = locObj.string("path_posix")
-                }
-
-                // For tape descriptors, the clip name IS the tape name
-                if descObj.classID == "MDTP" {
-                    tapeName = mobObj.string("name")
-                }
-            }
-
-            // If this is a MasterMob, chase tracks to find SourceClip references
-            // which point to SourceMobs that have the actual media paths
-            if mobTypeID == 2 { // MasterMob
-                let trackRefs = mobObj.properties["track_component_refs"] as? [(index: Int, componentRef: Int)] ?? []
-                for (_, compRef) in trackRefs {
-                    guard compRef > 0, let compObj = readObject(at: compRef) else { continue }
-                    if compObj.classID == "SCLP" {
-                        let srcMobIDUrn = compObj.string("mob_id_urn")
-                        // Find the matching SourceMob in our parsed objects
-                        if !srcMobIDUrn.isEmpty {
-                            for idx in 1..<objectPositions.count {
-                                guard let candidate = readObject(at: idx) else { continue }
-                                if candidate.classID == "CMPO" && candidate.string("mob_id_urn") == srcMobIDUrn {
-                                    let dRef = candidate.ref("descriptor_ref")
-                                    if dRef > 0, let dObj = readObject(at: dRef) {
-                                        if mediaPath.isEmpty {
-                                            let lRef = dObj.ref("locator_ref")
-                                            if lRef > 0, let lObj = readObject(at: lRef) {
-                                                mediaPath = lObj.string("path")
-                                                mediaPathPosix = lObj.string("path_posix")
-                                            }
-                                        }
-                                        if descriptorType.isEmpty || descriptorType == "MDES" {
-                                            descriptorType = dObj.classID
-                                        }
-                                        if tapeName.isEmpty && dObj.classID == "MDTP" {
-                                            tapeName = candidate.string("name")
-                                        }
-                                    }
-                                    break
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Build track list
-            var tracks: [AvbTrack] = []
-            let trackRefs = mobObj.properties["track_component_refs"] as? [(index: Int, componentRef: Int)] ?? []
-            for (trackIdx, compRef) in trackRefs {
-                guard compRef > 0, let compObj = readObject(at: compRef) else { continue }
-                let mediaKindID = compObj.int("media_kind_id")
-                let mediaKind: String
-                switch mediaKindID {
-                case 1: mediaKind = "picture"
-                case 2: mediaKind = "sound"
-                case 3: mediaKind = "timecode"
-                case 4: mediaKind = "edgecode"
-                case 5: mediaKind = "data"
-                default: mediaKind = "unknown(\(mediaKindID))"
-                }
-
-                tracks.append(AvbTrack(
-                    index: trackIdx,
-                    mediaKind: mediaKind,
-                    startPos: compObj.int("start_pos"),
-                    length: compObj.int("length"),
-                    sourceClipMobID: compObj.classID == "SCLP" ? compObj.string("mob_id_urn") : "",
-                    sourceTrackID: compObj.int("track_id")
-                ))
-            }
-
-            let clip = AvbClip(
-                clipName: mobObj.string("name"),
-                mobType: mobType,
-                mobID: mobIDStr,
-                materialUUID: materialUUID,
-                tapeName: tapeName,
-                creationDate: mobObj.date("creation_time"),
-                lastModified: mobObj.date("last_modified"),
-                editRate: mobObj.double("edit_rate"),
-                duration: mobObj.int("length"),
-                tracks: tracks,
-                mediaPath: mediaPath,
-                mediaPathPosix: mediaPathPosix,
-                descriptorType: descriptorType,
-                binFileName: url.lastPathComponent
-            )
-            clips.append(clip)
+            guard let mobObj = readObject(at: mobRef), mobObj.classID == "CMPO" else { continue }
+            clips.append(extractClip(from: mobObj,
+                                     objectPositions: objectPositions,
+                                     readObj: readObject,
+                                     binFileName: url.lastPathComponent))
         }
 
-        return AvbBinResult(filePath: path, binName: binName, creatorVersion: creatorVersion,
-                            lastSave: lastSave, clips: clips, errors: errors)
+        return AvbBinResult(filePath: path, binName: binName,
+                            creatorVersion: header.creatorVersion, lastSave: header.lastSave,
+                            clips: clips, errors: [])
     }
 
     /// Scan a directory recursively for .avb files and parse all of them.

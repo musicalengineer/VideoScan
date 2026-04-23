@@ -13,6 +13,8 @@ actor AsyncSemaphore {
     }
 
     func wait() async {
+        // `count` here is an Int counter, not a collection — empty_count rule is a false positive.
+        // swiftlint:disable:next empty_count
         if count > 0 {
             count -= 1
         } else {

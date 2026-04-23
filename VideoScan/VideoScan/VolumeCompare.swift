@@ -12,6 +12,8 @@ import Combine
 struct VolumeCompareResult {
     let sourcePath: String
     let destPath: String
+    let destLabel: String                 // human-readable; may be a volume name or "(any other cataloged volume)"
+    let isAuditMode: Bool                 // true when dest is "any other volume" — copy not available
     let missingFiles: [VideoRecord]       // on source, NOT on destination
     let alreadySafe: [VideoRecord]        // on source AND destination
     let sourceOnly: Int                   // count for quick display
@@ -30,11 +32,17 @@ enum VolumeComparer {
     /// Compare source volume against destination volume using catalog records.
     /// A file is "already safe" if destination has a record with matching
     /// (partialMD5 + sizeBytes) OR (filename + sizeBytes) when MD5 is unavailable.
+    ///
+    /// Pass `isAuditMode: true` when `destRecords` is the union of *many* volumes
+    /// (i.e., "does this file exist anywhere else in the catalog?") so the result
+    /// can flag that copy isn't available (no single target path).
     static func compare(
         sourceRecords: [VideoRecord],
         destRecords: [VideoRecord],
         sourcePath: String,
-        destPath: String
+        destPath: String,
+        destLabel: String? = nil,
+        isAuditMode: Bool = false
     ) -> VolumeCompareResult {
         // Build destination lookup indices
         var destByHash: Set<String> = []       // "md5|size"
@@ -79,6 +87,8 @@ enum VolumeComparer {
         return VolumeCompareResult(
             sourcePath: sourcePath,
             destPath: destPath,
+            destLabel: destLabel ?? URL(fileURLWithPath: destPath).lastPathComponent,
+            isAuditMode: isAuditMode,
             missingFiles: missing,
             alreadySafe: safe,
             sourceOnly: missing.count,
@@ -300,8 +310,10 @@ final class VolumeRescueOperation: ObservableObject {
 struct VolumeCompareSheet: View {
     @ObservedObject var model: VideoScanModel
     @Environment(\.dismiss) private var dismiss
-    @State private var sourceIdx: Int = 0
-    @State private var destIdx: Int = 1
+    // Multi-select model: volume paths tagged as source and/or destination.
+    // A volume cannot be both (UI enforces); a path never in either set is ignored.
+    @State private var selectedSources: Set<String> = []
+    @State private var selectedDests: Set<String> = []
     @State private var result: VolumeCompareResult?
     @State private var isComparing = false
     @StateObject private var rescue = VolumeRescueOperation()
@@ -336,37 +348,7 @@ struct VolumeCompareSheet: View {
                     .foregroundColor(.secondary)
                     .padding()
             } else {
-                // Volume pickers
-                HStack(spacing: 20) {
-                    VStack(alignment: .leading) {
-                        Text("Source (old drive)").font(.caption).foregroundColor(.secondary)
-                        Picker("Source", selection: $sourceIdx) {
-                            ForEach(0..<volumes.count, id: \.self) { i in
-                                Text(volumes[i].label).tag(i)
-                            }
-                        }
-                        .labelsHidden()
-                    }
-
-                    Image(systemName: "arrow.right")
-                        .font(.title2).foregroundColor(.secondary)
-
-                    VStack(alignment: .leading) {
-                        Text("Destination (new drive)").font(.caption).foregroundColor(.secondary)
-                        Picker("Destination", selection: $destIdx) {
-                            ForEach(0..<volumes.count, id: \.self) { i in
-                                Text(volumes[i].label).tag(i)
-                            }
-                        }
-                        .labelsHidden()
-                    }
-
-                    Button("Compare") {
-                        runCompare()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(sourceIdx == destIdx || isComparing)
-                }
+                volumeSelector
 
                 Divider()
 
@@ -383,7 +365,10 @@ struct VolumeCompareSheet: View {
             }
         }
         .padding()
-        .frame(minWidth: 700, minHeight: 500)
+        .frame(
+            minWidth: 900, idealWidth: 1200, maxWidth: .infinity,
+            minHeight: 650, idealHeight: 850, maxHeight: .infinity
+        )
         .alert("Copy Missing Files?", isPresented: $showCopyConfirm) {
             Button("Copy", role: .destructive) {
                 if let r = result {
@@ -414,12 +399,12 @@ struct VolumeCompareSheet: View {
             if r.missingFiles.isEmpty {
                 HStack {
                     Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
-                    Text("All source media files are already on the destination!")
+                    Text("Every source file has a copy on: \(r.destLabel).")
                         .font(.callout)
                 }
                 .padding()
             } else {
-                Text("Missing files (\(r.sourceOnly)):")
+                Text("Files with no copy on \(r.destLabel) (\(r.sourceOnly)):")
                     .font(.callout.bold())
 
                 List(r.missingFiles.prefix(500)) { rec in
@@ -444,7 +429,15 @@ struct VolumeCompareSheet: View {
             Spacer()
 
             // Action bar
-            if !r.missingFiles.isEmpty {
+            if !r.missingFiles.isEmpty && r.isAuditMode {
+                // Audit mode: no single destination, so no copy. Just show guidance.
+                HStack(spacing: 6) {
+                    Image(systemName: "info.circle")
+                        .foregroundColor(.secondary)
+                    Text("Audit complete. To rescue these files, turn off Audit mode and pick a destination.")
+                        .font(.caption).foregroundColor(.secondary)
+                }
+            } else if !r.missingFiles.isEmpty {
                 HStack {
                     if rescue.isRunning {
                         VStack(alignment: .leading, spacing: 4) {
@@ -524,23 +517,150 @@ struct VolumeCompareSheet: View {
         }
     }
 
+    // MARK: - Multi-select volume picker
+
+    /// One row per known volume with a "Source" and "Destination" toggle.
+    /// A volume can be either, but not both — toggling one clears the other.
+    @ViewBuilder
+    private var volumeSelector: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Pick which volumes to check and where backups should live.")
+                .font(.callout).foregroundColor(.secondary)
+
+            // Header
+            HStack {
+                Text("Volume").bold().frame(maxWidth: .infinity, alignment: .leading)
+                Text("Source").bold().frame(width: 70, alignment: .center)
+                    .help("Check for files that need backing up")
+                Text("Dest").bold().frame(width: 70, alignment: .center)
+                    .help("Where backups should exist (leave all unchecked for audit mode)")
+            }
+            .font(.caption).foregroundColor(.secondary)
+
+            Divider()
+
+            // Rows
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(volumes, id: \.path) { v in
+                        HStack {
+                            Text(v.label)
+                                .lineLimit(1)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Toggle("", isOn: sourceBinding(for: v.path))
+                                .labelsHidden()
+                                .frame(width: 70, alignment: .center)
+                            Toggle("", isOn: destBinding(for: v.path))
+                                .labelsHidden()
+                                .frame(width: 70, alignment: .center)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+            .frame(maxHeight: 200)
+
+            // Mode hint + compare button
+            HStack {
+                if selectedDests.isEmpty && !selectedSources.isEmpty {
+                    Label("Audit mode — checking against every volume outside your source set. Copy disabled.",
+                          systemImage: "info.circle")
+                        .font(.caption).foregroundColor(.secondary)
+                } else if selectedSources.isEmpty {
+                    Text("Pick at least one source volume to compare.")
+                        .font(.caption).foregroundColor(.secondary)
+                } else {
+                    Label("\(selectedSources.count) source × \(selectedDests.count) dest — copy enabled when exactly one destination is selected.",
+                          systemImage: "checkmark.circle")
+                        .font(.caption).foregroundColor(.secondary)
+                }
+
+                Spacer()
+
+                Button("Compare") { runCompare() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isComparing || selectedSources.isEmpty)
+            }
+        }
+    }
+
+    private func sourceBinding(for path: String) -> Binding<Bool> {
+        Binding(
+            get: { selectedSources.contains(path) },
+            set: { newVal in
+                if newVal {
+                    selectedSources.insert(path)
+                    selectedDests.remove(path)  // mutual exclusion
+                } else {
+                    selectedSources.remove(path)
+                }
+            }
+        )
+    }
+
+    private func destBinding(for path: String) -> Binding<Bool> {
+        Binding(
+            get: { selectedDests.contains(path) },
+            set: { newVal in
+                if newVal {
+                    selectedDests.insert(path)
+                    selectedSources.remove(path)  // mutual exclusion
+                } else {
+                    selectedDests.remove(path)
+                }
+            }
+        )
+    }
+
+    // MARK: - Compare
+
     private func runCompare() {
-        guard sourceIdx != destIdx else { return }
+        guard !selectedSources.isEmpty else { return }
         isComparing = true
+        defer { isComparing = false }
 
-        let srcPath = volumes[sourceIdx].path
-        let dstPath = volumes[destIdx].path
+        // Source records: union of everything under any selected source path.
+        let srcRecords = model.records.filter { rec in
+            selectedSources.contains { src in rec.fullPath.hasPrefix(src) }
+        }
 
-        let srcRecords = model.records.filter { $0.fullPath.hasPrefix(srcPath) }
-        let dstRecords = model.records.filter { $0.fullPath.hasPrefix(dstPath) }
+        // Destination records: either explicit selection, or "everything outside source set" for audit.
+        let dstRecords: [VideoRecord]
+        let destLabel: String
+        if selectedDests.isEmpty {
+            dstRecords = model.records.filter { rec in
+                !selectedSources.contains { src in rec.fullPath.hasPrefix(src) }
+            }
+            destLabel = "any volume outside the source set"
+        } else {
+            dstRecords = model.records.filter { rec in
+                selectedDests.contains { dst in rec.fullPath.hasPrefix(dst) }
+            }
+            let sortedDests = selectedDests.sorted()
+            destLabel = sortedDests.map { URL(fileURLWithPath: $0).lastPathComponent }.joined(separator: ", ")
+        }
+
+        // Copy is only meaningful when exactly one source and exactly one dest are picked:
+        //  - Need single source for the relative-path logic in VolumeRescueOperation
+        //  - Need single dest for a concrete target directory
+        // Everything else is "audit" (report-only).
+        let canCopy = selectedSources.count == 1 && selectedDests.count == 1
+        let srcPath: String
+        if canCopy, let s = selectedSources.first {
+            srcPath = s
+        } else {
+            srcPath = selectedSources.sorted().map { URL(fileURLWithPath: $0).lastPathComponent }.joined(separator: ", ")
+        }
+        let dstPath = canCopy ? (selectedDests.first ?? "") : ""
 
         result = VolumeComparer.compare(
             sourceRecords: srcRecords,
             destRecords: dstRecords,
             sourcePath: srcPath,
-            destPath: dstPath
+            destPath: dstPath,
+            destLabel: destLabel,
+            isAuditMode: !canCopy
         )
-        isComparing = false
     }
 }
 

@@ -67,9 +67,8 @@
 
 <h1>VideoScan — code-health trend</h1>
 <div class="sub">
-  Auto-updated on every CI run (main branch pushes). Data:
-  <a href="https://github.com/musicalengineer/VideoScan/blob/metrics/metrics/history.jsonl" target="_blank">history.jsonl</a>
-  on the <code>metrics</code> branch.
+  Local dashboard. Run <code>scripts/dashboard.sh</code> to fetch the latest
+  CI metrics from the private <code>metrics</code> branch and open this page.
 </div>
 
 <div id="status">Loading metrics…</div>
@@ -89,14 +88,10 @@
 
 <script>
 // ------ config ---------------------------------------------------------
-const OWNER  = "musicalengineer";
-const REPO   = "VideoScan";
-const BRANCH = "metrics";
-const PATH   = "metrics/history.jsonl";
-
-// Raw content URL. Cache-bust via ?t=now so a fresh CI run shows up
-// without manual refresh-bypass.
-const URL = `https://raw.githubusercontent.com/${OWNER}/${REPO}/${BRANCH}/${PATH}?t=${Date.now()}`;
+// Local mode: scripts/dashboard.sh pulls the latest history.jsonl from
+// the `metrics` branch and drops it beside this file. Cache-busted via
+// ?t=now so reloads always see the newest copy.
+const URL = `./history.jsonl?t=${Date.now()}`;
 
 // ------ helpers --------------------------------------------------------
 const $status = document.getElementById("status");

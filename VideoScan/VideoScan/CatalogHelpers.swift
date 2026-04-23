@@ -201,7 +201,7 @@ struct CatalogToolbar<Dashboard: View>: View {
             HStack(spacing: 4) {
                 Image(systemName: "magnifyingglass")
                     .foregroundColor(.secondary)
-                TextField("Search files, codecs, notes…", text: $searchText)
+                TextField("Search filenames…", text: $searchText)
                     .textFieldStyle(.plain)
                     .frame(width: 160)
                 if !searchText.isEmpty {
@@ -327,18 +327,11 @@ struct CatalogContent: View {
             }
         }
         if !searchText.isEmpty {
+            // Filename-only search (Finder-like). Users searching "matt" expect
+            // files literally named *matt*, not files that happen to live in a
+            // "Matthew" directory or have "matte" appear in some codec note.
             let q = searchText.lowercased()
-            out = out.filter {
-                $0.filename.lowercased().contains(q) ||
-                $0.directory.lowercased().contains(q) ||
-                $0.streamTypeRaw.lowercased().contains(q) ||
-                $0.isPlayable.lowercased().contains(q) ||
-                $0.notes.lowercased().contains(q) ||
-                $0.videoCodec.lowercased().contains(q) ||
-                $0.duplicateDisposition.rawValue.lowercased().contains(q) ||
-                $0.duplicateBestMatchFilename.lowercased().contains(q) ||
-                $0.duplicateReasons.lowercased().contains(q)
-            }
+            out = out.filter { $0.filename.lowercased().contains(q) }
         }
         if showPairsOnly {
             // Only show records that have a correlated partner
@@ -608,6 +601,13 @@ struct CatalogContent: View {
                     // Volume info — lower left
                     if let rec = selectedRecord {
                         VStack(alignment: .leading, spacing: 4) {
+                            // Finder-like selection count, above volume name
+                            if !selectedIDs.isEmpty {
+                                Text("\(selectedIDs.count) selected")
+                                    .font(.system(size: 24, weight: .bold))
+                                    .foregroundColor(.primary)
+                                    .monospacedDigit()
+                            }
                             HStack(spacing: 5) {
                                 Image(systemName: "externaldrive.fill")
                                     .font(.system(size: 14))
@@ -1361,5 +1361,66 @@ struct DiscoverVolumesSheet: View {
     private func refresh() {
         volumes = model.discoverVolumes()
         selected = []
+    }
+}
+
+// MARK: - Scan Options Menu
+
+/// Toolbar menu for toggling what the walker descends into and two perf
+/// shortcuts. All toggles are applied at scan start (not mid-scan), so the
+/// next "Scan All" reflects the new policy. Defaults = aggressive skip
+/// (only descend where family media plausibly lives).
+struct ScanOptionsMenu: View {
+    @ObservedObject var model: VideoScanModel
+
+    /// Binding wrapper that saves to UserDefaults on every toggle, so the
+    /// user's preference survives relaunch without an explicit "Save" step.
+    private func toggle(_ keyPath: WritableKeyPath<ScanOptions, Bool>) -> Binding<Bool> {
+        Binding(
+            get: { model.scanOptions[keyPath: keyPath] },
+            set: { newVal in
+                model.scanOptions[keyPath: keyPath] = newVal
+                model.scanOptions.save()
+            }
+        )
+    }
+
+    var body: some View {
+        Menu {
+            Toggle("Skip System Files", isOn: toggle(\.skipSystemFiles))
+            Toggle("Skip Media Bundles", isOn: toggle(\.skipMediaBundles))
+            Toggle("Skip Small Files",   isOn: toggle(\.skipSmallFiles))
+            Toggle("Skip Checksums",     isOn: toggle(\.skipChecksums))
+
+            Divider()
+
+            Button("Fast Defaults") {
+                model.scanOptions = .fastDefaults
+                model.scanOptions.save()
+            }
+            .disabled(model.scanOptions == .fastDefaults)
+
+            Button("Scan Everything (Slower)") {
+                model.scanOptions = .thorough
+                model.scanOptions.save()
+            }
+            .disabled(model.scanOptions == .thorough)
+        } label: {
+            HStack(spacing: 4) {
+                Label("Scan Options", systemImage: "slider.horizontal.3")
+                // Accent-colored dot when the user has deviated from the
+                // fast-path defaults — visible at a glance.
+                if model.scanOptions.isCustomized {
+                    Circle()
+                        .fill(Color.accentColor)
+                        .frame(width: 6, height: 6)
+                }
+            }
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help(model.scanOptions.isCustomized
+              ? "Non-default scan policy (applies on next scan)"
+              : "What to skip during scan (applies on next scan)")
     }
 }

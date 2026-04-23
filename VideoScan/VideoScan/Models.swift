@@ -152,6 +152,13 @@ class VideoRecord: Identifiable, Codable {
     /// machine's exported catalog so the UI can show "from <host>".
     var sourceHost: String = ""
 
+    /// Provenance captured at scan time: which machine ran the scan, what
+    /// kind of volume the file lived on (local/smb/nfs/afp), the volume's
+    /// stable UUID if available, and the remote server name for network
+    /// mounts. Populated automatically in ScanEngine.probeFile; refreshed
+    /// on every rescan so old records backfill naturally.
+    var scanContext: ScanContext = ScanContext()
+
     var streamType: StreamType {
         StreamType(rawValue: streamTypeRaw) ?? .ffprobeFailed
     }
@@ -206,6 +213,7 @@ class VideoRecord: Identifiable, Codable {
         case duplicateGroupID, duplicateConfidence, duplicateDisposition
         case duplicateReasons, duplicateBestMatchFilename, duplicateGroupCount
         case sourceHost
+        case scanContext
     }
 
     required init(from decoder: Decoder) throws {
@@ -260,6 +268,7 @@ class VideoRecord: Identifiable, Codable {
         duplicateBestMatchFilename  = try c.decodeIfPresent(String.self,               forKey: .duplicateBestMatchFilename) ?? ""
         duplicateGroupCount         = try c.decodeIfPresent(Int.self,                  forKey: .duplicateGroupCount) ?? 0
         sourceHost                  = try c.decodeIfPresent(String.self,               forKey: .sourceHost) ?? ""
+        scanContext                 = try c.decodeIfPresent(ScanContext.self,          forKey: .scanContext) ?? ScanContext()
     }
 
     func encode(to encoder: Encoder) throws {
@@ -314,6 +323,9 @@ class VideoRecord: Identifiable, Codable {
         try c.encode(duplicateBestMatchFilename,  forKey: .duplicateBestMatchFilename)
         try c.encode(duplicateGroupCount,         forKey: .duplicateGroupCount)
         try c.encode(sourceHost,                  forKey: .sourceHost)
+        if scanContext.isPopulated || scanContext.scannedAt != nil {
+            try c.encode(scanContext,             forKey: .scanContext)
+        }
     }
 
     var rowColor: Color {

@@ -435,7 +435,13 @@ struct PersonFinderView: View {
 
                 Spacer()
 
-                if model.jobs.count > 1 {
+                // Start All / Stop All visibility mirrors state:
+                // hide Start All once nothing is idle (matches "Stop All is
+                // disabled when nothing is active"), so the header doesn't
+                // dangle an enabled-looking Start button during a live search.
+                let anyIdle   = model.jobs.contains { $0.status.isIdle }
+                let anyActive = model.jobs.contains { $0.status.isActive }
+                if model.jobs.count > 1 && anyIdle {
                     Button(action: {
                         model.startAll()
                         if selectedJobID == nil { selectedJobID = model.jobs.first?.id }
@@ -444,14 +450,13 @@ struct PersonFinderView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.large)
-                    .disabled(model.jobs.isEmpty)
-
+                }
+                if model.jobs.count > 1 && anyActive {
                     Button(action: { model.stopAll() }) {
                         Label("Stop All", systemImage: "stop.fill")
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.large)
-                    .disabled(!model.jobs.contains { $0.status.isActive })
                 }
 
                 Divider().frame(height: 20)

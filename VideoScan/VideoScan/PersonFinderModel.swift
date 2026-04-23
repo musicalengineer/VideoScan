@@ -1612,24 +1612,27 @@ nonisolated func pfOrientedCGImage(from buffer: CVPixelBuffer,
 
 // MARK: - Video processing
 
-private nonisolated func pfProcessVideo(
+/// Bundle of reader + track metadata returned by `pfOpenVisionVideoReader`.
+private struct PFVisionReaderContext {
+    let reader: AVAssetReader
+    let trackOutput: AVAssetReaderTrackOutput
+    let duration: Double
+    let fps: Double
+    let orientation: CGImagePropertyOrientation
+    let transform: CGAffineTransform
+}
+
+/// Open and validate the video asset, returning a fully configured reader or
+/// logging + returning nil on any failure. Mirrors `openArcFaceVideoReader`.
+private func pfOpenVisionVideoReader(
     filePath: String,
-    prints: [VNFeaturePrintObservation],
-    settings: PersonFinderSettings,
+    filename: String,
     index: Int,
     total: Int,
-    pauseGate: PauseGate,
-    logFn: @escaping @Sendable (String) async -> Void,
-    progressFn: @escaping @Sendable (String) async -> Void,
-    frameFn: @escaping @Sendable (CGImage, [CGRect], [CGRect]) async -> Void,
-    distFn: @escaping @Sendable (Float) async -> Void,
-    visionStatsFn: @escaping @Sendable (Double, Double) async -> Void = { _, _ in },
-    previewRateFn: @escaping @Sendable () -> Int = { 5 }
-) async -> pfVideoResult? {
-    let filename = (filePath as NSString).lastPathComponent
+    logFn: @escaping @Sendable (String) async -> Void
+) async -> PFVisionReaderContext? {
     let asset = AVURLAsset(url: URL(fileURLWithPath: filePath),
                            options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
-
     let videoTrack: AVAssetTrack
     let duration: Double
     let fps: Double
@@ -1645,26 +1648,19 @@ private nonisolated func pfProcessVideo(
         await logFn("[\(index)/\(total)] \(filename) — skipped (\(error.localizedDescription))")
         return nil
     }
-    let totalFrames = Int(duration * fps)
-    guard totalFrames > 0, fps > 0 else { return nil }
+    guard duration > 0, fps > 0, Int(duration * fps) > 0 else { return nil }
 
-    await progressFn(filename)
-    await logFn("[\(index)/\(total)] \(filename)  (\(pfFormatDuration(duration)), \(String(format:"%.1f",fps)) fps)")
-
-    // ── AVAssetReader: hardware-decode sequential stream (no seeks, no re-decode) ────────────
     let preferredTransform: CGAffineTransform
     do { preferredTransform = try await videoTrack.load(.preferredTransform) } catch {
         await logFn("[\(index)/\(total)] \(filename) — skipped (can't load transform)")
         return nil
     }
-    let orientation = pfOrientationFromTransform(preferredTransform)
 
     let reader: AVAssetReader
     do { reader = try AVAssetReader(asset: asset) } catch {
         await logFn("[\(index)/\(total)] \(filename) — skipped (AVAssetReader: \(error.localizedDescription))")
         return nil
     }
-    // Request YpCbCr — hardware decoder's native format; Vision and CIImage both accept it directly
     let trackOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: [
         kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
     ])
@@ -1675,133 +1671,220 @@ private nonisolated func pfProcessVideo(
         return nil
     }
 
+    return PFVisionReaderContext(
+        reader: reader,
+        trackOutput: trackOutput,
+        duration: duration,
+        fps: fps,
+        orientation: pfOrientationFromTransform(preferredTransform),
+        transform: preferredTransform
+    )
+}
+
+/// Per-frame result from the Vision feature-print pipeline.
+private struct PFVisionFrameMatch {
+    var hits: [(Double, Float)] = []
+    var matchedRects: [CGRect] = []
+    var unmatchedRects: [CGRect] = []
+    var facesDetected: Int = 0
+    var bestDistInFrame: Float = .greatestFiniteMagnitude
+}
+
+/// For each candidate face, generate a Vision feature print and compare against
+/// each reference print. Returns matched/unmatched rects and the best distance.
+private func pfVisionMatchCandidates(
+    timeSecs: Double,
+    orientedImage: CGImage,
+    candidates: [VNFaceObservation],
+    referencePrints: [VNFeaturePrintObservation],
+    settings: PersonFinderSettings
+) -> PFVisionFrameMatch {
+    var m = PFVisionFrameMatch()
+    for obs in candidates {
+        guard obs.confidence >= settings.minFaceConfidence,
+              let cropped = pfNormalizeFaceCrop(from: orientedImage, observation: obs),
+              let fp = pfGenerateFeaturePrint(for: cropped) else { continue }
+        m.facesDetected += 1
+
+        var best: Float = .greatestFiniteMagnitude
+        for ref in referencePrints {
+            var d: Float = 0
+            if (try? ref.computeDistance(&d, to: fp)) != nil, d < best { best = d }
+        }
+        if best < m.bestDistInFrame { m.bestDistInFrame = best }
+
+        if best <= settings.threshold {
+            m.hits.append((timeSecs, best))
+            m.matchedRects.append(obs.boundingBox)
+        } else {
+            m.unmatchedRects.append(obs.boundingBox)
+        }
+    }
+    return m
+}
+
+/// Cluster raw timestamped hits into padded, duration-filtered segments.
+/// Identical algorithm to the ArcFace variant.
+private func pfVisionClusterSegments(
+    hits: [(timeSecs: Double, distance: Float)],
+    settings: PersonFinderSettings,
+    fps: Double,
+    duration: Double
+) -> [pfSegment] {
+    guard !hits.isEmpty else { return [] }
+
+    let gapTol = Double(settings.frameStep) / fps * 3.0
+    let sorted = hits.sorted { $0.timeSecs < $1.timeSecs }
+    var raw: [(start: Double, end: Double, distances: [Float])] = []
+    var cur = (start: sorted[0].timeSecs, end: sorted[0].timeSecs, distances: [sorted[0].distance])
+    for h in sorted.dropFirst() {
+        if h.timeSecs - cur.end <= gapTol {
+            cur.end = h.timeSecs; cur.distances.append(h.distance)
+        } else {
+            raw.append(cur); cur = (h.timeSecs, h.timeSecs, [h.distance])
+        }
+    }
+    raw.append(cur)
+
+    var padded = raw.map { (max(0, $0.start - settings.pad),
+                           min(duration, $0.end + settings.pad),
+                           $0.distances) }
+    padded.sort { $0.0 < $1.0 }
+
+    var merged: [(Double, Double, [Float])] = []
+    for seg in padded {
+        if var last = merged.last, seg.0 <= last.1 {
+            last.1 = max(last.1, seg.1)
+            last.2.append(contentsOf: seg.2)
+            merged[merged.count - 1] = last
+        } else {
+            merged.append(seg)
+        }
+    }
+
+    return merged.compactMap { s in
+        guard (s.1 - s.0) >= settings.minDuration else { return nil }
+        let avg = s.2.reduce(0, +) / Float(s.2.count)
+        return pfSegment(startSecs: s.0, endSecs: s.1,
+                         bestDistance: s.2.min() ?? 0, avgDistance: avg)
+    }
+}
+
+private nonisolated func pfProcessVideo(
+    filePath: String,
+    prints: [VNFeaturePrintObservation],
+    settings: PersonFinderSettings,
+    index: Int,
+    total: Int,
+    pauseGate: PauseGate,
+    logFn: @escaping @Sendable (String) async -> Void,
+    progressFn: @escaping @Sendable (String) async -> Void,
+    frameFn: @escaping @Sendable (CGImage, [CGRect], [CGRect]) async -> Void,
+    distFn: @escaping @Sendable (Float) async -> Void,
+    visionStatsFn: @escaping @Sendable (Double, Double) async -> Void = { _, _ in },
+    previewRateFn: @escaping @Sendable () -> Int = { 5 }
+) async -> pfVideoResult? {
+    let filename = (filePath as NSString).lastPathComponent
+    guard let ctx = await pfOpenVisionVideoReader(
+        filePath: filePath, filename: filename, index: index, total: total, logFn: logFn
+    ) else { return nil }
+
+    await progressFn(filename)
+    await logFn("[\(index)/\(total)] \(filename)  (\(pfFormatDuration(ctx.duration)), \(String(format:"%.1f",ctx.fps)) fps)")
+
     var hits: [(timeSecs: Double, distance: Float)] = []
     var totalFacesDetected = 0
-    var bestDistEver: Float = .greatestFiniteMagnitude  // closest match seen regardless of threshold
-    let frameInterval = Double(settings.frameStep) / fps // seconds between processed frames
-    var lastProcessedTime = -frameInterval               // ensures first frame is processed
+    var bestDistEver: Float = .greatestFiniteMagnitude
+    let frameInterval = Double(settings.frameStep) / ctx.fps
+    var lastProcessedTime = -frameInterval
     var sampledSoFar = 0
-    let milestones: Set<Int> = [25, 50, 75]             // % checkpoints for console progress lines
+    let milestones: Set<Int> = [25, 50, 75]
     var loggedMilestones = Set<Int>()
-    var visionFrameTimes: [Double] = []                  // per-frame processing times for FPS tracking
+    var visionFrameTimes: [Double] = []
 
     while true {
-        if Task.isCancelled { reader.cancelReading(); break }
+        if Task.isCancelled { ctx.reader.cancelReading(); break }
 
-        // All Obj-C bridged objects (CMSampleBuffer, CVPixelBuffer, VNFaceObservation,
-        // CGImage, VNFeaturePrint) are created inside autoreleasepool so they drain
-        // each iteration instead of piling up until the function returns.
         var frameTime: Double = 0
-        var frameHits: [(Double, Float)] = []
-        var frameMatchedRects: [CGRect] = []
-        var frameUnmatchedRects: [CGRect] = []
-        var previewImage: CGImage? = nil
-        var facesThisFrame = 0
+        var frameMatch = PFVisionFrameMatch()
+        var previewImage: CGImage?
         var shouldSkip = false
 
         autoreleasepool {
-            guard let sampleBuffer = trackOutput.copyNextSampleBuffer() else {
-                shouldSkip = true  // end of stream
-                return
+            guard let sampleBuffer = ctx.trackOutput.copyNextSampleBuffer() else {
+                shouldSkip = true; return
             }
-
             let t = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
             guard t - lastProcessedTime >= frameInterval else {
-                shouldSkip = true  // not time yet, skip
-                frameTime = -1     // sentinel: skip but don't break
-                return
+                shouldSkip = true; frameTime = -1; return
             }
             lastProcessedTime = t
             frameTime = t
 
             guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-                shouldSkip = true
-                frameTime = -1
-                return
+                shouldSkip = true; frameTime = -1; return
             }
 
-            // Phase 1: face detection on raw CVPixelBuffer — Vision dispatches to ANE
             let frameStart = CFAbsoluteTimeGetCurrent()
-            let allFaces = pfDetectFacesInBuffer(pixelBuffer, orientation: orientation)
+            let allFaces = pfDetectFacesInBuffer(pixelBuffer, orientation: ctx.orientation)
             let candidates: [VNFaceObservation] = settings.requirePrimary
                 ? (allFaces.max(by: { ($0.boundingBox.width * $0.boundingBox.height) < ($1.boundingBox.width * $1.boundingBox.height) }).map { [$0] } ?? [])
                 : allFaces
 
             if !candidates.isEmpty,
-               let img = pfOrientedCGImage(from: pixelBuffer, transform: preferredTransform) {
-                // Phase 2: CGImage only when faces present
-                for obs in candidates {
-                    guard obs.confidence >= settings.minFaceConfidence else { continue }
-                    guard let cropped = pfNormalizeFaceCrop(from: img, observation: obs),
-                          let fp = pfGenerateFeaturePrint(for: cropped) else { continue }
-                    facesThisFrame += 1
-                    var best: Float = .greatestFiniteMagnitude
-                    for ref in prints { var d: Float = 0; if (try? ref.computeDistance(&d, to: fp)) != nil, d < best { best = d } }
-                    if best < bestDistEver { bestDistEver = best }
-                    if best <= settings.threshold {
-                        frameHits.append((t, best))
-                        frameMatchedRects.append(obs.boundingBox)
-                    } else {
-                        frameUnmatchedRects.append(obs.boundingBox)
-                    }
+               let img = pfOrientedCGImage(from: pixelBuffer, transform: ctx.transform) {
+                frameMatch = pfVisionMatchCandidates(
+                    timeSecs: t,
+                    orientedImage: img,
+                    candidates: candidates,
+                    referencePrints: prints,
+                    settings: settings
+                )
+                if frameMatch.bestDistInFrame < bestDistEver {
+                    bestDistEver = frameMatch.bestDistInFrame
                 }
-                totalFacesDetected += facesThisFrame
-                sampledSoFar += 1
-                visionFrameTimes.append(CFAbsoluteTimeGetCurrent() - frameStart)
+                totalFacesDetected += frameMatch.facesDetected
                 let rate = max(1, previewRateFn())
-                if sampledSoFar % rate == 0 { previewImage = img }
-            } else {
-                sampledSoFar += 1
-                visionFrameTimes.append(CFAbsoluteTimeGetCurrent() - frameStart)
+                if (sampledSoFar + 1) % rate == 0 { previewImage = img }
             }
+            sampledSoFar += 1
+            visionFrameTimes.append(CFAbsoluteTimeGetCurrent() - frameStart)
         }
-        // -- autoreleasepool drained: all Obj-C temporaries released --
 
-        // Periodic memory pressure check — every 5 sampled frames.
-        // With multiple concurrent videos on 4K content, a 30-frame window
-        // allows multi-GB spikes before the check fires. 5 frames keeps
-        // pressure response tight without measurable overhead (the check
-        // itself is a single Mach VM stats call).
         if sampledSoFar > 0 && sampledSoFar % 5 == 0 {
             await pauseGate.waitIfPaused()
-            if Task.isCancelled { reader.cancelReading(); break }
+            if Task.isCancelled { ctx.reader.cancelReading(); break }
         }
 
         if shouldSkip {
-            if frameTime == -1 { continue }  // skip frame, keep going
-            else { break }                    // end of stream
+            if frameTime == -1 { continue } else { break }
         }
 
-        hits.append(contentsOf: frameHits)
+        hits.append(contentsOf: frameMatch.hits)
 
-        // Async calls outside autoreleasepool
         if let img = previewImage {
-            await frameFn(img, frameMatchedRects, frameUnmatchedRects)
+            await frameFn(img, frameMatch.matchedRects, frameMatch.unmatchedRects)
         }
 
-        // Publish Vision/ANE throughput stats every 10 sampled frames
         if visionFrameTimes.count >= 10 {
             let avg = visionFrameTimes.reduce(0, +) / Double(visionFrameTimes.count)
-            let currentFPS = avg > 0 ? 1.0 / avg : 0
-            await visionStatsFn(currentFPS, avg * 1000)  // fps, ms/frame
+            await visionStatsFn(avg > 0 ? 1.0 / avg : 0, avg * 1000)
             visionFrameTimes.removeAll(keepingCapacity: true)
         }
 
-        let pct = duration > 0 ? Int(frameTime / duration * 100) : 0
-        await progressFn("\(filename)  [t=\(String(format:"%.0f",frameTime))s / \(String(format:"%.0f",duration))s · \(hits.count) hit(s)]")
+        let pct = ctx.duration > 0 ? Int(frameTime / ctx.duration * 100) : 0
+        await progressFn("\(filename)  [t=\(String(format:"%.0f",frameTime))s / \(String(format:"%.0f",ctx.duration))s · \(hits.count) hit(s)]")
         for m in milestones where pct >= m && !loggedMilestones.contains(m) {
             loggedMilestones.insert(m)
             let distStr = bestDistEver < .greatestFiniteMagnitude ? String(format: "%.3f", bestDistEver) : "—"
-            await logFn("    \(m)% — t=\(String(format:"%.0f",frameTime))s/\(String(format:"%.0f",duration))s, \(totalFacesDetected) faces detected, \(hits.count) hit(s), best dist \(distStr)")
+            await logFn("    \(m)% — t=\(String(format:"%.0f",frameTime))s/\(String(format:"%.0f",ctx.duration))s, \(totalFacesDetected) faces detected, \(hits.count) hit(s), best dist \(distStr)")
             await distFn(bestDistEver)
         }
     }
 
-    // Final best-dist push so the dashboard always reflects the completed video
     await distFn(bestDistEver)
-
-    if reader.status == .failed {
-        await logFn("[\(index)/\(total)] \(filename) — reader error: \(reader.error?.localizedDescription ?? "unknown")")
+    if ctx.reader.status == .failed {
+        await logFn("[\(index)/\(total)] \(filename) — reader error: \(ctx.reader.error?.localizedDescription ?? "unknown")")
     }
 
     let distStr = bestDistEver < .greatestFiniteMagnitude ? String(format: "%.3f", bestDistEver) : "—"
@@ -1809,40 +1892,17 @@ private nonisolated func pfProcessVideo(
     guard !hits.isEmpty else {
         await logFn("  [\(index)/\(total)] \(filename) → no match  (faces detected: \(totalFacesDetected), best dist: \(distStr), threshold: \(String(format: "%.3f", settings.threshold)))")
         return pfVideoResult(filename: filename, filePath: filePath,
-                             durationSeconds: duration, fps: fps, totalHits: 0, segments: [])
+                             durationSeconds: ctx.duration, fps: ctx.fps, totalHits: 0, segments: [])
     }
 
-    // Cluster hits into segments
-    let gapTol = Double(settings.frameStep) / fps * 3.0
-    let sorted = hits.sorted { $0.timeSecs < $1.timeSecs }
-    var raw: [(start: Double, end: Double, distances: [Float])] = []
-    var cur = (start: sorted[0].timeSecs, end: sorted[0].timeSecs, distances: [sorted[0].distance])
-    for h in sorted.dropFirst() {
-        if h.timeSecs - cur.end <= gapTol { cur.end = h.timeSecs; cur.distances.append(h.distance) }
-        else { raw.append(cur); cur = (h.timeSecs, h.timeSecs, [h.distance]) }
-    }
-    raw.append(cur)
-
-    var padded = raw.map { (max(0, $0.start - settings.pad), min(duration, $0.end + settings.pad), $0.distances) }
-    padded.sort { $0.0 < $1.0 }
-    var merged: [(Double, Double, [Float])] = []
-    for seg in padded {
-        if var last = merged.last, seg.0 <= last.1 {
-            last.1 = max(last.1, seg.1); last.2.append(contentsOf: seg.2); merged[merged.count - 1] = last
-        } else { merged.append(seg) }
-    }
-
-    let segs: [pfSegment] = merged.compactMap { s in
-        guard (s.1 - s.0) >= settings.minDuration else { return nil }
-        let avg = s.2.reduce(0,+) / Float(s.2.count)
-        return pfSegment(startSecs: s.0, endSecs: s.1, bestDistance: s.2.min() ?? 0, avgDistance: avg)
-    }
+    let segs = pfVisionClusterSegments(hits: hits, settings: settings, fps: ctx.fps, duration: ctx.duration)
     let presence = segs.reduce(0) { $0 + ($1.endSecs - $1.startSecs) }
     let bestHitDist = hits.map(\.distance).min() ?? 0
     await logFn("  [\(index)/\(total)] \(filename) → \(hits.count) hits, \(segs.count) seg(s), \(pfFormatDuration(presence)) presence  (faces: \(totalFacesDetected), best dist: \(String(format: "%.3f", bestHitDist)))")
 
     return pfVideoResult(filename: filename, filePath: filePath,
-                         durationSeconds: duration, fps: fps, totalHits: hits.count, segments: segs)
+                         durationSeconds: ctx.duration, fps: ctx.fps,
+                         totalHits: hits.count, segments: segs)
 }
 
 // MARK: - dlib/Python video processing

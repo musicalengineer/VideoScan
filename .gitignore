@@ -34,3 +34,7 @@ models/
 # The pre-commit hook also rejects any staged file > 75 MB
 tests/fixtures/videos/*-test-*.mxf
 !tests/fixtures/videos/test_*
+
+# Local dashboard cache — populated by scripts/dashboard.sh from
+# the `metrics` branch. Never commit; it's a local snapshot.
+docs/history.jsonl

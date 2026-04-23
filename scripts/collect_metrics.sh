@@ -30,9 +30,11 @@ LOGIC_LINES="null"
 LOGIC_COVERED="null"
 
 if [ -d "TestResults.xcresult" ]; then
-    # Overall %  (e.g. "6.69% (2107/31493)") — extract the percentage only.
+    # Overall %  xccov line looks like: "0  VideoScan.app  41  8.39% (2851/33989)"
+    # After gsub("%","") NF=5; the percent is NF-1 (field 4). Don't use NF-2 —
+    # that's the function count.
     COV_OVERALL=$(xcrun xccov view --report --only-targets TestResults.xcresult 2>/dev/null \
-        | awk '/VideoScan\.app/ { gsub("%",""); print $(NF-2); exit }')
+        | awk '/VideoScan\.app/ { gsub("%",""); print $(NF-1); exit }')
     COV_OVERALL="${COV_OVERALL:-null}"
 
     # Logic-only: sum covered/total across files that do NOT match view patterns.
@@ -47,12 +49,18 @@ if [ -d "TestResults.xcresult" ]; then
             # Anything ending in View, Window, Sheet, Dashboard, App, or Bar
             # before .swift is considered a view file and excluded.
             $2 ~ /(View|Window|Sheet|Dashboard|App|Bar|Row|SplitView)\.swift$/ { next }
-            # Field 3 is "pct%", field 4 is "(covered/total)"
+            # Per-file xccov output: "ID  path  #funcs  pct%  (cov/tot)"
+            # The (c/t) fragment is in $5, not $4. Use 2-arg match() +
+            # RSTART/RLENGTH so this works on macOS BSD awk (gawk-only
+            # 3-arg match(str,re,arr) is not portable).
             {
-                match($4, /\(([0-9]+)\/([0-9]+)\)/, parts)
-                if (parts[1] != "" && parts[2] != "") {
-                    cov += parts[1]
-                    tot += parts[2]
+                if (match($5, /\([0-9]+\/[0-9]+\)/)) {
+                    frag = substr($5, RSTART+1, RLENGTH-2)
+                    split(frag, a, "/")
+                    if (a[1] != "" && a[2] != "") {
+                        cov += a[1]
+                        tot += a[2]
+                    }
                 }
             }
             END {

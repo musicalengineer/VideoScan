@@ -6,6 +6,108 @@ import Darwin
 import AVFoundation
 import SQLite3
 
+// MARK: - Scan Options
+
+/// User-toggleable scan policy. Every toggle reads "Skip X" — consistent
+/// polarity, no double negatives. Defaults match the fast-path
+/// recommendation (three out of four "Skip" toggles ON).
+struct ScanOptions: Equatable {
+    /// Skip macOS/Windows/BSD system trees, app bundles, dev caches,
+    /// Windows recycle bins. ON by default — family videos don't live in
+    /// /System, node_modules, or $RECYCLE.BIN.
+    var skipSystemFiles: Bool = true
+    /// Skip `.photoslibrary`, `.fcpbundle`, `.imovielibrary`, etc. OFF by
+    /// default — these *are* where user-created family media lives. Flip
+    /// ON for a faster filesystem-only pass that ignores library bundles.
+    var skipMediaBundles: Bool = false
+    /// Skip files < 1 MB (stubs, thumbnails, .DS_Store-ish junk). ON by
+    /// default — 1 MB is well under any real family video.
+    var skipSmallFiles: Bool = true
+    /// Skip partial-MD5 checksum. OFF by default — hashing lets Analyze
+    /// Duplicates find copies later. Flip ON for a faster SMB scan when
+    /// you don't care about dup detection this pass.
+    var skipChecksums: Bool = false
+
+    // MARK: Persistence
+    private static let defaults = UserDefaults.standard
+    private static let prefix = "scanopts_"
+
+    static func restored() -> ScanOptions {
+        let d = defaults; let p = prefix
+        var s = ScanOptions()
+        if d.object(forKey: "\(p)skipSystemFiles") != nil  { s.skipSystemFiles  = d.bool(forKey: "\(p)skipSystemFiles") }
+        if d.object(forKey: "\(p)skipMediaBundles") != nil { s.skipMediaBundles = d.bool(forKey: "\(p)skipMediaBundles") }
+        if d.object(forKey: "\(p)skipSmallFiles") != nil   { s.skipSmallFiles   = d.bool(forKey: "\(p)skipSmallFiles") }
+        if d.object(forKey: "\(p)skipChecksums") != nil    { s.skipChecksums    = d.bool(forKey: "\(p)skipChecksums") }
+        return s
+    }
+
+    func save() {
+        let d = Self.defaults; let p = Self.prefix
+        d.set(skipSystemFiles,  forKey: "\(p)skipSystemFiles")
+        d.set(skipMediaBundles, forKey: "\(p)skipMediaBundles")
+        d.set(skipSmallFiles,   forKey: "\(p)skipSmallFiles")
+        d.set(skipChecksums,    forKey: "\(p)skipChecksums")
+    }
+
+    /// True when the user has deviated from the recommended fast-path
+    /// defaults. Used to badge the menu icon so a non-default policy is
+    /// visible at a glance.
+    var isCustomized: Bool { self != ScanOptions() }
+
+    /// The recommended fast-path preset — all three safe skips ON,
+    /// checksums OFF. Same as default initializer.
+    static let fastDefaults = ScanOptions()
+
+    /// Scan everything, hash everything. Use when you suspect a rare find
+    /// lives somewhere weird. Slower — walks system trees and hashes all.
+    static let thorough = ScanOptions(
+        skipSystemFiles: false,
+        skipMediaBundles: false,
+        skipSmallFiles: false,
+        skipChecksums: false
+    )
+}
+
+// MARK: - Skip List Categories (static — walkers consult ScanOptions to decide)
+
+enum SkipCategories {
+    /// Always-skipped: Finder metadata that never contains media and cannot
+    /// be toggled on. These are filesystem plumbing, not content.
+    static let finderMetaDirs: Set<String> = [
+        ".spotlight-v100", ".fseventsd", ".trashes", ".temporaryitems",
+        ".documentrevisions-v100", ".vol", "automount"
+    ]
+    /// macOS + BSD system trees. `library` is here because ~/Library holds
+    /// app containers, never home videos. Togglable via includeSystemTrees.
+    static let systemDirs: Set<String> = [
+        "system", "library", "applications", "usr", "bin", "sbin",
+        "private", "network", "cores", "dev", "opt", "var", "tmp",
+        "etc", "volumes",
+        "home", "net", "lost+found"
+    ]
+    /// Windows-formatted-volume leftovers (seen on osx10.8). Togglable.
+    static let windowsTrashDirs: Set<String> = [
+        "$recycle.bin", "recycler", "system volume information"
+    ]
+    /// Dev / build caches. Togglable.
+    static let devCacheDirs: Set<String> = [
+        "node_modules", ".git", ".svn", ".hg", "__pycache__",
+        ".venv", "venv", ".cache", ".npm", ".cocoapods"
+    ]
+    /// Opaque OS/app bundles. Togglable via includeAppBundles.
+    static let appBundleExtensions: Set<String> = [
+        "app", "bundle", "framework", "kext", "plugin", "component",
+        "mdimporter", "osax", "xpc", "lproj", "pkg", "mpkg", "docset",
+        "pluginkit", "systemextension", "appex"
+    ]
+    /// User-media libraries. IN by default (opt-out via skipMediaLibraries).
+    static let mediaLibraryExtensions: Set<String> = [
+        "photoslibrary", "imovielibrary", "fcpbundle", "musiclibrary",
+        "tvlibrary", "aplibrary", "finalcutprojectlibrary"
+    ]
+}
+
 // MARK: - Performance Settings
 
 struct ScanPerformanceSettings {
@@ -88,10 +190,35 @@ final class VideoScanModel: ObservableObject {
         "f4v","3gp","3g2","dv","dif","braw","r3d","vro","mod","tod"
     ]
 
-    let skipDirs: Set<String> = [
-        ".spotlight-v100",".fseventsd",".trashes",".temporaryitems",
-        ".documentrevisions-v100",".vol","automount"
-    ]
+    /// User-toggleable scan policy. Bound to the Scan Options menu. Walkers
+    /// snapshot this at scan start via `skipDirsSnapshot()` /
+    /// `skipBundleExtensionsSnapshot()` so toggling a category takes effect
+    /// on the next scan (not mid-flight). Kept @Published so the menu
+    /// checkmarks update live.
+    @Published var scanOptions: ScanOptions = .restored()
+
+    /// Snapshot the current skip-directory set from scanOptions.
+    /// Must be called on the main actor (returns a Sendable Set<String>
+    /// that nonisolated walkers can then capture safely).
+    func skipDirsSnapshot() -> Set<String> {
+        var s = SkipCategories.finderMetaDirs  // always skipped
+        if scanOptions.skipSystemFiles {
+            s.formUnion(SkipCategories.systemDirs)
+            s.formUnion(SkipCategories.windowsTrashDirs)
+            s.formUnion(SkipCategories.devCacheDirs)
+        }
+        return s
+    }
+
+    /// Snapshot the current skip-bundle-extensions set from scanOptions.
+    /// App bundles fold into "system files"; media bundles are a separate
+    /// toggle (since media libraries are where user content often lives).
+    func skipBundleExtensionsSnapshot() -> Set<String> {
+        var s = Set<String>()
+        if scanOptions.skipSystemFiles  { s.formUnion(SkipCategories.appBundleExtensions) }
+        if scanOptions.skipMediaBundles { s.formUnion(SkipCategories.mediaLibraryExtensions) }
+        return s
+    }
 
     private var scanTask: Task<Void, Never>?
     private var combineTask: Task<Void, Never>?
@@ -1084,33 +1211,9 @@ final class VideoScanModel: ObservableObject {
             log("Discovering files on \(volName)…")
         }
 
-        // Phase 1: Discover files
-        let files = await walkDirectory(root: root)
-        if Task.isCancelled { target.status = .stopped; target.stopElapsedTimer(); updateGlobalScanState(); return }
-
-        target.filesFound = files.count
-        target.status = .scanning
-        log("  Found \(files.count) video files on \(volName)")
-        // Update dashboard with discovered count and flip into probing phase.
-        if let idx = dashboard.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
-            dashboard.volumeProgress[idx].totalFiles = files.count
-            dashboard.volumeProgress[idx].isWalking = false
-        }
-        dashboard.scanTotal += files.count
-        dashboard.scanPhase = .probing
-
-        if files.isEmpty {
-            log("  No video files found on \(volName).")
-            target.status = .complete
-            target.lastScannedDate = Date()
-            target.stopElapsedTimer()
-            updateGlobalScanState()
-            return
-        }
-
-        // Phase 2: Probe files
-        let probesLimit = perfSettings.probesPerVolume
-
+        // Mount RAM disk up-front for network scans so ffprobe prefetch works
+        // from the first probed file AND the user can see /Volumes/VideoScan_Temp
+        // appear right away instead of waiting for a long walk to finish.
         var ramMountPoint: String? = nil
         if rootIsNetwork {
             let ramDiskMB = perfSettings.ramDiskGB * 1024
@@ -1123,17 +1226,60 @@ final class VideoScanModel: ObservableObject {
             }
         }
 
-        var targetRecords: [VideoRecord] = []
+        // Streaming walk + interleaved probe (producer-consumer).
+        //
+        // The walker runs detached and yields URLs through an AsyncStream. A
+        // task group consumes each URL, submitting a prober task that takes a
+        // semaphore permit. The first media file gets probed while the walker
+        // is still enumerating directories — real SMB content reads start
+        // within seconds of scan start, which keeps the remote session warm.
+        // Pure metadata walks (the old architecture) let the session idle out
+        // on slow remotes, after which every subsequent probe fails with
+        // "File was discovered during scan but is no longer accessible".
+        dashboard.scanPhase = .probing
+        target.status = .scanning
+
+        let probesLimit = perfSettings.probesPerVolume
         let sem = AsyncSemaphore(limit: probesLimit)
-        let totalFiles = files.count
-        // Track milestones to avoid per-file UI updates (beachball prevention)
+        // Capture perf toggles at scan start — changing mid-scan shouldn't
+        // create mixed hashed/unhashed records in a single volume's catalog.
+        let skipHashingCaptured = scanOptions.skipChecksums
+
+        var targetRecords: [VideoRecord] = []
         let milestones = Set([10, 25, 50, 75, 90, 100])
         var loggedMilestones: Set<Int> = []
         var completedCount = 0
+        var discoveredCount = 0
+        var consecutiveNotAccessible = 0
+        let abortAfter = 50  // abort scan if the mount disappears mid-probe
+
+        let stream = walkDirectoryStream(
+            root: root,
+            skipDirs: skipDirsSnapshot(),
+            skipBundleExtensions: skipBundleExtensionsSnapshot(),
+            skipSmallFiles: scanOptions.skipSmallFiles
+        ) { [weak self] currentDir in
+            // Heartbeat: surface the current directory on the RT scan window.
+            Task { @MainActor in
+                guard let self else { return }
+                self.dashboard.scanCurrentVolume = volName
+                self.dashboard.scanCurrentFile = "📂 " + currentDir.lastPathComponent
+            }
+        }
 
         await withTaskGroup(of: VideoRecord.self) { probeGroup in
-            for (_, url) in files.enumerated() {
+            // Producer side: as URLs arrive from the walker, submit prober tasks.
+            for await url in stream {
                 if Task.isCancelled { break }
+                discoveredCount += 1
+                let currentDiscovered = discoveredCount
+                await MainActor.run {
+                    let ds = self.dashboard
+                    ds.scanTotal += 1
+                    if let idx = ds.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
+                        ds.volumeProgress[idx].totalFiles = currentDiscovered
+                    }
+                }
                 probeGroup.addTask { [self] in
                     await target.pauseGate.waitIfPaused()
                     return await sem.withPermit {
@@ -1154,7 +1300,8 @@ final class VideoScanModel: ObservableObject {
                         let rec = await self.probeFileWithTimeout(
                             url: url,
                             prefetchToRAM: rootIsNetwork,
-                            ramPath: ramMountPoint
+                            ramPath: ramMountPoint,
+                            skipHashing: skipHashingCaptured
                         )
                         await MainActor.run {
                             let ds = self.dashboard
@@ -1182,13 +1329,39 @@ final class VideoScanModel: ObservableObject {
                     }
                 }
             }
+
+            // Walker finished. Mark the volume no longer walking and publish
+            // the final discovered count for logging/UI.
+            let totalFiles = discoveredCount
+            target.filesFound = totalFiles
+            await MainActor.run {
+                if let idx = self.dashboard.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
+                    self.dashboard.volumeProgress[idx].isWalking = false
+                }
+            }
+            log("  Found \(totalFiles) video files on \(volName)")
+
+            // Consumer side: drain completed probers. If the mount dropped and
+            // everything is suddenly inaccessible, abort rather than burn
+            // timeouts on every remaining file.
             for await rec in probeGroup {
                 targetRecords.append(rec)
                 completedCount += 1
-                // Log ffprobe failures with detail
                 if rec.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
                     let detail = rec.notes.isEmpty ? "no detail available" : rec.notes
                     log("  ⚠ FAILED: \(rec.filename) — \(detail)")
+                    if rec.isPlayable == "File not found" {
+                        consecutiveNotAccessible += 1
+                        if consecutiveNotAccessible >= abortAfter {
+                            log("  ⛔ \(abortAfter) consecutive files inaccessible on \(volName) — volume likely unmounted. Aborting remaining probes.")
+                            probeGroup.cancelAll()
+                            break
+                        }
+                    } else {
+                        consecutiveNotAccessible = 0
+                    }
+                } else {
+                    consecutiveNotAccessible = 0
                 }
                 // Batch UI updates: only at milestones or every 20 files
                 let pct = totalFiles > 0 ? (completedCount * 100 / totalFiles) : 100
@@ -1203,6 +1376,16 @@ final class VideoScanModel: ObservableObject {
         }
         // Final count sync
         target.filesScanned = completedCount
+
+        if discoveredCount == 0 {
+            log("  No video files found on \(volName).")
+            if rootIsNetwork { await ramDisk.unmount() }
+            target.status = .complete
+            target.lastScannedDate = Date()
+            target.stopElapsedTimer()
+            updateGlobalScanState()
+            return
+        }
 
         // Unmount RAM disk if we mounted one
         if rootIsNetwork { await ramDisk.unmount() }
@@ -1285,96 +1468,66 @@ final class VideoScanModel: ObservableObject {
             }
         }
 
-        // ── Phase 1: Walk all directories in parallel to discover files ──
-        dashboard.scanPhase = .discovering
+        // Per-root streaming walk + interleaved probe (producer-consumer).
+        //
+        // Each root gets its own walker Task and its own prober pool. Probes
+        // begin as soon as the walker yields the first URL, so SMB content
+        // reads start within seconds and keep the remote session warm while
+        // the rest of the tree is enumerated. This replaces the old two-phase
+        // "walk everything, then probe everything" scheme that let long
+        // network walks idle out the session before probing could begin.
+        dashboard.scanPhase = .probing
         dashboard.volumeProgress = roots.map { root in
             VolumeProgress(rootPath: root, volumeName: URL(fileURLWithPath: root).lastPathComponent)
         }
-
-        var allVideoFiles: [(root: String, url: URL)] = []
-
-        await withTaskGroup(of: (String, [URL]).self) { group in
-            for root in roots {
-                let volName = URL(fileURLWithPath: root).lastPathComponent
-                group.addTask { [self] in
-                    let files = await self.walkDirectory(root: root) { currentDir, count, lastFile in
-                        // Heartbeat: stream walk progress to the dashboard so the
-                        // Realtime Catalog Scan window comes alive immediately
-                        // instead of looking frozen during long network walks.
-                        Task { @MainActor in
-                            let ds = self.dashboard
-                            ds.scanCurrentVolume = volName
-                            if let f = lastFile {
-                                ds.recordScanFile(volume: volName, filename: f.lastPathComponent)
-                            } else {
-                                ds.scanCurrentFile = "📂 " + currentDir.lastPathComponent
-                            }
-                            if let idx = ds.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
-                                ds.volumeProgress[idx].totalFiles = count
-                            }
-                        }
-                    }
-                    return (root, files)
-                }
-            }
-            for await (root, files) in group {
-                let volName = URL(fileURLWithPath: root).lastPathComponent
-                log("  Found \(files.count) video files on \(volName)")
-                // Update volume progress
-                if let idx = dashboard.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
-                    dashboard.volumeProgress[idx].totalFiles = files.count
-                    dashboard.volumeProgress[idx].isWalking = false
-                }
-                for f in files {
-                    allVideoFiles.append((root, f))
-                }
-            }
-        }
-
-        if Task.isCancelled {
-            await ramDisk.unmount()
-            dashboard.scanPhase = .idle
-            isScanning = false
-            return
-        }
-
-        dashboard.scanTotal = allVideoFiles.count
-        log("\nTotal: \(allVideoFiles.count) files across \(roots.count) location(s). Probing...\n")
-
-        if allVideoFiles.isEmpty {
-            log("No video files found.")
-            await ramDisk.unmount()
-            dashboard.scanPhase = .complete
-            isScanning = false
-            return
-        }
-
-        // ── Phase 2: Probe files ──
-        dashboard.scanPhase = .probing
         dashboard.startThroughputTimer()
-
-        var filesByRoot: [String: [URL]] = [:]
-        for (root, url) in allVideoFiles {
-            filesByRoot[root, default: []].append(url)
-        }
 
         var allRecords: [VideoRecord] = []
 
         // Capture settings on main actor before entering task group
         let probesLimit = perfSettings.probesPerVolume
+        let abortAfter = 50
+        let skipHashingCaptured = scanOptions.skipChecksums
+        let skipDirsCaptured = skipDirsSnapshot()
+        let skipBundleExtsCaptured = skipBundleExtensionsSnapshot()
+        let skipSmallFilesCaptured = scanOptions.skipSmallFiles
 
-        await withTaskGroup(of: Void.self) { group in
-            for (root, files) in filesByRoot {
-                let rootIsNetwork = self.isNetworkPath(root)
-                group.addTask { [self] in
+        await withTaskGroup(of: [VideoRecord].self) { rootGroup in
+            for root in roots {
+                rootGroup.addTask { [self] in
                     let volName = URL(fileURLWithPath: root).lastPathComponent
+                    let rootIsNetwork = self.isNetworkPath(root)
                     let sem = AsyncSemaphore(limit: probesLimit)
+                    var rootRecords: [VideoRecord] = []
+                    var discoveredCount = 0
+                    var consecutiveNotAccessible = 0
+
+                    let stream = self.walkDirectoryStream(
+                        root: root,
+                        skipDirs: skipDirsCaptured,
+                        skipBundleExtensions: skipBundleExtsCaptured,
+                        skipSmallFiles: skipSmallFilesCaptured
+                    ) { [weak self] currentDir in
+                        Task { @MainActor in
+                            guard let self else { return }
+                            self.dashboard.scanCurrentVolume = volName
+                            self.dashboard.scanCurrentFile = "📂 " + currentDir.lastPathComponent
+                        }
+                    }
 
                     await withTaskGroup(of: VideoRecord.self) { probeGroup in
-                        for (i, url) in files.enumerated() {
+                        for await url in stream {
                             if Task.isCancelled { break }
+                            discoveredCount += 1
+                            let currentDiscovered = discoveredCount
+                            await MainActor.run {
+                                let ds = self.dashboard
+                                ds.scanTotal += 1
+                                if let idx = ds.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
+                                    ds.volumeProgress[idx].totalFiles = currentDiscovered
+                                }
+                            }
                             probeGroup.addTask {
-                                // Pause gate: wait here if user (or memory pressure) paused
                                 await self.pauseGate.waitIfPaused()
                                 return await sem.withPermit {
                                     if Task.isCancelled {
@@ -1386,7 +1539,7 @@ final class VideoScanModel: ObservableObject {
                                         }
                                     }
                                     await MainActor.run {
-                                        self.log("  [\(volName)] [\(i+1)/\(files.count)] \(url.lastPathComponent)")
+                                        self.log("  [\(volName)] \(url.lastPathComponent)")
                                         self.dashboard.recordScanFile(
                                             volume: volName,
                                             filename: url.lastPathComponent
@@ -1395,7 +1548,8 @@ final class VideoScanModel: ObservableObject {
                                     let rec = await self.probeFile(
                                         url: url,
                                         prefetchToRAM: rootIsNetwork,
-                                        ramPath: ramMountPoint
+                                        ramPath: ramMountPoint,
+                                        skipHashing: skipHashingCaptured
                                     )
                                     await MainActor.run {
                                         let ds = self.dashboard
@@ -1423,11 +1577,41 @@ final class VideoScanModel: ObservableObject {
                                 }
                             }
                         }
+
+                        // Walker finished for this root.
+                        let totalFiles = discoveredCount
+                        await MainActor.run {
+                            self.log("  Found \(totalFiles) video files on \(volName)")
+                            if let idx = self.dashboard.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
+                                self.dashboard.volumeProgress[idx].isWalking = false
+                            }
+                        }
+
                         for await rec in probeGroup {
-                            allRecords.append(rec)
+                            rootRecords.append(rec)
+                            if rec.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
+                                if rec.isPlayable == "File not found" {
+                                    consecutiveNotAccessible += 1
+                                    if consecutiveNotAccessible >= abortAfter {
+                                        await MainActor.run {
+                                            self.log("  ⛔ \(abortAfter) consecutive files inaccessible on \(volName) — volume likely unmounted. Aborting remaining probes.")
+                                        }
+                                        probeGroup.cancelAll()
+                                        break
+                                    }
+                                } else {
+                                    consecutiveNotAccessible = 0
+                                }
+                            } else {
+                                consecutiveNotAccessible = 0
+                            }
                         }
                     }
+                    return rootRecords
                 }
+            }
+            for await rootRecords in rootGroup {
+                allRecords.append(contentsOf: rootRecords)
             }
         }
 
@@ -1471,15 +1655,20 @@ final class VideoScanModel: ObservableObject {
         isScanning = false
     }
 
-    /// Walk a single directory tree and return all video file URLs
+    /// Walk a single directory tree and return all video file URLs. Caller
+    /// (on main actor) passes pre-snapshotted skip sets so this method can
+    /// stay nonisolated.
     nonisolated func walkDirectory(
         root: String,
+        skipDirs: Set<String>,
+        skipBundleExtensions: Set<String>,
+        skipSmallFiles: Bool,
         onProgress: (@Sendable (_ currentDir: URL, _ filesFoundSoFar: Int, _ lastFile: URL?) -> Void)? = nil
     ) async -> [URL] {
         // Run on a detached task to avoid blocking the cooperative thread pool.
         // FileManager calls are synchronous and can stall on network volumes.
-        let skipDirs = self.skipDirs
         let videoExtensions = self.videoExtensions
+        let minFileBytes: Int = skipSmallFiles ? 1_048_576 : 0
         let result = await Task.detached(priority: .userInitiated) {
             var videoFiles: [URL] = []
             let fm = FileManager.default
@@ -1497,7 +1686,7 @@ final class VideoScanModel: ObservableObject {
                 do {
                     contents = try fm.contentsOfDirectory(
                         at: currentDir,
-                        includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isReadableKey],
+                        includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isReadableKey, .fileSizeKey],
                         options: [.skipsHiddenFiles]
                     )
                 } catch {
@@ -1507,11 +1696,14 @@ final class VideoScanModel: ObservableObject {
                 for url in contents {
                     if Task.isCancelled { break }
                     guard let rv = try? url.resourceValues(
-                        forKeys: [.isDirectoryKey, .isRegularFileKey, .isReadableKey]
+                        forKeys: [.isDirectoryKey, .isRegularFileKey, .isReadableKey, .fileSizeKey]
                     ) else { continue }
 
                     if rv.isDirectory == true {
-                        if !skipDirs.contains(url.lastPathComponent.lowercased()) {
+                        let dirName = url.lastPathComponent.lowercased()
+                        let dirExt = url.pathExtension.lowercased()
+                        if !skipDirs.contains(dirName)
+                            && !skipBundleExtensions.contains(dirExt) {
                             dirStack.append(url)
                         }
                     } else if rv.isRegularFile == true && rv.isReadable == true {
@@ -1520,6 +1712,9 @@ final class VideoScanModel: ObservableObject {
                             // .ts and .mts collide with TypeScript — verify MPEG-TS
                             // magic byte (0x47 sync byte) before including.
                             if (ext == "ts" || ext == "mts") && !Self.isMpegTS(url) {
+                                continue
+                            }
+                            if minFileBytes > 0, let sz = rv.fileSize, sz < minFileBytes {
                                 continue
                             }
                             videoFiles.append(url)
@@ -1531,6 +1726,84 @@ final class VideoScanModel: ObservableObject {
             return videoFiles
         }.value
         return result
+    }
+
+    /// Walk a directory tree and yield video file URLs as they are discovered
+    /// via an `AsyncStream<URL>`. The walker runs on a detached task so FileManager
+    /// I/O doesn't block the cooperative pool. Consumers receive URLs one at a
+    /// time and can begin probing long before the full walk completes.
+    ///
+    /// This is the network-friendly variant: a pure metadata walk over SMB can
+    /// take 30-90 minutes on old HDDs, long enough for the remote to let the
+    /// SMB session idle out. Interleaving content reads (probe) with directory
+    /// enumeration keeps the session warm end-to-end.
+    nonisolated func walkDirectoryStream(
+        root: String,
+        skipDirs: Set<String>,
+        skipBundleExtensions: Set<String>,
+        skipSmallFiles: Bool,
+        onDirectoryEntered: (@Sendable (_ currentDir: URL) -> Void)? = nil
+    ) -> AsyncStream<URL> {
+        let videoExtensions = self.videoExtensions
+        // Capture at walk start so mid-scan toggles don't corrupt the walk.
+        // 1 MB threshold — matches the skipSmallFiles heuristic.
+        let minFileBytes: Int = skipSmallFiles ? 1_048_576 : 0
+        return AsyncStream(URL.self, bufferingPolicy: .unbounded) { continuation in
+            let walker = Task.detached(priority: .userInitiated) {
+                let fm = FileManager.default
+                var dirStack: [URL] = [URL(fileURLWithPath: root)]
+                while !dirStack.isEmpty {
+                    if Task.isCancelled { break }
+                    let currentDir = dirStack.removeLast()
+                    onDirectoryEntered?(currentDir)
+
+                    let contents: [URL]
+                    do {
+                        contents = try fm.contentsOfDirectory(
+                            at: currentDir,
+                            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isReadableKey, .fileSizeKey],
+                            options: [.skipsHiddenFiles]
+                        )
+                    } catch {
+                        continue
+                    }
+
+                    for url in contents {
+                        if Task.isCancelled { break }
+                        guard let rv = try? url.resourceValues(
+                            forKeys: [.isDirectoryKey, .isRegularFileKey, .isReadableKey, .fileSizeKey]
+                        ) else { continue }
+
+                        if rv.isDirectory == true {
+                            let dirName = url.lastPathComponent.lowercased()
+                            let dirExt = url.pathExtension.lowercased()
+                            if !skipDirs.contains(dirName)
+                                && !skipBundleExtensions.contains(dirExt) {
+                                dirStack.append(url)
+                            }
+                        } else if rv.isRegularFile == true && rv.isReadable == true {
+                            let ext = url.pathExtension.lowercased()
+                            if videoExtensions.contains(ext) {
+                                if (ext == "ts" || ext == "mts") && !Self.isMpegTS(url) {
+                                    continue
+                                }
+                                // skipSmallFiles filter — cheap reject of stubs/thumbnails.
+                                // `.fileSizeKey` may be nil on SMB quirks; when missing, yield
+                                // (err on the side of cataloging) rather than silently drop.
+                                if minFileBytes > 0, let sz = rv.fileSize, sz < minFileBytes {
+                                    continue
+                                }
+                                continuation.yield(url)
+                            }
+                        }
+                    }
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { @Sendable _ in
+                walker.cancel()
+            }
+        }
     }
 
     /// Check if a .ts/.mts file is actually an MPEG transport stream (not TypeScript).
@@ -1545,17 +1818,33 @@ final class VideoScanModel: ObservableObject {
     }
 
     /// Per-file probe timeout (seconds). Prevents the scan from stalling on
-    /// network files that block indefinitely on read/open.
-    private let probeTimeoutSeconds: UInt64 = 60
+    /// network files that block indefinitely on read/open. 300s to accommodate
+    /// SMB mounts on sleepy external drives — a too-short timeout was flagging
+    /// healthy network volumes as "stalled" when they just needed to spin up.
+    private let probeTimeoutSeconds: UInt64 = 300
 
     /// Wrapper that races probeFile against a timeout. If probeFile takes
     /// longer than probeTimeoutSeconds, returns a timed-out record so the
     /// scan can move past stuck network files.
-    nonisolated func probeFileWithTimeout(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil) async -> VideoRecord {
+    ///
+    /// Even on timeout, the record carries filename + size so the
+    /// VolumeComparer `(filename, size)` fallback can still match it against
+    /// other volumes — without that, every timed-out file would be flagged as
+    /// "unique to this volume" in Compare & Rescue.
+    nonisolated func probeFileWithTimeout(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false) async -> VideoRecord {
+        // Best-effort stat before the race. stat() is metadata-only and
+        // usually fast even on SMB when content reads stall. We use this only
+        // to populate the timeout record; probeFile re-fetches on its own
+        // path for the success case.
+        let preSize: Int64 = {
+            let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+            return (attrs?[.size] as? Int64) ?? 0
+        }()
+
         do {
             return try await withThrowingTaskGroup(of: VideoRecord.self) { group in
                 group.addTask {
-                    await self.probeFile(url: url, prefetchToRAM: prefetchToRAM, ramPath: ramPath)
+                    await self.probeFile(url: url, prefetchToRAM: prefetchToRAM, ramPath: ramPath, skipHashing: skipHashing)
                 }
                 group.addTask {
                     try await Task.sleep(nanoseconds: self.probeTimeoutSeconds * 1_000_000_000)
@@ -1573,6 +1862,7 @@ final class VideoScanModel: ObservableObject {
             rec.ext           = url.pathExtension.uppercased()
             rec.fullPath      = url.path
             rec.directory     = url.deletingLastPathComponent().path
+            rec.sizeBytes     = preSize
             rec.isPlayable    = "Timed out"
             rec.notes         = "File probe exceeded \(probeTimeoutSeconds)s — network I/O may be stalled"
             rec.streamTypeRaw = StreamType.ffprobeFailed.rawValue
@@ -1583,7 +1873,7 @@ final class VideoScanModel: ObservableObject {
     /// Probe a single file and return a populated VideoRecord.
     /// If prefetchToRAM is true and ramPath is available, copies the first 10MB
     /// to the RAM disk so ffprobe reads at memory speed instead of network speed.
-    nonisolated func probeFile(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil) async -> VideoRecord {
+    nonisolated func probeFile(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false) async -> VideoRecord {
         let fm = FileManager.default
         let path = url.path
 
@@ -1608,9 +1898,14 @@ final class VideoScanModel: ObservableObject {
         let fileSize = (attrs?[.size] as? Int64) ?? 0
         let modDate = (attrs?[.modificationDate] as? Date) ?? Date.distantPast
 
-        // Check SQLite cache first — skip ffprobe if file unchanged
+        // Check SQLite cache first — skip ffprobe if file unchanged.
+        // Always refresh scanContext on cache hits so provenance (scan host,
+        // mount type, volume UUID, remote server) reflects the current scan
+        // and legacy records backfill naturally on rescan. The capture is two
+        // syscalls — cheap even when multiplied across thousands of hits.
         if let cached = metadataCache.lookup(path: path, fileSize: fileSize, modDate: modDate) {
             cached.wasCacheHit = true
+            cached.scanContext = ScanContext.capture(for: url)
             return cached
         }
 
@@ -1632,7 +1927,12 @@ final class VideoScanModel: ObservableObject {
             r.dateModified    = r.dateModifiedRaw.map { df.string(from: $0) } ?? ""
             r.dateCreated     = r.dateCreatedRaw.map { df.string(from: $0) } ?? ""
 
-            r.partialMD5 = partialMD5(path: path)
+            // partialMD5 is the strong identity key for duplicate detection.
+            // Skip reads ~64 KB per file, which is free on local SSD but costs
+            // real seconds over SMB on thousands of files. skipHashing trades
+            // dup detection for a faster pass — user can run "Analyze
+            // Duplicates" later if they change their mind.
+            r.partialMD5 = skipHashing ? "" : partialMD5(path: path)
             return r
         }
 
@@ -1662,7 +1962,7 @@ final class VideoScanModel: ObservableObject {
            probe.format != nil || !(probe.streams ?? []).isEmpty {
             // Genuine success — ffprobe found format/stream data
             autoreleasepool {
-                extractMetadata(probe: probe, into: rec)
+                ScanEngine.extractMetadata(probe: probe, into: rec)
             }
             if !stderrTrimmed.isEmpty {
                 rec.notes = stderrTrimmed
@@ -1681,7 +1981,7 @@ final class VideoScanModel: ObservableObject {
                 rec.streamTypeRaw = StreamType.ffprobeFailed.rawValue
             }
         } else {
-            let diagnosis = Self.humanReadableDiagnosis(stderr: stderrTrimmed)
+            let diagnosis = ScanEngine.humanReadableDiagnosis(stderr: stderrTrimmed)
             rec.isPlayable    = diagnosis.label
             rec.notes         = diagnosis.detail
             rec.streamTypeRaw = StreamType.ffprobeFailed.rawValue
@@ -1698,6 +1998,10 @@ final class VideoScanModel: ObservableObject {
             metadataCache.store(record: rec, fileSize: fileSize, modDate: modDate)
         }
 
+        // Stamp scan-time provenance. Done after caching so the SQLite cache
+        // schema stays stable — scanContext lives in catalog.json only and is
+        // recaptured fresh on every scan.
+        rec.scanContext = ScanContext.capture(for: url)
         return rec
     }
 
@@ -2373,94 +2677,6 @@ final class VideoScanModel: ObservableObject {
         }
         let output = try? JSONDecoder().decode(FFProbeOutput.self, from: data)
         return (output, result.stderr)
-    }
-
-    /// Translate raw ffprobe stderr into a human-readable label + detail.
-    nonisolated private static func humanReadableDiagnosis(stderr: String) -> (label: String, detail: String) {
-        let lower = stderr.lowercased()
-
-        if lower.contains("moov atom not found") {
-            return ("Damaged file",
-                    "File is corrupt or incomplete — missing media index (moov atom not found)")
-        }
-        if lower.contains("invalid data found") {
-            return ("Damaged file",
-                    "File contains invalid or unreadable data (invalid data found when processing input)")
-        }
-        if lower.contains("end of file") || lower.contains("truncated") {
-            return ("Truncated file",
-                    "File appears to be cut short or incomplete (\(stderr))")
-        }
-        if lower.contains("permission denied") {
-            return ("Access denied",
-                    "Cannot read file — permission denied")
-        }
-        if lower.contains("operation timed out") {
-            return ("Network timeout",
-                    "File read timed out — network volume may be slow or unreachable")
-        }
-        if lower.contains("no such file") {
-            return ("File not found",
-                    "File was discovered during scan but is no longer accessible")
-        }
-        if stderr.isEmpty {
-            return ("Unreadable file",
-                    "File could not be analyzed — no additional details available")
-        }
-        // Fallback: use the raw stderr but prefix with a human label
-        return ("Unreadable file",
-                "File could not be analyzed — \(stderr)")
-    }
-
-    nonisolated func extractMetadata(probe: FFProbeOutput, into rec: VideoRecord) {
-        let fmt     = probe.format
-        let streams = probe.streams ?? []
-        let fmtTags = fmt?.tags ?? [:]
-
-        rec.container = fmt?.format_long_name ?? fmt?.format_name ?? ""
-        if let d = Double(fmt?.duration ?? "") {
-            rec.durationSeconds = d
-            rec.duration = formatDuration(d)
-        }
-        if let br = fmt?.bit_rate, let bri = Int(br) { rec.totalBitrate = "\(bri/1000) kbps" }
-
-        rec.timecode = fmtTags["timecode"] ?? fmtTags["Timecode"] ?? ""
-        rec.tapeName = fmtTags["tape_name"] ?? fmtTags["reel_name"] ??
-                       fmtTags["com.apple.quicktime.reelname"] ?? ""
-
-        var hasVideo = false
-        var hasAudio = false
-
-        for s in streams {
-            let stags = s.tags ?? [:]
-            if rec.timecode.isEmpty { rec.timecode = stags["timecode"] ?? "" }
-
-            if s.codec_type == "video" && !hasVideo {
-                hasVideo       = true
-                rec.videoCodec = s.codec_name ?? ""
-                let w = s.width ?? 0; let h = s.height ?? 0
-                if w > 0 && h > 0 { rec.resolution = "\(w)x\(h)" }
-                rec.frameRate  = parseFraction(s.r_frame_rate ?? s.avg_frame_rate ?? "")
-                if let vbr = s.bit_rate, let vbri = Int(vbr) { rec.videoBitrate = "\(vbri/1000) kbps" }
-                rec.colorSpace = s.color_space ?? ""
-                rec.bitDepth   = s.bits_per_raw_sample ?? ""
-                rec.scanType   = s.field_order ?? ""
-            }
-
-            if s.codec_type == "audio" && !hasAudio {
-                hasAudio          = true
-                rec.audioCodec    = s.codec_name ?? ""
-                rec.audioChannels = s.channels.map { String($0) } ?? ""
-                if let sr = s.sample_rate { rec.audioSampleRate = "\(sr) Hz" }
-            }
-        }
-
-        if hasVideo && hasAudio { rec.streamTypeRaw = StreamType.videoAndAudio.rawValue }
-        else if hasVideo        { rec.streamTypeRaw = StreamType.videoOnly.rawValue }
-        else if hasAudio        { rec.streamTypeRaw = StreamType.audioOnly.rawValue }
-        else                    { rec.streamTypeRaw = StreamType.noStreams.rawValue }
-
-        rec.isPlayable = (rec.streamTypeRaw == StreamType.noStreams.rawValue) ? "No streams" : "Yes"
     }
 
     // MARK: - Process runner (cancellation-aware)
