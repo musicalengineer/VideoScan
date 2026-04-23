@@ -218,113 +218,113 @@ class VideoRecord: Identifiable, Codable {
 
     required init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        id                          = try c.decodeIfPresent(UUID.self,                 forKey: .id) ?? UUID()
-        filename                    = try c.decodeIfPresent(String.self,               forKey: .filename) ?? ""
-        ext                         = try c.decodeIfPresent(String.self,               forKey: .ext) ?? ""
-        streamTypeRaw               = try c.decodeIfPresent(String.self,               forKey: .streamTypeRaw) ?? ""
-        size                        = try c.decodeIfPresent(String.self,               forKey: .size) ?? ""
-        sizeBytes                   = try c.decodeIfPresent(Int64.self,                forKey: .sizeBytes) ?? 0
-        duration                    = try c.decodeIfPresent(String.self,               forKey: .duration) ?? ""
-        durationSeconds             = try c.decodeIfPresent(Double.self,               forKey: .durationSeconds) ?? 0
-        dateCreated                 = try c.decodeIfPresent(String.self,               forKey: .dateCreated) ?? ""
-        dateModified                = try c.decodeIfPresent(String.self,               forKey: .dateModified) ?? ""
-        dateCreatedRaw              = try c.decodeIfPresent(Date.self,                 forKey: .dateCreatedRaw)
-        dateModifiedRaw             = try c.decodeIfPresent(Date.self,                 forKey: .dateModifiedRaw)
-        container                   = try c.decodeIfPresent(String.self,               forKey: .container) ?? ""
-        videoCodec                  = try c.decodeIfPresent(String.self,               forKey: .videoCodec) ?? ""
-        resolution                  = try c.decodeIfPresent(String.self,               forKey: .resolution) ?? ""
-        frameRate                   = try c.decodeIfPresent(String.self,               forKey: .frameRate) ?? ""
-        videoBitrate                = try c.decodeIfPresent(String.self,               forKey: .videoBitrate) ?? ""
-        totalBitrate                = try c.decodeIfPresent(String.self,               forKey: .totalBitrate) ?? ""
-        colorSpace                  = try c.decodeIfPresent(String.self,               forKey: .colorSpace) ?? ""
-        bitDepth                    = try c.decodeIfPresent(String.self,               forKey: .bitDepth) ?? ""
-        scanType                    = try c.decodeIfPresent(String.self,               forKey: .scanType) ?? ""
-        audioCodec                  = try c.decodeIfPresent(String.self,               forKey: .audioCodec) ?? ""
-        audioChannels               = try c.decodeIfPresent(String.self,               forKey: .audioChannels) ?? ""
-        audioSampleRate             = try c.decodeIfPresent(String.self,               forKey: .audioSampleRate) ?? ""
-        timecode                    = try c.decodeIfPresent(String.self,               forKey: .timecode) ?? ""
-        tapeName                    = try c.decodeIfPresent(String.self,               forKey: .tapeName) ?? ""
-        isPlayable                  = try c.decodeIfPresent(String.self,               forKey: .isPlayable) ?? ""
-        partialMD5                  = try c.decodeIfPresent(String.self,               forKey: .partialMD5) ?? ""
-        fullPath                    = try c.decodeIfPresent(String.self,               forKey: .fullPath) ?? ""
-        directory                   = try c.decodeIfPresent(String.self,               forKey: .directory) ?? ""
-        notes                       = try c.decodeIfPresent(String.self,               forKey: .notes) ?? ""
-        avidClipName                = try c.decodeIfPresent(String.self,               forKey: .avidClipName) ?? ""
-        avidMobID                   = try c.decodeIfPresent(String.self,               forKey: .avidMobID) ?? ""
-        avidMaterialUUID            = try c.decodeIfPresent(String.self,               forKey: .avidMaterialUUID) ?? ""
-        avidBinFile                 = try c.decodeIfPresent(String.self,               forKey: .avidBinFile) ?? ""
-        avidMobType                 = try c.decodeIfPresent(String.self,               forKey: .avidMobType) ?? ""
-        avidMediaPath               = try c.decodeIfPresent(String.self,               forKey: .avidMediaPath) ?? ""
-        avidTapeName                = try c.decodeIfPresent(String.self,               forKey: .avidTapeName) ?? ""
-        avidEditRate                = try c.decodeIfPresent(Double.self,               forKey: .avidEditRate) ?? 0
-        avidTracks                  = try c.decodeIfPresent(String.self,               forKey: .avidTracks) ?? ""
-        pendingPairedWithID         = try c.decodeIfPresent(UUID.self,                 forKey: .pairedWithID)
-        pairGroupID                 = try c.decodeIfPresent(UUID.self,                 forKey: .pairGroupID)
-        pairConfidence              = try c.decodeIfPresent(PairConfidence.self,       forKey: .pairConfidence)
-        duplicateGroupID            = try c.decodeIfPresent(UUID.self,                 forKey: .duplicateGroupID)
-        duplicateConfidence         = try c.decodeIfPresent(DuplicateConfidence.self,  forKey: .duplicateConfidence)
+        id                          = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        filename                    = try c.decodeIfPresent(String.self, forKey: .filename) ?? ""
+        ext                         = try c.decodeIfPresent(String.self, forKey: .ext) ?? ""
+        streamTypeRaw               = try c.decodeIfPresent(String.self, forKey: .streamTypeRaw) ?? ""
+        size                        = try c.decodeIfPresent(String.self, forKey: .size) ?? ""
+        sizeBytes                   = try c.decodeIfPresent(Int64.self, forKey: .sizeBytes) ?? 0
+        duration                    = try c.decodeIfPresent(String.self, forKey: .duration) ?? ""
+        durationSeconds             = try c.decodeIfPresent(Double.self, forKey: .durationSeconds) ?? 0
+        dateCreated                 = try c.decodeIfPresent(String.self, forKey: .dateCreated) ?? ""
+        dateModified                = try c.decodeIfPresent(String.self, forKey: .dateModified) ?? ""
+        dateCreatedRaw              = try c.decodeIfPresent(Date.self, forKey: .dateCreatedRaw)
+        dateModifiedRaw             = try c.decodeIfPresent(Date.self, forKey: .dateModifiedRaw)
+        container                   = try c.decodeIfPresent(String.self, forKey: .container) ?? ""
+        videoCodec                  = try c.decodeIfPresent(String.self, forKey: .videoCodec) ?? ""
+        resolution                  = try c.decodeIfPresent(String.self, forKey: .resolution) ?? ""
+        frameRate                   = try c.decodeIfPresent(String.self, forKey: .frameRate) ?? ""
+        videoBitrate                = try c.decodeIfPresent(String.self, forKey: .videoBitrate) ?? ""
+        totalBitrate                = try c.decodeIfPresent(String.self, forKey: .totalBitrate) ?? ""
+        colorSpace                  = try c.decodeIfPresent(String.self, forKey: .colorSpace) ?? ""
+        bitDepth                    = try c.decodeIfPresent(String.self, forKey: .bitDepth) ?? ""
+        scanType                    = try c.decodeIfPresent(String.self, forKey: .scanType) ?? ""
+        audioCodec                  = try c.decodeIfPresent(String.self, forKey: .audioCodec) ?? ""
+        audioChannels               = try c.decodeIfPresent(String.self, forKey: .audioChannels) ?? ""
+        audioSampleRate             = try c.decodeIfPresent(String.self, forKey: .audioSampleRate) ?? ""
+        timecode                    = try c.decodeIfPresent(String.self, forKey: .timecode) ?? ""
+        tapeName                    = try c.decodeIfPresent(String.self, forKey: .tapeName) ?? ""
+        isPlayable                  = try c.decodeIfPresent(String.self, forKey: .isPlayable) ?? ""
+        partialMD5                  = try c.decodeIfPresent(String.self, forKey: .partialMD5) ?? ""
+        fullPath                    = try c.decodeIfPresent(String.self, forKey: .fullPath) ?? ""
+        directory                   = try c.decodeIfPresent(String.self, forKey: .directory) ?? ""
+        notes                       = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        avidClipName                = try c.decodeIfPresent(String.self, forKey: .avidClipName) ?? ""
+        avidMobID                   = try c.decodeIfPresent(String.self, forKey: .avidMobID) ?? ""
+        avidMaterialUUID            = try c.decodeIfPresent(String.self, forKey: .avidMaterialUUID) ?? ""
+        avidBinFile                 = try c.decodeIfPresent(String.self, forKey: .avidBinFile) ?? ""
+        avidMobType                 = try c.decodeIfPresent(String.self, forKey: .avidMobType) ?? ""
+        avidMediaPath               = try c.decodeIfPresent(String.self, forKey: .avidMediaPath) ?? ""
+        avidTapeName                = try c.decodeIfPresent(String.self, forKey: .avidTapeName) ?? ""
+        avidEditRate                = try c.decodeIfPresent(Double.self, forKey: .avidEditRate) ?? 0
+        avidTracks                  = try c.decodeIfPresent(String.self, forKey: .avidTracks) ?? ""
+        pendingPairedWithID         = try c.decodeIfPresent(UUID.self, forKey: .pairedWithID)
+        pairGroupID                 = try c.decodeIfPresent(UUID.self, forKey: .pairGroupID)
+        pairConfidence              = try c.decodeIfPresent(PairConfidence.self, forKey: .pairConfidence)
+        duplicateGroupID            = try c.decodeIfPresent(UUID.self, forKey: .duplicateGroupID)
+        duplicateConfidence         = try c.decodeIfPresent(DuplicateConfidence.self, forKey: .duplicateConfidence)
         duplicateDisposition        = try c.decodeIfPresent(DuplicateDisposition.self, forKey: .duplicateDisposition) ?? .none
-        duplicateReasons            = try c.decodeIfPresent(String.self,               forKey: .duplicateReasons) ?? ""
-        duplicateBestMatchFilename  = try c.decodeIfPresent(String.self,               forKey: .duplicateBestMatchFilename) ?? ""
-        duplicateGroupCount         = try c.decodeIfPresent(Int.self,                  forKey: .duplicateGroupCount) ?? 0
-        sourceHost                  = try c.decodeIfPresent(String.self,               forKey: .sourceHost) ?? ""
-        scanContext                 = try c.decodeIfPresent(ScanContext.self,          forKey: .scanContext) ?? ScanContext()
+        duplicateReasons            = try c.decodeIfPresent(String.self, forKey: .duplicateReasons) ?? ""
+        duplicateBestMatchFilename  = try c.decodeIfPresent(String.self, forKey: .duplicateBestMatchFilename) ?? ""
+        duplicateGroupCount         = try c.decodeIfPresent(Int.self, forKey: .duplicateGroupCount) ?? 0
+        sourceHost                  = try c.decodeIfPresent(String.self, forKey: .sourceHost) ?? ""
+        scanContext                 = try c.decodeIfPresent(ScanContext.self, forKey: .scanContext) ?? ScanContext()
     }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
-        try c.encode(id,                          forKey: .id)
-        try c.encode(filename,                    forKey: .filename)
-        try c.encode(ext,                         forKey: .ext)
-        try c.encode(streamTypeRaw,               forKey: .streamTypeRaw)
-        try c.encode(size,                        forKey: .size)
-        try c.encode(sizeBytes,                   forKey: .sizeBytes)
-        try c.encode(duration,                    forKey: .duration)
-        try c.encode(durationSeconds,             forKey: .durationSeconds)
-        try c.encode(dateCreated,                 forKey: .dateCreated)
-        try c.encode(dateModified,                forKey: .dateModified)
-        try c.encodeIfPresent(dateCreatedRaw,     forKey: .dateCreatedRaw)
-        try c.encodeIfPresent(dateModifiedRaw,    forKey: .dateModifiedRaw)
-        try c.encode(container,                   forKey: .container)
-        try c.encode(videoCodec,                  forKey: .videoCodec)
-        try c.encode(resolution,                  forKey: .resolution)
-        try c.encode(frameRate,                   forKey: .frameRate)
-        try c.encode(videoBitrate,                forKey: .videoBitrate)
-        try c.encode(totalBitrate,                forKey: .totalBitrate)
-        try c.encode(colorSpace,                  forKey: .colorSpace)
-        try c.encode(bitDepth,                    forKey: .bitDepth)
-        try c.encode(scanType,                    forKey: .scanType)
-        try c.encode(audioCodec,                  forKey: .audioCodec)
-        try c.encode(audioChannels,               forKey: .audioChannels)
-        try c.encode(audioSampleRate,             forKey: .audioSampleRate)
-        try c.encode(timecode,                    forKey: .timecode)
-        try c.encode(tapeName,                    forKey: .tapeName)
-        try c.encode(isPlayable,                  forKey: .isPlayable)
-        try c.encode(partialMD5,                  forKey: .partialMD5)
-        try c.encode(fullPath,                    forKey: .fullPath)
-        try c.encode(directory,                   forKey: .directory)
-        try c.encode(notes,                       forKey: .notes)
-        try c.encode(avidClipName,                forKey: .avidClipName)
-        try c.encode(avidMobID,                   forKey: .avidMobID)
-        try c.encode(avidMaterialUUID,            forKey: .avidMaterialUUID)
-        try c.encode(avidBinFile,                 forKey: .avidBinFile)
-        try c.encode(avidMobType,                 forKey: .avidMobType)
-        try c.encode(avidMediaPath,               forKey: .avidMediaPath)
-        try c.encode(avidTapeName,                forKey: .avidTapeName)
-        try c.encode(avidEditRate,                forKey: .avidEditRate)
-        try c.encode(avidTracks,                  forKey: .avidTracks)
-        try c.encodeIfPresent(pairedWith?.id,     forKey: .pairedWithID)
-        try c.encodeIfPresent(pairGroupID,        forKey: .pairGroupID)
-        try c.encodeIfPresent(pairConfidence,     forKey: .pairConfidence)
-        try c.encodeIfPresent(duplicateGroupID,   forKey: .duplicateGroupID)
+        try c.encode(id, forKey: .id)
+        try c.encode(filename, forKey: .filename)
+        try c.encode(ext, forKey: .ext)
+        try c.encode(streamTypeRaw, forKey: .streamTypeRaw)
+        try c.encode(size, forKey: .size)
+        try c.encode(sizeBytes, forKey: .sizeBytes)
+        try c.encode(duration, forKey: .duration)
+        try c.encode(durationSeconds, forKey: .durationSeconds)
+        try c.encode(dateCreated, forKey: .dateCreated)
+        try c.encode(dateModified, forKey: .dateModified)
+        try c.encodeIfPresent(dateCreatedRaw, forKey: .dateCreatedRaw)
+        try c.encodeIfPresent(dateModifiedRaw, forKey: .dateModifiedRaw)
+        try c.encode(container, forKey: .container)
+        try c.encode(videoCodec, forKey: .videoCodec)
+        try c.encode(resolution, forKey: .resolution)
+        try c.encode(frameRate, forKey: .frameRate)
+        try c.encode(videoBitrate, forKey: .videoBitrate)
+        try c.encode(totalBitrate, forKey: .totalBitrate)
+        try c.encode(colorSpace, forKey: .colorSpace)
+        try c.encode(bitDepth, forKey: .bitDepth)
+        try c.encode(scanType, forKey: .scanType)
+        try c.encode(audioCodec, forKey: .audioCodec)
+        try c.encode(audioChannels, forKey: .audioChannels)
+        try c.encode(audioSampleRate, forKey: .audioSampleRate)
+        try c.encode(timecode, forKey: .timecode)
+        try c.encode(tapeName, forKey: .tapeName)
+        try c.encode(isPlayable, forKey: .isPlayable)
+        try c.encode(partialMD5, forKey: .partialMD5)
+        try c.encode(fullPath, forKey: .fullPath)
+        try c.encode(directory, forKey: .directory)
+        try c.encode(notes, forKey: .notes)
+        try c.encode(avidClipName, forKey: .avidClipName)
+        try c.encode(avidMobID, forKey: .avidMobID)
+        try c.encode(avidMaterialUUID, forKey: .avidMaterialUUID)
+        try c.encode(avidBinFile, forKey: .avidBinFile)
+        try c.encode(avidMobType, forKey: .avidMobType)
+        try c.encode(avidMediaPath, forKey: .avidMediaPath)
+        try c.encode(avidTapeName, forKey: .avidTapeName)
+        try c.encode(avidEditRate, forKey: .avidEditRate)
+        try c.encode(avidTracks, forKey: .avidTracks)
+        try c.encodeIfPresent(pairedWith?.id, forKey: .pairedWithID)
+        try c.encodeIfPresent(pairGroupID, forKey: .pairGroupID)
+        try c.encodeIfPresent(pairConfidence, forKey: .pairConfidence)
+        try c.encodeIfPresent(duplicateGroupID, forKey: .duplicateGroupID)
         try c.encodeIfPresent(duplicateConfidence, forKey: .duplicateConfidence)
-        try c.encode(duplicateDisposition,        forKey: .duplicateDisposition)
-        try c.encode(duplicateReasons,            forKey: .duplicateReasons)
-        try c.encode(duplicateBestMatchFilename,  forKey: .duplicateBestMatchFilename)
-        try c.encode(duplicateGroupCount,         forKey: .duplicateGroupCount)
-        try c.encode(sourceHost,                  forKey: .sourceHost)
+        try c.encode(duplicateDisposition, forKey: .duplicateDisposition)
+        try c.encode(duplicateReasons, forKey: .duplicateReasons)
+        try c.encode(duplicateBestMatchFilename, forKey: .duplicateBestMatchFilename)
+        try c.encode(duplicateGroupCount, forKey: .duplicateGroupCount)
+        try c.encode(sourceHost, forKey: .sourceHost)
         if scanContext.isPopulated || scanContext.scannedAt != nil {
-            try c.encode(scanContext,             forKey: .scanContext)
+            try c.encode(scanContext, forKey: .scanContext)
         }
     }
 

@@ -70,8 +70,7 @@ enum CombineEngine {
                     )
                     continuation.resume(returning: result)
                 }
-                do    { try proc.run() }
-                catch {
+                do { try proc.run() } catch {
                     continuation.resume(returning: CombineResult(
                         success: false,
                         stderr: "Failed to launch ffmpeg: \(error.localizedDescription)",

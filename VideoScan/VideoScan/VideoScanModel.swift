@@ -35,19 +35,19 @@ struct ScanOptions: Equatable {
     static func restored() -> ScanOptions {
         let d = defaults; let p = prefix
         var s = ScanOptions()
-        if d.object(forKey: "\(p)skipSystemFiles") != nil  { s.skipSystemFiles  = d.bool(forKey: "\(p)skipSystemFiles") }
+        if d.object(forKey: "\(p)skipSystemFiles") != nil { s.skipSystemFiles  = d.bool(forKey: "\(p)skipSystemFiles") }
         if d.object(forKey: "\(p)skipMediaBundles") != nil { s.skipMediaBundles = d.bool(forKey: "\(p)skipMediaBundles") }
-        if d.object(forKey: "\(p)skipSmallFiles") != nil   { s.skipSmallFiles   = d.bool(forKey: "\(p)skipSmallFiles") }
-        if d.object(forKey: "\(p)skipChecksums") != nil    { s.skipChecksums    = d.bool(forKey: "\(p)skipChecksums") }
+        if d.object(forKey: "\(p)skipSmallFiles") != nil { s.skipSmallFiles   = d.bool(forKey: "\(p)skipSmallFiles") }
+        if d.object(forKey: "\(p)skipChecksums") != nil { s.skipChecksums    = d.bool(forKey: "\(p)skipChecksums") }
         return s
     }
 
     func save() {
         let d = Self.defaults; let p = Self.prefix
-        d.set(skipSystemFiles,  forKey: "\(p)skipSystemFiles")
+        d.set(skipSystemFiles, forKey: "\(p)skipSystemFiles")
         d.set(skipMediaBundles, forKey: "\(p)skipMediaBundles")
-        d.set(skipSmallFiles,   forKey: "\(p)skipSmallFiles")
-        d.set(skipChecksums,    forKey: "\(p)skipChecksums")
+        d.set(skipSmallFiles, forKey: "\(p)skipSmallFiles")
+        d.set(skipChecksums, forKey: "\(p)skipChecksums")
     }
 
     /// True when the user has deviated from the recommended fast-path
@@ -125,21 +125,21 @@ struct ScanPerformanceSettings {
     static func restored() -> ScanPerformanceSettings {
         let d = defaults; let p = prefix
         var s = ScanPerformanceSettings()
-        if d.object(forKey: "\(p)probesPerVolume") != nil    { s.probesPerVolume = d.integer(forKey: "\(p)probesPerVolume") }
-        if d.object(forKey: "\(p)ramDiskGB") != nil          { s.ramDiskGB = d.integer(forKey: "\(p)ramDiskGB") }
-        if d.object(forKey: "\(p)prefetchMB") != nil         { s.prefetchMB = d.integer(forKey: "\(p)prefetchMB") }
+        if d.object(forKey: "\(p)probesPerVolume") != nil { s.probesPerVolume = d.integer(forKey: "\(p)probesPerVolume") }
+        if d.object(forKey: "\(p)ramDiskGB") != nil { s.ramDiskGB = d.integer(forKey: "\(p)ramDiskGB") }
+        if d.object(forKey: "\(p)prefetchMB") != nil { s.prefetchMB = d.integer(forKey: "\(p)prefetchMB") }
         if d.object(forKey: "\(p)combineConcurrency") != nil { s.combineConcurrency = d.integer(forKey: "\(p)combineConcurrency") }
-        if d.object(forKey: "\(p)memoryFloorGB") != nil      { s.memoryFloorGB = d.integer(forKey: "\(p)memoryFloorGB") }
+        if d.object(forKey: "\(p)memoryFloorGB") != nil { s.memoryFloorGB = d.integer(forKey: "\(p)memoryFloorGB") }
         return s
     }
 
     func save() {
         let d = Self.defaults; let p = Self.prefix
-        d.set(probesPerVolume,    forKey: "\(p)probesPerVolume")
-        d.set(ramDiskGB,          forKey: "\(p)ramDiskGB")
-        d.set(prefetchMB,        forKey: "\(p)prefetchMB")
+        d.set(probesPerVolume, forKey: "\(p)probesPerVolume")
+        d.set(ramDiskGB, forKey: "\(p)ramDiskGB")
+        d.set(prefetchMB, forKey: "\(p)prefetchMB")
         d.set(combineConcurrency, forKey: "\(p)combineConcurrency")
-        d.set(memoryFloorGB,     forKey: "\(p)memoryFloorGB")
+        d.set(memoryFloorGB, forKey: "\(p)memoryFloorGB")
     }
 }
 
@@ -159,12 +159,12 @@ final class VideoScanModel: ObservableObject {
     @Published var avidBinResults: [AvbBinResult] = []
     @Published var scanTargets: [CatalogScanTarget] = []
     @Published var outputCSVPath: String = ""
-    @Published var previewImage: NSImage? = nil
+    @Published var previewImage: NSImage?
     @Published var previewFilename: String = ""
     /// Set when the user selects a record whose source volume isn't currently
     /// mounted. CatalogContent renders an "Volume Offline" placeholder
     /// instead of trying to load a thumbnail.
-    @Published var previewOfflineVolumeName: String? = nil
+    @Published var previewOfflineVolumeName: String?
 
     /// Force SwiftUI to recompute volumeTableRows when target properties
     /// (phase, reachability, etc.) change. Reassigning the array triggers
@@ -185,9 +185,9 @@ final class VideoScanModel: ObservableObject {
     let ffmpegPath  = "/opt/homebrew/bin/ffmpeg"
 
     let videoExtensions: Set<String> = [
-        "mov","mp4","m4v","avi","mkv","mxf","mts","m2ts","ts","mpg","mpeg",
-        "m2v","vob","wmv","asf","webm","ogv","ogg","rm","rmvb","divx","flv",
-        "f4v","3gp","3g2","dv","dif","braw","r3d","vro","mod","tod"
+        "mov", "mp4", "m4v", "avi", "mkv", "mxf", "mts", "m2ts", "ts", "mpg", "mpeg",
+        "m2v", "vob", "wmv", "asf", "webm", "ogv", "ogg", "rm", "rmvb", "divx", "flv",
+        "f4v", "3gp", "3g2", "dv", "dif", "braw", "r3d", "vro", "mod", "tod"
     ]
 
     /// User-toggleable scan policy. Bound to the Scan Options menu. Walkers
@@ -215,7 +215,7 @@ final class VideoScanModel: ObservableObject {
     /// toggle (since media libraries are where user content often lives).
     func skipBundleExtensionsSnapshot() -> Set<String> {
         var s = Set<String>()
-        if scanOptions.skipSystemFiles  { s.formUnion(SkipCategories.appBundleExtensions) }
+        if scanOptions.skipSystemFiles { s.formUnion(SkipCategories.appBundleExtensions) }
         if scanOptions.skipMediaBundles { s.formUnion(SkipCategories.mediaLibraryExtensions) }
         return s
     }
@@ -984,7 +984,7 @@ final class VideoScanModel: ObservableObject {
         let systemExclusions: Set<String> = [
             "Macintosh HD", "Macintosh HD - Data",
             "Data", "Preboot", "Recovery", "VM", "Update",
-            "com.apple.TimeMachine.localsnapshots",
+            "com.apple.TimeMachine.localsnapshots"
         ]
 
         guard let contents = try? fm.contentsOfDirectory(atPath: "/Volumes") else { return [] }
@@ -1185,6 +1185,101 @@ final class VideoScanModel: ObservableObject {
         isScanning = scanTargets.contains { $0.status.isActive }
     }
 
+    /// Probe a single URL and update the dashboard counters for one volume.
+    /// Extracted from `runScanForTarget` / `runParallelScan` so the big scan
+    /// methods stay below the SwiftLint function-body ceiling. Returns the
+    /// resulting VideoRecord — a `StreamType.ffprobeFailed` placeholder when
+    /// the task is cancelled.
+    ///
+    /// - Parameter useTimeout: true → `probeFileWithTimeout` (per-target scan),
+    ///   false → `probeFile` (parallel multi-root scan).
+    /// - Parameter echoFilename: true → log `[vol] filename` before probing
+    ///   (matches the old parallel-scan UX).
+    private func probeAndRecord(
+        url: URL,
+        volName: String,
+        root: String,
+        rootIsNetwork: Bool,
+        ramMountPoint: String?,
+        skipHashing: Bool,
+        useTimeout: Bool,
+        echoFilename: Bool
+    ) async -> VideoRecord {
+        if Task.isCancelled {
+            return await MainActor.run {
+                let skip = VideoRecord()
+                skip.filename = url.lastPathComponent
+                skip.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+                return skip
+            }
+        }
+        await MainActor.run {
+            if echoFilename {
+                self.log("  [\(volName)] \(url.lastPathComponent)")
+            }
+            self.dashboard.recordScanFile(volume: volName, filename: url.lastPathComponent)
+        }
+        let rec: VideoRecord
+        if useTimeout {
+            rec = await self.probeFileWithTimeout(
+                url: url,
+                prefetchToRAM: rootIsNetwork,
+                ramPath: ramMountPoint,
+                skipHashing: skipHashing
+            )
+        } else {
+            rec = await self.probeFile(
+                url: url,
+                prefetchToRAM: rootIsNetwork,
+                ramPath: ramMountPoint,
+                skipHashing: skipHashing
+            )
+        }
+        await MainActor.run {
+            let ds = self.dashboard
+            ds.scanCompleted += 1
+            if let idx = ds.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
+                ds.volumeProgress[idx].completedFiles += 1
+                if rec.wasCacheHit {
+                    ds.volumeProgress[idx].cacheHits += 1
+                }
+                if rec.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
+                    ds.volumeProgress[idx].errors += 1
+                }
+            }
+            if rec.wasCacheHit {
+                ds.scanCacheHits += 1
+            } else {
+                ds.scanCacheMisses += 1
+            }
+            if rec.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
+                ds.scanErrors += 1
+            }
+            ds.liveStreamCounts[rec.streamTypeRaw, default: 0] += 1
+        }
+        return rec
+    }
+
+    /// Log the final success summary for a volume scan. Extracted purely to
+    /// keep `runScanForTarget` focused on orchestration.
+    private func logTargetScanSummary(volName: String, records: [VideoRecord]) {
+        let va = records.filter { $0.streamTypeRaw == StreamType.videoAndAudio.rawValue }.count
+        let vo = records.filter { $0.streamTypeRaw == StreamType.videoOnly.rawValue }.count
+        let ao = records.filter { $0.streamTypeRaw == StreamType.audioOnly.rawValue }.count
+
+        log("""
+
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          Scan Complete: \(volName)
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          Total:          \(records.count)
+          Video+Audio:    \(va)
+          Video only:     \(vo)
+          Audio only:     \(ao)
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        """)
+    }
+
     /// Scan a single target's path, appending results to the shared records array
     private func runScanForTarget(_ target: CatalogScanTarget) async {
         let root = target.searchPath
@@ -1214,7 +1309,7 @@ final class VideoScanModel: ObservableObject {
         // Mount RAM disk up-front for network scans so ffprobe prefetch works
         // from the first probed file AND the user can see /Volumes/VideoScan_Temp
         // appear right away instead of waiting for a long walk to finish.
-        var ramMountPoint: String? = nil
+        var ramMountPoint: String?
         if rootIsNetwork {
             let ramDiskMB = perfSettings.ramDiskGB * 1024
             let mounted = await ramDisk.mount(sizeMB: ramDiskMB)
@@ -1283,49 +1378,16 @@ final class VideoScanModel: ObservableObject {
                 probeGroup.addTask { [self] in
                     await target.pauseGate.waitIfPaused()
                     return await sem.withPermit {
-                        if Task.isCancelled {
-                            return await MainActor.run {
-                                let skip = VideoRecord()
-                                skip.filename = url.lastPathComponent
-                                skip.streamTypeRaw = StreamType.ffprobeFailed.rawValue
-                                return skip
-                            }
-                        }
-                        await MainActor.run {
-                            self.dashboard.recordScanFile(
-                                volume: volName,
-                                filename: url.lastPathComponent
-                            )
-                        }
-                        let rec = await self.probeFileWithTimeout(
+                        await self.probeAndRecord(
                             url: url,
-                            prefetchToRAM: rootIsNetwork,
-                            ramPath: ramMountPoint,
-                            skipHashing: skipHashingCaptured
+                            volName: volName,
+                            root: root,
+                            rootIsNetwork: rootIsNetwork,
+                            ramMountPoint: ramMountPoint,
+                            skipHashing: skipHashingCaptured,
+                            useTimeout: true,
+                            echoFilename: false
                         )
-                        await MainActor.run {
-                            let ds = self.dashboard
-                            ds.scanCompleted += 1
-                            if let idx = ds.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
-                                ds.volumeProgress[idx].completedFiles += 1
-                                if rec.wasCacheHit {
-                                    ds.volumeProgress[idx].cacheHits += 1
-                                }
-                                if rec.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
-                                    ds.volumeProgress[idx].errors += 1
-                                }
-                            }
-                            if rec.wasCacheHit {
-                                ds.scanCacheHits += 1
-                            } else {
-                                ds.scanCacheMisses += 1
-                            }
-                            if rec.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
-                                ds.scanErrors += 1
-                            }
-                            ds.liveStreamCounts[rec.streamTypeRaw, default: 0] += 1
-                        }
-                        return rec
                     }
                 }
             }
@@ -1401,21 +1463,7 @@ final class VideoScanModel: ObservableObject {
         records.append(contentsOf: targetRecords)
         saveCatalogDebounced()
 
-        let va = targetRecords.filter { $0.streamTypeRaw == StreamType.videoAndAudio.rawValue }.count
-        let vo = targetRecords.filter { $0.streamTypeRaw == StreamType.videoOnly.rawValue }.count
-        let ao = targetRecords.filter { $0.streamTypeRaw == StreamType.audioOnly.rawValue }.count
-
-        log("""
-
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          Scan Complete: \(volName)
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          Total:          \(targetRecords.count)
-          Video+Audio:    \(va)
-          Video only:     \(vo)
-          Audio only:     \(ao)
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        """)
+        logTargetScanSummary(volName: volName, records: targetRecords)
 
         target.status = .complete
         target.lastScannedDate = Date()
@@ -1456,7 +1504,7 @@ final class VideoScanModel: ObservableObject {
 
         // Mount RAM disk for network file prefetching — size adapts to available memory
         let hasNetworkRoot = roots.contains { isNetworkPath($0) }
-        var ramMountPoint: String? = nil
+        var ramMountPoint: String?
         if hasNetworkRoot {
             let ramDiskMB = perfSettings.ramDiskGB * 1024
             let mounted = await ramDisk.mount(sizeMB: ramDiskMB)
@@ -1530,50 +1578,16 @@ final class VideoScanModel: ObservableObject {
                             probeGroup.addTask {
                                 await self.pauseGate.waitIfPaused()
                                 return await sem.withPermit {
-                                    if Task.isCancelled {
-                                        return await MainActor.run {
-                                            let skip = VideoRecord()
-                                            skip.filename = url.lastPathComponent
-                                            skip.streamTypeRaw = StreamType.ffprobeFailed.rawValue
-                                            return skip
-                                        }
-                                    }
-                                    await MainActor.run {
-                                        self.log("  [\(volName)] \(url.lastPathComponent)")
-                                        self.dashboard.recordScanFile(
-                                            volume: volName,
-                                            filename: url.lastPathComponent
-                                        )
-                                    }
-                                    let rec = await self.probeFile(
+                                    await self.probeAndRecord(
                                         url: url,
-                                        prefetchToRAM: rootIsNetwork,
-                                        ramPath: ramMountPoint,
-                                        skipHashing: skipHashingCaptured
+                                        volName: volName,
+                                        root: root,
+                                        rootIsNetwork: rootIsNetwork,
+                                        ramMountPoint: ramMountPoint,
+                                        skipHashing: skipHashingCaptured,
+                                        useTimeout: false,
+                                        echoFilename: true
                                     )
-                                    await MainActor.run {
-                                        let ds = self.dashboard
-                                        ds.scanCompleted += 1
-                                        if let idx = ds.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
-                                            ds.volumeProgress[idx].completedFiles += 1
-                                            if rec.wasCacheHit {
-                                                ds.volumeProgress[idx].cacheHits += 1
-                                            }
-                                            if rec.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
-                                                ds.volumeProgress[idx].errors += 1
-                                            }
-                                        }
-                                        if rec.wasCacheHit {
-                                            ds.scanCacheHits += 1
-                                        } else {
-                                            ds.scanCacheMisses += 1
-                                        }
-                                        if rec.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
-                                            ds.scanErrors += 1
-                                        }
-                                        ds.liveStreamCounts[rec.streamTypeRaw, default: 0] += 1
-                                    }
-                                    return rec
                                 }
                             }
                         }
@@ -1938,7 +1952,7 @@ final class VideoScanModel: ObservableObject {
 
         // Prefetch file header to RAM disk for fast ffprobe
         var probeURL = url
-        var tempFile: URL? = nil
+        var tempFile: URL?
 
         if prefetchToRAM, let rp = ramPath {
             let prefetchStart = CFAbsoluteTimeGetCurrent()
@@ -2165,9 +2179,7 @@ final class VideoScanModel: ObservableObject {
                 guard score >= 3 else { continue }
 
                 let confidence: PairConfidence
-                if score >= 7 { confidence = .high }
-                else if score >= 4 { confidence = .medium }
-                else { confidence = .low }
+                if score >= 7 { confidence = .high } else if score >= 4 { confidence = .medium } else { confidence = .low }
 
                 candidates.append(Candidate(
                     video: v, audio: a, score: score,
@@ -2376,7 +2388,7 @@ final class VideoScanModel: ObservableObject {
             let p = parts[i]
             if p.count > 1,
                let first = p.first,
-               (first == "V" || first == "A" || first == "v" || first == "a"),
+               first == "V" || first == "A" || first == "v" || first == "a",
                p.dropFirst().allSatisfy({ $0.isHexDigit }) {
                 parts[i] = "_" + p.dropFirst()
                 break
@@ -2560,8 +2572,7 @@ final class VideoScanModel: ObservableObject {
 
                 for await (_, ok) in group {
                     await MainActor.run {
-                        if ok { self.dashboard.combineSucceeded += 1 }
-                        else  { self.dashboard.combineFailed += 1 }
+                        if ok { self.dashboard.combineSucceeded += 1 } else { self.dashboard.combineFailed += 1 }
                     }
                 }
 
@@ -2669,8 +2680,8 @@ final class VideoScanModel: ObservableObject {
     // MARK: - ffprobe
 
     nonisolated func runFFProbe(url: URL) async -> (output: FFProbeOutput?, stderr: String) {
-        let args = ["-v","warning","-probesize","50M","-analyzeduration","10M",
-                    "-print_format","json","-show_format","-show_streams", url.path]
+        let args = ["-v", "warning", "-probesize", "50M", "-analyzeduration", "10M",
+                    "-print_format", "json", "-show_format", "-show_streams", url.path]
         let result = await ProcessRunner.runCapturingStderr(executable: ffprobePath, arguments: args)
         guard let json = result.stdout, let data = json.data(using: .utf8) else {
             return (nil, result.stderr)
@@ -2695,8 +2706,7 @@ final class VideoScanModel: ObservableObject {
                     let data = pipe.fileHandleForReading.readDataToEndOfFile()
                     continuation.resume(returning: String(data: data, encoding: .utf8))
                 }
-                do    { try proc.run() }
-                catch { continuation.resume(returning: nil) }
+                do { try proc.run() } catch { continuation.resume(returning: nil) }
             }
         } onCancel: {
             if proc.isRunning { proc.terminate() }
@@ -2744,12 +2754,12 @@ final class VideoScanModel: ObservableObject {
 
     func writeCSV(records: [VideoRecord], root: String) -> String? {
         let headers = [
-            "Filename","Extension","Stream Type","Size","Size (Bytes)","Duration",
-            "Date Created","Date Modified","Container","Video Codec","Resolution",
-            "Frame Rate","Video Bitrate","Total Bitrate","Color Space","Bit Depth",
-            "Scan Type","Audio Codec","Audio Channels","Audio Sample Rate","Timecode",
-            "Tape Name","Is Playable","Partial MD5","Duplicate Group","Duplicate Confidence",
-            "Duplicate Disposition","Duplicate Match","Duplicate Reasons","Full Path","Directory","Notes"
+            "Filename", "Extension", "Stream Type", "Size", "Size (Bytes)", "Duration",
+            "Date Created", "Date Modified", "Container", "Video Codec", "Resolution",
+            "Frame Rate", "Video Bitrate", "Total Bitrate", "Color Space", "Bit Depth",
+            "Scan Type", "Audio Codec", "Audio Channels", "Audio Sample Rate", "Timecode",
+            "Tape Name", "Is Playable", "Partial MD5", "Duplicate Group", "Duplicate Confidence",
+            "Duplicate Disposition", "Duplicate Match", "Duplicate Reasons", "Full Path", "Directory", "Notes"
         ]
         var lines = [headers.joined(separator: ",")]
         for r in records {
@@ -2811,8 +2821,7 @@ final class VideoScanModel: ObservableObject {
             do {
                 let cgImage = try await withCheckedThrowingContinuation { cont in
                     generator.generateCGImageAsynchronously(for: time) { image, _, error in
-                        if let image { cont.resume(returning: image) }
-                        else { cont.resume(throwing: error ?? CocoaError(.fileReadUnknown)) }
+                        if let image { cont.resume(returning: image) } else { cont.resume(throwing: error ?? CocoaError(.fileReadUnknown)) }
                     }
                 }
                 let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
@@ -2845,7 +2854,7 @@ final class VideoScanModel: ObservableObject {
     }
 
     nonisolated func humanSize(_ bytes: Int64) -> String {
-        let units = ["B","KB","MB","GB","TB"]
+        let units = ["B", "KB", "MB", "GB", "TB"]
         var val = Double(bytes)
         for unit in units {
             if abs(val) < 1024 { return String(format: "%.1f \(unit)", val) }

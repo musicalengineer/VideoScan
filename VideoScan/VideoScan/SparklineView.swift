@@ -60,8 +60,7 @@ struct SparklineView: View {
                             for (i, s) in samples.enumerated() {
                                 let x = CGFloat(i) * stepX
                                 let y = h - CGFloat(s.filesPerSecond / maxY) * h
-                                if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
-                                else { path.addLine(to: CGPoint(x: x, y: y)) }
+                                if i == 0 { path.move(to: CGPoint(x: x, y: y)) } else { path.addLine(to: CGPoint(x: x, y: y)) }
                             }
                         }
                         .stroke(

@@ -59,7 +59,7 @@ struct LiveFramePreview: View {
                     }
 
                     draw(unmatchedRects, color: .yellow, lineWidth: 1.5)
-                    draw(matchedRects,   color: .green,  lineWidth: 2.5)
+                    draw(matchedRects, color: .green, lineWidth: 2.5)
                 }
             }
         }
@@ -495,7 +495,6 @@ class PreviewWindowController {
             }
         }
     }
-
 
     func close() {
         if let obs = closeObserver {

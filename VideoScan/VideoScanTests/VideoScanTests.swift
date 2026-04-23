@@ -36,7 +36,7 @@ struct VideoRecordTests {
 
     @Test func defaults() {
         let rec = VideoRecord()
-        #expect(rec.filename == "")
+        #expect(rec.filename.isEmpty)
         #expect(rec.sizeBytes == 0)
         #expect(rec.durationSeconds == 0)
         #expect(rec.streamType == .ffprobeFailed) // empty streamTypeRaw → fallback
@@ -804,8 +804,8 @@ struct DuplicateDeletionSafetyTests {
         #expect(rec.duplicateGroupID == nil)
         #expect(rec.duplicateConfidence == nil)
         #expect(rec.duplicateDisposition == .none)
-        #expect(rec.duplicateReasons == "")
-        #expect(rec.duplicateBestMatchFilename == "")
+        #expect(rec.duplicateReasons.isEmpty)
+        #expect(rec.duplicateBestMatchFilename.isEmpty)
         #expect(rec.duplicateGroupCount == 0)
     }
 }
@@ -985,7 +985,7 @@ struct MxfPixelLayoutTests {
     @Test func emptyLayout() {
         let data = Data([0x00, 0x00])
         let result = MxfHeaderParser.decodePixelLayout(data: data, pos: 0, len: data.count)
-        #expect(result == "")
+        #expect(result.isEmpty)
     }
 
     @Test func parseNonexistentFile() {
@@ -1002,7 +1002,7 @@ struct MxfMetadataTests {
         let m = MxfHeaderParser.MxfMetadata()
         #expect(m.width == 0)
         #expect(m.height == 0)
-        #expect(m.codecLabel == "")
+        #expect(m.codecLabel.isEmpty)
         #expect(m.hasVideo == false)
         #expect(m.hasAudio == false)
         #expect(m.audioChannels == 0)
@@ -1991,7 +1991,7 @@ struct CatalogSkipSetTests {
             "/vol/audio.wav",
             "/vol/broken.mxf",
             "/vol/video2.mp4",
-            "/vol/empty.avi",
+            "/vol/empty.avi"
         ]
         let skipSet: Set<String> = ["/vol/audio.wav", "/vol/broken.mxf", "/vol/empty.avi"]
 
@@ -2084,7 +2084,7 @@ struct VolumeCompareTests {
     @Test func uniqueFileIsMissing() {
         let src = [
             makeRecord(filename: "shared.mov", path: "/Volumes/Old/shared.mov", md5: "aaa", size: 1000),
-            makeRecord(filename: "unique.mov", path: "/Volumes/Old/unique.mov", md5: "bbb", size: 2000),
+            makeRecord(filename: "unique.mov", path: "/Volumes/Old/unique.mov", md5: "bbb", size: 2000)
         ]
         let dst = [makeRecord(filename: "shared.mov", path: "/Volumes/New/shared.mov", md5: "aaa", size: 1000)]
 
@@ -2119,7 +2119,7 @@ struct VolumeCompareTests {
     @Test func emptyDestinationMeansAllMissing() {
         let src = [
             makeRecord(filename: "a.mov", path: "/Volumes/Old/a.mov", md5: "x", size: 100),
-            makeRecord(filename: "b.mov", path: "/Volumes/Old/b.mov", md5: "y", size: 200),
+            makeRecord(filename: "b.mov", path: "/Volumes/Old/b.mov", md5: "y", size: 200)
         ]
         let result = VolumeComparer.compare(sourceRecords: src, destRecords: [], sourcePath: "/Volumes/Old", destPath: "/Volumes/New")
 
@@ -2134,12 +2134,12 @@ struct VolumeCompareTests {
         // File A appears on SSD, file B appears on Backup — both should be "safe".
         let src = [
             makeRecord(filename: "A.mov", path: "/Volumes/MacPro/A.mov", md5: "a1", size: 100),
-            makeRecord(filename: "B.mov", path: "/Volumes/MacPro/B.mov", md5: "b2", size: 200),
+            makeRecord(filename: "B.mov", path: "/Volumes/MacPro/B.mov", md5: "b2", size: 200)
         ]
         // Union of every other volume's catalog records:
         let dstUnion = [
-            makeRecord(filename: "A.mov", path: "/Volumes/SSD/A.mov",     md5: "a1", size: 100),
-            makeRecord(filename: "B.mov", path: "/Volumes/Backup/B.mov",  md5: "b2", size: 200),
+            makeRecord(filename: "A.mov", path: "/Volumes/SSD/A.mov", md5: "a1", size: 100),
+            makeRecord(filename: "B.mov", path: "/Volumes/Backup/B.mov", md5: "b2", size: 200)
         ]
         let result = VolumeComparer.compare(
             sourceRecords: src, destRecords: dstUnion,
@@ -2157,10 +2157,10 @@ struct VolumeCompareTests {
         // File C is on MacPro only — no backup anywhere. Audit must flag it.
         let src = [
             makeRecord(filename: "A.mov", path: "/Volumes/MacPro/A.mov", md5: "a1", size: 100),
-            makeRecord(filename: "C.mov", path: "/Volumes/MacPro/C.mov", md5: "c3", size: 300),
+            makeRecord(filename: "C.mov", path: "/Volumes/MacPro/C.mov", md5: "c3", size: 300)
         ]
         let dstUnion = [
-            makeRecord(filename: "A.mov", path: "/Volumes/SSD/A.mov", md5: "a1", size: 100),
+            makeRecord(filename: "A.mov", path: "/Volumes/SSD/A.mov", md5: "a1", size: 100)
             // no record of C.mov anywhere
         ]
         let result = VolumeComparer.compare(
@@ -2178,9 +2178,9 @@ struct VolumeCompareTests {
         // A file that exists on 3 backup volumes shouldn't inflate the "safe" count.
         let src = [makeRecord(filename: "A.mov", path: "/Volumes/MacPro/A.mov", md5: "a1", size: 100)]
         let dstUnion = [
-            makeRecord(filename: "A.mov", path: "/Volumes/SSD/A.mov",    md5: "a1", size: 100),
+            makeRecord(filename: "A.mov", path: "/Volumes/SSD/A.mov", md5: "a1", size: 100),
             makeRecord(filename: "A.mov", path: "/Volumes/Backup/A.mov", md5: "a1", size: 100),
-            makeRecord(filename: "A.mov", path: "/Volumes/Archive/A.mov",md5: "a1", size: 100),
+            makeRecord(filename: "A.mov", path: "/Volumes/Archive/A.mov", md5: "a1", size: 100)
         ]
         let result = VolumeComparer.compare(
             sourceRecords: src, destRecords: dstUnion,
@@ -2218,7 +2218,7 @@ struct VolumeCompareTests {
         // kills both copies.
         let allRecords = [
             makeRecord(filename: "precious.mov", path: "/Volumes/InternalRaid/precious.mov", md5: "p1", size: 1000),
-            makeRecord(filename: "precious.mov", path: "/Volumes/ExternalRaid/precious.mov", md5: "p1", size: 1000),
+            makeRecord(filename: "precious.mov", path: "/Volumes/ExternalRaid/precious.mov", md5: "p1", size: 1000)
             // No copy anywhere off-MacPro.
         ]
         let macProVolumes = ["/Volumes/InternalRaid", "/Volumes/ExternalRaid"]
@@ -2244,7 +2244,7 @@ struct VolumeCompareTests {
         let allRecords = [
             makeRecord(filename: "precious.mov", path: "/Volumes/InternalRaid/precious.mov", md5: "p1", size: 1000),
             makeRecord(filename: "precious.mov", path: "/Volumes/ExternalRaid/precious.mov", md5: "p1", size: 1000),
-            makeRecord(filename: "precious.mov", path: "/Volumes/MyBook3TB/precious.mov",    md5: "p1", size: 1000),
+            makeRecord(filename: "precious.mov", path: "/Volumes/MyBook3TB/precious.mov", md5: "p1", size: 1000)
         ]
         let macProVolumes = ["/Volumes/InternalRaid", "/Volumes/ExternalRaid"]
 
@@ -2275,7 +2275,7 @@ struct VolumeCompareTests {
             makeRecord(filename: "A.mov", path: "/Volumes/MacStudio/A.mov", md5: "a", size: 100),  // safe
             makeRecord(filename: "B.mov", path: "/Volumes/MyBook3TB/B.mov", md5: "b", size: 200),  // safe
             // C.mov has no backup on declared destinations
-            makeRecord(filename: "C.mov", path: "/Volumes/SomeOtherDrive/C.mov", md5: "c", size: 300),  // ignored — not a picked dest
+            makeRecord(filename: "C.mov", path: "/Volumes/SomeOtherDrive/C.mov", md5: "c", size: 300)  // ignored — not a picked dest
         ]
         let srcVols = ["/Volumes/InternalRaid"]
         let dstVols = ["/Volumes/MacStudio", "/Volumes/MyBook3TB"]
@@ -2420,7 +2420,7 @@ struct CatalogImportExportTests {
         let source = VideoScanModel()
         source.records = [
             makeRec(name: "shared.mov", md5: "SAME", size: 500),
-            makeRec(name: "new.mov",    md5: "NEW",  size: 700)
+            makeRec(name: "new.mov", md5: "NEW", size: 700)
         ]
 
         let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -2461,10 +2461,10 @@ struct ScanContextTests {
 
     @Test func defaultsAreEmpty() {
         let ctx = ScanContext()
-        #expect(ctx.scanHost == "")
-        #expect(ctx.volumeUUID == "")
-        #expect(ctx.volumeMountType == "")
-        #expect(ctx.remoteServerName == "")
+        #expect(ctx.scanHost.isEmpty)
+        #expect(ctx.volumeUUID.isEmpty)
+        #expect(ctx.volumeMountType.isEmpty)
+        #expect(ctx.remoteServerName.isEmpty)
         #expect(ctx.scannedAt == nil)
         #expect(ctx.isPopulated == false)
         #expect(ctx.isRemoteMount == false)
@@ -2518,7 +2518,7 @@ struct ScanContextTests {
 
     @Test func decodeFromEmptyJSONYieldsDefaults() throws {
         // Forward compatibility: an object with no known keys must decode to defaults.
-        let data = "{}".data(using: .utf8)!
+        let data = Data("{}".utf8)
         let ctx = try JSONDecoder().decode(ScanContext.self, from: data)
         #expect(ctx == ScanContext())
     }
@@ -2555,9 +2555,9 @@ struct ScanContextTests {
 
     @Test func parseRemoteServerLocalReturnsEmpty() {
         #expect(VolumeReachability.parseRemoteServer(
-            fsType: "apfs", mntFromName: "/dev/disk3s1") == "")
+            fsType: "apfs", mntFromName: "/dev/disk3s1").isEmpty)
         #expect(VolumeReachability.parseRemoteServer(
-            fsType: "hfs", mntFromName: "/dev/disk4") == "")
+            fsType: "hfs", mntFromName: "/dev/disk4").isEmpty)
     }
 
     // MARK: capture (integration)
@@ -2706,7 +2706,7 @@ struct ExtractMetadataTests {
         ScanEngine.extractMetadata(probe: probe, into: rec)
         #expect(rec.streamTypeRaw == StreamType.videoOnly.rawValue)
         #expect(rec.videoCodec == "prores")
-        #expect(rec.audioCodec == "")
+        #expect(rec.audioCodec.isEmpty)
         #expect(rec.isPlayable == "Yes")
     }
 
@@ -2719,7 +2719,7 @@ struct ExtractMetadataTests {
         ScanEngine.extractMetadata(probe: probe, into: rec)
         #expect(rec.streamTypeRaw == StreamType.audioOnly.rawValue)
         #expect(rec.audioCodec == "pcm_s24le")
-        #expect(rec.videoCodec == "")
+        #expect(rec.videoCodec.isEmpty)
         #expect(rec.isPlayable == "Yes")
     }
 
@@ -2742,7 +2742,7 @@ struct ExtractMetadataTests {
         """)
         let rec = VideoRecord()
         ScanEngine.extractMetadata(probe: probe, into: rec)
-        #expect(rec.resolution == "")
+        #expect(rec.resolution.isEmpty)
     }
 
     @Test func timecodeFromFormatTags() throws {
@@ -2810,8 +2810,8 @@ struct ExtractMetadataTests {
         """)
         let rec = VideoRecord()
         ScanEngine.extractMetadata(probe: probe, into: rec)
-        #expect(rec.totalBitrate == "")
-        #expect(rec.videoBitrate == "")
+        #expect(rec.totalBitrate.isEmpty)
+        #expect(rec.videoBitrate.isEmpty)
     }
 
     @Test func multipleVideoStreamsUseFirstOnly() throws {

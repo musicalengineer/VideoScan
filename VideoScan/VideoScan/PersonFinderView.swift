@@ -11,7 +11,7 @@ struct PersonFinderView: View {
     @EnvironmentObject var dashboard: DashboardState
     @EnvironmentObject var model: PersonFinderModel
     @State private var selectedResultIDs = Set<UUID>()
-    @State private var inspectedResult: ClipResult? = nil
+    @State private var inspectedResult: ClipResult?
     @State private var resultSortOrder = [KeyPathComparator(\ClipResult.videoFilename)]
 
     var selectedJobID: UUID? {
@@ -46,14 +46,14 @@ struct PersonFinderView: View {
 
     // MARK: People Gallery — saved family profiles
 
-    @State private var confirmDeleteProfile: POIProfile? = nil
-    @State private var editingProfile: POIProfile? = nil
+    @State private var confirmDeleteProfile: POIProfile?
+    @State private var editingProfile: POIProfile?
     /// The original name of the profile being edited (nil when adding new).
-    @State private var editingOriginalName: String? = nil
+    @State private var editingOriginalName: String?
     /// Briefly set after a profile save to flash confirmation on the card.
-    @State private var justSavedProfileID: String? = nil
+    @State private var justSavedProfileID: String?
     /// Alert message shown when user tries to edit/switch during a scan.
-    @State private var scanLockMessage: String? = nil
+    @State private var scanLockMessage: String?
 
     var peopleGallery: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -222,7 +222,7 @@ struct PersonFinderView: View {
     @State private var showFailures = false
     @AppStorage("faceThumbnailSize") private var thumbSize: Double = 58
     @AppStorage("facesStripHeight") private var facesStripHeight: Double = 90
-    @State private var inspectedFace: ReferenceFace? = nil
+    @State private var inspectedFace: ReferenceFace?
 
     @ViewBuilder
     var loadedFacesStrip: some View {
@@ -362,8 +362,7 @@ struct PersonFinderView: View {
                     .frame(height: 5)
                     .contentShape(Rectangle())
                     .onHover { inside in
-                        if inside { NSCursor.resizeUpDown.push() }
-                        else { NSCursor.pop() }
+                        if inside { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
                     }
                     .gesture(
                         DragGesture(minimumDistance: 1)
@@ -969,11 +968,11 @@ struct PersonCard: View {
 struct CompactFaceThumbnail: View {
     let face: ReferenceFace
     var size: CGFloat = 58
-    var onRemove: (() -> Void)? = nil
+    var onRemove: (() -> Void)?
     /// Optional full path to the source image on disk. When set, a
     /// "Show in Finder" item appears in the context menu so users can
     /// see where the reference photo actually lives.
-    var sourceFileURL: URL? = nil
+    var sourceFileURL: URL?
 
     private var borderColor: Color {
         switch face.quality {

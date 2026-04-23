@@ -64,14 +64,14 @@ struct ScanContext: Codable, Equatable {
         volumeUUID       = try c.decodeIfPresent(String.self, forKey: .volumeUUID) ?? ""
         volumeMountType  = try c.decodeIfPresent(String.self, forKey: .volumeMountType) ?? ""
         remoteServerName = try c.decodeIfPresent(String.self, forKey: .remoteServerName) ?? ""
-        scannedAt        = try c.decodeIfPresent(Date.self,   forKey: .scannedAt)
+        scannedAt        = try c.decodeIfPresent(Date.self, forKey: .scannedAt)
     }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
-        if !scanHost.isEmpty         { try c.encode(scanHost,         forKey: .scanHost) }
-        if !volumeUUID.isEmpty       { try c.encode(volumeUUID,       forKey: .volumeUUID) }
-        if !volumeMountType.isEmpty  { try c.encode(volumeMountType,  forKey: .volumeMountType) }
+        if !scanHost.isEmpty { try c.encode(scanHost, forKey: .scanHost) }
+        if !volumeUUID.isEmpty { try c.encode(volumeUUID, forKey: .volumeUUID) }
+        if !volumeMountType.isEmpty { try c.encode(volumeMountType, forKey: .volumeMountType) }
         if !remoteServerName.isEmpty { try c.encode(remoteServerName, forKey: .remoteServerName) }
         try c.encodeIfPresent(scannedAt, forKey: .scannedAt)
     }

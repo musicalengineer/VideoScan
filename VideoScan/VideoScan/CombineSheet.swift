@@ -97,8 +97,7 @@ struct CombineSheet: View {
                                 Toggle("", isOn: Binding(
                                     get: { checkedPairs.contains(i) },
                                     set: { on in
-                                        if on { checkedPairs.insert(i) }
-                                        else  { checkedPairs.remove(i) }
+                                        if on { checkedPairs.insert(i) } else { checkedPairs.remove(i) }
                                     }
                                 ))
                                 .toggleStyle(.checkbox)

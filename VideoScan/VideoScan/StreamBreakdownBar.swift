@@ -5,11 +5,11 @@ struct StreamBreakdownBar: View {
     let counts: [String: Int]
 
     private static let categories: [(key: String, label: String, color: Color)] = [
-        (StreamType.videoAndAudio.rawValue, "V+A",     .green),
-        (StreamType.videoOnly.rawValue,     "V-only",  .orange),
-        (StreamType.audioOnly.rawValue,     "A-only",  .yellow),
-        (StreamType.noStreams.rawValue,      "None",    .gray),
-        (StreamType.ffprobeFailed.rawValue,  "Failed",  .red),
+        (StreamType.videoAndAudio.rawValue, "V+A", .green),
+        (StreamType.videoOnly.rawValue, "V-only", .orange),
+        (StreamType.audioOnly.rawValue, "A-only", .yellow),
+        (StreamType.noStreams.rawValue, "None", .gray),
+        (StreamType.ffprobeFailed.rawValue, "Failed", .red)
     ]
 
     private var total: Int {

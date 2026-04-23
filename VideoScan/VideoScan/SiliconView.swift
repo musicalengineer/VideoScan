@@ -71,7 +71,7 @@ struct SiliconChipView: View {
                          glow: matchFlashStrength > 0.01),
             SiliconBlock(label: "MEM",
                          rect: CGRect(x: 0.73, y: 0.08, width: 0.22, height: 0.42),
-                         load: memLoad, active: true),
+                         load: memLoad, active: true)
         ]
     }
 

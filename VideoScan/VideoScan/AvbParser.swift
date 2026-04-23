@@ -361,6 +361,9 @@ final class AvbParser {
     /// and fill in any missing media-path / descriptor-type / tape-name fields.
     /// State flows through inout parameters — this is exactly what the original
     /// nested loop did, just isolated for readability and testability.
+    /// "MasterMob" is the AAF/OMF spec term for the top-level composition mob;
+    /// keeping the name matches the Avid/SMPTE documentation.
+    // swiftlint:disable:next inclusive_language
     private static func chaseMasterMobDescriptors(
         mobObj: AvbObject,
         objectPositions: [Int],

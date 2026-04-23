@@ -10,7 +10,7 @@ struct ContentView: View {
 
     private let tabs: [(label: String, icon: String, tag: Int)] = [
         ("People", "person.2.fill", 0),
-        ("Media", "film.stack", 1),
+        ("Media", "film.stack", 1)
     ]
 
     var body: some View {
@@ -747,8 +747,7 @@ struct CatalogView: View {
                 .disabled(model.scanTargets.isEmpty || model.scanTargets.allSatisfy { $0.status.isActive })
 
                 Button(action: {
-                    if model.hasPausedTargets { model.resumeAllTargets() }
-                    else { model.pauseAllTargets() }
+                    if model.hasPausedTargets { model.resumeAllTargets() } else { model.pauseAllTargets() }
                 }) {
                     Label(model.hasPausedTargets ? "Resume All" : "Pause All",
                           systemImage: model.hasPausedTargets ? "play.fill" : "pause.fill")

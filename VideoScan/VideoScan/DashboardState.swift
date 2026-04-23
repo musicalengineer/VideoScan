@@ -19,7 +19,7 @@ final class DashboardState: ObservableObject {
     // MARK: - Chip identity / match flash
 
     @Published var chipName: String = ""
-    @Published var lastMatchFlashAt: Date? = nil
+    @Published var lastMatchFlashAt: Date?
 
     private static func detectChipName() -> String {
         var size = 0
@@ -71,7 +71,7 @@ final class DashboardState: ObservableObject {
 
     @Published var scanTotal: Int = 0
     @Published var scanCompleted: Int = 0
-    var scanStartTime: Date? = nil
+    var scanStartTime: Date?
 
     @Published var scanPhase: ScanPhase = .idle
     @Published var volumeProgress: [VolumeProgress] = []
@@ -117,7 +117,7 @@ final class DashboardState: ObservableObject {
 
     @Published var combineTotal: Int = 0
     @Published var combineCompleted: Int = 0
-    var combineStartTime: Date? = nil
+    var combineStartTime: Date?
     @Published var combineCurrentFile: String = ""
     @Published var combineSucceeded: Int = 0
     @Published var combineFailed: Int = 0

@@ -100,9 +100,7 @@ enum Correlator {
                 guard score >= minimumScore else { continue }
 
                 let confidence: PairConfidence
-                if score >= 7      { confidence = .high }
-                else if score >= 4 { confidence = .medium }
-                else               { confidence = .low }
+                if score >= 7 { confidence = .high } else if score >= 4 { confidence = .medium } else { confidence = .low }
 
                 candidates.append(Candidate(
                     video: v, audio: a, score: score,
@@ -161,7 +159,7 @@ enum Correlator {
             let p = parts[i]
             if p.count > 1,
                let first = p.first,
-               (first == "V" || first == "A" || first == "v" || first == "a"),
+               first == "V" || first == "A" || first == "v" || first == "a",
                p.dropFirst().allSatisfy({ $0.isHexDigit }) {
                 parts[i] = "_" + p.dropFirst()
                 break

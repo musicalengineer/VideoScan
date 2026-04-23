@@ -291,6 +291,70 @@ func generateFeaturePrint(for image: CGImage) -> VNFeaturePrintObservation? {
 
 // MARK: - Argument Parsing
 
+/// Pulls the next argument value after index `i`, or aborts with a consistent error.
+private func nextValue(_ args: [String], _ i: inout Int, flag: String) -> String {
+    i += 1
+    guard i < args.count else { exitWithError("\(flag) requires a value") }
+    return args[i]
+}
+
+private func nextInt(_ args: [String], _ i: inout Int, flag: String, min: Int = Int.min) -> Int {
+    let raw = nextValue(args, &i, flag: flag)
+    guard let val = Int(raw), val >= min else {
+        exitWithError("\(flag) requires an integer \(min > Int.min ? ">= \(min)" : "")")
+    }
+    return val
+}
+
+private func nextFloat(_ args: [String], _ i: inout Int, flag: String,
+                       min: Float = -.infinity, max: Float = .infinity) -> Float {
+    let raw = nextValue(args, &i, flag: flag)
+    guard let val = Float(raw), val >= min, val <= max else {
+        exitWithError("\(flag) requires a float in [\(min), \(max)]")
+    }
+    return val
+}
+
+private func nextDouble(_ args: [String], _ i: inout Int, flag: String,
+                        min: Double = -.infinity) -> Double {
+    let raw = nextValue(args, &i, flag: flag)
+    guard let val = Double(raw), val >= min else {
+        exitWithError("\(flag) requires a float \(min > -.infinity ? ">= \(min)" : "")")
+    }
+    return val
+}
+
+/// Dispatch one flag to its handler; returns false if `arg` isn't a known flag.
+/// Kept small so `parseArguments` complexity stays below SwiftLint's ceiling.
+private func applyFlag(_ arg: String, args: [String], i: inout Int, config: inout Config) -> Bool {
+    switch arg {
+    case "--help", "-h":
+        printUsage()
+        exit(0)
+    case "--name":               config.name = nextValue(args, &i, flag: arg)
+    case "--output":             config.outputDir = nextValue(args, &i, flag: arg)
+    case "--no-clips":           config.noClips = true
+    case "--include-bundles":    config.skipBundles = false
+    case "--frame-step":         config.frameStep = nextInt(args, &i, flag: arg, min: 1)
+    case "--threshold":          config.threshold = nextFloat(args, &i, flag: arg)
+    case "--min-face-confidence":
+        config.minFaceConfidence = nextFloat(args, &i, flag: arg, min: 0, max: 1)
+    case "--pad":                config.pad = nextDouble(args, &i, flag: arg)
+    case "--min-duration":       config.minDuration = nextDouble(args, &i, flag: arg)
+    case "--min-presence-secs":  config.minPresenceSecs = nextDouble(args, &i, flag: arg, min: 0)
+    case "--require-primary":    config.requirePrimary = true
+    case "--concat-output":      config.concatOutput = true
+    case "--concat-path":        config.concatOutputPath = nextValue(args, &i, flag: arg)
+    case "--concurrency":        config.concurrency = nextInt(args, &i, flag: arg, min: 1)
+    case "--decade-chapters":
+        config.decadeChapters = true
+        config.concatOutput = true  // decade-chapters implies concat
+    default:
+        return false
+    }
+    return true
+}
+
 func parseArguments() -> Config {
     var config = Config()
     let args = CommandLine.arguments
@@ -298,76 +362,7 @@ func parseArguments() -> Config {
     var i = 1
     while i < args.count {
         let arg = args[i]
-        switch arg {
-        case "--help", "-h":
-            printUsage()
-            exit(0)
-        case "--name":
-            i += 1
-            guard i < args.count else { exitWithError("--name requires a value") }
-            config.name = args[i]
-        case "--output":
-            i += 1
-            guard i < args.count else { exitWithError("--output requires a value") }
-            config.outputDir = args[i]
-        case "--no-clips":
-            config.noClips = true
-        case "--include-bundles":
-            config.skipBundles = false
-        case "--frame-step":
-            i += 1
-            guard i < args.count, let val = Int(args[i]), val > 0 else {
-                exitWithError("--frame-step requires a positive integer")
-            }
-            config.frameStep = val
-        case "--threshold":
-            i += 1
-            guard i < args.count, let val = Float(args[i]) else {
-                exitWithError("--threshold requires a float value")
-            }
-            config.threshold = val
-        case "--min-face-confidence":
-            i += 1
-            guard i < args.count, let val = Float(args[i]), val >= 0, val <= 1 else {
-                exitWithError("--min-face-confidence requires a float between 0 and 1")
-            }
-            config.minFaceConfidence = val
-        case "--pad":
-            i += 1
-            guard i < args.count, let val = Double(args[i]) else {
-                exitWithError("--pad requires a float value")
-            }
-            config.pad = val
-        case "--min-duration":
-            i += 1
-            guard i < args.count, let val = Double(args[i]) else {
-                exitWithError("--min-duration requires a float value")
-            }
-            config.minDuration = val
-        case "--min-presence-secs":
-            i += 1
-            guard i < args.count, let val = Double(args[i]), val >= 0 else {
-                exitWithError("--min-presence-secs requires a non-negative float")
-            }
-            config.minPresenceSecs = val
-        case "--require-primary":
-            config.requirePrimary = true
-        case "--concat-output":
-            config.concatOutput = true
-        case "--concat-path":
-            i += 1
-            guard i < args.count else { exitWithError("--concat-path requires a value") }
-            config.concatOutputPath = args[i]
-        case "--concurrency":
-            i += 1
-            guard i < args.count, let val = Int(args[i]), val >= 1 else {
-                exitWithError("--concurrency requires a positive integer")
-            }
-            config.concurrency = val
-        case "--decade-chapters":
-            config.decadeChapters = true
-            config.concatOutput = true  // decade-chapters implies concat
-        default:
+        if !applyFlag(arg, args: args, i: &i, config: &config) {
             if arg.hasPrefix("-") {
                 exitWithError("Unknown option: \(arg)")
             }

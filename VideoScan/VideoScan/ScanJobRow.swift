@@ -19,10 +19,10 @@ struct ScanJobRow: View {
     let onPause: () -> Void
     let onReset: () -> Void
     let onRemove: () -> Void
-    var onPreview: (() -> Void)? = nil
+    var onPreview: (() -> Void)?
 
     @State private var showSettingsPopover = false
-    @State private var startAlert: String? = nil
+    @State private var startAlert: String?
 
     private var isIdle: Bool { job.status.isIdle }
     private var isActive: Bool { job.status.isActive }
@@ -799,14 +799,14 @@ struct ScanRingChart: View {
     let threshold: Float
 
     private var scannedFrac: Double { total > 0 ? min(1, Double(scanned) / Double(total)) : 0 }
-    private var hitsFrac:    Double { total > 0 ? min(1, Double(hits)    / Double(total)) : 0 }
+    private var hitsFrac: Double { total > 0 ? min(1, Double(hits)    / Double(total)) : 0 }
     private var vps: Double? { elapsedSecs > 2 && scanned > 2 ? Double(scanned) / elapsedSecs : nil }
 
     // Colour the best-dist reading relative to the active threshold
     private var distColor: Color {
         guard bestDist < .greatestFiniteMagnitude else { return .secondary }
-        if bestDist <= threshold          { return .green }   // within threshold — a hit
-        if bestDist <= threshold + 0.10   { return .orange }  // close — might just need threshold nudge
+        if bestDist <= threshold { return .green }   // within threshold — a hit
+        if bestDist <= threshold + 0.10 { return .orange }  // close — might just need threshold nudge
         return .secondary
     }
 

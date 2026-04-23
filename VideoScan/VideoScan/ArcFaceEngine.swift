@@ -102,7 +102,7 @@ nonisolated func arcfaceEmbedding(from faceImage: CGImage, model: MLModel) -> [F
     var pixelBuffer: CVPixelBuffer?
     let attrs: [String: Any] = [
         kCVPixelBufferCGImageCompatibilityKey as String: true,
-        kCVPixelBufferCGBitmapContextCompatibilityKey as String: true,
+        kCVPixelBufferCGBitmapContextCompatibilityKey as String: true
     ]
     let status = CVPixelBufferCreate(kCFAllocatorDefault, size, size,
                                      kCVPixelFormatType_32ARGB, attrs as CFDictionary, &pixelBuffer)
@@ -166,7 +166,7 @@ nonisolated func arcfaceLoadReferenceEmbeddings(
     model: MLModel
 ) -> ([[Float]], String?) {
     let fm = FileManager.default
-    let imageExts: Set<String> = ["jpg","jpeg","png","heic","heif","tiff","tif","bmp","gif"]
+    let imageExts: Set<String> = ["jpg", "jpeg", "png", "heic", "heif", "tiff", "tif", "bmp", "gif"]
     var imagePaths: [String] = []
     var isDir: ObjCBool = false
     fm.fileExists(atPath: path, isDirectory: &isDir)
@@ -398,7 +398,7 @@ nonisolated func pfProcessVideoWithArcFace(
     ) else { return nil }
 
     await progressFn(filename)
-    await logFn("[\(index)/\(total)] \(filename)  (\(pfFormatDuration(ctx.duration)), \(String(format:"%.1f",ctx.fps)) fps)  [ArcFace]")
+    await logFn("[\(index)/\(total)] \(filename)  (\(pfFormatDuration(ctx.duration)), \(String(format: "%.1f", ctx.fps)) fps)  [ArcFace]")
 
     // ArcFace uses cosine similarity (higher = better match); default 0.40 ~ Vision 0.52.
     let cosineThreshold = settings.arcfaceThreshold
@@ -486,11 +486,11 @@ nonisolated func pfProcessVideoWithArcFace(
         }
 
         let pct = ctx.duration > 0 ? Int(frameTime / ctx.duration * 100) : 0
-        await progressFn("\(filename)  [t=\(String(format:"%.0f",frameTime))s / \(String(format:"%.0f",ctx.duration))s · \(hits.count) hit(s)]")
+        await progressFn("\(filename)  [t=\(String(format: "%.0f", frameTime))s / \(String(format: "%.0f", ctx.duration))s · \(hits.count) hit(s)]")
         for m in milestones where pct >= m && !loggedMilestones.contains(m) {
             loggedMilestones.insert(m)
             let cosStr = bestCosineEver > -1 ? String(format: "%.3f", bestCosineEver) : "—"
-            await logFn("    \(m)% — t=\(String(format:"%.0f",frameTime))s/\(String(format:"%.0f",ctx.duration))s, \(totalFacesDetected) faces detected, \(hits.count) hit(s), best cosine \(cosStr)")
+            await logFn("    \(m)% — t=\(String(format: "%.0f", frameTime))s/\(String(format: "%.0f", ctx.duration))s, \(totalFacesDetected) faces detected, \(hits.count) hit(s), best cosine \(cosStr)")
             if bestCosineEver > -1 { await distFn(1.0 - bestCosineEver) }
         }
     }

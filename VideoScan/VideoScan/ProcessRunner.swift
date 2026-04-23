@@ -23,8 +23,7 @@ enum ProcessRunner {
                     let data = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
                     continuation.resume(returning: String(data: data, encoding: .utf8))
                 }
-                do    { try proc.run() }
-                catch { continuation.resume(returning: nil) }
+                do { try proc.run() } catch { continuation.resume(returning: nil) }
             }
         } onCancel: {
             if proc.isRunning { proc.terminate() }
@@ -53,8 +52,7 @@ enum ProcessRunner {
                     let stderr = String(data: errData, encoding: .utf8) ?? ""
                     continuation.resume(returning: (stdout, stderr))
                 }
-                do    { try proc.run() }
-                catch { continuation.resume(returning: (nil, error.localizedDescription)) }
+                do { try proc.run() } catch { continuation.resume(returning: (nil, error.localizedDescription)) }
             }
         } onCancel: {
             if proc.isRunning { proc.terminate() }
@@ -125,8 +123,7 @@ enum ProcessRunner {
                     if !remaining.isEmpty { stdoutCollector.append(remaining) }
                     continuation.resume(returning: stdoutCollector.string)
                 }
-                do    { try proc.run() }
-                catch {
+                do { try proc.run() } catch {
                     stderrHandle.readabilityHandler = nil
                     stdoutHandle.readabilityHandler = nil
                     stderrLine("⚠ Could not launch: \(executable) — \(error.localizedDescription)")
