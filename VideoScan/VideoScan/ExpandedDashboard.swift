@@ -415,8 +415,11 @@ private struct VolumeProgressRow: View {
                     .lineLimit(1)
                 Spacer()
                 if volume.isWalking {
-                    Text("scanning...")
-                        .font(.system(size: 13))
+                    // Walker is still streaming URLs — show both counts.
+                    // A "completed / total" percentage is meaningless while
+                    // the denominator is still growing.
+                    Text("disc \(volume.totalFiles) · probed \(volume.completedFiles)")
+                        .font(.system(size: 13, design: .monospaced))
                         .foregroundColor(.orange)
                 } else {
                     Text("\(volume.completedFiles)/\(volume.totalFiles)")
@@ -443,22 +446,32 @@ private struct VolumeProgressRow: View {
                 }
             }
 
-            ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.gray.opacity(0.15))
-                    .frame(height: 5)
-                GeometryReader { geo in
+            if volume.isWalking {
+                // Indeterminate while walker is still yielding: the fraction
+                // is a moving target (denominator grows with each yield), so
+                // a determinate bar would overshoot then shrink.
+                ProgressView()
+                    .progressViewStyle(.linear)
+                    .controlSize(.mini)
+                    .tint(.orange)
+            } else {
+                ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 2)
-                        .fill(
-                            LinearGradient(
-                                colors: [.blue, .cyan],
-                                startPoint: .leading, endPoint: .trailing
+                        .fill(Color.gray.opacity(0.15))
+                        .frame(height: 5)
+                    GeometryReader { geo in
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(
+                                LinearGradient(
+                                    colors: [.blue, .cyan],
+                                    startPoint: .leading, endPoint: .trailing
+                                )
                             )
-                        )
-                        .frame(width: max(geo.size.width * fraction, 0), height: 5)
-                        .animation(.easeInOut(duration: 0.3), value: fraction)
+                            .frame(width: max(geo.size.width * fraction, 0), height: 5)
+                            .animation(.easeInOut(duration: 0.3), value: fraction)
+                    }
+                    .frame(height: 5)
                 }
-                .frame(height: 5)
             }
         }
     }

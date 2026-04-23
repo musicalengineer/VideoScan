@@ -87,8 +87,12 @@ enum ScanEngine {
         let fileSize = (attrs?[.size] as? Int64) ?? 0
         let modDate = (attrs?[.modificationDate] as? Date) ?? Date.distantPast
 
-        // Cache hit — skip ffprobe entirely
+        // Cache hit — skip ffprobe entirely. We still refresh scanContext so
+        // provenance reflects the current scan (host / mount type / volume UUID
+        // / remote server), letting old records backfill on rescan without
+        // paying the ffprobe cost.
         if let cached = cache.lookup(path: path, fileSize: fileSize, modDate: modDate) {
+            cached.scanContext = ScanContext.capture(for: url)
             return cached
         }
 
@@ -159,6 +163,10 @@ enum ScanEngine {
         if rec.streamTypeRaw != StreamType.ffprobeFailed.rawValue {
             cache.store(record: rec, fileSize: fileSize, modDate: modDate)
         }
+        // Stamp scan-time provenance. Done after caching so the SQLite cache
+        // stays schema-stable — scanContext lives in catalog.json only and is
+        // recaptured fresh on every scan (cheap: two syscalls).
+        rec.scanContext = ScanContext.capture(for: url)
         return rec
     }
 
@@ -175,6 +183,46 @@ enum ScanEngine {
         }
         let output = try? JSONDecoder().decode(FFProbeOutput.self, from: data)
         return (output, result.stderr)
+    }
+
+    /// Translate raw ffprobe stderr into a human-readable label + detail.
+    /// Used to classify failed probes (damaged file, truncated, access denied, timeout…)
+    /// for display in the catalog's "Is Playable" and "Notes" columns.
+    /// Pure — no I/O, no globals. Safe to call from any actor.
+    static func humanReadableDiagnosis(stderr: String) -> (label: String, detail: String) {
+        let lower = stderr.lowercased()
+
+        if lower.contains("moov atom not found") {
+            return ("Damaged file",
+                    "File is corrupt or incomplete — missing media index (moov atom not found)")
+        }
+        if lower.contains("invalid data found") {
+            return ("Damaged file",
+                    "File contains invalid or unreadable data (invalid data found when processing input)")
+        }
+        if lower.contains("end of file") || lower.contains("truncated") {
+            return ("Truncated file",
+                    "File appears to be cut short or incomplete (\(stderr))")
+        }
+        if lower.contains("permission denied") {
+            return ("Access denied",
+                    "Cannot read file — permission denied")
+        }
+        if lower.contains("operation timed out") {
+            return ("Network timeout",
+                    "File read timed out — network volume may be slow or unreachable")
+        }
+        if lower.contains("no such file") {
+            return ("File not found",
+                    "File was discovered during scan but is no longer accessible")
+        }
+        if stderr.isEmpty {
+            return ("Unreadable file",
+                    "File could not be analyzed — no additional details available")
+        }
+        // Fallback: use the raw stderr but prefix with a human label
+        return ("Unreadable file",
+                "File could not be analyzed — \(stderr)")
     }
 
     /// Extract metadata fields from ffprobe output into a `VideoRecord`.

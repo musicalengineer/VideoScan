@@ -6,10 +6,20 @@ import Foundation
 actor RAMDisk {
     private(set) var mountPoint: String?
     private var devicePath: String?
+    /// Ref count of active users (concurrent scans). Only the last unmount()
+    /// actually ejects — prevents one scan's completion from yanking the disk
+    /// out from under a still-running parallel scan, which was causing every
+    /// subsequent network probe to fall back to direct reads and hit the 60s
+    /// timeout. See VideoScan issue #33 thread / overnight 2026-04-21.
+    private var refCount: Int = 0
 
     /// Mount a RAM disk of the given size. Returns true on success.
+    /// Idempotent across callers — if already mounted, just bumps the refcount.
     func mount(sizeMB: Int) async -> Bool {
-        guard mountPoint == nil else { return true }
+        if mountPoint != nil {
+            refCount += 1
+            return true
+        }
 
         let sectors = sizeMB * 2048  // 512-byte sectors
         let name = "VideoScan_Temp"
@@ -57,18 +67,26 @@ actor RAMDisk {
         guard let dev = result else { return false }
         devicePath = dev
         mountPoint = mp
+        refCount = 1
         return true
     }
 
-    /// Unmount and release the RAM disk.
+    /// Decrement refcount; only actually unmount when the last user releases.
+    /// Matches the mount()/unmount() lifecycle of a single scan task.
     func unmount() async {
         guard let dev = devicePath else { return }
+        refCount -= 1
+        if refCount > 0 { return }
         await Task.detached(priority: .userInitiated) {
             Self.ejectDeviceSync(dev)
         }.value
         devicePath = nil
         mountPoint = nil
+        refCount = 0
     }
+
+    /// Current refcount — exposed for tests and diagnostics only.
+    var currentRefCount: Int { refCount }
 
     /// Synchronous eject — only call from a detached task, never from the cooperative pool.
     private static func ejectDeviceSync(_ dev: String) {

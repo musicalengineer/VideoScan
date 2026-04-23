@@ -130,10 +130,9 @@ struct CatalogView: View {
     @State private var deleteVolumeCatalogTarget: CatalogScanTarget?
     /// Selected volume IDs in the scan volumes table.
     @State private var selectedVolumeIDs: Set<UUID> = []
-    /// Catalog status alert for a volume.
-    @State private var showCatalogStatusAlert = false
-    @State private var catalogStatusAlertTitle = ""
-    @State private var catalogStatusAlertText = ""
+    /// Opens an independent resizable window keyed by CatalogInfoItem value.
+    /// Defined as a `WindowGroup(for:)` scene in VideoScanApp.
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VerticalSplitView(
@@ -332,9 +331,98 @@ struct CatalogView: View {
         }
     }
 
-    static func buildCatalogStatus(records: [VideoRecord], target: CatalogScanTarget) -> String {
+    /// Open the Catalog Info window for a given target. Shared by the
+    /// right-click menu Button and the Cmd-I global shortcut. Window identity
+    /// is the volume path, so repeat invocations focus the existing window
+    /// rather than stacking duplicates.
+    private func showCatalogInfo(for target: CatalogScanTarget) {
+        let volName = VolumeReachability.volumeName(forPath: target.searchPath)
+        let recs = model.records.filter { $0.fullPath.hasPrefix(target.searchPath) }
+        let item = CatalogInfoItem(
+            volumePath: target.searchPath,
+            title: "Catalog Info — \(volName)",
+            message: Self.buildCatalogInfo(records: recs, target: target)
+        )
+        openWindow(value: item)
+    }
+
+    /// Cmd-I handler: resolves the volume-table selection to a target and
+    /// opens Catalog Info. Requires exactly one row selected.
+    private func showCatalogInfoForSelection() {
+        guard selectedVolumeIDs.count == 1,
+              let id = selectedVolumeIDs.first,
+              let t = target(for: id) else { return }
+        showCatalogInfo(for: t)
+    }
+
+    /// Single-window "Catalog Info" builder: combines provenance (where/when/
+    /// how the catalog was captured — from ScanContext) with the catalog
+    /// content summary (counts, sizes, codecs, errors). Sections are separated
+    /// by bold rules so the resizable sheet reads like a printable report.
+    static func buildCatalogInfo(records: [VideoRecord], target: CatalogScanTarget) -> String {
         guard !records.isEmpty else { return "No catalog data for this volume." }
 
+        var lines: [String] = []
+        let rule = String(repeating: "━", count: 48)
+
+        // ══════════════════════════════════════════════════════════
+        // Section 1 — PROVENANCE (where/when/how this catalog was made)
+        // ══════════════════════════════════════════════════════════
+        let populated = records.filter { $0.scanContext.isPopulated }
+        let unpopulated = records.count - populated.count
+
+        lines.append(rule)
+        lines.append("  PROVENANCE")
+        lines.append(rule)
+        lines.append("Volume Path: \(target.searchPath)")
+        lines.append("Records: \(records.count) (with provenance: \(populated.count), without: \(unpopulated))")
+
+        if populated.isEmpty {
+            lines.append("")
+            lines.append("No scan-provenance data has been captured yet.")
+            lines.append("Rescan this volume to populate scan host, mount type,")
+            lines.append("volume UUID, and remote-server fields.")
+        } else {
+            let hosts       = Set(populated.map { $0.scanContext.scanHost }.filter { !$0.isEmpty })
+            let mountTypes  = Set(populated.map { $0.scanContext.volumeMountType }.filter { !$0.isEmpty })
+            let uuids       = Set(populated.map { $0.scanContext.volumeUUID }.filter { !$0.isEmpty })
+            let remoteHosts = Set(populated.map { $0.scanContext.remoteServerName }.filter { !$0.isEmpty })
+
+            lines.append("Scanned By: \(hosts.isEmpty ? "(unknown)" : hosts.sorted().joined(separator: ", "))")
+            lines.append("Mount Type: \(mountTypes.isEmpty ? "(unknown)" : mountTypes.sorted().joined(separator: ", "))")
+            if !remoteHosts.isEmpty {
+                lines.append("Remote Server: \(remoteHosts.sorted().joined(separator: ", "))")
+            }
+            if uuids.isEmpty {
+                lines.append("Volume UUID: (none — filesystem did not vend one)")
+            } else if uuids.count == 1 {
+                lines.append("Volume UUID: \(uuids.first!)")
+            } else {
+                lines.append("Volume UUID: \(uuids.count) distinct UUIDs seen:")
+                for u in uuids.sorted() { lines.append("  \(u)") }
+            }
+
+            let scanDates = populated.compactMap { $0.scanContext.scannedAt }
+            if let earliest = scanDates.min(), let latest = scanDates.max() {
+                let fmt = DateFormatter()
+                fmt.dateStyle = .medium
+                fmt.timeStyle = .short
+                if earliest == latest {
+                    lines.append("Scan Time: \(fmt.string(from: earliest))")
+                } else {
+                    lines.append("Scan Time Range: \(fmt.string(from: earliest)) → \(fmt.string(from: latest))")
+                }
+            }
+
+            if unpopulated > 0 {
+                lines.append("")
+                lines.append("Note: \(unpopulated) record(s) predate provenance capture — rescan to backfill.")
+            }
+        }
+
+        // ══════════════════════════════════════════════════════════
+        // Section 2 — CATALOG SUMMARY (what's in the catalog)
+        // ══════════════════════════════════════════════════════════
         let totalBytes = records.reduce(into: Int64(0)) { $0 += $1.sizeBytes }
         let va = records.filter { $0.streamType == .videoAndAudio }.count
         let vo = records.filter { $0.streamType == .videoOnly }.count
@@ -378,7 +466,10 @@ struct CatalogView: View {
             .prefix(8)
             .map { "\($0.key) (\($0.value))" }
 
-        var lines: [String] = []
+        lines.append("")
+        lines.append(rule)
+        lines.append("  CATALOG SUMMARY")
+        lines.append(rule)
         lines.append("Files: \(records.count)")
         lines.append("Total Duration: \(durationStr)")
         lines.append("Media Size: \(mediaSize)")
@@ -490,7 +581,7 @@ struct CatalogView: View {
                 lastScanned: target.lastScannedDate,
                 isReachable: target.isReachable,
                 isNetwork: isNet,
-                catalogStatusText: Self.buildCatalogStatus(records: recs, target: target)
+                catalogStatusText: Self.buildCatalogInfo(records: recs, target: target)
             )
         }
     }
@@ -637,6 +728,8 @@ struct CatalogView: View {
                 .fixedSize()
                 .help("Update or delete catalog data")
 
+                ScanOptionsMenu(model: model)
+
                 Button(action: { showVolumeCompare = true }) {
                     Label("Compare & Rescue", systemImage: "arrow.triangle.2.circlepath")
                 }
@@ -692,11 +785,16 @@ struct CatalogView: View {
             }
         }
         .background(Color(NSColor.controlBackgroundColor))
-        .alert("Catalog Status — \(catalogStatusAlertTitle)", isPresented: $showCatalogStatusAlert) {
-            Button("OK", role: .cancel) { }
-        } message: {
-            Text(catalogStatusAlertText)
-        }
+        .background(
+            // Hidden button gives Cmd-I a global binding on the scan-volumes
+            // pane — the context-menu Button's shortcut only fires when the
+            // menu is actually open, so this mirrors it for the selected row.
+            Button("") { showCatalogInfoForSelection() }
+                .keyboardShortcut("i", modifiers: .command)
+                .opacity(0)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        )
     }
 
     /// Auto-size the volume pane to fit all visible rows (header ~32 + ~30 per row),
@@ -838,14 +936,10 @@ struct CatalogView: View {
 
             Section("Catalog") {
                 if single {
-                    Button(action: {
-                        catalogStatusAlertTitle = VolumeReachability.volumeName(forPath: first.searchPath)
-                        let recs = model.records.filter { $0.fullPath.hasPrefix(first.searchPath) }
-                        catalogStatusAlertText = Self.buildCatalogStatus(records: recs, target: first)
-                        showCatalogStatusAlert = true
-                    }) {
-                        Label("Show Catalog Status", systemImage: "info.circle")
+                    Button(action: { showCatalogInfo(for: first) }) {
+                        Label("Catalog Info", systemImage: "info.circle")
                     }
+                    .keyboardShortcut("i", modifiers: .command)
                 }
 
                 Button(action: {
@@ -966,3 +1060,56 @@ struct CatalogView: View {
     }
 }
 
+/// Payload for the Catalog Info window. Codable/Hashable so it can back a
+/// `WindowGroup(for:)` scene — SwiftUI uses the value for window identity
+/// and session restoration, so two different volumes produce two distinct
+/// windows.
+struct CatalogInfoItem: Identifiable, Codable, Hashable {
+    /// Stable id — using the volume path means re-invoking Catalog Info on
+    /// the same volume focuses the existing window instead of stacking
+    /// duplicates. A fresh UUID would open a new window every click.
+    var id: String { volumePath }
+    let volumePath: String
+    let title: String
+    let message: String
+}
+
+/// Contents of the Catalog Info window. Independent resizable AppKit window
+/// (not a sheet) so Rick can drag edges freely, keep it open while working,
+/// or compare two volumes side by side.
+struct CatalogInfoWindow: View {
+    let item: CatalogInfoItem
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(item.title)
+                .font(.headline)
+                .padding(.horizontal, 16)
+                .padding(.top, 16)
+                .padding(.bottom, 12)
+
+            Divider()
+
+            ScrollView {
+                Text(item.message)
+                    .font(.system(size: 13, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+            }
+
+            Divider()
+
+            HStack {
+                Spacer()
+                Button("Copy") {
+                    let pb = NSPasteboard.general
+                    pb.clearContents()
+                    pb.setString(item.message, forType: .string)
+                }
+            }
+            .padding(12)
+        }
+        .frame(minWidth: 520, minHeight: 360)
+    }
+}

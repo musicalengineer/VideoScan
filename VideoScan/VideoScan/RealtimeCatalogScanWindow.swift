@@ -355,8 +355,11 @@ private struct VolumeMiniRow: View {
                     .lineLimit(1)
                 Spacer()
                 if volume.isWalking {
-                    Text("discovering…")
-                        .font(.system(size: 14, weight: .medium))
+                    // Walking + probing concurrently: the denominator is still
+                    // growing, so a percentage isn't meaningful yet. Show both
+                    // counts so the user sees real work happening on both sides.
+                    Text("discovered \(volume.totalFiles) · probed \(volume.completedFiles)")
+                        .font(.system(size: 14, weight: .medium, design: .monospaced))
                         .foregroundColor(.orange)
                 } else {
                     Text("\(volume.completedFiles) / \(volume.totalFiles)")
@@ -381,17 +384,30 @@ private struct VolumeMiniRow: View {
                     .foregroundColor(.red)
                 }
             }
-            ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(Color.gray.opacity(0.15))
-                    .frame(height: 10)
-                GeometryReader { geo in
+            if volume.isWalking {
+                // Indeterminate progress while the walker is still streaming
+                // URLs — the fraction "completedFiles / totalFiles" is a moving
+                // target since the denominator grows with every yield. A
+                // determinate bar in this phase would snap to high %, then
+                // shrink as more files are discovered, which is worse than no
+                // bar at all.
+                ProgressView()
+                    .progressViewStyle(.linear)
+                    .controlSize(.small)
+                    .tint(.orange)
+            } else {
+                ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 4)
-                        .fill(LinearGradient(colors: [.blue, .cyan], startPoint: .leading, endPoint: .trailing))
-                        .frame(width: max(geo.size.width * fraction, 0), height: 10)
-                        .animation(.easeInOut(duration: 0.3), value: fraction)
+                        .fill(Color.gray.opacity(0.15))
+                        .frame(height: 10)
+                    GeometryReader { geo in
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(LinearGradient(colors: [.blue, .cyan], startPoint: .leading, endPoint: .trailing))
+                            .frame(width: max(geo.size.width * fraction, 0), height: 10)
+                            .animation(.easeInOut(duration: 0.3), value: fraction)
+                    }
+                    .frame(height: 10)
                 }
-                .frame(height: 10)
             }
         }
         .padding(.vertical, 2)

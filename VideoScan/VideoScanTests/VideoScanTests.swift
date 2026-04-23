@@ -1266,7 +1266,7 @@ struct FFProbeIntegrationTests {
         #expect(output != nil, "ffprobe should parse MP4: \(stderr)")
 
         let rec = VideoRecord()
-        model.extractMetadata(probe: output!, into: rec)
+        ScanEngine.extractMetadata(probe: output!, into: rec)
         #expect(rec.streamType == .videoAndAudio)
         #expect(rec.videoCodec == "h264")
         #expect(!rec.resolution.isEmpty)
@@ -1281,7 +1281,7 @@ struct FFProbeIntegrationTests {
         #expect(output != nil, "ffprobe should parse MOV: \(stderr)")
 
         let rec = VideoRecord()
-        model.extractMetadata(probe: output!, into: rec)
+        ScanEngine.extractMetadata(probe: output!, into: rec)
         #expect(rec.streamType == .videoAndAudio)
         #expect(rec.videoCodec == "h264")
         #expect(rec.durationSeconds > 4.0)
@@ -1294,7 +1294,7 @@ struct FFProbeIntegrationTests {
         #expect(output != nil, "ffprobe should parse MKV: \(stderr)")
 
         let rec = VideoRecord()
-        model.extractMetadata(probe: output!, into: rec)
+        ScanEngine.extractMetadata(probe: output!, into: rec)
         #expect(rec.streamType == .videoAndAudio)
         #expect(rec.videoCodec == "h264")
     }
@@ -1306,7 +1306,7 @@ struct FFProbeIntegrationTests {
         #expect(output != nil, "ffprobe should parse MXF: \(stderr)")
 
         let rec = VideoRecord()
-        model.extractMetadata(probe: output!, into: rec)
+        ScanEngine.extractMetadata(probe: output!, into: rec)
         #expect(rec.streamType == .videoAndAudio)
         #expect(rec.videoCodec == "mpeg2video")
         #expect(rec.durationSeconds > 4.0)
@@ -1322,7 +1322,7 @@ struct FFProbeIntegrationTests {
         #expect(output != nil, "ffprobe should parse video-only MP4: \(stderr)")
 
         let rec = VideoRecord()
-        model.extractMetadata(probe: output!, into: rec)
+        ScanEngine.extractMetadata(probe: output!, into: rec)
         #expect(rec.streamType == .videoOnly)
         #expect(rec.videoCodec == "h264")
         #expect(rec.audioCodec.isEmpty)
@@ -1335,7 +1335,7 @@ struct FFProbeIntegrationTests {
         #expect(output != nil, "ffprobe should parse video-only MXF: \(stderr)")
 
         let rec = VideoRecord()
-        model.extractMetadata(probe: output!, into: rec)
+        ScanEngine.extractMetadata(probe: output!, into: rec)
         #expect(rec.streamType == .videoOnly)
         #expect(rec.videoCodec == "mpeg2video")
         #expect(rec.audioCodec.isEmpty)
@@ -1350,7 +1350,7 @@ struct FFProbeIntegrationTests {
         #expect(output != nil, "ffprobe should parse M4A: \(stderr)")
 
         let rec = VideoRecord()
-        model.extractMetadata(probe: output!, into: rec)
+        ScanEngine.extractMetadata(probe: output!, into: rec)
         #expect(rec.streamType == .audioOnly)
         #expect(rec.audioCodec == "aac")
         #expect(rec.videoCodec.isEmpty)
@@ -1363,7 +1363,7 @@ struct FFProbeIntegrationTests {
         #expect(output != nil, "ffprobe should parse WAV: \(stderr)")
 
         let rec = VideoRecord()
-        model.extractMetadata(probe: output!, into: rec)
+        ScanEngine.extractMetadata(probe: output!, into: rec)
         #expect(rec.streamType == .audioOnly)
         #expect(!rec.audioCodec.isEmpty)
         #expect(rec.videoCodec.isEmpty)
@@ -1381,7 +1381,7 @@ struct FFProbeIntegrationTests {
         #expect(output != nil, "ffprobe should parse Avid video MXF: \(stderr)")
 
         let rec = VideoRecord()
-        model.extractMetadata(probe: output!, into: rec)
+        ScanEngine.extractMetadata(probe: output!, into: rec)
         #expect(rec.streamType == .videoOnly)
         #expect(!rec.videoCodec.isEmpty)
         #expect(rec.audioCodec.isEmpty)
@@ -1398,7 +1398,7 @@ struct FFProbeIntegrationTests {
         #expect(output != nil, "ffprobe should parse Avid audio MXF: \(stderr)")
 
         let rec = VideoRecord()
-        model.extractMetadata(probe: output!, into: rec)
+        ScanEngine.extractMetadata(probe: output!, into: rec)
         #expect(rec.streamType == .audioOnly)
         #expect(!rec.audioCodec.isEmpty)
         #expect(rec.videoCodec.isEmpty)
@@ -2126,6 +2126,173 @@ struct VolumeCompareTests {
         #expect(result.sourceOnly == 2)
         #expect(result.missingBytes == 300)
     }
+
+    // MARK: - Audit mode (issue #33 — "has a copy on ANY other volume")
+
+    @Test func auditMode_fileFoundOnAnyDestinationIsSafe() {
+        // Source on MacPro; two other volumes contribute possible backups.
+        // File A appears on SSD, file B appears on Backup — both should be "safe".
+        let src = [
+            makeRecord(filename: "A.mov", path: "/Volumes/MacPro/A.mov", md5: "a1", size: 100),
+            makeRecord(filename: "B.mov", path: "/Volumes/MacPro/B.mov", md5: "b2", size: 200),
+        ]
+        // Union of every other volume's catalog records:
+        let dstUnion = [
+            makeRecord(filename: "A.mov", path: "/Volumes/SSD/A.mov",     md5: "a1", size: 100),
+            makeRecord(filename: "B.mov", path: "/Volumes/Backup/B.mov",  md5: "b2", size: 200),
+        ]
+        let result = VolumeComparer.compare(
+            sourceRecords: src, destRecords: dstUnion,
+            sourcePath: "/Volumes/MacPro", destPath: "",
+            destLabel: "any other cataloged volume", isAuditMode: true
+        )
+
+        #expect(result.isAuditMode == true)
+        #expect(result.alreadySafeCount == 2)
+        #expect(result.sourceOnly == 0)
+        #expect(result.destLabel == "any other cataloged volume")
+    }
+
+    @Test func auditMode_fileOnNoOtherVolumeIsFlagged() {
+        // File C is on MacPro only — no backup anywhere. Audit must flag it.
+        let src = [
+            makeRecord(filename: "A.mov", path: "/Volumes/MacPro/A.mov", md5: "a1", size: 100),
+            makeRecord(filename: "C.mov", path: "/Volumes/MacPro/C.mov", md5: "c3", size: 300),
+        ]
+        let dstUnion = [
+            makeRecord(filename: "A.mov", path: "/Volumes/SSD/A.mov", md5: "a1", size: 100),
+            // no record of C.mov anywhere
+        ]
+        let result = VolumeComparer.compare(
+            sourceRecords: src, destRecords: dstUnion,
+            sourcePath: "/Volumes/MacPro", destPath: "",
+            destLabel: "any other cataloged volume", isAuditMode: true
+        )
+
+        #expect(result.sourceOnly == 1)
+        #expect(result.missingFiles.first?.filename == "C.mov")
+        #expect(result.missingBytes == 300)
+    }
+
+    @Test func auditMode_sameFileOnMultipleDestsCountsOnceAsSafe() {
+        // A file that exists on 3 backup volumes shouldn't inflate the "safe" count.
+        let src = [makeRecord(filename: "A.mov", path: "/Volumes/MacPro/A.mov", md5: "a1", size: 100)]
+        let dstUnion = [
+            makeRecord(filename: "A.mov", path: "/Volumes/SSD/A.mov",    md5: "a1", size: 100),
+            makeRecord(filename: "A.mov", path: "/Volumes/Backup/A.mov", md5: "a1", size: 100),
+            makeRecord(filename: "A.mov", path: "/Volumes/Archive/A.mov",md5: "a1", size: 100),
+        ]
+        let result = VolumeComparer.compare(
+            sourceRecords: src, destRecords: dstUnion,
+            sourcePath: "/Volumes/MacPro", destPath: "",
+            destLabel: "any other cataloged volume", isAuditMode: true
+        )
+
+        #expect(result.alreadySafeCount == 1, "Safe count follows source side, not dest multiplicity")
+        #expect(result.sourceOnly == 0)
+    }
+
+    @Test func auditMode_defaultsPreserveNonAuditBehavior() {
+        // Calling compare without specifying audit flags must preserve old semantics.
+        let src = [makeRecord(filename: "A.mov", path: "/Volumes/Old/A.mov", md5: "a1", size: 100)]
+        let dst = [makeRecord(filename: "A.mov", path: "/Volumes/New/A.mov", md5: "a1", size: 100)]
+        let result = VolumeComparer.compare(sourceRecords: src, destRecords: dst,
+                                            sourcePath: "/Volumes/Old", destPath: "/Volumes/New")
+
+        #expect(result.isAuditMode == false)
+        #expect(result.destLabel == "New", "Label defaults to the last path component of destPath")
+        #expect(result.alreadySafeCount == 1)
+    }
+
+    // MARK: - Multi-source / multi-dest (issue #33 — local-vs-remote audit)
+
+    /// Mirrors the UI's "union records under any of these paths" logic.
+    private func recordsUnder(_ paths: [String], from all: [VideoRecord]) -> [VideoRecord] {
+        all.filter { rec in paths.contains(where: { rec.fullPath.hasPrefix($0) }) }
+    }
+
+    @Test func multiSource_sameMachineDuplicatesDoNotCountAsBackup() {
+        // Rick's real case: InternalRaid + ExternalRaid both live on MacPro.
+        // A file that exists on both should STILL flag as missing when the "dest"
+        // is "anything outside the MacPro volume set" — the same machine dying
+        // kills both copies.
+        let allRecords = [
+            makeRecord(filename: "precious.mov", path: "/Volumes/InternalRaid/precious.mov", md5: "p1", size: 1000),
+            makeRecord(filename: "precious.mov", path: "/Volumes/ExternalRaid/precious.mov", md5: "p1", size: 1000),
+            // No copy anywhere off-MacPro.
+        ]
+        let macProVolumes = ["/Volumes/InternalRaid", "/Volumes/ExternalRaid"]
+
+        let src = recordsUnder(macProVolumes, from: allRecords)
+        let dst = allRecords.filter { rec in
+            !macProVolumes.contains(where: { rec.fullPath.hasPrefix($0) })
+        }
+        #expect(dst.isEmpty, "No off-MacPro records means nothing can count as backup")
+
+        let result = VolumeComparer.compare(
+            sourceRecords: src, destRecords: dst,
+            sourcePath: "InternalRaid, ExternalRaid", destPath: "",
+            destLabel: "any volume outside the source set", isAuditMode: true
+        )
+
+        #expect(result.sourceOnly == 2, "Both copies should flag as missing — neither is off-MacPro")
+        #expect(result.alreadySafeCount == 0)
+    }
+
+    @Test func multiSource_backupOnOffMachineVolumeCountsAsSafe() {
+        // Same MacPro file, but this time MyBook3Terabytes (external to MacPro) has it.
+        let allRecords = [
+            makeRecord(filename: "precious.mov", path: "/Volumes/InternalRaid/precious.mov", md5: "p1", size: 1000),
+            makeRecord(filename: "precious.mov", path: "/Volumes/ExternalRaid/precious.mov", md5: "p1", size: 1000),
+            makeRecord(filename: "precious.mov", path: "/Volumes/MyBook3TB/precious.mov",    md5: "p1", size: 1000),
+        ]
+        let macProVolumes = ["/Volumes/InternalRaid", "/Volumes/ExternalRaid"]
+
+        let src = recordsUnder(macProVolumes, from: allRecords)
+        let dst = allRecords.filter { rec in
+            !macProVolumes.contains(where: { rec.fullPath.hasPrefix($0) })
+        }
+
+        let result = VolumeComparer.compare(
+            sourceRecords: src, destRecords: dst,
+            sourcePath: "InternalRaid, ExternalRaid", destPath: "",
+            destLabel: "any volume outside the source set", isAuditMode: true
+        )
+
+        #expect(result.sourceOnly == 0, "Both MacPro copies are safe — MyBook has a copy")
+        #expect(result.alreadySafeCount == 2)
+    }
+
+    @Test func multiDest_checkAgainstExplicitBackupSet() {
+        // "Are MacPro files backed up on MacStudio or MyBook, specifically?"
+        // This is the explicit-dest version: treat a file as safe only if it
+        // exists on one of the declared backup volumes.
+        let allRecords = [
+            makeRecord(filename: "A.mov", path: "/Volumes/InternalRaid/A.mov", md5: "a", size: 100),
+            makeRecord(filename: "B.mov", path: "/Volumes/InternalRaid/B.mov", md5: "b", size: 200),
+            makeRecord(filename: "C.mov", path: "/Volumes/InternalRaid/C.mov", md5: "c", size: 300),
+
+            makeRecord(filename: "A.mov", path: "/Volumes/MacStudio/A.mov", md5: "a", size: 100),  // safe
+            makeRecord(filename: "B.mov", path: "/Volumes/MyBook3TB/B.mov", md5: "b", size: 200),  // safe
+            // C.mov has no backup on declared destinations
+            makeRecord(filename: "C.mov", path: "/Volumes/SomeOtherDrive/C.mov", md5: "c", size: 300),  // ignored — not a picked dest
+        ]
+        let srcVols = ["/Volumes/InternalRaid"]
+        let dstVols = ["/Volumes/MacStudio", "/Volumes/MyBook3TB"]
+
+        let src = recordsUnder(srcVols, from: allRecords)
+        let dst = recordsUnder(dstVols, from: allRecords)
+
+        let result = VolumeComparer.compare(
+            sourceRecords: src, destRecords: dst,
+            sourcePath: "InternalRaid", destPath: "",
+            destLabel: "MacStudio, MyBook3TB", isAuditMode: true
+        )
+
+        #expect(result.sourceOnly == 1, "C.mov has no copy on the declared backup set")
+        #expect(result.missingFiles.first?.filename == "C.mov")
+        #expect(result.alreadySafeCount == 2)
+    }
 }
 
 // MARK: - Test Media Generator Tests
@@ -2276,5 +2443,389 @@ struct CatalogImportExportTests {
         #expect(dest.records.contains { $0.fullPath == "/Volumes/LocalDrive/shared.mov" })
         // The new record from the import is present.
         #expect(dest.records.contains { $0.partialMD5 == "NEW" })
+    }
+}
+
+// MARK: - ScanContext Tests
+//
+// Phase 1 provenance capture. These tests cover:
+//   - Struct defaults & isPopulated heuristic
+//   - Codable round-trip (must decode cleanly from JSON that omits the field)
+//   - parseRemoteServer for SMB/NFS/AFP/WebDAV/local mount strings
+//   - capture() against a local path produces a populated, non-remote context
+//
+// No real remote mounts are required — parseRemoteServer is pure and runs
+// against synthetic mntfromname strings.
+
+struct ScanContextTests {
+
+    @Test func defaultsAreEmpty() {
+        let ctx = ScanContext()
+        #expect(ctx.scanHost == "")
+        #expect(ctx.volumeUUID == "")
+        #expect(ctx.volumeMountType == "")
+        #expect(ctx.remoteServerName == "")
+        #expect(ctx.scannedAt == nil)
+        #expect(ctx.isPopulated == false)
+        #expect(ctx.isRemoteMount == false)
+    }
+
+    @Test func isPopulatedFlipsOnAnyField() {
+        var ctx = ScanContext()
+        ctx.scanHost = "MacStudio"
+        #expect(ctx.isPopulated == true)
+
+        ctx = ScanContext()
+        ctx.volumeUUID = "ABCD-1234"
+        #expect(ctx.isPopulated == true)
+
+        ctx = ScanContext()
+        ctx.volumeMountType = "apfs"
+        #expect(ctx.isPopulated == true)
+    }
+
+    @Test func isRemoteMountDetectsNetworkFilesystems() {
+        for fs in ["smbfs", "nfs", "afpfs", "webdav"] {
+            var ctx = ScanContext()
+            ctx.volumeMountType = fs
+            #expect(ctx.isRemoteMount == true, "\(fs) should be remote")
+        }
+        for fs in ["apfs", "hfs", "msdos", "exfat", ""] {
+            var ctx = ScanContext()
+            ctx.volumeMountType = fs
+            #expect(ctx.isRemoteMount == false, "\(fs) should be local")
+        }
+    }
+
+    @Test func codableRoundTripPreservesAllFields() throws {
+        var ctx = ScanContext()
+        ctx.scanHost = "MacStudio"
+        ctx.volumeUUID = "A8F2-1234-5678-9ABC"
+        ctx.volumeMountType = "smbfs"
+        ctx.remoteServerName = "macpro.local"
+        ctx.scannedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        let data = try enc.encode(ctx)
+
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        let round = try dec.decode(ScanContext.self, from: data)
+
+        #expect(round == ctx)
+    }
+
+    @Test func decodeFromEmptyJSONYieldsDefaults() throws {
+        // Forward compatibility: an object with no known keys must decode to defaults.
+        let data = "{}".data(using: .utf8)!
+        let ctx = try JSONDecoder().decode(ScanContext.self, from: data)
+        #expect(ctx == ScanContext())
+    }
+
+    // MARK: parseRemoteServer
+
+    @Test func parseRemoteServerSMB() {
+        #expect(VolumeReachability.parseRemoteServer(
+            fsType: "smbfs", mntFromName: "//macpro.local/FamilyMedia") == "macpro.local")
+        #expect(VolumeReachability.parseRemoteServer(
+            fsType: "smbfs", mntFromName: "//rick@macpro.local/share") == "macpro.local")
+        #expect(VolumeReachability.parseRemoteServer(
+            fsType: "smbfs", mntFromName: "//DOMAIN;user@host/share") == "host")
+    }
+
+    @Test func parseRemoteServerNFS() {
+        #expect(VolumeReachability.parseRemoteServer(
+            fsType: "nfs", mntFromName: "nas.local:/export/media") == "nas.local")
+    }
+
+    @Test func parseRemoteServerAFP() {
+        #expect(VolumeReachability.parseRemoteServer(
+            fsType: "afpfs", mntFromName: "afp://oldserver.local/Share") == "oldserver.local")
+        #expect(VolumeReachability.parseRemoteServer(
+            fsType: "afpfs", mntFromName: "afp://rick@oldserver.local/Share") == "oldserver.local")
+        #expect(VolumeReachability.parseRemoteServer(
+            fsType: "afpfs", mntFromName: "//oldserver.local/Share") == "oldserver.local")
+    }
+
+    @Test func parseRemoteServerWebDAV() {
+        #expect(VolumeReachability.parseRemoteServer(
+            fsType: "webdav", mntFromName: "https://cloud.example.com/dav/files") == "cloud.example.com")
+    }
+
+    @Test func parseRemoteServerLocalReturnsEmpty() {
+        #expect(VolumeReachability.parseRemoteServer(
+            fsType: "apfs", mntFromName: "/dev/disk3s1") == "")
+        #expect(VolumeReachability.parseRemoteServer(
+            fsType: "hfs", mntFromName: "/dev/disk4") == "")
+    }
+
+    // MARK: capture (integration)
+
+    @Test func captureForLocalTempDirectoryPopulatesContext() {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+        let ctx = ScanContext.capture(for: tmp)
+
+        // scanHost must be set — CatalogHost.currentName is never empty on macOS.
+        #expect(!ctx.scanHost.isEmpty)
+        // /tmp on macOS is apfs or hfs — in any case, not a network FS.
+        #expect(ctx.isRemoteMount == false)
+        // Mount type should be non-empty on any working Mac.
+        #expect(!ctx.volumeMountType.isEmpty)
+        // Remote server name must be empty for local mounts.
+        #expect(ctx.remoteServerName == "")
+        #expect(ctx.scannedAt != nil)
+        #expect(ctx.isPopulated == true)
+    }
+}
+
+// MARK: - ScanEngine.humanReadableDiagnosis Tests
+//
+// humanReadableDiagnosis translates raw ffprobe stderr into a human-readable
+// (label, detail) pair used in the catalog's "Is Playable" and "Notes" columns.
+// Pure function — no I/O — covers corrupted, truncated, permission, network,
+// missing, empty, and fallback cases.
+
+struct HumanReadableDiagnosisTests {
+
+    @Test func moovAtomNotFoundReportsDamaged() {
+        let d = ScanEngine.humanReadableDiagnosis(stderr: "moov atom not found")
+        #expect(d.label == "Damaged file")
+        #expect(d.detail.contains("moov atom not found"))
+    }
+
+    @Test func moovAtomMatchesCaseInsensitively() {
+        let d = ScanEngine.humanReadableDiagnosis(stderr: "ERROR: MOOV ATOM NOT FOUND in stream")
+        #expect(d.label == "Damaged file")
+    }
+
+    @Test func invalidDataReportsDamaged() {
+        let d = ScanEngine.humanReadableDiagnosis(stderr: "Invalid data found when processing input")
+        #expect(d.label == "Damaged file")
+        #expect(d.detail.contains("invalid data found"))
+    }
+
+    @Test func endOfFileReportsTruncated() {
+        let d = ScanEngine.humanReadableDiagnosis(stderr: "unexpected end of file")
+        #expect(d.label == "Truncated file")
+        // detail includes the raw stderr so the user can see what ffmpeg said
+        #expect(d.detail.contains("unexpected end of file"))
+    }
+
+    @Test func truncatedKeywordReportsTruncated() {
+        let d = ScanEngine.humanReadableDiagnosis(stderr: "stream is truncated at byte 12345")
+        #expect(d.label == "Truncated file")
+    }
+
+    @Test func permissionDeniedReportsAccess() {
+        let d = ScanEngine.humanReadableDiagnosis(stderr: "Permission denied opening file")
+        #expect(d.label == "Access denied")
+    }
+
+    @Test func timeoutReportsNetworkTimeout() {
+        let d = ScanEngine.humanReadableDiagnosis(stderr: "read: Operation timed out")
+        #expect(d.label == "Network timeout")
+    }
+
+    @Test func noSuchFileReportsFileNotFound() {
+        let d = ScanEngine.humanReadableDiagnosis(stderr: "open: No such file or directory")
+        #expect(d.label == "File not found")
+    }
+
+    @Test func emptyStderrReportsUnreadableWithoutDetail() {
+        let d = ScanEngine.humanReadableDiagnosis(stderr: "")
+        #expect(d.label == "Unreadable file")
+        #expect(d.detail.contains("no additional details"))
+    }
+
+    @Test func unknownStderrFallsBackToRawStderr() {
+        let d = ScanEngine.humanReadableDiagnosis(stderr: "some unrecognized ffmpeg warning")
+        #expect(d.label == "Unreadable file")
+        // Fallback should include the raw stderr for the user
+        #expect(d.detail.contains("some unrecognized ffmpeg warning"))
+    }
+
+    @Test func priorityMoovBeforeTruncated() {
+        // If multiple patterns match, the earlier check wins. moov atom is
+        // checked before truncated — stderr containing both should be classified
+        // as "Damaged file" (more specific) not "Truncated file".
+        let d = ScanEngine.humanReadableDiagnosis(stderr: "moov atom not found; stream appears truncated")
+        #expect(d.label == "Damaged file")
+    }
+}
+
+// MARK: - ScanEngine.extractMetadata Tests
+//
+// extractMetadata populates a VideoRecord from an FFProbeOutput. Covers:
+// - video+audio, video-only, audio-only, no-streams classification
+// - format-level fields (duration, bitrate, container)
+// - format tag fallback for timecode/tapeName across different tag keys
+// - stream-level tag fallback when format has no timecode
+// - missing/empty field handling
+
+struct ExtractMetadataTests {
+
+    /// Build an FFProbeOutput from a JSON literal — avoids memberwise init
+    /// since FFStream/FFFormat are all optionals.
+    private static func probe(_ json: String) throws -> FFProbeOutput {
+        let data = json.data(using: .utf8)!
+        return try JSONDecoder().decode(FFProbeOutput.self, from: data)
+    }
+
+    @Test func videoAndAudioClassifiedCorrectly() throws {
+        let probe = try Self.probe("""
+        {
+          "format": {"format_name": "mov,mp4,m4a", "duration": "12.5", "bit_rate": "5000000"},
+          "streams": [
+            {"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080,
+             "r_frame_rate": "30000/1001"},
+            {"codec_type": "audio", "codec_name": "aac", "channels": 2, "sample_rate": "48000"}
+          ]
+        }
+        """)
+        let rec = VideoRecord()
+        ScanEngine.extractMetadata(probe: probe, into: rec)
+        #expect(rec.streamTypeRaw == StreamType.videoAndAudio.rawValue)
+        #expect(rec.videoCodec == "h264")
+        #expect(rec.audioCodec == "aac")
+        #expect(rec.resolution == "1920x1080")
+        #expect(rec.audioChannels == "2")
+        #expect(rec.audioSampleRate == "48000 Hz")
+        #expect(rec.durationSeconds == 12.5)
+        #expect(rec.totalBitrate == "5000 kbps")
+        #expect(rec.isPlayable == "Yes")
+    }
+
+    @Test func videoOnlyClassifiedCorrectly() throws {
+        let probe = try Self.probe("""
+        {"format": null,
+         "streams": [{"codec_type": "video", "codec_name": "prores", "width": 1280, "height": 720,
+                      "r_frame_rate": "24/1"}]}
+        """)
+        let rec = VideoRecord()
+        ScanEngine.extractMetadata(probe: probe, into: rec)
+        #expect(rec.streamTypeRaw == StreamType.videoOnly.rawValue)
+        #expect(rec.videoCodec == "prores")
+        #expect(rec.audioCodec == "")
+        #expect(rec.isPlayable == "Yes")
+    }
+
+    @Test func audioOnlyClassifiedCorrectly() throws {
+        let probe = try Self.probe("""
+        {"format": null,
+         "streams": [{"codec_type": "audio", "codec_name": "pcm_s24le", "channels": 2, "sample_rate": "48000"}]}
+        """)
+        let rec = VideoRecord()
+        ScanEngine.extractMetadata(probe: probe, into: rec)
+        #expect(rec.streamTypeRaw == StreamType.audioOnly.rawValue)
+        #expect(rec.audioCodec == "pcm_s24le")
+        #expect(rec.videoCodec == "")
+        #expect(rec.isPlayable == "Yes")
+    }
+
+    @Test func noStreamsReportsNoStreams() throws {
+        let probe = try Self.probe("""
+        {"format": {"format_name": "unknown"}, "streams": []}
+        """)
+        let rec = VideoRecord()
+        ScanEngine.extractMetadata(probe: probe, into: rec)
+        #expect(rec.streamTypeRaw == StreamType.noStreams.rawValue)
+        #expect(rec.isPlayable == "No streams")
+    }
+
+    @Test func missingResolutionLeavesFieldEmpty() throws {
+        // Zero dimensions should not produce "0x0"
+        let probe = try Self.probe("""
+        {"format": null,
+         "streams": [{"codec_type": "video", "codec_name": "h264", "width": 0, "height": 0,
+                      "r_frame_rate": "30/1"}]}
+        """)
+        let rec = VideoRecord()
+        ScanEngine.extractMetadata(probe: probe, into: rec)
+        #expect(rec.resolution == "")
+    }
+
+    @Test func timecodeFromFormatTags() throws {
+        let probe = try Self.probe("""
+        {"format": {"format_name": "mov", "tags": {"timecode": "01:00:00:00"}},
+         "streams": [{"codec_type": "video", "codec_name": "h264"}]}
+        """)
+        let rec = VideoRecord()
+        ScanEngine.extractMetadata(probe: probe, into: rec)
+        #expect(rec.timecode == "01:00:00:00")
+    }
+
+    @Test func timecodeFromStreamTagsWhenFormatLacksIt() throws {
+        // Format has no timecode tag — should fall through to stream tags
+        let probe = try Self.probe("""
+        {"format": {"format_name": "mov"},
+         "streams": [{"codec_type": "video", "codec_name": "h264",
+                      "tags": {"timecode": "02:00:00:00"}}]}
+        """)
+        let rec = VideoRecord()
+        ScanEngine.extractMetadata(probe: probe, into: rec)
+        #expect(rec.timecode == "02:00:00:00")
+    }
+
+    @Test func tapeNameFromReelNameTag() throws {
+        // Avid MXF files use "reel_name" rather than "tape_name"
+        let probe = try Self.probe("""
+        {"format": {"format_name": "mxf", "tags": {"reel_name": "REEL007"}},
+         "streams": [{"codec_type": "video", "codec_name": "dnxhd"}]}
+        """)
+        let rec = VideoRecord()
+        ScanEngine.extractMetadata(probe: probe, into: rec)
+        #expect(rec.tapeName == "REEL007")
+    }
+
+    @Test func tapeNameFromAppleReelNameTag() throws {
+        // QuickTime exports use a com.apple.quicktime key
+        let probe = try Self.probe("""
+        {"format": {"format_name": "mov",
+                    "tags": {"com.apple.quicktime.reelname": "APPLE_REEL"}},
+         "streams": [{"codec_type": "video", "codec_name": "h264"}]}
+        """)
+        let rec = VideoRecord()
+        ScanEngine.extractMetadata(probe: probe, into: rec)
+        #expect(rec.tapeName == "APPLE_REEL")
+    }
+
+    @Test func frameRateParsedFromRational() throws {
+        let probe = try Self.probe("""
+        {"format": null,
+         "streams": [{"codec_type": "video", "codec_name": "h264",
+                      "r_frame_rate": "30000/1001"}]}
+        """)
+        let rec = VideoRecord()
+        ScanEngine.extractMetadata(probe: probe, into: rec)
+        // 30000/1001 ≈ 29.97
+        #expect(rec.frameRate == "29.97")
+    }
+
+    @Test func falsybitRateDoesNotCrash() throws {
+        // Non-numeric bit_rate string should be silently ignored, not crash
+        let probe = try Self.probe("""
+        {"format": {"format_name": "mov", "bit_rate": "N/A"},
+         "streams": [{"codec_type": "video", "codec_name": "h264", "bit_rate": "N/A"}]}
+        """)
+        let rec = VideoRecord()
+        ScanEngine.extractMetadata(probe: probe, into: rec)
+        #expect(rec.totalBitrate == "")
+        #expect(rec.videoBitrate == "")
+    }
+
+    @Test func multipleVideoStreamsUseFirstOnly() throws {
+        // Record model stores a single video codec — subsequent video streams ignored
+        let probe = try Self.probe("""
+        {"format": null,
+         "streams": [
+           {"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080},
+           {"codec_type": "video", "codec_name": "prores", "width": 3840, "height": 2160}
+         ]}
+        """)
+        let rec = VideoRecord()
+        ScanEngine.extractMetadata(probe: probe, into: rec)
+        #expect(rec.videoCodec == "h264")
+        #expect(rec.resolution == "1920x1080")
     }
 }

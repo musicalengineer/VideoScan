@@ -170,6 +170,18 @@ struct VideoScanApp: App {
         }
         .defaultPosition(.bottomTrailing)
 
+        // Independent resizable window per-volume for "Catalog Info" — the
+        // value-based WindowGroup reuses the window when the same volume is
+        // re-opened (CatalogInfoItem.id == volume path) and shows side-by-side
+        // windows for different volumes. Truly resizable, unlike .sheet.
+        WindowGroup("Catalog Info", for: CatalogInfoItem.self) { $item in
+            if let item {
+                CatalogInfoWindow(item: item)
+            }
+        }
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 720, height: 560)
+
         Window("Settings", id: "settings") {
             SettingsTabView(
                 settings: Binding(
