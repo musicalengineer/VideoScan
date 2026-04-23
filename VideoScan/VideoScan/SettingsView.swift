@@ -260,10 +260,10 @@ struct SettingsTabView: View {
 
     private static func neuralCoresForChip(_ name: String) -> Int {
         let lower = name.lowercased()
-        if lower.contains("m4")  { return 16 }
-        if lower.contains("m3")  { return 16 }
-        if lower.contains("m2")  { return 16 }
-        if lower.contains("m1")  { return 16 }
+        if lower.contains("m4") { return 16 }
+        if lower.contains("m3") { return 16 }
+        if lower.contains("m2") { return 16 }
+        if lower.contains("m1") { return 16 }
         return 0
     }
 

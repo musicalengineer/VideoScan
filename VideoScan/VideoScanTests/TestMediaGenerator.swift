@@ -19,7 +19,7 @@ struct TestMediaGenerator {
         let candidates = [
             "/opt/homebrew/bin/ffmpeg",
             "/usr/local/bin/ffmpeg",
-            "/usr/bin/ffmpeg",
+            "/usr/bin/ffmpeg"
         ]
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) } ?? "ffmpeg"
     }()

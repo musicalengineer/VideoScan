@@ -133,14 +133,14 @@ final class MetadataCache {
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         defer { sqlite3_finalize(stmt) }
 
-        bind(stmt, 1,  rec.fullPath)
+        bind(stmt, 1, rec.fullPath)
         sqlite3_bind_int64(stmt, 2, fileSize)
         sqlite3_bind_double(stmt, 3, modDate.timeIntervalSince1970)
-        bind(stmt, 4,  rec.filename)
-        bind(stmt, 5,  rec.ext)
-        bind(stmt, 6,  rec.streamTypeRaw)
-        bind(stmt, 7,  rec.size)
-        bind(stmt, 8,  rec.duration)
+        bind(stmt, 4, rec.filename)
+        bind(stmt, 5, rec.ext)
+        bind(stmt, 6, rec.streamTypeRaw)
+        bind(stmt, 7, rec.size)
+        bind(stmt, 8, rec.duration)
         sqlite3_bind_double(stmt, 9, rec.durationSeconds)
         bind(stmt, 10, rec.dateCreated)
         bind(stmt, 11, rec.dateModified)

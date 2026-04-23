@@ -255,7 +255,7 @@ struct CatalogContent: View {
     let onSort: ([KeyPathComparator<VideoRecord>]) -> Void
     let onSelect: (UUID?) -> Void
     let onClearPreview: () -> Void
-    var onCombinePair: ((VideoRecord, VideoRecord) -> Void)? = nil
+    var onCombinePair: ((VideoRecord, VideoRecord) -> Void)?
 
     @State private var player: AVPlayer?
     @State private var isPlaying = false
@@ -586,10 +586,10 @@ struct CatalogContent: View {
             }
         }
         .onAppear { tableData = computeFiltered() }
-        .onChange(of: records.count)     { tableData = computeFiltered() }
-        .onChange(of: searchText)        { tableData = computeFiltered() }
+        .onChange(of: records.count) { tableData = computeFiltered() }
+        .onChange(of: searchText) { tableData = computeFiltered() }
         .onChange(of: filterTargetPaths) { tableData = computeFiltered() }
-        .onChange(of: showPairsOnly)     { tableData = computeFiltered() }
+        .onChange(of: showPairsOnly) { tableData = computeFiltered() }
     }
 
     // MARK: - Preview / Player
@@ -795,7 +795,7 @@ struct InspectorPanel: View {
     let duplicateGroupMembers: [VideoRecord]
     let previewImage: NSImage?
     let previewOfflineVolumeName: String?
-    var onSelectRecord: ((UUID) -> Void)? = nil
+    var onSelectRecord: ((UUID) -> Void)?
 
     var body: some View {
         if let rec = record {
@@ -1408,8 +1408,8 @@ struct ScanOptionsMenu: View {
         Menu {
             Toggle("Skip System Files", isOn: toggle(\.skipSystemFiles))
             Toggle("Skip Media Bundles", isOn: toggle(\.skipMediaBundles))
-            Toggle("Skip Small Files",   isOn: toggle(\.skipSmallFiles))
-            Toggle("Skip Checksums",     isOn: toggle(\.skipChecksums))
+            Toggle("Skip Small Files", isOn: toggle(\.skipSmallFiles))
+            Toggle("Skip Checksums", isOn: toggle(\.skipChecksums))
 
             Divider()
 

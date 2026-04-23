@@ -20,7 +20,7 @@ struct PersonEditSheet: View {
     // Photo import
     @State private var photosPickerItems: [PhotosPickerItem] = []
     @State private var isImporting = false
-    @State private var imageFilenamesCache: [String]? = nil
+    @State private var imageFilenamesCache: [String]?
 
     // Cover crop
     @State private var cropScale: Double
@@ -175,7 +175,6 @@ struct PersonEditSheet: View {
                         Text("Click a photo to set it as the cover image. Right-click for more options. \(imageFilenames.count) photo\(imageFilenames.count == 1 ? "" : "s") in folder.")
                     }
                 }
-
 
             }
             .formStyle(.grouped)

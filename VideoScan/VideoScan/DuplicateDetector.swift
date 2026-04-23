@@ -240,7 +240,7 @@ enum DuplicateDetector {
             guard let lDate = l.dateCreatedRaw, let rDate = r.dateCreatedRaw,
                   abs(lDate.timeIntervalSince(rDate)) <= Self.creationTolerance else { return nil }
             return 1
-        },
+        }
     ]
 
     private static func score(left: VideoRecord, right: VideoRecord) -> Candidate? {

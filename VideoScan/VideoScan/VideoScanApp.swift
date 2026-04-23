@@ -412,4 +412,3 @@ struct BulletPoint: View {
         }
     }
 }
-

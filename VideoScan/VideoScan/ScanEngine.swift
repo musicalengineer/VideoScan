@@ -273,10 +273,7 @@ enum ScanEngine {
             }
         }
 
-        if hasVideo && hasAudio { rec.streamTypeRaw = StreamType.videoAndAudio.rawValue }
-        else if hasVideo        { rec.streamTypeRaw = StreamType.videoOnly.rawValue }
-        else if hasAudio        { rec.streamTypeRaw = StreamType.audioOnly.rawValue }
-        else                    { rec.streamTypeRaw = StreamType.noStreams.rawValue }
+        if hasVideo && hasAudio { rec.streamTypeRaw = StreamType.videoAndAudio.rawValue } else if hasVideo { rec.streamTypeRaw = StreamType.videoOnly.rawValue } else if hasAudio { rec.streamTypeRaw = StreamType.audioOnly.rawValue } else { rec.streamTypeRaw = StreamType.noStreams.rawValue }
 
         rec.isPlayable = (rec.streamTypeRaw == StreamType.noStreams.rawValue)
             ? "No streams" : "Yes"

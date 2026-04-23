@@ -40,8 +40,8 @@ struct CatalogSnapshot: Codable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        version       = try c.decodeIfPresent(Int.self,    forKey: .version)       ?? 1
-        savedAt       = try c.decodeIfPresent(Date.self,   forKey: .savedAt)       ?? Date()
+        version       = try c.decodeIfPresent(Int.self, forKey: .version)       ?? 1
+        savedAt       = try c.decodeIfPresent(Date.self, forKey: .savedAt)       ?? Date()
         records       = try c.decodeIfPresent([VideoRecord].self, forKey: .records) ?? []
         savedFromHost = try c.decodeIfPresent(String.self, forKey: .savedFromHost) ?? ""
     }
