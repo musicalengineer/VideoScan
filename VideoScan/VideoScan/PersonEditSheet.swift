@@ -155,10 +155,24 @@ struct PersonEditSheet: View {
                         referencePhotoGrid
                     }
                 } header: {
-                    Text("Reference Photos")
+                    HStack {
+                        Text("Reference Photos")
+                        Spacer()
+                        if !referencePath.isEmpty,
+                           FileManager.default.fileExists(atPath: referencePath) {
+                            Button {
+                                NSWorkspace.shared.open(URL(fileURLWithPath: referencePath))
+                            } label: {
+                                Label("Show Folder in Finder", systemImage: "folder")
+                                    .font(.caption)
+                            }
+                            .buttonStyle(.link)
+                            .help(referencePath)
+                        }
+                    }
                 } footer: {
                     if !imageFilenames.isEmpty {
-                        Text("Click a photo to set it as the cover image. \(imageFilenames.count) photo\(imageFilenames.count == 1 ? "" : "s") available.")
+                        Text("Click a photo to set it as the cover image. Right-click for more options. \(imageFilenames.count) photo\(imageFilenames.count == 1 ? "" : "s") in folder.")
                     }
                 }
 
@@ -254,6 +268,8 @@ struct PersonEditSheet: View {
     private func referencePhotoTile(_ filename: String) -> some View {
         let isCover = coverFilename == filename
         let profile = currentProfile
+        let fileURL = URL(fileURLWithPath: profile.referencePath)
+            .appendingPathComponent(filename)
         return Button {
             coverFilename = isCover ? nil : filename
         } label: {
@@ -290,6 +306,16 @@ struct PersonEditSheet: View {
         }
         .buttonStyle(.plain)
         .help(isCover ? "\(filename) (cover photo)" : filename)
+        .contextMenu {
+            Button("Show in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([fileURL])
+            }
+            Button(isCover ? "Remove as Cover" : "Set as Cover") {
+                coverFilename = isCover ? nil : filename
+            }
+            Divider()
+            Text(filename)
+        }
     }
 
     // MARK: Browse & Import

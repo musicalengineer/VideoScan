@@ -331,9 +331,12 @@ struct PersonFinderView: View {
                     ScrollView(.vertical, showsIndicators: true) {
                         LazyVGrid(columns: columns, spacing: 6) {
                             ForEach(model.referenceFaces) { face in
-                                CompactFaceThumbnail(face: face, size: cellSize, onRemove: {
-                                    model.removeReferenceFace(id: face.id)
-                                })
+                                CompactFaceThumbnail(
+                                    face: face,
+                                    size: cellSize,
+                                    onRemove: { model.removeReferenceFace(id: face.id) },
+                                    sourceFileURL: referenceFaceURL(for: face)
+                                )
                                 .onTapGesture(count: 2) {
                                     inspectedFace = face
                                 }
@@ -755,6 +758,16 @@ struct PersonFinderView: View {
         UserDefaults.standard.set(paths, forKey: recentPathsKey)
     }
 
+    /// Resolve a reference face back to its source image on disk. Returns
+    /// nil if the file doesn't actually exist where expected — don't surface
+    /// a broken Show-in-Finder item in that case.
+    private func referenceFaceURL(for face: ReferenceFace) -> URL? {
+        let refPath = model.settings.referencePath
+        guard !refPath.isEmpty else { return nil }
+        let url = URL(fileURLWithPath: refPath).appendingPathComponent(face.sourceFilename)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+
     func browseForOutput() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
@@ -957,6 +970,10 @@ struct CompactFaceThumbnail: View {
     let face: ReferenceFace
     var size: CGFloat = 58
     var onRemove: (() -> Void)? = nil
+    /// Optional full path to the source image on disk. When set, a
+    /// "Show in Finder" item appears in the context menu so users can
+    /// see where the reference photo actually lives.
+    var sourceFileURL: URL? = nil
 
     private var borderColor: Color {
         switch face.quality {
@@ -994,11 +1011,15 @@ struct CompactFaceThumbnail: View {
                 .foregroundColor(borderColor)
         }
         .contextMenu {
+            if let sourceFileURL {
+                Button("Show in Finder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([sourceFileURL])
+                }
+            }
             if let onRemove {
                 Button("Remove This Face", role: .destructive) { onRemove() }
             }
-            Button("Info") {}
-                .disabled(true)
+            Divider()
             Text("\(face.sourceFilename)")
             Text(face.quality == .good ? "Good quality" : face.quality == .fair ? "Fair quality" : "Poor quality")
         }
