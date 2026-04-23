@@ -517,7 +517,7 @@ struct CatalogContent: View {
                 DuplicateDispositionCell(record: rec)
                     .help(rec.duplicateDisposition == .none
                           ? "Run Duplicates analysis to check for copies"
-                          : "Keep = best copy, Review = check manually, Extra copy = safe to remove")
+                          : "Total copies across catalog. Color: green = Keep (best copy), orange = Review (check manually), red = Extra copy (safe to remove)")
             }
             .width(min: 80, ideal: 95)
         }
@@ -937,7 +937,11 @@ struct InspectorPanel: View {
                                     Circle()
                                         .fill(rec.duplicateDisposition.textColor)
                                         .frame(width: 8, height: 8)
-                                    Text(rec.duplicateDisposition.rawValue)
+                                    Text(
+                                        rec.duplicateGroupCount >= 2
+                                        ? "\(rec.duplicateDisposition.rawValue) · \(rec.duplicateGroupCount) copies"
+                                        : rec.duplicateDisposition.rawValue
+                                    )
                                         .font(.system(size: 11, weight: .medium))
                                         .foregroundColor(rec.duplicateDisposition.textColor)
                                     Spacer()
@@ -1232,10 +1236,25 @@ struct DuplicateDispositionCell: View {
                     .fill(conf.textColor)
                     .frame(width: 8, height: 8)
             }
-            Text(record.duplicateDisposition == .none ? "—" : record.duplicateDisposition.rawValue)
+            Text(duplicateDisplayLabel(for: record))
                 .foregroundColor(record.duplicateDisposition.textColor)
         }
     }
+}
+
+/// Display label for the Duplicate column. When the record is part of a
+/// detected duplicate group, show "N copies" so the user sees how many
+/// copies exist across the catalog. Disposition (Keep / Review / Extra)
+/// is encoded via text color and the confidence dot; status still
+/// distinguishes .keep from .extraCopy at a glance without eating
+/// horizontal space with "Extra copy · 5 copies".
+func duplicateDisplayLabel(for record: VideoRecord) -> String {
+    if record.duplicateDisposition == .none { return "—" }
+    let n = record.duplicateGroupCount
+    if n >= 2 { return "\(n) copies" }
+    // Fallback for older catalog records where duplicateGroupCount isn't set:
+    // show the disposition label so we don't regress to "—".
+    return record.duplicateDisposition.rawValue
 }
 
 // MARK: - Discover Volumes Sheet
