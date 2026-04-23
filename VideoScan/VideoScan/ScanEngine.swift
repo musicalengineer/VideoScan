@@ -392,4 +392,44 @@ enum ScanEngine {
         rec.isPlayable = "Codec unsupported"
         rec.container = "MXF (\(mxf.descriptorType))"
     }
+
+    /// Apply ffprobe output to a record. On ffprobe failure, try MXF header
+    /// fallback or produce a human-readable diagnosis. Mutates `rec` in place.
+    /// Used by `VideoScanModel.probeFile` — richer error messages than the
+    /// inline branch inside `ScanEngine.probeFile`.
+    static func applyProbeOrFallback(
+        rec: VideoRecord,
+        url: URL,
+        path: String,
+        probe: FFProbeOutput?,
+        stderrTrimmed: String
+    ) {
+        if let probe, probe.format != nil || !(probe.streams ?? []).isEmpty {
+            autoreleasepool {
+                extractMetadata(probe: probe, into: rec)
+            }
+            if !stderrTrimmed.isEmpty {
+                rec.notes = stderrTrimmed
+            }
+            return
+        }
+        if url.pathExtension.lowercased() == "mxf" {
+            if let mxf = MxfHeaderParser.parse(fileAt: path) {
+                applyMxfMetadata(mxf, into: rec)
+                let reason = stderrTrimmed.isEmpty ? "ffprobe could not decode" : stderrTrimmed
+                rec.notes = "MXF header parsed (ffprobe failed: \(reason))"
+            } else {
+                rec.isPlayable    = "Damaged MXF file"
+                rec.notes         = stderrTrimmed.isEmpty
+                    ? "Neither ffprobe nor MXF header parser could read this file"
+                    : "Damaged MXF — both ffprobe and header parser failed (\(stderrTrimmed))"
+                rec.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+            }
+            return
+        }
+        let diagnosis = humanReadableDiagnosis(stderr: stderrTrimmed)
+        rec.isPlayable    = diagnosis.label
+        rec.notes         = diagnosis.detail
+        rec.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+    }
 }
