@@ -295,13 +295,10 @@ struct PersonEditSheet: View {
     // MARK: Browse & Import
 
     /// Canonical local folder for this person's reference photos.
-    /// Always under ~/dev/VideoScan/poi_photos/<name>/.
+    /// Lives at ~/Library/Application Support/VideoScan/POI/<name>/ — see
+    /// POIStorage.swift. profile.json and photos share this folder.
     private func ensureLocalPhotoFolder() -> URL {
-        let sanitized = name.trimmingCharacters(in: .whitespaces)
-            .lowercased().replacingOccurrences(of: " ", with: "_")
-        let folderName = sanitized.isEmpty ? "reference" : sanitized
-        let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("dev/VideoScan/poi_photos/\(folderName)")
+        let dir = POIStorage.folder(for: name)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
