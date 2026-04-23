@@ -319,6 +319,7 @@ struct VolumeCompareSheet: View {
     @StateObject private var rescue = VolumeRescueOperation()
     @State private var copyMode: RescueCopyMode = .verified
     @State private var showCopyConfirm = false
+    @State private var detailFile: VideoRecord?
 
     private var volumes: [(label: String, path: String)] {
         var vols: [(String, String)] = []
@@ -369,6 +370,9 @@ struct VolumeCompareSheet: View {
             minWidth: 900, idealWidth: 1200, maxWidth: .infinity,
             minHeight: 650, idealHeight: 850, maxHeight: .infinity
         )
+        .sheet(item: $detailFile) { rec in
+            missingFileDetail(rec)
+        }
         .alert("Copy Missing Files?", isPresented: $showCopyConfirm) {
             Button("Copy", role: .destructive) {
                 if let r = result {
@@ -408,15 +412,25 @@ struct VolumeCompareSheet: View {
                     .font(.callout.bold())
 
                 List(r.missingFiles.prefix(500)) { rec in
-                    HStack {
-                        Image(systemName: streamIcon(rec.streamType))
-                            .foregroundColor(streamColor(rec.streamType))
-                            .frame(width: 16)
-                        Text(rec.filename).font(.callout).lineLimit(1)
-                        Spacer()
-                        Text(humanSize(rec.sizeBytes))
-                            .font(.callout).foregroundColor(.secondary)
+                    Button {
+                        detailFile = rec
+                    } label: {
+                        HStack {
+                            Image(systemName: streamIcon(rec.streamType))
+                                .foregroundColor(streamColor(rec.streamType))
+                                .frame(width: 16)
+                            Text(rec.filename).font(.callout).lineLimit(1)
+                            Spacer()
+                            Text(humanSize(rec.sizeBytes))
+                                .font(.callout).foregroundColor(.secondary)
+                            Image(systemName: "info.circle")
+                                .foregroundColor(.secondary)
+                                .font(.caption)
+                        }
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .help("Click for details")
                 }
                 .frame(maxHeight: 250)
 
@@ -482,6 +496,126 @@ struct VolumeCompareSheet: View {
                 }
             }
         }
+    }
+
+    // MARK: - Missing file detail
+
+    @ViewBuilder
+    private func missingFileDetail(_ rec: VideoRecord) -> some View {
+        let srcLabel = result.map { URL(fileURLWithPath: $0.sourcePath).lastPathComponent } ?? "source"
+        let dstLabel = result?.destLabel ?? "destination"
+        let otherVolumes = volumesContaining(rec)
+
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: streamIcon(rec.streamType))
+                    .foregroundColor(streamColor(rec.streamType))
+                Text(rec.filename).font(.headline).lineLimit(2)
+                Spacer()
+                Button("Close") { detailFile = nil }
+                    .keyboardShortcut(.cancelAction)
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                detailRow(label: "Size", value: humanSize(rec.sizeBytes))
+                detailRow(label: "Full path", value: rec.fullPath, mono: true)
+                if !rec.partialMD5.isEmpty {
+                    detailRow(label: "Partial MD5", value: rec.partialMD5, mono: true)
+                }
+
+                HStack(alignment: .top) {
+                    Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+                    VStack(alignment: .leading) {
+                        Text("Exists on: \(srcLabel)").font(.callout)
+                        Text(rec.fullPath).font(.caption).foregroundColor(.secondary).lineLimit(2)
+                    }
+                }
+
+                HStack(alignment: .top) {
+                    Image(systemName: "xmark.circle.fill").foregroundColor(.orange)
+                    Text("Not found on: \(dstLabel)").font(.callout)
+                }
+
+                if otherVolumes.isEmpty {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundColor(.red)
+                        Text("No other cataloged volume has a matching copy — this file exists only on \(srcLabel).")
+                            .font(.callout)
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Image(systemName: "shield.lefthalf.filled").foregroundColor(.blue)
+                            Text("Matching copy also found on:").font(.callout)
+                        }
+                        ForEach(otherVolumes, id: \.self) { vol in
+                            Text("• \(vol)").font(.caption).foregroundColor(.secondary)
+                                .padding(.leading, 22)
+                        }
+                    }
+                }
+            }
+
+            Spacer()
+
+            HStack {
+                Button {
+                    let url = URL(fileURLWithPath: rec.fullPath)
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                } label: {
+                    Label("Reveal in Finder", systemImage: "folder")
+                }
+                .disabled(!FileManager.default.fileExists(atPath: rec.fullPath))
+
+                Spacer()
+            }
+        }
+        .padding()
+        .frame(minWidth: 520, idealWidth: 680, minHeight: 360, idealHeight: 440)
+    }
+
+    private func detailRow(label: String, value: String, mono: Bool = false) -> some View {
+        HStack(alignment: .top) {
+            Text(label).font(.caption).foregroundColor(.secondary)
+                .frame(width: 90, alignment: .leading)
+            Text(value)
+                .font(mono ? .system(.caption, design: .monospaced) : .callout)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// Scan the full catalog for records matching rec's hash/size or name/size and
+    /// return the distinct scan-target volume names that contain such a match,
+    /// excluding the record's own volume.
+    private func volumesContaining(_ rec: VideoRecord) -> [String] {
+        let ownVolume = model.scanTargets
+            .map { $0.searchPath }
+            .first { rec.fullPath.hasPrefix($0) }
+
+        let hashKey = (!rec.partialMD5.isEmpty && rec.sizeBytes > 0)
+            ? "\(rec.partialMD5)|\(rec.sizeBytes)" : nil
+        let nameKey = "\(rec.filename.lowercased())|\(rec.sizeBytes)"
+
+        var found: Set<String> = []
+        for other in model.records {
+            if other.fullPath == rec.fullPath { continue }
+            let otherHash = (!other.partialMD5.isEmpty && other.sizeBytes > 0)
+                ? "\(other.partialMD5)|\(other.sizeBytes)" : nil
+            let otherName = "\(other.filename.lowercased())|\(other.sizeBytes)"
+            let hashMatch = (hashKey != nil && otherHash == hashKey)
+            let nameMatch = (otherName == nameKey)
+            guard hashMatch || nameMatch else { continue }
+
+            // Which volume?
+            if let vol = model.scanTargets.map({ $0.searchPath }).first(where: { other.fullPath.hasPrefix($0) }) {
+                if vol == ownVolume { continue }
+                found.insert(URL(fileURLWithPath: vol).lastPathComponent)
+            }
+        }
+        return found.sorted()
     }
 
     private func statCard(title: String, count: Int? = nil, value: String? = nil, icon: String, color: Color) -> some View {
