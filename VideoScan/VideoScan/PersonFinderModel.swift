@@ -892,16 +892,11 @@ final class PersonFinderModel: ObservableObject {
             referenceFaces.append(contentsOf: filtered)
             let label = (p as NSString).lastPathComponent
             if !referenceSources.contains(label) { referenceSources.append(label) }
-            var infoParts: [String] = []
-            if !rejected.isEmpty && filtered.count < faces.count {
-                let skipped = faces.count - filtered.count
-                infoParts.append("\(skipped) previously removed")
-            }
+            // "N previously removed" was noise — rejected photos are a user
+            // choice, not an error condition worth surfacing. Only the "no
+            // usable face" count matters (that one signals broken photos).
             if !newFailures.isEmpty {
-                infoParts.append("\(newFailures.count) photo(s) had no usable face")
-            }
-            if !infoParts.isEmpty {
-                referenceLoadError = infoParts.joined(separator: " · ")
+                referenceLoadError = "\(newFailures.count) photo(s) had no usable face"
             }
         }
         isLoadingReference = false
