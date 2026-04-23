@@ -1260,6 +1260,103 @@ final class VideoScanModel: ObservableObject {
         return rec
     }
 
+    /// Process one probe result inside the per-target scan loop.
+    /// Returns true if the caller should break (abort threshold tripped).
+    private func processTargetProbeResult(
+        rec: VideoRecord,
+        volName: String,
+        completedCount: Int,
+        totalFiles: Int,
+        target: CatalogScanTarget,
+        consecutiveNotAccessible: inout Int,
+        loggedMilestones: inout Set<Int>,
+        milestones: Set<Int>,
+        abortAfter: Int
+    ) -> Bool {
+        if rec.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
+            let detail = rec.notes.isEmpty ? "no detail available" : rec.notes
+            log("  ⚠ FAILED: \(rec.filename) — \(detail)")
+            if rec.isPlayable == "File not found" {
+                consecutiveNotAccessible += 1
+                if consecutiveNotAccessible >= abortAfter {
+                    log("  ⛔ \(abortAfter) consecutive files inaccessible on \(volName) — volume likely unmounted. Aborting remaining probes.")
+                    return true
+                }
+            } else {
+                consecutiveNotAccessible = 0
+            }
+        } else {
+            consecutiveNotAccessible = 0
+        }
+        let pct = totalFiles > 0 ? (completedCount * 100 / totalFiles) : 100
+        let shouldUpdate = completedCount % 20 == 0 || completedCount == totalFiles
+            || (milestones.contains(pct) && !loggedMilestones.contains(pct))
+        if shouldUpdate {
+            if milestones.contains(pct) { loggedMilestones.insert(pct) }
+            target.filesScanned = completedCount
+            log("  [\(volName)] \(completedCount)/\(totalFiles) (\(pct)%)")
+        }
+        return false
+    }
+
+    /// Post-scan bookkeeping for a single-target scan: unmount, persist,
+    /// update target + dashboard state. Extracted from `runScanForTarget`.
+    private func finalizeSingleTargetScan(
+        target: CatalogScanTarget,
+        volName: String,
+        targetRecords: [VideoRecord],
+        completedCount: Int,
+        discoveredCount: Int,
+        rootIsNetwork: Bool
+    ) async {
+        target.filesScanned = completedCount
+        if discoveredCount == 0 {
+            log("  No video files found on \(volName).")
+            if rootIsNetwork { await ramDisk.unmount() }
+            target.status = .complete
+            target.lastScannedDate = Date()
+            target.stopElapsedTimer()
+            updateGlobalScanState()
+            return
+        }
+        if rootIsNetwork { await ramDisk.unmount() }
+        if Task.isCancelled {
+            target.status = .stopped
+            target.stopElapsedTimer()
+            updateGlobalScanState()
+            return
+        }
+        records.append(contentsOf: targetRecords)
+        saveCatalogDebounced()
+        logTargetScanSummary(volName: volName, records: targetRecords)
+        target.status = .complete
+        target.lastScannedDate = Date()
+        if target.phase == .noCatalog { target.phase = .cataloged }
+        target.stopElapsedTimer()
+        persistScanDates()
+        notifyTargetsChanged()
+        updateGlobalScanState()
+        if !hasActiveTargets {
+            dashboard.stopThroughputTimer()
+            dashboard.scanPhase = .complete
+        }
+    }
+
+    /// Mount the RAM disk for network scans if any root needs it.
+    /// Returns the mount point string (or nil if not network / not mounted).
+    private func mountScanRAMDiskIfNeeded(hasNetwork: Bool) async -> String? {
+        guard hasNetwork else { return nil }
+        let ramDiskMB = perfSettings.ramDiskGB * 1024
+        let mounted = await ramDisk.mount(sizeMB: ramDiskMB)
+        let mp = await ramDisk.mountPoint
+        if mounted, let mp {
+            log("  RAM disk mounted at \(mp) (\(perfSettings.ramDiskGB) GB) for network prefetch")
+            return mp
+        }
+        log("  WARN: RAM disk unavailable, probing network files directly")
+        return nil
+    }
+
     /// Log the final success summary for a volume scan. Extracted purely to
     /// keep `runScanForTarget` focused on orchestration.
     private func logTargetScanSummary(volName: String, records: [VideoRecord]) {
@@ -1309,44 +1406,49 @@ final class VideoScanModel: ObservableObject {
         // Mount RAM disk up-front for network scans so ffprobe prefetch works
         // from the first probed file AND the user can see /Volumes/VideoScan_Temp
         // appear right away instead of waiting for a long walk to finish.
-        var ramMountPoint: String?
-        if rootIsNetwork {
-            let ramDiskMB = perfSettings.ramDiskGB * 1024
-            let mounted = await ramDisk.mount(sizeMB: ramDiskMB)
-            ramMountPoint = await ramDisk.mountPoint
-            if mounted, let mp = ramMountPoint {
-                log("  RAM disk mounted at \(mp) (\(perfSettings.ramDiskGB) GB) for network prefetch")
-            } else {
-                log("  WARN: RAM disk unavailable, probing network files directly")
-            }
-        }
+        let ramMountPoint = await mountScanRAMDiskIfNeeded(hasNetwork: rootIsNetwork)
 
-        // Streaming walk + interleaved probe (producer-consumer).
-        //
-        // The walker runs detached and yields URLs through an AsyncStream. A
-        // task group consumes each URL, submitting a prober task that takes a
-        // semaphore permit. The first media file gets probed while the walker
-        // is still enumerating directories — real SMB content reads start
-        // within seconds of scan start, which keeps the remote session warm.
-        // Pure metadata walks (the old architecture) let the session idle out
-        // on slow remotes, after which every subsequent probe fails with
-        // "File was discovered during scan but is no longer accessible".
+        // Streaming walk + interleaved probe — see runTargetProbeGroup.
         dashboard.scanPhase = .probing
         target.status = .scanning
 
+        let result = await runTargetProbeGroup(
+            target: target,
+            root: root,
+            volName: volName,
+            rootIsNetwork: rootIsNetwork,
+            ramMountPoint: ramMountPoint
+        )
+
+        await finalizeSingleTargetScan(
+            target: target,
+            volName: volName,
+            targetRecords: result.records,
+            completedCount: result.completed,
+            discoveredCount: result.discovered,
+            rootIsNetwork: rootIsNetwork
+        )
+    }
+
+    /// Streams `target.searchPath` and drains a probe group against it.
+    /// Returns the collected records, total discovered, and total completed.
+    private func runTargetProbeGroup(
+        target: CatalogScanTarget,
+        root: String,
+        volName: String,
+        rootIsNetwork: Bool,
+        ramMountPoint: String?
+    ) async -> (records: [VideoRecord], discovered: Int, completed: Int) {
         let probesLimit = perfSettings.probesPerVolume
         let sem = AsyncSemaphore(limit: probesLimit)
-        // Capture perf toggles at scan start — changing mid-scan shouldn't
-        // create mixed hashed/unhashed records in a single volume's catalog.
         let skipHashingCaptured = scanOptions.skipChecksums
-
         var targetRecords: [VideoRecord] = []
         let milestones = Set([10, 25, 50, 75, 90, 100])
         var loggedMilestones: Set<Int> = []
         var completedCount = 0
         var discoveredCount = 0
         var consecutiveNotAccessible = 0
-        let abortAfter = 50  // abort scan if the mount disappears mid-probe
+        let abortAfter = 50
 
         let stream = walkDirectoryStream(
             root: root,
@@ -1354,7 +1456,6 @@ final class VideoScanModel: ObservableObject {
             skipBundleExtensions: skipBundleExtensionsSnapshot(),
             skipSmallFiles: scanOptions.skipSmallFiles
         ) { [weak self] currentDir in
-            // Heartbeat: surface the current directory on the RT scan window.
             Task { @MainActor in
                 guard let self else { return }
                 self.dashboard.scanCurrentVolume = volName
@@ -1363,7 +1464,6 @@ final class VideoScanModel: ObservableObject {
         }
 
         await withTaskGroup(of: VideoRecord.self) { probeGroup in
-            // Producer side: as URLs arrive from the walker, submit prober tasks.
             for await url in stream {
                 if Task.isCancelled { break }
                 discoveredCount += 1
@@ -1392,8 +1492,6 @@ final class VideoScanModel: ObservableObject {
                 }
             }
 
-            // Walker finished. Mark the volume no longer walking and publish
-            // the final discovered count for logging/UI.
             let totalFiles = discoveredCount
             target.filesFound = totalFiles
             await MainActor.run {
@@ -1403,82 +1501,27 @@ final class VideoScanModel: ObservableObject {
             }
             log("  Found \(totalFiles) video files on \(volName)")
 
-            // Consumer side: drain completed probers. If the mount dropped and
-            // everything is suddenly inaccessible, abort rather than burn
-            // timeouts on every remaining file.
             for await rec in probeGroup {
                 targetRecords.append(rec)
                 completedCount += 1
-                if rec.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
-                    let detail = rec.notes.isEmpty ? "no detail available" : rec.notes
-                    log("  ⚠ FAILED: \(rec.filename) — \(detail)")
-                    if rec.isPlayable == "File not found" {
-                        consecutiveNotAccessible += 1
-                        if consecutiveNotAccessible >= abortAfter {
-                            log("  ⛔ \(abortAfter) consecutive files inaccessible on \(volName) — volume likely unmounted. Aborting remaining probes.")
-                            probeGroup.cancelAll()
-                            break
-                        }
-                    } else {
-                        consecutiveNotAccessible = 0
-                    }
-                } else {
-                    consecutiveNotAccessible = 0
-                }
-                // Batch UI updates: only at milestones or every 20 files
-                let pct = totalFiles > 0 ? (completedCount * 100 / totalFiles) : 100
-                let shouldUpdate = completedCount % 20 == 0 || completedCount == totalFiles
-                    || milestones.contains(pct) && !loggedMilestones.contains(pct)
-                if shouldUpdate {
-                    if milestones.contains(pct) { loggedMilestones.insert(pct) }
-                    target.filesScanned = completedCount
-                    log("  [\(volName)] \(completedCount)/\(totalFiles) (\(pct)%)")
+                let shouldAbort = processTargetProbeResult(
+                    rec: rec,
+                    volName: volName,
+                    completedCount: completedCount,
+                    totalFiles: totalFiles,
+                    target: target,
+                    consecutiveNotAccessible: &consecutiveNotAccessible,
+                    loggedMilestones: &loggedMilestones,
+                    milestones: milestones,
+                    abortAfter: abortAfter
+                )
+                if shouldAbort {
+                    probeGroup.cancelAll()
+                    break
                 }
             }
         }
-        // Final count sync
-        target.filesScanned = completedCount
-
-        if discoveredCount == 0 {
-            log("  No video files found on \(volName).")
-            if rootIsNetwork { await ramDisk.unmount() }
-            target.status = .complete
-            target.lastScannedDate = Date()
-            target.stopElapsedTimer()
-            updateGlobalScanState()
-            return
-        }
-
-        // Unmount RAM disk if we mounted one
-        if rootIsNetwork { await ramDisk.unmount() }
-
-        if Task.isCancelled {
-            target.status = .stopped
-            target.stopElapsedTimer()
-            updateGlobalScanState()
-            return
-        }
-
-        // Append results to shared records and persist the snapshot.
-        records.append(contentsOf: targetRecords)
-        saveCatalogDebounced()
-
-        logTargetScanSummary(volName: volName, records: targetRecords)
-
-        target.status = .complete
-        target.lastScannedDate = Date()
-        if target.phase == .noCatalog { target.phase = .cataloged }
-        target.stopElapsedTimer()
-        persistScanDates()
-        notifyTargetsChanged()
-        updateGlobalScanState()
-        // If this was the last active target, stop the throughput timer and
-        // mark the dashboard's overall phase complete so the Realtime window
-        // shows a finished scan instead of staying stuck in "probing".
-        if !hasActiveTargets {
-            dashboard.stopThroughputTimer()
-            dashboard.scanPhase = .complete
-        }
+        return (targetRecords, discoveredCount, completedCount)
     }
 
     /// How many bytes to prefetch from network files to RAM disk for ffprobe.
@@ -1504,17 +1547,7 @@ final class VideoScanModel: ObservableObject {
 
         // Mount RAM disk for network file prefetching — size adapts to available memory
         let hasNetworkRoot = roots.contains { isNetworkPath($0) }
-        var ramMountPoint: String?
-        if hasNetworkRoot {
-            let ramDiskMB = perfSettings.ramDiskGB * 1024
-            let mounted = await ramDisk.mount(sizeMB: ramDiskMB)
-            ramMountPoint = await ramDisk.mountPoint
-            if mounted, let mp = ramMountPoint {
-                log("  RAM disk mounted at \(mp) (\(perfSettings.ramDiskGB) GB) for network prefetch\n")
-            } else {
-                log("  WARN: RAM disk unavailable, probing network files directly\n")
-            }
-        }
+        let ramMountPoint = await mountScanRAMDiskIfNeeded(hasNetwork: hasNetworkRoot)
 
         // Per-root streaming walk + interleaved probe (producer-consumer).
         //
@@ -1543,85 +1576,16 @@ final class VideoScanModel: ObservableObject {
         await withTaskGroup(of: [VideoRecord].self) { rootGroup in
             for root in roots {
                 rootGroup.addTask { [self] in
-                    let volName = URL(fileURLWithPath: root).lastPathComponent
-                    let rootIsNetwork = self.isNetworkPath(root)
-                    let sem = AsyncSemaphore(limit: probesLimit)
-                    var rootRecords: [VideoRecord] = []
-                    var discoveredCount = 0
-                    var consecutiveNotAccessible = 0
-
-                    let stream = self.walkDirectoryStream(
+                    await scanOneRootParallel(
                         root: root,
+                        ramMountPoint: ramMountPoint,
+                        probesLimit: probesLimit,
+                        abortAfter: abortAfter,
+                        skipHashing: skipHashingCaptured,
                         skipDirs: skipDirsCaptured,
-                        skipBundleExtensions: skipBundleExtsCaptured,
+                        skipBundleExts: skipBundleExtsCaptured,
                         skipSmallFiles: skipSmallFilesCaptured
-                    ) { [weak self] currentDir in
-                        Task { @MainActor in
-                            guard let self else { return }
-                            self.dashboard.scanCurrentVolume = volName
-                            self.dashboard.scanCurrentFile = "📂 " + currentDir.lastPathComponent
-                        }
-                    }
-
-                    await withTaskGroup(of: VideoRecord.self) { probeGroup in
-                        for await url in stream {
-                            if Task.isCancelled { break }
-                            discoveredCount += 1
-                            let currentDiscovered = discoveredCount
-                            await MainActor.run {
-                                let ds = self.dashboard
-                                ds.scanTotal += 1
-                                if let idx = ds.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
-                                    ds.volumeProgress[idx].totalFiles = currentDiscovered
-                                }
-                            }
-                            probeGroup.addTask {
-                                await self.pauseGate.waitIfPaused()
-                                return await sem.withPermit {
-                                    await self.probeAndRecord(
-                                        url: url,
-                                        volName: volName,
-                                        root: root,
-                                        rootIsNetwork: rootIsNetwork,
-                                        ramMountPoint: ramMountPoint,
-                                        skipHashing: skipHashingCaptured,
-                                        useTimeout: false,
-                                        echoFilename: true
-                                    )
-                                }
-                            }
-                        }
-
-                        // Walker finished for this root.
-                        let totalFiles = discoveredCount
-                        await MainActor.run {
-                            self.log("  Found \(totalFiles) video files on \(volName)")
-                            if let idx = self.dashboard.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
-                                self.dashboard.volumeProgress[idx].isWalking = false
-                            }
-                        }
-
-                        for await rec in probeGroup {
-                            rootRecords.append(rec)
-                            if rec.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
-                                if rec.isPlayable == "File not found" {
-                                    consecutiveNotAccessible += 1
-                                    if consecutiveNotAccessible >= abortAfter {
-                                        await MainActor.run {
-                                            self.log("  ⛔ \(abortAfter) consecutive files inaccessible on \(volName) — volume likely unmounted. Aborting remaining probes.")
-                                        }
-                                        probeGroup.cancelAll()
-                                        break
-                                    }
-                                } else {
-                                    consecutiveNotAccessible = 0
-                                }
-                            } else {
-                                consecutiveNotAccessible = 0
-                            }
-                        }
-                    }
-                    return rootRecords
+                    )
                 }
             }
             for await rootRecords in rootGroup {
@@ -1646,18 +1610,130 @@ final class VideoScanModel: ObservableObject {
         outputCSVPath = csvPath ?? ""
         if let p = csvPath { log("CSV saved to:\n\(p)") }
 
-        let va = allRecords.filter { $0.streamTypeRaw == StreamType.videoAndAudio.rawValue }.count
-        let vo = allRecords.filter { $0.streamTypeRaw == StreamType.videoOnly.rawValue }.count
-        let ao = allRecords.filter { $0.streamTypeRaw == StreamType.audioOnly.rawValue }.count
-        let ff = allRecords.filter { $0.isPlayable.contains("ffprobe") }.count
+        logParallelScanSummary(roots: roots, records: allRecords)
+        dashboard.scanPhase = .complete
+        isScanning = false
+    }
 
+    /// Per-root body invoked from `runParallelScan`'s outer task group.
+    /// Streams directory entries and drains a probe group, aborting if too
+    /// many consecutive files become inaccessible.
+    private func scanOneRootParallel(
+        root: String,
+        ramMountPoint: String?,
+        probesLimit: Int,
+        abortAfter: Int,
+        skipHashing: Bool,
+        skipDirs: Set<String>,
+        skipBundleExts: Set<String>,
+        skipSmallFiles: Bool
+    ) async -> [VideoRecord] {
+        let volName = URL(fileURLWithPath: root).lastPathComponent
+        let rootIsNetwork = isNetworkPath(root)
+        let sem = AsyncSemaphore(limit: probesLimit)
+        var rootRecords: [VideoRecord] = []
+        var discoveredCount = 0
+        var consecutiveNotAccessible = 0
+
+        let stream = walkDirectoryStream(
+            root: root,
+            skipDirs: skipDirs,
+            skipBundleExtensions: skipBundleExts,
+            skipSmallFiles: skipSmallFiles
+        ) { [weak self] currentDir in
+            Task { @MainActor in
+                guard let self else { return }
+                self.dashboard.scanCurrentVolume = volName
+                self.dashboard.scanCurrentFile = "📂 " + currentDir.lastPathComponent
+            }
+        }
+
+        await withTaskGroup(of: VideoRecord.self) { probeGroup in
+            for await url in stream {
+                if Task.isCancelled { break }
+                discoveredCount += 1
+                let currentDiscovered = discoveredCount
+                await MainActor.run {
+                    let ds = self.dashboard
+                    ds.scanTotal += 1
+                    if let idx = ds.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
+                        ds.volumeProgress[idx].totalFiles = currentDiscovered
+                    }
+                }
+                probeGroup.addTask {
+                    await self.pauseGate.waitIfPaused()
+                    return await sem.withPermit {
+                        await self.probeAndRecord(
+                            url: url,
+                            volName: volName,
+                            root: root,
+                            rootIsNetwork: rootIsNetwork,
+                            ramMountPoint: ramMountPoint,
+                            skipHashing: skipHashing,
+                            useTimeout: false,
+                            echoFilename: true
+                        )
+                    }
+                }
+            }
+
+            // Walker finished for this root.
+            let totalFiles = discoveredCount
+            await MainActor.run {
+                self.log("  Found \(totalFiles) video files on \(volName)")
+                if let idx = self.dashboard.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
+                    self.dashboard.volumeProgress[idx].isWalking = false
+                }
+            }
+
+            for await rec in probeGroup {
+                rootRecords.append(rec)
+                let shouldAbort = Self.updateInaccessibleCounter(
+                    rec: rec,
+                    consecutive: &consecutiveNotAccessible,
+                    abortAfter: abortAfter
+                )
+                if shouldAbort {
+                    await MainActor.run {
+                        self.log("  ⛔ \(abortAfter) consecutive files inaccessible on \(volName) — volume likely unmounted. Aborting remaining probes.")
+                    }
+                    probeGroup.cancelAll()
+                    break
+                }
+            }
+        }
+        return rootRecords
+    }
+
+    /// Reset or increment the consecutive-not-accessible counter based on a
+    /// probe result. Returns true if the caller should abort.
+    nonisolated private static func updateInaccessibleCounter(
+        rec: VideoRecord,
+        consecutive: inout Int,
+        abortAfter: Int
+    ) -> Bool {
+        if rec.streamTypeRaw == StreamType.ffprobeFailed.rawValue,
+           rec.isPlayable == "File not found" {
+            consecutive += 1
+            return consecutive >= abortAfter
+        }
+        consecutive = 0
+        return false
+    }
+
+    /// Final banner for `runParallelScan`.
+    private func logParallelScanSummary(roots: [String], records: [VideoRecord]) {
+        let va = records.filter { $0.streamTypeRaw == StreamType.videoAndAudio.rawValue }.count
+        let vo = records.filter { $0.streamTypeRaw == StreamType.videoOnly.rawValue }.count
+        let ao = records.filter { $0.streamTypeRaw == StreamType.audioOnly.rawValue }.count
+        let ff = records.filter { $0.isPlayable.contains("ffprobe") }.count
         log("""
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Scan Complete
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   Locations:      \(roots.count)
-  Total:          \(allRecords.count)
+  Total:          \(records.count)
   Video+Audio:    \(va)
   Video only:     \(vo)
   Audio only:     \(ao)
@@ -1665,8 +1741,6 @@ final class VideoScanModel: ObservableObject {
   Cache hits:     \(dashboard.scanCacheHits)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """)
-        dashboard.scanPhase = .complete
-        isScanning = false
     }
 
     /// Walk a single directory tree and return all video file URLs. Caller
@@ -1865,7 +1939,9 @@ final class VideoScanModel: ObservableObject {
                     throw CancellationError()
                 }
                 // First to finish wins — cancel the other
-                let result = try await group.next()!
+                guard let result = try await group.next() else {
+                    throw CancellationError()
+                }
                 group.cancelAll()
                 return result
             }
@@ -1951,55 +2027,18 @@ final class VideoScanModel: ObservableObject {
         }
 
         // Prefetch file header to RAM disk for fast ffprobe
-        var probeURL = url
-        var tempFile: URL?
-
-        if prefetchToRAM, let rp = ramPath {
-            let prefetchStart = CFAbsoluteTimeGetCurrent()
-            let tmpName = "\(UUID().uuidString)_\(url.lastPathComponent)"
-            let tmpURL = URL(fileURLWithPath: rp).appendingPathComponent(tmpName)
-            if prefetchHeader(from: url, to: tmpURL, bytes: prefetchBytes) {
-                probeURL = tmpURL
-                tempFile = tmpURL
-                let elapsed = CFAbsoluteTimeGetCurrent() - prefetchStart
-                let mbCopied = Double(min(prefetchBytes, Int(fileSize))) / (1024.0 * 1024.0)
-                await MainActor.run { [elapsed, mbCopied] in
-                    self.dashboard.recordNetworkPrefetch(megabytesCopied: mbCopied, seconds: elapsed)
-                }
-            }
-        }
+        let (probeURL, tempFile) = await prefetchIfNeeded(
+            url: url,
+            fileSize: fileSize,
+            prefetchToRAM: prefetchToRAM,
+            ramPath: ramPath
+        )
 
         let probeResult = await runFFProbe(url: probeURL)
         let stderrTrimmed = probeResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if let probe = probeResult.output,
-           probe.format != nil || !(probe.streams ?? []).isEmpty {
-            // Genuine success — ffprobe found format/stream data
-            autoreleasepool {
-                ScanEngine.extractMetadata(probe: probe, into: rec)
-            }
-            if !stderrTrimmed.isEmpty {
-                rec.notes = stderrTrimmed
-            }
-        } else if url.pathExtension.lowercased() == "mxf" {
-            // ffprobe failed on MXF — try native header parser
-            if let mxf = MxfHeaderParser.parse(fileAt: path) {
-                ScanEngine.applyMxfMetadata(mxf, into: rec)
-                let reason = stderrTrimmed.isEmpty ? "ffprobe could not decode" : stderrTrimmed
-                rec.notes = "MXF header parsed (ffprobe failed: \(reason))"
-            } else {
-                rec.isPlayable    = "Damaged MXF file"
-                rec.notes         = stderrTrimmed.isEmpty
-                    ? "Neither ffprobe nor MXF header parser could read this file"
-                    : "Damaged MXF — both ffprobe and header parser failed (\(stderrTrimmed))"
-                rec.streamTypeRaw = StreamType.ffprobeFailed.rawValue
-            }
-        } else {
-            let diagnosis = ScanEngine.humanReadableDiagnosis(stderr: stderrTrimmed)
-            rec.isPlayable    = diagnosis.label
-            rec.notes         = diagnosis.detail
-            rec.streamTypeRaw = StreamType.ffprobeFailed.rawValue
-        }
+        ScanEngine.applyProbeOrFallback(rec: rec, url: url, path: path,
+                                        probe: probeResult.output, stderrTrimmed: stderrTrimmed)
 
         // Clean up temp file
         if let tmp = tempFile {
@@ -2017,6 +2056,30 @@ final class VideoScanModel: ObservableObject {
         // recaptured fresh on every scan.
         rec.scanContext = ScanContext.capture(for: url)
         return rec
+    }
+
+    /// If prefetchToRAM is enabled and a RAM path is available, copy the
+    /// file's header to the RAM disk and return the staged URL (plus a temp
+    /// file for later cleanup). Falls back to the original URL on failure.
+    nonisolated private func prefetchIfNeeded(
+        url: URL,
+        fileSize: Int64,
+        prefetchToRAM: Bool,
+        ramPath: String?
+    ) async -> (probeURL: URL, tempFile: URL?) {
+        guard prefetchToRAM, let rp = ramPath else { return (url, nil) }
+        let prefetchStart = CFAbsoluteTimeGetCurrent()
+        let tmpName = "\(UUID().uuidString)_\(url.lastPathComponent)"
+        let tmpURL = URL(fileURLWithPath: rp).appendingPathComponent(tmpName)
+        guard prefetchHeader(from: url, to: tmpURL, bytes: prefetchBytes) else {
+            return (url, nil)
+        }
+        let elapsed = CFAbsoluteTimeGetCurrent() - prefetchStart
+        let mbCopied = Double(min(prefetchBytes, Int(fileSize))) / (1024.0 * 1024.0)
+        await MainActor.run { [elapsed, mbCopied] in
+            self.dashboard.recordNetworkPrefetch(megabytesCopied: mbCopied, seconds: elapsed)
+        }
+        return (tmpURL, tmpURL)
     }
 
     /// Copy the first N bytes of a file to a destination. Used to prefetch
@@ -2061,146 +2124,136 @@ final class VideoScanModel: ObservableObject {
     /// Tolerance for timestamp matching (seconds)
     private let timestampTolerance: TimeInterval = 5.0
 
-    /// Correlate all records, or only those whose IDs are in `selectedIDs` (if non-nil/non-empty).
-    func correlate(selectedIDs: Set<UUID>? = nil) {
-        isCorrelating = true
-        correlateStatus = ""
-        defer { isCorrelating = false }
+    // MARK: - Correlate helpers
+
+    private struct CorrelateCandidate {
+        let video: VideoRecord
+        let audio: VideoRecord
+        let score: Int
+        let confidence: PairConfidence
+        let reasons: [String]
+    }
+
+    /// Select records to re-correlate (all or the selected subset) and clear
+    /// their prior pairing so they can be re-paired from scratch.
+    private func resolveCorrelateScope(selectedIDs: Set<UUID>?) -> [VideoRecord] {
         let scope: [VideoRecord]
         if let ids = selectedIDs, !ids.isEmpty {
             scope = records.filter { ids.contains($0.id) }
-            // Only clear pairing on selected records
-            for r in scope {
-                r.pairedWith = nil
-                r.pairGroupID = nil
-                r.pairConfidence = nil
-            }
         } else {
             scope = records
-            for r in records {
-                r.pairedWith = nil
-                r.pairGroupID = nil
-                r.pairConfidence = nil
+        }
+        for r in scope {
+            r.pairedWith = nil
+            r.pairGroupID = nil
+            r.pairConfidence = nil
+        }
+        return scope
+    }
+
+    /// Index audio records by filename-correlation key and directory for O(1) lookup.
+    private func buildAudioPools(
+        from audios: [VideoRecord]
+    ) -> (byKey: [String: [VideoRecord]], byDir: [String: [VideoRecord]]) {
+        var byKey: [String: [VideoRecord]] = [:]
+        var byDir: [String: [VideoRecord]] = [:]
+        for a in audios {
+            byKey[filenameCorrelationKey(a.filename), default: []].append(a)
+            byDir[a.directory, default: []].append(a)
+        }
+        return (byKey, byDir)
+    }
+
+    /// Build the candidate audio pool for a video: indexed lookups first, fall back
+    /// to duration/timestamp scan across ALL audios only when the pool is thin.
+    private func gatherCandidateAudios(
+        for video: VideoRecord,
+        vKey: String,
+        allAudios: [VideoRecord],
+        byKey: [String: [VideoRecord]],
+        byDir: [String: [VideoRecord]]
+    ) -> [VideoRecord] {
+        var seen = Set<UUID>()
+        var pool: [VideoRecord] = []
+        for a in byKey[vKey] ?? [] where seen.insert(a.id).inserted { pool.append(a) }
+        for a in byDir[video.directory] ?? [] where seen.insert(a.id).inserted { pool.append(a) }
+        if pool.count >= 5 { return pool }
+        for a in allAudios where !seen.contains(a.id) {
+            let durationHit = video.durationSeconds > 0 && a.durationSeconds > 0 &&
+                abs(video.durationSeconds - a.durationSeconds) <= durationTolerance
+            let timestampHit: Bool
+            if let vDate = video.dateCreatedRaw, let aDate = a.dateCreatedRaw {
+                timestampHit = abs(vDate.timeIntervalSince(aDate)) <= timestampTolerance
+            } else {
+                timestampHit = false
+            }
+            if (durationHit || timestampHit) && seen.insert(a.id).inserted {
+                pool.append(a)
             }
         }
+        return pool
+    }
 
-        let needsPairing = scope.filter { $0.streamType.needsCorrelation }
-        let allVideos = needsPairing.filter { $0.streamType == .videoOnly }
-        let allAudios = needsPairing.filter { $0.streamType == .audioOnly }
-        var matched: Set<UUID> = []
+    /// Score a single video/audio pair and return a Candidate if the minimum
+    /// threshold is met. Same weighting as Correlator.swift (filename 4 / duration 3 /
+    /// timestamp 3 / timecode 2 / directory 1 / tape 1).
+    private func scoreCorrelatePair(
+        video: VideoRecord,
+        audio: VideoRecord,
+        vKey: String
+    ) -> CorrelateCandidate? {
+        var score = 0
+        var reasons: [String] = []
 
-        correlateStatus = "\(allVideos.count) video + \(allAudios.count) audio candidates"
-        log("  Correlating \(allVideos.count) video-only + \(allAudios.count) audio-only files...")
-
-        // Two-phase approach to avoid O(N*M) memory:
-        // Phase 1: Build index of audio files by correlation key for fast lookup.
-        // Phase 2: For each video, score only plausible audio candidates (same key,
-        //          same directory, or similar timestamp) rather than all audios.
-
-        struct Candidate {
-            let video: VideoRecord
-            let audio: VideoRecord
-            let score: Int
-            let confidence: PairConfidence
-            let reasons: [String]
+        if vKey == filenameCorrelationKey(audio.filename) { score += 4; reasons.append("filename") }
+        if video.durationSeconds > 0 && audio.durationSeconds > 0 &&
+           abs(video.durationSeconds - audio.durationSeconds) <= durationTolerance {
+            score += 3; reasons.append("duration")
         }
-
-        // Index audio files by correlation key and directory for fast lookup
-        var audioByKey: [String: [VideoRecord]] = [:]
-        var audioByDir: [String: [VideoRecord]] = [:]
-        for a in allAudios {
-            let key = filenameCorrelationKey(a.filename)
-            audioByKey[key, default: []].append(a)
-            audioByDir[a.directory, default: []].append(a)
+        if let vDate = video.dateCreatedRaw, let aDate = audio.dateCreatedRaw,
+           abs(vDate.timeIntervalSince(aDate)) <= timestampTolerance {
+            score += 3; reasons.append("timestamp")
         }
-
-        var candidates: [Candidate] = []
-
-        for v in allVideos {
-            let vKey = filenameCorrelationKey(v.filename)
-
-            // Gather plausible audio candidates: same key OR same directory
-            var candidateAudios = Set<UUID>()
-            var audioPool: [VideoRecord] = []
-            for a in audioByKey[vKey] ?? [] {
-                if candidateAudios.insert(a.id).inserted { audioPool.append(a) }
-            }
-            for a in audioByDir[v.directory] ?? [] {
-                if candidateAudios.insert(a.id).inserted { audioPool.append(a) }
-            }
-            // If pool is small, also check duration/timestamp matches against all audios
-            // (only when the indexed lookups haven't found enough candidates)
-            if audioPool.count < 5 {
-                for a in allAudios where !candidateAudios.contains(a.id) {
-                    var hasStrongSignal = false
-                    if v.durationSeconds > 0 && a.durationSeconds > 0 &&
-                       abs(v.durationSeconds - a.durationSeconds) <= durationTolerance {
-                        hasStrongSignal = true
-                    }
-                    if let vDate = v.dateCreatedRaw, let aDate = a.dateCreatedRaw,
-                       abs(vDate.timeIntervalSince(aDate)) <= timestampTolerance {
-                        hasStrongSignal = true
-                    }
-                    if hasStrongSignal {
-                        if candidateAudios.insert(a.id).inserted { audioPool.append(a) }
-                    }
-                }
-            }
-
-            for a in audioPool {
-                var score = 0
-                var reasons: [String] = []
-
-                let aKey = filenameCorrelationKey(a.filename)
-                if vKey == aKey { score += 4; reasons.append("filename") }
-
-                if v.durationSeconds > 0 && a.durationSeconds > 0 &&
-                   abs(v.durationSeconds - a.durationSeconds) <= durationTolerance {
-                    score += 3; reasons.append("duration")
-                }
-
-                if let vDate = v.dateCreatedRaw, let aDate = a.dateCreatedRaw,
-                   abs(vDate.timeIntervalSince(aDate)) <= timestampTolerance {
-                    score += 3; reasons.append("timestamp")
-                }
-
-                if !v.timecode.isEmpty && v.timecode == a.timecode {
-                    score += 2; reasons.append("timecode")
-                }
-
-                if v.directory == a.directory {
-                    score += 1; reasons.append("directory")
-                }
-
-                if !v.tapeName.isEmpty && v.tapeName == a.tapeName {
-                    score += 1; reasons.append("tape")
-                }
-
-                guard score >= 3 else { continue }
-
-                let confidence: PairConfidence
-                if score >= 7 { confidence = .high } else if score >= 4 { confidence = .medium } else { confidence = .low }
-
-                candidates.append(Candidate(
-                    video: v, audio: a, score: score,
-                    confidence: confidence, reasons: reasons
-                ))
-            }
+        if !video.timecode.isEmpty && video.timecode == audio.timecode {
+            score += 2; reasons.append("timecode")
         }
+        if video.directory == audio.directory { score += 1; reasons.append("directory") }
+        if !video.tapeName.isEmpty && video.tapeName == audio.tapeName {
+            score += 1; reasons.append("tape")
+        }
+        guard score >= 3 else { return nil }
 
-        // Sort by score descending, then greedily pair
-        candidates.sort { $0.score > $1.score }
+        let confidence: PairConfidence
+        if score >= 7 { confidence = .high } else if score >= 4 { confidence = .medium } else { confidence = .low }
+        return CorrelateCandidate(
+            video: video, audio: audio,
+            score: score, confidence: confidence, reasons: reasons
+        )
+    }
 
-        for c in candidates {
-            guard !matched.contains(c.video.id) && !matched.contains(c.audio.id) else { continue }
-
+    /// Greedy max-score assignment: sort by score descending, claim each pair
+    /// unless either side was already matched. Mutates records in place.
+    private func assignCorrelateCandidates(
+        _ candidates: [CorrelateCandidate],
+        matched: inout Set<UUID>
+    ) {
+        for c in candidates.sorted(by: { $0.score > $1.score }) {
+            guard !matched.contains(c.video.id), !matched.contains(c.audio.id) else { continue }
             let gid = UUID()
-            c.video.pairedWith = c.audio; c.video.pairGroupID = gid; c.video.pairConfidence = c.confidence
-            c.audio.pairedWith = c.video; c.audio.pairGroupID = gid; c.audio.pairConfidence = c.confidence
-            matched.insert(c.video.id); matched.insert(c.audio.id)
+            c.video.pairedWith = c.audio
+            c.video.pairGroupID = gid
+            c.video.pairConfidence = c.confidence
+            c.audio.pairedWith = c.video
+            c.audio.pairGroupID = gid
+            c.audio.pairConfidence = c.confidence
+            matched.insert(c.video.id)
+            matched.insert(c.audio.id)
             log("  Paired [\(c.confidence.rawValue)] (\(c.reasons.joined(separator: "+"))): \(c.video.filename)  ↔  \(c.audio.filename)")
         }
+    }
 
+    /// Emit the end-of-correlation summary (both status line and console log).
+    private func logCorrelateSummary(needsPairing: [VideoRecord], matched: Set<UUID>) {
         let totalPairs     = matched.count / 2
         let highCount      = records.filter { $0.pairConfidence == .high }.count / 2
         let medCount       = records.filter { $0.pairConfidence == .medium }.count / 2
@@ -2208,13 +2261,46 @@ final class VideoScanModel: ObservableObject {
         let stillUnmatched = needsPairing.filter { !matched.contains($0.id) }.count
 
         correlateStatus = "\(totalPairs) pairs · \(stillUnmatched) unmatched"
-
         log("""
 
         Correlation complete:
           \(totalPairs) pairs — \(highCount) high, \(medCount) medium, \(lowCount) low confidence
           \(stillUnmatched) unmatched
         """)
+    }
+
+    /// Correlate all records, or only those whose IDs are in `selectedIDs` (if non-nil/non-empty).
+    func correlate(selectedIDs: Set<UUID>? = nil) {
+        isCorrelating = true
+        correlateStatus = ""
+        defer { isCorrelating = false }
+
+        let scope = resolveCorrelateScope(selectedIDs: selectedIDs)
+        let needsPairing = scope.filter { $0.streamType.needsCorrelation }
+        let allVideos = needsPairing.filter { $0.streamType == .videoOnly }
+        let allAudios = needsPairing.filter { $0.streamType == .audioOnly }
+
+        correlateStatus = "\(allVideos.count) video + \(allAudios.count) audio candidates"
+        log("  Correlating \(allVideos.count) video-only + \(allAudios.count) audio-only files...")
+
+        let pools = buildAudioPools(from: allAudios)
+        var candidates: [CorrelateCandidate] = []
+        for v in allVideos {
+            let vKey = filenameCorrelationKey(v.filename)
+            let audioPool = gatherCandidateAudios(
+                for: v, vKey: vKey, allAudios: allAudios,
+                byKey: pools.byKey, byDir: pools.byDir
+            )
+            for a in audioPool {
+                if let candidate = scoreCorrelatePair(video: v, audio: a, vKey: vKey) {
+                    candidates.append(candidate)
+                }
+            }
+        }
+
+        var matched = Set<UUID>()
+        assignCorrelateCandidates(candidates, matched: &matched)
+        logCorrelateSummary(needsPairing: needsPairing, matched: matched)
 
         // Force table refresh
         let tmp = records
@@ -2431,6 +2517,165 @@ final class VideoScanModel: ObservableObject {
         combineAllPairsInternal(pairs: pairs, outputFolder: outputFolder, maxConcurrency: maxConcurrency)
     }
 
+    // MARK: - Combine helpers
+
+    /// Mount the RAM disk for combine temp buffering. Returns the base URL to
+    /// use (RAM disk if mounted, otherwise the system temp dir) and a flag.
+    private func mountCombineRAMDisk() async -> (tempBase: URL, hasRAMDisk: Bool) {
+        let combineDiskMB = perfSettings.ramDiskGB * 1024
+        let hasRAMDisk = await ramDisk.mount(sizeMB: combineDiskMB)
+        let ramMountPoint = await ramDisk.mountPoint
+        if hasRAMDisk, let mp = ramMountPoint {
+            log("  RAM disk mounted at \(mp) (\(perfSettings.ramDiskGB) GB)")
+            return (URL(fileURLWithPath: mp), true)
+        }
+        return (FileManager.default.temporaryDirectory, false)
+    }
+
+    /// Buffer a single network-side file to the combine temp dir.
+    /// Returns the local URL to pass to ffmpeg.
+    private func bufferCombineSource(
+        kind: String,
+        from remotePath: String,
+        to destination: URL,
+        hasRAMDisk: Bool
+    ) async throws -> URL {
+        await MainActor.run {
+            self.log("    Buffering \(kind) to \(hasRAMDisk ? "RAM disk" : "temp")...")
+        }
+        try await bufferedCopy(from: URL(fileURLWithPath: remotePath), to: destination)
+        return destination
+    }
+
+    /// Copy network-backed inputs to `tempBase` and return the local paths to use.
+    /// Creates (and marks for cleanup) a dedicated temp dir only when needed.
+    private func stageCombineInputs(
+        videoPath: String,
+        videoFilename: String,
+        audioPath: String,
+        audioFilename: String,
+        tempBase: URL,
+        hasRAMDisk: Bool
+    ) async throws -> (video: URL, audio: URL, tempDir: URL?) {
+        let videoIsNetwork = isNetworkPath(videoPath)
+        let audioIsNetwork = isNetworkPath(audioPath)
+        guard videoIsNetwork || audioIsNetwork else {
+            return (URL(fileURLWithPath: videoPath), URL(fileURLWithPath: audioPath), nil)
+        }
+        let tempDir = tempBase.appendingPathComponent("VS_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+
+        var localVideo = URL(fileURLWithPath: videoPath)
+        var localAudio = URL(fileURLWithPath: audioPath)
+        if videoIsNetwork {
+            localVideo = try await bufferCombineSource(
+                kind: "video", from: videoPath,
+                to: tempDir.appendingPathComponent(videoFilename),
+                hasRAMDisk: hasRAMDisk
+            )
+        }
+        if audioIsNetwork {
+            localAudio = try await bufferCombineSource(
+                kind: "audio", from: audioPath,
+                to: tempDir.appendingPathComponent(audioFilename),
+                hasRAMDisk: hasRAMDisk
+            )
+        }
+        return (localVideo, localAudio, tempDir)
+    }
+
+    /// Process one video/audio pair end-to-end: skip-if-exists, pause-gate,
+    /// stage inputs, mux, clean up. Returns true on success.
+    private func processCombinePair(
+        video: VideoRecord,
+        audio: VideoRecord,
+        outputFolder: URL,
+        tempBase: URL,
+        hasRAMDisk: Bool
+    ) async -> Bool {
+        if Task.isCancelled { return false }
+        await combinePauseGate.waitIfPaused()
+        if Task.isCancelled { return false }
+
+        let videoPath = video.fullPath
+        let audioPath = audio.fullPath
+        let videoFilename = video.filename
+        let audioFilename = audio.filename
+        let baseName = URL(fileURLWithPath: videoPath).deletingPathExtension().lastPathComponent
+        let outName = "\(baseName)_combined.mov"
+        let outURL = outputFolder.appendingPathComponent(outName)
+
+        // Skip if already completed (resume after pause)
+        if FileManager.default.fileExists(atPath: outURL.path) {
+            await MainActor.run {
+                self.dashboard.combineCompleted += 1
+                self.log("  [\(self.dashboard.combineCompleted)/\(self.dashboard.combineTotal)] \(outName) — already exists, skipping")
+            }
+            return true
+        }
+
+        await MainActor.run {
+            self.dashboard.combineCurrentFile = outName
+            self.log("  [\(self.dashboard.combineCompleted + 1)/\(self.dashboard.combineTotal)] \(outName)")
+            self.log("    Video: \(videoPath)")
+            self.log("    Audio: \(audioPath)")
+        }
+
+        let staged: (video: URL, audio: URL, tempDir: URL?)
+        do {
+            staged = try await stageCombineInputs(
+                videoPath: videoPath, videoFilename: videoFilename,
+                audioPath: audioPath, audioFilename: audioFilename,
+                tempBase: tempBase, hasRAMDisk: hasRAMDisk
+            )
+        } catch {
+            await MainActor.run {
+                self.log("    ERROR buffering: \(error.localizedDescription)")
+                self.dashboard.combineCompleted += 1
+            }
+            return false
+        }
+
+        let success = await runFFMpeg(
+            videoPath: staged.video.path,
+            audioPath: staged.audio.path,
+            outputPath: outURL.path
+        )
+
+        if let tempDir = staged.tempDir {
+            try? FileManager.default.removeItem(at: tempDir)
+        }
+        if !success {
+            try? FileManager.default.removeItem(at: outURL)
+        }
+
+        await MainActor.run {
+            self.dashboard.combineCompleted += 1
+            if success {
+                self.log("    ✓ Done: \(outURL.path)")
+            } else {
+                self.log("    ✗ FAILED: \(outName)")
+            }
+        }
+        return success
+    }
+
+    /// Emit the Combine Complete banner and clear the combine UI state.
+    @MainActor
+    private func logCombineSummary() {
+        self.log("""
+
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          Combine Complete
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          Succeeded: \(dashboard.combineSucceeded)
+          Failed:    \(dashboard.combineFailed)
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        """)
+        isCombining = false
+        dashboard.combineCurrentFile = ""
+    }
+
     private func combineAllPairsInternal(pairs: [(video: VideoRecord, audio: VideoRecord)], outputFolder: URL, maxConcurrency: Int? = nil) {
         isCombining = true
         dashboard.resetForCombine(total: pairs.count)
@@ -2443,155 +2688,31 @@ final class VideoScanModel: ObservableObject {
         """)
 
         combineTask = Task {
-            // Mount RAM disk for temp buffering
-            let combineDiskMB = self.perfSettings.ramDiskGB * 1024
-            let hasRAMDisk = await ramDisk.mount(sizeMB: combineDiskMB)
-            let ramMountPoint = await ramDisk.mountPoint
-            if hasRAMDisk, let mp = ramMountPoint {
-                log("  RAM disk mounted at \(mp) (\(self.perfSettings.ramDiskGB) GB)")
-            }
-            let tempBase = (hasRAMDisk && ramMountPoint != nil)
-                ? URL(fileURLWithPath: ramMountPoint!)
-                : FileManager.default.temporaryDirectory
-
+            let (tempBase, hasRAMDisk) = await mountCombineRAMDisk()
             let semaphore = AsyncSemaphore(limit: maxConcurrency ?? self.perfSettings.combineConcurrency)
 
-            await withTaskGroup(of: (String, Bool).self) { group in
+            await withTaskGroup(of: Bool.self) { group in
                 for (video, audio) in pairs {
                     if Task.isCancelled { break }
-
-                    let videoFilename = video.filename
-                    let videoPath = video.fullPath
-                    let audioFilename = audio.filename
-                    let audioPath = audio.fullPath
-
                     group.addTask { [self] in
-                        return await semaphore.withPermit {
-                            if Task.isCancelled { return (videoFilename, false) }
-
-                            // Wait if paused — blocks here until resumed
-                            await self.combinePauseGate.waitIfPaused()
-                            if Task.isCancelled { return (videoFilename, false) }
-
-                            let baseName = URL(fileURLWithPath: videoPath)
-                                .deletingPathExtension().lastPathComponent
-                            let outName = "\(baseName)_combined.mov"
-                            let outURL = outputFolder.appendingPathComponent(outName)
-
-                            // Skip if already completed (resume after pause)
-                            if FileManager.default.fileExists(atPath: outURL.path) {
-                                await MainActor.run {
-                                    self.dashboard.combineCompleted += 1
-                                    self.log("  [\(self.dashboard.combineCompleted)/\(self.dashboard.combineTotal)] \(outName) — already exists, skipping")
-                                }
-                                return (videoFilename, true)
-                            }
-
-                            await MainActor.run {
-                                self.dashboard.combineCurrentFile = outName
-                                self.log("  [\(self.dashboard.combineCompleted + 1)/\(self.dashboard.combineTotal)] \(outName)")
-                                self.log("    Video: \(videoPath)")
-                                self.log("    Audio: \(audioPath)")
-                            }
-
-                            // Buffer network sources to RAM disk (or /tmp fallback)
-                            let tempDir = tempBase
-                                .appendingPathComponent("VS_\(UUID().uuidString)")
-                            var localVideo = URL(fileURLWithPath: videoPath)
-                            var localAudio = URL(fileURLWithPath: audioPath)
-                            var usedTempDir = false
-
-                            let videoIsNetwork = self.isNetworkPath(videoPath)
-                            let audioIsNetwork = self.isNetworkPath(audioPath)
-
-                            if videoIsNetwork || audioIsNetwork {
-                                do {
-                                    try FileManager.default.createDirectory(
-                                        at: tempDir, withIntermediateDirectories: true)
-                                    usedTempDir = true
-
-                                    if videoIsNetwork {
-                                        let dest = tempDir.appendingPathComponent(videoFilename)
-                                        await MainActor.run {
-                                            self.log("    Buffering video to \(hasRAMDisk ? "RAM disk" : "temp")...")
-                                        }
-                                        try await self.bufferedCopy(
-                                            from: URL(fileURLWithPath: videoPath), to: dest)
-                                        localVideo = dest
-                                    }
-                                    if audioIsNetwork {
-                                        let dest = tempDir.appendingPathComponent(audioFilename)
-                                        await MainActor.run {
-                                            self.log("    Buffering audio to \(hasRAMDisk ? "RAM disk" : "temp")...")
-                                        }
-                                        try await self.bufferedCopy(
-                                            from: URL(fileURLWithPath: audioPath), to: dest)
-                                        localAudio = dest
-                                    }
-                                } catch {
-                                    await MainActor.run {
-                                        self.log("    ERROR buffering: \(error.localizedDescription)")
-                                        self.dashboard.combineCompleted += 1
-                                    }
-                                    if usedTempDir {
-                                        try? FileManager.default.removeItem(at: tempDir)
-                                    }
-                                    return (videoFilename, false)
-                                }
-                            }
-
-                            // Run ffmpeg: remux into MOV, no re-encode
-                            let success = await self.runFFMpeg(
-                                videoPath: localVideo.path,
-                                audioPath: localAudio.path,
-                                outputPath: outURL.path
+                        await semaphore.withPermit {
+                            await self.processCombinePair(
+                                video: video, audio: audio,
+                                outputFolder: outputFolder,
+                                tempBase: tempBase, hasRAMDisk: hasRAMDisk
                             )
-
-                            // Clean up temp files
-                            if usedTempDir {
-                                try? FileManager.default.removeItem(at: tempDir)
-                            }
-
-                            // If ffmpeg failed or was cancelled, delete partial output
-                            if !success {
-                                try? FileManager.default.removeItem(at: outURL)
-                            }
-
-                            await MainActor.run {
-                                self.dashboard.combineCompleted += 1
-                                if success {
-                                    self.log("    ✓ Done: \(outURL.path)")
-                                } else {
-                                    self.log("    ✗ FAILED: \(outName)")
-                                }
-                            }
-                            return (videoFilename, success)
                         }
                     }
                 }
 
-                for await (_, ok) in group {
+                for await ok in group {
                     await MainActor.run {
                         if ok { self.dashboard.combineSucceeded += 1 } else { self.dashboard.combineFailed += 1 }
                     }
                 }
 
-                // Unmount RAM disk
                 await self.ramDisk.unmount()
-
-                await MainActor.run {
-                    self.log("""
-
-                    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-                      Combine Complete
-                    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-                      Succeeded: \(self.dashboard.combineSucceeded)
-                      Failed:    \(self.dashboard.combineFailed)
-                    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-                    """)
-                    self.isCombining = false
-                    self.dashboard.combineCurrentFile = ""
-                }
+                await self.logCombineSummary()
             }
         }
     }
