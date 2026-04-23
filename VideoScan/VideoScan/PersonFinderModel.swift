@@ -344,44 +344,52 @@ struct POIProfile: Codable, Identifiable, Equatable {
     }
 
     // MARK: File-based persistence
-
-    private static var profilesDir: URL {
-        let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("dev/VideoScan/poi_profiles")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }
-
-    private static func fileURL(for name: String) -> URL {
-        profilesDir.appendingPathComponent(name.lowercased()
-            .replacingOccurrences(of: " ", with: "_") + ".json")
-    }
+    //
+    // Storage layout lives in POIStorage — each POI gets its own folder
+    // under ~/Library/Application Support/VideoScan/POI/<name>/ holding
+    // profile.json plus its reference photos. See POIStorage.swift.
+    //
+    // referencePath in the JSON is kept for backwards compatibility but
+    // is ALWAYS rewritten on save to point at the POI's own folder, so
+    // moving the user's home directory can't break things.
 
     func save() throws {
-        let data = try JSONEncoder().encode(self)
-        try data.write(to: Self.fileURL(for: name), options: .atomic)
+        let folder = POIStorage.folder(for: name)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        // Keep referencePath in sync with actual location.
+        var copy = self
+        copy.referencePath = folder.path
+        let data = try JSONEncoder().encode(copy)
+        try data.write(to: POIStorage.profileURL(for: name), options: .atomic)
     }
 
     static func load(name: String) throws -> POIProfile {
-        let data = try Data(contentsOf: fileURL(for: name))
-        return try JSONDecoder().decode(POIProfile.self, from: data)
+        let data = try Data(contentsOf: POIStorage.profileURL(for: name))
+        var profile = try JSONDecoder().decode(POIProfile.self, from: data)
+        // Heal referencePath — its folder is implicit, always the POI's own folder.
+        profile.referencePath = POIStorage.folder(for: profile.name).path
+        return profile
     }
 
     static func delete(name: String) throws {
-        let url = fileURL(for: name)
-        if FileManager.default.fileExists(atPath: url.path) {
-            try FileManager.default.removeItem(at: url)
+        let folder = POIStorage.folder(for: name)
+        if FileManager.default.fileExists(atPath: folder.path) {
+            try FileManager.default.removeItem(at: folder)
         }
     }
 
     static func listAll() -> [POIProfile] {
-        guard let files = try? FileManager.default.contentsOfDirectory(
-            at: profilesDir, includingPropertiesForKeys: nil
-        ) else { return [] }
-        return files
-            .filter { $0.pathExtension == "json" }
-            .compactMap { try? JSONDecoder().decode(POIProfile.self, from: Data(contentsOf: $0)) }
-            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        // Trigger lazy migration on first read.
+        _ = POIStorage.migrateLegacyIfNeeded()
+        return POIStorage.allPOIFolders().compactMap { folder in
+            let profileURL = folder.appendingPathComponent("profile.json")
+            guard let data = try? Data(contentsOf: profileURL),
+                  var p = try? JSONDecoder().decode(POIProfile.self, from: data)
+            else { return nil }
+            // Heal referencePath on read — the folder location is authoritative.
+            p.referencePath = folder.path
+            return p
+        }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     /// Resolve the cover image to an NSImage by looking in the reference folder.
@@ -398,6 +406,8 @@ struct POIProfile: Codable, Identifiable, Equatable {
     }
 
     /// List image filenames in the reference folder (for cover photo picking).
+    /// profile.json lives in the same folder and is filtered out by the
+    /// extension whitelist below — no explicit skip needed.
     var referenceImageFilenames: [String] {
         guard !referencePath.isEmpty else { return [] }
         let url = URL(fileURLWithPath: referencePath)
