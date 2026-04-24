@@ -100,3 +100,99 @@ For async tests:
     #expect(result != nil)
 }
 ```
+
+## Testing Philosophy
+
+VideoScan is a personal media app, but the discipline applied here is deliberately
+modelled on safety-critical software practice — the kind of work Rick did in medical
+and industrial-controls shops for decades. The aim isn't maximum test count or a
+shiny coverage number; it's to reveal a process that would hold up in environments
+where silent failures hurt people.
+
+### What we actually want to measure
+
+Coverage-% is a weak metric on its own. A project at 90% coverage can still ship a
+serious bug if the tests never exercise the failure mode. And a project at 20%
+coverage can be rock-solid in the paths that matter if every known regression is
+locked down by a purpose-built test.
+
+The better question is: **of the bugs we've found in this codebase, how many have a
+test that would have caught them the moment someone reverted the fix?** That number
+is usually much smaller than coverage — and far more meaningful.
+
+### Unit tests should focus on *our* logic
+
+Don't test Apple Vision, Swift standard library, ffmpeg, dlib, CoreML, or Apple
+Photos. Those are someone else's problem. Write tests for the code we wrote:
+
+- Metadata extraction + parsing (ffprobe JSON → VideoRecord)
+- Duplicate detection scoring
+- Correlator matching audio-only + video-only pairs
+- Combine engine's mux command construction
+- Catalog state transitions
+- Scan phase lifecycle
+- Face-match scoring distance math
+- Settings propagation into jobs
+
+Skip:
+- SwiftUI view layout
+- Third-party library behavior
+- File I/O (except via fixtures)
+- Wall-clock / network-dependent behavior
+
+### The regression-test-by-revert pattern
+
+This is the workflow we use for every real bug we find:
+
+1. **Find the bug** (reproducer in hand)
+2. **Fix it** in the code
+3. **Write a unit test** that exercises the buggy path
+4. **Revert the fix** — run the test and confirm it FAILS
+5. **Restore the fix** — confirm the test PASSES
+6. **Commit fix + test together**, with the test tagged as a regression:
+
+   ```swift
+   // regression: empty MXF tracks silently skipped (issue #42)
+   @Test func probeReportsEmptyTracks() { ... }
+   ```
+
+Step 4 is non-negotiable. A test that has never failed on the broken code is not
+yet trusted — you don't know whether it actually catches the bug or just passes
+coincidentally. Many codebases accumulate thousands of tests that have never once
+failed, and no one knows which of them are real.
+
+This is the discipline that separates defensive unit tests from theater.
+
+### How this informs what we measure
+
+The raw coverage-% number will always be noisy on this project — the filter in
+`scripts/collect_metrics.sh` is filename-based (`View|Window|Sheet|...` excluded),
+which is coarse. A refactor that moves a helper into a view-named file will drop
+the number without changing what's actually tested.
+
+More useful metrics, in rough order of importance:
+
+1. **Regression test count** — grep for `// regression:` tags. Every entry is
+   proof that a real bug is now locked out by a test that has been seen to fail.
+2. **Core-logic coverage** — hand-curated include-list (`VideoScanModel`,
+   `PersonFinderModel`, `ScanEngine`, `CatalogStore`, `Correlator`,
+   `DuplicateDetector`, `CombineEngine`, etc.). Denominator is "stuff that
+   matters," so the number is honest.
+3. **SwiftLint warnings** — direct signal of code complexity / file size / force
+   unwraps. Goes up when things get worse, down when we clean up.
+4. **Periphery findings** — dead code count. High numbers don't necessarily mean
+   broken, but they mean the codebase is wider than it needs to be.
+5. **Overall xccov coverage** — keep it on the chart, but don't steer by it.
+
+### Why this matters even for a home-video app
+
+The point isn't that VideoScan will kill anyone. It's that the process of
+accumulating proven regression tests, one bug at a time, is the same process
+that makes medical-software reviews go smoothly. Every test in the suite should
+have a story: *this test exists because of this bug, and it has been seen to fail
+on the broken code.* That story is what a regulator or a surgeon or a post-mortem
+review wants to see — and it's what tells Rick, six months from now, that the
+test suite is worth trusting instead of rubber-stamping.
+
+"We don't want to rat-hole on metrics, but we want to keep on top of spaghetti
+code and regressions." — Rick, 2026-04-23.
