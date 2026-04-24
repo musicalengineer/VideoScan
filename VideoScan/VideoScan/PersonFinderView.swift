@@ -220,8 +220,14 @@ struct PersonFinderView: View {
     // MARK: Loaded Faces Strip — compact scan-readiness indicator
 
     @State private var showFailures = false
-    @AppStorage("faceThumbnailSize") private var thumbSize: Double = 58
     @AppStorage("facesStripHeight") private var facesStripHeight: Double = 90
+
+    /// Derive thumbnail cell size from the pane height: photos scale with
+    /// the drag-resizable strip. Clamped so thumbs stay usable at extremes.
+    /// Issue #38 — replaced the explicit thumbnail-size slider.
+    private var derivedThumbSize: CGFloat {
+        CGFloat(min(max(facesStripHeight * 0.55, 40), 140))
+    }
     @State private var inspectedFace: ReferenceFace?
 
     @ViewBuilder
@@ -308,25 +314,11 @@ struct PersonFinderView: View {
                         }
                     }
                     Spacer()
-
-                    // Thumbnail size slider
-                    if !model.referenceFaces.isEmpty {
-                        HStack(spacing: 4) {
-                            Image(systemName: "photo")
-                                .font(.system(size: 9))
-                                .foregroundStyle(.secondary)
-                            Slider(value: $thumbSize, in: 40...140, step: 2)
-                                .frame(width: 80)
-                            Image(systemName: "photo")
-                                .font(.system(size: 14))
-                                .foregroundStyle(.secondary)
-                        }
-                    }
                 }
 
                 // Face thumbnails — wrapping grid in a resizable pane
                 if !model.referenceFaces.isEmpty {
-                    let cellSize = CGFloat(thumbSize)
+                    let cellSize = derivedThumbSize
                     let columns = [GridItem(.adaptive(minimum: cellSize + 4), spacing: 6)]
                     ScrollView(.vertical, showsIndicators: true) {
                         LazyVGrid(columns: columns, spacing: 6) {
