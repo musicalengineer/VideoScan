@@ -27,6 +27,9 @@ struct PersonEditSheet: View {
     @State private var cropOffset: CGSize
     @State private var showCropEditor = false
 
+    // Photo deletion — confirmation alert
+    @State private var photoPendingDeletion: String?
+
     init(profile: POIProfile, onSave: @escaping (POIProfile) -> Void) {
         self.originalProfile = profile
         self.onSave = onSave
@@ -172,7 +175,7 @@ struct PersonEditSheet: View {
                     }
                 } footer: {
                     if !imageFilenames.isEmpty {
-                        Text("Click a photo to set it as the cover image. Right-click for more options. \(imageFilenames.count) photo\(imageFilenames.count == 1 ? "" : "s") in folder.")
+                        Text("Click a photo to set it as the cover image. Right-click to delete or show in Finder. \(imageFilenames.count) photo\(imageFilenames.count == 1 ? "" : "s") in folder.")
                     }
                 }
 
@@ -201,6 +204,24 @@ struct PersonEditSheet: View {
             .background(Color(NSColor.windowBackgroundColor))
         }
         .frame(width: 560, height: 720)
+        .alert(
+            "Delete this reference photo?",
+            isPresented: Binding(
+                get: { photoPendingDeletion != nil },
+                set: { if !$0 { photoPendingDeletion = nil } }
+            ),
+            presenting: photoPendingDeletion
+        ) { filename in
+            Button("Delete", role: .destructive) {
+                deleteReferencePhoto(filename)
+                photoPendingDeletion = nil
+            }
+            Button("Cancel", role: .cancel) {
+                photoPendingDeletion = nil
+            }
+        } message: { filename in
+            Text("\(filename) will be moved to the Trash. This photo will no longer be used when scanning for \(name.isEmpty ? "this person" : name).")
+        }
     }
 
     // MARK: Cover avatar in header
@@ -313,8 +334,30 @@ struct PersonEditSheet: View {
                 coverFilename = isCover ? nil : filename
             }
             Divider()
+            Button("Delete Photo\u{2026}", role: .destructive) {
+                photoPendingDeletion = filename
+            }
+            Divider()
             Text(filename)
         }
+    }
+
+    /// Move a reference photo to the Trash and refresh the grid.
+    /// If the deleted photo was the cover, clear the cover selection.
+    /// Issue #37 — edit sheet must match scan-time photos, so user needs
+    /// to remove ones that shouldn't feed face recognition.
+    private func deleteReferencePhoto(_ filename: String) {
+        let url = URL(fileURLWithPath: referencePath).appendingPathComponent(filename)
+        do {
+            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+        } catch {
+            NSLog("PersonEditSheet: failed to trash \(url.path): \(error)")
+            return
+        }
+        if coverFilename == filename {
+            coverFilename = nil
+        }
+        imageFilenamesCache = nil  // force refresh
     }
 
     // MARK: Browse & Import
