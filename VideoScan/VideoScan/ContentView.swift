@@ -361,119 +361,121 @@ struct CatalogView: View {
     /// by bold rules so the resizable sheet reads like a printable report.
     static func buildCatalogInfo(records: [VideoRecord], target: CatalogScanTarget) -> String {
         guard !records.isEmpty else { return "No catalog data for this volume." }
-
-        var lines: [String] = []
         let rule = String(repeating: "━", count: 48)
+        var lines: [String] = []
+        lines.append(contentsOf: catalogInfoProvenanceLines(records: records, target: target, rule: rule))
+        lines.append(contentsOf: catalogInfoSummaryLines(records: records, target: target, rule: rule))
+        lines.append(contentsOf: catalogInfoErrorLines(records: records))
+        return lines.joined(separator: "\n")
+    }
 
-        // ══════════════════════════════════════════════════════════
-        // Section 1 — PROVENANCE (where/when/how this catalog was made)
-        // ══════════════════════════════════════════════════════════
+    /// Section 1 — PROVENANCE: where/when/how the catalog was captured.
+    private static func catalogInfoProvenanceLines(
+        records: [VideoRecord],
+        target: CatalogScanTarget,
+        rule: String
+    ) -> [String] {
         let populated = records.filter { $0.scanContext.isPopulated }
         let unpopulated = records.count - populated.count
-
-        lines.append(rule)
-        lines.append("  PROVENANCE")
-        lines.append(rule)
-        lines.append("Volume Path: \(target.searchPath)")
-        lines.append("Records: \(records.count) (with provenance: \(populated.count), without: \(unpopulated))")
-
-        if populated.isEmpty {
+        var lines: [String] = [
+            rule,
+            "  PROVENANCE",
+            rule,
+            "Volume Path: \(target.searchPath)",
+            "Records: \(records.count) (with provenance: \(populated.count), without: \(unpopulated))"
+        ]
+        guard !populated.isEmpty else {
             lines.append("")
             lines.append("No scan-provenance data has been captured yet.")
             lines.append("Rescan this volume to populate scan host, mount type,")
             lines.append("volume UUID, and remote-server fields.")
+            return lines
+        }
+
+        let hosts       = Set(populated.map { $0.scanContext.scanHost }.filter { !$0.isEmpty })
+        let mountTypes  = Set(populated.map { $0.scanContext.volumeMountType }.filter { !$0.isEmpty })
+        let uuids       = Set(populated.map { $0.scanContext.volumeUUID }.filter { !$0.isEmpty })
+        let remoteHosts = Set(populated.map { $0.scanContext.remoteServerName }.filter { !$0.isEmpty })
+
+        lines.append("Scanned By: \(hosts.isEmpty ? "(unknown)" : hosts.sorted().joined(separator: ", "))")
+        lines.append("Mount Type: \(mountTypes.isEmpty ? "(unknown)" : mountTypes.sorted().joined(separator: ", "))")
+        if !remoteHosts.isEmpty {
+            lines.append("Remote Server: \(remoteHosts.sorted().joined(separator: ", "))")
+        }
+        if uuids.isEmpty {
+            lines.append("Volume UUID: (none — filesystem did not vend one)")
+        } else if let onlyUUID = uuids.first, uuids.count == 1 {
+            lines.append("Volume UUID: \(onlyUUID)")
         } else {
-            let hosts       = Set(populated.map { $0.scanContext.scanHost }.filter { !$0.isEmpty })
-            let mountTypes  = Set(populated.map { $0.scanContext.volumeMountType }.filter { !$0.isEmpty })
-            let uuids       = Set(populated.map { $0.scanContext.volumeUUID }.filter { !$0.isEmpty })
-            let remoteHosts = Set(populated.map { $0.scanContext.remoteServerName }.filter { !$0.isEmpty })
+            lines.append("Volume UUID: \(uuids.count) distinct UUIDs seen:")
+            for u in uuids.sorted() { lines.append("  \(u)") }
+        }
 
-            lines.append("Scanned By: \(hosts.isEmpty ? "(unknown)" : hosts.sorted().joined(separator: ", "))")
-            lines.append("Mount Type: \(mountTypes.isEmpty ? "(unknown)" : mountTypes.sorted().joined(separator: ", "))")
-            if !remoteHosts.isEmpty {
-                lines.append("Remote Server: \(remoteHosts.sorted().joined(separator: ", "))")
-            }
-            if uuids.isEmpty {
-                lines.append("Volume UUID: (none — filesystem did not vend one)")
-            } else if uuids.count == 1 {
-                lines.append("Volume UUID: \(uuids.first!)")
+        let scanDates = populated.compactMap { $0.scanContext.scannedAt }
+        if let earliest = scanDates.min(), let latest = scanDates.max() {
+            let fmt = DateFormatter()
+            fmt.dateStyle = .medium
+            fmt.timeStyle = .short
+            if earliest == latest {
+                lines.append("Scan Time: \(fmt.string(from: earliest))")
             } else {
-                lines.append("Volume UUID: \(uuids.count) distinct UUIDs seen:")
-                for u in uuids.sorted() { lines.append("  \(u)") }
-            }
-
-            let scanDates = populated.compactMap { $0.scanContext.scannedAt }
-            if let earliest = scanDates.min(), let latest = scanDates.max() {
-                let fmt = DateFormatter()
-                fmt.dateStyle = .medium
-                fmt.timeStyle = .short
-                if earliest == latest {
-                    lines.append("Scan Time: \(fmt.string(from: earliest))")
-                } else {
-                    lines.append("Scan Time Range: \(fmt.string(from: earliest)) → \(fmt.string(from: latest))")
-                }
-            }
-
-            if unpopulated > 0 {
-                lines.append("")
-                lines.append("Note: \(unpopulated) record(s) predate provenance capture — rescan to backfill.")
+                lines.append("Scan Time Range: \(fmt.string(from: earliest)) → \(fmt.string(from: latest))")
             }
         }
 
-        // ══════════════════════════════════════════════════════════
-        // Section 2 — CATALOG SUMMARY (what's in the catalog)
-        // ══════════════════════════════════════════════════════════
+        if unpopulated > 0 {
+            lines.append("")
+            lines.append("Note: \(unpopulated) record(s) predate provenance capture — rescan to backfill.")
+        }
+        return lines
+    }
+
+    /// Section 2 — CATALOG SUMMARY: counts, sizes, codecs, extensions, etc.
+    private static func catalogInfoSummaryLines(
+        records: [VideoRecord],
+        target: CatalogScanTarget,
+        rule: String
+    ) -> [String] {
         let totalBytes = records.reduce(into: Int64(0)) { $0 += $1.sizeBytes }
         let va = records.filter { $0.streamType == .videoAndAudio }.count
         let vo = records.filter { $0.streamType == .videoOnly }.count
         let ao = records.filter { $0.streamType == .audioOnly }.count
-        let failedRecs = records.filter { $0.streamType == .ffprobeFailed }
         let noStreams = records.filter { $0.streamType == .noStreams }.count
 
-        // Catalog size estimate
         let catBytes = records.count * 2048
-        let catSize: String
-        if catBytes < 1_048_576 {
-            catSize = String(format: "%.0f KB", Double(catBytes) / 1024)
-        } else {
-            catSize = String(format: "%.1f MB", Double(catBytes) / 1_048_576)
-        }
+        let catSize = catBytes < 1_048_576
+            ? String(format: "%.0f KB", Double(catBytes) / 1024)
+            : String(format: "%.1f MB", Double(catBytes) / 1_048_576)
+        let mediaSize = totalBytes < 1_073_741_824
+            ? String(format: "%.1f MB", Double(totalBytes) / 1_048_576)
+            : String(format: "%.1f GB", Double(totalBytes) / 1_073_741_824)
 
-        // Media size
-        let mediaSize: String
-        if totalBytes < 1_073_741_824 {
-            mediaSize = String(format: "%.1f MB", Double(totalBytes) / 1_048_576)
-        } else {
-            mediaSize = String(format: "%.1f GB", Double(totalBytes) / 1_073_741_824)
-        }
-
-        // Unique codecs, containers, resolutions
         let codecs = Set(records.compactMap { $0.videoCodec.isEmpty ? nil : $0.videoCodec })
         let containers = Set(records.compactMap { $0.container.isEmpty ? nil : $0.container })
         let resolutions = Set(records.compactMap { $0.resolution.isEmpty ? nil : $0.resolution })
         let audioCodecs = Set(records.compactMap { $0.audioCodec.isEmpty ? nil : $0.audioCodec })
 
-        // Total duration
         let totalDuration = records.reduce(0.0) { $0 + $1.durationSeconds }
         let hours = Int(totalDuration) / 3600
         let mins = (Int(totalDuration) % 3600) / 60
         let durationStr = hours > 0 ? "\(hours)h \(mins)m" : "\(mins)m"
 
-        // Extensions breakdown
         let extCounts = Dictionary(grouping: records, by: { $0.ext.lowercased() })
             .mapValues { $0.count }
             .sorted { $0.value > $1.value }
             .prefix(8)
             .map { "\($0.key) (\($0.value))" }
 
-        lines.append("")
-        lines.append(rule)
-        lines.append("  CATALOG SUMMARY")
-        lines.append(rule)
-        lines.append("Files: \(records.count)")
-        lines.append("Total Duration: \(durationStr)")
-        lines.append("Media Size: \(mediaSize)")
-        lines.append("Catalog Size: \(catSize)")
+        var lines: [String] = [
+            "",
+            rule,
+            "  CATALOG SUMMARY",
+            rule,
+            "Files: \(records.count)",
+            "Total Duration: \(durationStr)",
+            "Media Size: \(mediaSize)",
+            "Catalog Size: \(catSize)"
+        ]
         if let date = target.lastScannedDate {
             let fmt = DateFormatter()
             fmt.dateStyle = .medium
@@ -493,7 +495,6 @@ struct CatalogView: View {
             lines.append("— File Types —")
             lines.append(extCounts.joined(separator: ", "))
         }
-
         if !codecs.isEmpty {
             lines.append("")
             lines.append("— Video Codecs —")
@@ -511,44 +512,46 @@ struct CatalogView: View {
             lines.append("— Resolutions —")
             lines.append(resolutions.sorted().joined(separator: ", "))
         }
+        return lines
+    }
 
-        // Error details
-        if !failedRecs.isEmpty {
-            lines.append("")
-            lines.append("— Errors (\(failedRecs.count)) —")
+    /// Section 3 — ERRORS: grouped failure reasons + example filenames.
+    private static func catalogInfoErrorLines(records: [VideoRecord]) -> [String] {
+        let failedRecs = records.filter { $0.streamType == .ffprobeFailed }
+        guard !failedRecs.isEmpty else { return [] }
 
-            // Group by error reason (from isPlayable + notes)
-            var reasonCounts: [String: Int] = [:]
-            for rec in failedRecs {
-                let reason: String
-                if !rec.notes.isEmpty {
-                    // Truncate long stderr to a recognizable prefix
-                    let trimmed = rec.notes.prefix(80)
-                    reason = String(trimmed)
-                } else if !rec.isPlayable.isEmpty {
-                    reason = rec.isPlayable
-                } else {
-                    reason = "Unknown error"
-                }
-                reasonCounts[reason, default: 0] += 1
-            }
-            for (reason, count) in reasonCounts.sorted(by: { $0.value > $1.value }).prefix(10) {
-                lines.append("  \(count)x  \(reason)")
-            }
+        var lines: [String] = [
+            "",
+            "— Errors (\(failedRecs.count)) —"
+        ]
 
-            // Show a few example filenames
-            let examples = failedRecs.prefix(5).map { $0.filename }
-            lines.append("")
-            lines.append("Example files:")
-            for name in examples {
-                lines.append("  \(name)")
+        // Group by error reason (from isPlayable + notes)
+        var reasonCounts: [String: Int] = [:]
+        for rec in failedRecs {
+            let reason: String
+            if !rec.notes.isEmpty {
+                reason = String(rec.notes.prefix(80))
+            } else if !rec.isPlayable.isEmpty {
+                reason = rec.isPlayable
+            } else {
+                reason = "Unknown error"
             }
-            if failedRecs.count > 5 {
-                lines.append("  … and \(failedRecs.count - 5) more")
-            }
+            reasonCounts[reason, default: 0] += 1
+        }
+        for (reason, count) in reasonCounts.sorted(by: { $0.value > $1.value }).prefix(10) {
+            lines.append("  \(count)x  \(reason)")
         }
 
-        return lines.joined(separator: "\n")
+        let examples = failedRecs.prefix(5).map { $0.filename }
+        lines.append("")
+        lines.append("Example files:")
+        for name in examples {
+            lines.append("  \(name)")
+        }
+        if failedRecs.count > 5 {
+            lines.append("  … and \(failedRecs.count - 5) more")
+        }
+        return lines
     }
 
     /// Build VolumeRow values from filtered scan targets for the Table.
@@ -932,93 +935,103 @@ struct CatalogView: View {
         let targets = ids.compactMap { id in target(for: id) }
         if let first = targets.first {
             let single = targets.count == 1
+            volumeContextCatalogSection(targets: targets, first: first, single: single)
+            Divider()
+            volumeContextPhaseSection(targets: targets, first: first, single: single)
+            Divider()
+            volumeContextVolumeSection(targets: targets, first: first, single: single)
+        }
+    }
 
-            Section("Catalog") {
-                if single {
-                    Button(action: { showCatalogInfo(for: first) }) {
-                        Label("Catalog Info", systemImage: "info.circle")
-                    }
-                    .keyboardShortcut("i", modifiers: .command)
+    @ViewBuilder
+    private func volumeContextCatalogSection(
+        targets: [CatalogScanTarget], first: CatalogScanTarget, single: Bool
+    ) -> some View {
+        Section("Catalog") {
+            if single {
+                Button(action: { showCatalogInfo(for: first) }) {
+                    Label("Catalog Info", systemImage: "info.circle")
                 }
-
+                .keyboardShortcut("i", modifiers: .command)
+            }
+            Button(action: {
+                for t in targets where t.status.isIdle && t.isReachable {
+                    model.startTarget(t)
+                }
+            }) {
+                Label(single ? "Scan / Update Catalog" : "Scan Selected", systemImage: "arrow.clockwise")
+            }
+            Button(role: .destructive, action: {
+                if single {
+                    deleteVolumeCatalogTarget = first
+                    showDeleteVolumeCatalogConfirm = true
+                } else {
+                    for t in targets { model.deleteCatalogForTarget(t) }
+                }
+            }) {
+                Label("Delete Catalog", systemImage: "trash")
+            }
+            if targets.contains(where: { $0.status == .complete || $0.status == .stopped || $0.status == .error }) {
                 Button(action: {
-                    for t in targets where t.status.isIdle && t.isReachable {
-                        model.startTarget(t)
-                    }
+                    for t in targets { model.resetTarget(t) }
                 }) {
-                    Label(single ? "Scan / Update Catalog" : "Scan Selected", systemImage: "arrow.clockwise")
+                    Label("Reset & Re-probe", systemImage: "arrow.counterclockwise")
                 }
+            }
+        }
+    }
 
-                Button(role: .destructive, action: {
-                    if single {
-                        deleteVolumeCatalogTarget = first
-                        showDeleteVolumeCatalogConfirm = true
-                    } else {
-                        for t in targets { model.deleteCatalogForTarget(t) }
-                    }
+    @ViewBuilder
+    private func volumeContextPhaseSection(
+        targets: [CatalogScanTarget], first: CatalogScanTarget, single: Bool
+    ) -> some View {
+        Section("Phase") {
+            ForEach(VolumePhase.allCases, id: \.self) { phase in
+                Button(action: {
+                    for t in targets { model.setPhase(phase, for: t) }
                 }) {
-                    Label("Delete Catalog", systemImage: "trash")
-                }
-
-                if targets.contains(where: { $0.status == .complete || $0.status == .stopped || $0.status == .error }) {
-                    Button(action: {
-                        for t in targets { model.resetTarget(t) }
-                    }) {
-                        Label("Reset & Re-probe", systemImage: "arrow.counterclockwise")
+                    HStack {
+                        if single, first.phase == phase {
+                            Image(systemName: "checkmark")
+                        }
+                        Label(phase.rawValue, systemImage: phase.icon)
                     }
                 }
             }
+        }
+    }
 
-            Divider()
-
-            Section("Phase") {
-                ForEach(VolumePhase.allCases, id: \.self) { phase in
-                    Button(action: {
-                        for t in targets { model.setPhase(phase, for: t) }
-                    }) {
-                        HStack {
-                            if single, first.phase == phase {
-                                Image(systemName: "checkmark")
-                            }
-                            Label(phase.rawValue, systemImage: phase.icon)
-                        }
-                    }
+    @ViewBuilder
+    private func volumeContextVolumeSection(
+        targets: [CatalogScanTarget], first: CatalogScanTarget, single: Bool
+    ) -> some View {
+        Section("Volume") {
+            if single {
+                Button(action: { browsePath(for: first) }) {
+                    Label("Browse…", systemImage: "folder")
+                }
+                .disabled(!first.status.isIdle)
+            }
+            if targets.contains(where: { !$0.isReachable }) {
+                Button(action: {
+                    for t in targets where !t.isReachable { model.wakeVolume(t) }
+                }) {
+                    Label("Wake Volume", systemImage: "bolt.fill")
                 }
             }
-
-            Divider()
-
-            Section("Volume") {
-                if single {
-                    Button(action: { browsePath(for: first) }) {
-                        Label("Browse…", systemImage: "folder")
+            if targets.contains(where: { $0.isReachable && $0.searchPath.hasPrefix("/Volumes/") }) {
+                Button(action: {
+                    for t in targets where t.isReachable && t.searchPath.hasPrefix("/Volumes/") {
+                        model.ejectVolume(t)
                     }
-                    .disabled(!first.status.isIdle)
-                }
-
-                if targets.contains(where: { !$0.isReachable }) {
-                    Button(action: {
-                        for t in targets where !t.isReachable { model.wakeVolume(t) }
-                    }) {
-                        Label("Wake Volume", systemImage: "bolt.fill")
-                    }
-                }
-
-                if targets.contains(where: { $0.isReachable && $0.searchPath.hasPrefix("/Volumes/") }) {
-                    Button(action: {
-                        for t in targets where t.isReachable && t.searchPath.hasPrefix("/Volumes/") {
-                            model.ejectVolume(t)
-                        }
-                    }) {
-                        Label("Eject", systemImage: "eject.fill")
-                    }
-                }
-
-                Button(role: .destructive, action: {
-                    for t in targets { model.removeScanTarget(t) }
                 }) {
-                    Label(single ? "Remove from List" : "Remove Selected", systemImage: "minus.circle")
+                    Label("Eject", systemImage: "eject.fill")
                 }
+            }
+            Button(role: .destructive, action: {
+                for t in targets { model.removeScanTarget(t) }
+            }) {
+                Label(single ? "Remove from List" : "Remove Selected", systemImage: "minus.circle")
             }
         }
     }
