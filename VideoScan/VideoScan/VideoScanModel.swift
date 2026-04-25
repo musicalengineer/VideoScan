@@ -1802,9 +1802,9 @@ final class VideoScanModel: ObservableObject {
                     } else if rv.isRegularFile == true && rv.isReadable == true {
                         let ext = url.pathExtension.lowercased()
                         if videoExtensions.contains(ext) {
-                            // .ts and .mts collide with TypeScript — verify MPEG-TS
-                            // magic byte (0x47 sync byte) before including.
-                            if (ext == "ts" || ext == "mts") && !Self.isMpegTS(url) {
+                            // .ts can collide with TypeScript — verify MPEG-TS sync byte.
+                            // .mts is AVCHD-only (never TypeScript), so skip the check.
+                            if ext == "ts" && !Self.isMpegTS(url) {
                                 continue
                             }
                             if minFileBytes > 0, let sz = rv.fileSize, sz < minFileBytes {
@@ -1877,7 +1877,7 @@ final class VideoScanModel: ObservableObject {
                         } else if rv.isRegularFile == true && rv.isReadable == true {
                             let ext = url.pathExtension.lowercased()
                             if videoExtensions.contains(ext) {
-                                if (ext == "ts" || ext == "mts") && !Self.isMpegTS(url) {
+                                if ext == "ts" && !Self.isMpegTS(url) {
                                     continue
                                 }
                                 // skipSmallFiles filter — cheap reject of stubs/thumbnails.
@@ -1899,15 +1899,17 @@ final class VideoScanModel: ObservableObject {
         }
     }
 
-    /// Check if a .ts/.mts file is actually an MPEG transport stream (not TypeScript).
-    /// MPEG-TS files start with sync byte 0x47. TypeScript source files start with ASCII.
+    /// Check if a .ts file is actually an MPEG transport stream (not TypeScript).
+    /// Standard MPEG-TS: sync byte 0x47 at offset 0 (188-byte packets).
+    /// BDAV/AVCHD:        sync byte 0x47 at offset 4 (192-byte packets with timecode prefix).
     nonisolated private static func isMpegTS(_ url: URL) -> Bool {
         let fd = open(url.path, O_RDONLY)
         guard fd >= 0 else { return false }
         defer { close(fd) }
-        var byte: UInt8 = 0
-        let n = read(fd, &byte, 1)
-        return n == 1 && byte == 0x47
+        var buf = [UInt8](repeating: 0, count: 5)
+        let n = read(fd, &buf, 5)
+        guard n >= 1 else { return false }
+        return buf[0] == 0x47 || (n >= 5 && buf[4] == 0x47)
     }
 
     /// Per-file probe timeout (seconds). Prevents the scan from stalling on
