@@ -248,6 +248,9 @@ struct CatalogContent: View {
     let searchText: String
     let filterTargetPaths: Set<String>
     let showPairsOnly: Bool
+    /// When non-empty, show only these specific records (overrides all other filters).
+    /// Used by Archive tab's "Show in Catalog" / "Show Pair in Catalog".
+    var filterByIDs: Set<UUID> = []
     let previewImage: NSImage?
     let previewFilename: String
     let previewOfflineVolumeName: String?
@@ -319,6 +322,10 @@ struct CatalogContent: View {
     }
 
     private func computeFiltered() -> [VideoRecord] {
+        // ID filter overrides everything — used by Archive "Show in Catalog"
+        if !filterByIDs.isEmpty {
+            return records.filter { filterByIDs.contains($0.id) }
+        }
         var out = records
         if !filterTargetPaths.isEmpty {
             let prefixes = Array(filterTargetPaths)
@@ -590,6 +597,7 @@ struct CatalogContent: View {
         .onChange(of: searchText) { tableData = computeFiltered() }
         .onChange(of: filterTargetPaths) { tableData = computeFiltered() }
         .onChange(of: showPairsOnly) { tableData = computeFiltered() }
+        .onChange(of: filterByIDs) { tableData = computeFiltered() }
     }
 
     // MARK: - Preview / Player
