@@ -147,6 +147,14 @@ class VideoRecord: Identifiable, Codable {
     var duplicateBestMatchFilename: String = ""
     var duplicateGroupCount: Int = 0
 
+    // Media lifecycle (Archive tab)
+    var mediaDisposition: MediaDisposition = .unreviewed
+    var archiveStage: ArchiveStage = .none
+    var masterLocation: String = ""           // e.g. "Mac Studio SSD"
+    var backupDestinations: [BackupEntry] = []
+    var junkScore: Int = 0
+    var junkReasons: [String] = []
+
     /// Hostname of the machine that originally cataloged this record.
     /// Empty on records scanned locally; populated on import from another
     /// machine's exported catalog so the UI can show "from <host>".
@@ -212,6 +220,8 @@ class VideoRecord: Identifiable, Codable {
         case pairedWithID, pairGroupID, pairConfidence
         case duplicateGroupID, duplicateConfidence, duplicateDisposition
         case duplicateReasons, duplicateBestMatchFilename, duplicateGroupCount
+        case mediaDisposition, archiveStage, masterLocation, backupDestinations
+        case junkScore, junkReasons
         case sourceHost
         case scanContext
     }
@@ -268,6 +278,12 @@ class VideoRecord: Identifiable, Codable {
         duplicateBestMatchFilename  = try c.decodeIfPresent(String.self, forKey: .duplicateBestMatchFilename) ?? ""
         duplicateGroupCount         = try c.decodeIfPresent(Int.self, forKey: .duplicateGroupCount) ?? 0
         sourceHost                  = try c.decodeIfPresent(String.self, forKey: .sourceHost) ?? ""
+        mediaDisposition            = try c.decodeIfPresent(MediaDisposition.self, forKey: .mediaDisposition) ?? .unreviewed
+        archiveStage                = try c.decodeIfPresent(ArchiveStage.self, forKey: .archiveStage) ?? .none
+        masterLocation              = try c.decodeIfPresent(String.self, forKey: .masterLocation) ?? ""
+        backupDestinations          = try c.decodeIfPresent([BackupEntry].self, forKey: .backupDestinations) ?? []
+        junkScore                   = try c.decodeIfPresent(Int.self, forKey: .junkScore) ?? 0
+        junkReasons                 = try c.decodeIfPresent([String].self, forKey: .junkReasons) ?? []
         scanContext                 = try c.decodeIfPresent(ScanContext.self, forKey: .scanContext) ?? ScanContext()
     }
 
@@ -323,6 +339,18 @@ class VideoRecord: Identifiable, Codable {
         try c.encode(duplicateBestMatchFilename, forKey: .duplicateBestMatchFilename)
         try c.encode(duplicateGroupCount, forKey: .duplicateGroupCount)
         try c.encode(sourceHost, forKey: .sourceHost)
+        try c.encode(mediaDisposition, forKey: .mediaDisposition)
+        try c.encode(archiveStage, forKey: .archiveStage)
+        if !masterLocation.isEmpty {
+            try c.encode(masterLocation, forKey: .masterLocation)
+        }
+        if !backupDestinations.isEmpty {
+            try c.encode(backupDestinations, forKey: .backupDestinations)
+        }
+        try c.encode(junkScore, forKey: .junkScore)
+        if !junkReasons.isEmpty {
+            try c.encode(junkReasons, forKey: .junkReasons)
+        }
         if scanContext.isPopulated || scanContext.scannedAt != nil {
             try c.encode(scanContext, forKey: .scanContext)
         }
@@ -338,6 +366,95 @@ class VideoRecord: Identifiable, Codable {
         case .noStreams:     return Color.gray.opacity(0.15)
         case .ffprobeFailed: return Color.red.opacity(0.15)
         default:             return Color.clear
+        }
+    }
+}
+
+// MARK: - Media Disposition (per-file lifecycle)
+
+enum MediaDisposition: String, Codable, CaseIterable {
+    case unreviewed    = "Unreviewed"
+    case important     = "Important"
+    case recoverable   = "Recoverable"
+    case suspectedJunk = "Suspected Junk"
+    case confirmedJunk = "Confirmed Junk"
+
+    var icon: String {
+        switch self {
+        case .unreviewed:    return "circle"
+        case .important:     return "star.fill"
+        case .recoverable:   return "wrench.and.screwdriver.fill"
+        case .suspectedJunk: return "exclamationmark.triangle"
+        case .confirmedJunk: return "xmark.circle.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .unreviewed:    return .secondary
+        case .important:     return .blue
+        case .recoverable:   return .teal
+        case .suspectedJunk: return .orange
+        case .confirmedJunk: return .red
+        }
+    }
+}
+
+enum ArchiveStage: String, Codable, CaseIterable, Comparable {
+    case none            = "None"
+    case healthy         = "Healthy"
+    case masterAssigned  = "Master"
+    case backedUp        = "Backed Up"
+    case readyForArchive = "Ready"
+    case archived        = "Archived"
+
+    var icon: String {
+        switch self {
+        case .none:            return "circle"
+        case .healthy:         return "heart.fill"
+        case .masterAssigned:  return "crown.fill"
+        case .backedUp:        return "doc.on.doc.fill"
+        case .readyForArchive: return "checkmark.seal.fill"
+        case .archived:        return "archivebox.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .none:            return .secondary
+        case .healthy:         return .green
+        case .masterAssigned:  return .blue
+        case .backedUp:        return .purple
+        case .readyForArchive: return .mint
+        case .archived:        return .indigo
+        }
+    }
+
+    static func < (lhs: ArchiveStage, rhs: ArchiveStage) -> Bool {
+        let order: [ArchiveStage] = allCases
+        return order.firstIndex(of: lhs)! < order.firstIndex(of: rhs)!
+    }
+}
+
+// MARK: - Backup Entry
+
+struct BackupEntry: Codable, Identifiable, Equatable {
+    var id: String { name }
+    let name: String           // "LTA_Crucial", "iCloud", "Breen's NAS"
+    let kind: BackupKind
+    let date: Date
+
+    enum BackupKind: String, Codable, CaseIterable {
+        case local   = "Local"       // external drive, same network
+        case cloud   = "Cloud"       // iCloud, Backblaze, S3
+        case offsite = "Offsite"     // physically elsewhere (son's NAS, etc.)
+
+        var icon: String {
+            switch self {
+            case .local:   return "externaldrive.fill"
+            case .cloud:   return "icloud.fill"
+            case .offsite: return "building.2.fill"
+            }
         }
     }
 }

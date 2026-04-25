@@ -10,7 +10,8 @@ struct ContentView: View {
 
     private let tabs: [(label: String, icon: String, tag: Int)] = [
         ("People", "person.2.fill", 0),
-        ("Media", "film.stack", 1)
+        ("Catalog", "film.stack", 1),
+        ("Archive", "archivebox.fill", 2)
     ]
 
     var body: some View {
@@ -63,6 +64,8 @@ struct ContentView: View {
                         .environmentObject(personFinderModel)
                 case 1:
                     CatalogView()
+                case 2:
+                    ArchiveView()
                 default:
                     PersonFinderView()
                         .environmentObject(personFinderModel)
@@ -109,6 +112,8 @@ struct CatalogView: View {
     @State private var deleteTargetCount: Int = 0
     @State private var showDiscoverVolumes = false
     @State private var showVolumeCompare = false
+    /// Set by Archive tab navigation — filters catalog to specific record IDs.
+    @State private var filterByIDs: Set<UUID> = []
     // Volume pane height is now managed by NSSplitView (VerticalSplitView)
     @State private var showPairsOnly = false
     @State private var combinePairItem: CombinePairItem?
@@ -223,6 +228,7 @@ struct CatalogView: View {
                 searchText: searchText,
                 filterTargetPaths: filterTargetPaths,
                 showPairsOnly: showPairsOnly,
+                filterByIDs: filterByIDs,
                 previewImage: model.previewImage,
                 previewFilename: model.previewFilename,
                 previewOfflineVolumeName: model.previewOfflineVolumeName,
@@ -261,6 +267,15 @@ struct CatalogView: View {
                 } else {
                     highlightedTargetPath = ""
                 }
+            }
+            .onAppear { handlePendingCatalogNavigation() }
+            .onChange(of: model.pendingCatalogSelection) { handlePendingCatalogNavigation() }
+            // Clear the ID filter when user types in search or selects a volume
+            .onChange(of: searchText) {
+                if !searchText.isEmpty { filterByIDs = [] }
+            }
+            .onChange(of: selectedVolumeIDs) {
+                if !selectedVolumeIDs.isEmpty { filterByIDs = [] }
             }
                 }  // end bottom VStack
             }  // end VerticalSplitView
@@ -307,6 +322,39 @@ struct CatalogView: View {
             } else {
                 Text("Delete catalog records for this volume?")
             }
+        }
+    }
+
+    // MARK: - Archive → Catalog Navigation
+
+    private func handlePendingCatalogNavigation() {
+        guard let id = model.pendingCatalogSelection else { return }
+        let pairMode = model.pendingCatalogPairMode
+        model.pendingCatalogSelection = nil
+        model.pendingCatalogPairMode = false
+
+        // Clear other filters so filterByIDs takes full effect
+        selectedVolumeIDs = []
+        searchText = ""
+        showPairsOnly = false
+
+        if pairMode, let rec = model.records.first(where: { $0.id == id }) {
+            // Show just the pair (2 rows)
+            var ids: Set<UUID> = [id]
+            if let partner = rec.pairedWith {
+                ids.insert(partner.id)
+            }
+            filterByIDs = ids
+            selectedIDs = ids
+        } else {
+            // Show just the one file
+            filterByIDs = [id]
+            selectedIDs = [id]
+        }
+        // Generate thumbnail
+        if let rec = model.records.first(where: { $0.id == id }),
+           rec.streamType == .videoOnly || rec.streamType == .videoAndAudio {
+            model.generateThumbnail(for: rec)
         }
     }
 

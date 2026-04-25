@@ -161,6 +161,11 @@ final class VideoScanModel: ObservableObject {
     @Published var outputCSVPath: String = ""
     @Published var previewImage: NSImage?
     @Published var previewFilename: String = ""
+    /// Set by Archive tab to navigate the Catalog tab to a specific record.
+    @Published var pendingCatalogSelection: UUID?
+    /// When true, Show Pair mode: filter catalog to show the selected file
+    /// and its correlated pair instead of just the one file.
+    @Published var pendingCatalogPairMode: Bool = false
     /// Set when the user selects a record whose source volume isn't currently
     /// mounted. CatalogContent renders an "Volume Offline" placeholder
     /// instead of trying to load a thumbnail.
