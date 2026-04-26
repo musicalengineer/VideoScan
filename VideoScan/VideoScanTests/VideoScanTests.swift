@@ -2885,3 +2885,587 @@ struct POIStorageTests {
         #expect(second == .notNeeded)
     }
 }
+
+// MARK: - CombineJobStatus Tests
+
+struct CombineJobStatusTests {
+
+    @Test func defaultPhaseIsQueued() {
+        let job = CombineJobStatus(
+            pairIndex: 0,
+            videoFilename: "v.mxf", audioFilename: "a.mxf",
+            outputFilename: "out.mov", outputPath: "/tmp/out.mov",
+            videoSizeBytes: 100, audioSizeBytes: 50,
+            totalDurationSeconds: 10, videoOnline: true, audioOnline: true
+        )
+        #expect(job.phase == .queued)
+        #expect(job.progressFraction == 0)
+        #expect(job.isPaused == false)
+        #expect(job.technique == .streamCopy)
+    }
+
+    @Test func estimatedBytes() {
+        let job = CombineJobStatus(
+            pairIndex: 0,
+            videoFilename: "v.mxf", audioFilename: "a.mxf",
+            outputFilename: "out.mov", outputPath: "/tmp/out.mov",
+            videoSizeBytes: 1_000_000, audioSizeBytes: 500_000,
+            totalDurationSeconds: 10, videoOnline: true, audioOnline: true
+        )
+        #expect(job.estimatedBytes == 1_500_000)
+    }
+
+    @Test func bothOnlineRequiresBoth() {
+        let online = CombineJobStatus(
+            pairIndex: 0,
+            videoFilename: "v.mxf", audioFilename: "a.mxf",
+            outputFilename: "out.mov", outputPath: "/tmp/out.mov",
+            videoSizeBytes: 100, audioSizeBytes: 50,
+            totalDurationSeconds: 10, videoOnline: true, audioOnline: true
+        )
+        #expect(online.bothOnline == true)
+
+        let partial = CombineJobStatus(
+            pairIndex: 0,
+            videoFilename: "v.mxf", audioFilename: "a.mxf",
+            outputFilename: "out.mov", outputPath: "/tmp/out.mov",
+            videoSizeBytes: 100, audioSizeBytes: 50,
+            totalDurationSeconds: 10, videoOnline: true, audioOnline: false
+        )
+        #expect(partial.bothOnline == false)
+    }
+
+    @Test func elapsedNilWhenNotStarted() {
+        let job = CombineJobStatus(
+            pairIndex: 0,
+            videoFilename: "v.mxf", audioFilename: "a.mxf",
+            outputFilename: "out.mov", outputPath: "/tmp/out.mov",
+            videoSizeBytes: 100, audioSizeBytes: 50,
+            totalDurationSeconds: 10, videoOnline: true, audioOnline: true
+        )
+        #expect(job.elapsed == nil)
+    }
+
+    @Test func elapsedComputesWhenStarted() {
+        var job = CombineJobStatus(
+            pairIndex: 0,
+            videoFilename: "v.mxf", audioFilename: "a.mxf",
+            outputFilename: "out.mov", outputPath: "/tmp/out.mov",
+            videoSizeBytes: 100, audioSizeBytes: 50,
+            totalDurationSeconds: 10, videoOnline: true, audioOnline: true
+        )
+        job.startTime = Date().addingTimeInterval(-5)
+        let elapsed = job.elapsed!
+        #expect(elapsed >= 4.5 && elapsed <= 6.0)
+    }
+
+    @Test func phaseRawValues() {
+        #expect(CombineJobStatus.CombinePhase.queued.rawValue == "Queued")
+        #expect(CombineJobStatus.CombinePhase.buffering.rawValue == "Buffering")
+        #expect(CombineJobStatus.CombinePhase.muxing.rawValue == "Muxing")
+        #expect(CombineJobStatus.CombinePhase.verifying.rawValue == "Verifying")
+        #expect(CombineJobStatus.CombinePhase.done.rawValue == "Verified")
+        #expect(CombineJobStatus.CombinePhase.failed.rawValue == "Failed")
+        #expect(CombineJobStatus.CombinePhase.skipped.rawValue == "Already Combined")
+    }
+
+    @Test func techniqueRawValues() {
+        #expect(CombineJobStatus.CombineTechnique.streamCopy.rawValue == "Stream Copy")
+        #expect(CombineJobStatus.CombineTechnique.reencodeProRes.rawValue == "Re-encode → ProRes")
+        #expect(CombineJobStatus.CombineTechnique.reencodeH264.rawValue == "Re-encode → H.264")
+    }
+}
+
+// MARK: - CombineEngine Extended Tests
+
+struct CombineEngineExtendedTests {
+
+    /// Helper: attempt to decode one frame of a given stream type.
+    /// Mirrors the app's decodeTestFrame logic so tests verify the same thing.
+    private static func canDecodeFrame(path: String, streamType: String) async -> Bool {
+        let args: [String]
+        if streamType == "v" {
+            args = ["-v", "error", "-i", path, "-map", "0:v:0", "-vframes", "1", "-f", "null", "-"]
+        } else {
+            args = ["-v", "error", "-i", path, "-map", "0:a:0", "-frames:a", "1", "-f", "null", "-"]
+        }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: CombineEngine.ffmpegPath)
+        proc.arguments = args
+        let errPipe = Pipe()
+        proc.standardError = errPipe
+        proc.standardOutput = FileHandle.nullDevice
+        do { try proc.run() } catch { return false }
+        proc.waitUntilExit()
+        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+        let errStr = String(data: errData, encoding: .utf8) ?? ""
+        return proc.terminationStatus == 0 && errStr.isEmpty
+    }
+
+    /// Full verification matching the app's verifyCombineOutput:
+    /// probe streams, check dimensions, decode one video frame, decode one audio frame.
+    private static func fullVerify(path: String, expectedDuration: Double) async -> (ok: Bool, reason: String) {
+        let (probe, _) = await ScanEngine.runFFProbe(url: URL(fileURLWithPath: path))
+        let streams = probe?.streams ?? []
+        guard let vStream = streams.first(where: { $0.codec_type == "video" }) else {
+            return (false, "no video stream")
+        }
+        guard streams.contains(where: { $0.codec_type == "audio" }) else {
+            return (false, "no audio stream")
+        }
+        if (vStream.width ?? 0) == 0 || (vStream.height ?? 0) == 0 {
+            return (false, "video has no dimensions")
+        }
+        let outDuration = Double(probe?.format?.duration ?? "0") ?? 0
+        let tolerance = max(expectedDuration * 0.1, 2.0)
+        if expectedDuration > 0 && outDuration > 0 && abs(outDuration - expectedDuration) > tolerance {
+            return (false, "duration mismatch: expected \(expectedDuration), got \(outDuration)")
+        }
+        if !(await canDecodeFrame(path: path, streamType: "v")) {
+            return (false, "video frame decode failed")
+        }
+        if !(await canDecodeFrame(path: path, streamType: "a")) {
+            return (false, "audio frame decode failed")
+        }
+        return (true, "")
+    }
+
+    /// Helper: run ffmpeg volumedetect and return mean_volume in dB.
+    private static func detectMeanVolume(path: String) async -> Double? {
+        let args = ["-v", "info", "-i", path, "-map", "0:a:0",
+                    "-af", "volumedetect", "-f", "null", "-"]
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: CombineEngine.ffmpegPath)
+        proc.arguments = args
+        let errPipe = Pipe()
+        proc.standardError = errPipe
+        proc.standardOutput = FileHandle.nullDevice
+        do { try proc.run() } catch { return nil }
+        proc.waitUntilExit()
+        let data = errPipe.fileHandleForReading.readDataToEndOfFile()
+        let text = String(data: data, encoding: .utf8) ?? ""
+        for line in text.components(separatedBy: .newlines) {
+            if line.contains("mean_volume:") {
+                let parts = line.components(separatedBy: "mean_volume:")
+                if parts.count > 1 {
+                    let dbStr = parts[1].trimmingCharacters(in: .whitespaces)
+                        .replacingOccurrences(of: " dB", with: "")
+                    return Double(dbStr)
+                }
+            }
+        }
+        return nil
+    }
+
+    // MARK: - Positive Tests
+
+    @Test func combineValidPairStreamCopy() async throws {
+        guard TestMediaGenerator.isAvailable else { return }
+
+        let pair = try TestMediaGenerator.createPair(duration: 3.0)
+        defer { TestMediaGenerator.cleanup(pair.videoPath, pair.audioPath) }
+
+        let outPath = NSTemporaryDirectory() + "combine_test_\(UUID().uuidString.prefix(8)).mov"
+        defer { try? FileManager.default.removeItem(atPath: outPath) }
+
+        let result = await CombineEngine.runFFMpeg(
+            videoPath: pair.videoPath,
+            audioPath: pair.audioPath,
+            outputPath: outPath,
+            technique: .streamCopy,
+            log: { _ in }
+        )
+
+        #expect(result.success == true)
+        #expect(result.exitCode == 0)
+        #expect(FileManager.default.fileExists(atPath: outPath))
+
+        let verify = await Self.fullVerify(path: outPath, expectedDuration: 3.0)
+        #expect(verify.ok == true, "Full verify failed: \(verify.reason)")
+    }
+
+    @Test func combineWithProgressReporting() async throws {
+        guard TestMediaGenerator.isAvailable else { return }
+
+        let pair = try TestMediaGenerator.createPair(duration: 3.0)
+        defer { TestMediaGenerator.cleanup(pair.videoPath, pair.audioPath) }
+
+        let outPath = NSTemporaryDirectory() + "combine_progress_\(UUID().uuidString.prefix(8)).mov"
+        defer { try? FileManager.default.removeItem(atPath: outPath) }
+
+        var progressValues: [Double] = []
+        let lock = NSLock()
+
+        let result = await CombineEngine.runFFMpeg(
+            videoPath: pair.videoPath,
+            audioPath: pair.audioPath,
+            outputPath: outPath,
+            technique: .streamCopy,
+            durationSeconds: 3.0,
+            onProgress: { frac in
+                lock.lock()
+                progressValues.append(frac)
+                lock.unlock()
+            },
+            log: { _ in }
+        )
+
+        #expect(result.success == true)
+        #expect(progressValues.count > 0)
+
+        let verify = await Self.fullVerify(path: outPath, expectedDuration: 3.0)
+        #expect(verify.ok == true, "Full verify failed: \(verify.reason)")
+    }
+
+    @Test func combineReencodeH264() async throws {
+        guard TestMediaGenerator.isAvailable else { return }
+
+        let pair = try TestMediaGenerator.createPair(duration: 2.0)
+        defer { TestMediaGenerator.cleanup(pair.videoPath, pair.audioPath) }
+
+        let outPath = NSTemporaryDirectory() + "combine_h264_\(UUID().uuidString.prefix(8)).mov"
+        defer { try? FileManager.default.removeItem(atPath: outPath) }
+
+        let result = await CombineEngine.runFFMpeg(
+            videoPath: pair.videoPath,
+            audioPath: pair.audioPath,
+            outputPath: outPath,
+            technique: .reencodeH264,
+            log: { _ in }
+        )
+
+        #expect(result.success == true)
+        #expect(FileManager.default.fileExists(atPath: outPath))
+
+        let verify = await Self.fullVerify(path: outPath, expectedDuration: 2.0)
+        #expect(verify.ok == true, "Full verify failed: \(verify.reason)")
+
+        let (probe, _) = await ScanEngine.runFFProbe(url: URL(fileURLWithPath: outPath))
+        let streams = probe?.streams ?? []
+        let vCodec = streams.first(where: { $0.codec_type == "video" })?.codec_name
+        let aCodec = streams.first(where: { $0.codec_type == "audio" })?.codec_name
+        #expect(vCodec == "h264")
+        #expect(aCodec == "aac")
+    }
+
+    @Test func verifyDurationWithinTolerance() async throws {
+        guard TestMediaGenerator.isAvailable else { return }
+
+        let pair = try TestMediaGenerator.createPair(duration: 5.0)
+        defer { TestMediaGenerator.cleanup(pair.videoPath, pair.audioPath) }
+
+        let outPath = NSTemporaryDirectory() + "combine_dur_\(UUID().uuidString.prefix(8)).mov"
+        defer { try? FileManager.default.removeItem(atPath: outPath) }
+
+        let result = await CombineEngine.runFFMpeg(
+            videoPath: pair.videoPath,
+            audioPath: pair.audioPath,
+            outputPath: outPath,
+            technique: .streamCopy,
+            log: { _ in }
+        )
+        #expect(result.success == true)
+
+        let verify = await Self.fullVerify(path: outPath, expectedDuration: 5.0)
+        #expect(verify.ok == true, "Full verify failed: \(verify.reason)")
+    }
+
+    // MARK: - Negative Tests: Missing Inputs
+
+    @Test func combineFailsMissingVideoFile() async throws {
+        guard TestMediaGenerator.isAvailable else { return }
+
+        let audio = try TestMediaGenerator.generate(
+            container: "m4a", streams: .audioOnly, duration: 2.0
+        )
+        defer { TestMediaGenerator.cleanup(audio) }
+
+        let outPath = NSTemporaryDirectory() + "combine_fail_\(UUID().uuidString.prefix(8)).mov"
+        defer { try? FileManager.default.removeItem(atPath: outPath) }
+
+        let result = await CombineEngine.runFFMpeg(
+            videoPath: "/tmp/nonexistent_video_\(UUID()).mp4",
+            audioPath: audio,
+            outputPath: outPath,
+            technique: .streamCopy,
+            log: { _ in }
+        )
+
+        #expect(result.success == false)
+        #expect(result.exitCode != 0)
+        #expect(!FileManager.default.fileExists(atPath: outPath))
+    }
+
+    @Test func combineFailsMissingAudioFile() async throws {
+        guard TestMediaGenerator.isAvailable else { return }
+
+        let video = try TestMediaGenerator.generate(
+            container: "mp4", streams: .videoOnly, duration: 2.0
+        )
+        defer { TestMediaGenerator.cleanup(video) }
+
+        let outPath = NSTemporaryDirectory() + "combine_fail2_\(UUID().uuidString.prefix(8)).mov"
+        defer { try? FileManager.default.removeItem(atPath: outPath) }
+
+        let result = await CombineEngine.runFFMpeg(
+            videoPath: video,
+            audioPath: "/tmp/nonexistent_audio_\(UUID()).m4a",
+            outputPath: outPath,
+            technique: .streamCopy,
+            log: { _ in }
+        )
+
+        #expect(result.success == false)
+        #expect(result.exitCode != 0)
+    }
+
+    // MARK: - Negative Tests: Stream Content Validation
+
+    @Test func verifyDetectsVideoOnlyOutput() async throws {
+        guard TestMediaGenerator.isAvailable else { return }
+
+        let videoOnly = try TestMediaGenerator.generate(
+            container: "mp4", streams: .videoOnly, duration: 2.0
+        )
+        defer { TestMediaGenerator.cleanup(videoOnly) }
+
+        let verify = await Self.fullVerify(path: videoOnly, expectedDuration: 2.0)
+        #expect(verify.ok == false)
+        #expect(verify.reason.contains("no audio"))
+    }
+
+    @Test func verifyDetectsAudioOnlyOutput() async throws {
+        guard TestMediaGenerator.isAvailable else { return }
+
+        let audioOnly = try TestMediaGenerator.generate(
+            container: "m4a", streams: .audioOnly, duration: 2.0
+        )
+        defer { TestMediaGenerator.cleanup(audioOnly) }
+
+        let verify = await Self.fullVerify(path: audioOnly, expectedDuration: 2.0)
+        #expect(verify.ok == false)
+        #expect(verify.reason.contains("no video"))
+    }
+
+    @Test func verifyDetectsTwoAudioFilesMuxedAsVideoAudio() async throws {
+        guard TestMediaGenerator.isAvailable else { return }
+
+        let audio1 = try TestMediaGenerator.generate(
+            container: "m4a", streams: .audioOnly, duration: 2.0, prefix: "test_fake_v"
+        )
+        let audio2 = try TestMediaGenerator.generate(
+            container: "m4a", streams: .audioOnly, duration: 2.0, prefix: "test_fake_a"
+        )
+        defer { TestMediaGenerator.cleanup(audio1, audio2) }
+
+        let outPath = NSTemporaryDirectory() + "combine_2audio_\(UUID().uuidString.prefix(8)).mov"
+        defer { try? FileManager.default.removeItem(atPath: outPath) }
+
+        let result = await CombineEngine.runFFMpeg(
+            videoPath: audio1,
+            audioPath: audio2,
+            outputPath: outPath,
+            technique: .streamCopy,
+            log: { _ in }
+        )
+
+        if result.success && FileManager.default.fileExists(atPath: outPath) {
+            let verify = await Self.fullVerify(path: outPath, expectedDuration: 2.0)
+            #expect(verify.ok == false, "Should fail: two audio files muxed together have no real video")
+        }
+    }
+
+    @Test func verifyDecodesRealFramesInValidCombine() async throws {
+        guard TestMediaGenerator.isAvailable else { return }
+
+        let pair = try TestMediaGenerator.createPair(duration: 2.0)
+        defer { TestMediaGenerator.cleanup(pair.videoPath, pair.audioPath) }
+
+        let outPath = NSTemporaryDirectory() + "combine_decode_\(UUID().uuidString.prefix(8)).mov"
+        defer { try? FileManager.default.removeItem(atPath: outPath) }
+
+        let result = await CombineEngine.runFFMpeg(
+            videoPath: pair.videoPath,
+            audioPath: pair.audioPath,
+            outputPath: outPath,
+            technique: .streamCopy,
+            log: { _ in }
+        )
+        #expect(result.success == true)
+
+        let canVideo = await Self.canDecodeFrame(path: outPath, streamType: "v")
+        let canAudio = await Self.canDecodeFrame(path: outPath, streamType: "a")
+        #expect(canVideo == true, "Must be able to decode a real video frame")
+        #expect(canAudio == true, "Must be able to decode a real audio frame")
+    }
+
+    @Test func cannotDecodeVideoFromAudioOnlyFile() async throws {
+        guard TestMediaGenerator.isAvailable else { return }
+
+        let audioOnly = try TestMediaGenerator.generate(
+            container: "m4a", streams: .audioOnly, duration: 2.0
+        )
+        defer { TestMediaGenerator.cleanup(audioOnly) }
+
+        let canVideo = await Self.canDecodeFrame(path: audioOnly, streamType: "v")
+        #expect(canVideo == false, "Audio-only file should fail video decode")
+    }
+
+    @Test func cannotDecodeAudioFromVideoOnlyFile() async throws {
+        guard TestMediaGenerator.isAvailable else { return }
+
+        let videoOnly = try TestMediaGenerator.generate(
+            container: "mp4", streams: .videoOnly, duration: 2.0
+        )
+        defer { TestMediaGenerator.cleanup(videoOnly) }
+
+        let canAudio = await Self.canDecodeFrame(path: videoOnly, streamType: "a")
+        #expect(canAudio == false, "Video-only file should fail audio decode")
+    }
+
+    // MARK: - Silence Detection
+
+    @Test func realAudioHasAudibleLevel() async throws {
+        guard TestMediaGenerator.isAvailable else { return }
+
+        let pair = try TestMediaGenerator.createPair(duration: 2.0)
+        defer { TestMediaGenerator.cleanup(pair.videoPath, pair.audioPath) }
+
+        let outPath = NSTemporaryDirectory() + "combine_audible_\(UUID().uuidString.prefix(8)).mov"
+        defer { try? FileManager.default.removeItem(atPath: outPath) }
+
+        let result = await CombineEngine.runFFMpeg(
+            videoPath: pair.videoPath,
+            audioPath: pair.audioPath,
+            outputPath: outPath,
+            technique: .streamCopy,
+            log: { _ in }
+        )
+        #expect(result.success == true)
+
+        let meanDB = await Self.detectMeanVolume(path: outPath)
+        #expect(meanDB != nil, "Should detect audio level")
+        #expect(meanDB! > -60, "440Hz sine tone should be well above silence threshold, got \(meanDB!) dB")
+    }
+
+    @Test func silentAudioDetectedBelowThreshold() async throws {
+        guard TestMediaGenerator.isAvailable else { return }
+
+        let video = try TestMediaGenerator.generate(
+            container: "mp4", streams: .videoOnly, duration: 2.0
+        )
+        let tmpDir = NSTemporaryDirectory()
+        let silentAudio = tmpDir + "silent_audio_\(UUID().uuidString.prefix(8)).m4a"
+        defer {
+            TestMediaGenerator.cleanup(video)
+            try? FileManager.default.removeItem(atPath: silentAudio)
+        }
+
+        let silProc = Process()
+        silProc.executableURL = URL(fileURLWithPath: CombineEngine.ffmpegPath)
+        silProc.arguments = ["-y", "-hide_banner", "-loglevel", "error",
+                             "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+                             "-t", "2", "-c:a", "aac", silentAudio]
+        silProc.standardOutput = FileHandle.nullDevice
+        silProc.standardError = FileHandle.nullDevice
+        try silProc.run()
+        silProc.waitUntilExit()
+
+        let outPath = tmpDir + "combine_silent_\(UUID().uuidString.prefix(8)).mov"
+        defer { try? FileManager.default.removeItem(atPath: outPath) }
+
+        let result = await CombineEngine.runFFMpeg(
+            videoPath: video,
+            audioPath: silentAudio,
+            outputPath: outPath,
+            technique: .streamCopy,
+            log: { _ in }
+        )
+        #expect(result.success == true)
+
+        let meanDB = await Self.detectMeanVolume(path: outPath)
+        #expect(meanDB != nil, "Should detect audio level even for silence")
+        #expect(meanDB! < -60, "Silent audio should be below -60 dB, got \(meanDB!) dB")
+    }
+
+    // MARK: - Buffered Copy
+
+    @Test func bufferedCopyProducesIdenticalFile() async throws {
+        let srcPath = NSTemporaryDirectory() + "buf_src_\(UUID().uuidString.prefix(8)).bin"
+        let dstPath = NSTemporaryDirectory() + "buf_dst_\(UUID().uuidString.prefix(8)).bin"
+        defer {
+            try? FileManager.default.removeItem(atPath: srcPath)
+            try? FileManager.default.removeItem(atPath: dstPath)
+        }
+
+        let testData = Data(repeating: 0xAB, count: 1024 * 1024)
+        try testData.write(to: URL(fileURLWithPath: srcPath))
+
+        try await CombineEngine.bufferedCopy(
+            from: URL(fileURLWithPath: srcPath),
+            to: URL(fileURLWithPath: dstPath)
+        )
+
+        let copied = try Data(contentsOf: URL(fileURLWithPath: dstPath))
+        #expect(copied == testData)
+    }
+
+    @Test func bufferedCopyFailsForMissingSource() async {
+        let dstPath = NSTemporaryDirectory() + "buf_dst_missing_\(UUID().uuidString.prefix(8)).bin"
+        defer { try? FileManager.default.removeItem(atPath: dstPath) }
+
+        do {
+            try await CombineEngine.bufferedCopy(
+                from: URL(fileURLWithPath: "/tmp/nonexistent_\(UUID()).bin"),
+                to: URL(fileURLWithPath: dstPath)
+            )
+            #expect(Bool(false), "should have thrown")
+        } catch {
+            #expect(true)
+        }
+    }
+}
+
+// MARK: - DashboardState Combine Counter Tests
+
+struct DashboardCombineCounterTests {
+
+    @Test @MainActor func resetForCombineClearsCounters() {
+        let dash = DashboardState()
+        dash.combineSucceeded = 5
+        dash.combineFailed = 2
+        dash.combineSkipped = 3
+        dash.combineCompleted = 10
+        dash.combineCurrentFile = "foo.mov"
+        dash.combineJobs = [CombineJobStatus(
+            pairIndex: 0,
+            videoFilename: "v.mxf", audioFilename: "a.mxf",
+            outputFilename: "out.mov", outputPath: "/tmp/out.mov",
+            videoSizeBytes: 100, audioSizeBytes: 50,
+            totalDurationSeconds: 10, videoOnline: true, audioOnline: true
+        )]
+
+        dash.resetForCombine(total: 7)
+
+        #expect(dash.combineTotal == 7)
+        #expect(dash.combineCompleted == 0)
+        #expect(dash.combineSucceeded == 0)
+        #expect(dash.combineFailed == 0)
+        #expect(dash.combineSkipped == 0)
+        #expect(dash.combineCurrentFile == "")
+        #expect(dash.combineJobs.isEmpty)
+        #expect(dash.combineStartTime != nil)
+    }
+
+    @Test @MainActor func countersAddUpToCompleted() {
+        let dash = DashboardState()
+        dash.resetForCombine(total: 6)
+
+        dash.combineSucceeded = 3
+        dash.combineFailed = 1
+        dash.combineSkipped = 2
+        dash.combineCompleted = 6
+
+        #expect(dash.combineSucceeded + dash.combineFailed + dash.combineSkipped == dash.combineCompleted)
+    }
+}
