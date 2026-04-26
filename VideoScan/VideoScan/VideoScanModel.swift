@@ -2276,6 +2276,111 @@ final class VideoScanModel: ObservableObject {
         """)
     }
 
+    // MARK: - Cross-Volume Avid Correlator
+
+    private static let avidMXFPattern = try! NSRegularExpression(
+        pattern: #"^\d+\.([AV])([0-9A-Fa-f]+)\.mxf$"#, options: .caseInsensitive
+    )
+
+    /// Extract the Avid clip ID from an MXF filename, e.g. "00001.V14D1BBD3F.mxf" → "14D1BBD3F"
+    /// Returns (clipID, isVideo) or nil if the filename doesn't match the Avid pattern.
+    private func avidClipID(from filename: String) -> (clipID: String, isVideo: Bool)? {
+        let range = NSRange(filename.startIndex..., in: filename)
+        guard let match = Self.avidMXFPattern.firstMatch(in: filename, range: range),
+              let avRange = Range(match.range(at: 1), in: filename),
+              let idRange = Range(match.range(at: 2), in: filename) else { return nil }
+        let av = String(filename[avRange]).uppercased()
+        let clipID = String(filename[idRange]).uppercased()
+        return (clipID, av == "V")
+    }
+
+    /// Pick the best record from a set: prefer online, then playable, then largest.
+    private func bestCopy(from candidates: [VideoRecord]) -> VideoRecord? {
+        candidates.sorted { a, b in
+            let aOnline = FileManager.default.isReadableFile(atPath: a.fullPath)
+            let bOnline = FileManager.default.isReadableFile(atPath: b.fullPath)
+            if aOnline != bOnline { return aOnline }
+            if a.isPlayable != b.isPlayable { return a.isPlayable == "Yes" }
+            return a.sizeBytes > b.sizeBytes
+        }.first
+    }
+
+    /// Correlate Avid MXF A/V pairs across all volumes using clip ID matching.
+    func correlateAcrossVolumes() {
+        isCorrelating = true
+        correlateStatus = ""
+        defer { isCorrelating = false }
+
+        // Clear existing pairs
+        for r in records {
+            r.pairedWith = nil
+            r.pairGroupID = nil
+            r.pairConfidence = nil
+        }
+
+        // Group by Avid clip ID
+        var videosByClip: [String: [VideoRecord]] = [:]
+        var audiosByClip: [String: [VideoRecord]] = [:]
+
+        for r in records {
+            guard let (clipID, isVideo) = avidClipID(from: r.filename) else { continue }
+            if isVideo {
+                videosByClip[clipID, default: []].append(r)
+            } else {
+                audiosByClip[clipID, default: []].append(r)
+            }
+        }
+
+        let allClipIDs = Set(videosByClip.keys).union(audiosByClip.keys)
+        var paired = 0
+        var videoOnlyOrphans = 0
+        var audioOnlyOrphans = 0
+
+        for clipID in allClipIDs {
+            let videos = videosByClip[clipID] ?? []
+            let audios = audiosByClip[clipID] ?? []
+
+            guard !videos.isEmpty, !audios.isEmpty else {
+                if videos.isEmpty { audioOnlyOrphans += audios.count }
+                if audios.isEmpty { videoOnlyOrphans += videos.count }
+                continue
+            }
+
+            guard let bestVideo = bestCopy(from: videos),
+                  let bestAudio = bestCopy(from: audios) else { continue }
+
+            let gid = UUID()
+            bestVideo.pairedWith = bestAudio
+            bestVideo.pairGroupID = gid
+            bestVideo.pairConfidence = .high
+            bestAudio.pairedWith = bestVideo
+            bestAudio.pairGroupID = gid
+            bestAudio.pairConfidence = .high
+            paired += 1
+            log("  Paired [high] (clipID): \(bestVideo.filename) ↔ \(bestAudio.filename)")
+        }
+
+        // Enrich with Avid bin metadata if bins have been scanned
+        if !avidBinResults.isEmpty {
+            crossReferenceAvidBins()
+        }
+
+        correlateStatus = "\(paired) pairs · \(videoOnlyOrphans)V + \(audioOnlyOrphans)A orphans"
+        log("""
+
+        Cross-volume Avid correlation complete:
+          \(allClipIDs.count) unique clip IDs
+          \(paired) pairs matched
+          \(videoOnlyOrphans) video-only orphans (no audio found)
+          \(audioOnlyOrphans) audio-only orphans (no video found)
+        """)
+
+        // Force table refresh
+        let tmp = records
+        records = []
+        records = tmp
+    }
+
     /// Correlate all records, or only those whose IDs are in `selectedIDs` (if non-nil/non-empty).
     func correlate(selectedIDs: Set<UUID>? = nil) {
         isCorrelating = true
