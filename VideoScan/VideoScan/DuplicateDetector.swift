@@ -27,38 +27,25 @@ enum DuplicateDetector {
 
         let candidates = records.filter(isDuplicateCandidate)
         guard candidates.count > 1 else {
-            return DuplicateAnalysisSummary(
-                groups: 0,
-                highConfidenceGroups: 0,
-                mediumConfidenceGroups: 0,
-                lowConfidenceGroups: 0,
-                extraCopies: 0,
-                reviewItems: 0
-            )
+            return emptySummary
         }
 
         let pairs = buildCandidatePairs(from: candidates)
         guard !pairs.isEmpty else {
-            return DuplicateAnalysisSummary(
-                groups: 0,
-                highConfidenceGroups: 0,
-                mediumConfidenceGroups: 0,
-                lowConfidenceGroups: 0,
-                extraCopies: 0,
-                reviewItems: 0
-            )
+            return emptySummary
         }
 
-        var adjacency: [UUID: Set<UUID>] = [:]
         var pairByIDs: [PairKey: Candidate] = [:]
         for pair in pairs {
-            adjacency[pair.left.id, default: []].insert(pair.right.id)
-            adjacency[pair.right.id, default: []].insert(pair.left.id)
             pairByIDs[PairKey(pair.left.id, pair.right.id)] = pair
         }
 
+        // Star-topology grouping: elect a keeper first, then only include
+        // records that score against the keeper directly.  This prevents
+        // transitive contamination where A↔B↔C chains inflate groups with
+        // unrelated files.
         let recordsByID = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) })
-        var visited = Set<UUID>()
+        var assigned = Set<UUID>()
         var groups = 0
         var highGroups = 0
         var mediumGroups = 0
@@ -66,6 +53,15 @@ enum DuplicateDetector {
         var extraCopies = 0
         var reviewItems = 0
 
+        // Build adjacency for initial keeper election
+        var adjacency: [UUID: Set<UUID>] = [:]
+        for pair in pairs {
+            adjacency[pair.left.id, default: []].insert(pair.right.id)
+            adjacency[pair.right.id, default: []].insert(pair.left.id)
+        }
+
+        // Walk connected components to find keeper candidates
+        var visited = Set<UUID>()
         for record in candidates where !visited.contains(record.id) {
             guard adjacency[record.id] != nil else { continue }
 
@@ -83,10 +79,19 @@ enum DuplicateDetector {
             let component = componentIDs.compactMap { recordsByID[$0] }
             guard let keeper = component.max(by: { keeperScore($0) < keeperScore($1) }) else { continue }
 
+            // Star filter: only include records with a direct match to keeper
+            var starMembers = [keeper]
+            for item in component where item !== keeper {
+                let key = PairKey(keeper.id, item.id)
+                if let pair = pairByIDs[key], pair.score >= scoreThreshold {
+                    starMembers.append(item)
+                }
+            }
+            guard starMembers.count > 1 else { continue }
+
             let groupID = UUID()
-            let groupConfidence = component.compactMap { bestConfidence(for: $0, in: componentIDs, pairByIDs: pairByIDs) }.max() ?? .low
-            let groupReasons = component.flatMap { bestReasons(for: $0, in: componentIDs, pairByIDs: pairByIDs) }
-            let reasonText = Array(NSOrderedSet(array: groupReasons)).compactMap { $0 as? String }.joined(separator: "+")
+            let memberIDs = starMembers.map(\.id)
+            let groupConfidence = starMembers.compactMap { bestConfidence(for: $0, in: memberIDs, pairByIDs: pairByIDs) }.max() ?? .low
 
             groups += 1
             switch groupConfidence {
@@ -95,12 +100,19 @@ enum DuplicateDetector {
             case .low: lowGroups += 1
             }
 
-            for item in component {
+            for item in starMembers {
+                assigned.insert(item.id)
                 item.duplicateGroupID = groupID
-                item.duplicateGroupCount = component.count
-                item.duplicateConfidence = bestConfidence(for: item, in: componentIDs, pairByIDs: pairByIDs) ?? groupConfidence
-                item.duplicateReasons = bestReasons(for: item, in: componentIDs, pairByIDs: pairByIDs).joined(separator: "+").isEmpty ? reasonText : bestReasons(for: item, in: componentIDs, pairByIDs: pairByIDs).joined(separator: "+")
-                item.duplicateBestMatchFilename = keeper === item ? strongestMatchFilename(for: item, in: component, pairByIDs: pairByIDs) : keeper.filename
+                item.duplicateGroupCount = starMembers.count
+                item.duplicateConfidence = bestConfidence(for: item, in: memberIDs, pairByIDs: pairByIDs) ?? groupConfidence
+                let reasons = bestReasons(for: item, in: memberIDs, pairByIDs: pairByIDs)
+                item.duplicateReasons = reasons.isEmpty
+                    ? starMembers.flatMap { bestReasons(for: $0, in: memberIDs, pairByIDs: pairByIDs) }
+                        .uniqued().joined(separator: "+")
+                    : reasons.joined(separator: "+")
+                item.duplicateBestMatchFilename = keeper === item
+                    ? strongestMatchFilename(for: item, in: starMembers, pairByIDs: pairByIDs)
+                    : keeper.filename
 
                 if item === keeper {
                     item.duplicateDisposition = .keep
@@ -123,6 +135,11 @@ enum DuplicateDetector {
             reviewItems: reviewItems
         )
     }
+
+    private static let emptySummary = DuplicateAnalysisSummary(
+        groups: 0, highConfidenceGroups: 0, mediumConfidenceGroups: 0,
+        lowConfidenceGroups: 0, extraCopies: 0, reviewItems: 0
+    )
 
     static func clear(records: [VideoRecord]) {
         for record in records {
@@ -351,8 +368,41 @@ enum DuplicateDetector {
         case .ffprobeFailed, .noStreams:
             return false
         default:
-            return true
+            break
         }
+        if isStockMedia(record) { return false }
+        return true
+    }
+
+    private static let stockPathPatterns: [String] = [
+        "/iMovie",
+        "/Final Cut",
+        "/FxPlug",
+        "/Motion",
+        "/Compressor",
+        "/Pro Video Formats",
+        "/Avid/AVX",
+        "/Media Composer",
+        "/Transitions/",
+        "/Titles/",
+        "/Generators/",
+        "/Effects/",
+        ".app/Contents/"
+    ]
+
+    private static func isStockMedia(_ record: VideoRecord) -> Bool {
+        let path = record.fullPath
+        for pattern in stockPathPatterns {
+            if path.contains(pattern) { return true }
+        }
+        return false
+    }
+}
+
+private extension Array where Element: Hashable {
+    func uniqued() -> [Element] {
+        var seen = Set<Element>()
+        return filter { seen.insert($0).inserted }
     }
 }
 
