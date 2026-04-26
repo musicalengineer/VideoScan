@@ -49,6 +49,9 @@ docs/history.jsonl
 /swiftlint-raw.txt
 /docs/metrics-report.html
 
+# Generated face-recognition outputs (embeddings, scan CSVs, plots)
+/output/
+
 # POI data now lives in ~/Library/Application Support/VideoScan/POI/
 # (issue #35). Any lingering legacy copies in the repo are local state.
 /poi_profiles/
