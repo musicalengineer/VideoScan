@@ -29,6 +29,7 @@ struct CatalogToolbar<Dashboard: View>: View {
     let onStopCombine: () -> Void
     let onCorrelateAll: () -> Void
     let onCorrelateSelected: () -> Void
+    let onCorrelateAcrossVolumes: () -> Void
     let onAnalyzeDuplicatesAll: () -> Void
     let onAnalyzeDuplicatesSelected: () -> Void
     let volumesWithDeletableDups: [(path: String, count: Int)]
@@ -70,6 +71,8 @@ struct CatalogToolbar<Dashboard: View>: View {
                     Button("Correlate All", action: onCorrelateAll)
                     Button("Correlate Selected", action: onCorrelateSelected)
                         .disabled(selectedIDs.isEmpty)
+                    Divider()
+                    Button("Find A/V Pairs Across Volumes", action: onCorrelateAcrossVolumes)
                     Divider()
                     Toggle("Show Pairs Only", isOn: $showPairsOnly)
                         .disabled(!hasCorrelatedPairs)
@@ -655,16 +658,46 @@ struct CatalogContent: View {
                     showRenameSheet = true
                 }
 
-                // Show copies / duplicates
-                let copies = records.filter {
+                // Show duplicate group matches
+                let groupMatches = records.filter {
                     $0.id != rec.id && $0.duplicateGroupID != nil && $0.duplicateGroupID == rec.duplicateGroupID
                 }
-                if !copies.isEmpty {
-                    Menu("Copies (\(copies.count))") {
-                        ForEach(copies) { dup in
-                            Button("\(dup.filename) — \(VolumeReachability.volumeName(forPath: dup.fullPath))") {
+                if !groupMatches.isEmpty {
+                    let onlineMatches = groupMatches.filter {
+                        VolumeReachability.isReachable(path: $0.fullPath)
+                    }
+
+                    if !onlineMatches.isEmpty {
+                        let byVolume = Dictionary(grouping: onlineMatches) {
+                            VolumeReachability.volumeName(forPath: $0.fullPath)
+                        }
+                        Menu("Find Online Copy (\(onlineMatches.count))") {
+                            ForEach(byVolume.keys.sorted(), id: \.self) { vol in
+                                if let files = byVolume[vol] {
+                                    Section(vol) {
+                                        ForEach(files) { match in
+                                            Button(match.filename) {
+                                                NSWorkspace.shared.selectFile(
+                                                    match.fullPath,
+                                                    inFileViewerRootedAtPath: ""
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Menu("All Matches (\(groupMatches.count))") {
+                        ForEach(groupMatches) { dup in
+                            let online = VolumeReachability.isReachable(path: dup.fullPath)
+                            Button {
                                 selectedIDs = [dup.id]
                                 onSelect(dup.id)
+                            } label: {
+                                let vol = VolumeReachability.volumeName(forPath: dup.fullPath)
+                                Text("\(dup.filename) — \(vol)\(online ? "" : " (offline)")")
                             }
                         }
                     }
@@ -967,6 +1000,35 @@ struct InspectorPanel: View {
                                 .textSelection(.enabled)
                         }
                         .padding(.top, 2)
+                        // Avid identity — tape and clip name at a glance
+                        if rec.hasAvidMetadata && (!rec.avidTapeName.isEmpty || !rec.avidClipName.isEmpty) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                if !rec.avidTapeName.isEmpty {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "recordingtape")
+                                            .font(.system(size: 10))
+                                        Text(rec.avidTapeName)
+                                            .font(.system(size: 12, weight: .semibold))
+                                    }
+                                }
+                                if !rec.avidClipName.isEmpty {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "film.stack")
+                                            .font(.system(size: 10))
+                                        Text(rec.avidClipName)
+                                            .font(.system(size: 11))
+                                    }
+                                }
+                            }
+                            .foregroundColor(.cyan)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .background(
+                                RoundedRectangle(cornerRadius: 5)
+                                    .fill(Color.cyan.opacity(0.08))
+                            )
+                            .padding(.top, 4)
+                        }
                     }
                     .padding(.horizontal, 16)
                     .padding(.bottom, 12)
@@ -1172,6 +1234,12 @@ struct InspectorPanel: View {
                     Spacer(minLength: 16)
                 }
             }
+            .contextMenu {
+                Button("Copy All Metadata") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(formatAllMetadata(rec), forType: .string)
+                }
+            }
             .background(Color(NSColor.controlBackgroundColor))
         } else {
             VStack(spacing: 8) {
@@ -1188,6 +1256,130 @@ struct InspectorPanel: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(NSColor.controlBackgroundColor))
         }
+    }
+
+    // MARK: - Copy Metadata
+
+    private func formatAllMetadata(_ rec: VideoRecord) -> String {
+        var lines: [String] = []
+        func add(_ label: String, _ value: String) {
+            guard !value.isEmpty else { return }
+            lines.append("  \(label): \(value)")
+        }
+        func section(_ title: String) {
+            if !lines.isEmpty { lines.append("") }
+            lines.append("[\(title)]")
+        }
+
+        // Header
+        lines.append(rec.filename)
+        lines.append("  Stream Type: \(rec.streamTypeRaw)")
+        lines.append("  Volume: \(VolumeReachability.volumeName(forPath: rec.fullPath))")
+        if rec.starRating > 0 {
+            lines.append("  Rating: \(String(repeating: "★", count: rec.starRating))")
+        }
+        if rec.hasAvidMetadata {
+            if !rec.avidTapeName.isEmpty { add("Tape", rec.avidTapeName) }
+            if !rec.avidClipName.isEmpty { add("Clip", rec.avidClipName) }
+        }
+
+        // General
+        section("General")
+        add("Size", rec.size)
+        add("Duration", rec.duration)
+        add("Container", rec.container)
+        add("Extension", rec.ext)
+
+        // Video
+        section("Video")
+        add("Resolution", rec.resolution)
+        add("Codec", rec.videoCodec)
+        add("Frame Rate", rec.frameRate)
+        add("Bitrate", rec.videoBitrate)
+        add("Total Bitrate", rec.totalBitrate)
+        add("Color Space", rec.colorSpace)
+        add("Bit Depth", rec.bitDepth)
+        add("Scan Type", rec.scanType)
+
+        // Audio
+        section("Audio")
+        add("Codec", rec.audioCodec)
+        add("Channels", rec.audioChannels)
+        add("Sample Rate", rec.audioSampleRate)
+
+        // Timestamps
+        section("Timestamps")
+        add("Created", rec.dateCreated)
+        add("Modified", rec.dateModified)
+        add("Timecode", rec.timecode)
+        add("Tape Name", rec.tapeName)
+
+        // Correlation
+        if rec.pairedWith != nil || rec.pairConfidence != nil {
+            section("Correlation")
+            if let paired = rec.pairedWith {
+                add("Paired With", paired.filename)
+                add("Pair Volume", VolumeReachability.volumeName(forPath: paired.fullPath))
+                add("Pair Path", paired.fullPath)
+            }
+            if let conf = rec.pairConfidence {
+                add("Confidence", conf.rawValue)
+            }
+        }
+
+        // Duplicates
+        if rec.duplicateDisposition != .none || !rec.duplicateBestMatchFilename.isEmpty {
+            section("Duplicates")
+            if rec.duplicateDisposition != .none {
+                let status = rec.duplicateGroupCount >= 2
+                    ? "\(rec.duplicateDisposition.rawValue) · \(rec.duplicateGroupCount) matches"
+                    : rec.duplicateDisposition.rawValue
+                add("Status", status)
+            }
+            add("Reasons", rec.duplicateReasons)
+            if let conf = rec.duplicateConfidence {
+                add("Confidence", conf.rawValue)
+            }
+            if !duplicateGroupMembers.isEmpty {
+                lines.append("")
+                lines.append("  Duplicate Group (\(duplicateGroupMembers.count + 1) total):")
+                let thisVol = VolumeReachability.volumeName(forPath: rec.fullPath)
+                lines.append("    ★ \(rec.filename)  [\(thisVol)]  \(rec.duplicateDisposition.rawValue)")
+                for member in duplicateGroupMembers {
+                    let vol = VolumeReachability.volumeName(forPath: member.fullPath)
+                    let online = VolumeReachability.isReachable(path: member.fullPath)
+                    lines.append("    · \(member.filename)  [\(vol)]\(online ? "" : " (offline)")  \(member.duplicateDisposition.rawValue)")
+                }
+            }
+        }
+
+        // Avid Project
+        if rec.hasAvidMetadata {
+            section("Avid Project")
+            add("Clip Name", rec.avidClipName)
+            add("Mob Type", rec.avidMobType)
+            add("Bin File", rec.avidBinFile)
+            add("Tape", rec.avidTapeName)
+            add("Tracks", rec.avidTracks)
+            if rec.avidEditRate > 0 { add("Edit Rate", String(format: "%.2f fps", rec.avidEditRate)) }
+            add("Mob ID", rec.avidMobID)
+            add("Material UUID", rec.avidMaterialUUID)
+            add("Original Path", rec.avidMediaPath)
+        }
+
+        // Notes
+        if !rec.notes.isEmpty {
+            section("Notes")
+            lines.append("  \(rec.notes)")
+        }
+
+        // Location
+        section("Location")
+        add("Path", rec.fullPath)
+        add("Directory", rec.directory)
+        add("MD5 (partial)", rec.partialMD5)
+
+        return lines.joined(separator: "\n")
     }
 
     // MARK: - Thumbnail
