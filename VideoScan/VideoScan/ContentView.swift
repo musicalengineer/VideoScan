@@ -198,6 +198,10 @@ struct CatalogView: View {
                     model.log("\nCorrelating \(selectedIDs.count) selected files...")
                     model.correlate(selectedIDs: selectedIDs)
                 },
+                onCorrelateAcrossVolumes: {
+                    model.log("\n━━ Finding Avid A/V pairs across all volumes ━━")
+                    model.correlateAcrossVolumes()
+                },
                 onAnalyzeDuplicatesAll: {
                     model.log("\nAnalyzing duplicate candidates across all scanned media...")
                     model.analyzeDuplicates()
