@@ -32,7 +32,9 @@ Personal video cataloging and person-finding suite for organizing family home vi
 | `scripts/VideoScan.py` | Python video catalog generator |
 | `scripts/VideoScan.sh` | Bash wrapper for Python script |
 | `scripts/face_recognize.py` | dlib-based face recognition engine (called by Swift app) |
-| `scripts/face_diagnose.py` | Face detection diagnostic tool |
+| `scripts/fd_diagnostic.py` | Tier-1 dlib vs FaceNet confusion-matrix diagnostic; emits embeddings.npz |
+| `scripts/fd_scan_volume.py` | Tier-1 single-volume person scanner using FaceNet+MTCNN |
+| `scripts/find_person.py` | Multi-volume interactive person search CLI (CSV+HTML output) |
 | `swift_cli/PersonFinder.swift` | Standalone Swift CLI for person finding |
 | `swift_cli/FaceDetect.swift` | Face detection utilities |
 | `swift_cli/FaceDiagnose.swift` | Face detection diagnostics CLI |
