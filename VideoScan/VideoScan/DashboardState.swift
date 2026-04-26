@@ -121,6 +121,7 @@ final class DashboardState: ObservableObject {
     @Published var combineCurrentFile: String = ""
     @Published var combineSucceeded: Int = 0
     @Published var combineFailed: Int = 0
+    @Published var combineSkipped: Int = 0
 
     // MARK: - Throughput Timer
 
@@ -235,5 +236,58 @@ final class DashboardState: ObservableObject {
         combineCurrentFile = ""
         combineSucceeded = 0
         combineFailed = 0
+        combineSkipped = 0
+        combineJobs = []
+    }
+
+    // MARK: - Per-Job Combine Tracking
+
+    @Published var combineJobs: [CombineJobStatus] = []
+}
+
+// MARK: - CombineJobStatus
+
+struct CombineJobStatus: Identifiable {
+    let id = UUID()
+    let pairIndex: Int
+    let videoFilename: String
+    let audioFilename: String
+    let outputFilename: String
+    let outputPath: String
+    let videoSizeBytes: Int64
+    let audioSizeBytes: Int64
+    let totalDurationSeconds: Double
+    let videoOnline: Bool
+    let audioOnline: Bool
+    var technique: CombineTechnique = .streamCopy
+    var phase: CombinePhase = .queued
+    var startTime: Date?
+    var endTime: Date?
+    var progressFraction: Double = 0
+    var isPaused: Bool = false
+    var warningMessage: String?
+
+    var estimatedBytes: Int64 { videoSizeBytes + audioSizeBytes }
+    var bothOnline: Bool { videoOnline && audioOnline }
+
+    var elapsed: TimeInterval? {
+        guard let start = startTime else { return nil }
+        return (endTime ?? Date()).timeIntervalSince(start)
+    }
+
+    enum CombineTechnique: String {
+        case streamCopy = "Stream Copy"
+        case reencodeProRes = "Re-encode → ProRes"
+        case reencodeH264 = "Re-encode → H.264"
+    }
+
+    enum CombinePhase: String {
+        case queued = "Queued"
+        case buffering = "Buffering"
+        case muxing = "Muxing"
+        case verifying = "Verifying"
+        case done = "Verified"
+        case failed = "Failed"
+        case skipped = "Already Combined"
     }
 }

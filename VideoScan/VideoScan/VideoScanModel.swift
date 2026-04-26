@@ -2598,10 +2598,12 @@ final class VideoScanModel: ObservableObject {
         audio: VideoRecord,
         outputFolder: URL,
         tempBase: URL,
-        hasRAMDisk: Bool
+        hasRAMDisk: Bool,
+        jobIndex: Int
     ) async -> Bool {
         if Task.isCancelled { return false }
         await combinePauseGate.waitIfPaused()
+        await waitForJobPause(jobIndex)
         if Task.isCancelled { return false }
 
         let videoPath = video.fullPath
@@ -2612,18 +2614,37 @@ final class VideoScanModel: ObservableObject {
         let outName = "\(baseName)_combined.mov"
         let outURL = outputFolder.appendingPathComponent(outName)
 
-        // Skip if already completed (resume after pause)
-        if FileManager.default.fileExists(atPath: outURL.path) {
+        // Skip offline files
+        let fm = FileManager.default
+        if !fm.isReadableFile(atPath: videoPath) || !fm.isReadableFile(atPath: audioPath) {
             await MainActor.run {
                 self.dashboard.combineCompleted += 1
+                self.dashboard.combineFailed += 1
+                self.updateJobPhase(jobIndex, .failed)
+                self.log("  [\(self.dashboard.combineCompleted)/\(self.dashboard.combineTotal)] \(outName) — media offline, skipping")
+            }
+            return false
+        }
+
+        // Skip if already completed (resume after pause)
+        if fm.fileExists(atPath: outURL.path) {
+            await MainActor.run {
+                self.dashboard.combineCompleted += 1
+                self.dashboard.combineSkipped += 1
+                self.updateJobPhase(jobIndex, .skipped)
                 self.log("  [\(self.dashboard.combineCompleted)/\(self.dashboard.combineTotal)] \(outName) — already exists, skipping")
             }
             return true
         }
 
+        let technique = await MainActor.run {
+            self.dashboard.combineJobs[jobIndex].technique
+        }
+
         await MainActor.run {
             self.dashboard.combineCurrentFile = outName
-            self.log("  [\(self.dashboard.combineCompleted + 1)/\(self.dashboard.combineTotal)] \(outName)")
+            self.updateJobPhase(jobIndex, .buffering)
+            self.log("  [\(self.dashboard.combineCompleted + 1)/\(self.dashboard.combineTotal)] \(outName) (\(technique.rawValue))")
             self.log("    Video: \(videoPath)")
             self.log("    Audio: \(audioPath)")
         }
@@ -2639,43 +2660,330 @@ final class VideoScanModel: ObservableObject {
             await MainActor.run {
                 self.log("    ERROR buffering: \(error.localizedDescription)")
                 self.dashboard.combineCompleted += 1
+                self.dashboard.combineFailed += 1
+                self.updateJobPhase(jobIndex, .failed)
             }
             return false
         }
 
-        let success = await runFFMpeg(
+        await MainActor.run {
+            self.updateJobPhase(jobIndex, .muxing)
+        }
+
+        let duration = await MainActor.run {
+            self.dashboard.combineJobs[jobIndex].totalDurationSeconds
+        }
+
+        let logFn: @Sendable (String) -> Void = { [weak self] msg in
+            DispatchQueue.main.async { self?.log(msg) }
+        }
+        let jobIdx = jobIndex
+        let progressFn: @Sendable (Double) -> Void = { [weak self] frac in
+            DispatchQueue.main.async {
+                guard let self, jobIdx < self.dashboard.combineJobs.count else { return }
+                self.dashboard.combineJobs[jobIdx].progressFraction = frac
+            }
+        }
+
+        let result = await CombineEngine.runFFMpeg(
             videoPath: staged.video.path,
             audioPath: staged.audio.path,
-            outputPath: outURL.path
+            outputPath: outURL.path,
+            technique: technique,
+            durationSeconds: duration,
+            onProgress: progressFn,
+            log: logFn
         )
 
         if let tempDir = staged.tempDir {
             try? FileManager.default.removeItem(at: tempDir)
         }
-        if !success {
+        if !result.success {
             try? FileManager.default.removeItem(at: outURL)
-        }
-
-        await MainActor.run {
-            self.dashboard.combineCompleted += 1
-            if success {
-                self.log("    ✓ Done: \(outURL.path)")
-            } else {
+            log("ffmpeg exit code \(result.exitCode)")
+            await MainActor.run {
+                self.dashboard.combineCompleted += 1
+                self.dashboard.combineFailed += 1
+                self.updateJobPhase(jobIndex, .failed)
                 self.log("    ✗ FAILED: \(outName)")
             }
+            return false
         }
-        return success
+
+        // Verify the output has both video and audio streams
+        await MainActor.run {
+            self.updateJobPhase(jobIndex, .verifying)
+            self.log("    Verifying output…")
+        }
+        let verified = await verifyCombineOutput(url: outURL, expectedDuration: duration)
+        if !verified.ok {
+            try? FileManager.default.removeItem(at: outURL)
+            await MainActor.run {
+                self.dashboard.combineCompleted += 1
+                self.dashboard.combineFailed += 1
+                self.updateJobPhase(jobIndex, .failed)
+                self.log("    ✗ VERIFY FAILED: \(outName) — \(verified.reason)")
+            }
+            return false
+        }
+
+        let combinedRecord = await buildCombinedRecord(
+            outputURL: outURL, video: video, audio: audio, summary: verified.summary
+        )
+        await MainActor.run {
+            self.dashboard.combineCompleted += 1
+            self.dashboard.combineSucceeded += 1
+            self.updateJobPhase(jobIndex, .done)
+            self.dashboard.combineJobs[jobIndex].progressFraction = 1.0
+            if let warning = verified.warning {
+                self.dashboard.combineJobs[jobIndex].warningMessage = warning
+                self.log("    ⚠ \(warning)")
+            }
+            self.log("    ✓ Verified: \(outURL.path) (\(verified.summary))")
+            if let rec = combinedRecord {
+                self.records.append(rec)
+                self.log("    → Added to catalog for Archive")
+            }
+        }
+        return true
+    }
+
+    @MainActor
+    private func updateJobPhase(_ index: Int, _ phase: CombineJobStatus.CombinePhase) {
+        guard index < dashboard.combineJobs.count else { return }
+        if phase == .buffering || phase == .muxing {
+            dashboard.combineJobs[index].startTime = dashboard.combineJobs[index].startTime ?? Date()
+        }
+        if phase == .done || phase == .failed || phase == .skipped {
+            dashboard.combineJobs[index].endTime = Date()
+        }
+        dashboard.combineJobs[index].phase = phase
+    }
+
+    @MainActor
+    func toggleJobPause(_ index: Int) {
+        guard index < dashboard.combineJobs.count else { return }
+        dashboard.combineJobs[index].isPaused.toggle()
+    }
+
+    /// Build a catalog record for a successfully combined output file.
+    /// Inherits the star rating from the source pair and links back via combinedFromPairID.
+    nonisolated private func buildCombinedRecord(
+        outputURL: URL, video: VideoRecord, audio: VideoRecord, summary: String
+    ) async -> VideoRecord? {
+        let (probe, _) = await runFFProbe(url: outputURL)
+        guard let probe else { return nil }
+        let fm = FileManager.default
+        let attrs = try? fm.attributesOfItem(atPath: outputURL.path)
+
+        let rec = VideoRecord()
+        rec.filename = outputURL.lastPathComponent
+        rec.ext = outputURL.pathExtension.lowercased()
+        rec.fullPath = outputURL.path
+        rec.directory = outputURL.deletingLastPathComponent().path
+        rec.container = probe.format?.format_name ?? "mov"
+        rec.streamTypeRaw = StreamType.videoAndAudio.rawValue
+
+        let bytes = (attrs?[.size] as? Int64) ?? Int64(probe.format?.size ?? "0") ?? 0
+        rec.sizeBytes = bytes
+        rec.size = Formatting.humanSize(bytes)
+
+        let dur = Double(probe.format?.duration ?? "0") ?? 0
+        rec.durationSeconds = dur
+        rec.duration = Formatting.duration(dur)
+
+        let streams = probe.streams ?? []
+        if let vs = streams.first(where: { $0.codec_type == "video" }) {
+            rec.videoCodec = vs.codec_name ?? ""
+            rec.resolution = (vs.width != nil && vs.height != nil) ? "\(vs.width!)x\(vs.height!)" : ""
+            rec.frameRate = vs.r_frame_rate ?? ""
+            rec.videoBitrate = vs.bit_rate ?? ""
+            rec.colorSpace = vs.color_space ?? ""
+            rec.bitDepth = vs.bits_per_raw_sample ?? ""
+            rec.scanType = vs.field_order ?? ""
+        }
+        if let as_ = streams.first(where: { $0.codec_type == "audio" }) {
+            rec.audioCodec = as_.codec_name ?? ""
+            rec.audioChannels = as_.channels.map(String.init) ?? ""
+            rec.audioSampleRate = as_.sample_rate ?? ""
+        }
+
+        rec.totalBitrate = probe.format?.bit_rate ?? ""
+        rec.isPlayable = "Yes"
+        rec.notes = "Combined: \(summary)"
+
+        let dateFmt = ISO8601DateFormatter()
+        dateFmt.formatOptions = [.withFullDate, .withTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
+        if let created = attrs?[.creationDate] as? Date {
+            rec.dateCreatedRaw = created
+            rec.dateCreated = dateFmt.string(from: created)
+        }
+        if let modified = attrs?[.modificationDate] as? Date {
+            rec.dateModifiedRaw = modified
+            rec.dateModified = dateFmt.string(from: modified)
+        }
+
+        rec.mediaDisposition = .unreviewed
+        rec.archiveStage = .none
+        rec.starRating = max(video.starRating, audio.starRating)
+        rec.combinedFromPairID = video.pairGroupID
+
+        return rec
+    }
+
+    private func waitForJobPause(_ index: Int) async {
+        while await MainActor.run(body: {
+            index < dashboard.combineJobs.count && dashboard.combineJobs[index].isPaused
+        }) {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            if Task.isCancelled { return }
+        }
+    }
+
+    struct VerifyResult {
+        let ok: Bool
+        let reason: String
+        let summary: String
+        var warning: String?
+    }
+
+    /// Probe the combined output to confirm it has both video and audio streams
+    /// and a reasonable duration relative to the source.
+    nonisolated private func verifyCombineOutput(url: URL, expectedDuration: Double) async -> VerifyResult {
+        let (probe, stderr) = await runFFProbe(url: url)
+        guard let probe else {
+            return VerifyResult(ok: false, reason: "ffprobe failed: \(stderr)", summary: "")
+        }
+
+        let streams = probe.streams ?? []
+        let vStream = streams.first(where: { $0.codec_type == "video" })
+        let aStream = streams.first(where: { $0.codec_type == "audio" })
+
+        guard let vStream else {
+            return VerifyResult(ok: false, reason: "no video stream in output", summary: "")
+        }
+        guard aStream != nil else {
+            return VerifyResult(ok: false, reason: "no audio stream in output", summary: "")
+        }
+
+        if (vStream.width ?? 0) == 0 || (vStream.height ?? 0) == 0 {
+            return VerifyResult(ok: false, reason: "video stream has no dimensions (\(vStream.width ?? 0)x\(vStream.height ?? 0))", summary: "")
+        }
+
+        let outDuration = Double(probe.format?.duration ?? "0") ?? 0
+        let tolerance = max(expectedDuration * 0.1, 2.0)
+        if expectedDuration > 0 && outDuration > 0 && abs(outDuration - expectedDuration) > tolerance {
+            return VerifyResult(
+                ok: false,
+                reason: String(format: "duration mismatch: expected %.1fs, got %.1fs", expectedDuration, outDuration),
+                summary: ""
+            )
+        }
+
+        let vDecode = await decodeTestFrame(url: url, streamType: "v")
+        if !vDecode.ok {
+            return VerifyResult(ok: false, reason: "video decode failed: \(vDecode.reason)", summary: "")
+        }
+        let aDecode = await decodeTestFrame(url: url, streamType: "a")
+        if !aDecode.ok {
+            return VerifyResult(ok: false, reason: "audio decode failed: \(aDecode.reason)", summary: "")
+        }
+
+        let meanDB = await detectAudioLevel(url: url)
+        var warning: String?
+        if let db = meanDB, db < -60 {
+            warning = String(format: "Audio may be silent (%.1f dB)", db)
+        }
+
+        let vCodec = vStream.codec_name ?? "?"
+        let aCodec = aStream?.codec_name ?? "?"
+        let summary = String(format: "V:%@ %dx%d + A:%@, %.1fs",
+                             vCodec, vStream.width ?? 0, vStream.height ?? 0, aCodec, outDuration)
+        return VerifyResult(ok: true, reason: "", summary: summary, warning: warning)
+    }
+
+    /// Run ffmpeg volumedetect on the audio stream. Returns mean_volume in dB, or nil on failure.
+    nonisolated private func detectAudioLevel(url: URL) async -> Double? {
+        let args = ["-v", "info", "-i", url.path, "-map", "0:a:0",
+                    "-af", "volumedetect", "-f", "null", "-"]
+        return await withCheckedContinuation { continuation in
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: CombineEngine.ffmpegPath)
+            proc.arguments = args
+            let errPipe = Pipe()
+            proc.standardError = errPipe
+            proc.standardOutput = FileHandle.nullDevice
+
+            proc.terminationHandler = { _ in
+                let data = errPipe.fileHandleForReading.readDataToEndOfFile()
+                let text = String(data: data, encoding: .utf8) ?? ""
+                var meanDB: Double?
+                for line in text.components(separatedBy: .newlines) {
+                    if line.contains("mean_volume:") {
+                        let parts = line.components(separatedBy: "mean_volume:")
+                        if parts.count > 1 {
+                            let dbStr = parts[1].trimmingCharacters(in: .whitespaces)
+                                .replacingOccurrences(of: " dB", with: "")
+                            meanDB = Double(dbStr)
+                        }
+                    }
+                }
+                continuation.resume(returning: meanDB)
+            }
+            do { try proc.run() } catch {
+                continuation.resume(returning: nil)
+            }
+        }
+    }
+
+    /// Attempt to decode one frame from the specified stream type ("v" or "a").
+    /// Returns failure if ffmpeg can't produce a single decodable frame.
+    nonisolated private func decodeTestFrame(url: URL, streamType: String) async -> (ok: Bool, reason: String) {
+        let args: [String]
+        if streamType == "v" {
+            args = ["-v", "error", "-i", url.path, "-map", "0:v:0", "-vframes", "1", "-f", "null", "-"]
+        } else {
+            args = ["-v", "error", "-i", url.path, "-map", "0:a:0", "-frames:a", "1", "-f", "null", "-"]
+        }
+
+        return await withCheckedContinuation { continuation in
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: CombineEngine.ffmpegPath)
+            proc.arguments = args
+            let errPipe = Pipe()
+            proc.standardError = errPipe
+            proc.standardOutput = FileHandle.nullDevice
+
+            proc.terminationHandler = { p in
+                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+                let errStr = String(data: errData, encoding: .utf8) ?? ""
+                if p.terminationStatus != 0 {
+                    continuation.resume(returning: (false, "exit \(p.terminationStatus): \(String(errStr.prefix(200)))"))
+                } else if !errStr.isEmpty {
+                    continuation.resume(returning: (false, "decode errors: \(String(errStr.prefix(200)))"))
+                } else {
+                    continuation.resume(returning: (true, ""))
+                }
+            }
+            do { try proc.run() } catch {
+                continuation.resume(returning: (false, "launch failed: \(error.localizedDescription)"))
+            }
+        }
     }
 
     /// Emit the Combine Complete banner and clear the combine UI state.
+    /// Only marks isCombining = false when all jobs (including appended ones) are done.
     @MainActor
     private func logCombineSummary() {
+        let allDone = dashboard.combineCompleted >= dashboard.combineTotal
+        guard allDone else { return }
         self.log("""
 
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
           Combine Complete
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
           Succeeded: \(dashboard.combineSucceeded)
+          Skipped:   \(dashboard.combineSkipped)
           Failed:    \(dashboard.combineFailed)
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         """)
@@ -2684,43 +2992,95 @@ final class VideoScanModel: ObservableObject {
     }
 
     private func combineAllPairsInternal(pairs: [(video: VideoRecord, audio: VideoRecord)], outputFolder: URL, maxConcurrency: Int? = nil) {
-        isCombining = true
-        dashboard.resetForCombine(total: pairs.count)
+        let appending = isCombining
+
+        let filteredPairs: [(video: VideoRecord, audio: VideoRecord)]
+        if appending {
+            let activeOutputs = Set(dashboard.combineJobs
+                .filter { $0.phase != .done && $0.phase != .failed && $0.phase != .skipped }
+                .map { $0.outputFilename })
+            filteredPairs = pairs.filter { pair in
+                let baseName = URL(fileURLWithPath: pair.video.fullPath).deletingPathExtension().lastPathComponent
+                let outName = "\(baseName)_combined.mov"
+                if activeOutputs.contains(outName) {
+                    log("  ⚠ \(outName) already in progress, skipping")
+                    return false
+                }
+                return true
+            }
+            guard !filteredPairs.isEmpty else {
+                log("All selected pairs are already in progress.")
+                return
+            }
+        } else {
+            filteredPairs = pairs
+        }
+
+        let jobOffset = dashboard.combineJobs.count
+
+        if appending {
+            dashboard.combineTotal += filteredPairs.count
+        } else {
+            isCombining = true
+            dashboard.resetForCombine(total: filteredPairs.count)
+        }
+
+        let fm = FileManager.default
+        for (i, pair) in filteredPairs.enumerated() {
+            let baseName = URL(fileURLWithPath: pair.video.fullPath).deletingPathExtension().lastPathComponent
+            let outName = "\(baseName)_combined.mov"
+            dashboard.combineJobs.append(CombineJobStatus(
+                pairIndex: jobOffset + i,
+                videoFilename: pair.video.filename,
+                audioFilename: pair.audio.filename,
+                outputFilename: outName,
+                outputPath: outputFolder.appendingPathComponent(outName).path,
+                videoSizeBytes: pair.video.sizeBytes,
+                audioSizeBytes: pair.audio.sizeBytes,
+                totalDurationSeconds: max(pair.video.durationSeconds, pair.audio.durationSeconds),
+                videoOnline: fm.isReadableFile(atPath: pair.video.fullPath),
+                audioOnline: fm.isReadableFile(atPath: pair.audio.fullPath)
+            ))
+        }
 
         log("""
 
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          Combining \(pairs.count) pair\(pairs.count == 1 ? "" : "s") → \(outputFolder.path)
+          \(appending ? "Adding" : "Combining") \(filteredPairs.count) pair\(filteredPairs.count == 1 ? "" : "s") → \(outputFolder.path)
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         """)
 
-        combineTask = Task {
+        let newTask = Task {
             let (tempBase, hasRAMDisk) = await mountCombineRAMDisk()
             let semaphore = AsyncSemaphore(limit: maxConcurrency ?? self.perfSettings.combineConcurrency)
 
             await withTaskGroup(of: Bool.self) { group in
-                for (video, audio) in pairs {
+                for (i, (video, audio)) in filteredPairs.enumerated() {
                     if Task.isCancelled { break }
+                    let jobIndex = jobOffset + i
                     group.addTask { [self] in
                         await semaphore.withPermit {
                             await self.processCombinePair(
                                 video: video, audio: audio,
                                 outputFolder: outputFolder,
-                                tempBase: tempBase, hasRAMDisk: hasRAMDisk
+                                tempBase: tempBase, hasRAMDisk: hasRAMDisk,
+                                jobIndex: jobIndex
                             )
                         }
                     }
                 }
 
-                for await ok in group {
-                    await MainActor.run {
-                        if ok { self.dashboard.combineSucceeded += 1 } else { self.dashboard.combineFailed += 1 }
-                    }
+                for await _ in group {
+                    // Succeeded/failed/skipped counters are updated inside processCombinePair
                 }
 
                 await self.ramDisk.unmount()
                 await self.logCombineSummary()
             }
+        }
+
+        if !appending {
+            combineTask = newTask
         }
     }
 
@@ -2797,6 +3157,7 @@ final class VideoScanModel: ObservableObject {
             videoPath: videoPath,
             audioPath: audioPath,
             outputPath: outputPath,
+            technique: .streamCopy,
             log: logFn
         )
         if !result.success {
