@@ -154,6 +154,8 @@ class VideoRecord: Identifiable, Codable {
     var backupDestinations: [BackupEntry] = []
     var junkScore: Int = 0
     var junkReasons: [String] = []
+    var starRating: Int = 0                   // 0 = unrated, 1-3 stars
+    var combinedFromPairID: UUID?             // links back to source pair group
 
     /// Hostname of the machine that originally cataloged this record.
     /// Empty on records scanned locally; populated on import from another
@@ -222,6 +224,7 @@ class VideoRecord: Identifiable, Codable {
         case duplicateReasons, duplicateBestMatchFilename, duplicateGroupCount
         case mediaDisposition, archiveStage, masterLocation, backupDestinations
         case junkScore, junkReasons
+        case starRating, combinedFromPairID
         case sourceHost
         case scanContext
     }
@@ -284,6 +287,8 @@ class VideoRecord: Identifiable, Codable {
         backupDestinations          = try c.decodeIfPresent([BackupEntry].self, forKey: .backupDestinations) ?? []
         junkScore                   = try c.decodeIfPresent(Int.self, forKey: .junkScore) ?? 0
         junkReasons                 = try c.decodeIfPresent([String].self, forKey: .junkReasons) ?? []
+        starRating                  = try c.decodeIfPresent(Int.self, forKey: .starRating) ?? 0
+        combinedFromPairID          = try c.decodeIfPresent(UUID.self, forKey: .combinedFromPairID)
         scanContext                 = try c.decodeIfPresent(ScanContext.self, forKey: .scanContext) ?? ScanContext()
     }
 
@@ -350,6 +355,12 @@ class VideoRecord: Identifiable, Codable {
         try c.encode(junkScore, forKey: .junkScore)
         if !junkReasons.isEmpty {
             try c.encode(junkReasons, forKey: .junkReasons)
+        }
+        if starRating > 0 {
+            try c.encode(starRating, forKey: .starRating)
+        }
+        if combinedFromPairID != nil {
+            try c.encode(combinedFromPairID, forKey: .combinedFromPairID)
         }
         if scanContext.isPopulated || scanContext.scannedAt != nil {
             try c.encode(scanContext, forKey: .scanContext)

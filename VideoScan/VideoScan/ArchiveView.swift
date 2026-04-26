@@ -321,19 +321,20 @@ struct ArchiveView: View {
             }
             .width(min: 60, ideal: 80)
 
-            TableColumn("Codec", value: \.videoCodec) { rec in
-                Text(rec.videoCodec.isEmpty ? rec.audioCodec : rec.videoCodec)
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-            }
-            .width(min: 60, ideal: 80)
-
             TableColumn("Volume", value: \.volumeName) { rec in
                 Text(rec.volumeName)
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
             }
             .width(min: 80, ideal: 110)
+
+            TableColumn("Rating") { rec in
+                StarRatingView(rating: Binding(
+                    get: { rec.starRating },
+                    set: { rec.starRating = $0 }
+                ))
+            }
+            .width(min: 60, ideal: 70)
 
             // Keeper checkmarks
             TableColumn("Lifecycle") { rec in
