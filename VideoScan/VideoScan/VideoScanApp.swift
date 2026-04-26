@@ -182,6 +182,15 @@ struct VideoScanApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: 720, height: 560)
 
+        Window("Combine & Render", id: "combine") {
+            CombineWindow()
+                .environmentObject(catalogModel)
+                .environmentObject(catalogModel.dashboard)
+        }
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 640, height: 420)
+        .defaultPosition(.center)
+
         Window("Settings", id: "settings") {
             SettingsTabView(
                 settings: Binding(
@@ -233,6 +242,11 @@ struct WindowMenuItems: View {
             openWindow(id: "console")
         }
         .keyboardShortcut("c", modifiers: [.command, .shift])
+
+        Button("Combine & Render") {
+            openWindow(id: "combine")
+        }
+        .keyboardShortcut("r", modifiers: [.command, .shift])
     }
 }
 
@@ -248,7 +262,7 @@ final class MainWindowHelper {
     var openWindowAction: OpenWindowAction?
 
     /// Known auxiliary window titles — anything else is the main window.
-    private let auxiliaryTitles = ["Dashboard", "Console", "About", "Realtime"]
+    private let auxiliaryTitles = ["Dashboard", "Console", "About", "Realtime", "Combine"]
 
     func openMainWindow() {
         // First try to find and unhide an existing main window

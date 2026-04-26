@@ -1,7 +1,7 @@
 import Foundation
 
 /// Handles batch remuxing of correlated audio/video MXF pairs into MOV containers.
-/// Uses ffmpeg stream copy (no re-encode), with RAM disk buffering for network sources.
+/// Supports stream copy (no re-encode) and re-encode modes, with RAM disk buffering for network sources.
 enum CombineEngine {
 
     static let ffmpegPath = "/opt/homebrew/bin/ffmpeg"
@@ -14,17 +14,22 @@ enum CombineEngine {
 
     // MARK: - ffmpeg Remux
 
-    /// Run ffmpeg to remux video+audio into MOV. Returns result with success/failure and stderr.
+    /// Run ffmpeg to combine video+audio. Returns result with success/failure and stderr.
+    /// Supports progress reporting via `-progress pipe:1` when a progress callback is provided.
     /// Cancellation-aware: terminates ffmpeg immediately when task is cancelled.
     static func runFFMpeg(
         videoPath: String,
         audioPath: String,
         outputPath: String,
+        technique: CombineJobStatus.CombineTechnique = .streamCopy,
+        durationSeconds: Double = 0,
+        onProgress: (@Sendable (Double) -> Void)? = nil,
         log: @escaping @Sendable (String) -> Void
     ) async -> CombineResult {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: ffmpegPath)
-        proc.arguments = [
+
+        var args = [
             "-y",
             "-probesize", "50M",
             "-analyzeduration", "10M",
@@ -32,16 +37,30 @@ enum CombineEngine {
             "-i", audioPath,
             "-map", "0:v",
             "-map", "1:a",
-            "-c:v", "copy",
-            "-c:a", "copy",
-            "-movflags", "+faststart",
-            "-f", "mov",
-            outputPath
         ]
 
+        switch technique {
+        case .streamCopy:
+            args += ["-c:v", "copy", "-c:a", "copy"]
+        case .reencodeProRes:
+            args += ["-c:v", "prores_ks", "-profile:v", "3", "-c:a", "pcm_s24le"]
+        case .reencodeH264:
+            args += ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-c:a", "aac", "-b:a", "256k"]
+        }
+
+        args += ["-movflags", "+faststart", "-f", "mov"]
+
+        if onProgress != nil {
+            args += ["-progress", "pipe:1"]
+        }
+
+        args.append(outputPath)
+        proc.arguments = args
+
         let errPipe = Pipe()
+        let outPipe = Pipe()
         proc.standardError = errPipe
-        proc.standardOutput = Pipe()
+        proc.standardOutput = outPipe
 
         let collected = StderrCollector()
 
@@ -53,10 +72,25 @@ enum CombineEngine {
             }
         }
 
+        if let onProgress, durationSeconds > 0 {
+            outPipe.fileHandleForReading.readabilityHandler = { handle in
+                if let text = String(data: handle.availableData, encoding: .utf8), !text.isEmpty {
+                    for line in text.components(separatedBy: .newlines) {
+                        if line.hasPrefix("out_time_us="), let us = Double(line.dropFirst(12)) {
+                            let seconds = us / 1_000_000
+                            let frac = min(seconds / durationSeconds, 1.0)
+                            onProgress(frac)
+                        }
+                    }
+                }
+            }
+        }
+
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 proc.terminationHandler = { p in
                     errPipe.fileHandleForReading.readabilityHandler = nil
+                    outPipe.fileHandleForReading.readabilityHandler = nil
                     let remaining = errPipe.fileHandleForReading.readDataToEndOfFile()
                     if let text = String(data: remaining, encoding: .utf8), !text.isEmpty {
                         let trimmed = text.trimmingCharacters(in: .newlines)
