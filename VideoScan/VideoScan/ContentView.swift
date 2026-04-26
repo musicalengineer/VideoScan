@@ -77,6 +77,24 @@ struct ContentView: View {
     }
 }
 
+// MARK: - Catalog View Filter
+
+enum CatalogViewFilter: String, CaseIterable, Hashable {
+    case onlineOnly       = "Online Media Only"
+    case videoAndAudioOnly = "Video+Audio Only"
+    case unpairedOnly     = "Unpaired Only"
+    case ratedOnly        = "Rated Only"
+
+    var icon: String {
+        switch self {
+        case .onlineOnly:        return "externaldrive.fill.badge.checkmark"
+        case .videoAndAudioOnly: return "film"
+        case .unpairedOnly:      return "exclamationmark.triangle"
+        case .ratedOnly:         return "star.fill"
+        }
+    }
+}
+
 // MARK: - Volume Filter
 
 enum VolumeFilter: String, CaseIterable, Hashable {
@@ -116,6 +134,7 @@ struct CatalogView: View {
     @State private var filterByIDs: Set<UUID> = []
     // Volume pane height is now managed by NSSplitView (VerticalSplitView)
     @State private var showPairsOnly = false
+    @State private var catalogViewFilters: Set<CatalogViewFilter> = []
     @State private var combinePairItem: CombinePairItem?
     /// Set of scan-target searchPaths whose records the user wants to see in
     /// the catalog table. Derived from `selectedVolumeIDs` so that selecting
@@ -199,6 +218,7 @@ struct CatalogView: View {
                 avidBinCount: model.avidBinResults.reduce(0) { $0 + $1.clips.count },
                 avidBinFiles: model.avidBinResults.count,
                 showPairsOnly: $showPairsOnly,
+                viewFilters: $catalogViewFilters,
                 dashboardContent: {
                     if model.isScanning || model.isCombining {
                         CompactDashboard(
@@ -228,6 +248,7 @@ struct CatalogView: View {
                 searchText: searchText,
                 filterTargetPaths: filterTargetPaths,
                 showPairsOnly: showPairsOnly,
+                viewFilters: catalogViewFilters,
                 filterByIDs: filterByIDs,
                 previewImage: model.previewImage,
                 previewFilename: model.previewFilename,
@@ -250,10 +271,19 @@ struct CatalogView: View {
                     model.previewOfflineVolumeName = nil
                 },
                 onCombinePair: { video, audio in
-                    // Delay sheet presentation to let the context menu dismiss first
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                         combinePairItem = CombinePairItem(video: video, audio: audio)
                     }
+                },
+                onShowPair: { id1, id2 in
+                    searchText = ""
+                    selectedVolumeIDs = []
+                    showPairsOnly = false
+                    filterByIDs = [id1, id2]
+                    selectedIDs = [id1, id2]
+                },
+                onClearFilter: {
+                    filterByIDs = []
                 }
             )
             .onChange(of: selectedIDs) {

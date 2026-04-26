@@ -39,6 +39,7 @@ struct CatalogToolbar<Dashboard: View>: View {
     let avidBinCount: Int
     let avidBinFiles: Int
     @Binding var showPairsOnly: Bool
+    @Binding var viewFilters: Set<CatalogViewFilter>
     @ViewBuilder let dashboardContent: () -> Dashboard
 
     private var canCombine: Bool {
@@ -217,6 +218,32 @@ struct CatalogToolbar<Dashboard: View>: View {
             .background(Color(NSColor.textBackgroundColor))
             .cornerRadius(6)
 
+            Menu {
+                ForEach(CatalogViewFilter.allCases, id: \.self) { filter in
+                    Toggle(isOn: Binding(
+                        get: { viewFilters.contains(filter) },
+                        set: { on in
+                            if on { viewFilters.insert(filter) }
+                            else  { viewFilters.remove(filter) }
+                        }
+                    )) {
+                        Label(filter.rawValue, systemImage: filter.icon)
+                    }
+                }
+                if !viewFilters.isEmpty {
+                    Divider()
+                    Button("Clear All Filters") { viewFilters.removeAll() }
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "line.3.horizontal.decrease.circle\(viewFilters.isEmpty ? "" : ".fill")")
+                    Text("View")
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .frame(width: 70)
+            .help("Filter catalog results")
+
             Spacer()
 
             Button {
@@ -248,6 +275,7 @@ struct CatalogContent: View {
     let searchText: String
     let filterTargetPaths: Set<String>
     let showPairsOnly: Bool
+    let viewFilters: Set<CatalogViewFilter>
     /// When non-empty, show only these specific records (overrides all other filters).
     /// Used by Archive tab's "Show in Catalog" / "Show Pair in Catalog".
     var filterByIDs: Set<UUID> = []
@@ -259,6 +287,8 @@ struct CatalogContent: View {
     let onSelect: (UUID?) -> Void
     let onClearPreview: () -> Void
     var onCombinePair: ((VideoRecord, VideoRecord) -> Void)?
+    var onShowPair: ((UUID, UUID) -> Void)?
+    var onClearFilter: (() -> Void)?
 
     @State private var player: AVPlayer?
     @State private var isPlaying = false
@@ -359,6 +389,21 @@ struct CatalogContent: View {
             }
             out = result
         }
+        // View menu filters (additive — each active filter narrows further)
+        if viewFilters.contains(.onlineOnly) {
+            out = out.filter { VolumeReachability.isReachable(path: $0.fullPath) }
+        }
+        if viewFilters.contains(.videoAndAudioOnly) {
+            out = out.filter { $0.streamType == .videoAndAudio }
+        }
+        if viewFilters.contains(.unpairedOnly) {
+            out = out.filter {
+                ($0.streamType == .videoOnly || $0.streamType == .audioOnly) && $0.pairedWith == nil
+            }
+        }
+        if viewFilters.contains(.ratedOnly) {
+            out = out.filter { $0.starRating > 0 }
+        }
         return out
     }
 
@@ -366,7 +411,12 @@ struct CatalogContent: View {
         HSplitView {
             // MARK: Left side — Table + Player
             VSplitView {
-                catalogTable
+                VStack(spacing: 0) {
+                    if !filterByIDs.isEmpty {
+                        pairFilterBanner
+                    }
+                    catalogTable
+                }
                     .frame(minHeight: 250)
 
                 previewPlayer
@@ -444,11 +494,42 @@ struct CatalogContent: View {
         showRenameSheet = false
     }
 
+    private var pairFilterBanner: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "line.horizontal.3.decrease.circle.fill")
+                .foregroundColor(.accentColor)
+            Text("Showing matched pair (\(filterByIDs.count) files)")
+                .font(.system(size: 12, weight: .medium))
+            Spacer()
+
+            if let rec = records.first(where: { filterByIDs.contains($0.id) }),
+               let partner = rec.pairedWith, filterByIDs.contains(partner.id) {
+                Button("Combine This Pair…") {
+                    let video = rec.streamType == .videoOnly ? rec : partner
+                    let audio = rec.streamType == .audioOnly ? rec : partner
+                    onCombinePair?(video, audio)
+                }
+                .buttonStyle(.bordered)
+                .font(.system(size: 11))
+            }
+
+            Button("Show All") {
+                onClearFilter?()
+            }
+            .buttonStyle(.bordered)
+            .font(.system(size: 11))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color.accentColor.opacity(0.08))
+    }
+
     // MARK: - Results Table
 
     private var catalogTable: some View {
         Table(tableData, selection: $selectedIDs, sortOrder: $sortOrder) {
             TableColumn("Filename", value: \.filename) { rec in
+                let offline = !FileManager.default.isReadableFile(atPath: rec.fullPath)
                 HStack(spacing: 4) {
                     if showPairsOnly && rec.pairedWith != nil {
                         Image(systemName: rec.streamType == .videoOnly ? "film" : "waveform")
@@ -457,13 +538,15 @@ struct CatalogContent: View {
                     }
                     Text(rec.filename)
                         .font(.system(.body, design: .monospaced))
-                        .foregroundColor(showPairsOnly && rec.pairedWith != nil
-                            ? (rec.streamType == .videoOnly ? .blue : .green)
-                            : .primary)
+                        .italic(offline)
+                        .foregroundColor(offline ? .secondary
+                            : (showPairsOnly && rec.pairedWith != nil
+                               ? (rec.streamType == .videoOnly ? .blue : .green)
+                               : .primary))
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 2)
-                .help(rec.directory)
+                .help(offline ? "\(rec.directory) (offline)" : rec.directory)
             }
             .width(min: 180, ideal: 260)
 
@@ -477,13 +560,16 @@ struct CatalogContent: View {
             .width(min: 80, ideal: 120)
 
             TableColumn("Stream", value: \.streamTypeRaw) { rec in
+                let unpaired = rec.streamType.needsCorrelation && rec.pairedWith == nil
                 let display = rec.streamType == .ffprobeFailed
                     ? rec.isPlayable
                     : rec.streamTypeRaw
                 Text(display)
-                    .foregroundColor(streamTypeColor(rec.streamType))
+                    .foregroundColor(unpaired ? .orange : streamTypeColor(rec.streamType))
                     .bold(rec.streamType.needsCorrelation)
-                    .help("V+A = video and audio, V-only/A-only = single stream, or file status if damaged")
+                    .help(unpaired
+                          ? (rec.streamType == .videoOnly ? "No audio pair found" : "No video pair found")
+                          : "V+A = video and audio, V-only/A-only = single stream, or file status if damaged")
             }
             .width(min: 90, ideal: 130)
 
@@ -535,8 +621,19 @@ struct CatalogContent: View {
         .contextMenu(forSelectionType: UUID.self) { ids in
             if let id = ids.first,
                let rec = records.first(where: { $0.id == id }) {
-                Button("Reveal in Finder") {
-                    NSWorkspace.shared.selectFile(rec.fullPath, inFileViewerRootedAtPath: "")
+                Button(FileManager.default.isReadableFile(atPath: rec.fullPath)
+                       ? "Reveal in Finder"
+                       : "Reveal in Finder (offline)") {
+                    if FileManager.default.isReadableFile(atPath: rec.fullPath) {
+                        NSWorkspace.shared.selectFile(rec.fullPath, inFileViewerRootedAtPath: "")
+                    } else {
+                        let alert = NSAlert()
+                        alert.messageText = "File Offline"
+                        alert.informativeText = "The volume containing this file is not mounted.\n\n\(rec.fullPath)"
+                        alert.alertStyle = .informational
+                        alert.addButton(withTitle: "OK")
+                        alert.runModal()
+                    }
                 }
                 Button("Open in QuickTime Player") {
                     if let qtURL = NSWorkspace.shared.urlForApplication(
@@ -575,9 +672,8 @@ struct CatalogContent: View {
 
                 if let partner = rec.pairedWith {
                     Divider()
-                    Button(rec.streamType == .videoOnly ? "Find Matched Audio" : "Find Matched Video") {
-                        selectedIDs = [partner.id]
-                        onSelect(partner.id)
+                    Button("Show Matched Pair") {
+                        onShowPair?(rec.id, partner.id)
                     }
                     Button("Combine This Pair…") {
                         let video = rec.streamType == .videoOnly ? rec : partner
@@ -598,6 +694,7 @@ struct CatalogContent: View {
         .onChange(of: filterTargetPaths) { tableData = computeFiltered() }
         .onChange(of: showPairsOnly) { tableData = computeFiltered() }
         .onChange(of: filterByIDs) { tableData = computeFiltered() }
+        .onChange(of: viewFilters) { tableData = computeFiltered() }
     }
 
     // MARK: - Preview / Player
@@ -826,6 +923,38 @@ struct InspectorPanel: View {
                                     RoundedRectangle(cornerRadius: 4)
                                         .fill(streamTypeColor(rec.streamType).opacity(0.12))
                                 )
+                            if rec.streamType == .videoOnly && rec.pairedWith == nil {
+                                Text("NO AUDIO")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundColor(.orange)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .fill(Color.orange.opacity(0.12))
+                                    )
+                            }
+                            if rec.streamType == .audioOnly && rec.pairedWith == nil {
+                                Text("NO VIDEO")
+                                    .font(.system(size: 11, weight: .bold))
+                                    .foregroundColor(.orange)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(
+                                        RoundedRectangle(cornerRadius: 4)
+                                            .fill(Color.orange.opacity(0.12))
+                                    )
+                            }
+                        }
+                        // Star rating
+                        HStack(spacing: 6) {
+                            Text("Rating")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                            StarRatingView(rating: Binding(
+                                get: { rec.starRating },
+                                set: { rec.starRating = $0 }
+                            ))
                         }
                         // Volume name — prominent
                         HStack(spacing: 4) {
@@ -947,7 +1076,7 @@ struct InspectorPanel: View {
                                         .frame(width: 8, height: 8)
                                     Text(
                                         rec.duplicateGroupCount >= 2
-                                        ? "\(rec.duplicateDisposition.rawValue) · \(rec.duplicateGroupCount) copies"
+                                        ? "\(rec.duplicateDisposition.rawValue) · \(rec.duplicateGroupCount) matches"
                                         : rec.duplicateDisposition.rawValue
                                     )
                                         .font(.system(size: 11, weight: .medium))
@@ -978,7 +1107,7 @@ struct InspectorPanel: View {
 
                                 Divider().padding(.vertical, 4)
 
-                                Text("All Copies (\(duplicateGroupMembers.count + 1) total)")
+                                Text("Duplicate Group (\(duplicateGroupMembers.count + 1) total)")
                                     .font(.system(size: 11, weight: .semibold))
                                     .foregroundColor(.primary)
                                     .padding(.leading, 4)
@@ -1250,18 +1379,10 @@ struct DuplicateDispositionCell: View {
     }
 }
 
-/// Display label for the Duplicate column. When the record is part of a
-/// detected duplicate group, show "N copies" so the user sees how many
-/// copies exist across the catalog. Disposition (Keep / Review / Extra)
-/// is encoded via text color and the confidence dot; status still
-/// distinguishes .keep from .extraCopy at a glance without eating
-/// horizontal space with "Extra copy · 5 copies".
 func duplicateDisplayLabel(for record: VideoRecord) -> String {
     if record.duplicateDisposition == .none { return "—" }
     let n = record.duplicateGroupCount
-    if n >= 2 { return "\(n) copies" }
-    // Fallback for older catalog records where duplicateGroupCount isn't set:
-    // show the disposition label so we don't regress to "—".
+    if n >= 2 { return "\(n) matches" }
     return record.duplicateDisposition.rawValue
 }
 
@@ -1449,5 +1570,25 @@ struct ScanOptionsMenu: View {
         .help(model.scanOptions.isCustomized
               ? "Non-default scan policy (applies on next scan)"
               : "What to skip during scan (applies on next scan)")
+    }
+}
+
+// MARK: - Star Rating View
+
+struct StarRatingView: View {
+    @Binding var rating: Int
+    let maxStars: Int = 3
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(1...maxStars, id: \.self) { star in
+                Image(systemName: star <= rating ? "star.fill" : "star")
+                    .font(.system(size: 14))
+                    .foregroundColor(star <= rating ? .yellow : .secondary.opacity(0.4))
+                    .onTapGesture {
+                        rating = (rating == star) ? 0 : star
+                    }
+            }
+        }
     }
 }
