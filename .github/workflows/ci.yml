@@ -71,16 +71,13 @@ jobs:
           fi
 
       - name: Periphery — unused code report (non-blocking)
-        # Periphery analyzes the compiler index produced by the Build step above.
-        # Runs in --skip-build mode to reuse that index.
-        # Configuration (project, schemes, retention rules) lives in .periphery.yml —
-        # don't pass them as CLI args; periphery 3.x rejects --targets, which
-        # silently broke this step (all errors → zero findings).
+        # Periphery builds its own index internally, so no --skip-build.
+        # Configuration lives in .periphery.yml.
         continue-on-error: true
         run: |
           echo "## Periphery — unused code" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          periphery scan --skip-build 2>&1 | tee periphery-raw.txt | tee -a $GITHUB_STEP_SUMMARY || true
+          periphery scan 2>&1 | tee periphery-raw.txt | tee -a $GITHUB_STEP_SUMMARY || true
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "PERIPHERY_OUTPUT=$(pwd)/periphery-raw.txt" >> $GITHUB_ENV
 
