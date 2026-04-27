@@ -127,20 +127,42 @@ struct VideoScanApp: App {
             CommandGroup(replacing: .appSettings) {
                 SettingsMenuItem()
             }
-            CommandGroup(after: .saveItem) {
-                Button("Export Volume Info…") {
+            // Anchor on .newItem (which always has the default Close item
+            // in non-document SwiftUI apps). Anchoring on .saveItem looks
+            // correct semantically but silently no-ops when no Save group
+            // exists — the symptom Rick saw: File menu had only New and
+            // Close.
+            CommandGroup(after: .newItem) {
+                Divider()
+                // Whole-shebang bundle — the "make this Mac look like the
+                // other one" entry point. Use this when moving between
+                // Rick's Mac Studio and MBP.
+                Button("Export Everything…") {
+                    catalogModel.exportBundleViaPanel()
+                }
+                .keyboardShortcut("e", modifiers: [.command])
+
+                Button("Import Everything…") {
+                    catalogModel.importBundleViaPanel()
+                }
+                .keyboardShortcut("i", modifiers: [.command])
+
+                Divider()
+
+                // Partial exports — kept for callers who want just the
+                // catalog (smaller file, AirDrop-friendly) or just a CSV
+                // summary of volume status.
+                Button("Export Volume Info (CSV)…") {
                     catalogModel.exportVolumeInfo()
                 }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
 
-                Divider()
-
-                Button("Export Catalog…") {
+                Button("Export Catalog Only…") {
                     catalogModel.exportCatalogViaPanel()
                 }
                 .keyboardShortcut("e", modifiers: [.command, .option])
 
-                Button("Import Catalog…") {
+                Button("Import Catalog Only…") {
                     catalogModel.importCatalogViaPanel()
                 }
                 .keyboardShortcut("i", modifiers: [.command, .option])
