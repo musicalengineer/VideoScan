@@ -518,6 +518,71 @@ enum VolumePhase: String, CaseIterable, Codable {
     }
 }
 
+// MARK: - Volume Role
+
+enum VolumeRole: String, CaseIterable, Codable {
+    case unassigned  = "Unassigned"
+    case original    = "Original"
+    case backup      = "Backup"
+    case archive     = "Archive"
+    case lta         = "Long-Term Archive"
+
+    var icon: String {
+        switch self {
+        case .unassigned: return "questionmark.circle"
+        case .original:   return "film.stack"
+        case .backup:     return "doc.on.doc"
+        case .archive:    return "archivebox.fill"
+        case .lta:        return "icloud.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .unassigned: return .secondary
+        case .original:   return .orange
+        case .backup:     return .blue
+        case .archive:    return .green
+        case .lta:        return .mint
+        }
+    }
+
+    var shortLabel: String {
+        switch self {
+        case .unassigned: return "—"
+        case .original:   return "ORIG"
+        case .backup:     return "BKUP"
+        case .archive:    return "ARCH"
+        case .lta:        return "LTA"
+        }
+    }
+}
+
+enum VolumeTrust: String, CaseIterable, Codable {
+    case unknown    = "Unknown"
+    case reliable   = "Reliable"
+    case aging      = "Aging"
+    case unreliable = "Unreliable"
+
+    var icon: String {
+        switch self {
+        case .unknown:    return "questionmark.circle"
+        case .reliable:   return "checkmark.shield.fill"
+        case .aging:      return "exclamationmark.triangle"
+        case .unreliable: return "xmark.shield.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .unknown:    return .secondary
+        case .reliable:   return .green
+        case .aging:      return .yellow
+        case .unreliable: return .red
+        }
+    }
+}
+
 // MARK: - Volume Row (value type for Table display)
 
 struct VolumeRow: Identifiable {
@@ -605,6 +670,10 @@ final class CatalogScanTarget: ObservableObject, Identifiable {
     @Published var lastScannedDate: Date?
     /// Lifecycle phase — user-assigned workflow state.
     @Published var phase: VolumePhase = .noCatalog
+    /// What role this volume plays in the archival workflow.
+    @Published var role: VolumeRole = .unassigned
+    /// How trustworthy this volume is (age/reliability).
+    @Published var trust: VolumeTrust = .unknown
 
     var scanTask: Task<Void, Never>?
     let pauseGate = PauseGate()

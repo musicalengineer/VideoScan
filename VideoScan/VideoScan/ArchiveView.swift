@@ -55,6 +55,14 @@ struct ArchiveView: View {
                         sidebarRow(.suspectedJunk)
                         sidebarRow(.confirmedJunk)
                     }
+
+                    Divider().padding(.vertical, 8)
+
+                    sidebarSection("VOLUMES") {
+                        ForEach(model.scanTargets, id: \.id) { target in
+                            volumeRoleRow(target)
+                        }
+                    }
                 }
                 .padding(.horizontal, 8)
                 .padding(.top, 8)
@@ -110,6 +118,79 @@ struct ArchiveView: View {
             .clipShape(RoundedRectangle(cornerRadius: 5))
         }
         .buttonStyle(.plain)
+    }
+
+    private func volumeRoleRow(_ target: CatalogScanTarget) -> some View {
+        let name = VolumeReachability.volumeName(forPath: target.searchPath)
+        let fileCount = model.records.filter { $0.fullPath.hasPrefix(target.searchPath) }.count
+
+        return HStack(spacing: 6) {
+            Circle()
+                .fill(target.isReachable ? target.role.color : Color.secondary.opacity(0.3))
+                .frame(width: 8, height: 8)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 4) {
+                    Text(name)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(target.isReachable ? .primary : .secondary)
+                        .lineLimit(1)
+                    if !target.isReachable {
+                        Text("offline")
+                            .font(.system(size: 9))
+                            .foregroundColor(.orange)
+                    }
+                }
+                HStack(spacing: 4) {
+                    Text(target.role.shortLabel)
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundColor(target.role.color)
+                    if target.trust != .unknown {
+                        Image(systemName: target.trust.icon)
+                            .font(.system(size: 8))
+                            .foregroundColor(target.trust.color)
+                    }
+                    Text("\(fileCount)")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .contextMenu {
+            Menu("Role") {
+                ForEach(VolumeRole.allCases, id: \.self) { role in
+                    Button {
+                        model.setRole(role, for: target)
+                    } label: {
+                        HStack {
+                            Image(systemName: role.icon)
+                            Text(role.rawValue)
+                            if target.role == role {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            }
+            Menu("Reliability") {
+                ForEach(VolumeTrust.allCases, id: \.self) { trust in
+                    Button {
+                        model.setTrust(trust, for: target)
+                    } label: {
+                        HStack {
+                            Image(systemName: trust.icon)
+                            Text(trust.rawValue)
+                            if target.trust == trust {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private var volumeProgressBar: some View {
