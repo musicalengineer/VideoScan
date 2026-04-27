@@ -262,6 +262,10 @@ struct PersonFinderView: View {
 
     @State private var showFailures = false
     @AppStorage("facesStripHeight") private var facesStripHeight: Double = 90
+    /// User-toggleable hide for the reference photo grid: keep the header
+    /// (so you can still see who's loaded) but free up vertical space for
+    /// the People gallery above. Persisted across launches.
+    @AppStorage("referencePaneCollapsed") private var referencePaneCollapsed: Bool = false
 
     /// Derive thumbnail cell size from the pane height: photos scale with
     /// the drag-resizable strip. Clamped so thumbs stay usable at extremes.
@@ -355,10 +359,40 @@ struct PersonFinderView: View {
                         }
                     }
                     Spacer()
+
+                    // Collapse / expand the reference grid. Sized and tinted
+                    // so it's findable at a glance — the chevron alone read
+                    // too small in usability testing.
+                    if !model.referenceFaces.isEmpty {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                referencePaneCollapsed.toggle()
+                            }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: referencePaneCollapsed
+                                      ? "chevron.down.circle.fill"
+                                      : "chevron.up.circle.fill")
+                                    .font(.system(size: 22, weight: .semibold))
+                                Text(referencePaneCollapsed ? "Show Photos" : "Hide Photos")
+                                    .font(.callout.weight(.medium))
+                            }
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(
+                                Capsule().fill(Color.accentColor)
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .help(referencePaneCollapsed
+                              ? "Show reference photos"
+                              : "Hide reference photos — gives more room to the People gallery")
+                    }
                 }
 
                 // Face thumbnails — wrapping grid in a resizable pane
-                if !model.referenceFaces.isEmpty {
+                if !model.referenceFaces.isEmpty && !referencePaneCollapsed {
                     let cellSize = derivedThumbSize
                     let columns = [GridItem(.adaptive(minimum: cellSize + 4), spacing: 6)]
                     ScrollView(.vertical, showsIndicators: true) {
@@ -388,8 +422,8 @@ struct PersonFinderView: View {
             .padding(.vertical, 8)
             .background(Color(NSColor.controlBackgroundColor))
 
-            // Drag handle to resize the faces pane
-            if !model.referenceFaces.isEmpty {
+            // Drag handle to resize the faces pane (hidden while collapsed)
+            if !model.referenceFaces.isEmpty && !referencePaneCollapsed {
                 Rectangle()
                     .fill(Color(NSColor.separatorColor))
                     .frame(height: 5)
