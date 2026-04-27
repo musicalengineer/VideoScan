@@ -1088,6 +1088,12 @@ struct CatalogView: View {
         targets: [CatalogScanTarget], first: CatalogScanTarget, single: Bool
     ) -> some View {
         Section("Volume") {
+            Button(action: {
+                model.pendingVolumesSelectionID = first.id
+                openWindow(id: "volumes")
+            }) {
+                Label("Volume Roles & Archive…", systemImage: "externaldrive.badge.checkmark")
+            }
             if single {
                 Button(action: { browsePath(for: first) }) {
                     Label("Browse…", systemImage: "folder")

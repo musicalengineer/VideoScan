@@ -8,6 +8,7 @@ import AVKit
 // MARK: - Toolbar (post-scan actions: correlate, combine, search, export)
 
 struct CatalogToolbar<Dashboard: View>: View {
+    @EnvironmentObject var model: VideoScanModel
     let isScanning: Bool
     let isCombining: Bool
     let isCorrelating: Bool
@@ -184,7 +185,7 @@ struct CatalogToolbar<Dashboard: View>: View {
             }
 
             Button {
-                CatalogScanWindowController.shared.show(dashboard: dashboard)
+                CatalogScanWindowController.shared.show(dashboard: dashboard, model: model)
             } label: {
                 Label("Realtime Scan", systemImage: "waveform.path.ecg.rectangle")
             }

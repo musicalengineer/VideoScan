@@ -583,6 +583,84 @@ enum VolumeTrust: String, CaseIterable, Codable {
     }
 }
 
+// MARK: - Volume Media Technology
+
+enum VolumeMediaTech: String, CaseIterable, Codable {
+    case unknown = "Unknown"
+    case ssd     = "SSD"
+    case hdd     = "HDD"
+    case raid0   = "RAID-0"
+    case raid1   = "RAID-1"
+    case raid5   = "RAID-5"
+    case raid10  = "RAID-10"
+    case cloud   = "Cloud"
+    case network = "Network"
+
+    var icon: String {
+        switch self {
+        case .unknown: return "questionmark.circle"
+        case .ssd:     return "internaldrive"
+        case .hdd:     return "externaldrive"
+        case .raid0,
+             .raid1,
+             .raid5,
+             .raid10:  return "externaldrive.connected.to.line.below"
+        case .cloud:   return "icloud"
+        case .network: return "network"
+        }
+    }
+
+    /// Multi-disk redundancy: a single-disk failure doesn't lose the volume.
+    var isRedundant: Bool {
+        switch self {
+        case .raid1, .raid5, .raid10, .cloud: return true
+        default: return false
+        }
+    }
+
+    /// RAID-0 doubles failure probability with no redundancy — never an
+    /// archive destination, even when new.
+    var isFragile: Bool { self == .raid0 }
+}
+
+// MARK: - Destination Policy (computed)
+
+/// How appropriate a volume is as a *destination* for archived media.
+/// Pure function of role + trust + mediaTech + age + reachability.
+enum DestinationPolicy: String {
+    case preferred
+    case acceptable
+    case discouraged
+    case forbidden
+
+    var label: String {
+        switch self {
+        case .preferred:   return "Preferred"
+        case .acceptable:  return "Acceptable"
+        case .discouraged: return "Discouraged"
+        case .forbidden:   return "Forbidden"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .preferred:   return .green
+        case .acceptable:  return .yellow
+        case .discouraged: return .orange
+        case .forbidden:   return .red
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .preferred:   return "checkmark.seal.fill"
+        case .acceptable:  return "checkmark.circle"
+        case .discouraged: return "exclamationmark.triangle.fill"
+        case .forbidden:   return "xmark.octagon.fill"
+        }
+    }
+}
+
 // MARK: - Volume Row (value type for Table display)
 
 struct VolumeRow: Identifiable {
@@ -674,6 +752,52 @@ final class CatalogScanTarget: ObservableObject, Identifiable {
     @Published var role: VolumeRole = .unassigned
     /// How trustworthy this volume is (age/reliability).
     @Published var trust: VolumeTrust = .unknown
+    /// Filesystem name (APFS, HFS+, exFAT, NTFS, SMB, …). User-entered.
+    @Published var filesystem: String = ""
+    /// Storage medium / topology (SSD, HDD, RAID-0/-1/-5, cloud, network).
+    @Published var mediaTech: VolumeMediaTech = .unknown
+    /// Year the volume was placed in service. Drives the age penalty in
+    /// `destinationPolicy`.
+    @Published var purchaseYear: Int?
+    /// Total capacity in terabytes. Free-form display, not an enforced limit.
+    @Published var capacityTB: Double?
+    /// User notes — model number, serial, location, history, etc.
+    @Published var notes: String = ""
+
+    /// Computed archival-destination suitability. Rules (first match wins):
+    ///   1. RAID-0 or trust=Unreliable → Forbidden
+    ///   2. Offline → Discouraged (can't write to it now)
+    ///   3. Role not Archive/LTA → Acceptable (it's not meant as a target)
+    ///   4. Trust=Aging → Discouraged
+    ///   5. ≥12 yr old, or ≥8 yr old without redundancy → Discouraged
+    ///   6. Trust=Unknown on plain HDD/Network → Acceptable
+    ///   7. Else → Preferred
+    var destinationPolicy: DestinationPolicy {
+        if mediaTech.isFragile { return .forbidden }
+        if trust == .unreliable { return .forbidden }
+        if !isReachable { return .discouraged }
+
+        let isDestRole = (role == .archive || role == .lta)
+        if !isDestRole { return .acceptable }
+
+        if trust == .aging { return .discouraged }
+
+        if let year = purchaseYear {
+            let now = Calendar.current.component(.year, from: Date())
+            let age = now - year
+            if age >= 12 { return .discouraged }
+            if age >= 8 && !mediaTech.isRedundant { return .discouraged }
+        }
+
+        if trust == .unknown
+            && !mediaTech.isRedundant
+            && mediaTech != .ssd
+            && mediaTech != .cloud {
+            return .acceptable
+        }
+
+        return .preferred
+    }
 
     var scanTask: Task<Void, Never>?
     let pauseGate = PauseGate()

@@ -7,6 +7,7 @@ struct ExpandedDashboard: View {
     @ObservedObject var dashboard: DashboardState
     let isScanning: Bool
     let isCombining: Bool
+    @EnvironmentObject var model: VideoScanModel
 
     @State private var now = Date()
     private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
@@ -292,7 +293,10 @@ struct ExpandedDashboard: View {
                 GroupBox("Volumes") {
                     VStack(alignment: .leading, spacing: 6) {
                         ForEach(dashboard.volumeProgress) { vol in
-                            VolumeProgressRow(volume: vol)
+                            VolumeProgressRow(
+                                volume: vol,
+                                target: model.scanTargets.first { $0.searchPath == vol.rootPath }
+                            )
                         }
                     }
                 }
@@ -399,6 +403,7 @@ struct ExpandedDashboard: View {
 
 private struct VolumeProgressRow: View {
     let volume: VolumeProgress
+    let target: CatalogScanTarget?
 
     private var fraction: Double {
         volume.totalFiles > 0 ? Double(volume.completedFiles) / Double(volume.totalFiles) : 0
@@ -413,6 +418,9 @@ private struct VolumeProgressRow: View {
                 Text(volume.volumeName)
                     .font(.system(size: 14, weight: .medium))
                     .lineLimit(1)
+                if let target {
+                    ObservedVolumeBadge(target: target)
+                }
                 Spacer()
                 if volume.isWalking {
                     // Walker is still streaming URLs — show both counts.
