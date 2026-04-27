@@ -54,6 +54,23 @@ struct PersonFinderView: View {
     @State private var justSavedProfileID: String?
     /// Alert message shown when user tries to edit/switch during a scan.
     @State private var scanLockMessage: String?
+    /// Drag-resizable height for the People gallery row. Default leans large
+    /// so the family portraits read as the centerpiece — Rick wants the app
+    /// to feel like it's about people first when he shows it off.
+    @AppStorage("peopleGalleryHeight") private var peopleGalleryHeight: Double = 180
+
+    /// Image diameter scales linearly with the gallery height, leaving
+    /// ~70pt headroom for the name label and padding. Clamped so cards
+    /// stay tappable at the floor and don't overflow at the ceiling.
+    private var personImageSize: CGFloat {
+        CGFloat(min(max(peopleGalleryHeight - 70, 56), 260))
+    }
+    private var personCardWidth: CGFloat {
+        max(personImageSize + 24, 96)
+    }
+    private var personNameFontSize: CGFloat {
+        min(max(11 + (personImageSize - 64) * 0.07, 11), 20)
+    }
 
     var peopleGallery: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -105,16 +122,16 @@ struct PersonFinderView: View {
                                     Circle()
                                         .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [5, 3]))
                                         .foregroundColor(.secondary.opacity(0.4))
-                                        .frame(width: 64, height: 64)
+                                        .frame(width: personImageSize, height: personImageSize)
                                     Image(systemName: "plus")
-                                        .font(.system(size: 22, weight: .medium))
+                                        .font(.system(size: personImageSize * 0.34, weight: .medium))
                                         .foregroundColor(.secondary)
                                 }
                                 Text("Add Person")
-                                    .font(.system(size: 11, weight: .medium))
+                                    .font(.system(size: personNameFontSize, weight: .medium))
                                     .foregroundColor(.secondary)
                             }
-                            .frame(width: 80)
+                            .frame(width: personCardWidth)
                             .padding(.vertical, 4)
                         }
                         .buttonStyle(.plain)
@@ -124,7 +141,12 @@ struct PersonFinderView: View {
                         ForEach(model.savedProfiles) { profile in
                             let isBeingScanned = scanningNames.contains(profile.name.lowercased())
                             let isActive = isBeingScanned
-                            PersonCard(profile: profile, isActive: isActive, justSaved: justSavedProfileID == profile.id)
+                            PersonCard(profile: profile,
+                                       isActive: isActive,
+                                       justSaved: justSavedProfileID == profile.id,
+                                       imageSize: personImageSize,
+                                       cardWidth: personCardWidth,
+                                       nameFontSize: personNameFontSize)
                                 .opacity(isBeingScanned ? 0.7 : 1.0)
                                 .onTapGesture {
                                     if isBeingScanned {
@@ -172,11 +194,30 @@ struct PersonFinderView: View {
                     .padding(.horizontal, 4)
                     .padding(.vertical, 4)
                 }
-                .frame(height: 110)
+                .frame(height: peopleGalleryHeight)
+
+                // Drag handle to resize the People gallery — the photos
+                // grow/shrink with the pane height, so this is also the
+                // size control. Mirrors the reference-faces-strip pattern.
+                Rectangle()
+                    .fill(Color(NSColor.separatorColor))
+                    .frame(height: 5)
+                    .contentShape(Rectangle())
+                    .onHover { inside in
+                        if inside { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
+                    }
+                    .gesture(
+                        DragGesture(minimumDistance: 1)
+                            .onChanged { value in
+                                peopleGalleryHeight = max(110, min(420, peopleGalleryHeight + value.translation.height))
+                            }
+                    )
+                    .help("Drag to resize the People gallery — photos scale to fit")
             }
         }
         .padding(.horizontal, 16)
-        .padding(.vertical, 10)
+        .padding(.top, 10)
+        .padding(.bottom, model.savedProfiles.isEmpty ? 10 : 0)
         .background(Color(NSColor.windowBackgroundColor))
         .alert("Delete Person", isPresented: Binding(
             get: { confirmDeleteProfile != nil },
@@ -887,6 +928,12 @@ struct PersonCard: View {
     let profile: POIProfile
     let isActive: Bool
     var justSaved: Bool = false
+    /// Image diameter — driven by the parent gallery's drag-resizable height.
+    var imageSize: CGFloat = 64
+    /// Card width — should accommodate the image plus a little breathing room.
+    var cardWidth: CGFloat = 80
+    /// Name label point size — scales with image size.
+    var nameFontSize: CGFloat = 13
 
     private var ringGradient: AngularGradient {
         AngularGradient(
@@ -911,13 +958,13 @@ struct PersonCard: View {
                         scale: profile.coverCropScale,
                         offset: CGSize(width: profile.coverCropOffsetX, height: profile.coverCropOffsetY)
                     )
-                    .frame(width: 64, height: 64)
+                    .frame(width: imageSize, height: imageSize)
                 } else {
                     Circle()
                         .fill(Color.accentColor.opacity(0.15))
-                        .frame(width: 64, height: 64)
+                        .frame(width: imageSize, height: imageSize)
                     Text(String(profile.name.prefix(1)).uppercased())
-                        .font(.system(size: 26, weight: .bold, design: .rounded))
+                        .font(.system(size: imageSize * 0.42, weight: .bold, design: .rounded))
                         .foregroundColor(.accentColor)
                 }
             }
@@ -927,7 +974,7 @@ struct PersonCard: View {
                         justSaved ? savedGradient
                             : isActive ? ringGradient
                             : AngularGradient(colors: [.clear], center: .center),
-                        lineWidth: (justSaved || isActive) ? 3.5 : 0
+                        lineWidth: (justSaved || isActive) ? max(3.5, imageSize * 0.045) : 0
                     )
                     .animation(.easeInOut(duration: 0.3), value: justSaved)
             )
@@ -938,18 +985,18 @@ struct PersonCard: View {
             HStack(spacing: 3) {
                 if justSaved {
                     Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 9))
+                        .font(.system(size: max(9, nameFontSize * 0.7)))
                         .foregroundColor(.green)
                         .transition(.scale.combined(with: .opacity))
                 }
                 Text(justSaved ? "Saved" : profile.name)
-                    .font(.system(size: 13, weight: isActive ? .bold : .medium))
+                    .font(.system(size: nameFontSize, weight: isActive ? .bold : .medium))
                     .lineLimit(1)
                     .foregroundColor(justSaved ? .green : isActive ? .blue : .primary)
             }
             .animation(.easeInOut(duration: 0.3), value: justSaved)
         }
-        .frame(width: 80)
+        .frame(width: cardWidth)
         .padding(.vertical, 4)
         .contentShape(Rectangle())
     }
