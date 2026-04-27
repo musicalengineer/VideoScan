@@ -249,6 +249,8 @@ final class VideoScanModel: ObservableObject {
     private static let savedTargetsKey = "VideoScan.scanTargetPaths"
     private static let savedDatesKey = "VideoScan.scanTargetDates"
     private static let savedPhasesKey = "VideoScan.scanTargetPhases"
+    private static let savedRolesKey = "VideoScan.scanTargetRoles"
+    private static let savedTrustKey = "VideoScan.scanTargetTrust"
 
     private let catalogStore = CatalogStore.shared
 
@@ -697,6 +699,8 @@ final class VideoScanModel: ObservableObject {
         let paths = UserDefaults.standard.stringArray(forKey: Self.savedTargetsKey) ?? []
         let dates = UserDefaults.standard.dictionary(forKey: Self.savedDatesKey) as? [String: Date] ?? [:]
         let phases = UserDefaults.standard.dictionary(forKey: Self.savedPhasesKey) as? [String: String] ?? [:]
+        let roles = UserDefaults.standard.dictionary(forKey: Self.savedRolesKey) as? [String: String] ?? [:]
+        let trusts = UserDefaults.standard.dictionary(forKey: Self.savedTrustKey) as? [String: String] ?? [:]
         for p in paths where !p.isEmpty {
             if !scanTargets.contains(where: { $0.searchPath == p }) {
                 let t = CatalogScanTarget(searchPath: p)
@@ -708,6 +712,12 @@ final class VideoScanModel: ObservableObject {
                         t.phase = .noCatalog
                     }
                 }
+                if let raw = roles[p], let role = VolumeRole(rawValue: raw) {
+                    t.role = role
+                }
+                if let raw = trusts[p], let trust = VolumeTrust(rawValue: raw) {
+                    t.trust = trust
+                }
                 scanTargets.append(t)
             }
         }
@@ -718,23 +728,41 @@ final class VideoScanModel: ObservableObject {
         UserDefaults.standard.set(paths, forKey: Self.savedTargetsKey)
     }
 
-    /// Save scan-completion dates and phases so they survive relaunch.
+    /// Save scan-completion dates, phases, roles, and trust so they survive relaunch.
     private func persistScanDates() {
         var dates: [String: Date] = [:]
         var phases: [String: String] = [:]
+        var roles: [String: String] = [:]
+        var trusts: [String: String] = [:]
         for t in scanTargets {
             if let d = t.lastScannedDate {
                 dates[t.searchPath] = d
             }
             phases[t.searchPath] = t.phase.rawValue
+            roles[t.searchPath] = t.role.rawValue
+            trusts[t.searchPath] = t.trust.rawValue
         }
         UserDefaults.standard.set(dates, forKey: Self.savedDatesKey)
         UserDefaults.standard.set(phases, forKey: Self.savedPhasesKey)
+        UserDefaults.standard.set(roles, forKey: Self.savedRolesKey)
+        UserDefaults.standard.set(trusts, forKey: Self.savedTrustKey)
     }
 
     /// Update a volume's lifecycle phase and persist.
     func setPhase(_ phase: VolumePhase, for target: CatalogScanTarget) {
         target.phase = phase
+        persistScanDates()
+        notifyTargetsChanged()
+    }
+
+    func setRole(_ role: VolumeRole, for target: CatalogScanTarget) {
+        target.role = role
+        persistScanDates()
+        notifyTargetsChanged()
+    }
+
+    func setTrust(_ trust: VolumeTrust, for target: CatalogScanTarget) {
+        target.trust = trust
         persistScanDates()
         notifyTargetsChanged()
     }
