@@ -672,6 +672,219 @@ final class VideoScanModel: ObservableObject {
         }
     }
 
+    // MARK: - Whole-shebang Bundle Import / Export
+    //
+    // The bundle format (see BundleExportImport.swift) wraps catalog +
+    // per-volume metadata + machine-portable PersonFinderSettings + the
+    // entire POI tree (profiles + reference photos) in a single
+    // `<name>.videoscanbundle/` directory. Goal: after pulling the latest
+    // code on the MBP and importing a bundle from the Mac Studio, the two
+    // machines look identical to the user.
+
+    /// UI entry point: show a save panel, write the bundle, summarize.
+    func exportBundleViaPanel() {
+        let panel = NSSavePanel()
+        panel.title = "Export Everything"
+        panel.message = "Save a VideoScan bundle containing the catalog, volume metadata, settings, and reference photos for every person."
+        panel.canCreateDirectories = true
+        panel.allowedContentTypes = [.directory]
+        let host = CatalogHost.currentName.replacingOccurrences(of: " ", with: "_")
+        let dateStr = ISO8601DateFormatter().string(from: Date()).prefix(10)
+        panel.nameFieldStringValue = "VideoScan_\(host)_\(dateStr).videoscanbundle"
+        guard panel.runModal() == .OK, var url = panel.url else { return }
+        // NSSavePanel can drop our extension if the user retypes the name.
+        if url.pathExtension != "videoscanbundle" {
+            url = url.appendingPathExtension("videoscanbundle")
+        }
+        do {
+            let summary = try BundleExporter.writeBundle(records: records,
+                                                         scanTargets: scanTargets,
+                                                         to: url)
+            let m = summary.manifest
+            log("Exported bundle to \(url.lastPathComponent) — " +
+                "\(m.counts.records) records, \(m.counts.volumes) volumes, " +
+                "\(m.counts.people) people, \(m.counts.referencePhotos) photos, " +
+                "\(BundleSize.human(m.sizes.totalBytes)).")
+            let alert = NSAlert()
+            alert.messageText = "Exported Everything"
+            alert.informativeText = """
+            Saved \(url.lastPathComponent)
+
+            • \(m.counts.records) catalog record(s)
+            • \(m.counts.volumes) volume(s)
+            • \(m.counts.people) person profile(s) with \(m.counts.referencePhotos) reference photo(s)
+            • Total size: \(BundleSize.human(m.sizes.totalBytes)) (photos: \(BundleSize.human(m.sizes.referencePhotoBytes)))
+            """
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        } catch {
+            log("Bundle export failed: \(error.localizedDescription)")
+            Self.showErrorAlert(title: "Export Failed", message: error.localizedDescription)
+        }
+    }
+
+    /// UI entry point: show an open panel, parse the bundle, ask for
+    /// confirmation, then merge into live state.
+    func importBundleViaPanel() {
+        let panel = NSOpenPanel()
+        panel.title = "Import Everything"
+        panel.message = "Choose a .videoscanbundle directory from another Mac."
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            let payload = try BundleImporter.read(from: url)
+            // Confirmation dialog — bundles can be sizeable and this
+            // overwrites POI folders, so make the user opt in deliberately.
+            let confirm = NSAlert()
+            confirm.messageText = "Import Everything from this Bundle?"
+            confirm.informativeText = """
+            From: \(payload.manifest.exportedFromHost) on \(Self.shortDate(payload.manifest.exportedAt))
+            App: v\(payload.manifest.appVersion) build \(payload.manifest.appBuild)
+
+            • \(payload.manifest.counts.records) catalog record(s)
+            • \(payload.manifest.counts.volumes) volume(s) of metadata
+            • \(payload.manifest.counts.people) person profile(s) (\(payload.manifest.counts.referencePhotos) photo(s))
+
+            Catalog records merge by content identity (no duplicates). \
+            Volume metadata for matching paths is overwritten. \
+            Person profiles with the same name are overwritten. \
+            Reference photos are copied into your local POI folder.
+            """
+            confirm.addButton(withTitle: "Import")
+            confirm.addButton(withTitle: "Cancel")
+            guard confirm.runModal() == .alertFirstButtonReturn else {
+                log("Bundle import canceled.")
+                return
+            }
+
+            let result = applyBundlePayload(payload)
+            log("Imported bundle from \(payload.manifest.exportedFromHost): " +
+                "\(result.recordsAdded) new records, \(result.recordsSkipped) duplicates skipped, " +
+                "\(result.volumesUpdated) volume(s) updated, \(result.volumesAdded) added, " +
+                "\(result.peopleInstalled) person profile(s) installed.")
+            let done = NSAlert()
+            done.messageText = "Bundle Imported"
+            done.informativeText = """
+            From \(payload.manifest.exportedFromHost):
+            • \(result.recordsAdded) new catalog record(s) (skipped \(result.recordsSkipped) already here)
+            • \(result.volumesUpdated) volume(s) updated, \(result.volumesAdded) new volume(s) added
+            • \(result.peopleInstalled) person profile(s) installed
+
+            Person Finder settings will take effect after relaunching VideoScan.
+            """
+            done.addButton(withTitle: "OK")
+            done.runModal()
+        } catch {
+            log("Bundle import failed: \(error.localizedDescription)")
+            Self.showErrorAlert(title: "Import Failed", message: error.localizedDescription)
+        }
+    }
+
+    struct BundleImportResult {
+        var recordsAdded: Int
+        var recordsSkipped: Int
+        var volumesUpdated: Int
+        var volumesAdded: Int
+        var peopleInstalled: Int
+    }
+
+    /// Merge a parsed bundle payload into live model state. Pure function
+    /// over the model — separated from `importBundleViaPanel` so tests
+    /// could call it directly.
+    @discardableResult
+    func applyBundlePayload(_ payload: BundleImporter.Payload) -> BundleImportResult {
+        // Catalog — seed identity set from existing records, dedup on insert.
+        var seen = Set<String>()
+        for rec in records {
+            if let key = Self.identityKey(for: rec) { seen.insert(key) }
+        }
+        let effectiveHost = payload.catalog.savedFromHost.isEmpty
+            ? payload.manifest.exportedFromHost
+            : payload.catalog.savedFromHost
+        var added = 0
+        var skipped = 0
+        for rec in payload.catalog.records {
+            if let key = Self.identityKey(for: rec), seen.contains(key) {
+                skipped += 1
+                continue
+            }
+            if rec.sourceHost.isEmpty {
+                rec.sourceHost = effectiveHost
+            }
+            records.append(rec)
+            if let key = Self.identityKey(for: rec) { seen.insert(key) }
+            added += 1
+        }
+
+        // Volumes — overwrite metadata on path match; add as offline target
+        // when the path isn't present locally so the volume shows up in the
+        // sidebar (grayed out until the drive is connected on this Mac).
+        var updated = 0
+        var addedVolumes = 0
+        for snap in payload.volumes.volumes {
+            if let existing = scanTargets.first(where: { $0.searchPath == snap.searchPath }) {
+                applyVolumeSnapshot(snap, to: existing)
+                updated += 1
+            } else {
+                let t = CatalogScanTarget(searchPath: snap.searchPath)
+                applyVolumeSnapshot(snap, to: t)
+                scanTargets.append(t)
+                addedVolumes += 1
+            }
+        }
+        if updated > 0 || addedVolumes > 0 {
+            persistScanTargets()
+            persistScanDates()
+            notifyTargetsChanged()
+        }
+
+        // Settings — merge portable fields onto current settings, save back.
+        var current = PersonFinderSettings.restored()
+        payload.settings.apply(to: &current)
+        current.save()
+
+        // POIs — copy folders into POIStorage.storeDir, overwriting any
+        // same-named folder. Failures here are logged but don't roll back
+        // the catalog/volumes/settings work above.
+        var installed = 0
+        do {
+            installed = try BundleImporter.installPOIs(from: payload.poiFoldersInBundle)
+        } catch {
+            log("POI install warning: \(error.localizedDescription)")
+        }
+
+        saveCatalogNow()
+        return BundleImportResult(
+            recordsAdded: added,
+            recordsSkipped: skipped,
+            volumesUpdated: updated,
+            volumesAdded: addedVolumes,
+            peopleInstalled: installed
+        )
+    }
+
+    private func applyVolumeSnapshot(_ s: VolumeMetadataSnapshot, to t: CatalogScanTarget) {
+        if let phase = VolumePhase(rawValue: s.phase) { t.phase = phase }
+        if let role = VolumeRole(rawValue: s.role) { t.role = role }
+        if let trust = VolumeTrust(rawValue: s.trust) { t.trust = trust }
+        if let tech = VolumeMediaTech(rawValue: s.mediaTech) { t.mediaTech = tech }
+        t.filesystem = s.filesystem
+        t.purchaseYear = s.purchaseYear
+        t.capacityTB = s.capacityTB
+        t.notes = s.notes
+        if let d = s.lastScannedDate { t.lastScannedDate = d }
+    }
+
+    private static func shortDate(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        return f.string(from: d)
+    }
+
     /// Delete all catalog records across all volumes.
     func deleteAllCatalog() {
         // Reset all target state BEFORE touching records
