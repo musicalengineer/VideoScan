@@ -2,98 +2,223 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>VideoScan — Code-health dashboard</title>
+<title>VideoScan — Code Health Dashboard</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-
-<!-- Chart.js from jsdelivr (pinned major). No build step, no NPM. -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
   :root {
-    --bg: #0e1116;
-    --panel: #151a21;
-    --border: #2a2f38;
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel-hover: #1c2230;
+    --border: #30363d;
     --fg: #e6edf3;
     --muted: #8b949e;
     --accent: #58a6ff;
-    --good: #56d364;
-    --warn: #e3b341;
-    --bad:  #f85149;
+    --accent-dim: #58a6ff22;
+    --good: #3fb950;
+    --good-dim: #3fb95022;
+    --warn: #d29922;
+    --warn-dim: #d2992222;
+    --bad: #f85149;
+    --bad-dim: #f8514922;
+    --purple: #bc8cff;
+    --purple-dim: #bc8cff22;
+    --radius: 12px;
   }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0; padding: 24px;
-    background: var(--bg); color: var(--fg);
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
-  }
-  h1 { margin: 0 0 4px 0; font-size: 22px; }
-  .sub { color: var(--muted); margin-bottom: 24px; font-size: 13px; }
-  .sub a { color: var(--accent); }
 
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    padding: 32px;
+    min-height: 100vh;
+  }
+
+  /* Header */
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 8px;
+  }
+  .header svg { flex-shrink: 0; }
+  .header h1 {
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    background: linear-gradient(135deg, var(--accent), var(--purple));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .subtitle {
+    color: var(--muted);
+    font-size: 14px;
+    margin-bottom: 28px;
+    line-height: 1.5;
+  }
+  .subtitle a { color: var(--accent); text-decoration: none; }
+  .subtitle a:hover { text-decoration: underline; }
+
+  #status {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 20px;
+    padding: 8px 12px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    display: inline-block;
+  }
+  #status.error {
+    color: var(--bad);
+    border-color: var(--bad);
+    background: var(--bad-dim);
+  }
+
+  /* Summary cards */
   .cards {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-    gap: 12px; margin-bottom: 24px;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 14px;
+    margin-bottom: 28px;
   }
   .card {
-    background: var(--panel); border: 1px solid var(--border);
-    border-radius: 8px; padding: 14px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 18px;
+    transition: border-color 0.15s, background 0.15s;
+    position: relative;
+    overflow: hidden;
   }
-  .card .label { font-size: 11px; text-transform: uppercase; color: var(--muted); letter-spacing: .5px; }
-  .card .value { font-size: 22px; font-weight: 600; margin-top: 4px; font-variant-numeric: tabular-nums; }
-  .card .delta { font-size: 12px; margin-top: 2px; color: var(--muted); }
+  .card:hover {
+    border-color: var(--accent);
+    background: var(--panel-hover);
+  }
+  .card .indicator {
+    position: absolute;
+    top: 0; left: 0;
+    width: 4px;
+    height: 100%;
+    border-radius: 4px 0 0 4px;
+  }
+  .card .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--muted);
+    letter-spacing: 0.8px;
+    font-weight: 500;
+    margin-left: 8px;
+  }
+  .card .value {
+    font-size: 28px;
+    font-weight: 700;
+    margin-top: 6px;
+    font-variant-numeric: tabular-nums;
+    margin-left: 8px;
+  }
+  .card .delta {
+    font-size: 12px;
+    margin-top: 4px;
+    color: var(--muted);
+    font-weight: 500;
+    margin-left: 8px;
+  }
   .delta.up-good   { color: var(--good); }
-  .delta.up-bad    { color: var(--bad);  }
+  .delta.up-bad    { color: var(--bad); }
   .delta.down-good { color: var(--good); }
-  .delta.down-bad  { color: var(--bad);  }
+  .delta.down-bad  { color: var(--bad); }
 
+  /* Chart grid */
   .charts {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(460px, 1fr));
     gap: 16px;
   }
   .chart-box {
-    background: var(--panel); border: 1px solid var(--border);
-    border-radius: 8px; padding: 14px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px;
+    transition: border-color 0.15s;
   }
-  .chart-box h2 { margin: 0 0 8px 0; font-size: 14px; font-weight: 500; color: var(--muted); }
-  canvas { width: 100% !important; height: 220px !important; }
+  .chart-box:hover { border-color: var(--muted); }
+  .chart-box h2 {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 12px;
+  }
+  canvas { width: 100% !important; height: 240px !important; }
 
-  #status { color: var(--muted); font-size: 12px; margin: 12px 0 20px; }
-  #status.error { color: var(--bad); }
+  /* Footer */
+  .footer {
+    margin-top: 32px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .footer a { color: var(--accent); text-decoration: none; }
+
+  /* Responsive */
+  @media (max-width: 520px) {
+    body { padding: 16px; }
+    .cards { grid-template-columns: repeat(2, 1fr); }
+    .charts { grid-template-columns: 1fr; }
+    .header h1 { font-size: 22px; }
+  }
 </style>
 </head>
 <body>
 
-<h1>VideoScan — code-health trend</h1>
-<div class="sub">
-  Local dashboard. Run <code>scripts/dashboard.sh</code> to fetch the latest
-  CI metrics from the private <code>metrics</code> branch and open this page.
+<div class="header">
+  <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
+    <rect width="36" height="36" rx="8" fill="#58a6ff" fill-opacity="0.15"/>
+    <path d="M10 18L15 23L26 12" stroke="#58a6ff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+  <h1>VideoScan</h1>
 </div>
 
-<div id="status">Loading metrics…</div>
+<div class="subtitle">
+  Code health dashboard &mdash; tracking coverage, lint, complexity, and test count over time.<br>
+  <a href="https://github.com/musicalengineer/VideoScan">musicalengineer/VideoScan</a>
+</div>
 
-<!-- Latest-value cards at top -->
+<div id="status">Loading metrics&hellip;</div>
+
+<!-- Summary cards -->
 <div class="cards" id="cards"></div>
 
-<!-- Time-series charts -->
+<!-- Trend charts -->
 <div class="charts">
-  <div class="chart-box"><h2>Logic-only coverage %</h2><canvas id="chart-coverage"></canvas></div>
-  <div class="chart-box"><h2>SwiftLint — warnings + errors</h2><canvas id="chart-swiftlint"></canvas></div>
-  <div class="chart-box"><h2>Periphery — unused-code findings</h2><canvas id="chart-periphery"></canvas></div>
-  <div class="chart-box"><h2>Total Swift LOC</h2><canvas id="chart-loc"></canvas></div>
-  <div class="chart-box"><h2>Files over 1000 lines</h2><canvas id="chart-fat-files"></canvas></div>
-  <div class="chart-box"><h2>Test count</h2><canvas id="chart-tests"></canvas></div>
+  <div class="chart-box"><h2>Logic-Only Coverage %</h2><canvas id="chart-coverage"></canvas></div>
+  <div class="chart-box"><h2>SwiftLint Warnings + Errors</h2><canvas id="chart-swiftlint"></canvas></div>
+  <div class="chart-box"><h2>Periphery — Unused Code</h2><canvas id="chart-periphery"></canvas></div>
+  <div class="chart-box"><h2>Total Swift Lines of Code</h2><canvas id="chart-loc"></canvas></div>
+  <div class="chart-box"><h2>Files Over 1,000 Lines</h2><canvas id="chart-fat-files"></canvas></div>
+  <div class="chart-box"><h2>Test Count</h2><canvas id="chart-tests"></canvas></div>
+</div>
+
+<div class="footer">
+  Data collected by CI on each push to <code>main</code>.
+  Run <code>scripts/collect_metrics.sh</code> locally to add a data point.
+  &bull; <a href="https://github.com/musicalengineer/VideoScan">Source</a>
 </div>
 
 <script>
-// ------ config ---------------------------------------------------------
-// Local mode: scripts/dashboard.sh pulls the latest history.jsonl from
-// the `metrics` branch and drops it beside this file. Cache-busted via
-// ?t=now so reloads always see the newest copy.
-const URL = `./history.jsonl?t=${Date.now()}`;
+// Try GitHub raw URL first (works on Pages), fall back to local file
+const GITHUB_RAW = "https://raw.githubusercontent.com/musicalengineer/VideoScan/metrics/metrics/history.jsonl";
+const LOCAL_FILE = `./history.jsonl?t=${Date.now()}`;
 
-// ------ helpers --------------------------------------------------------
 const $status = document.getElementById("status");
 function fail(msg) { $status.classList.add("error"); $status.textContent = msg; }
 
@@ -101,135 +226,214 @@ function parseJsonl(text) {
   return text.split("\n")
     .map(l => l.trim())
     .filter(l => l.length > 0)
-    .map(l => { try { return JSON.parse(l); } catch (e) { return null; } })
+    .map(l => { try { return JSON.parse(l); } catch { return null; } })
     .filter(r => r !== null);
 }
 
-// Color matching by "is lower better?" rule.
 function deltaClass(older, newer, lowerIsBetter) {
   if (older == null || newer == null || older === newer) return "";
   const rising = newer > older;
   if (lowerIsBetter) return rising ? "up-bad" : "down-good";
   return rising ? "up-good" : "down-bad";
 }
+
 function fmtDelta(older, newer) {
   if (older == null || newer == null) return "";
   const d = newer - older;
   if (d === 0) return "unchanged";
   const sign = d > 0 ? "+" : "";
-  return `${sign}${Number.isInteger(d) ? d : d.toFixed(2)} vs prev`;
+  const val = Number.isInteger(d) ? d : d.toFixed(2);
+  return `${sign}${val} from previous`;
 }
 
-function card(label, value, older, newer, lowerIsBetter) {
+function card(label, value, older, newer, lowerIsBetter, indicatorColor) {
   const el = document.createElement("div");
   el.className = "card";
   el.innerHTML = `
+    <div class="indicator" style="background: ${indicatorColor || 'var(--accent)'}"></div>
     <div class="label">${label}</div>
-    <div class="value">${value == null ? "—" : value}</div>
+    <div class="value">${value == null ? "&mdash;" : value}</div>
     <div class="delta ${deltaClass(older, newer, lowerIsBetter)}">${fmtDelta(older, newer)}</div>
   `;
   return el;
 }
 
-// Shared chart options tuned for dark mode.
-const chartOpts = {
+const chartDefaults = {
   responsive: true,
   maintainAspectRatio: false,
+  interaction: { mode: "index", intersect: false },
   plugins: {
     legend: { display: false },
-    tooltip: { mode: "index", intersect: false },
+    tooltip: {
+      backgroundColor: "#161b22",
+      borderColor: "#30363d",
+      borderWidth: 1,
+      titleColor: "#e6edf3",
+      bodyColor: "#8b949e",
+      padding: 10,
+      cornerRadius: 8,
+      displayColors: true,
+    },
   },
   scales: {
-    x: { ticks: { color: "#8b949e", maxRotation: 0, autoSkipPadding: 20 },
-         grid:  { color: "#2a2f38" } },
-    y: { ticks: { color: "#8b949e" }, grid: { color: "#2a2f38" }, beginAtZero: true },
+    x: {
+      ticks: { color: "#8b949e", maxRotation: 0, autoSkipPadding: 24, font: { size: 11 } },
+      grid: { color: "#21262d", drawBorder: false },
+    },
+    y: {
+      ticks: { color: "#8b949e", font: { size: 11 } },
+      grid: { color: "#21262d", drawBorder: false },
+      beginAtZero: true,
+    },
   },
-  elements: { point: { radius: 2 }, line: { borderWidth: 2, tension: 0.1 } },
+  elements: {
+    point: { radius: 3, hoverRadius: 6, borderWidth: 2, backgroundColor: "#0d1117" },
+    line: { borderWidth: 2.5, tension: 0.3 },
+  },
 };
 
 function drawLine(canvasId, labels, datasets) {
   new Chart(document.getElementById(canvasId), {
     type: "line",
     data: { labels, datasets },
-    options: chartOpts,
+    options: chartDefaults,
   });
 }
 
-// ------ main -----------------------------------------------------------
-fetch(URL)
-  .then(r => {
-    if (!r.ok) throw new Error(`HTTP ${r.status} fetching ${URL}`);
-    return r.text();
-  })
-  .then(text => {
-    const rows = parseJsonl(text);
-    if (rows.length === 0) {
-      fail("No metrics data yet — waiting for first CI run to populate the metrics branch.");
-      return;
-    }
+async function loadData() {
+  let text;
+  try {
+    const resp = await fetch(GITHUB_RAW);
+    if (resp.ok) text = await resp.text();
+  } catch {}
+  if (!text) {
+    try {
+      const resp = await fetch(LOCAL_FILE);
+      if (resp.ok) text = await resp.text();
+    } catch {}
+  }
+  if (!text) {
+    fail("No metrics data available. Push to main or run scripts/collect_metrics.sh locally.");
+    return;
+  }
 
-    // Newest last. ISO timestamps sort lexicographically, so the file
-    // is already time-ordered if CI only appends. Guard anyway.
-    rows.sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
+  const rows = parseJsonl(text);
+  if (rows.length === 0) {
+    fail("Metrics file exists but contains no valid data.");
+    return;
+  }
 
-    const last = rows[rows.length - 1];
-    const prev = rows.length > 1 ? rows[rows.length - 2] : {};
-    $status.textContent = `${rows.length} data point${rows.length === 1 ? "" : "s"}, last update ${last.ts} (sha ${last.sha})`;
+  rows.sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
 
-    // --- latest-value cards ---
-    const cardsEl = document.getElementById("cards");
-    cardsEl.appendChild(card("Logic coverage",
-      last.coverage_logic_pct != null ? last.coverage_logic_pct.toFixed(2) + "%" : "—",
-      prev.coverage_logic_pct, last.coverage_logic_pct, /*lowerIsBetter*/ false));
-    cardsEl.appendChild(card("SwiftLint warnings",
-      last.swiftlint_warnings, prev.swiftlint_warnings, last.swiftlint_warnings, true));
-    cardsEl.appendChild(card("SwiftLint errors",
-      last.swiftlint_errors, prev.swiftlint_errors, last.swiftlint_errors, true));
-    cardsEl.appendChild(card("Periphery findings",
-      last.periphery_findings, prev.periphery_findings, last.periphery_findings, true));
-    cardsEl.appendChild(card("Total Swift LOC",
-      last.total_swift_lines, prev.total_swift_lines, last.total_swift_lines, false));
-    cardsEl.appendChild(card("Test count",
-      last.test_count, prev.test_count, last.test_count, false));
-    cardsEl.appendChild(card("Files > 1000 lines",
-      last.files_over_1000, prev.files_over_1000, last.files_over_1000, true));
-    cardsEl.appendChild(card("Worst file", last.worst_file, null, null, false));
+  const last = rows[rows.length - 1];
+  const prev = rows.length > 1 ? rows[rows.length - 2] : {};
 
-    // --- charts ---
-    const labels   = rows.map(r => (r.ts || "").slice(5, 16).replace("T", " "));
-    const col = (key) => rows.map(r => r[key]);
+  const date = last.ts ? new Date(last.ts).toLocaleDateString("en-US", {
+    month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit"
+  }) : "unknown";
+  $status.textContent = `${rows.length} data points \u2022 last update: ${date} \u2022 ${last.sha}`;
 
-    drawLine("chart-coverage", labels, [
-      { label: "coverage %", data: col("coverage_logic_pct"),
-        borderColor: "#56d364", backgroundColor: "#56d36433", fill: true },
-    ]);
-    drawLine("chart-swiftlint", labels, [
-      { label: "warnings", data: col("swiftlint_warnings"),
-        borderColor: "#e3b341", backgroundColor: "#e3b34133", fill: true },
-      { label: "errors",   data: col("swiftlint_errors"),
-        borderColor: "#f85149", backgroundColor: "#f8514933", fill: true },
-    ]);
-    drawLine("chart-periphery", labels, [
-      { label: "findings", data: col("periphery_findings"),
-        borderColor: "#58a6ff", backgroundColor: "#58a6ff33", fill: true },
-    ]);
-    drawLine("chart-loc", labels, [
-      { label: "total LOC", data: col("total_swift_lines"),
-        borderColor: "#8b949e", backgroundColor: "#8b949e33", fill: true },
-    ]);
-    drawLine("chart-fat-files", labels, [
-      { label: "files > 1000", data: col("files_over_1000"),
-        borderColor: "#f85149", backgroundColor: "#f8514933", fill: true },
-    ]);
-    drawLine("chart-tests", labels, [
-      { label: "test count", data: col("test_count"),
-        borderColor: "#56d364", backgroundColor: "#56d36433", fill: true },
-    ]);
-  })
-  .catch(err => {
-    fail(`Failed to load metrics: ${err.message}. If this is the first deploy, run CI once to populate the metrics branch.`);
-    console.error(err);
+  // Cards
+  const cardsEl = document.getElementById("cards");
+  cardsEl.appendChild(card("Logic Coverage",
+    last.coverage_logic_pct != null ? last.coverage_logic_pct.toFixed(1) + "%" : "\u2014",
+    prev.coverage_logic_pct, last.coverage_logic_pct, false, "var(--good)"));
+  cardsEl.appendChild(card("Lint Warnings",
+    last.swiftlint_warnings, prev.swiftlint_warnings, last.swiftlint_warnings, true, "var(--warn)"));
+  cardsEl.appendChild(card("Lint Errors",
+    last.swiftlint_errors, prev.swiftlint_errors, last.swiftlint_errors, true, "var(--bad)"));
+  cardsEl.appendChild(card("Unused Code",
+    last.periphery_findings, prev.periphery_findings, last.periphery_findings, true, "var(--accent)"));
+  cardsEl.appendChild(card("Swift LOC",
+    last.total_swift_lines?.toLocaleString(), prev.total_swift_lines, last.total_swift_lines, false, "var(--muted)"));
+  cardsEl.appendChild(card("Tests",
+    last.test_count, prev.test_count, last.test_count, false, "var(--good)"));
+  cardsEl.appendChild(card("Files > 1K Lines",
+    last.files_over_1000, prev.files_over_1000, last.files_over_1000, true, "var(--bad)"));
+  cardsEl.appendChild(card("Largest File",
+    last.worst_file || "\u2014", null, null, false, "var(--purple)"));
+
+  // Charts
+  const labels = rows.map(r => {
+    if (!r.ts) return "";
+    const d = new Date(r.ts);
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
   });
+  const col = key => rows.map(r => r[key]);
+
+  drawLine("chart-coverage", labels, [{
+    label: "coverage %",
+    data: col("coverage_logic_pct"),
+    borderColor: "#3fb950",
+    backgroundColor: "#3fb95018",
+    fill: true,
+    pointBackgroundColor: "#0d1117",
+    pointBorderColor: "#3fb950",
+  }]);
+
+  drawLine("chart-swiftlint", labels, [
+    {
+      label: "warnings",
+      data: col("swiftlint_warnings"),
+      borderColor: "#d29922",
+      backgroundColor: "#d2992218",
+      fill: true,
+      pointBackgroundColor: "#0d1117",
+      pointBorderColor: "#d29922",
+    },
+    {
+      label: "errors",
+      data: col("swiftlint_errors"),
+      borderColor: "#f85149",
+      backgroundColor: "#f8514918",
+      fill: true,
+      pointBackgroundColor: "#0d1117",
+      pointBorderColor: "#f85149",
+    },
+  ]);
+
+  drawLine("chart-periphery", labels, [{
+    label: "findings",
+    data: col("periphery_findings"),
+    borderColor: "#58a6ff",
+    backgroundColor: "#58a6ff18",
+    fill: true,
+    pointBackgroundColor: "#0d1117",
+    pointBorderColor: "#58a6ff",
+  }]);
+
+  drawLine("chart-loc", labels, [{
+    label: "total LOC",
+    data: col("total_swift_lines"),
+    borderColor: "#8b949e",
+    backgroundColor: "#8b949e18",
+    fill: true,
+    pointBackgroundColor: "#0d1117",
+    pointBorderColor: "#8b949e",
+  }]);
+
+  drawLine("chart-fat-files", labels, [{
+    label: "files > 1000",
+    data: col("files_over_1000"),
+    borderColor: "#f85149",
+    backgroundColor: "#f8514918",
+    fill: true,
+    pointBackgroundColor: "#0d1117",
+    pointBorderColor: "#f85149",
+  }]);
+
+  drawLine("chart-tests", labels, [{
+    label: "test count",
+    data: col("test_count"),
+    borderColor: "#3fb950",
+    backgroundColor: "#3fb95018",
+    fill: true,
+    pointBackgroundColor: "#0d1117",
+    pointBorderColor: "#3fb950",
+  }]);
+}
+
+loadData();
 </script>
 </body>
 </html>
