@@ -203,6 +203,14 @@ struct VideoScanApp: App {
         }
         .windowResizability(.contentMinSize)
         .defaultPosition(.center)
+
+        Window("Volumes", id: "volumes") {
+            VolumesWindow()
+                .environmentObject(catalogModel)
+        }
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 820, height: 560)
+        .defaultPosition(.center)
     }
 }
 
@@ -247,6 +255,11 @@ struct WindowMenuItems: View {
             openWindow(id: "combine")
         }
         .keyboardShortcut("r", modifiers: [.command, .shift])
+
+        Button("Volumes") {
+            openWindow(id: "volumes")
+        }
+        .keyboardShortcut("v", modifiers: [.command, .shift])
     }
 }
 

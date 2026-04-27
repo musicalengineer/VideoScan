@@ -664,6 +664,8 @@ struct VolumeCompareSheet: View {
             // Header
             HStack {
                 Text("Volume").bold().frame(maxWidth: .infinity, alignment: .leading)
+                Text("Role / Policy").bold().frame(width: 200, alignment: .leading)
+                    .help("Declared role + computed destination policy. Forbidden = RAID-0 / unreliable; discouraged = aging / offline.")
                 Text("Source").bold().frame(width: 70, alignment: .center)
                     .help("Check for files that need backing up")
                 Text("Dest").bold().frame(width: 70, alignment: .center)
@@ -681,12 +683,24 @@ struct VolumeCompareSheet: View {
                             Text(v.label)
                                 .lineLimit(1)
                                 .frame(maxWidth: .infinity, alignment: .leading)
+                            HStack(spacing: 6) {
+                                if let target = model.scanTargets.first(where: { $0.searchPath == v.path }) {
+                                    ObservedVolumeBadge(target: target)
+                                    PolicyBadge(policy: target.destinationPolicy)
+                                } else {
+                                    Text("—").font(.caption).foregroundColor(.secondary)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                            .frame(width: 200, alignment: .leading)
                             Toggle("", isOn: sourceBinding(for: v.path))
                                 .labelsHidden()
                                 .frame(width: 70, alignment: .center)
                             Toggle("", isOn: destBinding(for: v.path))
                                 .labelsHidden()
                                 .frame(width: 70, alignment: .center)
+                                .disabled(destDisabled(for: v.path))
+                                .help(destDisabledReason(for: v.path) ?? "")
                         }
                         .padding(.vertical, 2)
                     }
@@ -730,6 +744,33 @@ struct VolumeCompareSheet: View {
                 }
             }
         )
+    }
+
+    /// Forbidden policies (RAID-0, unreliable drives) block destination selection
+    /// to prevent a Compare-and-rescue from being told to copy *to* a fragile or
+    /// untrusted drive. The user can lift the block by re-classifying the volume
+    /// in the Volumes window.
+    private func destDisabled(for path: String) -> Bool {
+        guard let target = model.scanTargets.first(where: { $0.searchPath == path }) else {
+            return false
+        }
+        return target.destinationPolicy == .forbidden
+    }
+
+    private func destDisabledReason(for path: String) -> String? {
+        guard let target = model.scanTargets.first(where: { $0.searchPath == path }) else {
+            return nil
+        }
+        switch target.destinationPolicy {
+        case .forbidden:
+            if target.mediaTech.isFragile { return "Forbidden: \(target.mediaTech.rawValue) is a fragile destination (no redundancy)." }
+            if target.trust == .unreliable { return "Forbidden: this volume is marked Unreliable." }
+            return "Forbidden destination — change role/trust in Volumes window to enable."
+        case .discouraged:
+            return "Discouraged — verify role and reliability in Volumes window before relying on this destination."
+        case .acceptable, .preferred:
+            return nil
+        }
     }
 
     private func destBinding(for path: String) -> Binding<Bool> {

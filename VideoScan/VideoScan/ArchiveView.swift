@@ -120,14 +120,16 @@ struct ArchiveView: View {
         .buttonStyle(.plain)
     }
 
+    @Environment(\.openWindow) private var openWindow
+
     private func volumeRoleRow(_ target: CatalogScanTarget) -> some View {
         let name = VolumeReachability.volumeName(forPath: target.searchPath)
         let fileCount = model.records.filter { $0.fullPath.hasPrefix(target.searchPath) }.count
 
         return HStack(spacing: 6) {
-            Circle()
-                .fill(target.isReachable ? target.role.color : Color.secondary.opacity(0.3))
-                .frame(width: 8, height: 8)
+            VolumeBadge(role: target.role,
+                        trust: target.trust,
+                        isReachable: target.isReachable)
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
                     Text(name)
@@ -141,17 +143,11 @@ struct ArchiveView: View {
                     }
                 }
                 HStack(spacing: 4) {
-                    Text(target.role.shortLabel)
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundColor(target.role.color)
-                    if target.trust != .unknown {
-                        Image(systemName: target.trust.icon)
-                            .font(.system(size: 8))
-                            .foregroundColor(target.trust.color)
-                    }
                     Text("\(fileCount)")
                         .font(.system(size: 9, design: .monospaced))
                         .foregroundColor(.secondary)
+                    PolicyBadge(policy: target.destinationPolicy)
+                        .scaleEffect(0.75, anchor: .leading)
                 }
             }
             Spacer()
@@ -159,7 +155,16 @@ struct ArchiveView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            model.pendingVolumesSelectionID = target.id
+            openWindow(id: "volumes")
+        }
         .contextMenu {
+            Button("Edit Volume…") {
+                model.pendingVolumesSelectionID = target.id
+                openWindow(id: "volumes")
+            }
+            Divider()
             Menu("Role") {
                 ForEach(VolumeRole.allCases, id: \.self) { role in
                     Button {

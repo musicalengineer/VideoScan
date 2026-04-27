@@ -158,6 +158,11 @@ final class VideoScanModel: ObservableObject {
     @Published var duplicateStatus: String = ""
     @Published var avidBinResults: [AvbBinResult] = []
     @Published var scanTargets: [CatalogScanTarget] = []
+    /// Set by other views to ask the Volumes window to open with a specific
+    /// volume pre-selected. The window consumes and clears this on appear /
+    /// change. Lets the Archive sidebar (and future badges elsewhere) deep-
+    /// link into the editor without a separate routing layer.
+    @Published var pendingVolumesSelectionID: UUID?
     @Published var outputCSVPath: String = ""
     @Published var previewImage: NSImage?
     @Published var previewFilename: String = ""
@@ -251,6 +256,11 @@ final class VideoScanModel: ObservableObject {
     private static let savedPhasesKey = "VideoScan.scanTargetPhases"
     private static let savedRolesKey = "VideoScan.scanTargetRoles"
     private static let savedTrustKey = "VideoScan.scanTargetTrust"
+    private static let savedFilesystemKey = "VideoScan.scanTargetFilesystems"
+    private static let savedMediaTechKey = "VideoScan.scanTargetMediaTechs"
+    private static let savedPurchaseYearKey = "VideoScan.scanTargetPurchaseYears"
+    private static let savedCapacityKey = "VideoScan.scanTargetCapacities"
+    private static let savedNotesKey = "VideoScan.scanTargetNotes"
 
     private let catalogStore = CatalogStore.shared
 
@@ -701,6 +711,11 @@ final class VideoScanModel: ObservableObject {
         let phases = UserDefaults.standard.dictionary(forKey: Self.savedPhasesKey) as? [String: String] ?? [:]
         let roles = UserDefaults.standard.dictionary(forKey: Self.savedRolesKey) as? [String: String] ?? [:]
         let trusts = UserDefaults.standard.dictionary(forKey: Self.savedTrustKey) as? [String: String] ?? [:]
+        let filesystems = UserDefaults.standard.dictionary(forKey: Self.savedFilesystemKey) as? [String: String] ?? [:]
+        let mediaTechs = UserDefaults.standard.dictionary(forKey: Self.savedMediaTechKey) as? [String: String] ?? [:]
+        let purchaseYears = UserDefaults.standard.dictionary(forKey: Self.savedPurchaseYearKey) as? [String: Int] ?? [:]
+        let capacities = UserDefaults.standard.dictionary(forKey: Self.savedCapacityKey) as? [String: Double] ?? [:]
+        let notes = UserDefaults.standard.dictionary(forKey: Self.savedNotesKey) as? [String: String] ?? [:]
         for p in paths where !p.isEmpty {
             if !scanTargets.contains(where: { $0.searchPath == p }) {
                 let t = CatalogScanTarget(searchPath: p)
@@ -718,6 +733,13 @@ final class VideoScanModel: ObservableObject {
                 if let raw = trusts[p], let trust = VolumeTrust(rawValue: raw) {
                     t.trust = trust
                 }
+                t.filesystem = filesystems[p] ?? ""
+                if let raw = mediaTechs[p], let tech = VolumeMediaTech(rawValue: raw) {
+                    t.mediaTech = tech
+                }
+                t.purchaseYear = purchaseYears[p]
+                t.capacityTB = capacities[p]
+                t.notes = notes[p] ?? ""
                 scanTargets.append(t)
             }
         }
@@ -728,12 +750,17 @@ final class VideoScanModel: ObservableObject {
         UserDefaults.standard.set(paths, forKey: Self.savedTargetsKey)
     }
 
-    /// Save scan-completion dates, phases, roles, and trust so they survive relaunch.
+    /// Save all per-volume metadata so it survives relaunch.
     private func persistScanDates() {
         var dates: [String: Date] = [:]
         var phases: [String: String] = [:]
         var roles: [String: String] = [:]
         var trusts: [String: String] = [:]
+        var filesystems: [String: String] = [:]
+        var mediaTechs: [String: String] = [:]
+        var purchaseYears: [String: Int] = [:]
+        var capacities: [String: Double] = [:]
+        var notesMap: [String: String] = [:]
         for t in scanTargets {
             if let d = t.lastScannedDate {
                 dates[t.searchPath] = d
@@ -741,11 +768,21 @@ final class VideoScanModel: ObservableObject {
             phases[t.searchPath] = t.phase.rawValue
             roles[t.searchPath] = t.role.rawValue
             trusts[t.searchPath] = t.trust.rawValue
+            if !t.filesystem.isEmpty { filesystems[t.searchPath] = t.filesystem }
+            mediaTechs[t.searchPath] = t.mediaTech.rawValue
+            if let y = t.purchaseYear { purchaseYears[t.searchPath] = y }
+            if let c = t.capacityTB { capacities[t.searchPath] = c }
+            if !t.notes.isEmpty { notesMap[t.searchPath] = t.notes }
         }
         UserDefaults.standard.set(dates, forKey: Self.savedDatesKey)
         UserDefaults.standard.set(phases, forKey: Self.savedPhasesKey)
         UserDefaults.standard.set(roles, forKey: Self.savedRolesKey)
         UserDefaults.standard.set(trusts, forKey: Self.savedTrustKey)
+        UserDefaults.standard.set(filesystems, forKey: Self.savedFilesystemKey)
+        UserDefaults.standard.set(mediaTechs, forKey: Self.savedMediaTechKey)
+        UserDefaults.standard.set(purchaseYears, forKey: Self.savedPurchaseYearKey)
+        UserDefaults.standard.set(capacities, forKey: Self.savedCapacityKey)
+        UserDefaults.standard.set(notesMap, forKey: Self.savedNotesKey)
     }
 
     /// Update a volume's lifecycle phase and persist.
@@ -763,6 +800,36 @@ final class VideoScanModel: ObservableObject {
 
     func setTrust(_ trust: VolumeTrust, for target: CatalogScanTarget) {
         target.trust = trust
+        persistScanDates()
+        notifyTargetsChanged()
+    }
+
+    func setFilesystem(_ value: String, for target: CatalogScanTarget) {
+        target.filesystem = value
+        persistScanDates()
+        notifyTargetsChanged()
+    }
+
+    func setMediaTech(_ value: VolumeMediaTech, for target: CatalogScanTarget) {
+        target.mediaTech = value
+        persistScanDates()
+        notifyTargetsChanged()
+    }
+
+    func setPurchaseYear(_ value: Int?, for target: CatalogScanTarget) {
+        target.purchaseYear = value
+        persistScanDates()
+        notifyTargetsChanged()
+    }
+
+    func setCapacityTB(_ value: Double?, for target: CatalogScanTarget) {
+        target.capacityTB = value
+        persistScanDates()
+        notifyTargetsChanged()
+    }
+
+    func setNotes(_ value: String, for target: CatalogScanTarget) {
+        target.notes = value
         persistScanDates()
         notifyTargetsChanged()
     }

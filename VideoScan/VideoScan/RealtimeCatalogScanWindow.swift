@@ -10,6 +10,7 @@ import AppKit
 
 struct RealtimeCatalogScanContent: View {
     @ObservedObject var dashboard: DashboardState
+    @EnvironmentObject var model: VideoScanModel
 
     private var phaseColor: Color {
         switch dashboard.scanPhase {
@@ -249,7 +250,10 @@ struct RealtimeCatalogScanContent: View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
                 ForEach(dashboard.volumeProgress) { vol in
-                    VolumeMiniRow(volume: vol)
+                    VolumeMiniRow(
+                        volume: vol,
+                        target: model.scanTargets.first { $0.searchPath == vol.rootPath }
+                    )
                 }
             }
         } label: {
@@ -329,6 +333,7 @@ struct RealtimeCatalogScanContent: View {
 
 private struct VolumeMiniRow: View {
     let volume: VolumeProgress
+    let target: CatalogScanTarget?
 
     private var fraction: Double {
         volume.totalFiles > 0 ? Double(volume.completedFiles) / Double(volume.totalFiles) : 0
@@ -353,6 +358,9 @@ private struct VolumeMiniRow: View {
                 Text(volume.volumeName)
                     .font(.system(size: 16, weight: .semibold))
                     .lineLimit(1)
+                if let target {
+                    ObservedVolumeBadge(target: target)
+                }
                 Spacer()
                 if volume.isWalking {
                     // Walking + probing concurrently: the denominator is still
@@ -422,14 +430,18 @@ class CatalogScanWindowController {
     private var window: NSWindow?
     private var closeObserver: NSObjectProtocol?
 
-    func show(dashboard: DashboardState) {
+    func show(dashboard: DashboardState, model: VideoScanModel) {
         if let w = window, w.isVisible {
             w.makeKeyAndOrderFront(nil)
             return
         }
         close()
 
+        // Inject `model` so VolumeMiniRow can look up CatalogScanTargets and
+        // render volume role/trust badges. Without the env-object, the badges
+        // simply don't appear (the row's target lookup returns nil).
         let content = RealtimeCatalogScanContent(dashboard: dashboard)
+            .environmentObject(model)
         let hosting = NSHostingView(rootView: content)
         let w = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 800, height: 560),
