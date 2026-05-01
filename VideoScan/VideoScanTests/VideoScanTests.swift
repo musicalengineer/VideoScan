@@ -3574,6 +3574,110 @@ struct CatalogNavigationTests {
 
 // MARK: - Combine Technique Propagation Tests (Issue #41)
 
+// MARK: - Codec Compatibility Tests (Issue #1)
+
+@Suite struct CodecCompatibilityTests {
+
+    // --- Positive: safe codec combos ---
+
+    @Test func h264AacIsSafe() {
+        let check = CombineEngine.checkStreamCopyCompatibility(videoCodec: "h264", audioCodec: "aac")
+        #expect(check.streamCopySafe == true)
+        #expect(check.warning == nil)
+    }
+
+    @Test func hevcPcmIsSafe() {
+        let check = CombineEngine.checkStreamCopyCompatibility(videoCodec: "hevc", audioCodec: "pcm_s24le")
+        #expect(check.streamCopySafe == true)
+    }
+
+    @Test func proresAlacIsSafe() {
+        let check = CombineEngine.checkStreamCopyCompatibility(videoCodec: "prores", audioCodec: "alac")
+        #expect(check.streamCopySafe == true)
+    }
+
+    @Test func dnxhdMp3IsSafe() {
+        let check = CombineEngine.checkStreamCopyCompatibility(videoCodec: "dnxhd", audioCodec: "mp3")
+        #expect(check.streamCopySafe == true)
+    }
+
+    @Test func mjpegFlacIsSafe() {
+        let check = CombineEngine.checkStreamCopyCompatibility(videoCodec: "mjpeg", audioCodec: "flac")
+        #expect(check.streamCopySafe == true)
+    }
+
+    @Test func dvvideoAc3IsSafe() {
+        let check = CombineEngine.checkStreamCopyCompatibility(videoCodec: "dvvideo", audioCodec: "ac3")
+        #expect(check.streamCopySafe == true)
+    }
+
+    @Test func rawvideoOpusIsSafe() {
+        let check = CombineEngine.checkStreamCopyCompatibility(videoCodec: "rawvideo", audioCodec: "opus")
+        #expect(check.streamCopySafe == true)
+    }
+
+    // --- Negative: unsafe codec combos ---
+
+    @Test func mpeg2VideoNotSafe() {
+        let check = CombineEngine.checkStreamCopyCompatibility(videoCodec: "mpeg2video", audioCodec: "aac")
+        #expect(check.streamCopySafe == false)
+        #expect(check.warning != nil)
+        #expect(check.warning!.contains("mpeg2video"))
+    }
+
+    @Test func wmv3NotSafe() {
+        let check = CombineEngine.checkStreamCopyCompatibility(videoCodec: "wmv3", audioCodec: "wma")
+        #expect(check.streamCopySafe == false)
+        #expect(check.warning!.contains("wmv3"))
+        #expect(check.warning!.contains("wma"))
+    }
+
+    @Test func vp9NotSafe() {
+        let check = CombineEngine.checkStreamCopyCompatibility(videoCodec: "vp9", audioCodec: "vorbis")
+        #expect(check.streamCopySafe == false)
+    }
+
+    @Test func safeVideoUnsafeAudio() {
+        let check = CombineEngine.checkStreamCopyCompatibility(videoCodec: "h264", audioCodec: "wma")
+        #expect(check.streamCopySafe == false)
+        #expect(check.warning!.contains("wma"))
+        #expect(!check.warning!.contains("h264"))
+    }
+
+    @Test func unsafeVideoSafeAudio() {
+        let check = CombineEngine.checkStreamCopyCompatibility(videoCodec: "theora", audioCodec: "aac")
+        #expect(check.streamCopySafe == false)
+        #expect(check.warning!.contains("theora"))
+    }
+
+    // --- Edge cases ---
+
+    @Test func bothCodecsNilNotSafe() {
+        let check = CombineEngine.checkStreamCopyCompatibility(videoCodec: nil, audioCodec: nil)
+        #expect(check.streamCopySafe == false)
+    }
+
+    @Test func emptyStringsNotSafe() {
+        let check = CombineEngine.checkStreamCopyCompatibility(videoCodec: "", audioCodec: "")
+        #expect(check.streamCopySafe == false)
+    }
+
+    @Test func videoOnlyIsSafe() {
+        let check = CombineEngine.checkStreamCopyCompatibility(videoCodec: "h264", audioCodec: nil)
+        #expect(check.streamCopySafe == true)
+    }
+
+    @Test func audioOnlyIsSafe() {
+        let check = CombineEngine.checkStreamCopyCompatibility(videoCodec: nil, audioCodec: "aac")
+        #expect(check.streamCopySafe == true)
+    }
+
+    @Test func caseInsensitive() {
+        let check = CombineEngine.checkStreamCopyCompatibility(videoCodec: "H264", audioCodec: "AAC")
+        #expect(check.streamCopySafe == true)
+    }
+}
+
 @Suite @MainActor struct CombineTechniquePropagationTests {
 
     @Test func techniqueSetAtJobCreation() {

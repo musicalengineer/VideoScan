@@ -135,6 +135,52 @@ enum CombineEngine {
         }
     }
 
+    // MARK: - Codec Compatibility
+
+    struct CodecCheck: Sendable {
+        let streamCopySafe: Bool
+        let warning: String?
+    }
+
+    private static let movSafeVideoCodecs: Set<String> = [
+        "h264", "hevc", "prores", "mpeg4", "mjpeg", "dnxhd",
+        "rawvideo", "v210", "v410", "dvvideo", "cfhd",
+        "ap4h", "ap4x", "apcn", "apch", "apcs", "apco",
+    ]
+
+    private static let movSafeAudioCodecs: Set<String> = [
+        "aac", "pcm_s16le", "pcm_s16be", "pcm_s24le", "pcm_s24be",
+        "pcm_s32le", "pcm_s32be", "pcm_f32le", "pcm_f64le",
+        "mp3", "ac3", "eac3", "alac", "opus", "flac",
+        "pcm_mulaw", "pcm_alaw",
+    ]
+
+    static func checkStreamCopyCompatibility(
+        videoCodec: String?,
+        audioCodec: String?
+    ) -> CodecCheck {
+        let vc = (videoCodec ?? "").lowercased()
+        let ac = (audioCodec ?? "").lowercased()
+
+        if vc.isEmpty && ac.isEmpty {
+            return CodecCheck(streamCopySafe: false, warning: "No codecs detected")
+        }
+
+        var warnings: [String] = []
+
+        if !vc.isEmpty && !movSafeVideoCodecs.contains(vc) {
+            warnings.append("Video codec '\(vc)' may not be compatible with MOV container")
+        }
+        if !ac.isEmpty && !movSafeAudioCodecs.contains(ac) {
+            warnings.append("Audio codec '\(ac)' may not be compatible with MOV container")
+        }
+
+        if warnings.isEmpty {
+            return CodecCheck(streamCopySafe: true, warning: nil)
+        }
+        return CodecCheck(streamCopySafe: false, warning: warnings.joined(separator: "; "))
+    }
+
     // MARK: - Buffered Copy
 
     /// Large-buffer async file copy (4 MB chunks) for network reliability.
