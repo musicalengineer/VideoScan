@@ -1439,7 +1439,7 @@ struct FFProbeIntegrationTests {
 
 // MARK: - CombineEngine Tests
 
-struct CombineEngineTests {
+@Suite(.serialized) struct CombineEngineTests {
 
     static let fixturesDir: String = {
         let thisFile = #filePath
@@ -2978,7 +2978,7 @@ struct CombineJobStatusTests {
 
 // MARK: - CombineEngine Extended Tests
 
-struct CombineEngineExtendedTests {
+@Suite(.serialized) struct CombineEngineExtendedTests {
 
     /// Helper: attempt to decode one frame of a given stream type.
     /// Mirrors the app's decodeTestFrame logic so tests verify the same thing.
