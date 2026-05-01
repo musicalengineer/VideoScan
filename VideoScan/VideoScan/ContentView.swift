@@ -318,7 +318,7 @@ struct CatalogView: View {
             CombineSheet(selectedIDs: selectedIDs)
         }
         .sheet(item: $combinePairItem) { item in
-            CombinePairSheet(video: item.video, audio: item.audio)
+            CombinePairSheet(originalVideo: item.video, originalAudio: item.audio)
         }
         .alert("Delete Duplicates", isPresented: $showDeleteDuplicatesConfirm) {
             Button("Delete \(deleteTargetCount) Files", role: .destructive) {

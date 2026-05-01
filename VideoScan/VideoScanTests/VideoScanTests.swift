@@ -3574,6 +3574,136 @@ struct CatalogNavigationTests {
 
 // MARK: - Combine Technique Propagation Tests (Issue #41)
 
+// MARK: - Online Substitute Finder Tests
+
+@Suite struct OnlineSubstituteTests {
+
+    @Test func findsContentIdenticalCopy() {
+        let offline = VideoRecord()
+        offline.filename = "video_V01.mxf"
+        offline.fullPath = "/Volumes/OfflineDrive/video_V01.mxf"
+        offline.partialMD5 = "abc123def456"
+        offline.sizeBytes = 500_000_000
+
+        let online = VideoRecord()
+        online.filename = "video_V01.mxf"
+        online.fullPath = "/usr/bin/true"  // always exists on macOS
+        online.partialMD5 = "abc123def456"
+        online.sizeBytes = 500_000_000
+
+        let subs = VideoScanModel.findOnlineSubstitutes(for: offline, in: [offline, online])
+        #expect(subs.count == 1)
+        #expect(subs.first?.substitute.id == online.id)
+    }
+
+    @Test func rejectsDifferentHash() {
+        let offline = VideoRecord()
+        offline.filename = "video.mxf"
+        offline.fullPath = "/Volumes/OfflineDrive/video.mxf"
+        offline.partialMD5 = "abc123"
+        offline.sizeBytes = 500_000_000
+
+        let different = VideoRecord()
+        different.filename = "video.mxf"
+        different.fullPath = "/tmp/video.mxf"
+        different.partialMD5 = "xyz789"
+        different.sizeBytes = 500_000_000
+
+        let subs = VideoScanModel.findOnlineSubstitutes(for: offline, in: [offline, different])
+        #expect(subs.isEmpty)
+    }
+
+    @Test func rejectsDifferentSize() {
+        let offline = VideoRecord()
+        offline.filename = "video.mxf"
+        offline.fullPath = "/Volumes/OfflineDrive/video.mxf"
+        offline.partialMD5 = "abc123"
+        offline.sizeBytes = 500_000_000
+
+        let wrongSize = VideoRecord()
+        wrongSize.filename = "video.mxf"
+        wrongSize.fullPath = "/tmp/video.mxf"
+        wrongSize.partialMD5 = "abc123"
+        wrongSize.sizeBytes = 499_000_000
+
+        let subs = VideoScanModel.findOnlineSubstitutes(for: offline, in: [offline, wrongSize])
+        #expect(subs.isEmpty)
+    }
+
+    @Test func excludesSelf() {
+        let rec = VideoRecord()
+        rec.filename = "video.mxf"
+        rec.fullPath = "/tmp/video.mxf"
+        rec.partialMD5 = "abc123"
+        rec.sizeBytes = 500_000_000
+
+        let subs = VideoScanModel.findOnlineSubstitutes(for: rec, in: [rec])
+        #expect(subs.isEmpty)
+    }
+
+    @Test func emptyHashReturnsEmpty() {
+        let offline = VideoRecord()
+        offline.filename = "video.mxf"
+        offline.fullPath = "/Volumes/OfflineDrive/video.mxf"
+        offline.partialMD5 = ""
+        offline.sizeBytes = 500_000_000
+
+        let subs = VideoScanModel.findOnlineSubstitutes(for: offline, in: [offline])
+        #expect(subs.isEmpty)
+    }
+
+    @Test func zeroSizeReturnsEmpty() {
+        let offline = VideoRecord()
+        offline.filename = "video.mxf"
+        offline.fullPath = "/Volumes/OfflineDrive/video.mxf"
+        offline.partialMD5 = "abc123"
+        offline.sizeBytes = 0
+
+        let subs = VideoScanModel.findOnlineSubstitutes(for: offline, in: [offline])
+        #expect(subs.isEmpty)
+    }
+
+    @Test func findsMultipleCopies() {
+        let offline = VideoRecord()
+        offline.filename = "video.mxf"
+        offline.fullPath = "/Volumes/OfflineDrive/video.mxf"
+        offline.partialMD5 = "abc123"
+        offline.sizeBytes = 500_000_000
+
+        let copy1 = VideoRecord()
+        copy1.filename = "video.mxf"
+        copy1.fullPath = "/usr/bin/true"
+        copy1.partialMD5 = "abc123"
+        copy1.sizeBytes = 500_000_000
+
+        let copy2 = VideoRecord()
+        copy2.filename = "video_backup.mxf"
+        copy2.fullPath = "/usr/bin/false"
+        copy2.partialMD5 = "abc123"
+        copy2.sizeBytes = 500_000_000
+
+        let subs = VideoScanModel.findOnlineSubstitutes(for: offline, in: [offline, copy1, copy2])
+        #expect(subs.count == 2)
+    }
+
+    @Test func volumeNamePopulated() {
+        let offline = VideoRecord()
+        offline.filename = "video.mxf"
+        offline.fullPath = "/Volumes/OfflineDrive/video.mxf"
+        offline.partialMD5 = "abc123"
+        offline.sizeBytes = 500_000_000
+
+        let online = VideoRecord()
+        online.filename = "video.mxf"
+        online.fullPath = "/usr/bin/true"
+        online.partialMD5 = "abc123"
+        online.sizeBytes = 500_000_000
+
+        let subs = VideoScanModel.findOnlineSubstitutes(for: offline, in: [offline, online])
+        #expect(subs.first?.volumeName.isEmpty == false)
+    }
+}
+
 // MARK: - Codec Compatibility Tests (Issue #1)
 
 @Suite struct CodecCompatibilityTests {

@@ -16,6 +16,8 @@ struct CombineSheet: View {
     }()
     @State private var checkedPairs: Set<Int> = []
     @State private var technique: CombineJobStatus.CombineTechnique = .streamCopy
+    @State private var substitutions: [UUID: VideoRecord] = [:]
+    @State private var subsSearched = false
 
     var pairs: [(video: VideoRecord, audio: VideoRecord)] {
         let all = model.correlatedPairs
@@ -24,10 +26,17 @@ struct CombineSheet: View {
         return filtered.isEmpty ? all : filtered
     }
 
+    private func effectivePair(_ pair: (video: VideoRecord, audio: VideoRecord)) -> (video: VideoRecord, audio: VideoRecord) {
+        let v = substitutions[pair.video.id] ?? pair.video
+        let a = substitutions[pair.audio.id] ?? pair.audio
+        return (v, a)
+    }
+
     private var onlinePairs: [(index: Int, pair: (video: VideoRecord, audio: VideoRecord))] {
         pairs.enumerated().compactMap { i, pair in
-            if VolumeReachability.isReachable(path: pair.video.fullPath) &&
-               VolumeReachability.isReachable(path: pair.audio.fullPath) {
+            let eff = effectivePair(pair)
+            if VolumeReachability.isReachable(path: eff.video.fullPath) &&
+               VolumeReachability.isReachable(path: eff.audio.fullPath) {
                 return (i, pair)
             }
             return nil
@@ -40,7 +49,8 @@ struct CombineSheet: View {
     private var estimatedOutputBytes: Int64 {
         checkedPairs.reduce(Int64(0)) { total, i in
             guard i < pairs.count else { return total }
-            return total + pairs[i].video.sizeBytes + pairs[i].audio.sizeBytes
+            let eff = effectivePair(pairs[i])
+            return total + eff.video.sizeBytes + eff.audio.sizeBytes
         }
     }
 
@@ -140,18 +150,57 @@ struct CombineSheet: View {
                         Text("Yellow rows = media offline — mount the volume to enable combine")
                             .font(.system(size: 11, weight: .medium))
                             .foregroundColor(.yellow.opacity(0.85))
+                        Spacer()
+                        if !subsSearched {
+                            Button("Find Online Copies") {
+                                findSubstitutesForOfflinePairs()
+                            }
+                            .font(.system(size: 11, weight: .semibold))
+                            .buttonStyle(.bordered)
+                        }
                     }
                     .padding(.top, 4)
+
+                    if !substitutions.isEmpty {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.triangle.swap")
+                                .foregroundColor(.green)
+                            Text("\(substitutions.count) online \(substitutions.count == 1 ? "copy" : "copies") found (MD5 verified) — swapped automatically")
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(.green)
+                            Spacer()
+                            Button("Reset") {
+                                substitutions.removeAll()
+                                subsSearched = false
+                                checkedPairs = Set(onlinePairs.map(\.index))
+                            }
+                            .font(.caption)
+                            .buttonStyle(.borderless)
+                        }
+                        .padding(.top, 2)
+                    } else if subsSearched {
+                        HStack(spacing: 4) {
+                            Image(systemName: "xmark.circle")
+                                .foregroundColor(.secondary)
+                            Text("No online copies found for offline media")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.top, 2)
+                    }
                 }
             }
         }
     }
 
     private func pairRow(index i: Int, pair: (video: VideoRecord, audio: VideoRecord)) -> some View {
-        let vOnline = VolumeReachability.isReachable(path: pair.video.fullPath)
-        let aOnline = VolumeReachability.isReachable(path: pair.audio.fullPath)
+        let eff = effectivePair(pair)
+        let vOnline = VolumeReachability.isReachable(path: eff.video.fullPath)
+        let aOnline = VolumeReachability.isReachable(path: eff.audio.fullPath)
         let bothOnline = vOnline && aOnline
-        let estSize = pair.video.sizeBytes + pair.audio.sizeBytes
+        let vSwapped = substitutions[pair.video.id] != nil
+        let aSwapped = substitutions[pair.audio.id] != nil
+        let estSize = eff.video.sizeBytes + eff.audio.sizeBytes
 
         return HStack(spacing: 4) {
             Toggle("", isOn: Binding(
@@ -169,10 +218,10 @@ struct CombineSheet: View {
                 .frame(width: 28, alignment: .trailing)
                 .font(.system(size: 11, design: .monospaced))
 
-            Image(systemName: "film")
+            Image(systemName: vSwapped ? "arrow.triangle.swap" : "film")
                 .font(.system(size: 9))
-                .foregroundColor(vOnline ? .blue : .yellow)
-            Text(pair.video.filename)
+                .foregroundColor(vSwapped ? .green : (vOnline ? .blue : .yellow))
+            Text(eff.video.filename)
                 .font(.system(size: 11, design: .monospaced))
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -181,10 +230,10 @@ struct CombineSheet: View {
                 .font(.system(size: 9))
                 .foregroundColor(.secondary)
 
-            Image(systemName: "waveform")
+            Image(systemName: aSwapped ? "arrow.triangle.swap" : "waveform")
                 .font(.system(size: 9))
-                .foregroundColor(aOnline ? .orange : .yellow)
-            Text(pair.audio.filename)
+                .foregroundColor(aSwapped ? .green : (aOnline ? .orange : .yellow))
+            Text(eff.audio.filename)
                 .font(.system(size: 11, design: .monospaced))
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -321,8 +370,9 @@ struct CombineSheet: View {
                 : "Combine \(checkedPairs.count) Pair\(checkedPairs.count == 1 ? "" : "s")"
             Button(label) {
                 guard let folder = outputFolder else { return }
-                let selectedPairs = checkedPairs.sorted().compactMap { i in
-                    i < pairs.count ? pairs[i] : nil
+                let selectedPairs: [(video: VideoRecord, audio: VideoRecord)] = checkedPairs.sorted().compactMap { i in
+                    guard i < pairs.count else { return nil }
+                    return effectivePair(pairs[i])
                 }
                 model.combineSelectedPairs(selectedPairs, outputFolder: folder, technique: technique)
                 dismiss()
@@ -350,6 +400,25 @@ struct CombineSheet: View {
             UserDefaults.standard.set(url.path, forKey: combineOutputFolderKey)
         }
     }
+
+    private func findSubstitutesForOfflinePairs() {
+        var newSubs: [UUID: VideoRecord] = [:]
+        for pair in pairs {
+            if !VolumeReachability.isReachable(path: pair.video.fullPath) {
+                if let best = VideoScanModel.findOnlineSubstitutes(for: pair.video, in: model.records).first {
+                    newSubs[pair.video.id] = best.substitute
+                }
+            }
+            if !VolumeReachability.isReachable(path: pair.audio.fullPath) {
+                if let best = VideoScanModel.findOnlineSubstitutes(for: pair.audio, in: model.records).first {
+                    newSubs[pair.audio.id] = best.substitute
+                }
+            }
+        }
+        substitutions = newSubs
+        subsSearched = true
+        checkedPairs = Set(onlinePairs.map(\.index))
+    }
 }
 
 // MARK: - Combine Single Pair Sheet
@@ -358,10 +427,15 @@ struct CombineSheet: View {
 /// Picks output folder + technique, then launches to Combine & Render window.
 struct CombinePairSheet: View {
     @EnvironmentObject var model: VideoScanModel
-    let video: VideoRecord
-    let audio: VideoRecord
+    let originalVideo: VideoRecord
+    let originalAudio: VideoRecord
     @Environment(\.dismiss) var dismiss
     @Environment(\.openWindow) var openWindow
+
+    @State private var activeVideo: VideoRecord?
+    @State private var activeAudio: VideoRecord?
+    @State private var videoSubs: [VideoScanModel.OnlineSubstitute] = []
+    @State private var audioSubs: [VideoScanModel.OnlineSubstitute] = []
 
     @State private var outputFolder: URL? = {
         guard let path = UserDefaults.standard.string(forKey: combineOutputFolderKey),
@@ -369,6 +443,9 @@ struct CombinePairSheet: View {
         return URL(fileURLWithPath: path)
     }()
     @State private var technique: CombineJobStatus.CombineTechnique = .streamCopy
+
+    private var video: VideoRecord { activeVideo ?? originalVideo }
+    private var audio: VideoRecord { activeAudio ?? originalAudio }
 
     private var outputFilename: String {
         let stem = (video.filename as NSString).deletingPathExtension
@@ -398,12 +475,42 @@ struct CombinePairSheet: View {
             }
 
             if !videoOnline || !audioOnline {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.yellow)
+                        Text("Media offline — volume not mounted")
+                            .font(.caption)
+                            .foregroundColor(.yellow)
+                    }
+
+                    if !videoOnline && !videoSubs.isEmpty {
+                        substituteSection(label: "Video", subs: videoSubs) { sub in
+                            activeVideo = sub.substitute
+                        }
+                    }
+                    if !audioOnline && !audioSubs.isEmpty {
+                        substituteSection(label: "Audio", subs: audioSubs) { sub in
+                            activeAudio = sub.substitute
+                        }
+                    }
+                }
+            }
+
+            if activeVideo != nil || activeAudio != nil {
                 HStack(spacing: 4) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(.yellow)
-                    Text("Media offline — volume not mounted")
+                    Image(systemName: "arrow.triangle.swap")
+                        .foregroundColor(.green)
+                    Text("Using online copy — content-identical (MD5 verified)")
                         .font(.caption)
-                        .foregroundColor(.yellow)
+                        .foregroundColor(.green)
+                    Spacer()
+                    Button("Reset to Original") {
+                        activeVideo = nil
+                        activeAudio = nil
+                    }
+                    .font(.caption)
+                    .buttonStyle(.borderless)
                 }
             }
 
@@ -477,6 +584,52 @@ struct CombinePairSheet: View {
         }
         .padding(20)
         .frame(width: 560)
+        .onAppear {
+            if !VolumeReachability.isReachable(path: originalVideo.fullPath) {
+                videoSubs = VideoScanModel.findOnlineSubstitutes(for: originalVideo, in: model.records)
+            }
+            if !VolumeReachability.isReachable(path: originalAudio.fullPath) {
+                audioSubs = VideoScanModel.findOnlineSubstitutes(for: originalAudio, in: model.records)
+            }
+        }
+    }
+
+    private func substituteSection(
+        label: String,
+        subs: [VideoScanModel.OnlineSubstitute],
+        onSelect: @escaping (VideoScanModel.OnlineSubstitute) -> Void
+    ) -> some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 4) {
+                    Image(systemName: "doc.on.doc")
+                        .foregroundColor(.green)
+                        .font(.system(size: 11))
+                    Text("\(subs.count) online \(label.lowercased()) copy\(subs.count == 1 ? "" : " copies") found")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(.green)
+                }
+                ForEach(subs, id: \.substitute.id) { sub in
+                    HStack(spacing: 6) {
+                        Button("Use This") { onSelect(sub) }
+                            .font(.system(size: 11))
+                            .buttonStyle(.bordered)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(sub.substitute.filename)
+                                .font(.system(size: 11, design: .monospaced))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Text("on \(sub.volumeName)  •  \(Formatting.humanSize(sub.substitute.sizeBytes))  •  MD5 match")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .padding(.vertical, 2)
+                }
+            }
+            .padding(4)
+        }
     }
 
     private func fileRow(icon: String, label: String, color: Color,
