@@ -672,6 +672,29 @@ final class VideoScanModel: ObservableObject {
         }
     }
 
+    // MARK: - Catalog Navigation Helpers
+
+    /// Find the set of record IDs that should be shown when navigating from
+    /// Archive to Catalog for a given record. In pair mode, includes both the
+    /// record and its partner (via `pairedWith` or `pairGroupID` fallback).
+    nonisolated static func catalogFilterIDs(for recordID: UUID, pairMode: Bool, in records: [VideoRecord]) -> Set<UUID> {
+        guard let rec = records.first(where: { $0.id == recordID }) else {
+            return [recordID]
+        }
+        if !pairMode {
+            return [recordID]
+        }
+        var ids: Set<UUID> = [recordID]
+        if let partner = rec.pairedWith {
+            ids.insert(partner.id)
+        } else if let gid = rec.pairGroupID {
+            for r in records where r.pairGroupID == gid && r.id != recordID {
+                ids.insert(r.id)
+            }
+        }
+        return ids
+    }
+
     // MARK: - Whole-shebang Bundle Import / Export
     //
     // The bundle format (see BundleExportImport.swift) wraps catalog +

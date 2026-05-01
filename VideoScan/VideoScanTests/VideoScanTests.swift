@@ -3469,3 +3469,105 @@ struct DashboardCombineCounterTests {
         #expect(dash.combineSucceeded + dash.combineFailed + dash.combineSkipped == dash.combineCompleted)
     }
 }
+
+// MARK: - Catalog Navigation Tests (Issue #39)
+
+struct CatalogNavigationTests {
+
+    @Test func singleRecordNoPairMode() {
+        let rec = VideoRecord()
+        rec.filename = "test.mov"
+        let ids = VideoScanModel.catalogFilterIDs(for: rec.id, pairMode: false, in: [rec])
+        #expect(ids == [rec.id])
+    }
+
+    @Test func pairModeWithPairedWith() {
+        let video = VideoRecord()
+        video.filename = "clip.V1A.mxf"
+        video.streamTypeRaw = "Video only"
+        let audio = VideoRecord()
+        audio.filename = "clip.A1A.mxf"
+        audio.streamTypeRaw = "Audio only"
+        video.pairedWith = audio
+
+        let ids = VideoScanModel.catalogFilterIDs(for: video.id, pairMode: true, in: [video, audio])
+        #expect(ids.count == 2)
+        #expect(ids.contains(video.id))
+        #expect(ids.contains(audio.id))
+    }
+
+    @Test func pairModeWithPairGroupIDFallback() {
+        // This is the bug case: pairedWith is nil but pairGroupID links them
+        let gid = UUID()
+        let video = VideoRecord()
+        video.filename = "clip.V1A.mxf"
+        video.streamTypeRaw = "Video only"
+        video.pairGroupID = gid
+
+        let audio = VideoRecord()
+        audio.filename = "clip.A1A.mxf"
+        audio.streamTypeRaw = "Audio only"
+        audio.pairGroupID = gid
+
+        // pairedWith is nil on both — only pairGroupID connects them
+        #expect(video.pairedWith == nil)
+        #expect(audio.pairedWith == nil)
+
+        let ids = VideoScanModel.catalogFilterIDs(for: video.id, pairMode: true, in: [video, audio])
+        #expect(ids.count == 2, "Should find partner via pairGroupID when pairedWith is nil")
+        #expect(ids.contains(video.id))
+        #expect(ids.contains(audio.id))
+    }
+
+    @Test func pairModeFromAudioSide() {
+        // Navigate from the audio record — should still find the video partner
+        let gid = UUID()
+        let video = VideoRecord()
+        video.filename = "clip.V1A.mxf"
+        video.streamTypeRaw = "Video only"
+        video.pairGroupID = gid
+
+        let audio = VideoRecord()
+        audio.filename = "clip.A1A.mxf"
+        audio.streamTypeRaw = "Audio only"
+        audio.pairGroupID = gid
+
+        let ids = VideoScanModel.catalogFilterIDs(for: audio.id, pairMode: true, in: [video, audio])
+        #expect(ids.count == 2)
+        #expect(ids.contains(video.id))
+        #expect(ids.contains(audio.id))
+    }
+
+    @Test func pairModeRecordNotFound() {
+        let bogusID = UUID()
+        let ids = VideoScanModel.catalogFilterIDs(for: bogusID, pairMode: true, in: [])
+        #expect(ids == [bogusID], "Should return the requested ID even if record isn't found")
+    }
+
+    @Test func pairModeNoPairAtAll() {
+        // Record exists but has no pair info — should just return the one record
+        let rec = VideoRecord()
+        rec.filename = "standalone.mov"
+        rec.streamTypeRaw = "Video+Audio"
+
+        let ids = VideoScanModel.catalogFilterIDs(for: rec.id, pairMode: true, in: [rec])
+        #expect(ids == [rec.id])
+    }
+
+    @Test func pairGroupIDDoesNotLeakOtherGroups() {
+        let gid1 = UUID()
+        let gid2 = UUID()
+
+        let v1 = VideoRecord(); v1.pairGroupID = gid1; v1.streamTypeRaw = "Video only"
+        let a1 = VideoRecord(); a1.pairGroupID = gid1; a1.streamTypeRaw = "Audio only"
+        let v2 = VideoRecord(); v2.pairGroupID = gid2; v2.streamTypeRaw = "Video only"
+        let a2 = VideoRecord(); a2.pairGroupID = gid2; a2.streamTypeRaw = "Audio only"
+
+        let ids = VideoScanModel.catalogFilterIDs(for: v1.id, pairMode: true, in: [v1, a1, v2, a2])
+        #expect(ids.count == 2, "Should only include records from the same pairGroupID")
+        #expect(ids.contains(v1.id))
+        #expect(ids.contains(a1.id))
+        #expect(!ids.contains(v2.id))
+        #expect(!ids.contains(a2.id))
+    }
+}
