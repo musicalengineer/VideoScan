@@ -133,18 +133,18 @@ struct ArchiveView: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
                     Text(name)
-                        .font(.system(size: 11, weight: .medium))
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundColor(target.isReachable ? .primary : .secondary)
                         .lineLimit(1)
                     if !target.isReachable {
                         Text("offline")
-                            .font(.system(size: 9))
+                            .font(.system(size: 11))
                             .foregroundColor(.orange)
                     }
                 }
                 HStack(spacing: 4) {
                     Text("\(fileCount)")
-                        .font(.system(size: 9, design: .monospaced))
+                        .font(.system(size: 11, design: .monospaced))
                         .foregroundColor(.secondary)
                     PolicyBadge(policy: target.destinationPolicy)
                         .scaleEffect(0.75, anchor: .leading)
