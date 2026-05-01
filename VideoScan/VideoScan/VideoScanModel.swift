@@ -695,6 +695,33 @@ final class VideoScanModel: ObservableObject {
         return ids
     }
 
+    // MARK: - Online Substitute Finder
+
+    struct OnlineSubstitute {
+        let original: VideoRecord
+        let substitute: VideoRecord
+        let volumeName: String
+    }
+
+    /// Find online content-identical copies of an offline record.
+    /// Matches on partialMD5 + sizeBytes (byte-identical) only — no fuzzy matching.
+    nonisolated static func findOnlineSubstitutes(
+        for record: VideoRecord,
+        in allRecords: [VideoRecord]
+    ) -> [OnlineSubstitute] {
+        guard !record.partialMD5.isEmpty, record.sizeBytes > 0 else { return [] }
+
+        return allRecords.compactMap { candidate in
+            guard candidate.id != record.id,
+                  candidate.partialMD5 == record.partialMD5,
+                  candidate.sizeBytes == record.sizeBytes,
+                  VolumeReachability.isReachable(path: candidate.fullPath)
+            else { return nil }
+            let vol = VolumeReachability.volumeName(forPath: candidate.fullPath)
+            return OnlineSubstitute(original: record, substitute: candidate, volumeName: vol)
+        }
+    }
+
     // MARK: - Whole-shebang Bundle Import / Export
     //
     // The bundle format (see BundleExportImport.swift) wraps catalog +
