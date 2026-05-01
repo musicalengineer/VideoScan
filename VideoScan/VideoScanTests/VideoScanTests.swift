@@ -3571,3 +3571,78 @@ struct CatalogNavigationTests {
         #expect(!ids.contains(a2.id))
     }
 }
+
+// MARK: - Combine Technique Propagation Tests (Issue #41)
+
+@Suite @MainActor struct CombineTechniquePropagationTests {
+
+    @Test func techniqueSetAtJobCreation() {
+        let job = CombineJobStatus(
+            pairIndex: 0, videoFilename: "v.mxf", audioFilename: "a.mxf",
+            outputFilename: "out.mov", outputPath: "/tmp/out.mov",
+            videoSizeBytes: 1000, audioSizeBytes: 500,
+            totalDurationSeconds: 10.0, videoOnline: true, audioOnline: true,
+            technique: .reencodeProRes
+        )
+        #expect(job.technique == .reencodeProRes)
+    }
+
+    @Test func techniqueH264SetAtJobCreation() {
+        let job = CombineJobStatus(
+            pairIndex: 0, videoFilename: "v.mxf", audioFilename: "a.mxf",
+            outputFilename: "out.mov", outputPath: "/tmp/out.mov",
+            videoSizeBytes: 1000, audioSizeBytes: 500,
+            totalDurationSeconds: 10.0, videoOnline: true, audioOnline: true,
+            technique: .reencodeH264
+        )
+        #expect(job.technique == .reencodeH264)
+    }
+
+    @Test func techniqueDefaultsToStreamCopy() {
+        let job = CombineJobStatus(
+            pairIndex: 0, videoFilename: "v.mxf", audioFilename: "a.mxf",
+            outputFilename: "out.mov", outputPath: "/tmp/out.mov",
+            videoSizeBytes: 1000, audioSizeBytes: 500,
+            totalDurationSeconds: 10.0, videoOnline: true, audioOnline: true
+        )
+        #expect(job.technique == .streamCopy)
+    }
+
+    @Test func dashboardResetClearsJobsAndCounters() {
+        let dash = DashboardState()
+        dash.combineCompleted = 5
+        dash.combineSucceeded = 3
+        dash.combineFailed = 1
+        dash.combineSkipped = 1
+        dash.combineJobs = [CombineJobStatus(
+            pairIndex: 0, videoFilename: "v.mxf", audioFilename: "a.mxf",
+            outputFilename: "out.mov", outputPath: "/tmp/out.mov",
+            videoSizeBytes: 1000, audioSizeBytes: 500,
+            totalDurationSeconds: 10.0, videoOnline: true, audioOnline: true
+        )]
+        dash.resetForCombine(total: 10)
+        #expect(dash.combineTotal == 10)
+        #expect(dash.combineCompleted == 0)
+        #expect(dash.combineSucceeded == 0)
+        #expect(dash.combineFailed == 0)
+        #expect(dash.combineSkipped == 0)
+        #expect(dash.combineJobs.isEmpty)
+    }
+
+    @Test func techniquePreservedAcrossMultipleJobs() {
+        let dash = DashboardState()
+        dash.resetForCombine(total: 3)
+        for i in 0..<3 {
+            dash.combineJobs.append(CombineJobStatus(
+                pairIndex: i, videoFilename: "v\(i).mxf", audioFilename: "a\(i).mxf",
+                outputFilename: "out\(i).mov", outputPath: "/tmp/out\(i).mov",
+                videoSizeBytes: 1000, audioSizeBytes: 500,
+                totalDurationSeconds: 10.0, videoOnline: true, audioOnline: true,
+                technique: .reencodeProRes
+            ))
+        }
+        for job in dash.combineJobs {
+            #expect(job.technique == .reencodeProRes)
+        }
+    }
+}

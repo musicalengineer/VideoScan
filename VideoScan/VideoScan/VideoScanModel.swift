@@ -2943,12 +2943,12 @@ final class VideoScanModel: ObservableObject {
         return pairs
     }
 
-    func combineSelectedPairs(_ pairs: [(video: VideoRecord, audio: VideoRecord)], outputFolder: URL, maxConcurrency: Int? = nil) {
+    func combineSelectedPairs(_ pairs: [(video: VideoRecord, audio: VideoRecord)], outputFolder: URL, technique: CombineJobStatus.CombineTechnique = .streamCopy, maxConcurrency: Int? = nil) {
         guard !pairs.isEmpty else {
             log("No pairs selected to combine.")
             return
         }
-        combineAllPairsInternal(pairs: pairs, outputFolder: outputFolder, maxConcurrency: maxConcurrency)
+        combineAllPairsInternal(pairs: pairs, outputFolder: outputFolder, technique: technique, maxConcurrency: maxConcurrency)
     }
 
     func combineAllPairs(outputFolder: URL, maxConcurrency: Int? = nil) {
@@ -3050,9 +3050,8 @@ final class VideoScanModel: ObservableObject {
         let outName = "\(baseName)_combined.mov"
         let outURL = outputFolder.appendingPathComponent(outName)
 
-        // Skip offline files
-        let fm = FileManager.default
-        if !fm.isReadableFile(atPath: videoPath) || !fm.isReadableFile(atPath: audioPath) {
+        // Skip offline files (VolumeReachability avoids blocking on network timeouts)
+        if !VolumeReachability.isReachable(path: videoPath) || !VolumeReachability.isReachable(path: audioPath) {
             await MainActor.run {
                 self.dashboard.combineCompleted += 1
                 self.dashboard.combineFailed += 1
@@ -3063,6 +3062,7 @@ final class VideoScanModel: ObservableObject {
         }
 
         // Skip if already completed (resume after pause)
+        let fm = FileManager.default
         if fm.fileExists(atPath: outURL.path) {
             await MainActor.run {
                 self.dashboard.combineCompleted += 1
@@ -3431,7 +3431,7 @@ final class VideoScanModel: ObservableObject {
         dashboard.combineCurrentFile = ""
     }
 
-    private func combineAllPairsInternal(pairs: [(video: VideoRecord, audio: VideoRecord)], outputFolder: URL, maxConcurrency: Int? = nil) {
+    private func combineAllPairsInternal(pairs: [(video: VideoRecord, audio: VideoRecord)], outputFolder: URL, technique: CombineJobStatus.CombineTechnique = .streamCopy, maxConcurrency: Int? = nil) {
         let appending = isCombining
 
         let filteredPairs: [(video: VideoRecord, audio: VideoRecord)]
@@ -3478,8 +3478,9 @@ final class VideoScanModel: ObservableObject {
                 videoSizeBytes: pair.video.sizeBytes,
                 audioSizeBytes: pair.audio.sizeBytes,
                 totalDurationSeconds: max(pair.video.durationSeconds, pair.audio.durationSeconds),
-                videoOnline: fm.isReadableFile(atPath: pair.video.fullPath),
-                audioOnline: fm.isReadableFile(atPath: pair.audio.fullPath)
+                videoOnline: VolumeReachability.isReachable(path: pair.video.fullPath),
+                audioOnline: VolumeReachability.isReachable(path: pair.audio.fullPath),
+                technique: technique
             ))
         }
 

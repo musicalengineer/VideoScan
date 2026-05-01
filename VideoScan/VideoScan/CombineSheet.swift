@@ -324,14 +324,7 @@ struct CombineSheet: View {
                 let selectedPairs = checkedPairs.sorted().compactMap { i in
                     i < pairs.count ? pairs[i] : nil
                 }
-                model.combineSelectedPairs(selectedPairs, outputFolder: folder)
-                // Set technique on all jobs
-                let tech = technique
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                    for idx in model.dashboard.combineJobs.indices {
-                        model.dashboard.combineJobs[idx].technique = tech
-                    }
-                }
+                model.combineSelectedPairs(selectedPairs, outputFolder: folder, technique: technique)
                 dismiss()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                     openWindow(id: "combine")
@@ -471,13 +464,7 @@ struct CombinePairSheet: View {
                     .keyboardShortcut(.escape)
                 Button("Combine") {
                     guard let folder = outputFolder else { return }
-                    model.combineSelectedPairs([(video: video, audio: audio)], outputFolder: folder)
-                    let tech = technique
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                        for idx in model.dashboard.combineJobs.indices {
-                            model.dashboard.combineJobs[idx].technique = tech
-                        }
-                    }
+                    model.combineSelectedPairs([(video: video, audio: audio)], outputFolder: folder, technique: technique)
                     dismiss()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                         openWindow(id: "combine")
