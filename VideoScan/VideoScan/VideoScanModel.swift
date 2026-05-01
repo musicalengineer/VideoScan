@@ -3074,7 +3074,8 @@ final class VideoScanModel: ObservableObject {
         }
 
         let technique = await MainActor.run {
-            self.dashboard.combineJobs[jobIndex].technique
+            guard jobIndex < self.dashboard.combineJobs.count else { return CombineJobStatus.CombineTechnique.streamCopy }
+            return self.dashboard.combineJobs[jobIndex].technique
         }
 
         await MainActor.run {
@@ -3107,7 +3108,8 @@ final class VideoScanModel: ObservableObject {
         }
 
         let duration = await MainActor.run {
-            self.dashboard.combineJobs[jobIndex].totalDurationSeconds
+            guard jobIndex < self.dashboard.combineJobs.count else { return 0.0 }
+            return self.dashboard.combineJobs[jobIndex].totalDurationSeconds
         }
 
         let logFn: @Sendable (String) -> Void = { [weak self] msg in
@@ -3170,10 +3172,12 @@ final class VideoScanModel: ObservableObject {
             self.dashboard.combineCompleted += 1
             self.dashboard.combineSucceeded += 1
             self.updateJobPhase(jobIndex, .done)
-            self.dashboard.combineJobs[jobIndex].progressFraction = 1.0
-            if let warning = verified.warning {
-                self.dashboard.combineJobs[jobIndex].warningMessage = warning
-                self.log("    ⚠ \(warning)")
+            if jobIndex < self.dashboard.combineJobs.count {
+                self.dashboard.combineJobs[jobIndex].progressFraction = 1.0
+                if let warning = verified.warning {
+                    self.dashboard.combineJobs[jobIndex].warningMessage = warning
+                    self.log("    ⚠ \(warning)")
+                }
             }
             self.log("    ✓ Verified: \(outURL.path) (\(verified.summary))")
             if let rec = combinedRecord {
