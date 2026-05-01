@@ -174,7 +174,7 @@ enum MediaAnalyzer {
         }
 
         // Long-form content (>2 min) with video+audio is likely intentional
-        if rec.durationSeconds > 120 && rec.streamType == .videoAndAudio {
+        if rec.durationSeconds > 120 && rec.durationSeconds < 1_000_000 && rec.streamType == .videoAndAudio {
             familyScore += 1
             familyReasons.append("Long-form video (\(Int(rec.durationSeconds / 60)) min)")
         }
