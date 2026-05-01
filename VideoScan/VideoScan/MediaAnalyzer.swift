@@ -132,6 +132,12 @@ enum MediaAnalyzer {
             junkReasons.append("Filename suggests test/temp/sample content")
         }
 
+        // NLE transition / render output patterns (xfade, dissolve, wipe, etc.)
+        if isTransitionOrRenderFile(filenameLower: filenameLower) {
+            junkScore += 3
+            junkReasons.append("Filename suggests NLE transition or render output")
+        }
+
         // Truncated file — size much smaller than expected for bitrate x duration
         if let truncated = isTruncated(rec), truncated {
             junkScore += 3
@@ -298,6 +304,42 @@ enum MediaAnalyzer {
         let contains = ["_test.", "-test.", "_sample.", "_temp.", "_tmp."]
         if prefixes.contains(where: { filenameLower.hasPrefix($0) }) { return true }
         if contains.contains(where: { filenameLower.contains($0) }) { return true }
+        return false
+    }
+
+    /// NLE-rendered transition or export-artifact filenames. These are almost
+    /// always intermediate render output, not original camera media. Patterns
+    /// are conservative — match on word-boundary delimiters so a clip named
+    /// "wedding_dissolve_2010" matches but "kid named Wipeout" does not.
+    private static func isTransitionOrRenderFile(filenameLower: String) -> Bool {
+        // Strict prefixes (file STARTS with these — strong signal)
+        let prefixes = [
+            "xfade_", "xfade-",
+            "crossfade_", "crossfade-", "cross_fade", "cross-fade",
+            "dissolve_", "dissolve-",
+            "wipe_", "wipe-",
+            "transition_", "transition-",
+            "fadein_", "fadein-", "fade_in_", "fade-in-",
+            "fadeout_", "fadeout-", "fade_out_", "fade-out-",
+            "render_", "render-",
+            "export_", "export-"
+        ]
+        if prefixes.contains(where: { filenameLower.hasPrefix($0) }) { return true }
+
+        // Word-boundary delimited middles (e.g., "myedit_xfade_v2.mov")
+        let delimited = [
+            "_xfade_", "-xfade-", "_xfade.",
+            "_crossfade_", "-crossfade-", "_crossfade.",
+            "_dissolve_", "-dissolve-", "_dissolve.",
+            "_wipe_", "-wipe-", "_wipe.",
+            "_transition_", "-transition-", "_transition.",
+            "_fadein_", "_fade_in_", "_fadeout_", "_fade_out_",
+            "_render_", "-render-", "_render.",
+            "_export_", "-export-", "_export.",
+            "_proxy_", "-proxy-", "_proxy."
+        ]
+        if delimited.contains(where: { filenameLower.contains($0) }) { return true }
+
         return false
     }
 

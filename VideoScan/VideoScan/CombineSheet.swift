@@ -1,13 +1,19 @@
 import SwiftUI
 
 /// Modal sheet for reviewing and executing batch combine of correlated MXF pairs.
+private let combineOutputFolderKey = "combineOutputFolder"
+
 struct CombineSheet: View {
     @EnvironmentObject var model: VideoScanModel
     let selectedIDs: Set<UUID>
     @Environment(\.dismiss) var dismiss
     @Environment(\.openWindow) var openWindow
 
-    @State private var outputFolder: URL?
+    @State private var outputFolder: URL? = {
+        guard let path = UserDefaults.standard.string(forKey: combineOutputFolderKey),
+              FileManager.default.fileExists(atPath: path) else { return nil }
+        return URL(fileURLWithPath: path)
+    }()
     @State private var checkedPairs: Set<Int> = []
     @State private var technique: CombineJobStatus.CombineTechnique = .streamCopy
 
@@ -20,8 +26,8 @@ struct CombineSheet: View {
 
     private var onlinePairs: [(index: Int, pair: (video: VideoRecord, audio: VideoRecord))] {
         pairs.enumerated().compactMap { i, pair in
-            let fm = FileManager.default
-            if fm.isReadableFile(atPath: pair.video.fullPath) && fm.isReadableFile(atPath: pair.audio.fullPath) {
+            if VolumeReachability.isReachable(path: pair.video.fullPath) &&
+               VolumeReachability.isReachable(path: pair.audio.fullPath) {
                 return (i, pair)
             }
             return nil
@@ -79,14 +85,20 @@ struct CombineSheet: View {
                         .font(.subheadline.weight(.semibold))
 
                     if offlineCount > 0 {
-                        HStack(spacing: 3) {
+                        HStack(spacing: 5) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundColor(.yellow)
-                                .font(.system(size: 10))
-                            Text("\(offlineCount) offline")
-                                .font(.system(size: 11, weight: .medium))
+                                .font(.system(size: 14))
+                            Text("\(offlineCount) MEDIA OFFLINE")
+                                .font(.system(size: 13, weight: .bold))
                                 .foregroundColor(.yellow)
                         }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5)
+                                .fill(Color.yellow.opacity(0.15))
+                        )
                     }
 
                     Spacer()
@@ -121,24 +133,23 @@ struct CombineSheet: View {
                 .frame(maxHeight: 280)
 
                 if offlineCount > 0 {
-                    HStack(spacing: 4) {
-                        Rectangle()
-                            .fill(Color.yellow.opacity(0.2))
-                            .frame(width: 14, height: 14)
-                            .cornerRadius(2)
-                        Text("Yellow = media offline (volume not mounted)")
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
+                    HStack(spacing: 6) {
+                        Image(systemName: "externaldrive.trianglebadge.exclamationmark")
+                            .foregroundColor(.yellow)
+                            .font(.system(size: 12))
+                        Text("Yellow rows = media offline — mount the volume to enable combine")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.yellow.opacity(0.85))
                     }
+                    .padding(.top, 4)
                 }
             }
         }
     }
 
     private func pairRow(index i: Int, pair: (video: VideoRecord, audio: VideoRecord)) -> some View {
-        let fm = FileManager.default
-        let vOnline = fm.isReadableFile(atPath: pair.video.fullPath)
-        let aOnline = fm.isReadableFile(atPath: pair.audio.fullPath)
+        let vOnline = VolumeReachability.isReachable(path: pair.video.fullPath)
+        let aOnline = VolumeReachability.isReachable(path: pair.audio.fullPath)
         let bothOnline = vOnline && aOnline
         let estSize = pair.video.sizeBytes + pair.audio.sizeBytes
 
@@ -340,8 +351,10 @@ struct CombineSheet: View {
         panel.allowsMultipleSelection = false
         panel.message = "Choose output folder for combined files"
         panel.prompt = "Select"
+        if let current = outputFolder { panel.directoryURL = current }
         if panel.runModal() == .OK, let url = panel.url {
             outputFolder = url
+            UserDefaults.standard.set(url.path, forKey: combineOutputFolderKey)
         }
     }
 }
@@ -357,7 +370,11 @@ struct CombinePairSheet: View {
     @Environment(\.dismiss) var dismiss
     @Environment(\.openWindow) var openWindow
 
-    @State private var outputFolder: URL?
+    @State private var outputFolder: URL? = {
+        guard let path = UserDefaults.standard.string(forKey: combineOutputFolderKey),
+              FileManager.default.fileExists(atPath: path) else { return nil }
+        return URL(fileURLWithPath: path)
+    }()
     @State private var technique: CombineJobStatus.CombineTechnique = .streamCopy
 
     private var outputFilename: String {
@@ -367,8 +384,8 @@ struct CombinePairSheet: View {
 
     private var estimatedBytes: Int64 { video.sizeBytes + audio.sizeBytes }
 
-    private var videoOnline: Bool { FileManager.default.isReadableFile(atPath: video.fullPath) }
-    private var audioOnline: Bool { FileManager.default.isReadableFile(atPath: audio.fullPath) }
+    private var videoOnline: Bool { VolumeReachability.isReachable(path: video.fullPath) }
+    private var audioOnline: Bool { VolumeReachability.isReachable(path: audio.fullPath) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -512,8 +529,10 @@ struct CombinePairSheet: View {
         panel.allowsMultipleSelection = false
         panel.message = "Choose output folder for combined file"
         panel.prompt = "Select"
+        if let current = outputFolder { panel.directoryURL = current }
         if panel.runModal() == .OK, let url = panel.url {
             outputFolder = url
+            UserDefaults.standard.set(url.path, forKey: combineOutputFolderKey)
         }
     }
 }
