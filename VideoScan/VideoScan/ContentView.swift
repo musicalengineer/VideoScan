@@ -372,19 +372,9 @@ struct CatalogView: View {
         searchText = ""
         showPairsOnly = false
 
-        if pairMode, let rec = model.records.first(where: { $0.id == id }) {
-            // Show just the pair (2 rows)
-            var ids: Set<UUID> = [id]
-            if let partner = rec.pairedWith {
-                ids.insert(partner.id)
-            }
-            filterByIDs = ids
-            selectedIDs = ids
-        } else {
-            // Show just the one file
-            filterByIDs = [id]
-            selectedIDs = [id]
-        }
+        let ids = VideoScanModel.catalogFilterIDs(for: id, pairMode: pairMode, in: model.records)
+        filterByIDs = ids
+        selectedIDs = ids
         // Generate thumbnail
         if let rec = model.records.first(where: { $0.id == id }),
            rec.streamType == .videoOnly || rec.streamType == .videoAndAudio {
