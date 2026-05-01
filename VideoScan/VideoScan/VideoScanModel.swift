@@ -3073,9 +3073,26 @@ final class VideoScanModel: ObservableObject {
             return true
         }
 
-        let technique = await MainActor.run {
+        var technique = await MainActor.run {
             guard jobIndex < self.dashboard.combineJobs.count else { return CombineJobStatus.CombineTechnique.streamCopy }
             return self.dashboard.combineJobs[jobIndex].technique
+        }
+
+        if technique == .streamCopy {
+            let check = CombineEngine.checkStreamCopyCompatibility(
+                videoCodec: video.videoCodec.isEmpty ? nil : video.videoCodec,
+                audioCodec: audio.audioCodec.isEmpty ? nil : audio.audioCodec
+            )
+            if !check.streamCopySafe {
+                technique = .reencodeProRes
+                await MainActor.run {
+                    if jobIndex < self.dashboard.combineJobs.count {
+                        self.dashboard.combineJobs[jobIndex].technique = technique
+                        self.dashboard.combineJobs[jobIndex].warningMessage = check.warning
+                    }
+                    self.log("    ⚠ \(check.warning ?? "Codec incompatible") — auto-switching to ProRes re-encode")
+                }
+            }
         }
 
         await MainActor.run {
