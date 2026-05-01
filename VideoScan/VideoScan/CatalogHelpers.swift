@@ -533,7 +533,7 @@ struct CatalogContent: View {
     private var catalogTable: some View {
         Table(tableData, selection: $selectedIDs, sortOrder: $sortOrder) {
             TableColumn("Filename", value: \.filename) { rec in
-                let offline = !FileManager.default.isReadableFile(atPath: rec.fullPath)
+                let offline = !VolumeReachability.isReachable(path: rec.fullPath)
                 HStack(spacing: 4) {
                     if showPairsOnly && rec.pairedWith != nil {
                         Image(systemName: rec.streamType == .videoOnly ? "film" : "waveform")
@@ -625,10 +625,10 @@ struct CatalogContent: View {
         .contextMenu(forSelectionType: UUID.self) { ids in
             if let id = ids.first,
                let rec = records.first(where: { $0.id == id }) {
-                Button(FileManager.default.isReadableFile(atPath: rec.fullPath)
+                Button(VolumeReachability.isReachable(path: rec.fullPath)
                        ? "Reveal in Finder"
                        : "Reveal in Finder (offline)") {
-                    if FileManager.default.isReadableFile(atPath: rec.fullPath) {
+                    if VolumeReachability.isReachable(path: rec.fullPath) {
                         NSWorkspace.shared.selectFile(rec.fullPath, inFileViewerRootedAtPath: "")
                     } else {
                         let alert = NSAlert()
