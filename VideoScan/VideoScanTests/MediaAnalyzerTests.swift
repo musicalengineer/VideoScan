@@ -216,3 +216,180 @@ struct DispositionTests {
         #expect(r.mediaDisposition == .important)
     }
 }
+
+// MARK: - Paired File Recovery
+
+struct PairedFileTests {
+
+    @Test func audioOnlyWithPairIsRecoverable() {
+        let r = record(filename: "audio.mxf", streamType: .audioOnly)
+        r.pairGroupID = UUID()
+        let result = MediaAnalyzer.score(r)
+        #expect(result.suggestedDisposition == .recoverable)
+    }
+
+    @Test func videoOnlyWithPairIsRecoverable() {
+        let r = record(filename: "video.mxf", streamType: .videoOnly)
+        r.pairGroupID = UUID()
+        let result = MediaAnalyzer.score(r)
+        #expect(result.suggestedDisposition == .recoverable)
+    }
+
+    @Test func audioOnlyWithoutPairScoresJunk() {
+        let r = record(filename: "orphan.mxf", duration: 10, streamType: .audioOnly)
+        let result = MediaAnalyzer.score(r)
+        #expect(result.junkScore >= 3)
+    }
+
+    @Test func longAudioOnlyWithoutPairScoresLess() {
+        let r = record(filename: "long_audio.mxf", duration: 120, streamType: .audioOnly)
+        let result = MediaAnalyzer.score(r)
+        #expect(result.junkScore <= 2)
+    }
+}
+
+// MARK: - Voicemail / VoIP Detection
+
+struct VoicemailTests {
+
+    @Test func lowSampleRateFlagged() {
+        let r = record(filename: "recording.mov")
+        r.audioSampleRate = "8000"
+        r.audioChannels = "1"
+        let result = MediaAnalyzer.score(r)
+        #expect(result.junkReasons.contains { $0.contains("voicemail") || $0.contains("VoIP") })
+    }
+
+    @Test func normalSampleRateNotFlagged() {
+        let r = record(filename: "family_dinner.mov")
+        r.audioSampleRate = "48000"
+        r.audioChannels = "2"
+        let result = MediaAnalyzer.score(r)
+        #expect(result.junkReasons.allSatisfy { !$0.contains("voicemail") && !$0.contains("VoIP") })
+    }
+}
+
+// MARK: - Family Scoring Signals
+
+struct FamilyScoringTests {
+
+    @Test func longFormVideoWithAudioScoresFamily() {
+        let r = record(filename: "christmas_2015.mov", duration: 600)
+        let result = MediaAnalyzer.score(r)
+        #expect(result.familyScore >= 2)
+        #expect(result.familyReasons.contains { $0.contains("Long-form") })
+    }
+
+    @Test func familyPathBoostsScore() {
+        let r = record(filename: "clip.mov",
+                       fullPath: "/Volumes/Family/Home Videos/clip.mov",
+                       duration: 120)
+        let result = MediaAnalyzer.score(r)
+        #expect(result.familyScore >= 1)
+    }
+
+    @Test func camcorderResolutionBoosts() {
+        let r = record(filename: "tape01.mov", duration: 120, resolution: "720x480")
+        let result = MediaAnalyzer.score(r)
+        #expect(result.familyReasons.contains { $0.contains("camcorder") })
+    }
+
+    @Test func importantDispositionForStrongFamilySignals() {
+        let r = record(filename: "donna_birthday.mov",
+                       fullPath: "/Volumes/Family/Videos/donna_birthday.mov",
+                       duration: 600,
+                       resolution: "720x480")
+        let result = MediaAnalyzer.score(r)
+        #expect(result.suggestedDisposition == .important)
+    }
+}
+
+// MARK: - Screencast Detection
+
+struct ScreencastTests {
+
+    @Test func screencastResolutionVideoOnlyFlagged() {
+        let r = record(filename: "screen.mov", streamType: .videoOnly, resolution: "2560x1440")
+        let result = MediaAnalyzer.score(r)
+        #expect(result.junkReasons.contains { $0.contains("Screencast") })
+    }
+
+    @Test func screencastResolutionWithAudioNotFlagged() {
+        let r = record(filename: "presentation.mov", duration: 600, resolution: "2560x1440")
+        let result = MediaAnalyzer.score(r)
+        #expect(result.junkReasons.allSatisfy { !$0.contains("Screencast resolution") || !$0.contains("no audio") })
+    }
+}
+
+// MARK: - System Artifact Detection
+
+struct SystemArtifactTests {
+
+    @Test func trashPathFlagged() {
+        let r = record(filename: "clip.mov", fullPath: "/Volumes/Test/.Trash/clip.mov")
+        let result = MediaAnalyzer.score(r)
+        #expect(result.junkReasons.contains { $0.contains("System") || $0.contains("hidden") })
+    }
+
+    @Test func dsStorePathFlagged() {
+        let r = record(filename: ".DS_Store.mov", fullPath: "/Volumes/Test/.DS_Store.mov")
+        let result = MediaAnalyzer.score(r)
+        #expect(result.junkScore >= 4)
+    }
+}
+
+// MARK: - Truncated File Detection
+
+struct TruncatedFileTests {
+
+    @Test func normalSizeNotFlagged() {
+        let r = record(filename: "good.mov", duration: 60, sizeBytes: 100_000_000)
+        r.totalBitrate = "13000000"
+        let result = MediaAnalyzer.score(r)
+        #expect(result.junkReasons.allSatisfy { !$0.contains("truncated") })
+    }
+
+    @Test func drasticallySmallSizeFlagged() {
+        let r = record(filename: "cut_short.mov", duration: 60, sizeBytes: 1_000)
+        r.totalBitrate = "13000000"
+        let result = MediaAnalyzer.score(r)
+        #expect(result.junkReasons.contains { $0.contains("truncated") })
+    }
+}
+
+// MARK: - Disposition Threshold Edge Cases
+
+struct DispositionThresholdTests {
+
+    @Test func junkScore4WithLowFamilyStaysUnreviewed() {
+        let r = record(filename: "test_render.mov", duration: 1.5,
+                       streamType: .videoOnly, resolution: "320x240",
+                       videoCodec: "rawvideo", audioCodec: "")
+        let result = MediaAnalyzer.score(r)
+        #expect(result.junkScore >= 2)
+        #expect(result.suggestedDisposition != .important)
+    }
+
+    @Test func zeroDurationIsSuspectedJunk() {
+        let r = record(filename: "empty.mov", duration: 0,
+                       resolution: "", videoCodec: "", audioCodec: "")
+        let result = MediaAnalyzer.score(r)
+        #expect(result.suggestedDisposition == .suspectedJunk)
+    }
+
+    @Test func analyzeAllSummaryCountsCorrect() {
+        let good = record(filename: "family.mov",
+                          fullPath: "/Volumes/Family/Videos/family.mov",
+                          duration: 600, resolution: "720x480")
+        let bad = record(filename: "broken.mov",
+                         streamType: .ffprobeFailed,
+                         resolution: "", videoCodec: "", audioCodec: "")
+        let paired = record(filename: "audio.mxf", streamType: .audioOnly)
+        paired.pairGroupID = UUID()
+
+        let summary = MediaAnalyzer.analyzeAll([good, bad, paired])
+        #expect(summary.familyCount >= 1)
+        #expect(summary.junkCount >= 1)
+        #expect(summary.recoverableCount >= 1)
+    }
+}
