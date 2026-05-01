@@ -1334,7 +1334,7 @@ final class VideoScanModel: ObservableObject {
             // Resolve symlinks — /Volumes/Macintosh HD is a symlink to /
             let resolved = (path as NSString).resolvingSymlinksInPath
             guard resolved != "/" else { return nil }
-            guard fm.isReadableFile(atPath: path) else { return nil }
+            guard VolumeReachability.isReachable(path: path) else { return nil }
 
             let alreadyAdded = existingPaths.contains(path)
             let isNetwork = isNetworkVolume(path: path)
@@ -2309,7 +2309,7 @@ final class VideoScanModel: ObservableObject {
         // the walk phase can vanish by the time we probe (symlinks, aliases,
         // unmounted subdirs). Skip immediately rather than wasting time on
         // ffprobe which will also fail.
-        guard fm.isReadableFile(atPath: path) else {
+        guard VolumeReachability.isReachable(path: path) else {
             let rec = VideoRecord()
             rec.filename      = url.lastPathComponent
             rec.ext           = url.pathExtension.uppercased()
@@ -2628,8 +2628,8 @@ final class VideoScanModel: ObservableObject {
     /// Pick the best record from a set: prefer online, then playable, then largest.
     private func bestCopy(from candidates: [VideoRecord]) -> VideoRecord? {
         candidates.sorted { a, b in
-            let aOnline = FileManager.default.isReadableFile(atPath: a.fullPath)
-            let bOnline = FileManager.default.isReadableFile(atPath: b.fullPath)
+            let aOnline = VolumeReachability.isReachable(path: a.fullPath)
+            let bOnline = VolumeReachability.isReachable(path: b.fullPath)
             if aOnline != bOnline { return aOnline }
             if a.isPlayable != b.isPlayable { return a.isPlayable == "Yes" }
             return a.sizeBytes > b.sizeBytes
