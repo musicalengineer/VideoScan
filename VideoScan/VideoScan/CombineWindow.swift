@@ -184,46 +184,47 @@ struct CombineWindow: View {
                     .padding(.bottom, 4)
             }
 
-            // Warning banner (e.g. silent audio)
-            if let warning = job.warningMessage {
-                HStack(spacing: 5) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(.orange)
-                        .font(.system(size: 12))
-                    Text(warning)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.orange)
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 3)
-            }
-
-            // Action buttons when selected
-            if isSelected {
-                HStack(spacing: 8) {
-                    Spacer()
-
-                    if job.phase == .done {
-                        Button("Reveal in Finder") {
-                            NSWorkspace.shared.selectFile(job.outputPath, inFileViewerRootedAtPath: "")
-                        }
-                        .font(.system(size: 11))
-                        .buttonStyle(.bordered)
-                    }
-
-                    if job.phase == .muxing || job.phase == .buffering || job.phase == .queued {
-                        Button(job.isPaused ? "Resume" : "Pause") {
-                            model.toggleJobPause(job.pairIndex)
-                        }
-                        .font(.system(size: 11))
-                        .buttonStyle(.bordered)
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.bottom, 6)
-            }
+            jobWarningAndActions(job, isSelected: isSelected)
         }
         .background(rowBackground(job, selected: isSelected))
+    }
+
+    @ViewBuilder
+    private func jobWarningAndActions(_ job: CombineJobStatus, isSelected: Bool) -> some View {
+        if let warning = job.warningMessage {
+            HStack(spacing: 5) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(.orange)
+                    .font(.system(size: 12))
+                Text(warning)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.orange)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 3)
+        }
+
+        if isSelected {
+            HStack(spacing: 8) {
+                Spacer()
+                if job.phase == .done {
+                    Button("Reveal in Finder") {
+                        NSWorkspace.shared.selectFile(job.outputPath, inFileViewerRootedAtPath: "")
+                    }
+                    .font(.system(size: 11))
+                    .buttonStyle(.bordered)
+                }
+                if job.phase == .muxing || job.phase == .buffering || job.phase == .queued {
+                    Button(job.isPaused ? "Resume" : "Pause") {
+                        model.toggleJobPause(job.pairIndex)
+                    }
+                    .font(.system(size: 11))
+                    .buttonStyle(.bordered)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 6)
+        }
     }
 
     @ViewBuilder

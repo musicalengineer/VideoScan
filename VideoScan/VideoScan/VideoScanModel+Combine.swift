@@ -176,9 +176,20 @@ extension VideoScanModel {
             return false
         }
 
-        await MainActor.run {
-            self.updateJobPhase(jobIndex, .muxing)
-        }
+        return await runMuxAndVerify(
+            staged: staged, outURL: outURL, outName: outName,
+            technique: technique, video: video, audio: audio, jobIndex: jobIndex
+        )
+    }
+
+    private func runMuxAndVerify(
+        staged: (video: URL, audio: URL, tempDir: URL?),
+        outURL: URL, outName: String,
+        technique: CombineJobStatus.CombineTechnique,
+        video: VideoRecord, audio: VideoRecord,
+        jobIndex: Int
+    ) async -> Bool {
+        await MainActor.run { self.updateJobPhase(jobIndex, .muxing) }
 
         let duration = await MainActor.run {
             guard jobIndex < self.dashboard.combineJobs.count else { return 0.0 }
@@ -221,7 +232,6 @@ extension VideoScanModel {
             return false
         }
 
-        // Verify the output has both video and audio streams
         await MainActor.run {
             self.updateJobPhase(jobIndex, .verifying)
             self.log("    Verifying output…")
