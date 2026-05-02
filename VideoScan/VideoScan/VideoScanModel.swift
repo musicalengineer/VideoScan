@@ -231,8 +231,8 @@ final class VideoScanModel: ObservableObject {
     }
 
     private var scanTask: Task<Void, Never>?
-    private var combineTask: Task<Void, Never>?
-    private var ramDisk = RAMDisk()
+    var combineTask: Task<Void, Never>?
+    var ramDisk = RAMDisk()
     nonisolated private let metadataCache = MetadataCache()
 
     /// Cooperative pause gate for scan tasks
@@ -917,15 +917,7 @@ final class VideoScanModel: ObservableObject {
     }
 
     private func applyVolumeSnapshot(_ s: VolumeMetadataSnapshot, to t: CatalogScanTarget) {
-        if let phase = VolumePhase(rawValue: s.phase) { t.phase = phase }
-        if let role = VolumeRole(rawValue: s.role) { t.role = role }
-        if let trust = VolumeTrust(rawValue: s.trust) { t.trust = trust }
-        if let tech = VolumeMediaTech(rawValue: s.mediaTech) { t.mediaTech = tech }
-        t.filesystem = s.filesystem
-        t.purchaseYear = s.purchaseYear
-        t.capacityTB = s.capacityTB
-        t.notes = s.notes
-        if let d = s.lastScannedDate { t.lastScannedDate = d }
+        ScanTargetPersistence.applyVolumeSnapshot(s, to: t)
     }
 
     private static func shortDate(_ d: Date) -> String {
@@ -969,83 +961,39 @@ final class VideoScanModel: ObservableObject {
     }
 
     private func restoreScanTargets() {
-        let paths = UserDefaults.standard.stringArray(forKey: Self.savedTargetsKey) ?? []
-        let dates = UserDefaults.standard.dictionary(forKey: Self.savedDatesKey) as? [String: Date] ?? [:]
-        let phases = UserDefaults.standard.dictionary(forKey: Self.savedPhasesKey) as? [String: String] ?? [:]
-        let roles = UserDefaults.standard.dictionary(forKey: Self.savedRolesKey) as? [String: String] ?? [:]
-        let trusts = UserDefaults.standard.dictionary(forKey: Self.savedTrustKey) as? [String: String] ?? [:]
-        let filesystems = UserDefaults.standard.dictionary(forKey: Self.savedFilesystemKey) as? [String: String] ?? [:]
-        let mediaTechs = UserDefaults.standard.dictionary(forKey: Self.savedMediaTechKey) as? [String: String] ?? [:]
-        let purchaseYears = UserDefaults.standard.dictionary(forKey: Self.savedPurchaseYearKey) as? [String: Int] ?? [:]
-        let capacities = UserDefaults.standard.dictionary(forKey: Self.savedCapacityKey) as? [String: Double] ?? [:]
-        let notes = UserDefaults.standard.dictionary(forKey: Self.savedNotesKey) as? [String: String] ?? [:]
-        for p in paths where !p.isEmpty {
-            if !scanTargets.contains(where: { $0.searchPath == p }) {
-                let t = CatalogScanTarget(searchPath: p)
-                t.lastScannedDate = dates[p]
-                if let raw = phases[p] {
-                    if let phase = VolumePhase(rawValue: raw) {
-                        t.phase = phase
-                    } else if raw == "New" {
-                        t.phase = .noCatalog
-                    }
-                }
-                if let raw = roles[p], let role = VolumeRole(rawValue: raw) {
-                    t.role = role
-                }
-                if let raw = trusts[p], let trust = VolumeTrust(rawValue: raw) {
-                    t.trust = trust
-                }
-                t.filesystem = filesystems[p] ?? ""
-                if let raw = mediaTechs[p], let tech = VolumeMediaTech(rawValue: raw) {
-                    t.mediaTech = tech
-                }
-                t.purchaseYear = purchaseYears[p]
-                t.capacityTB = capacities[p]
-                t.notes = notes[p] ?? ""
-                scanTargets.append(t)
-            }
-        }
+        let restored = ScanTargetPersistence.restore(
+            existing: scanTargets,
+            savedTargetsKey: Self.savedTargetsKey,
+            savedDatesKey: Self.savedDatesKey,
+            savedPhasesKey: Self.savedPhasesKey,
+            savedRolesKey: Self.savedRolesKey,
+            savedTrustKey: Self.savedTrustKey,
+            savedFilesystemKey: Self.savedFilesystemKey,
+            savedMediaTechKey: Self.savedMediaTechKey,
+            savedPurchaseYearKey: Self.savedPurchaseYearKey,
+            savedCapacityKey: Self.savedCapacityKey,
+            savedNotesKey: Self.savedNotesKey
+        )
+        scanTargets.append(contentsOf: restored)
     }
 
     private func persistScanTargets() {
-        let paths = scanTargets.map { $0.searchPath }
-        UserDefaults.standard.set(paths, forKey: Self.savedTargetsKey)
+        ScanTargetPersistence.persistPaths(scanTargets, key: Self.savedTargetsKey)
     }
 
-    /// Save all per-volume metadata so it survives relaunch.
     private func persistScanDates() {
-        var dates: [String: Date] = [:]
-        var phases: [String: String] = [:]
-        var roles: [String: String] = [:]
-        var trusts: [String: String] = [:]
-        var filesystems: [String: String] = [:]
-        var mediaTechs: [String: String] = [:]
-        var purchaseYears: [String: Int] = [:]
-        var capacities: [String: Double] = [:]
-        var notesMap: [String: String] = [:]
-        for t in scanTargets {
-            if let d = t.lastScannedDate {
-                dates[t.searchPath] = d
-            }
-            phases[t.searchPath] = t.phase.rawValue
-            roles[t.searchPath] = t.role.rawValue
-            trusts[t.searchPath] = t.trust.rawValue
-            if !t.filesystem.isEmpty { filesystems[t.searchPath] = t.filesystem }
-            mediaTechs[t.searchPath] = t.mediaTech.rawValue
-            if let y = t.purchaseYear { purchaseYears[t.searchPath] = y }
-            if let c = t.capacityTB { capacities[t.searchPath] = c }
-            if !t.notes.isEmpty { notesMap[t.searchPath] = t.notes }
-        }
-        UserDefaults.standard.set(dates, forKey: Self.savedDatesKey)
-        UserDefaults.standard.set(phases, forKey: Self.savedPhasesKey)
-        UserDefaults.standard.set(roles, forKey: Self.savedRolesKey)
-        UserDefaults.standard.set(trusts, forKey: Self.savedTrustKey)
-        UserDefaults.standard.set(filesystems, forKey: Self.savedFilesystemKey)
-        UserDefaults.standard.set(mediaTechs, forKey: Self.savedMediaTechKey)
-        UserDefaults.standard.set(purchaseYears, forKey: Self.savedPurchaseYearKey)
-        UserDefaults.standard.set(capacities, forKey: Self.savedCapacityKey)
-        UserDefaults.standard.set(notesMap, forKey: Self.savedNotesKey)
+        ScanTargetPersistence.persistMetadata(
+            scanTargets,
+            savedDatesKey: Self.savedDatesKey,
+            savedPhasesKey: Self.savedPhasesKey,
+            savedRolesKey: Self.savedRolesKey,
+            savedTrustKey: Self.savedTrustKey,
+            savedFilesystemKey: Self.savedFilesystemKey,
+            savedMediaTechKey: Self.savedMediaTechKey,
+            savedPurchaseYearKey: Self.savedPurchaseYearKey,
+            savedCapacityKey: Self.savedCapacityKey,
+            savedNotesKey: Self.savedNotesKey
+        )
     }
 
     /// Update a volume's lifecycle phase and persist.
@@ -2371,94 +2319,7 @@ final class VideoScanModel: ObservableObject {
     /// Tolerance for timestamp matching (seconds)
     private let timestampTolerance: TimeInterval = 5.0
 
-    // MARK: - Correlate helpers
-
-    private typealias CorrelateCandidate = CorrelationScorer.Candidate
-
-    /// Select records to re-correlate (all or the selected subset) and clear
-    /// their prior pairing so they can be re-paired from scratch.
-    private func resolveCorrelateScope(selectedIDs: Set<UUID>?) -> [VideoRecord] {
-        CorrelationScorer.resolveCorrelateScope(records: records, selectedIDs: selectedIDs)
-    }
-
-    /// Index audio records by filename-correlation key and directory for O(1) lookup.
-    private func buildAudioPools(
-        from audios: [VideoRecord]
-    ) -> (byKey: [String: [VideoRecord]], byDir: [String: [VideoRecord]]) {
-        CorrelationScorer.buildAudioPools(from: audios)
-    }
-
-    /// Build the candidate audio pool for a video: indexed lookups first, fall back
-    /// to duration/timestamp scan across ALL audios only when the pool is thin.
-    private func gatherCandidateAudios(
-        for video: VideoRecord,
-        vKey: String,
-        allAudios: [VideoRecord],
-        byKey: [String: [VideoRecord]],
-        byDir: [String: [VideoRecord]]
-    ) -> [VideoRecord] {
-        CorrelationScorer.gatherCandidateAudios(
-            for: video, vKey: vKey, allAudios: allAudios,
-            byKey: byKey, byDir: byDir,
-            durationTolerance: durationTolerance,
-            timestampTolerance: timestampTolerance
-        )
-    }
-
-    /// Score a single video/audio pair and return a Candidate if the minimum
-    /// threshold is met. Same weighting as Correlator.swift (filename 4 / duration 3 /
-    /// timestamp 3 / timecode 2 / directory 1 / tape 1).
-    private func scoreCorrelatePair(
-        video: VideoRecord,
-        audio: VideoRecord,
-        vKey: String
-    ) -> CorrelateCandidate? {
-        CorrelationScorer.scoreCorrelatePair(
-            video: video, audio: audio, vKey: vKey,
-            durationTolerance: durationTolerance,
-            timestampTolerance: timestampTolerance
-        )
-    }
-
-    /// Greedy max-score assignment: sort by score descending, claim each pair
-    /// unless either side was already matched. Mutates records in place.
-    private func assignCorrelateCandidates(
-        _ candidates: [CorrelateCandidate],
-        matched: inout Set<UUID>
-    ) {
-        let logLines = CorrelationScorer.assignCandidates(candidates, matched: &matched)
-        for line in logLines { log(line) }
-    }
-
-    /// Emit the end-of-correlation summary (both status line and console log).
-    private func logCorrelateSummary(needsPairing: [VideoRecord], matched: Set<UUID>) {
-        let totalPairs     = matched.count / 2
-        let highCount      = records.filter { $0.pairConfidence == .high }.count / 2
-        let medCount       = records.filter { $0.pairConfidence == .medium }.count / 2
-        let lowCount       = records.filter { $0.pairConfidence == .low }.count / 2
-        let stillUnmatched = needsPairing.filter { !matched.contains($0.id) }.count
-
-        correlateStatus = "\(totalPairs) pairs · \(stillUnmatched) unmatched"
-        log("""
-
-        Correlation complete:
-          \(totalPairs) pairs — \(highCount) high, \(medCount) medium, \(lowCount) low confidence
-          \(stillUnmatched) unmatched
-        """)
-    }
-
     // MARK: - Cross-Volume Avid Correlator
-
-    /// Extract the Avid clip ID from an MXF filename, e.g. "00001.V14D1BBD3F.mxf" -> "14D1BBD3F"
-    /// Returns (clipID, isVideo) or nil if the filename doesn't match the Avid pattern.
-    private func avidClipID(from filename: String) -> (clipID: String, isVideo: Bool)? {
-        CorrelationScorer.avidClipID(from: filename)
-    }
-
-    /// Pick the best record from a set: prefer online, then playable, then largest.
-    private func bestCopy(from candidates: [VideoRecord]) -> VideoRecord? {
-        CorrelationScorer.bestCopy(from: candidates)
-    }
 
     /// Correlate Avid MXF A/V pairs across all volumes using clip ID matching.
     func correlateAcrossVolumes() {
@@ -2478,7 +2339,7 @@ final class VideoScanModel: ObservableObject {
         var audiosByClip: [String: [VideoRecord]] = [:]
 
         for r in records {
-            guard let (clipID, isVideo) = avidClipID(from: r.filename) else { continue }
+            guard let (clipID, isVideo) = CorrelationScorer.avidClipID(from: r.filename) else { continue }
             if isVideo {
                 videosByClip[clipID, default: []].append(r)
             } else {
@@ -2501,8 +2362,8 @@ final class VideoScanModel: ObservableObject {
                 continue
             }
 
-            guard let bestVideo = bestCopy(from: videos),
-                  let bestAudio = bestCopy(from: audios) else { continue }
+            guard let bestVideo = CorrelationScorer.bestCopy(from: videos),
+                  let bestAudio = CorrelationScorer.bestCopy(from: audios) else { continue }
 
             let gid = UUID()
             bestVideo.pairedWith = bestAudio
@@ -2542,7 +2403,7 @@ final class VideoScanModel: ObservableObject {
         correlateStatus = ""
         defer { isCorrelating = false }
 
-        let scope = resolveCorrelateScope(selectedIDs: selectedIDs)
+        let scope = CorrelationScorer.resolveCorrelateScope(records: records, selectedIDs: selectedIDs)
         let needsPairing = scope.filter { $0.streamType.needsCorrelation }
         let allVideos = needsPairing.filter { $0.streamType == .videoOnly }
         let allAudios = needsPairing.filter { $0.streamType == .audioOnly }
@@ -2550,24 +2411,43 @@ final class VideoScanModel: ObservableObject {
         correlateStatus = "\(allVideos.count) video + \(allAudios.count) audio candidates"
         log("  Correlating \(allVideos.count) video-only + \(allAudios.count) audio-only files...")
 
-        let pools = buildAudioPools(from: allAudios)
-        var candidates: [CorrelateCandidate] = []
+        let pools = CorrelationScorer.buildAudioPools(from: allAudios)
+        var candidates: [CorrelationScorer.Candidate] = []
         for v in allVideos {
-            let vKey = filenameCorrelationKey(v.filename)
-            let audioPool = gatherCandidateAudios(
+            let vKey = CorrelationScorer.filenameCorrelationKey(v.filename)
+            let audioPool = CorrelationScorer.gatherCandidateAudios(
                 for: v, vKey: vKey, allAudios: allAudios,
-                byKey: pools.byKey, byDir: pools.byDir
+                byKey: pools.byKey, byDir: pools.byDir,
+                durationTolerance: durationTolerance,
+                timestampTolerance: timestampTolerance
             )
             for a in audioPool {
-                if let candidate = scoreCorrelatePair(video: v, audio: a, vKey: vKey) {
+                if let candidate = CorrelationScorer.scoreCorrelatePair(
+                    video: v, audio: a, vKey: vKey,
+                    durationTolerance: durationTolerance,
+                    timestampTolerance: timestampTolerance
+                ) {
                     candidates.append(candidate)
                 }
             }
         }
 
         var matched = Set<UUID>()
-        assignCorrelateCandidates(candidates, matched: &matched)
-        logCorrelateSummary(needsPairing: needsPairing, matched: matched)
+        let logLines = CorrelationScorer.assignCandidates(candidates, matched: &matched)
+        for line in logLines { log(line) }
+
+        let totalPairs     = matched.count / 2
+        let highCount      = records.filter { $0.pairConfidence == .high }.count / 2
+        let medCount       = records.filter { $0.pairConfidence == .medium }.count / 2
+        let lowCount       = records.filter { $0.pairConfidence == .low }.count / 2
+        let stillUnmatched = needsPairing.filter { !matched.contains($0.id) }.count
+        correlateStatus = "\(totalPairs) pairs · \(stillUnmatched) unmatched"
+        log("""
+
+        Correlation complete:
+          \(totalPairs) pairs — \(highCount) high, \(medCount) medium, \(lowCount) low confidence
+          \(stillUnmatched) unmatched
+        """)
 
         // Force table refresh
         let tmp = records
@@ -2731,531 +2611,6 @@ final class VideoScanModel: ObservableObject {
             }
         }
         return (path as NSString).deletingLastPathComponent
-    }
-
-    /// Normalize filename by stripping V/A prefix (Avid MXF convention).
-    /// Only strips when followed by hex digits (e.g., V01A23BC.mxf -> _01A23BC.mxf)
-    func filenameCorrelationKey(_ filename: String) -> String {
-        CorrelationScorer.filenameCorrelationKey(filename)
-    }
-
-    // MARK: - Combine
-
-    /// All correlated pairs (video record is always first in tuple)
-    var correlatedPairs: [(video: VideoRecord, audio: VideoRecord)] {
-        var seen = Set<UUID>()
-        var pairs: [(VideoRecord, VideoRecord)] = []
-        for rec in records {
-            guard let partner = rec.pairedWith, !seen.contains(rec.id) else { continue }
-            seen.insert(rec.id)
-            seen.insert(partner.id)
-            let v = rec.streamType == .videoOnly ? rec : partner
-            let a = rec.streamType == .audioOnly ? rec : partner
-            pairs.append((v, a))
-        }
-        return pairs
-    }
-
-    func combineSelectedPairs(_ pairs: [(video: VideoRecord, audio: VideoRecord)], outputFolder: URL, technique: CombineJobStatus.CombineTechnique = .streamCopy, maxConcurrency: Int? = nil) {
-        guard !pairs.isEmpty else {
-            log("No pairs selected to combine.")
-            return
-        }
-        combineAllPairsInternal(pairs: pairs, outputFolder: outputFolder, technique: technique, maxConcurrency: maxConcurrency)
-    }
-
-    func combineAllPairs(outputFolder: URL, maxConcurrency: Int? = nil) {
-        let pairs = correlatedPairs
-        guard !pairs.isEmpty else {
-            log("No correlated pairs to combine.")
-            return
-        }
-        combineAllPairsInternal(pairs: pairs, outputFolder: outputFolder, maxConcurrency: maxConcurrency)
-    }
-
-    // MARK: - Combine helpers
-
-    /// Mount the RAM disk for combine temp buffering. Returns the base URL to
-    /// use (RAM disk if mounted, otherwise the system temp dir) and a flag.
-    private func mountCombineRAMDisk() async -> (tempBase: URL, hasRAMDisk: Bool) {
-        let combineDiskMB = perfSettings.ramDiskGB * 1024
-        let hasRAMDisk = await ramDisk.mount(sizeMB: combineDiskMB)
-        let ramMountPoint = await ramDisk.mountPoint
-        if hasRAMDisk, let mp = ramMountPoint {
-            log("  RAM disk mounted at \(mp) (\(perfSettings.ramDiskGB) GB)")
-            return (URL(fileURLWithPath: mp), true)
-        }
-        return (FileManager.default.temporaryDirectory, false)
-    }
-
-    /// Buffer a single network-side file to the combine temp dir.
-    /// Returns the local URL to pass to ffmpeg.
-    private func bufferCombineSource(
-        kind: String,
-        from remotePath: String,
-        to destination: URL,
-        hasRAMDisk: Bool
-    ) async throws -> URL {
-        await MainActor.run {
-            self.log("    Buffering \(kind) to \(hasRAMDisk ? "RAM disk" : "temp")...")
-        }
-        try await CombineVerifier.bufferedCopy(from: URL(fileURLWithPath: remotePath), to: destination)
-        return destination
-    }
-
-    /// Copy network-backed inputs to `tempBase` and return the local paths to use.
-    /// Creates (and marks for cleanup) a dedicated temp dir only when needed.
-    private func stageCombineInputs(
-        videoPath: String,
-        videoFilename: String,
-        audioPath: String,
-        audioFilename: String,
-        tempBase: URL,
-        hasRAMDisk: Bool
-    ) async throws -> (video: URL, audio: URL, tempDir: URL?) {
-        let videoIsNetwork = CombineVerifier.isNetworkPath(videoPath)
-        let audioIsNetwork = CombineVerifier.isNetworkPath(audioPath)
-        guard videoIsNetwork || audioIsNetwork else {
-            return (URL(fileURLWithPath: videoPath), URL(fileURLWithPath: audioPath), nil)
-        }
-        let tempDir = tempBase.appendingPathComponent("VS_\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-
-        var localVideo = URL(fileURLWithPath: videoPath)
-        var localAudio = URL(fileURLWithPath: audioPath)
-        if videoIsNetwork {
-            localVideo = try await bufferCombineSource(
-                kind: "video", from: videoPath,
-                to: tempDir.appendingPathComponent(videoFilename),
-                hasRAMDisk: hasRAMDisk
-            )
-        }
-        if audioIsNetwork {
-            localAudio = try await bufferCombineSource(
-                kind: "audio", from: audioPath,
-                to: tempDir.appendingPathComponent(audioFilename),
-                hasRAMDisk: hasRAMDisk
-            )
-        }
-        return (localVideo, localAudio, tempDir)
-    }
-
-    /// Process one video/audio pair end-to-end: skip-if-exists, pause-gate,
-    /// stage inputs, mux, clean up. Returns true on success.
-    private func processCombinePair(
-        video: VideoRecord,
-        audio: VideoRecord,
-        outputFolder: URL,
-        tempBase: URL,
-        hasRAMDisk: Bool,
-        jobIndex: Int
-    ) async -> Bool {
-        if Task.isCancelled { return false }
-        await combinePauseGate.waitIfPaused()
-        await waitForJobPause(jobIndex)
-        if Task.isCancelled { return false }
-
-        let videoPath = video.fullPath
-        let audioPath = audio.fullPath
-        let videoFilename = video.filename
-        let audioFilename = audio.filename
-        let baseName = URL(fileURLWithPath: videoPath).deletingPathExtension().lastPathComponent
-        let outName = "\(baseName)_combined.mov"
-        let outURL = outputFolder.appendingPathComponent(outName)
-
-        // Skip offline files (VolumeReachability avoids blocking on network timeouts)
-        if !VolumeReachability.isReachable(path: videoPath) || !VolumeReachability.isReachable(path: audioPath) {
-            await MainActor.run {
-                self.dashboard.combineCompleted += 1
-                self.dashboard.combineFailed += 1
-                self.updateJobPhase(jobIndex, .failed)
-                self.log("  [\(self.dashboard.combineCompleted)/\(self.dashboard.combineTotal)] \(outName) — media offline, skipping")
-            }
-            return false
-        }
-
-        // Skip if already completed (resume after pause)
-        let fm = FileManager.default
-        if fm.fileExists(atPath: outURL.path) {
-            await MainActor.run {
-                self.dashboard.combineCompleted += 1
-                self.dashboard.combineSkipped += 1
-                self.updateJobPhase(jobIndex, .skipped)
-                self.log("  [\(self.dashboard.combineCompleted)/\(self.dashboard.combineTotal)] \(outName) — already exists, skipping")
-            }
-            return true
-        }
-
-        var technique = await MainActor.run {
-            guard jobIndex < self.dashboard.combineJobs.count else { return CombineJobStatus.CombineTechnique.streamCopy }
-            return self.dashboard.combineJobs[jobIndex].technique
-        }
-
-        if technique == .streamCopy {
-            let check = CombineEngine.checkStreamCopyCompatibility(
-                videoCodec: video.videoCodec.isEmpty ? nil : video.videoCodec,
-                audioCodec: audio.audioCodec.isEmpty ? nil : audio.audioCodec
-            )
-            if !check.streamCopySafe {
-                technique = .reencodeProRes
-                await MainActor.run {
-                    if jobIndex < self.dashboard.combineJobs.count {
-                        self.dashboard.combineJobs[jobIndex].technique = technique
-                        self.dashboard.combineJobs[jobIndex].warningMessage = check.warning
-                    }
-                    self.log("    ⚠ \(check.warning ?? "Codec incompatible") — auto-switching to ProRes re-encode")
-                }
-            }
-        }
-
-        await MainActor.run {
-            self.dashboard.combineCurrentFile = outName
-            self.updateJobPhase(jobIndex, .buffering)
-            self.log("  [\(self.dashboard.combineCompleted + 1)/\(self.dashboard.combineTotal)] \(outName) (\(technique.rawValue))")
-            self.log("    Video: \(videoPath)")
-            self.log("    Audio: \(audioPath)")
-        }
-
-        let staged: (video: URL, audio: URL, tempDir: URL?)
-        do {
-            staged = try await stageCombineInputs(
-                videoPath: videoPath, videoFilename: videoFilename,
-                audioPath: audioPath, audioFilename: audioFilename,
-                tempBase: tempBase, hasRAMDisk: hasRAMDisk
-            )
-        } catch {
-            await MainActor.run {
-                self.log("    ERROR buffering: \(error.localizedDescription)")
-                self.dashboard.combineCompleted += 1
-                self.dashboard.combineFailed += 1
-                self.updateJobPhase(jobIndex, .failed)
-            }
-            return false
-        }
-
-        await MainActor.run {
-            self.updateJobPhase(jobIndex, .muxing)
-        }
-
-        let duration = await MainActor.run {
-            guard jobIndex < self.dashboard.combineJobs.count else { return 0.0 }
-            return self.dashboard.combineJobs[jobIndex].totalDurationSeconds
-        }
-
-        let logFn: @Sendable (String) -> Void = { [weak self] msg in
-            DispatchQueue.main.async { self?.log(msg) }
-        }
-        let jobIdx = jobIndex
-        let progressFn: @Sendable (Double) -> Void = { [weak self] frac in
-            DispatchQueue.main.async {
-                guard let self, jobIdx < self.dashboard.combineJobs.count else { return }
-                self.dashboard.combineJobs[jobIdx].progressFraction = frac
-            }
-        }
-
-        let result = await CombineEngine.runFFMpeg(
-            videoPath: staged.video.path,
-            audioPath: staged.audio.path,
-            outputPath: outURL.path,
-            technique: technique,
-            durationSeconds: duration,
-            onProgress: progressFn,
-            log: logFn
-        )
-
-        if let tempDir = staged.tempDir {
-            try? FileManager.default.removeItem(at: tempDir)
-        }
-        if !result.success {
-            try? FileManager.default.removeItem(at: outURL)
-            log("ffmpeg exit code \(result.exitCode)")
-            await MainActor.run {
-                self.dashboard.combineCompleted += 1
-                self.dashboard.combineFailed += 1
-                self.updateJobPhase(jobIndex, .failed)
-                self.log("    ✗ FAILED: \(outName)")
-            }
-            return false
-        }
-
-        // Verify the output has both video and audio streams
-        await MainActor.run {
-            self.updateJobPhase(jobIndex, .verifying)
-            self.log("    Verifying output…")
-        }
-        let verified = await verifyCombineOutput(url: outURL, expectedDuration: duration)
-        if !verified.ok {
-            try? FileManager.default.removeItem(at: outURL)
-            await MainActor.run {
-                self.dashboard.combineCompleted += 1
-                self.dashboard.combineFailed += 1
-                self.updateJobPhase(jobIndex, .failed)
-                self.log("    ✗ VERIFY FAILED: \(outName) — \(verified.reason)")
-            }
-            return false
-        }
-
-        let combinedRecord = await buildCombinedRecord(
-            outputURL: outURL, video: video, audio: audio, summary: verified.summary
-        )
-        await MainActor.run {
-            self.dashboard.combineCompleted += 1
-            self.dashboard.combineSucceeded += 1
-            self.updateJobPhase(jobIndex, .done)
-            if jobIndex < self.dashboard.combineJobs.count {
-                self.dashboard.combineJobs[jobIndex].progressFraction = 1.0
-                if let warning = verified.warning {
-                    self.dashboard.combineJobs[jobIndex].warningMessage = warning
-                    self.log("    ⚠ \(warning)")
-                }
-            }
-            self.log("    ✓ Verified: \(outURL.path) (\(verified.summary))")
-            if let rec = combinedRecord {
-                self.records.append(rec)
-                self.log("    → Added to catalog for Archive")
-            }
-        }
-        return true
-    }
-
-    @MainActor
-    private func updateJobPhase(_ index: Int, _ phase: CombineJobStatus.CombinePhase) {
-        guard index < dashboard.combineJobs.count else { return }
-        if phase == .buffering || phase == .muxing {
-            dashboard.combineJobs[index].startTime = dashboard.combineJobs[index].startTime ?? Date()
-        }
-        if phase == .done || phase == .failed || phase == .skipped {
-            dashboard.combineJobs[index].endTime = Date()
-        }
-        dashboard.combineJobs[index].phase = phase
-    }
-
-    @MainActor
-    func toggleJobPause(_ index: Int) {
-        guard index < dashboard.combineJobs.count else { return }
-        dashboard.combineJobs[index].isPaused.toggle()
-    }
-
-    /// Build a catalog record for a successfully combined output file.
-    /// Inherits the star rating from the source pair and links back via combinedFromPairID.
-    nonisolated private func buildCombinedRecord(
-        outputURL: URL, video: VideoRecord, audio: VideoRecord, summary: String
-    ) async -> VideoRecord? {
-        let (probe, _) = await CombineVerifier.runFFProbe(url: outputURL, ffprobePath: ffprobePath)
-        guard let probe else { return nil }
-        let fm = FileManager.default
-        let attrs = try? fm.attributesOfItem(atPath: outputURL.path)
-
-        let rec = VideoRecord()
-        rec.filename = outputURL.lastPathComponent
-        rec.ext = outputURL.pathExtension.lowercased()
-        rec.fullPath = outputURL.path
-        rec.directory = outputURL.deletingLastPathComponent().path
-        rec.container = probe.format?.format_name ?? "mov"
-        rec.streamTypeRaw = StreamType.videoAndAudio.rawValue
-
-        let bytes = (attrs?[.size] as? Int64) ?? Int64(probe.format?.size ?? "0") ?? 0
-        rec.sizeBytes = bytes
-        rec.size = Formatting.humanSize(bytes)
-
-        let dur = Double(probe.format?.duration ?? "0") ?? 0
-        rec.durationSeconds = dur
-        rec.duration = Formatting.duration(dur)
-
-        let streams = probe.streams ?? []
-        if let vs = streams.first(where: { $0.codec_type == "video" }) {
-            rec.videoCodec = vs.codec_name ?? ""
-            rec.resolution = (vs.width != nil && vs.height != nil) ? "\(vs.width!)x\(vs.height!)" : ""
-            rec.frameRate = vs.r_frame_rate ?? ""
-            rec.videoBitrate = vs.bit_rate ?? ""
-            rec.colorSpace = vs.color_space ?? ""
-            rec.bitDepth = vs.bits_per_raw_sample ?? ""
-            rec.scanType = vs.field_order ?? ""
-        }
-        if let as_ = streams.first(where: { $0.codec_type == "audio" }) {
-            rec.audioCodec = as_.codec_name ?? ""
-            rec.audioChannels = as_.channels.map(String.init) ?? ""
-            rec.audioSampleRate = as_.sample_rate ?? ""
-        }
-
-        rec.totalBitrate = probe.format?.bit_rate ?? ""
-        rec.isPlayable = "Yes"
-        rec.notes = "Combined: \(summary)"
-
-        let dateFmt = ISO8601DateFormatter()
-        dateFmt.formatOptions = [.withFullDate, .withTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
-        if let created = attrs?[.creationDate] as? Date {
-            rec.dateCreatedRaw = created
-            rec.dateCreated = dateFmt.string(from: created)
-        }
-        if let modified = attrs?[.modificationDate] as? Date {
-            rec.dateModifiedRaw = modified
-            rec.dateModified = dateFmt.string(from: modified)
-        }
-
-        rec.mediaDisposition = .unreviewed
-        rec.archiveStage = .none
-        rec.starRating = max(video.starRating, audio.starRating)
-        rec.combinedFromPairID = video.pairGroupID
-
-        return rec
-    }
-
-    private func waitForJobPause(_ index: Int) async {
-        while await MainActor.run(body: {
-            index < dashboard.combineJobs.count && dashboard.combineJobs[index].isPaused
-        }) {
-            try? await Task.sleep(nanoseconds: 200_000_000)
-            if Task.isCancelled { return }
-        }
-    }
-
-    private typealias VerifyResult = CombineVerifier.VerifyResult
-
-    nonisolated private func verifyCombineOutput(url: URL, expectedDuration: Double) async -> VerifyResult {
-        await CombineVerifier.verifyCombineOutput(
-            url: url, expectedDuration: expectedDuration,
-            ffprobePath: ffprobePath, ffmpegPath: CombineEngine.ffmpegPath
-        )
-    }
-
-    /// Emit the Combine Complete banner and clear the combine UI state.
-    /// Only marks isCombining = false when all jobs (including appended ones) are done.
-    @MainActor
-    private func logCombineSummary() {
-        let allDone = dashboard.combineCompleted >= dashboard.combineTotal
-        guard allDone else { return }
-        self.log("""
-
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          Combine Complete
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          Succeeded: \(dashboard.combineSucceeded)
-          Skipped:   \(dashboard.combineSkipped)
-          Failed:    \(dashboard.combineFailed)
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        """)
-        isCombining = false
-        dashboard.combineCurrentFile = ""
-    }
-
-    private func combineAllPairsInternal(pairs: [(video: VideoRecord, audio: VideoRecord)], outputFolder: URL, technique: CombineJobStatus.CombineTechnique = .streamCopy, maxConcurrency: Int? = nil) {
-        let appending = isCombining
-
-        let filteredPairs: [(video: VideoRecord, audio: VideoRecord)]
-        if appending {
-            let activeOutputs = Set(dashboard.combineJobs
-                .filter { $0.phase != .done && $0.phase != .failed && $0.phase != .skipped }
-                .map { $0.outputFilename })
-            filteredPairs = pairs.filter { pair in
-                let baseName = URL(fileURLWithPath: pair.video.fullPath).deletingPathExtension().lastPathComponent
-                let outName = "\(baseName)_combined.mov"
-                if activeOutputs.contains(outName) {
-                    log("  ⚠ \(outName) already in progress, skipping")
-                    return false
-                }
-                return true
-            }
-            guard !filteredPairs.isEmpty else {
-                log("All selected pairs are already in progress.")
-                return
-            }
-        } else {
-            filteredPairs = pairs
-        }
-
-        let jobOffset = dashboard.combineJobs.count
-
-        if appending {
-            dashboard.combineTotal += filteredPairs.count
-        } else {
-            isCombining = true
-            dashboard.resetForCombine(total: filteredPairs.count)
-        }
-
-        let fm = FileManager.default
-        for (i, pair) in filteredPairs.enumerated() {
-            let baseName = URL(fileURLWithPath: pair.video.fullPath).deletingPathExtension().lastPathComponent
-            let outName = "\(baseName)_combined.mov"
-            dashboard.combineJobs.append(CombineJobStatus(
-                pairIndex: jobOffset + i,
-                videoFilename: pair.video.filename,
-                audioFilename: pair.audio.filename,
-                outputFilename: outName,
-                outputPath: outputFolder.appendingPathComponent(outName).path,
-                videoSizeBytes: pair.video.sizeBytes,
-                audioSizeBytes: pair.audio.sizeBytes,
-                totalDurationSeconds: max(pair.video.durationSeconds, pair.audio.durationSeconds),
-                videoOnline: VolumeReachability.isReachable(path: pair.video.fullPath),
-                audioOnline: VolumeReachability.isReachable(path: pair.audio.fullPath),
-                technique: technique
-            ))
-        }
-
-        log("""
-
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          \(appending ? "Adding" : "Combining") \(filteredPairs.count) pair\(filteredPairs.count == 1 ? "" : "s") → \(outputFolder.path)
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        """)
-
-        let newTask = Task {
-            let (tempBase, hasRAMDisk) = await mountCombineRAMDisk()
-            let semaphore = AsyncSemaphore(limit: maxConcurrency ?? self.perfSettings.combineConcurrency)
-
-            await withTaskGroup(of: Bool.self) { group in
-                for (i, (video, audio)) in filteredPairs.enumerated() {
-                    if Task.isCancelled { break }
-                    let jobIndex = jobOffset + i
-                    group.addTask { [self] in
-                        await semaphore.withPermit {
-                            await self.processCombinePair(
-                                video: video, audio: audio,
-                                outputFolder: outputFolder,
-                                tempBase: tempBase, hasRAMDisk: hasRAMDisk,
-                                jobIndex: jobIndex
-                            )
-                        }
-                    }
-                }
-
-                for await _ in group {
-                    // Succeeded/failed/skipped counters are updated inside processCombinePair
-                }
-
-                await self.ramDisk.unmount()
-                await self.logCombineSummary()
-            }
-        }
-
-        if !appending {
-            combineTask = newTask
-        }
-    }
-
-    func pauseCombine() {
-        isCombinePaused = true
-        Task { await combinePauseGate.pause() }
-        log("--- Combine paused ---")
-    }
-
-    func resumeCombine() {
-        isCombinePaused = false
-        Task { await combinePauseGate.resume() }
-        log("--- Combine resumed ---")
-    }
-
-    func stopCombine() {
-        combineTask?.cancel()
-        combineTask = nil
-        Task {
-            await combinePauseGate.resume()  // release any waiters before cancel
-            await ramDisk.unmount()
-        }
-        log("--- Combine stopped by user ---")
-        isCombining = false
-        isCombinePaused = false
-        dashboard.combineCurrentFile = ""
     }
 
     // MARK: - ffprobe
