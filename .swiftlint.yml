@@ -13,7 +13,6 @@
 
 included:
   - VideoScan/VideoScan
-  - VideoScan/VideoScanTests
   - swift_cli
 
 excluded:
