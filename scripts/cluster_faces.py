@@ -57,6 +57,13 @@ from PIL import Image, ImageOps
 REPO = Path(__file__).resolve().parent.parent
 DEFAULT_OUT = REPO / "output/cluster_faces"
 
+# When launched from the GUI app, PATH doesn't include Homebrew, so ffprobe
+# and ffmpeg fail to spawn and every video reports duration=None. Prepend
+# the standard Homebrew bin dirs so subprocess calls find them either way.
+for _bin in ("/opt/homebrew/bin", "/usr/local/bin"):
+    if _bin not in os.environ.get("PATH", "").split(os.pathsep):
+        os.environ["PATH"] = _bin + os.pathsep + os.environ.get("PATH", "")
+
 VIDEO_EXTS = {
     ".mp4", ".mov", ".m4v", ".avi", ".mkv", ".wmv", ".flv",
     ".mts", ".m2ts", ".mpg", ".mpeg", ".3gp", ".webm", ".ogv",
@@ -85,11 +92,15 @@ def _init_models():
     import torch
     from facenet_pytorch import MTCNN, InceptionResnetV1
     _torch = torch
+    # MTCNN stays on CPU because adaptive_avg_pool2d on MPS requires
+    # input/output size divisibility, which the MTCNN pyramid violates
+    # (fails with RuntimeError on Apple Silicon). FaceNet embedding runs
+    # on MPS where it sees ~10x speedup. This mirrors fd_scan_volume.py.
     _device = (torch.device("mps") if torch.backends.mps.is_available()
                else torch.device("cpu"))
-    _mtcnn = MTCNN(keep_all=True, device=_device, post_process=False)
+    _mtcnn = MTCNN(keep_all=True, device=torch.device("cpu"), post_process=False)
     _resnet = InceptionResnetV1(pretrained="vggface2").eval().to(_device)
-    print(f"[init] models loaded on {_device}")
+    print(f"[init] models loaded (MTCNN cpu, FaceNet {_device})")
 
 
 # --- Video walking + frame extraction --------------------------------------
