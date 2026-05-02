@@ -41,7 +41,7 @@ enum PairConfidence: String, Codable, Comparable {
 
     static func < (lhs: PairConfidence, rhs: PairConfidence) -> Bool {
         let order: [PairConfidence] = [.low, .medium, .high]
-        return order.firstIndex(of: lhs)! < order.firstIndex(of: rhs)!
+        return (order.firstIndex(of: lhs) ?? 0) < (order.firstIndex(of: rhs) ?? 0)
     }
 }
 
@@ -62,7 +62,7 @@ enum DuplicateConfidence: String, Codable, Comparable {
 
     static func < (lhs: DuplicateConfidence, rhs: DuplicateConfidence) -> Bool {
         let order: [DuplicateConfidence] = [.low, .medium, .high]
-        return order.firstIndex(of: lhs)! < order.firstIndex(of: rhs)!
+        return (order.firstIndex(of: lhs) ?? 0) < (order.firstIndex(of: rhs) ?? 0)
     }
 }
 
@@ -443,7 +443,7 @@ enum ArchiveStage: String, Codable, CaseIterable, Comparable {
 
     static func < (lhs: ArchiveStage, rhs: ArchiveStage) -> Bool {
         let order: [ArchiveStage] = allCases
-        return order.firstIndex(of: lhs)! < order.firstIndex(of: rhs)!
+        return (order.firstIndex(of: lhs) ?? 0) < (order.firstIndex(of: rhs) ?? 0)
     }
 }
 

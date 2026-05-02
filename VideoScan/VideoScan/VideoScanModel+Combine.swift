@@ -336,7 +336,7 @@ extension VideoScanModel {
         let streams = probe.streams ?? []
         if let vs = streams.first(where: { $0.codec_type == "video" }) {
             rec.videoCodec = vs.codec_name ?? ""
-            rec.resolution = (vs.width != nil && vs.height != nil) ? "\(vs.width!)x\(vs.height!)" : ""
+            if let w = vs.width, let h = vs.height { rec.resolution = "\(w)x\(h)" } else { rec.resolution = "" }
             rec.frameRate = vs.r_frame_rate ?? ""
             rec.videoBitrate = vs.bit_rate ?? ""
             rec.colorSpace = vs.color_space ?? ""
