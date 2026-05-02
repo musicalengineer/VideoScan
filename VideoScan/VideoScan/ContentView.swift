@@ -135,6 +135,9 @@ struct CatalogView: View {
     @State private var showVolumeCompare = false
     /// Set by Archive tab navigation — filters catalog to specific record IDs.
     @State private var filterByIDs: Set<UUID> = []
+    /// When `filterByIDs` was populated by Find A/V Pair, the candidate's score
+    /// (0–14) so the focus banner can show a Best/Better/Good/Maybe label.
+    @State private var focusMatchScore: Int?
     // Volume pane height is now managed by NSSplitView (VerticalSplitView)
     @State private var showPairsOnly = false
     @State private var catalogViewFilters: Set<CatalogViewFilter> = []
@@ -257,6 +260,7 @@ struct CatalogView: View {
                 showPairsOnly: showPairsOnly,
                 viewFilters: catalogViewFilters,
                 filterByIDs: filterByIDs,
+                focusMatchScore: focusMatchScore,
                 previewImage: model.previewImage,
                 previewFilename: model.previewFilename,
                 previewOfflineVolumeName: model.previewOfflineVolumeName,
@@ -288,9 +292,14 @@ struct CatalogView: View {
                     showPairsOnly = false
                     filterByIDs = [id1, id2]
                     selectedIDs = [id1, id2]
+                    focusMatchScore = nil
+                },
+                onFindAVPair: { rec in
+                    findAVPairFocus(for: rec)
                 },
                 onClearFilter: {
                     filterByIDs = []
+                    focusMatchScore = nil
                 }
             )
             .onChange(of: selectedIDs) {
@@ -309,10 +318,10 @@ struct CatalogView: View {
             .onChange(of: model.pendingCatalogSelection) { handlePendingCatalogNavigation() }
             // Clear the ID filter when user types in search or selects a volume
             .onChange(of: searchText) {
-                if !searchText.isEmpty { filterByIDs = [] }
+                if !searchText.isEmpty { filterByIDs = []; focusMatchScore = nil }
             }
             .onChange(of: selectedVolumeIDs) {
-                if !selectedVolumeIDs.isEmpty { filterByIDs = [] }
+                if !selectedVolumeIDs.isEmpty { filterByIDs = []; focusMatchScore = nil }
             }
                 }  // end bottom VStack
             }  // end VerticalSplitView
@@ -362,6 +371,65 @@ struct CatalogView: View {
         }
     }
 
+    // MARK: - Find A/V Pair (on-demand single-file pair search)
+
+    /// Right-click "Find A/V Pair" handler. Builds a focus set in the catalog
+    /// containing the selected file + its online duplicates + the best pair
+    /// candidate + that pair's online duplicates. Stays cross-volume so offline
+    /// pairs surface their online copies as alternates.
+    private func findAVPairFocus(for rec: VideoRecord) {
+        searchText = ""
+        selectedVolumeIDs = []
+        showPairsOnly = false
+
+        let durationTolerance: Double = 1.0
+        let timestampTolerance: TimeInterval = 5.0
+
+        var partner: VideoRecord?
+        var score: Int?
+
+        if let existing = rec.pairedWith {
+            partner = existing
+            score = rec.pairConfidence.map { conf in
+                switch conf {
+                case .high: return 8
+                case .medium: return 5
+                case .low: return 3
+                }
+            }
+        } else if let cand = CorrelationScorer.findBestPair(
+            for: rec,
+            in: model.records,
+            durationTolerance: durationTolerance,
+            timestampTolerance: timestampTolerance
+        ) {
+            partner = (rec.streamType == .videoOnly) ? cand.audio : cand.video
+            score = cand.score
+        }
+
+        guard let pair = partner else {
+            let alert = NSAlert()
+            alert.messageText = "No A/V Pair Found"
+            alert.informativeText = "No matching \(rec.streamType == .videoOnly ? "audio" : "video")-only file scored highly enough against:\n\n\(rec.filename)"
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+
+        var ids: Set<UUID> = [rec.id, pair.id]
+        if let g = rec.duplicateGroupID {
+            for r in model.records where r.duplicateGroupID == g { ids.insert(r.id) }
+        }
+        if let g = pair.duplicateGroupID {
+            for r in model.records where r.duplicateGroupID == g { ids.insert(r.id) }
+        }
+
+        focusMatchScore = score
+        filterByIDs = ids
+        selectedIDs = [rec.id]
+    }
+
     // MARK: - Archive → Catalog Navigation
 
     private func handlePendingCatalogNavigation() {
@@ -377,6 +445,7 @@ struct CatalogView: View {
 
         let ids = VideoScanModel.catalogFilterIDs(for: id, pairMode: pairMode, in: model.records)
         filterByIDs = ids
+        focusMatchScore = nil
         selectedIDs = ids
         // Generate thumbnail
         if let rec = model.records.first(where: { $0.id == id }),
