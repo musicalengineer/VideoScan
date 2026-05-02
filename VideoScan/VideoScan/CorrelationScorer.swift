@@ -123,6 +123,62 @@ enum CorrelationScorer {
         )
     }
 
+    // MARK: - Single-file Best-Match (on-demand "Find A/V Pair")
+
+    /// Bucketed match-quality label for the right-click "Find A/V Pair" UI.
+    /// Spans the 0–14 score range with a wider top bucket so "Best" stays meaningful.
+    enum MatchQuality: String {
+        case best = "Best", better = "Better", good = "Good", maybe = "Maybe"
+
+        static func bucket(forScore score: Int) -> MatchQuality {
+            if score >= 10 { return .best }
+            if score >= 7 { return .better }
+            if score >= 4 { return .good }
+            return .maybe
+        }
+    }
+
+    /// Find the single best pair-candidate for one V-only or A-only record.
+    /// Scores against every opposite-type record in `allRecords` (cross-volume,
+    /// online and offline). Returns nil if no candidate clears the score≥3 floor.
+    static func findBestPair(
+        for record: VideoRecord,
+        in allRecords: [VideoRecord],
+        durationTolerance: Double,
+        timestampTolerance: TimeInterval
+    ) -> Candidate? {
+        guard record.streamType == .videoOnly || record.streamType == .audioOnly else {
+            return nil
+        }
+        let isVideo = record.streamType == .videoOnly
+        let opposites = allRecords.filter {
+            $0.id != record.id && $0.streamType == (isVideo ? .audioOnly : .videoOnly)
+        }
+        let vKey: String
+        if isVideo {
+            vKey = filenameCorrelationKey(record.filename)
+        } else {
+            vKey = ""  // computed per-candidate below
+        }
+
+        var best: Candidate?
+        for other in opposites {
+            let video = isVideo ? record : other
+            let audio = isVideo ? other : record
+            let key = isVideo ? vKey : filenameCorrelationKey(video.filename)
+            if let cand = scoreCorrelatePair(
+                video: video, audio: audio, vKey: key,
+                durationTolerance: durationTolerance,
+                timestampTolerance: timestampTolerance
+            ) {
+                if best == nil || cand.score > best!.score {
+                    best = cand
+                }
+            }
+        }
+        return best
+    }
+
     // MARK: - Assignment
 
     /// Greedy max-score assignment: sort by score descending, claim each pair

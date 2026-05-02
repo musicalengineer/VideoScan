@@ -284,6 +284,10 @@ struct CatalogContent: View {
     /// When non-empty, show only these specific records (overrides all other filters).
     /// Used by Archive tab's "Show in Catalog" / "Show Pair in Catalog".
     var filterByIDs: Set<UUID> = []
+    /// When `filterByIDs` was populated by an on-demand "Find A/V Pair", carries
+    /// the score so the focus banner can show a Best/Better/Good/Maybe label.
+    /// nil for filters from other sources (Archive, already-paired).
+    var focusMatchScore: Int?
     let previewImage: NSImage?
     let previewFilename: String
     let previewOfflineVolumeName: String?
@@ -293,6 +297,7 @@ struct CatalogContent: View {
     let onClearPreview: () -> Void
     var onCombinePair: ((VideoRecord, VideoRecord) -> Void)?
     var onShowPair: ((UUID, UUID) -> Void)?
+    var onFindAVPair: ((VideoRecord) -> Void)?
     var onClearFilter: (() -> Void)?
 
     @State private var player: AVPlayer?
@@ -503,8 +508,21 @@ struct CatalogContent: View {
         HStack(spacing: 8) {
             Image(systemName: "line.horizontal.3.decrease.circle.fill")
                 .foregroundColor(.accentColor)
-            Text("Showing matched pair (\(filterByIDs.count) files)")
+            Text("A/V Pair focus (\(filterByIDs.count) file\(filterByIDs.count == 1 ? "" : "s"))")
                 .font(.system(size: 12, weight: .medium))
+
+            if let score = focusMatchScore {
+                let q = CorrelationScorer.MatchQuality.bucket(forScore: score)
+                Text("\(q.rawValue) match")
+                    .font(.system(size: 11, weight: .semibold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(matchQualityColor(q).opacity(0.18),
+                                in: RoundedRectangle(cornerRadius: 4))
+                    .foregroundColor(matchQualityColor(q))
+                    .help("Score \(score)/14 — Best ≥10, Better 7–9, Good 4–6, Maybe 3")
+            }
+
             Spacer()
 
             if let rec = records.first(where: { filterByIDs.contains($0.id) }),
@@ -527,6 +545,15 @@ struct CatalogContent: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(Color.accentColor.opacity(0.08))
+    }
+
+    private func matchQualityColor(_ q: CorrelationScorer.MatchQuality) -> Color {
+        switch q {
+        case .best:   return .green
+        case .better: return .blue
+        case .good:   return .orange
+        case .maybe:  return .secondary
+        }
     }
 
     // MARK: - Results Table
@@ -761,11 +788,14 @@ struct CatalogContent: View {
                     }
                 }
 
-                if let partner = rec.pairedWith {
+                if rec.streamType.needsCorrelation {
                     Divider()
-                    Button("Show Matched Pair") {
-                        onShowPair?(rec.id, partner.id)
+                    Button("Find A/V Pair") {
+                        onFindAVPair?(rec)
                     }
+                    .help("Show this file's best matching pair in the catalog, including any online duplicates of either side.")
+                }
+                if let partner = rec.pairedWith {
                     Button("Combine This Pair…") {
                         let video = rec.streamType == .videoOnly ? rec : partner
                         let audio = rec.streamType == .audioOnly ? rec : partner
