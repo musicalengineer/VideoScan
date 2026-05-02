@@ -181,9 +181,16 @@ struct PersonFinderSettings: Equatable {
 
     /// Restore settings from UserDefaults. Missing keys use struct defaults.
     static func restored() -> PersonFinderSettings {
-        let d = defaults
-        let p = prefix
         var s = PersonFinderSettings()
+        restoreStrings(&s)
+        restoreNumericValues(&s)
+        restoreBoolValues(&s)
+        validatePaths(&s)
+        return s
+    }
+
+    private static func restoreStrings(_ s: inout PersonFinderSettings) {
+        let d = defaults; let p = prefix
         if let v = d.string(forKey: "\(p)personName") { s.personName = v }
         if let v = d.string(forKey: "\(p)referencePath") { s.referencePath = v }
         if let v = d.string(forKey: "\(p)outputDir") { s.outputDir = v }
@@ -192,6 +199,11 @@ struct PersonFinderSettings: Equatable {
         if let v = d.string(forKey: "\(p)recognitionEngine") {
             s.recognitionEngine = RecognitionEngine(rawValue: v) ?? .vision
         }
+        if let rejected = d.stringArray(forKey: "\(p)rejectedReferenceFiles") { s.rejectedReferenceFiles = rejected }
+    }
+
+    private static func restoreNumericValues(_ s: inout PersonFinderSettings) {
+        let d = defaults; let p = prefix
         if d.object(forKey: "\(p)threshold") != nil { s.threshold = d.float(forKey: "\(p)threshold") }
         if d.object(forKey: "\(p)minFaceConfidence") != nil { s.minFaceConfidence = d.float(forKey: "\(p)minFaceConfidence") }
         if d.object(forKey: "\(p)frameStep") != nil { s.frameStep = d.integer(forKey: "\(p)frameStep") }
@@ -199,22 +211,27 @@ struct PersonFinderSettings: Equatable {
         if d.object(forKey: "\(p)minDuration") != nil { s.minDuration = d.double(forKey: "\(p)minDuration") }
         if d.object(forKey: "\(p)minPresenceSecs") != nil { s.minPresenceSecs = d.double(forKey: "\(p)minPresenceSecs") }
         if d.object(forKey: "\(p)concurrency") != nil { s.concurrency = d.integer(forKey: "\(p)concurrency") }
+        if d.object(forKey: "\(p)previewRate") != nil { s.previewRate = max(1, d.integer(forKey: "\(p)previewRate")) }
+        if d.object(forKey: "\(p)arcfaceThreshold") != nil { s.arcfaceThreshold = d.float(forKey: "\(p)arcfaceThreshold") }
+    }
+
+    private static func restoreBoolValues(_ s: inout PersonFinderSettings) {
+        let d = defaults; let p = prefix
         if d.object(forKey: "\(p)requirePrimary") != nil { s.requirePrimary = d.bool(forKey: "\(p)requirePrimary") }
         if d.object(forKey: "\(p)concatOutput") != nil { s.concatOutput = d.bool(forKey: "\(p)concatOutput") }
         if d.object(forKey: "\(p)decadeChapters") != nil { s.decadeChapters = d.bool(forKey: "\(p)decadeChapters") }
         if d.object(forKey: "\(p)skipBundles") != nil { s.skipBundles = d.bool(forKey: "\(p)skipBundles") }
         if d.object(forKey: "\(p)skipCatalogBadFiles") != nil { s.skipCatalogBadFiles = d.bool(forKey: "\(p)skipCatalogBadFiles") }
         if d.object(forKey: "\(p)largestFaceOnly") != nil { s.largestFaceOnly = d.bool(forKey: "\(p)largestFaceOnly") }
-        if d.object(forKey: "\(p)previewRate") != nil { s.previewRate = max(1, d.integer(forKey: "\(p)previewRate")) }
-        if d.object(forKey: "\(p)arcfaceThreshold") != nil { s.arcfaceThreshold = d.float(forKey: "\(p)arcfaceThreshold") }
-        if let rejected = d.stringArray(forKey: "\(p)rejectedReferenceFiles") { s.rejectedReferenceFiles = rejected }
+    }
+
+    private static func validatePaths(_ s: inout PersonFinderSettings) {
         if s.pythonPath.isEmpty || !FileManager.default.isExecutableFile(atPath: s.pythonPath) {
             s.pythonPath = detectedPythonPath()
         }
         if s.recognitionScript.isEmpty || !FileManager.default.fileExists(atPath: s.recognitionScript) {
             s.recognitionScript = detectedRecognitionScript()
         }
-        return s
     }
 
     /// Extract a POI profile from the current settings.
@@ -1780,6 +1797,90 @@ private func pfVisionClusterSegments(
     }
 }
 
+private enum PFFrameResult {
+    case skipped
+    case finished
+    case processed(frameTime: Double, match: PFVisionFrameMatch, preview: CGImage?)
+}
+
+private nonisolated func pfSampleNextFrame(
+    ctx: PFVisionReaderContext, settings: PersonFinderSettings, prints: [VNFeaturePrintObservation],
+    lastProcessedTime: inout Double, frameInterval: Double,
+    bestDistEver: inout Float, totalFacesDetected: inout Int,
+    sampledSoFar: inout Int, visionFrameTimes: inout [Double],
+    previewRateFn: @escaping @Sendable () -> Int
+) -> PFFrameResult {
+    var frameTime: Double = 0
+    var frameMatch = PFVisionFrameMatch()
+    var previewImage: CGImage?
+    var shouldSkip = false
+
+    autoreleasepool {
+        guard let sampleBuffer = ctx.trackOutput.copyNextSampleBuffer() else {
+            shouldSkip = true; return
+        }
+        let t = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+        guard t - lastProcessedTime >= frameInterval else {
+            shouldSkip = true; frameTime = -1; return
+        }
+        lastProcessedTime = t
+        frameTime = t
+
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            shouldSkip = true; frameTime = -1; return
+        }
+
+        let frameStart = CFAbsoluteTimeGetCurrent()
+        let allFaces = pfDetectFacesInBuffer(pixelBuffer, orientation: ctx.orientation)
+        let candidates: [VNFaceObservation] = settings.requirePrimary
+            ? (allFaces.max(by: { ($0.boundingBox.width * $0.boundingBox.height) < ($1.boundingBox.width * $1.boundingBox.height) }).map { [$0] } ?? [])
+            : allFaces
+
+        if !candidates.isEmpty,
+           let img = pfOrientedCGImage(from: pixelBuffer, transform: ctx.transform) {
+            frameMatch = pfVisionMatchCandidates(
+                timeSecs: t,
+                orientedImage: img,
+                candidates: candidates,
+                referencePrints: prints,
+                settings: settings
+            )
+            if frameMatch.bestDistInFrame < bestDistEver {
+                bestDistEver = frameMatch.bestDistInFrame
+            }
+            totalFacesDetected += frameMatch.facesDetected
+            let rate = max(1, previewRateFn())
+            if (sampledSoFar + 1) % rate == 0 { previewImage = img }
+        }
+        sampledSoFar += 1
+        visionFrameTimes.append(CFAbsoluteTimeGetCurrent() - frameStart)
+    }
+
+    if shouldSkip {
+        return frameTime == -1 ? .skipped : .finished
+    }
+    return .processed(frameTime: frameTime, match: frameMatch, preview: previewImage)
+}
+
+private nonisolated func pfLogMilestones(
+    frameTime: Double, duration: Double, filename: String,
+    index: Int, total: Int, hits: [(timeSecs: Double, distance: Float)],
+    totalFacesDetected: Int, bestDistEver: Float,
+    milestones: Set<Int>, loggedMilestones: inout Set<Int>,
+    progressFn: @escaping @Sendable (String) async -> Void,
+    logFn: @escaping @Sendable (String) async -> Void,
+    distFn: @escaping @Sendable (Float) async -> Void
+) async {
+    let pct = duration > 0 ? Int(frameTime / duration * 100) : 0
+    await progressFn("\(filename)  [t=\(String(format: "%.0f", frameTime))s / \(String(format: "%.0f", duration))s · \(hits.count) hit(s)]")
+    for m in milestones where pct >= m && !loggedMilestones.contains(m) {
+        loggedMilestones.insert(m)
+        let distStr = bestDistEver < .greatestFiniteMagnitude ? String(format: "%.3f", bestDistEver) : "—"
+        await logFn("    \(m)% — t=\(String(format: "%.0f", frameTime))s/\(String(format: "%.0f", duration))s, \(totalFacesDetected) faces detected, \(hits.count) hit(s), best dist \(distStr)")
+        await distFn(bestDistEver)
+    }
+}
+
 private nonisolated func pfProcessVideo(
     filePath: String,
     prints: [VNFeaturePrintObservation],
@@ -1815,81 +1916,43 @@ private nonisolated func pfProcessVideo(
     while true {
         if Task.isCancelled { ctx.reader.cancelReading(); break }
 
-        var frameTime: Double = 0
-        var frameMatch = PFVisionFrameMatch()
-        var previewImage: CGImage?
-        var shouldSkip = false
-
-        autoreleasepool {
-            guard let sampleBuffer = ctx.trackOutput.copyNextSampleBuffer() else {
-                shouldSkip = true; return
-            }
-            let t = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
-            guard t - lastProcessedTime >= frameInterval else {
-                shouldSkip = true; frameTime = -1; return
-            }
-            lastProcessedTime = t
-            frameTime = t
-
-            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-                shouldSkip = true; frameTime = -1; return
-            }
-
-            let frameStart = CFAbsoluteTimeGetCurrent()
-            let allFaces = pfDetectFacesInBuffer(pixelBuffer, orientation: ctx.orientation)
-            let candidates: [VNFaceObservation] = settings.requirePrimary
-                ? (allFaces.max(by: { ($0.boundingBox.width * $0.boundingBox.height) < ($1.boundingBox.width * $1.boundingBox.height) }).map { [$0] } ?? [])
-                : allFaces
-
-            if !candidates.isEmpty,
-               let img = pfOrientedCGImage(from: pixelBuffer, transform: ctx.transform) {
-                frameMatch = pfVisionMatchCandidates(
-                    timeSecs: t,
-                    orientedImage: img,
-                    candidates: candidates,
-                    referencePrints: prints,
-                    settings: settings
-                )
-                if frameMatch.bestDistInFrame < bestDistEver {
-                    bestDistEver = frameMatch.bestDistInFrame
-                }
-                totalFacesDetected += frameMatch.facesDetected
-                let rate = max(1, previewRateFn())
-                if (sampledSoFar + 1) % rate == 0 { previewImage = img }
-            }
-            sampledSoFar += 1
-            visionFrameTimes.append(CFAbsoluteTimeGetCurrent() - frameStart)
-        }
+        let frameResult = pfSampleNextFrame(
+            ctx: ctx, settings: settings, prints: prints,
+            lastProcessedTime: &lastProcessedTime, frameInterval: frameInterval,
+            bestDistEver: &bestDistEver, totalFacesDetected: &totalFacesDetected,
+            sampledSoFar: &sampledSoFar, visionFrameTimes: &visionFrameTimes,
+            previewRateFn: previewRateFn
+        )
 
         if sampledSoFar > 0 && sampledSoFar % 5 == 0 {
             await pauseGate.waitIfPaused()
             if Task.isCancelled { ctx.reader.cancelReading(); break }
         }
 
-        if shouldSkip {
-            if frameTime == -1 { continue } else { break }
-        }
+        switch frameResult {
+        case .skipped: continue
+        case .finished: break
+        case let .processed(frameTime, frameMatch, previewImage):
+            hits.append(contentsOf: frameMatch.hits)
 
-        hits.append(contentsOf: frameMatch.hits)
+            if let img = previewImage {
+                await frameFn(img, frameMatch.matchedRects, frameMatch.unmatchedRects)
+            }
 
-        if let img = previewImage {
-            await frameFn(img, frameMatch.matchedRects, frameMatch.unmatchedRects)
-        }
+            if visionFrameTimes.count >= 10 {
+                let avg = visionFrameTimes.reduce(0, +) / Double(visionFrameTimes.count)
+                await visionStatsFn(avg > 0 ? 1.0 / avg : 0, avg * 1000)
+                visionFrameTimes.removeAll(keepingCapacity: true)
+            }
 
-        if visionFrameTimes.count >= 10 {
-            let avg = visionFrameTimes.reduce(0, +) / Double(visionFrameTimes.count)
-            await visionStatsFn(avg > 0 ? 1.0 / avg : 0, avg * 1000)
-            visionFrameTimes.removeAll(keepingCapacity: true)
+            await pfLogMilestones(
+                frameTime: frameTime, duration: ctx.duration, filename: filename,
+                index: index, total: total, hits: hits, totalFacesDetected: totalFacesDetected,
+                bestDistEver: bestDistEver, milestones: milestones,
+                loggedMilestones: &loggedMilestones, progressFn: progressFn, logFn: logFn, distFn: distFn
+            )
         }
-
-        let pct = ctx.duration > 0 ? Int(frameTime / ctx.duration * 100) : 0
-        await progressFn("\(filename)  [t=\(String(format: "%.0f", frameTime))s / \(String(format: "%.0f", ctx.duration))s · \(hits.count) hit(s)]")
-        for m in milestones where pct >= m && !loggedMilestones.contains(m) {
-            loggedMilestones.insert(m)
-            let distStr = bestDistEver < .greatestFiniteMagnitude ? String(format: "%.3f", bestDistEver) : "—"
-            await logFn("    \(m)% — t=\(String(format: "%.0f", frameTime))s/\(String(format: "%.0f", ctx.duration))s, \(totalFacesDetected) faces detected, \(hits.count) hit(s), best dist \(distStr)")
-            await distFn(bestDistEver)
-        }
+        if case .finished = frameResult { break }
     }
 
     await distFn(bestDistEver)
