@@ -693,27 +693,7 @@ final class AvbParser {
         _ = numScalars
 
         let trackCount = Int(reader.readS32() ?? 0)
-        var trackComponentRefs: [(index: Int, componentRef: Int)] = []
-
-        for _ in 0..<trackCount {
-            guard let flags = reader.readU16() else { break }
-            var trackIndex = 0
-            var componentRef = 0
-
-            if flags & 0x0001 != 0 { trackIndex = Int(reader.readS16() ?? 0) }          // LABEL
-            if flags & 0x0002 != 0 { _ = reader.readObjectRef() }                       // ATTRIBUTES
-            if flags & 0x0200 != 0 { _ = reader.readObjectRef() }                       // SESSION_ATTR
-            if flags & 0x0004 != 0 { componentRef = Int(reader.readObjectRef() ?? 0) }  // COMPONENT
-            if flags & 0x0008 != 0 { _ = reader.readObjectRef() }                       // FILLER_PROXY
-            if flags & 0x0010 != 0 { _ = reader.readObjectRef() }                       // BOB_DATA
-            if flags & 0x0020 != 0 { _ = reader.readS16() }                             // CONTROL_CODE
-            if flags & 0x0040 != 0 { _ = reader.readS16() }                             // CONTROL_SUB_CODE
-            if flags & 0x0080 != 0 { _ = reader.readS32() }                             // START_POS
-            if flags & 0x0100 != 0 { _ = reader.readBool() }                            // READ_ONLY
-
-            trackComponentRefs.append((index: trackIndex, componentRef: componentRef))
-        }
-        obj.properties["track_component_refs"] = trackComponentRefs
+        obj.properties["track_component_refs"] = readTrackEntries(reader: reader, count: trackCount)
 
         // Skip TrackGroup ext tags (lock numbers etc)
         skipExtTags(reader: reader)
@@ -743,8 +723,10 @@ final class AvbParser {
             // Some versions have descriptor ref in ext tags
         }
 
-        // Extended tags for Composition
-        // Read ext tags looking for mob_id and descriptor
+        readCompositionExtTags(reader: reader, obj: obj)
+    }
+
+    private static func readCompositionExtTags(reader: BinaryReader, obj: AvbObject) {
         while true {
             let pos = reader.offset
             guard let tag = reader.readU8() else { break }
@@ -756,18 +738,15 @@ final class AvbParser {
 
             switch extTag {
             case 0x01:
-                // MobID
                 if let mobIDResult = reader.readMobID() {
                     obj.properties["mob_id_urn"] = mobIDResult.urn
                     obj.properties["material_uuid"] = mobIDResult.materialUUID
                 }
             case 0x02:
-                // Descriptor reference
                 guard reader.assertTag(72) else { break }
                 let descRef = Int(reader.readObjectRef() ?? 0)
                 obj.properties["descriptor_ref"] = descRef
             case 0x03:
-                // Usage code string
                 guard reader.assertTag(72) else { break }
                 _ = reader.readObjectRef()
             default:
@@ -922,6 +901,29 @@ final class AvbParser {
             trackComponentRefs.append((index: trackIndex, componentRef: componentRef))
         }
         obj.properties["track_component_refs"] = trackComponentRefs
+    }
+
+    private static func readTrackEntries(reader: BinaryReader, count: Int) -> [(index: Int, componentRef: Int)] {
+        var entries: [(index: Int, componentRef: Int)] = []
+        for _ in 0..<count {
+            guard let flags = reader.readU16() else { break }
+            var trackIndex = 0
+            var componentRef = 0
+
+            if flags & 0x0001 != 0 { trackIndex = Int(reader.readS16() ?? 0) }
+            if flags & 0x0002 != 0 { _ = reader.readObjectRef() }
+            if flags & 0x0200 != 0 { _ = reader.readObjectRef() }
+            if flags & 0x0004 != 0 { componentRef = Int(reader.readObjectRef() ?? 0) }
+            if flags & 0x0008 != 0 { _ = reader.readObjectRef() }
+            if flags & 0x0010 != 0 { _ = reader.readObjectRef() }
+            if flags & 0x0020 != 0 { _ = reader.readS16() }
+            if flags & 0x0040 != 0 { _ = reader.readS16() }
+            if flags & 0x0080 != 0 { _ = reader.readS32() }
+            if flags & 0x0100 != 0 { _ = reader.readBool() }
+
+            entries.append((index: trackIndex, componentRef: componentRef))
+        }
+        return entries
     }
 
     /// Skip a sequence of extension tags (0x01 + tag + data).
