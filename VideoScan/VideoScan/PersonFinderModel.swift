@@ -1050,98 +1050,6 @@ final class PersonFinderModel: ObservableObject {
         let total = videoFiles.count
         var orderedResults = [pfVideoResult?](repeating: nil, count: total)
 
-        // Closure that dispatches to the right engine — keeps the task group logic identical
-        // regardless of which recognition backend is active.
-        @Sendable func processOne(idx: Int) async -> (Int, pfVideoResult?) {
-            await job.pauseGate.waitIfPaused()
-            if Task.isCancelled { return (idx, nil) }
-
-            // Reserve a worker slot atomically so multiple jobs cannot overbook
-            // the same memory budget based on a stale snapshot.
-            await MemoryPressureMonitor.shared.acquireWorkerSlot(
-                requested: settings.concurrency,
-                engine: settings.recognitionEngine
-            )
-            defer { Task { await MemoryPressureMonitor.shared.decrementWorkers() } }
-
-            let logFn: @Sendable (String) async -> Void = { line in await job.appendLog(line) }
-
-            // Throttle MainActor dispatches to ~4 Hz to avoid beachball under high concurrency.
-            let progressState = ThrottledMainActorUpdate(intervalSecs: 0.25)
-            let progressFn: @Sendable (String) async -> Void = { file in
-                await progressState.update { job.currentFile = file }
-            }
-            let distFn: @Sendable (Float)  async -> Void = { dist in
-                await progressState.update { if dist < job.bestDist { job.bestDist = dist } }
-            }
-
-            // Vision branch — used by .vision and as the first pass of .hybrid.
-            @Sendable func runVision() async -> pfVideoResult? {
-                await pfProcessVideo(
-                    filePath: videoFiles[idx], prints: prints,
-                    settings: settings, index: idx + 1, total: total,
-                    pauseGate: job.pauseGate,
-                    logFn: logFn, progressFn: progressFn,
-                    frameFn: { img, matched, unmatched in
-                        await progressState.update {
-                            job.liveFrame = img
-                            job.liveMatchedRects = matched
-                            job.liveUnmatchedRects = unmatched
-                        }
-                    },
-                    distFn: distFn,
-                    visionStatsFn: { fps, msPerFrame in
-                        let workers = await MemoryPressureMonitor.shared.currentWorkers()
-                        await MainActor.run {
-                            dash?.visionFPS = fps
-                            dash?.visionMsPerFrame = msPerFrame
-                            dash?.visionWorkers = workers
-                        }
-                    },
-                    previewRateFn: { job.previewRate }
-                )
-            }
-
-            @Sendable func runArcFace() async -> pfVideoResult? {
-                await pfRunArcFaceEngine(
-                    filePath: videoFiles[idx], idx1: idx + 1, total: total,
-                    settings: settings, job: job, dash: dash,
-                    progressState: progressState,
-                    logFn: logFn, progressFn: progressFn, distFn: distFn
-                )
-            }
-
-            @Sendable func runDlib() async -> pfVideoResult? {
-                await pfProcessVideoWithDlib(
-                    filePath: videoFiles[idx], settings: settings,
-                    index: idx + 1, total: total,
-                    pauseGate: job.pauseGate,
-                    logFn: logFn, progressFn: progressFn, distFn: distFn
-                )
-            }
-
-            let r: pfVideoResult?
-            switch settings.recognitionEngine {
-            case .vision:  r = await runVision()
-            case .arcface: r = await runArcFace()
-            case .dlib:    r = await runDlib()
-            case .hybrid:
-                // Pass 1: fast Vision sweep on the ANE.
-                let v = await runVision()
-                if let v, !v.segments.isEmpty {
-                    r = v
-                } else if !settings.dlibReadyForHybrid {
-                    await job.appendLog("[hybrid] Vision: 0 hits — dlib not configured, skipping fallback")
-                    r = v
-                } else {
-                    // Pass 2: dlib as a "second look" — catches profile/glasses/dim-light.
-                    await job.appendLog("[hybrid] Vision: 0 hits — falling back to dlib")
-                    r = await runDlib()
-                }
-            }
-            return (idx, r)
-        }
-
         await withTaskGroup(of: (Int, pfVideoResult?).self) { group in
             var submitted = 0
             let scanConcurrency = await MemoryPressureMonitor.shared.recommendedConcurrency(
@@ -1156,7 +1064,12 @@ final class PersonFinderModel: ObservableObject {
             }
             let seed = min(scanConcurrency, total)
             for i in 0..<seed {
-                group.addTask { await processOne(idx: i) }
+                group.addTask {
+                    await processOneVideo(
+                        idx: i, videoFiles: videoFiles, prints: prints,
+                        settings: settings, total: total, job: job, dash: dash
+                    )
+                }
                 submitted += 1
             }
 
@@ -1173,13 +1086,106 @@ final class PersonFinderModel: ObservableObject {
                 }
                 if submitted < total {
                     let nextIdx = submitted
-                    group.addTask { await processOne(idx: nextIdx) }
+                    group.addTask {
+                        await processOneVideo(
+                            idx: nextIdx, videoFiles: videoFiles, prints: prints,
+                            settings: settings, total: total, job: job, dash: dash
+                        )
+                    }
                     submitted += 1
                 }
             }
         }
 
         return orderedResults
+    }
+
+    // swiftlint:disable:next function_parameter_count
+    private nonisolated static func processOneVideo(
+        idx: Int, videoFiles: [String], prints: [VNFeaturePrintObservation],
+        settings: PersonFinderSettings, total: Int,
+        job: ScanJob, dash: DashboardState?
+    ) async -> (Int, pfVideoResult?) {
+        await job.pauseGate.waitIfPaused()
+        if Task.isCancelled { return (idx, nil) }
+
+        await MemoryPressureMonitor.shared.acquireWorkerSlot(
+            requested: settings.concurrency,
+            engine: settings.recognitionEngine
+        )
+        defer { Task { await MemoryPressureMonitor.shared.decrementWorkers() } }
+
+        let logFn: @Sendable (String) async -> Void = { line in await job.appendLog(line) }
+        let progressState = ThrottledMainActorUpdate(intervalSecs: 0.25)
+        let progressFn: @Sendable (String) async -> Void = { file in
+            await progressState.update { job.currentFile = file }
+        }
+        let distFn: @Sendable (Float) async -> Void = { dist in
+            await progressState.update { if dist < job.bestDist { job.bestDist = dist } }
+        }
+
+        @Sendable func runVision() async -> pfVideoResult? {
+            await pfProcessVideo(
+                filePath: videoFiles[idx], prints: prints,
+                settings: settings, index: idx + 1, total: total,
+                pauseGate: job.pauseGate,
+                logFn: logFn, progressFn: progressFn,
+                frameFn: { img, matched, unmatched in
+                    await progressState.update {
+                        job.liveFrame = img
+                        job.liveMatchedRects = matched
+                        job.liveUnmatchedRects = unmatched
+                    }
+                },
+                distFn: distFn,
+                visionStatsFn: { fps, msPerFrame in
+                    let workers = await MemoryPressureMonitor.shared.currentWorkers()
+                    await MainActor.run {
+                        dash?.visionFPS = fps
+                        dash?.visionMsPerFrame = msPerFrame
+                        dash?.visionWorkers = workers
+                    }
+                },
+                previewRateFn: { job.previewRate }
+            )
+        }
+
+        @Sendable func runArcFace() async -> pfVideoResult? {
+            await pfRunArcFaceEngine(
+                filePath: videoFiles[idx], idx1: idx + 1, total: total,
+                settings: settings, job: job, dash: dash,
+                progressState: progressState,
+                logFn: logFn, progressFn: progressFn, distFn: distFn
+            )
+        }
+
+        @Sendable func runDlib() async -> pfVideoResult? {
+            await pfProcessVideoWithDlib(
+                filePath: videoFiles[idx], settings: settings,
+                index: idx + 1, total: total,
+                pauseGate: job.pauseGate,
+                logFn: logFn, progressFn: progressFn, distFn: distFn
+            )
+        }
+
+        let r: pfVideoResult?
+        switch settings.recognitionEngine {
+        case .vision:  r = await runVision()
+        case .arcface: r = await runArcFace()
+        case .dlib:    r = await runDlib()
+        case .hybrid:
+            let v = await runVision()
+            if let v, !v.segments.isEmpty {
+                r = v
+            } else if !settings.dlibReadyForHybrid {
+                await job.appendLog("[hybrid] Vision: 0 hits — dlib not configured, skipping fallback")
+                r = v
+            } else {
+                await job.appendLog("[hybrid] Vision: 0 hits — falling back to dlib")
+                r = await runDlib()
+            }
+        }
+        return (idx, r)
     }
 
     /// Discover and catalog-filter video files for a job. Returns nil (and sets
@@ -2206,6 +2212,46 @@ private func pfBuildSortedClipEntries(results: [pfVideoResult], outputDir: Strin
     return entries.sorted { a, b in a.year == b.year ? a.clipPath < b.clipPath : a.year < b.year }
 }
 
+private func pfRunFFMpegProcess(
+    ffmpegPath: String,
+    args: [String],
+    logFn: @escaping @Sendable (String) async -> Void
+) async -> Int32 {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: ffmpegPath)
+    process.arguments = args
+    process.standardOutput = FileHandle.nullDevice
+    let stderrPipe = Pipe()
+    process.standardError = stderrPipe
+
+    var stderrData = Data()
+    stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+        let chunk = handle.availableData
+        if !chunk.isEmpty { stderrData.append(chunk) }
+    }
+
+    do { try process.run() } catch {
+        await logFn("  ⚠ Could not launch ffmpeg: \(error.localizedDescription)")
+        return -1
+    }
+
+    await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+        process.terminationHandler = { _ in cont.resume() }
+        if !process.isRunning { cont.resume() }
+    }
+    stderrPipe.fileHandleForReading.readabilityHandler = nil
+
+    if process.terminationStatus != 0 {
+        await logFn("  ⚠ ffmpeg exited with code \(process.terminationStatus)")
+        if let errStr = String(data: stderrData, encoding: .utf8), !errStr.isEmpty {
+            for line in errStr.components(separatedBy: .newlines).suffix(10) where !line.isEmpty {
+                await logFn("    stderr: \(line)")
+            }
+        }
+    }
+    return process.terminationStatus
+}
+
 private func pfConcatenateWithDecadeChapters(
     results: [pfVideoResult],
     outputDir: String,
@@ -2263,9 +2309,7 @@ private func pfConcatenateWithDecadeChapters(
     let decadeList = chapters.map(\.title).joined(separator: " · ")
     await logFn("  Building decade chapter video (\(decadeList))…")
 
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: ffmpegPath)
-    process.arguments = [
+    let args = [
         "-f", "concat", "-safe", "0", "-i", listPath,
         "-i", metaPath,
         "-map_metadata", "1",
@@ -2275,44 +2319,13 @@ private func pfConcatenateWithDecadeChapters(
         "-c:a", "aac", "-b:a", "192k",
         "-y", outputPath
     ]
-    process.standardOutput = FileHandle.nullDevice
-    let stderrPipe = Pipe()
-    process.standardError = stderrPipe
-
-    // Drain stderr asynchronously to prevent pipe buffer deadlock.
-    // ffmpeg can emit thousands of warning lines with mixed-format inputs;
-    // if the 64KB pipe buffer fills, ffmpeg blocks and the output is truncated.
-    var stderrData = Data()
-    stderrPipe.fileHandleForReading.readabilityHandler = { handle in
-        let chunk = handle.availableData
-        if !chunk.isEmpty { stderrData.append(chunk) }
-    }
-
-    do { try process.run() } catch {
-        await logFn("  ⚠ Could not launch ffmpeg: \(error.localizedDescription)")
-        try? fm.removeItem(atPath: listPath); try? fm.removeItem(atPath: metaPath)
-        return
-    }
-
-    await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-        process.terminationHandler = { _ in cont.resume() }
-        if !process.isRunning { cont.resume() }
-    }
-    stderrPipe.fileHandleForReading.readabilityHandler = nil
+    let exitCode = await pfRunFFMpegProcess(ffmpegPath: ffmpegPath, args: args, logFn: logFn)
     try? fm.removeItem(atPath: listPath); try? fm.removeItem(atPath: metaPath)
 
-    if process.terminationStatus == 0 {
+    if exitCode == 0 {
         let totalSecs = durations.reduce(0, +)
         await logFn("  → Decade video saved: \(outputPath)")
         await logFn("  → Duration: \(pfFormatDuration(totalSecs))  Chapters: \(decadeList)")
-    } else {
-        await logFn("  ⚠ ffmpeg exited with code \(process.terminationStatus)")
-        if let errStr = String(data: stderrData, encoding: .utf8), !errStr.isEmpty {
-            let lines = errStr.components(separatedBy: .newlines).suffix(10)
-            for line in lines where !line.isEmpty {
-                await logFn("    stderr: \(line)")
-            }
-        }
     }
 }
 

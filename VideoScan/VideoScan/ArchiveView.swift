@@ -429,30 +429,12 @@ struct ArchiveView: View {
             .width(min: 140, ideal: 180)
 
             TableColumn("Score", value: \.junkScore) { rec in
-                if rec.junkScore > 0 {
-                    Text("\(rec.junkScore)")
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                        .foregroundColor(rec.junkScore >= 8 ? .red : rec.junkScore >= 5 ? .orange : .yellow)
-                } else {
-                    Text("—")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                }
+                junkScoreCell(rec)
             }
             .width(min: 40, ideal: 50)
 
             TableColumn("Why") { rec in
-                if !rec.junkReasons.isEmpty {
-                    Text(rec.junkReasons.joined(separator: " · "))
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                        .lineLimit(2)
-                        .help(rec.junkReasons.joined(separator: "\n"))
-                } else {
-                    Text("—")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                }
+                junkReasonsCell(rec)
             }
             .width(min: 120, ideal: 200)
         }
@@ -571,6 +553,34 @@ struct ArchiveView: View {
             Label("Reveal in Finder", systemImage: "folder")
         }
         .disabled(count != 1)
+    }
+
+    @ViewBuilder
+    private func junkScoreCell(_ rec: VideoRecord) -> some View {
+        if rec.junkScore > 0 {
+            Text("\(rec.junkScore)")
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundColor(rec.junkScore >= 8 ? .red : rec.junkScore >= 5 ? .orange : .yellow)
+        } else {
+            Text("—")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func junkReasonsCell(_ rec: VideoRecord) -> some View {
+        if !rec.junkReasons.isEmpty {
+            Text(rec.junkReasons.joined(separator: " · "))
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .lineLimit(2)
+                .help(rec.junkReasons.joined(separator: "\n"))
+        } else {
+            Text("—")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+        }
     }
 
     @ViewBuilder
