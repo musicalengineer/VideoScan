@@ -1753,7 +1753,7 @@ final class VideoScanModel: ObservableObject {
             return
         }
 
-        let rootIsNetwork = isNetworkPath(root)
+        let rootIsNetwork = CombineVerifier.isNetworkPath(root)
         target.status = .discovering
         // Register this volume in the dashboard so the Realtime Catalog Scan
         // window can show per-volume progress for per-target scans.
@@ -1909,7 +1909,7 @@ final class VideoScanModel: ObservableObject {
         log("")
 
         // Mount RAM disk for network file prefetching — size adapts to available memory
-        let hasNetworkRoot = roots.contains { isNetworkPath($0) }
+        let hasNetworkRoot = roots.contains { CombineVerifier.isNetworkPath($0) }
         let ramMountPoint = await mountScanRAMDiskIfNeeded(hasNetwork: hasNetworkRoot)
 
         // Per-root streaming walk + interleaved probe (producer-consumer).
@@ -1992,7 +1992,7 @@ final class VideoScanModel: ObservableObject {
         skipSmallFiles: Bool
     ) async -> [VideoRecord] {
         let volName = URL(fileURLWithPath: root).lastPathComponent
-        let rootIsNetwork = isNetworkPath(root)
+        let rootIsNetwork = CombineVerifier.isNetworkPath(root)
         let sem = AsyncSemaphore(limit: probesLimit)
         var rootRecords: [VideoRecord] = []
         var discoveredCount = 0
@@ -2269,7 +2269,7 @@ final class VideoScanModel: ObservableObject {
             // real seconds over SMB on thousands of files. skipHashing trades
             // dup detection for a faster pass — user can run "Analyze
             // Duplicates" later if they change their mind.
-            r.partialMD5 = skipHashing ? "" : partialMD5(path: path)
+            r.partialMD5 = skipHashing ? "" : FileHasher.partialMD5(path: path)
             return r
         }
 
@@ -2281,7 +2281,7 @@ final class VideoScanModel: ObservableObject {
             ramPath: ramPath
         )
 
-        let probeResult = await runFFProbe(url: probeURL)
+        let probeResult = await CombineVerifier.runFFProbe(url: probeURL, ffprobePath: ffprobePath)
         let stderrTrimmed = probeResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
 
         ScanEngine.applyProbeOrFallback(rec: rec, url: url, path: path,
@@ -2799,7 +2799,7 @@ final class VideoScanModel: ObservableObject {
         await MainActor.run {
             self.log("    Buffering \(kind) to \(hasRAMDisk ? "RAM disk" : "temp")...")
         }
-        try await bufferedCopy(from: URL(fileURLWithPath: remotePath), to: destination)
+        try await CombineVerifier.bufferedCopy(from: URL(fileURLWithPath: remotePath), to: destination)
         return destination
     }
 
@@ -2813,8 +2813,8 @@ final class VideoScanModel: ObservableObject {
         tempBase: URL,
         hasRAMDisk: Bool
     ) async throws -> (video: URL, audio: URL, tempDir: URL?) {
-        let videoIsNetwork = isNetworkPath(videoPath)
-        let audioIsNetwork = isNetworkPath(audioPath)
+        let videoIsNetwork = CombineVerifier.isNetworkPath(videoPath)
+        let audioIsNetwork = CombineVerifier.isNetworkPath(audioPath)
         guard videoIsNetwork || audioIsNetwork else {
             return (URL(fileURLWithPath: videoPath), URL(fileURLWithPath: audioPath), nil)
         }
@@ -3041,7 +3041,7 @@ final class VideoScanModel: ObservableObject {
     nonisolated private func buildCombinedRecord(
         outputURL: URL, video: VideoRecord, audio: VideoRecord, summary: String
     ) async -> VideoRecord? {
-        let (probe, _) = await runFFProbe(url: outputURL)
+        let (probe, _) = await CombineVerifier.runFFProbe(url: outputURL, ffprobePath: ffprobePath)
         guard let probe else { return nil }
         let fm = FileManager.default
         let attrs = try? fm.attributesOfItem(atPath: outputURL.path)
@@ -3258,47 +3258,10 @@ final class VideoScanModel: ObservableObject {
         dashboard.combineCurrentFile = ""
     }
 
-    nonisolated func isNetworkPath(_ path: String) -> Bool {
-        CombineVerifier.isNetworkPath(path)
-    }
-
-    nonisolated func bufferedCopy(from src: URL, to dst: URL, bufferSize: Int = 4 * 1024 * 1024) async throws {
-        try await CombineVerifier.bufferedCopy(from: src, to: dst, bufferSize: bufferSize)
-    }
-
-    func runFFMpeg(videoPath: String, audioPath: String, outputPath: String) async -> Bool {
-        let logFn: @Sendable (String) -> Void = { [weak self] msg in
-            DispatchQueue.main.async { self?.log(msg) }
-        }
-        let result = await CombineEngine.runFFMpeg(
-            videoPath: videoPath,
-            audioPath: audioPath,
-            outputPath: outputPath,
-            technique: .streamCopy,
-            log: logFn
-        )
-        if !result.success {
-            log("ffmpeg exit code \(result.exitCode)")
-        }
-        return result.success
-    }
-
     // MARK: - ffprobe
 
     nonisolated func runFFProbe(url: URL) async -> (output: FFProbeOutput?, stderr: String) {
         await CombineVerifier.runFFProbe(url: url, ffprobePath: ffprobePath)
-    }
-
-    // MARK: - Process runner (cancellation-aware)
-
-    nonisolated func runProcess(executable: String, arguments: [String]) async -> String? {
-        await ProcessRunner.run(executable: executable, arguments: arguments)
-    }
-
-    // MARK: - Partial MD5
-
-    nonisolated func partialMD5(path: String, chunkSize: Int = 65536) -> String {
-        FileHasher.partialMD5(path: path, chunkSize: chunkSize)
     }
 
     // MARK: - CSV
