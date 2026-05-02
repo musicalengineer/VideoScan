@@ -442,56 +442,59 @@ struct VolumeCompareSheet: View {
 
             Spacer()
 
-            // Action bar
-            if !r.missingFiles.isEmpty && r.isAuditMode {
-                // Audit mode: no single destination, so no copy. Just show guidance.
-                HStack(spacing: 6) {
-                    Image(systemName: "info.circle")
-                        .foregroundColor(.secondary)
-                    Text("Audit complete. To rescue these files, turn off Audit mode and pick a destination.")
-                        .font(.caption).foregroundColor(.secondary)
-                }
-            } else if !r.missingFiles.isEmpty {
-                HStack {
-                    if rescue.isRunning {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ProgressView(value: rescue.progress)
-                            HStack {
-                                Text("\(rescue.filesCopied)/\(r.sourceOnly) files")
-                                    .font(.caption)
-                                Spacer()
-                                Text(rescue.currentFile).font(.caption).foregroundColor(.secondary).lineLimit(1)
-                            }
-                        }
-                        Button("Cancel") { rescue.cancel() }
-                            .buttonStyle(.bordered)
-                    } else if rescue.isDone {
+            rescueActionBar(r)
+        }
+    }
+
+    @ViewBuilder
+    private func rescueActionBar(_ r: VolumeCompareResult) -> some View {
+        if !r.missingFiles.isEmpty && r.isAuditMode {
+            HStack(spacing: 6) {
+                Image(systemName: "info.circle")
+                    .foregroundColor(.secondary)
+                Text("Audit complete. To rescue these files, turn off Audit mode and pick a destination.")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+        } else if !r.missingFiles.isEmpty {
+            HStack {
+                if rescue.isRunning {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ProgressView(value: rescue.progress)
                         HStack {
-                            Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
-                            Text("Done — \(rescue.filesCopied) copied, \(rescue.filesFailed) failed")
-                                .font(.callout)
+                            Text("\(rescue.filesCopied)/\(r.sourceOnly) files")
+                                .font(.caption)
+                            Spacer()
+                            Text(rescue.currentFile).font(.caption).foregroundColor(.secondary).lineLimit(1)
                         }
-                    } else {
-                        let srcOnline = model.scanTargets.first(where: { $0.searchPath == r.sourcePath })?.isReachable ?? false
+                    }
+                    Button("Cancel") { rescue.cancel() }
+                        .buttonStyle(.bordered)
+                } else if rescue.isDone {
+                    HStack {
+                        Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
+                        Text("Done — \(rescue.filesCopied) copied, \(rescue.filesFailed) failed")
+                            .font(.callout)
+                    }
+                } else {
+                    let srcOnline = model.scanTargets.first(where: { $0.searchPath == r.sourcePath })?.isReachable ?? false
 
-                        Picker("Copy Mode:", selection: $copyMode) {
-                            ForEach(RescueCopyMode.allCases, id: \.self) { mode in
-                                Text(mode.rawValue).tag(mode)
-                            }
+                    Picker("Copy Mode:", selection: $copyMode) {
+                        ForEach(RescueCopyMode.allCases, id: \.self) { mode in
+                            Text(mode.rawValue).tag(mode)
                         }
-                        .pickerStyle(.segmented)
-                        .frame(maxWidth: 320)
-                        .help(copyMode.description)
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 320)
+                    .help(copyMode.description)
 
-                        Button("Copy \(r.sourceOnly) Missing Files") {
-                            showCopyConfirm = true
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(!srcOnline)
-                        if !srcOnline {
-                            Text("Source volume is offline — connect it to copy.")
-                                .font(.caption).foregroundColor(.orange)
-                        }
+                    Button("Copy \(r.sourceOnly) Missing Files") {
+                        showCopyConfirm = true
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!srcOnline)
+                    if !srcOnline {
+                        Text("Source volume is offline — connect it to copy.")
+                            .font(.caption).foregroundColor(.orange)
                     }
                 }
             }

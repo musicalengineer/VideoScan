@@ -60,70 +60,31 @@ enum DuplicateDetector {
             adjacency[pair.right.id, default: []].insert(pair.left.id)
         }
 
-        // Walk connected components to find keeper candidates
         var visited = Set<UUID>()
         for record in candidates where !visited.contains(record.id) {
             guard adjacency[record.id] != nil else { continue }
 
-            var stack = [record.id]
-            var componentIDs: [UUID] = []
-            while let id = stack.popLast() {
-                guard visited.insert(id).inserted else { continue }
-                componentIDs.append(id)
-                for next in adjacency[id] ?? [] where !visited.contains(next) {
-                    stack.append(next)
-                }
-            }
-
+            let componentIDs = walkComponent(from: record.id, adjacency: adjacency, visited: &visited)
             guard componentIDs.count > 1 else { continue }
             let component = componentIDs.compactMap { recordsByID[$0] }
             guard let keeper = component.max(by: { keeperScore($0) < keeperScore($1) }) else { continue }
 
-            // Star filter: only include records with a direct match to keeper
-            var starMembers = [keeper]
-            for item in component where item !== keeper {
-                let key = PairKey(keeper.id, item.id)
-                if let pair = pairByIDs[key], pair.score >= scoreThreshold {
-                    starMembers.append(item)
-                }
-            }
+            let starMembers = buildStarMembers(keeper: keeper, component: component, pairByIDs: pairByIDs)
             guard starMembers.count > 1 else { continue }
 
-            let groupID = UUID()
-            let memberIDs = starMembers.map(\.id)
-            let groupConfidence = starMembers.compactMap { bestConfidence(for: $0, in: memberIDs, pairByIDs: pairByIDs) }.max() ?? .low
+            let result = classifyGroup(
+                starMembers: starMembers, keeper: keeper,
+                pairByIDs: pairByIDs, assigned: &assigned
+            )
 
             groups += 1
-            switch groupConfidence {
+            switch result.confidence {
             case .high: highGroups += 1
             case .medium: mediumGroups += 1
             case .low: lowGroups += 1
             }
-
-            for item in starMembers {
-                assigned.insert(item.id)
-                item.duplicateGroupID = groupID
-                item.duplicateGroupCount = starMembers.count
-                item.duplicateConfidence = bestConfidence(for: item, in: memberIDs, pairByIDs: pairByIDs) ?? groupConfidence
-                let reasons = bestReasons(for: item, in: memberIDs, pairByIDs: pairByIDs)
-                item.duplicateReasons = reasons.isEmpty
-                    ? starMembers.flatMap { bestReasons(for: $0, in: memberIDs, pairByIDs: pairByIDs) }
-                        .uniqued().joined(separator: "+")
-                    : reasons.joined(separator: "+")
-                item.duplicateBestMatchFilename = keeper === item
-                    ? strongestMatchFilename(for: item, in: starMembers, pairByIDs: pairByIDs)
-                    : keeper.filename
-
-                if item === keeper {
-                    item.duplicateDisposition = .keep
-                } else if item.duplicateConfidence == .high {
-                    item.duplicateDisposition = .extraCopy
-                    extraCopies += 1
-                } else {
-                    item.duplicateDisposition = .review
-                    reviewItems += 1
-                }
-            }
+            extraCopies += result.extraCopies
+            reviewItems += result.reviewItems
         }
 
         return DuplicateAnalysisSummary(
@@ -134,6 +95,71 @@ enum DuplicateDetector {
             extraCopies: extraCopies,
             reviewItems: reviewItems
         )
+    }
+
+    private static func walkComponent(from startID: UUID, adjacency: [UUID: Set<UUID>], visited: inout Set<UUID>) -> [UUID] {
+        var stack = [startID]
+        var componentIDs: [UUID] = []
+        while let id = stack.popLast() {
+            guard visited.insert(id).inserted else { continue }
+            componentIDs.append(id)
+            for next in adjacency[id] ?? [] where !visited.contains(next) {
+                stack.append(next)
+            }
+        }
+        return componentIDs
+    }
+
+    private static func buildStarMembers(keeper: VideoRecord, component: [VideoRecord], pairByIDs: [PairKey: Candidate]) -> [VideoRecord] {
+        var members = [keeper]
+        for item in component where item !== keeper {
+            let key = PairKey(keeper.id, item.id)
+            if let pair = pairByIDs[key], pair.score >= scoreThreshold {
+                members.append(item)
+            }
+        }
+        return members
+    }
+
+    private static func classifyGroup(
+        starMembers: [VideoRecord], keeper: VideoRecord,
+        pairByIDs: [PairKey: Candidate], assigned: inout Set<UUID>
+    ) -> (confidence: DuplicateConfidence, extraCopies: Int, reviewItems: Int) {
+        let groupID = UUID()
+        let memberIDs = starMembers.map(\.id)
+        let groupConfidence = starMembers
+            .compactMap { bestConfidence(for: $0, in: memberIDs, pairByIDs: pairByIDs) }
+            .max() ?? .low
+
+        var extras = 0
+        var reviews = 0
+
+        for item in starMembers {
+            assigned.insert(item.id)
+            item.duplicateGroupID = groupID
+            item.duplicateGroupCount = starMembers.count
+            item.duplicateConfidence = bestConfidence(for: item, in: memberIDs, pairByIDs: pairByIDs) ?? groupConfidence
+            let reasons = bestReasons(for: item, in: memberIDs, pairByIDs: pairByIDs)
+            item.duplicateReasons = reasons.isEmpty
+                ? starMembers.flatMap { bestReasons(for: $0, in: memberIDs, pairByIDs: pairByIDs) }
+                    .uniqued().joined(separator: "+")
+                : reasons.joined(separator: "+")
+            item.duplicateBestMatchFilename = keeper === item
+                ? strongestMatchFilename(for: item, in: starMembers, pairByIDs: pairByIDs)
+                : keeper.filename
+
+            if item === keeper {
+                item.duplicateDisposition = .keep
+            } else if item.duplicateConfidence == .high {
+                item.duplicateDisposition = .extraCopy
+                extras += 1
+            } else {
+                item.duplicateDisposition = .review
+                reviews += 1
+            }
+        }
+
+        return (groupConfidence, extras, reviews)
     }
 
     private static let emptySummary = DuplicateAnalysisSummary(

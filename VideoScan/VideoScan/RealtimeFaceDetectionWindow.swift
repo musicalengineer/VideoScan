@@ -311,7 +311,7 @@ private struct ActiveJobFaceDetectView: View {
                             let status = j.status == .done ? " [Done]" :
                                          j.status == .scanning ? " [Scanning]" :
                                          j.status.isActive ? " [Active]" : ""
-                            Text((person != nil ? "\(person!) — \(vol)" : vol) + status)
+                            Text((person.map { "\($0) — \(vol)" } ?? vol) + status)
                                 .font(.system(size: 14))
                                 .tag(j.id)
                         }

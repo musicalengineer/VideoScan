@@ -913,7 +913,7 @@ struct CatalogContent: View {
                     // Media preview — center
                     VStack(spacing: 0) {
                         if previewOfflineVolumeName != nil
-                            || (selectedRecord != nil && !VolumeReachability.isReachable(path: selectedRecord!.fullPath)) {
+                            || (selectedRecord.map { !VolumeReachability.isReachable(path: $0.fullPath) } ?? false) {
                             ZStack {
                                 RoundedRectangle(cornerRadius: 6)
                                     .fill(Color.black)
@@ -1476,45 +1476,8 @@ struct InspectorPanel: View {
             }
         }
 
-        // Duplicates
-        if rec.duplicateDisposition != .none || !rec.duplicateBestMatchFilename.isEmpty {
-            section("Duplicates")
-            if rec.duplicateDisposition != .none {
-                let status = rec.duplicateGroupCount >= 2
-                    ? "\(rec.duplicateDisposition.rawValue) · \(rec.duplicateGroupCount) matches"
-                    : rec.duplicateDisposition.rawValue
-                add("Status", status)
-            }
-            add("Reasons", rec.duplicateReasons)
-            if let conf = rec.duplicateConfidence {
-                add("Confidence", conf.rawValue)
-            }
-            if !duplicateGroupMembers.isEmpty {
-                lines.append("")
-                lines.append("  Duplicate Group (\(duplicateGroupMembers.count + 1) total):")
-                let thisVol = VolumeReachability.volumeName(forPath: rec.fullPath)
-                lines.append("    ★ \(rec.filename)  [\(thisVol)]  \(rec.duplicateDisposition.rawValue)")
-                for member in duplicateGroupMembers {
-                    let vol = VolumeReachability.volumeName(forPath: member.fullPath)
-                    let online = VolumeReachability.isReachable(path: member.fullPath)
-                    lines.append("    · \(member.filename)  [\(vol)]\(online ? "" : " (offline)")  \(member.duplicateDisposition.rawValue)")
-                }
-            }
-        }
-
-        // Avid Project
-        if rec.hasAvidMetadata {
-            section("Avid Project")
-            add("Clip Name", rec.avidClipName)
-            add("Mob Type", rec.avidMobType)
-            add("Bin File", rec.avidBinFile)
-            add("Tape", rec.avidTapeName)
-            add("Tracks", rec.avidTracks)
-            if rec.avidEditRate > 0 { add("Edit Rate", String(format: "%.2f fps", rec.avidEditRate)) }
-            add("Mob ID", rec.avidMobID)
-            add("Material UUID", rec.avidMaterialUUID)
-            add("Original Path", rec.avidMediaPath)
-        }
+        formatDuplicateSection(rec, lines: &lines, add: add, section: section)
+        formatAvidSection(rec, lines: &lines, add: add, section: section)
 
         // Notes
         if !rec.notes.isEmpty {
@@ -1529,6 +1492,50 @@ struct InspectorPanel: View {
         add("MD5 (partial)", rec.partialMD5)
 
         return lines.joined(separator: "\n")
+    }
+
+    private func formatDuplicateSection(
+        _ rec: VideoRecord, lines: inout [String],
+        add: (String, String) -> Void, section: (String) -> Void
+    ) {
+        guard rec.duplicateDisposition != .none || !rec.duplicateBestMatchFilename.isEmpty else { return }
+        section("Duplicates")
+        if rec.duplicateDisposition != .none {
+            let status = rec.duplicateGroupCount >= 2
+                ? "\(rec.duplicateDisposition.rawValue) · \(rec.duplicateGroupCount) matches"
+                : rec.duplicateDisposition.rawValue
+            add("Status", status)
+        }
+        add("Reasons", rec.duplicateReasons)
+        if let conf = rec.duplicateConfidence { add("Confidence", conf.rawValue) }
+        if !duplicateGroupMembers.isEmpty {
+            lines.append("")
+            lines.append("  Duplicate Group (\(duplicateGroupMembers.count + 1) total):")
+            let thisVol = VolumeReachability.volumeName(forPath: rec.fullPath)
+            lines.append("    ★ \(rec.filename)  [\(thisVol)]  \(rec.duplicateDisposition.rawValue)")
+            for member in duplicateGroupMembers {
+                let vol = VolumeReachability.volumeName(forPath: member.fullPath)
+                let online = VolumeReachability.isReachable(path: member.fullPath)
+                lines.append("    · \(member.filename)  [\(vol)]\(online ? "" : " (offline)")  \(member.duplicateDisposition.rawValue)")
+            }
+        }
+    }
+
+    private func formatAvidSection(
+        _ rec: VideoRecord, lines: inout [String],
+        add: (String, String) -> Void, section: (String) -> Void
+    ) {
+        guard rec.hasAvidMetadata else { return }
+        section("Avid Project")
+        add("Clip Name", rec.avidClipName)
+        add("Mob Type", rec.avidMobType)
+        add("Bin File", rec.avidBinFile)
+        add("Tape", rec.avidTapeName)
+        add("Tracks", rec.avidTracks)
+        if rec.avidEditRate > 0 { add("Edit Rate", String(format: "%.2f fps", rec.avidEditRate)) }
+        add("Mob ID", rec.avidMobID)
+        add("Material UUID", rec.avidMaterialUUID)
+        add("Original Path", rec.avidMediaPath)
     }
 
     // MARK: - Thumbnail

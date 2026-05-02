@@ -51,61 +51,13 @@ enum Correlator {
 
         logLines.append("  Correlating \(allVideos.count) video-only + \(allAudios.count) audio-only files...")
 
-        // Score every possible video↔audio pair
         var candidates: [Candidate] = []
 
         for v in allVideos {
             for a in allAudios {
-                var score = 0
-                var reasons: [String] = []
-
-                // Signal 1: Filename similarity (strongest — Avid V/A prefix convention)
-                if filenameCorrelationKey(v.filename) == filenameCorrelationKey(a.filename) {
-                    score += 4
-                    reasons.append("filename")
+                if let candidate = scoreCandidate(video: v, audio: a) {
+                    candidates.append(candidate)
                 }
-
-                // Signal 2: Duration match
-                if v.durationSeconds > 0 && a.durationSeconds > 0 &&
-                   abs(v.durationSeconds - a.durationSeconds) <= durationTolerance {
-                    score += 3
-                    reasons.append("duration")
-                }
-
-                // Signal 3: Timestamp match
-                if let vDate = v.dateCreatedRaw, let aDate = a.dateCreatedRaw,
-                   abs(vDate.timeIntervalSince(aDate)) <= timestampTolerance {
-                    score += 3
-                    reasons.append("timestamp")
-                }
-
-                // Signal 4: Timecode match
-                if !v.timecode.isEmpty && v.timecode == a.timecode {
-                    score += 2
-                    reasons.append("timecode")
-                }
-
-                // Signal 5: Same directory
-                if v.directory == a.directory {
-                    score += 1
-                    reasons.append("directory")
-                }
-
-                // Signal 6: Tape name match
-                if !v.tapeName.isEmpty && v.tapeName == a.tapeName {
-                    score += 1
-                    reasons.append("tape")
-                }
-
-                guard score >= minimumScore else { continue }
-
-                let confidence: PairConfidence
-                if score >= 7 { confidence = .high } else if score >= 4 { confidence = .medium } else { confidence = .low }
-
-                candidates.append(Candidate(
-                    video: v, audio: a, score: score,
-                    confidence: confidence, reasons: reasons
-                ))
             }
         }
 
@@ -146,6 +98,39 @@ enum Correlator {
         """)
 
         return logLines.joined(separator: "\n")
+    }
+
+    private static func scoreCandidate(video v: VideoRecord, audio a: VideoRecord) -> Candidate? {
+        var score = 0
+        var reasons: [String] = []
+
+        if filenameCorrelationKey(v.filename) == filenameCorrelationKey(a.filename) {
+            score += 4; reasons.append("filename")
+        }
+        if v.durationSeconds > 0 && a.durationSeconds > 0 &&
+           abs(v.durationSeconds - a.durationSeconds) <= durationTolerance {
+            score += 3; reasons.append("duration")
+        }
+        if let vDate = v.dateCreatedRaw, let aDate = a.dateCreatedRaw,
+           abs(vDate.timeIntervalSince(aDate)) <= timestampTolerance {
+            score += 3; reasons.append("timestamp")
+        }
+        if !v.timecode.isEmpty && v.timecode == a.timecode {
+            score += 2; reasons.append("timecode")
+        }
+        if v.directory == a.directory {
+            score += 1; reasons.append("directory")
+        }
+        if !v.tapeName.isEmpty && v.tapeName == a.tapeName {
+            score += 1; reasons.append("tape")
+        }
+
+        guard score >= minimumScore else { return nil }
+
+        let confidence: PairConfidence
+        if score >= 7 { confidence = .high } else if score >= 4 { confidence = .medium } else { confidence = .low }
+
+        return Candidate(video: v, audio: a, score: score, confidence: confidence, reasons: reasons)
     }
 
     // MARK: - Helpers

@@ -429,30 +429,12 @@ struct ArchiveView: View {
             .width(min: 140, ideal: 180)
 
             TableColumn("Score", value: \.junkScore) { rec in
-                if rec.junkScore > 0 {
-                    Text("\(rec.junkScore)")
-                        .font(.system(size: 12, weight: .medium, design: .monospaced))
-                        .foregroundColor(rec.junkScore >= 8 ? .red : rec.junkScore >= 5 ? .orange : .yellow)
-                } else {
-                    Text("—")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                }
+                junkScoreCell(rec)
             }
             .width(min: 40, ideal: 50)
 
             TableColumn("Why") { rec in
-                if !rec.junkReasons.isEmpty {
-                    Text(rec.junkReasons.joined(separator: " · "))
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                        .lineLimit(2)
-                        .help(rec.junkReasons.joined(separator: "\n"))
-                } else {
-                    Text("—")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                }
+                junkReasonsCell(rec)
             }
             .width(min: 120, ideal: 200)
         }
@@ -541,57 +523,7 @@ struct ArchiveView: View {
         }
 
         if recs.allSatisfy({ $0.mediaDisposition == .important }) {
-            Divider()
-            Section("Lifecycle") {
-                Button {
-                    for rec in recs { rec.archiveStage = .healthy }
-                } label: {
-                    Label("Mark Healthy", systemImage: "heart.fill")
-                }
-                Button {
-                    for rec in recs { rec.archiveStage = .masterAssigned }
-                } label: {
-                    Label("Designate as Master", systemImage: "crown.fill")
-                }
-                Button {
-                    for rec in recs { rec.archiveStage = .backedUp }
-                } label: {
-                    Label("Mark Backed Up", systemImage: "doc.on.doc.fill")
-                }
-                Button {
-                    for rec in recs { rec.archiveStage = .readyForArchive }
-                } label: {
-                    Label("Mark Ready for Archive", systemImage: "checkmark.seal.fill")
-                }
-                Button {
-                    for rec in recs { rec.archiveStage = .archived }
-                } label: {
-                    Label("Mark Archived", systemImage: "archivebox.fill")
-                }
-            }
-
-            Divider()
-
-            Section("Backed Up To") {
-                Button {
-                    let entry = BackupEntry(name: "LTA_Crucial", kind: .local, date: Date())
-                    for rec in recs { addBackup(rec, entry: entry) }
-                } label: {
-                    Label("LTA_Crucial (Local)", systemImage: "externaldrive.fill")
-                }
-                Button {
-                    let entry = BackupEntry(name: "iCloud", kind: .cloud, date: Date())
-                    for rec in recs { addBackup(rec, entry: entry) }
-                } label: {
-                    Label("iCloud (Cloud)", systemImage: "icloud.fill")
-                }
-                Button {
-                    let entry = BackupEntry(name: "Breen's NAS", kind: .offsite, date: Date())
-                    for rec in recs { addBackup(rec, entry: entry) }
-                } label: {
-                    Label("Breen's NAS (Offsite)", systemImage: "building.2.fill")
-                }
-            }
+            lifecycleAndBackupSections(for: recs)
         }
 
         Divider()
@@ -621,6 +553,79 @@ struct ArchiveView: View {
             Label("Reveal in Finder", systemImage: "folder")
         }
         .disabled(count != 1)
+    }
+
+    @ViewBuilder
+    private func junkScoreCell(_ rec: VideoRecord) -> some View {
+        if rec.junkScore > 0 {
+            Text("\(rec.junkScore)")
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundColor(rec.junkScore >= 8 ? .red : rec.junkScore >= 5 ? .orange : .yellow)
+        } else {
+            Text("—")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func junkReasonsCell(_ rec: VideoRecord) -> some View {
+        if !rec.junkReasons.isEmpty {
+            Text(rec.junkReasons.joined(separator: " · "))
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .lineLimit(2)
+                .help(rec.junkReasons.joined(separator: "\n"))
+        } else {
+            Text("—")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private func lifecycleAndBackupSections(for recs: [VideoRecord]) -> some View {
+        Divider()
+        Section("Lifecycle") {
+            Button { for rec in recs { rec.archiveStage = .healthy } } label: {
+                Label("Mark Healthy", systemImage: "heart.fill")
+            }
+            Button { for rec in recs { rec.archiveStage = .masterAssigned } } label: {
+                Label("Designate as Master", systemImage: "crown.fill")
+            }
+            Button { for rec in recs { rec.archiveStage = .backedUp } } label: {
+                Label("Mark Backed Up", systemImage: "doc.on.doc.fill")
+            }
+            Button { for rec in recs { rec.archiveStage = .readyForArchive } } label: {
+                Label("Mark Ready for Archive", systemImage: "checkmark.seal.fill")
+            }
+            Button { for rec in recs { rec.archiveStage = .archived } } label: {
+                Label("Mark Archived", systemImage: "archivebox.fill")
+            }
+        }
+
+        Divider()
+
+        Section("Backed Up To") {
+            Button {
+                let entry = BackupEntry(name: "LTA_Crucial", kind: .local, date: Date())
+                for rec in recs { addBackup(rec, entry: entry) }
+            } label: {
+                Label("LTA_Crucial (Local)", systemImage: "externaldrive.fill")
+            }
+            Button {
+                let entry = BackupEntry(name: "iCloud", kind: .cloud, date: Date())
+                for rec in recs { addBackup(rec, entry: entry) }
+            } label: {
+                Label("iCloud (Cloud)", systemImage: "icloud.fill")
+            }
+            Button {
+                let entry = BackupEntry(name: "Breen's NAS", kind: .offsite, date: Date())
+                for rec in recs { addBackup(rec, entry: entry) }
+            } label: {
+                Label("Breen's NAS (Offsite)", systemImage: "building.2.fill")
+            }
+        }
     }
 
     // MARK: - Backup Tracking
