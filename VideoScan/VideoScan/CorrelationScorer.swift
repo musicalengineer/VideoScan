@@ -171,7 +171,7 @@ enum CorrelationScorer {
                 durationTolerance: durationTolerance,
                 timestampTolerance: timestampTolerance
             ) {
-                if best == nil || cand.score > best!.score {
+                if cand.score > (best?.score ?? -1) {
                     best = cand
                 }
             }

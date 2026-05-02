@@ -58,7 +58,8 @@ enum MxfHeaderParser {
 
         var buf = Data(count: readLen)
         let bytesRead = buf.withUnsafeMutableBytes { rawBuf in
-            Darwin.read(fd, rawBuf.baseAddress!, readLen)
+            guard let ptr = rawBuf.baseAddress else { return -1 }
+            return Darwin.read(fd, ptr, readLen)
         }
         close(fd)
         guard bytesRead > 16 else { return nil }

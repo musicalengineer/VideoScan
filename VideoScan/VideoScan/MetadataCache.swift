@@ -12,7 +12,7 @@ final class MetadataCache {
     private static var dbPath: String {
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
-        ).first!
+        ).first ?? FileManager.default.temporaryDirectory
         let dir = appSupport.appendingPathComponent("VideoScan", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("metadata_cache.sqlite").path

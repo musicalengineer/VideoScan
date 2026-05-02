@@ -913,7 +913,7 @@ struct CatalogContent: View {
                     // Media preview — center
                     VStack(spacing: 0) {
                         if previewOfflineVolumeName != nil
-                            || (selectedRecord != nil && !VolumeReachability.isReachable(path: selectedRecord!.fullPath)) {
+                            || (selectedRecord.map { !VolumeReachability.isReachable(path: $0.fullPath) } ?? false) {
                             ZStack {
                                 RoundedRectangle(cornerRadius: 6)
                                     .fill(Color.black)

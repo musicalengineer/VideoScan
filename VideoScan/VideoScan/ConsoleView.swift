@@ -30,8 +30,7 @@ struct ConsoleView: NSViewRepresentable {
         // Skip if nothing changed
         guard newCount != coord.lastLineCount else { return }
 
-        let textView = coord.textView!
-        let storage = textView.textStorage!
+        guard let textView = coord.textView, let storage = textView.textStorage else { return }
 
         if newCount < coord.lastLineCount || coord.lastLineCount == 0 {
             // Reset — lines were cleared or first load
