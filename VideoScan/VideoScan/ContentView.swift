@@ -5,6 +5,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject var model: VideoScanModel
     @StateObject private var personFinderModel = PersonFinderModel()
+    @StateObject private var identifyFamilyModel = IdentifyFamilyModel()
     @AppStorage("selectedTab") private var selectedTab: Int = 0
     private let tabFontSize: Double = 18
 
@@ -60,15 +61,17 @@ struct ContentView: View {
             Group {
                 switch selectedTab {
                 case 0:
-                    PersonFinderView()
+                    PeopleTabView()
                         .environmentObject(personFinderModel)
+                        .environmentObject(identifyFamilyModel)
                 case 1:
                     CatalogView()
                 case 2:
                     ArchiveView()
                 default:
-                    PersonFinderView()
+                    PeopleTabView()
                         .environmentObject(personFinderModel)
+                        .environmentObject(identifyFamilyModel)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
