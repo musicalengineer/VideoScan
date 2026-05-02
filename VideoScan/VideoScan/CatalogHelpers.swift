@@ -305,6 +305,9 @@ struct CatalogContent: View {
     @State private var showRenameSheet = false
     @State private var renameTarget: VideoRecord?
     @State private var renameText: String = ""
+    @State private var showNotesSheet = false
+    @State private var notesTarget: VideoRecord?
+    @State private var notesText: String = ""
 
     /// Stable snapshot the Table reads from. Decoupled from `records` so the
     /// Table never sees the data array mutate mid-gesture (which races with
@@ -468,6 +471,18 @@ struct CatalogContent: View {
                 originalExt: (renameTarget?.filename as NSString?)?.pathExtension ?? "",
                 onConfirm: { performRename() },
                 onCancel: { showRenameSheet = false }
+            )
+        }
+        .sheet(isPresented: $showNotesSheet) {
+            NotesSheet(
+                notes: $notesText,
+                filename: notesTarget?.filename ?? "",
+                onConfirm: {
+                    notesTarget?.notes = notesText
+                    model.saveCatalogDebounced()
+                    showNotesSheet = false
+                },
+                onCancel: { showNotesSheet = false }
             )
         }
     }
@@ -647,10 +662,17 @@ struct CatalogContent: View {
                             .font(.system(size: 11))
                             .foregroundColor(rec.mediaDisposition.color)
                     }
+                    if !rec.notes.isEmpty {
+                        Image(systemName: "note.text")
+                            .font(.system(size: 9))
+                            .foregroundColor(.secondary)
+                    }
                 }
-                .help(rec.mediaDisposition.rawValue)
+                .help(rec.notes.isEmpty
+                      ? rec.mediaDisposition.rawValue
+                      : "\(rec.mediaDisposition.rawValue) — \(rec.notes)")
             }
-            .width(min: 70, ideal: 95)
+            .width(min: 70, ideal: 110)
 
             TableColumn("Duplicate") { rec in
                 DuplicateDispositionCell(record: rec)
@@ -741,6 +763,12 @@ struct CatalogContent: View {
                     } label: {
                         Label("Clear Tag", systemImage: "arrow.counterclockwise")
                     }
+                }
+
+                Button("Notes\u{2026}") {
+                    notesTarget = rec
+                    notesText = rec.notes
+                    showNotesSheet = true
                 }
 
                 // Show duplicate group matches
@@ -1011,6 +1039,39 @@ struct RenameSheet: View {
         }
         .padding(20)
         .frame(width: 400)
+    }
+}
+
+// MARK: - Notes Sheet
+
+struct NotesSheet: View {
+    @Binding var notes: String
+    let filename: String
+    let onConfirm: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Notes")
+                .font(.headline)
+            Text(filename)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+            TextEditor(text: $notes)
+                .font(.system(.body))
+                .frame(minHeight: 80)
+                .border(Color.secondary.opacity(0.3))
+            HStack {
+                Button("Cancel", role: .cancel, action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("Save", action: onConfirm)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 420, height: 220)
     }
 }
 
