@@ -2116,67 +2116,14 @@ final class VideoScanModel: ObservableObject {
         skipSmallFiles: Bool,
         onProgress: (@Sendable (_ currentDir: URL, _ filesFoundSoFar: Int, _ lastFile: URL?) -> Void)? = nil
     ) async -> [URL] {
-        // Run on a detached task to avoid blocking the cooperative thread pool.
-        // FileManager calls are synchronous and can stall on network volumes.
-        let videoExtensions = self.videoExtensions
-        let minFileBytes: Int = skipSmallFiles ? 1_048_576 : 0
-        let result = await Task.detached(priority: .userInitiated) {
-            var videoFiles: [URL] = []
-            let fm = FileManager.default
-            var dirStack: [URL] = [URL(fileURLWithPath: root)]
-
-            while !dirStack.isEmpty {
-                if Task.isCancelled { break }
-                let currentDir = dirStack.removeLast()
-                // Heartbeat: tell the dashboard which directory we're entering.
-                // This is the only signal a network walk produces — without it
-                // the RT scan window looks frozen during discovery.
-                onProgress?(currentDir, videoFiles.count, nil)
-
-                let contents: [URL]
-                do {
-                    contents = try fm.contentsOfDirectory(
-                        at: currentDir,
-                        includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isReadableKey, .fileSizeKey],
-                        options: [.skipsHiddenFiles]
-                    )
-                } catch {
-                    continue
-                }
-
-                for url in contents {
-                    if Task.isCancelled { break }
-                    guard let rv = try? url.resourceValues(
-                        forKeys: [.isDirectoryKey, .isRegularFileKey, .isReadableKey, .fileSizeKey]
-                    ) else { continue }
-
-                    if rv.isDirectory == true {
-                        let dirName = url.lastPathComponent.lowercased()
-                        let dirExt = url.pathExtension.lowercased()
-                        if !skipDirs.contains(dirName)
-                            && !skipBundleExtensions.contains(dirExt) {
-                            dirStack.append(url)
-                        }
-                    } else if rv.isRegularFile == true && rv.isReadable == true {
-                        let ext = url.pathExtension.lowercased()
-                        if videoExtensions.contains(ext) {
-                            // .ts can collide with TypeScript — verify MPEG-TS sync byte.
-                            // .mts is AVCHD-only (never TypeScript), so skip the check.
-                            if ext == "ts" && !Self.isMpegTS(url) {
-                                continue
-                            }
-                            if minFileBytes > 0, let sz = rv.fileSize, sz < minFileBytes {
-                                continue
-                            }
-                            videoFiles.append(url)
-                            onProgress?(currentDir, videoFiles.count, url)
-                        }
-                    }
-                }
-            }
-            return videoFiles
-        }.value
-        return result
+        await FilesystemWalker.walkDirectory(
+            root: root,
+            videoExtensions: videoExtensions,
+            skipDirs: skipDirs,
+            skipBundleExtensions: skipBundleExtensions,
+            skipSmallFiles: skipSmallFiles,
+            onProgress: onProgress
+        )
     }
 
     /// Walk a directory tree and yield video file URLs as they are discovered
@@ -2195,79 +2142,14 @@ final class VideoScanModel: ObservableObject {
         skipSmallFiles: Bool,
         onDirectoryEntered: (@Sendable (_ currentDir: URL) -> Void)? = nil
     ) -> AsyncStream<URL> {
-        let videoExtensions = self.videoExtensions
-        // Capture at walk start so mid-scan toggles don't corrupt the walk.
-        // 1 MB threshold — matches the skipSmallFiles heuristic.
-        let minFileBytes: Int = skipSmallFiles ? 1_048_576 : 0
-        return AsyncStream(URL.self, bufferingPolicy: .unbounded) { continuation in
-            let walker = Task.detached(priority: .userInitiated) {
-                let fm = FileManager.default
-                var dirStack: [URL] = [URL(fileURLWithPath: root)]
-                while !dirStack.isEmpty {
-                    if Task.isCancelled { break }
-                    let currentDir = dirStack.removeLast()
-                    onDirectoryEntered?(currentDir)
-
-                    let contents: [URL]
-                    do {
-                        contents = try fm.contentsOfDirectory(
-                            at: currentDir,
-                            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isReadableKey, .fileSizeKey],
-                            options: [.skipsHiddenFiles]
-                        )
-                    } catch {
-                        continue
-                    }
-
-                    for url in contents {
-                        if Task.isCancelled { break }
-                        guard let rv = try? url.resourceValues(
-                            forKeys: [.isDirectoryKey, .isRegularFileKey, .isReadableKey, .fileSizeKey]
-                        ) else { continue }
-
-                        if rv.isDirectory == true {
-                            let dirName = url.lastPathComponent.lowercased()
-                            let dirExt = url.pathExtension.lowercased()
-                            if !skipDirs.contains(dirName)
-                                && !skipBundleExtensions.contains(dirExt) {
-                                dirStack.append(url)
-                            }
-                        } else if rv.isRegularFile == true && rv.isReadable == true {
-                            let ext = url.pathExtension.lowercased()
-                            if videoExtensions.contains(ext) {
-                                if ext == "ts" && !Self.isMpegTS(url) {
-                                    continue
-                                }
-                                // skipSmallFiles filter — cheap reject of stubs/thumbnails.
-                                // `.fileSizeKey` may be nil on SMB quirks; when missing, yield
-                                // (err on the side of cataloging) rather than silently drop.
-                                if minFileBytes > 0, let sz = rv.fileSize, sz < minFileBytes {
-                                    continue
-                                }
-                                continuation.yield(url)
-                            }
-                        }
-                    }
-                }
-                continuation.finish()
-            }
-            continuation.onTermination = { @Sendable _ in
-                walker.cancel()
-            }
-        }
-    }
-
-    /// Check if a .ts file is actually an MPEG transport stream (not TypeScript).
-    /// Standard MPEG-TS: sync byte 0x47 at offset 0 (188-byte packets).
-    /// BDAV/AVCHD:        sync byte 0x47 at offset 4 (192-byte packets with timecode prefix).
-    nonisolated private static func isMpegTS(_ url: URL) -> Bool {
-        let fd = open(url.path, O_RDONLY)
-        guard fd >= 0 else { return false }
-        defer { close(fd) }
-        var buf = [UInt8](repeating: 0, count: 5)
-        let n = read(fd, &buf, 5)
-        guard n >= 1 else { return false }
-        return buf[0] == 0x47 || (n >= 5 && buf[4] == 0x47)
+        FilesystemWalker.walkDirectoryStream(
+            root: root,
+            videoExtensions: videoExtensions,
+            skipDirs: skipDirs,
+            skipBundleExtensions: skipBundleExtensions,
+            skipSmallFiles: skipSmallFiles,
+            onDirectoryEntered: onDirectoryEntered
+        )
     }
 
     /// Per-file probe timeout (seconds). Prevents the scan from stalling on
@@ -2376,7 +2258,7 @@ final class VideoScanModel: ObservableObject {
             let df = DateFormatter()
             df.dateFormat = "yyyy-MM-dd HH:mm:ss"
             r.sizeBytes       = fileSize
-            r.size            = humanSize(fileSize)
+            r.size            = Formatting.humanSize(fileSize)
             r.dateModifiedRaw = attrs?[.modificationDate] as? Date
             r.dateCreatedRaw  = attrs?[.creationDate] as? Date
             r.dateModified    = r.dateModifiedRaw.map { df.string(from: $0) } ?? ""
@@ -2491,42 +2373,19 @@ final class VideoScanModel: ObservableObject {
 
     // MARK: - Correlate helpers
 
-    private struct CorrelateCandidate {
-        let video: VideoRecord
-        let audio: VideoRecord
-        let score: Int
-        let confidence: PairConfidence
-        let reasons: [String]
-    }
+    private typealias CorrelateCandidate = CorrelationScorer.Candidate
 
     /// Select records to re-correlate (all or the selected subset) and clear
     /// their prior pairing so they can be re-paired from scratch.
     private func resolveCorrelateScope(selectedIDs: Set<UUID>?) -> [VideoRecord] {
-        let scope: [VideoRecord]
-        if let ids = selectedIDs, !ids.isEmpty {
-            scope = records.filter { ids.contains($0.id) }
-        } else {
-            scope = records
-        }
-        for r in scope {
-            r.pairedWith = nil
-            r.pairGroupID = nil
-            r.pairConfidence = nil
-        }
-        return scope
+        CorrelationScorer.resolveCorrelateScope(records: records, selectedIDs: selectedIDs)
     }
 
     /// Index audio records by filename-correlation key and directory for O(1) lookup.
     private func buildAudioPools(
         from audios: [VideoRecord]
     ) -> (byKey: [String: [VideoRecord]], byDir: [String: [VideoRecord]]) {
-        var byKey: [String: [VideoRecord]] = [:]
-        var byDir: [String: [VideoRecord]] = [:]
-        for a in audios {
-            byKey[filenameCorrelationKey(a.filename), default: []].append(a)
-            byDir[a.directory, default: []].append(a)
-        }
-        return (byKey, byDir)
+        CorrelationScorer.buildAudioPools(from: audios)
     }
 
     /// Build the candidate audio pool for a video: indexed lookups first, fall back
@@ -2538,25 +2397,12 @@ final class VideoScanModel: ObservableObject {
         byKey: [String: [VideoRecord]],
         byDir: [String: [VideoRecord]]
     ) -> [VideoRecord] {
-        var seen = Set<UUID>()
-        var pool: [VideoRecord] = []
-        for a in byKey[vKey] ?? [] where seen.insert(a.id).inserted { pool.append(a) }
-        for a in byDir[video.directory] ?? [] where seen.insert(a.id).inserted { pool.append(a) }
-        if pool.count >= 5 { return pool }
-        for a in allAudios where !seen.contains(a.id) {
-            let durationHit = video.durationSeconds > 0 && a.durationSeconds > 0 &&
-                abs(video.durationSeconds - a.durationSeconds) <= durationTolerance
-            let timestampHit: Bool
-            if let vDate = video.dateCreatedRaw, let aDate = a.dateCreatedRaw {
-                timestampHit = abs(vDate.timeIntervalSince(aDate)) <= timestampTolerance
-            } else {
-                timestampHit = false
-            }
-            if (durationHit || timestampHit) && seen.insert(a.id).inserted {
-                pool.append(a)
-            }
-        }
-        return pool
+        CorrelationScorer.gatherCandidateAudios(
+            for: video, vKey: vKey, allAudios: allAudios,
+            byKey: byKey, byDir: byDir,
+            durationTolerance: durationTolerance,
+            timestampTolerance: timestampTolerance
+        )
     }
 
     /// Score a single video/audio pair and return a Candidate if the minimum
@@ -2567,32 +2413,10 @@ final class VideoScanModel: ObservableObject {
         audio: VideoRecord,
         vKey: String
     ) -> CorrelateCandidate? {
-        var score = 0
-        var reasons: [String] = []
-
-        if vKey == filenameCorrelationKey(audio.filename) { score += 4; reasons.append("filename") }
-        if video.durationSeconds > 0 && audio.durationSeconds > 0 &&
-           abs(video.durationSeconds - audio.durationSeconds) <= durationTolerance {
-            score += 3; reasons.append("duration")
-        }
-        if let vDate = video.dateCreatedRaw, let aDate = audio.dateCreatedRaw,
-           abs(vDate.timeIntervalSince(aDate)) <= timestampTolerance {
-            score += 3; reasons.append("timestamp")
-        }
-        if !video.timecode.isEmpty && video.timecode == audio.timecode {
-            score += 2; reasons.append("timecode")
-        }
-        if video.directory == audio.directory { score += 1; reasons.append("directory") }
-        if !video.tapeName.isEmpty && video.tapeName == audio.tapeName {
-            score += 1; reasons.append("tape")
-        }
-        guard score >= 3 else { return nil }
-
-        let confidence: PairConfidence
-        if score >= 7 { confidence = .high } else if score >= 4 { confidence = .medium } else { confidence = .low }
-        return CorrelateCandidate(
-            video: video, audio: audio,
-            score: score, confidence: confidence, reasons: reasons
+        CorrelationScorer.scoreCorrelatePair(
+            video: video, audio: audio, vKey: vKey,
+            durationTolerance: durationTolerance,
+            timestampTolerance: timestampTolerance
         )
     }
 
@@ -2602,19 +2426,8 @@ final class VideoScanModel: ObservableObject {
         _ candidates: [CorrelateCandidate],
         matched: inout Set<UUID>
     ) {
-        for c in candidates.sorted(by: { $0.score > $1.score }) {
-            guard !matched.contains(c.video.id), !matched.contains(c.audio.id) else { continue }
-            let gid = UUID()
-            c.video.pairedWith = c.audio
-            c.video.pairGroupID = gid
-            c.video.pairConfidence = c.confidence
-            c.audio.pairedWith = c.video
-            c.audio.pairGroupID = gid
-            c.audio.pairConfidence = c.confidence
-            matched.insert(c.video.id)
-            matched.insert(c.audio.id)
-            log("  Paired [\(c.confidence.rawValue)] (\(c.reasons.joined(separator: "+"))): \(c.video.filename)  ↔  \(c.audio.filename)")
-        }
+        let logLines = CorrelationScorer.assignCandidates(candidates, matched: &matched)
+        for line in logLines { log(line) }
     }
 
     /// Emit the end-of-correlation summary (both status line and console log).
@@ -2636,31 +2449,15 @@ final class VideoScanModel: ObservableObject {
 
     // MARK: - Cross-Volume Avid Correlator
 
-    private static let avidMXFPattern = try! NSRegularExpression(
-        pattern: #"^\d+\.([AV])([0-9A-Fa-f]+)\.mxf$"#, options: .caseInsensitive
-    )
-
-    /// Extract the Avid clip ID from an MXF filename, e.g. "00001.V14D1BBD3F.mxf" → "14D1BBD3F"
+    /// Extract the Avid clip ID from an MXF filename, e.g. "00001.V14D1BBD3F.mxf" -> "14D1BBD3F"
     /// Returns (clipID, isVideo) or nil if the filename doesn't match the Avid pattern.
     private func avidClipID(from filename: String) -> (clipID: String, isVideo: Bool)? {
-        let range = NSRange(filename.startIndex..., in: filename)
-        guard let match = Self.avidMXFPattern.firstMatch(in: filename, range: range),
-              let avRange = Range(match.range(at: 1), in: filename),
-              let idRange = Range(match.range(at: 2), in: filename) else { return nil }
-        let av = String(filename[avRange]).uppercased()
-        let clipID = String(filename[idRange]).uppercased()
-        return (clipID, av == "V")
+        CorrelationScorer.avidClipID(from: filename)
     }
 
     /// Pick the best record from a set: prefer online, then playable, then largest.
     private func bestCopy(from candidates: [VideoRecord]) -> VideoRecord? {
-        candidates.sorted { a, b in
-            let aOnline = VolumeReachability.isReachable(path: a.fullPath)
-            let bOnline = VolumeReachability.isReachable(path: b.fullPath)
-            if aOnline != bOnline { return aOnline }
-            if a.isPlayable != b.isPlayable { return a.isPlayable == "Yes" }
-            return a.sizeBytes > b.sizeBytes
-        }.first
+        CorrelationScorer.bestCopy(from: candidates)
     }
 
     /// Correlate Avid MXF A/V pairs across all volumes using clip ID matching.
@@ -2937,20 +2734,9 @@ final class VideoScanModel: ObservableObject {
     }
 
     /// Normalize filename by stripping V/A prefix (Avid MXF convention).
-    /// Only strips when followed by hex digits (e.g., V01A23BC.mxf → _01A23BC.mxf)
+    /// Only strips when followed by hex digits (e.g., V01A23BC.mxf -> _01A23BC.mxf)
     func filenameCorrelationKey(_ filename: String) -> String {
-        var parts = filename.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
-        for i in parts.indices {
-            let p = parts[i]
-            if p.count > 1,
-               let first = p.first,
-               first == "V" || first == "A" || first == "v" || first == "a",
-               p.dropFirst().allSatisfy({ $0.isHexDigit }) {
-                parts[i] = "_" + p.dropFirst()
-                break
-            }
-        }
-        return parts.joined(separator: ".")
+        CorrelationScorer.filenameCorrelationKey(filename)
     }
 
     // MARK: - Combine
@@ -3667,61 +3453,13 @@ final class VideoScanModel: ObservableObject {
     // MARK: - Process runner (cancellation-aware)
 
     nonisolated func runProcess(executable: String, arguments: [String]) async -> String? {
-        let proc = Process()
-        proc.executableURL  = URL(fileURLWithPath: executable)
-        proc.arguments      = arguments
-        let pipe            = Pipe()
-        proc.standardOutput = pipe
-        proc.standardError  = Pipe()
-
-        return await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                proc.terminationHandler = { _ in
-                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                    continuation.resume(returning: String(data: data, encoding: .utf8))
-                }
-                do { try proc.run() } catch { continuation.resume(returning: nil) }
-            }
-        } onCancel: {
-            if proc.isRunning { proc.terminate() }
-        }
+        await ProcessRunner.run(executable: executable, arguments: arguments)
     }
 
     // MARK: - Partial MD5
 
     nonisolated func partialMD5(path: String, chunkSize: Int = 65536) -> String {
-        // Use read() instead of mmap() — mmap on network files can SIGBUS
-        // (KERN_MEMORY_ERROR) if the remote volume becomes unreachable mid-read.
-        // read() returns -1 on I/O errors instead of crashing.
-        let fd = open(path, O_RDONLY)
-        guard fd >= 0 else { return "" }
-        defer { close(fd) }
-
-        var sb = stat()
-        guard fstat(fd, &sb) == 0 else { return "" }
-        let fileSize = Int(sb.st_size)
-        guard fileSize > 0 else { return "" }
-
-        var md5 = Insecure.MD5()
-        let buf = UnsafeMutableRawPointer.allocate(byteCount: chunkSize, alignment: 16)
-        defer { buf.deallocate() }
-
-        // Hash first chunk
-        let headLen = min(chunkSize, fileSize)
-        let headRead = read(fd, buf, headLen)
-        guard headRead > 0 else { return "" }
-        md5.update(bufferPointer: UnsafeRawBufferPointer(start: buf, count: headRead))
-
-        // Hash last chunk if file is large enough
-        if fileSize > chunkSize * 2 {
-            let tailOffset = off_t(fileSize - chunkSize)
-            guard lseek(fd, tailOffset, SEEK_SET) == tailOffset else { return "" }
-            let tailRead = read(fd, buf, chunkSize)
-            guard tailRead > 0 else { return "" }
-            md5.update(bufferPointer: UnsafeRawBufferPointer(start: buf, count: tailRead))
-        }
-
-        return md5.finalize().map { String(format: "%02x", $0) }.joined()
+        FileHasher.partialMD5(path: path, chunkSize: chunkSize)
     }
 
     // MARK: - CSV
@@ -3746,7 +3484,7 @@ final class VideoScanModel: ObservableObject {
                 r.tapeName, r.isPlayable, r.partialMD5, r.duplicateGroupID?.uuidString ?? "",
                 r.duplicateConfidence?.rawValue ?? "", r.duplicateDisposition.rawValue,
                 r.duplicateBestMatchFilename, r.duplicateReasons, r.fullPath, r.directory, r.notes
-            ].map { csvEscape($0) }.joined(separator: ",")
+            ].map { Formatting.csvEscape($0) }.joined(separator: ",")
             lines.append(row)
         }
 
@@ -3813,34 +3551,4 @@ final class VideoScanModel: ObservableObject {
 
     // MARK: - Helpers
 
-    nonisolated func formatDuration(_ secs: Double) -> String {
-        let s = Int(secs)
-        return String(format: "%02d:%02d:%02d", s/3600, (s%3600)/60, s%60)
-    }
-
-    nonisolated func parseFraction(_ fr: String) -> String {
-        let parts = fr.split(separator: "/").compactMap { Double($0) }
-        guard parts.count == 2, parts[1] != 0 else { return fr }
-        var s = String(format: "%.3f", parts[0]/parts[1])
-        while s.hasSuffix("0") { s.removeLast() }
-        if s.hasSuffix(".") { s.removeLast() }
-        return s
-    }
-
-    nonisolated func humanSize(_ bytes: Int64) -> String {
-        let units = ["B", "KB", "MB", "GB", "TB"]
-        var val = Double(bytes)
-        for unit in units {
-            if abs(val) < 1024 { return String(format: "%.1f \(unit)", val) }
-            val /= 1024
-        }
-        return String(format: "%.1f PB", val)
-    }
-
-    func csvEscape(_ v: String) -> String {
-        if v.contains(",") || v.contains("\"") || v.contains("\n") {
-            return "\"" + v.replacingOccurrences(of: "\"", with: "\"\"") + "\""
-        }
-        return v
-    }
 }
