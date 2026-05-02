@@ -242,7 +242,7 @@ import Foundation
         )
 
         #expect(result.success == true)
-        #expect(progressValues.count > 0)
+        #expect(!progressValues.isEmpty)
 
         let verify = await Self.fullVerify(path: outPath, expectedDuration: 3.0)
         #expect(verify.ok == true, "Full verify failed: \(verify.reason)")
