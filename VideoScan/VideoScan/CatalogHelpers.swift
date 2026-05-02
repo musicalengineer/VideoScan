@@ -273,6 +273,7 @@ struct CatalogToolbar<Dashboard: View>: View {
 // MARK: - Table + Preview + Inspector
 
 struct CatalogContent: View {
+    @EnvironmentObject var model: VideoScanModel
     let records: [VideoRecord]
     @Binding var selectedIDs: Set<UUID>
     @Binding var sortOrder: [KeyPathComparator<VideoRecord>]
@@ -610,6 +611,20 @@ struct CatalogContent: View {
             }
             .width(min: 80, ideal: 100)
 
+            TableColumn("Tag") { rec in
+                HStack(spacing: 3) {
+                    Image(systemName: rec.mediaDisposition.icon)
+                        .foregroundColor(rec.mediaDisposition.color)
+                    if rec.mediaDisposition != .unreviewed {
+                        Text(rec.mediaDisposition.rawValue)
+                            .font(.system(size: 11))
+                            .foregroundColor(rec.mediaDisposition.color)
+                    }
+                }
+                .help(rec.mediaDisposition.rawValue)
+            }
+            .width(min: 70, ideal: 95)
+
             TableColumn("Duplicate") { rec in
                 DuplicateDispositionCell(record: rec)
                     .help(rec.duplicateDisposition == .none
@@ -623,6 +638,7 @@ struct CatalogContent: View {
             tableData.sort(using: sortOrder)
         }
         .contextMenu(forSelectionType: UUID.self) { ids in
+            let selectedRecs = ids.compactMap { id in records.first { $0.id == id } }
             if let id = ids.first,
                let rec = records.first(where: { $0.id == id }) {
                 Button(VolumeReachability.isReachable(path: rec.fullPath)
@@ -657,6 +673,47 @@ struct CatalogContent: View {
                     renameTarget = rec
                     renameText = (rec.filename as NSString).deletingPathExtension
                     showRenameSheet = true
+                }
+
+                Divider()
+
+                Menu("Tag") {
+                    Button {
+                        for r in selectedRecs { r.mediaDisposition = .important }
+                        model.saveCatalogDebounced()
+                    } label: {
+                        Label("Important", systemImage: "star.fill")
+                    }
+                    Button {
+                        for r in selectedRecs { r.mediaDisposition = .recoverable }
+                        model.saveCatalogDebounced()
+                    } label: {
+                        Label("Recoverable", systemImage: "wrench.and.screwdriver.fill")
+                    }
+
+                    Divider()
+
+                    Button {
+                        for r in selectedRecs { r.mediaDisposition = .suspectedJunk }
+                        model.saveCatalogDebounced()
+                    } label: {
+                        Label("Suspected Junk", systemImage: "exclamationmark.triangle")
+                    }
+                    Button {
+                        for r in selectedRecs { r.mediaDisposition = .confirmedJunk }
+                        model.saveCatalogDebounced()
+                    } label: {
+                        Label("Junk", systemImage: "xmark.circle.fill")
+                    }
+
+                    Divider()
+
+                    Button {
+                        for r in selectedRecs { r.mediaDisposition = .unreviewed }
+                        model.saveCatalogDebounced()
+                    } label: {
+                        Label("Clear Tag", systemImage: "arrow.counterclockwise")
+                    }
                 }
 
                 // Show duplicate group matches
