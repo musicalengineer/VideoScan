@@ -181,39 +181,46 @@ enum MxfHeaderParser {
             pos += 4
 
             guard pos + tlen <= end else { break }
-
-            switch tag {
-            case 0x3203: // Stored Width
-                if tlen >= 4 { metadata.width = Int(readU32BE(data: data, pos: pos)) }
-            case 0x3202: // Stored Height
-                if tlen >= 4 { metadata.height = Int(readU32BE(data: data, pos: pos)) }
-            case 0x320E: // Frame Layout
-                if tlen >= 1 { metadata.frameLayout = Int(data[pos]) }
-            case 0x3201: // Picture Essence Coding UL
-                if tlen >= 16 {
-                    let ul = Array(data[pos..<pos+16])
-                    metadata.essenceCodingUL = ul.map { String(format: "%02x", $0) }.joined()
-                    metadata.codecLabel = identifyCodec(ul: metadata.essenceCodingUL)
-                }
-            case 0x3001: // Sample Rate (rational num/den)
-                if tlen >= 8 {
-                    metadata.sampleRateNum = readU32BE(data: data, pos: pos)
-                    metadata.sampleRateDen = readU32BE(data: data, pos: pos + 4)
-                }
-            case 0x3002: // Container Duration
-                if tlen >= 8 {
-                    metadata.duration = readU64BE(data: data, pos: pos)
-                } else if tlen >= 4 {
-                    metadata.duration = UInt64(readU32BE(data: data, pos: pos))
-                }
-            case 0x3401: // Pixel Layout
-                if tlen >= 2 {
-                    metadata.pixelLayout = decodePixelLayout(data: data, pos: pos, len: tlen)
-                }
-            default:
-                break
-            }
+            applyPictureTag(tag: tag, data: data, pos: pos, tlen: tlen, metadata: &metadata)
             pos += tlen
+        }
+    }
+
+    private static func applyPictureTag(tag: UInt16, data: Data, pos: Int, tlen: Int, metadata: inout MxfMetadata) {
+        switch tag {
+        case 0x3203:
+            if tlen >= 4 { metadata.width = Int(readU32BE(data: data, pos: pos)) }
+        case 0x3202:
+            if tlen >= 4 { metadata.height = Int(readU32BE(data: data, pos: pos)) }
+        case 0x320E:
+            if tlen >= 1 { metadata.frameLayout = Int(data[pos]) }
+        case 0x3201:
+            if tlen >= 16 {
+                let ul = Array(data[pos..<pos+16])
+                metadata.essenceCodingUL = ul.map { String(format: "%02x", $0) }.joined()
+                metadata.codecLabel = identifyCodec(ul: metadata.essenceCodingUL)
+            }
+        case 0x3001:
+            if tlen >= 8 {
+                metadata.sampleRateNum = readU32BE(data: data, pos: pos)
+                metadata.sampleRateDen = readU32BE(data: data, pos: pos + 4)
+            }
+        case 0x3002:
+            readContainerDuration(data: data, pos: pos, tlen: tlen, into: &metadata.duration)
+        case 0x3401:
+            if tlen >= 2 {
+                metadata.pixelLayout = decodePixelLayout(data: data, pos: pos, len: tlen)
+            }
+        default:
+            break
+        }
+    }
+
+    private static func readContainerDuration(data: Data, pos: Int, tlen: Int, into duration: inout UInt64) {
+        if tlen >= 8 {
+            duration = readU64BE(data: data, pos: pos)
+        } else if tlen >= 4 {
+            duration = UInt64(readU32BE(data: data, pos: pos))
         }
     }
 
@@ -244,10 +251,8 @@ enum MxfHeaderParser {
                     metadata.sampleRateDen = readU32BE(data: data, pos: pos + 4)
                 }
             case 0x3002: // Container Duration
-                if tlen >= 8 && metadata.duration == 0 {
-                    metadata.duration = readU64BE(data: data, pos: pos)
-                } else if tlen >= 4 && metadata.duration == 0 {
-                    metadata.duration = UInt64(readU32BE(data: data, pos: pos))
+                if metadata.duration == 0 {
+                    readContainerDuration(data: data, pos: pos, tlen: tlen, into: &metadata.duration)
                 }
             default:
                 break
