@@ -30,171 +30,14 @@ enum MediaAnalyzer {
         var familyScore = 0
         var familyReasons: [String] = []
 
-        // --- Junk signals (positive = more likely junk) ---
-
-        // Broken / unreadable
-        if rec.streamType == .ffprobeFailed {
-            junkScore += 5
-            junkReasons.append("Probe failed — file may be corrupted")
-        }
-
-        if rec.streamType == .noStreams {
-            junkScore += 5
-            junkReasons.append("No audio or video streams found")
-        }
-
-        // Zero or near-zero content
-        if rec.durationSeconds == 0 && rec.streamType != .ffprobeFailed {
-            junkScore += 5
-            junkReasons.append("Zero duration")
-        }
-
-        if rec.sizeBytes == 0 {
-            junkScore += 5
-            junkReasons.append("Zero-byte file")
-        }
-
-        // Very short clips (under 3 seconds) — almost always artifacts
-        if rec.durationSeconds > 0 && rec.durationSeconds < 3.0 {
-            junkScore += 2
-            junkReasons.append("Very short (\(String(format: "%.1f", rec.durationSeconds))s)")
-        }
-
-        // Audio-only or video-only — check if paired before scoring as junk
         let hasPair = rec.pairedWith != nil || rec.pairGroupID != nil
-        if rec.streamType == .audioOnly {
-            if hasPair {
-                // Has a matched partner — recoverable, not junk
-                familyScore += 1
-                familyReasons.append("Audio-only with matched video pair — recoverable")
-            } else if rec.durationSeconds < 30 {
-                junkScore += 3
-                junkReasons.append("Short audio-only clip (<30s), no pair found")
-            } else {
-                junkScore += 1
-                junkReasons.append("Audio-only file, no pair found")
-            }
-        }
 
-        if rec.streamType == .videoOnly && !hasPair {
-            junkScore += 1
-            junkReasons.append("Video-only file, no audio pair found")
-        } else if rec.streamType == .videoOnly && hasPair {
-            familyScore += 1
-            familyReasons.append("Video-only with matched audio pair — recoverable")
-        }
+        scoreJunkSignals(rec, hasPair: hasPair,
+                         junkScore: &junkScore, junkReasons: &junkReasons,
+                         familyScore: &familyScore, familyReasons: &familyReasons)
+        scoreFamilySignals(rec, hasPair: hasPair,
+                           familyScore: &familyScore, familyReasons: &familyReasons)
 
-        // Voicemail / VoIP signature
-        if let sr = Int(rec.audioSampleRate), sr <= 8000 {
-            junkScore += 2
-            junkReasons.append("Low audio sample rate (\(rec.audioSampleRate) Hz) — voicemail/VoIP")
-        }
-        if rec.audioChannels == "1" && rec.audioSampleRate == "8000" {
-            junkScore += 1
-            junkReasons.append("Mono 8kHz — likely phone recording")
-        }
-
-        // Screen recording / screencast signatures
-        let screencastResolutions = ["1920x1200", "2560x1440", "2560x1600", "1440x900", "1680x1050"]
-        if screencastResolutions.contains(rec.resolution) && rec.streamType == .videoOnly {
-            junkScore += 3
-            junkReasons.append("Screencast resolution (\(rec.resolution)), no audio")
-        }
-        if screencastResolutions.contains(rec.resolution) && rec.durationSeconds < 10 {
-            junkScore += 2
-            junkReasons.append("Short clip at screencast resolution")
-        }
-
-        // Avid render / test patterns
-        let pathLower = rec.fullPath.lowercased()
-        let filenameLower = rec.filename.lowercased()
-
-        if isAvidRenderFile(pathLower: pathLower, filenameLower: filenameLower) {
-            junkScore += 3
-            junkReasons.append("Avid render/precompute file")
-        }
-
-        // FCP scratch / render
-        if isFCPRenderFile(pathLower: pathLower) {
-            junkScore += 3
-            junkReasons.append("Final Cut Pro render/scratch file")
-        }
-
-        // System / hidden directory artifacts
-        if isSystemArtifact(pathLower: pathLower) {
-            junkScore += 4
-            junkReasons.append("System/hidden directory artifact")
-        }
-
-        // Test / temp / sample filename patterns
-        if isTestOrTempFile(filenameLower: filenameLower) {
-            junkScore += 2
-            junkReasons.append("Filename suggests test/temp/sample content")
-        }
-
-        // NLE transition / render output patterns (xfade, dissolve, wipe, etc.)
-        if isTransitionOrRenderFile(filenameLower: filenameLower) {
-            junkScore += 3
-            junkReasons.append("Filename suggests NLE transition or render output")
-        }
-
-        // Truncated file — size much smaller than expected for bitrate x duration
-        if let truncated = isTruncated(rec), truncated {
-            junkScore += 3
-            junkReasons.append("File appears truncated (size << expected)")
-        }
-
-        // Duplicate extra copy (already classified by DuplicateDetector)
-        if rec.duplicateDisposition == .extraCopy {
-            junkScore += 3
-            junkReasons.append("Duplicate extra copy (original exists)")
-        }
-
-        // Tiny resolution — too small for useful face detection
-        if isTinyResolution(rec) {
-            junkScore += 2
-            junkReasons.append("Very low resolution — below usable threshold")
-        }
-
-        // --- Family candidate signals (positive = more likely family) ---
-
-        // Home video codec signatures
-        let codecScore = homeVideoCodecScore(rec)
-        if codecScore.score > 0 {
-            familyScore += codecScore.score
-            familyReasons.append(codecScore.reason)
-        }
-
-        // Reasonable duration for home video (30s - 2h)
-        if rec.durationSeconds >= 30 && rec.durationSeconds <= 7200 {
-            if rec.streamType == .videoAndAudio {
-                familyScore += 1
-                familyReasons.append("Video+audio, reasonable duration")
-            }
-        }
-
-        // Long-form content (>2 min) with video+audio is likely intentional
-        if rec.durationSeconds > 120 && rec.durationSeconds < 1_000_000 && rec.streamType == .videoAndAudio {
-            familyScore += 1
-            familyReasons.append("Long-form video (\(Int(rec.durationSeconds / 60)) min)")
-        }
-
-        // Path hints suggesting family content
-        let familyPathScore = familyPathSignals(pathLower: pathLower)
-        if familyPathScore.score > 0 {
-            familyScore += familyPathScore.score
-            familyReasons.append(familyPathScore.reason)
-        }
-
-        // Standard camcorder resolutions
-        if isCamcorderResolution(rec) {
-            familyScore += 1
-            familyReasons.append("Standard camcorder resolution (\(rec.resolution))")
-        }
-
-        // --- Classify ---
-
-        // Check if this is a paired audio/video-only file → recoverable
         let isPairedHalf = hasPair &&
             (rec.streamType == .audioOnly || rec.streamType == .videoOnly)
 
@@ -216,6 +59,183 @@ enum MediaAnalyzer {
             familyReasons: familyReasons,
             suggestedDisposition: disposition
         )
+    }
+
+    // MARK: - Junk Signal Scoring
+
+    // swiftlint:disable:next function_parameter_count
+    private static func scoreJunkSignals(
+        _ rec: VideoRecord, hasPair: Bool,
+        junkScore: inout Int, junkReasons: inout [String],
+        familyScore: inout Int, familyReasons: inout [String]
+    ) {
+        if rec.streamType == .ffprobeFailed {
+            junkScore += 5
+            junkReasons.append("Probe failed — file may be corrupted")
+        }
+
+        if rec.streamType == .noStreams {
+            junkScore += 5
+            junkReasons.append("No audio or video streams found")
+        }
+
+        if rec.durationSeconds == 0 && rec.streamType != .ffprobeFailed {
+            junkScore += 5
+            junkReasons.append("Zero duration")
+        }
+
+        if rec.sizeBytes == 0 {
+            junkScore += 5
+            junkReasons.append("Zero-byte file")
+        }
+
+        if rec.durationSeconds > 0 && rec.durationSeconds < 3.0 {
+            junkScore += 2
+            junkReasons.append("Very short (\(String(format: "%.1f", rec.durationSeconds))s)")
+        }
+
+        scoreStreamTypeSignals(rec, hasPair: hasPair,
+                               junkScore: &junkScore, junkReasons: &junkReasons,
+                               familyScore: &familyScore, familyReasons: &familyReasons)
+        scoreAudioSignals(rec, junkScore: &junkScore, junkReasons: &junkReasons)
+        scorePathSignals(rec, junkScore: &junkScore, junkReasons: &junkReasons)
+
+        if let truncated = isTruncated(rec), truncated {
+            junkScore += 3
+            junkReasons.append("File appears truncated (size << expected)")
+        }
+
+        if rec.duplicateDisposition == .extraCopy {
+            junkScore += 3
+            junkReasons.append("Duplicate extra copy (original exists)")
+        }
+
+        if isTinyResolution(rec) {
+            junkScore += 2
+            junkReasons.append("Very low resolution — below usable threshold")
+        }
+    }
+
+    // swiftlint:disable:next function_parameter_count
+    private static func scoreStreamTypeSignals(
+        _ rec: VideoRecord, hasPair: Bool,
+        junkScore: inout Int, junkReasons: inout [String],
+        familyScore: inout Int, familyReasons: inout [String]
+    ) {
+        if rec.streamType == .audioOnly {
+            if hasPair {
+                familyScore += 1
+                familyReasons.append("Audio-only with matched video pair — recoverable")
+            } else if rec.durationSeconds < 30 {
+                junkScore += 3
+                junkReasons.append("Short audio-only clip (<30s), no pair found")
+            } else {
+                junkScore += 1
+                junkReasons.append("Audio-only file, no pair found")
+            }
+        }
+
+        if rec.streamType == .videoOnly && !hasPair {
+            junkScore += 1
+            junkReasons.append("Video-only file, no audio pair found")
+        } else if rec.streamType == .videoOnly && hasPair {
+            familyScore += 1
+            familyReasons.append("Video-only with matched audio pair — recoverable")
+        }
+    }
+
+    private static func scoreAudioSignals(
+        _ rec: VideoRecord,
+        junkScore: inout Int, junkReasons: inout [String]
+    ) {
+        if let sr = Int(rec.audioSampleRate), sr <= 8000 {
+            junkScore += 2
+            junkReasons.append("Low audio sample rate (\(rec.audioSampleRate) Hz) — voicemail/VoIP")
+        }
+        if rec.audioChannels == "1" && rec.audioSampleRate == "8000" {
+            junkScore += 1
+            junkReasons.append("Mono 8kHz — likely phone recording")
+        }
+
+        let screencastResolutions = ["1920x1200", "2560x1440", "2560x1600", "1440x900", "1680x1050"]
+        if screencastResolutions.contains(rec.resolution) && rec.streamType == .videoOnly {
+            junkScore += 3
+            junkReasons.append("Screencast resolution (\(rec.resolution)), no audio")
+        }
+        if screencastResolutions.contains(rec.resolution) && rec.durationSeconds < 10 {
+            junkScore += 2
+            junkReasons.append("Short clip at screencast resolution")
+        }
+    }
+
+    private static func scorePathSignals(
+        _ rec: VideoRecord,
+        junkScore: inout Int, junkReasons: inout [String]
+    ) {
+        let pathLower = rec.fullPath.lowercased()
+        let filenameLower = rec.filename.lowercased()
+
+        if isAvidRenderFile(pathLower: pathLower, filenameLower: filenameLower) {
+            junkScore += 3
+            junkReasons.append("Avid render/precompute file")
+        }
+
+        if isFCPRenderFile(pathLower: pathLower) {
+            junkScore += 3
+            junkReasons.append("Final Cut Pro render/scratch file")
+        }
+
+        if isSystemArtifact(pathLower: pathLower) {
+            junkScore += 4
+            junkReasons.append("System/hidden directory artifact")
+        }
+
+        if isTestOrTempFile(filenameLower: filenameLower) {
+            junkScore += 2
+            junkReasons.append("Filename suggests test/temp/sample content")
+        }
+
+        if isTransitionOrRenderFile(filenameLower: filenameLower) {
+            junkScore += 3
+            junkReasons.append("Filename suggests NLE transition or render output")
+        }
+    }
+
+    // MARK: - Family Signal Scoring
+
+    private static func scoreFamilySignals(
+        _ rec: VideoRecord, hasPair: Bool,
+        familyScore: inout Int, familyReasons: inout [String]
+    ) {
+        let codecScore = homeVideoCodecScore(rec)
+        if codecScore.score > 0 {
+            familyScore += codecScore.score
+            familyReasons.append(codecScore.reason)
+        }
+
+        if rec.durationSeconds >= 30 && rec.durationSeconds <= 7200 {
+            if rec.streamType == .videoAndAudio {
+                familyScore += 1
+                familyReasons.append("Video+audio, reasonable duration")
+            }
+        }
+
+        if rec.durationSeconds > 120 && rec.durationSeconds < 1_000_000 && rec.streamType == .videoAndAudio {
+            familyScore += 1
+            familyReasons.append("Long-form video (\(Int(rec.durationSeconds / 60)) min)")
+        }
+
+        let pathLower = rec.fullPath.lowercased()
+        let familyPathScore = familyPathSignals(pathLower: pathLower)
+        if familyPathScore.score > 0 {
+            familyScore += familyPathScore.score
+            familyReasons.append(familyPathScore.reason)
+        }
+
+        if isCamcorderResolution(rec) {
+            familyScore += 1
+            familyReasons.append("Standard camcorder resolution (\(rec.resolution))")
+        }
     }
 
     // MARK: - Batch Analysis

@@ -377,6 +377,93 @@ private func arcFaceClusterSegments(
     }
 }
 
+private enum ArcFaceFrameResult {
+    case skipped
+    case finished
+    case processed(frameTime: Double, match: ArcFaceFrameMatch, preview: CGImage?)
+}
+
+private nonisolated func arcFaceSampleNextFrame(
+    ctx: ArcFaceReaderContext, settings: PersonFinderSettings,
+    referenceEmbeddings: [[Float]], model: MLModel, cosineThreshold: Float,
+    lastProcessedTime: inout Double, frameInterval: Double,
+    bestCosineEver: inout Float, totalFacesDetected: inout Int,
+    sampledSoFar: inout Int, visionFrameTimes: inout [Double],
+    previewRateFn: @escaping @Sendable () -> Int
+) -> ArcFaceFrameResult {
+    var frameTime: Double = 0
+    var frameMatch = ArcFaceFrameMatch()
+    var previewImage: CGImage?
+    var shouldSkip = false
+
+    autoreleasepool {
+        guard let sampleBuffer = ctx.trackOutput.copyNextSampleBuffer() else {
+            shouldSkip = true; return
+        }
+        let t = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+        guard t - lastProcessedTime >= frameInterval else {
+            shouldSkip = true; frameTime = -1; return
+        }
+        lastProcessedTime = t
+        frameTime = t
+
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            shouldSkip = true; frameTime = -1; return
+        }
+
+        let frameStart = CFAbsoluteTimeGetCurrent()
+        let allFaces = pfDetectFacesInBuffer(pixelBuffer, orientation: ctx.orientation)
+        let candidates: [VNFaceObservation] = settings.requirePrimary
+            ? (allFaces.max(by: { ($0.boundingBox.width * $0.boundingBox.height) < ($1.boundingBox.width * $1.boundingBox.height) }).map { [$0] } ?? [])
+            : allFaces
+
+        if !candidates.isEmpty,
+           let img = pfOrientedCGImage(from: pixelBuffer, transform: ctx.transform) {
+            frameMatch = arcFaceMatchCandidates(
+                timeSecs: t,
+                orientedImage: img,
+                candidates: candidates,
+                referenceEmbeddings: referenceEmbeddings,
+                settings: settings,
+                model: model,
+                cosineThreshold: cosineThreshold
+            )
+            if frameMatch.bestCosineInFrame > bestCosineEver {
+                bestCosineEver = frameMatch.bestCosineInFrame
+            }
+            totalFacesDetected += frameMatch.facesDetected
+            let rate = max(1, previewRateFn())
+            if (sampledSoFar + 1) % rate == 0 { previewImage = img }
+        }
+        sampledSoFar += 1
+        visionFrameTimes.append(CFAbsoluteTimeGetCurrent() - frameStart)
+    }
+
+    if shouldSkip {
+        return frameTime == -1 ? .skipped : .finished
+    }
+    return .processed(frameTime: frameTime, match: frameMatch, preview: previewImage)
+}
+
+private nonisolated func arcFaceLogMilestones(
+    frameTime: Double, duration: Double, filename: String,
+    index: Int, total: Int, hits: [(timeSecs: Double, distance: Float)],
+    totalFacesDetected: Int, bestCosineEver: Float,
+    milestones: Set<Int>, loggedMilestones: inout Set<Int>,
+    progressFn: @escaping @Sendable (String) async -> Void,
+    logFn: @escaping @Sendable (String) async -> Void,
+    distFn: @escaping @Sendable (Float) async -> Void
+) async {
+    let pct = duration > 0 ? Int(frameTime / duration * 100) : 0
+    await progressFn("\(filename)  [t=\(String(format: "%.0f", frameTime))s / \(String(format: "%.0f", duration))s · \(hits.count) hit(s)]")
+    for m in milestones where pct >= m && !loggedMilestones.contains(m) {
+        loggedMilestones.insert(m)
+        let cosStr = bestCosineEver > -1 ? String(format: "%.3f", bestCosineEver) : "—"
+        await logFn("    \(m)% — t=\(String(format: "%.0f", frameTime))s/\(String(format: "%.0f", duration))s, \(totalFacesDetected) faces detected, \(hits.count) hit(s), best cosine \(cosStr)")
+        if bestCosineEver > -1 { await distFn(1.0 - bestCosineEver) }
+    }
+}
+
 nonisolated func pfProcessVideoWithArcFace(
     filePath: String,
     referenceEmbeddings: [[Float]],
@@ -416,83 +503,44 @@ nonisolated func pfProcessVideoWithArcFace(
     while true {
         if Task.isCancelled { ctx.reader.cancelReading(); break }
 
-        var frameTime: Double = 0
-        var frameMatch = ArcFaceFrameMatch()
-        var previewImage: CGImage?
-        var shouldSkip = false
-
-        autoreleasepool {
-            guard let sampleBuffer = ctx.trackOutput.copyNextSampleBuffer() else {
-                shouldSkip = true; return
-            }
-            let t = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
-            guard t - lastProcessedTime >= frameInterval else {
-                shouldSkip = true; frameTime = -1; return
-            }
-            lastProcessedTime = t
-            frameTime = t
-
-            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-                shouldSkip = true; frameTime = -1; return
-            }
-
-            let frameStart = CFAbsoluteTimeGetCurrent()
-            let allFaces = pfDetectFacesInBuffer(pixelBuffer, orientation: ctx.orientation)
-            let candidates: [VNFaceObservation] = settings.requirePrimary
-                ? (allFaces.max(by: { ($0.boundingBox.width * $0.boundingBox.height) < ($1.boundingBox.width * $1.boundingBox.height) }).map { [$0] } ?? [])
-                : allFaces
-
-            if !candidates.isEmpty,
-               let img = pfOrientedCGImage(from: pixelBuffer, transform: ctx.transform) {
-                frameMatch = arcFaceMatchCandidates(
-                    timeSecs: t,
-                    orientedImage: img,
-                    candidates: candidates,
-                    referenceEmbeddings: referenceEmbeddings,
-                    settings: settings,
-                    model: model,
-                    cosineThreshold: cosineThreshold
-                )
-                if frameMatch.bestCosineInFrame > bestCosineEver {
-                    bestCosineEver = frameMatch.bestCosineInFrame
-                }
-                totalFacesDetected += frameMatch.facesDetected
-                let rate = max(1, previewRateFn())
-                if (sampledSoFar + 1) % rate == 0 { previewImage = img }
-            }
-            sampledSoFar += 1
-            visionFrameTimes.append(CFAbsoluteTimeGetCurrent() - frameStart)
-        }
+        let frameResult = arcFaceSampleNextFrame(
+            ctx: ctx, settings: settings, referenceEmbeddings: referenceEmbeddings,
+            model: model, cosineThreshold: cosineThreshold,
+            lastProcessedTime: &lastProcessedTime, frameInterval: frameInterval,
+            bestCosineEver: &bestCosineEver, totalFacesDetected: &totalFacesDetected,
+            sampledSoFar: &sampledSoFar, visionFrameTimes: &visionFrameTimes,
+            previewRateFn: previewRateFn
+        )
 
         if sampledSoFar > 0 && sampledSoFar % 5 == 0 {
             await pauseGate.waitIfPaused()
             if Task.isCancelled { ctx.reader.cancelReading(); break }
         }
 
-        if shouldSkip {
-            if frameTime == -1 { continue } else { break }
-        }
+        switch frameResult {
+        case .skipped: continue
+        case .finished: break
+        case let .processed(frameTime, frameMatch, previewImage):
+            hits.append(contentsOf: frameMatch.hits)
 
-        hits.append(contentsOf: frameMatch.hits)
+            if let img = previewImage {
+                await frameFn(img, frameMatch.matchedRects, frameMatch.unmatchedRects)
+            }
 
-        if let img = previewImage {
-            await frameFn(img, frameMatch.matchedRects, frameMatch.unmatchedRects)
-        }
+            if visionFrameTimes.count >= 10 {
+                let avg = visionFrameTimes.reduce(0, +) / Double(visionFrameTimes.count)
+                await visionStatsFn(avg > 0 ? 1.0 / avg : 0, avg * 1000)
+                visionFrameTimes.removeAll(keepingCapacity: true)
+            }
 
-        if visionFrameTimes.count >= 10 {
-            let avg = visionFrameTimes.reduce(0, +) / Double(visionFrameTimes.count)
-            await visionStatsFn(avg > 0 ? 1.0 / avg : 0, avg * 1000)
-            visionFrameTimes.removeAll(keepingCapacity: true)
+            await arcFaceLogMilestones(
+                frameTime: frameTime, duration: ctx.duration, filename: filename,
+                index: index, total: total, hits: hits, totalFacesDetected: totalFacesDetected,
+                bestCosineEver: bestCosineEver, milestones: milestones,
+                loggedMilestones: &loggedMilestones, progressFn: progressFn, logFn: logFn, distFn: distFn
+            )
         }
-
-        let pct = ctx.duration > 0 ? Int(frameTime / ctx.duration * 100) : 0
-        await progressFn("\(filename)  [t=\(String(format: "%.0f", frameTime))s / \(String(format: "%.0f", ctx.duration))s · \(hits.count) hit(s)]")
-        for m in milestones where pct >= m && !loggedMilestones.contains(m) {
-            loggedMilestones.insert(m)
-            let cosStr = bestCosineEver > -1 ? String(format: "%.3f", bestCosineEver) : "—"
-            await logFn("    \(m)% — t=\(String(format: "%.0f", frameTime))s/\(String(format: "%.0f", ctx.duration))s, \(totalFacesDetected) faces detected, \(hits.count) hit(s), best cosine \(cosStr)")
-            if bestCosineEver > -1 { await distFn(1.0 - bestCosineEver) }
-        }
+        if case .finished = frameResult { break }
     }
 
     if bestCosineEver > -1 { await distFn(1.0 - bestCosineEver) }

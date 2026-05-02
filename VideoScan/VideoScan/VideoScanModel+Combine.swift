@@ -149,27 +149,7 @@ extension VideoScanModel {
             return true
         }
 
-        var technique = await MainActor.run {
-            guard jobIndex < self.dashboard.combineJobs.count else { return CombineJobStatus.CombineTechnique.streamCopy }
-            return self.dashboard.combineJobs[jobIndex].technique
-        }
-
-        if technique == .streamCopy {
-            let check = CombineEngine.checkStreamCopyCompatibility(
-                videoCodec: video.videoCodec.isEmpty ? nil : video.videoCodec,
-                audioCodec: audio.audioCodec.isEmpty ? nil : audio.audioCodec
-            )
-            if !check.streamCopySafe {
-                technique = .reencodeProRes
-                await MainActor.run {
-                    if jobIndex < self.dashboard.combineJobs.count {
-                        self.dashboard.combineJobs[jobIndex].technique = technique
-                        self.dashboard.combineJobs[jobIndex].warningMessage = check.warning
-                    }
-                    self.log("    ⚠ \(check.warning ?? "Codec incompatible") — auto-switching to ProRes re-encode")
-                }
-            }
-        }
+        let technique = await resolveCombineTechnique(video: video, audio: audio, jobIndex: jobIndex)
 
         await MainActor.run {
             self.dashboard.combineCurrentFile = outName
@@ -196,9 +176,20 @@ extension VideoScanModel {
             return false
         }
 
-        await MainActor.run {
-            self.updateJobPhase(jobIndex, .muxing)
-        }
+        return await runMuxAndVerify(
+            staged: staged, outURL: outURL, outName: outName,
+            technique: technique, video: video, audio: audio, jobIndex: jobIndex
+        )
+    }
+
+    private func runMuxAndVerify(
+        staged: (video: URL, audio: URL, tempDir: URL?),
+        outURL: URL, outName: String,
+        technique: CombineJobStatus.CombineTechnique,
+        video: VideoRecord, audio: VideoRecord,
+        jobIndex: Int
+    ) async -> Bool {
+        await MainActor.run { self.updateJobPhase(jobIndex, .muxing) }
 
         let duration = await MainActor.run {
             guard jobIndex < self.dashboard.combineJobs.count else { return 0.0 }
@@ -241,7 +232,6 @@ extension VideoScanModel {
             return false
         }
 
-        // Verify the output has both video and audio streams
         await MainActor.run {
             self.updateJobPhase(jobIndex, .verifying)
             self.log("    Verifying output…")
@@ -296,6 +286,31 @@ extension VideoScanModel {
         dashboard.combineJobs[index].phase = phase
     }
 
+    private func resolveCombineTechnique(video: VideoRecord, audio: VideoRecord, jobIndex: Int) async -> CombineJobStatus.CombineTechnique {
+        var technique = await MainActor.run {
+            guard jobIndex < self.dashboard.combineJobs.count else { return CombineJobStatus.CombineTechnique.streamCopy }
+            return self.dashboard.combineJobs[jobIndex].technique
+        }
+
+        if technique == .streamCopy {
+            let check = CombineEngine.checkStreamCopyCompatibility(
+                videoCodec: video.videoCodec.isEmpty ? nil : video.videoCodec,
+                audioCodec: audio.audioCodec.isEmpty ? nil : audio.audioCodec
+            )
+            if !check.streamCopySafe {
+                technique = .reencodeProRes
+                await MainActor.run {
+                    if jobIndex < self.dashboard.combineJobs.count {
+                        self.dashboard.combineJobs[jobIndex].technique = technique
+                        self.dashboard.combineJobs[jobIndex].warningMessage = check.warning
+                    }
+                    self.log("    ⚠ \(check.warning ?? "Codec incompatible") — auto-switching to ProRes re-encode")
+                }
+            }
+        }
+        return technique
+    }
+
     @MainActor
     func toggleJobPause(_ index: Int) {
         guard index < dashboard.combineJobs.count else { return }
@@ -331,7 +346,7 @@ extension VideoScanModel {
         let streams = probe.streams ?? []
         if let vs = streams.first(where: { $0.codec_type == "video" }) {
             rec.videoCodec = vs.codec_name ?? ""
-            rec.resolution = (vs.width != nil && vs.height != nil) ? "\(vs.width!)x\(vs.height!)" : ""
+            if let w = vs.width, let h = vs.height { rec.resolution = "\(w)x\(h)" } else { rec.resolution = "" }
             rec.frameRate = vs.r_frame_rate ?? ""
             rec.videoBitrate = vs.bit_rate ?? ""
             rec.colorSpace = vs.color_space ?? ""

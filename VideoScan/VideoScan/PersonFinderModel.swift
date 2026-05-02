@@ -181,9 +181,16 @@ struct PersonFinderSettings: Equatable {
 
     /// Restore settings from UserDefaults. Missing keys use struct defaults.
     static func restored() -> PersonFinderSettings {
-        let d = defaults
-        let p = prefix
         var s = PersonFinderSettings()
+        restoreStrings(&s)
+        restoreNumericValues(&s)
+        restoreBoolValues(&s)
+        validatePaths(&s)
+        return s
+    }
+
+    private static func restoreStrings(_ s: inout PersonFinderSettings) {
+        let d = defaults; let p = prefix
         if let v = d.string(forKey: "\(p)personName") { s.personName = v }
         if let v = d.string(forKey: "\(p)referencePath") { s.referencePath = v }
         if let v = d.string(forKey: "\(p)outputDir") { s.outputDir = v }
@@ -192,6 +199,11 @@ struct PersonFinderSettings: Equatable {
         if let v = d.string(forKey: "\(p)recognitionEngine") {
             s.recognitionEngine = RecognitionEngine(rawValue: v) ?? .vision
         }
+        if let rejected = d.stringArray(forKey: "\(p)rejectedReferenceFiles") { s.rejectedReferenceFiles = rejected }
+    }
+
+    private static func restoreNumericValues(_ s: inout PersonFinderSettings) {
+        let d = defaults; let p = prefix
         if d.object(forKey: "\(p)threshold") != nil { s.threshold = d.float(forKey: "\(p)threshold") }
         if d.object(forKey: "\(p)minFaceConfidence") != nil { s.minFaceConfidence = d.float(forKey: "\(p)minFaceConfidence") }
         if d.object(forKey: "\(p)frameStep") != nil { s.frameStep = d.integer(forKey: "\(p)frameStep") }
@@ -199,22 +211,27 @@ struct PersonFinderSettings: Equatable {
         if d.object(forKey: "\(p)minDuration") != nil { s.minDuration = d.double(forKey: "\(p)minDuration") }
         if d.object(forKey: "\(p)minPresenceSecs") != nil { s.minPresenceSecs = d.double(forKey: "\(p)minPresenceSecs") }
         if d.object(forKey: "\(p)concurrency") != nil { s.concurrency = d.integer(forKey: "\(p)concurrency") }
+        if d.object(forKey: "\(p)previewRate") != nil { s.previewRate = max(1, d.integer(forKey: "\(p)previewRate")) }
+        if d.object(forKey: "\(p)arcfaceThreshold") != nil { s.arcfaceThreshold = d.float(forKey: "\(p)arcfaceThreshold") }
+    }
+
+    private static func restoreBoolValues(_ s: inout PersonFinderSettings) {
+        let d = defaults; let p = prefix
         if d.object(forKey: "\(p)requirePrimary") != nil { s.requirePrimary = d.bool(forKey: "\(p)requirePrimary") }
         if d.object(forKey: "\(p)concatOutput") != nil { s.concatOutput = d.bool(forKey: "\(p)concatOutput") }
         if d.object(forKey: "\(p)decadeChapters") != nil { s.decadeChapters = d.bool(forKey: "\(p)decadeChapters") }
         if d.object(forKey: "\(p)skipBundles") != nil { s.skipBundles = d.bool(forKey: "\(p)skipBundles") }
         if d.object(forKey: "\(p)skipCatalogBadFiles") != nil { s.skipCatalogBadFiles = d.bool(forKey: "\(p)skipCatalogBadFiles") }
         if d.object(forKey: "\(p)largestFaceOnly") != nil { s.largestFaceOnly = d.bool(forKey: "\(p)largestFaceOnly") }
-        if d.object(forKey: "\(p)previewRate") != nil { s.previewRate = max(1, d.integer(forKey: "\(p)previewRate")) }
-        if d.object(forKey: "\(p)arcfaceThreshold") != nil { s.arcfaceThreshold = d.float(forKey: "\(p)arcfaceThreshold") }
-        if let rejected = d.stringArray(forKey: "\(p)rejectedReferenceFiles") { s.rejectedReferenceFiles = rejected }
+    }
+
+    private static func validatePaths(_ s: inout PersonFinderSettings) {
         if s.pythonPath.isEmpty || !FileManager.default.isExecutableFile(atPath: s.pythonPath) {
             s.pythonPath = detectedPythonPath()
         }
         if s.recognitionScript.isEmpty || !FileManager.default.fileExists(atPath: s.recognitionScript) {
             s.recognitionScript = detectedRecognitionScript()
         }
-        return s
     }
 
     /// Extract a POI profile from the current settings.
@@ -1033,98 +1050,6 @@ final class PersonFinderModel: ObservableObject {
         let total = videoFiles.count
         var orderedResults = [pfVideoResult?](repeating: nil, count: total)
 
-        // Closure that dispatches to the right engine — keeps the task group logic identical
-        // regardless of which recognition backend is active.
-        @Sendable func processOne(idx: Int) async -> (Int, pfVideoResult?) {
-            await job.pauseGate.waitIfPaused()
-            if Task.isCancelled { return (idx, nil) }
-
-            // Reserve a worker slot atomically so multiple jobs cannot overbook
-            // the same memory budget based on a stale snapshot.
-            await MemoryPressureMonitor.shared.acquireWorkerSlot(
-                requested: settings.concurrency,
-                engine: settings.recognitionEngine
-            )
-            defer { Task { await MemoryPressureMonitor.shared.decrementWorkers() } }
-
-            let logFn: @Sendable (String) async -> Void = { line in await job.appendLog(line) }
-
-            // Throttle MainActor dispatches to ~4 Hz to avoid beachball under high concurrency.
-            let progressState = ThrottledMainActorUpdate(intervalSecs: 0.25)
-            let progressFn: @Sendable (String) async -> Void = { file in
-                await progressState.update { job.currentFile = file }
-            }
-            let distFn: @Sendable (Float)  async -> Void = { dist in
-                await progressState.update { if dist < job.bestDist { job.bestDist = dist } }
-            }
-
-            // Vision branch — used by .vision and as the first pass of .hybrid.
-            @Sendable func runVision() async -> pfVideoResult? {
-                await pfProcessVideo(
-                    filePath: videoFiles[idx], prints: prints,
-                    settings: settings, index: idx + 1, total: total,
-                    pauseGate: job.pauseGate,
-                    logFn: logFn, progressFn: progressFn,
-                    frameFn: { img, matched, unmatched in
-                        await progressState.update {
-                            job.liveFrame = img
-                            job.liveMatchedRects = matched
-                            job.liveUnmatchedRects = unmatched
-                        }
-                    },
-                    distFn: distFn,
-                    visionStatsFn: { fps, msPerFrame in
-                        let workers = await MemoryPressureMonitor.shared.currentWorkers()
-                        await MainActor.run {
-                            dash?.visionFPS = fps
-                            dash?.visionMsPerFrame = msPerFrame
-                            dash?.visionWorkers = workers
-                        }
-                    },
-                    previewRateFn: { job.previewRate }
-                )
-            }
-
-            @Sendable func runArcFace() async -> pfVideoResult? {
-                await pfRunArcFaceEngine(
-                    filePath: videoFiles[idx], idx1: idx + 1, total: total,
-                    settings: settings, job: job, dash: dash,
-                    progressState: progressState,
-                    logFn: logFn, progressFn: progressFn, distFn: distFn
-                )
-            }
-
-            @Sendable func runDlib() async -> pfVideoResult? {
-                await pfProcessVideoWithDlib(
-                    filePath: videoFiles[idx], settings: settings,
-                    index: idx + 1, total: total,
-                    pauseGate: job.pauseGate,
-                    logFn: logFn, progressFn: progressFn, distFn: distFn
-                )
-            }
-
-            let r: pfVideoResult?
-            switch settings.recognitionEngine {
-            case .vision:  r = await runVision()
-            case .arcface: r = await runArcFace()
-            case .dlib:    r = await runDlib()
-            case .hybrid:
-                // Pass 1: fast Vision sweep on the ANE.
-                let v = await runVision()
-                if let v, !v.segments.isEmpty {
-                    r = v
-                } else if !settings.dlibReadyForHybrid {
-                    await job.appendLog("[hybrid] Vision: 0 hits — dlib not configured, skipping fallback")
-                    r = v
-                } else {
-                    // Pass 2: dlib as a "second look" — catches profile/glasses/dim-light.
-                    await job.appendLog("[hybrid] Vision: 0 hits — falling back to dlib")
-                    r = await runDlib()
-                }
-            }
-            return (idx, r)
-        }
-
         await withTaskGroup(of: (Int, pfVideoResult?).self) { group in
             var submitted = 0
             let scanConcurrency = await MemoryPressureMonitor.shared.recommendedConcurrency(
@@ -1139,7 +1064,12 @@ final class PersonFinderModel: ObservableObject {
             }
             let seed = min(scanConcurrency, total)
             for i in 0..<seed {
-                group.addTask { await processOne(idx: i) }
+                group.addTask {
+                    await processOneVideo(
+                        idx: i, videoFiles: videoFiles, prints: prints,
+                        settings: settings, total: total, job: job, dash: dash
+                    )
+                }
                 submitted += 1
             }
 
@@ -1156,13 +1086,106 @@ final class PersonFinderModel: ObservableObject {
                 }
                 if submitted < total {
                     let nextIdx = submitted
-                    group.addTask { await processOne(idx: nextIdx) }
+                    group.addTask {
+                        await processOneVideo(
+                            idx: nextIdx, videoFiles: videoFiles, prints: prints,
+                            settings: settings, total: total, job: job, dash: dash
+                        )
+                    }
                     submitted += 1
                 }
             }
         }
 
         return orderedResults
+    }
+
+    // swiftlint:disable:next function_parameter_count
+    private nonisolated static func processOneVideo(
+        idx: Int, videoFiles: [String], prints: [VNFeaturePrintObservation],
+        settings: PersonFinderSettings, total: Int,
+        job: ScanJob, dash: DashboardState?
+    ) async -> (Int, pfVideoResult?) {
+        await job.pauseGate.waitIfPaused()
+        if Task.isCancelled { return (idx, nil) }
+
+        await MemoryPressureMonitor.shared.acquireWorkerSlot(
+            requested: settings.concurrency,
+            engine: settings.recognitionEngine
+        )
+        defer { Task { await MemoryPressureMonitor.shared.decrementWorkers() } }
+
+        let logFn: @Sendable (String) async -> Void = { line in await job.appendLog(line) }
+        let progressState = ThrottledMainActorUpdate(intervalSecs: 0.25)
+        let progressFn: @Sendable (String) async -> Void = { file in
+            await progressState.update { job.currentFile = file }
+        }
+        let distFn: @Sendable (Float) async -> Void = { dist in
+            await progressState.update { if dist < job.bestDist { job.bestDist = dist } }
+        }
+
+        @Sendable func runVision() async -> pfVideoResult? {
+            await pfProcessVideo(
+                filePath: videoFiles[idx], prints: prints,
+                settings: settings, index: idx + 1, total: total,
+                pauseGate: job.pauseGate,
+                logFn: logFn, progressFn: progressFn,
+                frameFn: { img, matched, unmatched in
+                    await progressState.update {
+                        job.liveFrame = img
+                        job.liveMatchedRects = matched
+                        job.liveUnmatchedRects = unmatched
+                    }
+                },
+                distFn: distFn,
+                visionStatsFn: { fps, msPerFrame in
+                    let workers = await MemoryPressureMonitor.shared.currentWorkers()
+                    await MainActor.run {
+                        dash?.visionFPS = fps
+                        dash?.visionMsPerFrame = msPerFrame
+                        dash?.visionWorkers = workers
+                    }
+                },
+                previewRateFn: { job.previewRate }
+            )
+        }
+
+        @Sendable func runArcFace() async -> pfVideoResult? {
+            await pfRunArcFaceEngine(
+                filePath: videoFiles[idx], idx1: idx + 1, total: total,
+                settings: settings, job: job, dash: dash,
+                progressState: progressState,
+                logFn: logFn, progressFn: progressFn, distFn: distFn
+            )
+        }
+
+        @Sendable func runDlib() async -> pfVideoResult? {
+            await pfProcessVideoWithDlib(
+                filePath: videoFiles[idx], settings: settings,
+                index: idx + 1, total: total,
+                pauseGate: job.pauseGate,
+                logFn: logFn, progressFn: progressFn, distFn: distFn
+            )
+        }
+
+        let r: pfVideoResult?
+        switch settings.recognitionEngine {
+        case .vision:  r = await runVision()
+        case .arcface: r = await runArcFace()
+        case .dlib:    r = await runDlib()
+        case .hybrid:
+            let v = await runVision()
+            if let v, !v.segments.isEmpty {
+                r = v
+            } else if !settings.dlibReadyForHybrid {
+                await job.appendLog("[hybrid] Vision: 0 hits — dlib not configured, skipping fallback")
+                r = v
+            } else {
+                await job.appendLog("[hybrid] Vision: 0 hits — falling back to dlib")
+                r = await runDlib()
+            }
+        }
+        return (idx, r)
     }
 
     /// Discover and catalog-filter video files for a job. Returns nil (and sets
@@ -1780,6 +1803,90 @@ private func pfVisionClusterSegments(
     }
 }
 
+private enum PFFrameResult {
+    case skipped
+    case finished
+    case processed(frameTime: Double, match: PFVisionFrameMatch, preview: CGImage?)
+}
+
+private nonisolated func pfSampleNextFrame(
+    ctx: PFVisionReaderContext, settings: PersonFinderSettings, prints: [VNFeaturePrintObservation],
+    lastProcessedTime: inout Double, frameInterval: Double,
+    bestDistEver: inout Float, totalFacesDetected: inout Int,
+    sampledSoFar: inout Int, visionFrameTimes: inout [Double],
+    previewRateFn: @escaping @Sendable () -> Int
+) -> PFFrameResult {
+    var frameTime: Double = 0
+    var frameMatch = PFVisionFrameMatch()
+    var previewImage: CGImage?
+    var shouldSkip = false
+
+    autoreleasepool {
+        guard let sampleBuffer = ctx.trackOutput.copyNextSampleBuffer() else {
+            shouldSkip = true; return
+        }
+        let t = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+        guard t - lastProcessedTime >= frameInterval else {
+            shouldSkip = true; frameTime = -1; return
+        }
+        lastProcessedTime = t
+        frameTime = t
+
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            shouldSkip = true; frameTime = -1; return
+        }
+
+        let frameStart = CFAbsoluteTimeGetCurrent()
+        let allFaces = pfDetectFacesInBuffer(pixelBuffer, orientation: ctx.orientation)
+        let candidates: [VNFaceObservation] = settings.requirePrimary
+            ? (allFaces.max(by: { ($0.boundingBox.width * $0.boundingBox.height) < ($1.boundingBox.width * $1.boundingBox.height) }).map { [$0] } ?? [])
+            : allFaces
+
+        if !candidates.isEmpty,
+           let img = pfOrientedCGImage(from: pixelBuffer, transform: ctx.transform) {
+            frameMatch = pfVisionMatchCandidates(
+                timeSecs: t,
+                orientedImage: img,
+                candidates: candidates,
+                referencePrints: prints,
+                settings: settings
+            )
+            if frameMatch.bestDistInFrame < bestDistEver {
+                bestDistEver = frameMatch.bestDistInFrame
+            }
+            totalFacesDetected += frameMatch.facesDetected
+            let rate = max(1, previewRateFn())
+            if (sampledSoFar + 1) % rate == 0 { previewImage = img }
+        }
+        sampledSoFar += 1
+        visionFrameTimes.append(CFAbsoluteTimeGetCurrent() - frameStart)
+    }
+
+    if shouldSkip {
+        return frameTime == -1 ? .skipped : .finished
+    }
+    return .processed(frameTime: frameTime, match: frameMatch, preview: previewImage)
+}
+
+private nonisolated func pfLogMilestones(
+    frameTime: Double, duration: Double, filename: String,
+    index: Int, total: Int, hits: [(timeSecs: Double, distance: Float)],
+    totalFacesDetected: Int, bestDistEver: Float,
+    milestones: Set<Int>, loggedMilestones: inout Set<Int>,
+    progressFn: @escaping @Sendable (String) async -> Void,
+    logFn: @escaping @Sendable (String) async -> Void,
+    distFn: @escaping @Sendable (Float) async -> Void
+) async {
+    let pct = duration > 0 ? Int(frameTime / duration * 100) : 0
+    await progressFn("\(filename)  [t=\(String(format: "%.0f", frameTime))s / \(String(format: "%.0f", duration))s · \(hits.count) hit(s)]")
+    for m in milestones where pct >= m && !loggedMilestones.contains(m) {
+        loggedMilestones.insert(m)
+        let distStr = bestDistEver < .greatestFiniteMagnitude ? String(format: "%.3f", bestDistEver) : "—"
+        await logFn("    \(m)% — t=\(String(format: "%.0f", frameTime))s/\(String(format: "%.0f", duration))s, \(totalFacesDetected) faces detected, \(hits.count) hit(s), best dist \(distStr)")
+        await distFn(bestDistEver)
+    }
+}
+
 private nonisolated func pfProcessVideo(
     filePath: String,
     prints: [VNFeaturePrintObservation],
@@ -1815,81 +1922,43 @@ private nonisolated func pfProcessVideo(
     while true {
         if Task.isCancelled { ctx.reader.cancelReading(); break }
 
-        var frameTime: Double = 0
-        var frameMatch = PFVisionFrameMatch()
-        var previewImage: CGImage?
-        var shouldSkip = false
-
-        autoreleasepool {
-            guard let sampleBuffer = ctx.trackOutput.copyNextSampleBuffer() else {
-                shouldSkip = true; return
-            }
-            let t = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
-            guard t - lastProcessedTime >= frameInterval else {
-                shouldSkip = true; frameTime = -1; return
-            }
-            lastProcessedTime = t
-            frameTime = t
-
-            guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
-                shouldSkip = true; frameTime = -1; return
-            }
-
-            let frameStart = CFAbsoluteTimeGetCurrent()
-            let allFaces = pfDetectFacesInBuffer(pixelBuffer, orientation: ctx.orientation)
-            let candidates: [VNFaceObservation] = settings.requirePrimary
-                ? (allFaces.max(by: { ($0.boundingBox.width * $0.boundingBox.height) < ($1.boundingBox.width * $1.boundingBox.height) }).map { [$0] } ?? [])
-                : allFaces
-
-            if !candidates.isEmpty,
-               let img = pfOrientedCGImage(from: pixelBuffer, transform: ctx.transform) {
-                frameMatch = pfVisionMatchCandidates(
-                    timeSecs: t,
-                    orientedImage: img,
-                    candidates: candidates,
-                    referencePrints: prints,
-                    settings: settings
-                )
-                if frameMatch.bestDistInFrame < bestDistEver {
-                    bestDistEver = frameMatch.bestDistInFrame
-                }
-                totalFacesDetected += frameMatch.facesDetected
-                let rate = max(1, previewRateFn())
-                if (sampledSoFar + 1) % rate == 0 { previewImage = img }
-            }
-            sampledSoFar += 1
-            visionFrameTimes.append(CFAbsoluteTimeGetCurrent() - frameStart)
-        }
+        let frameResult = pfSampleNextFrame(
+            ctx: ctx, settings: settings, prints: prints,
+            lastProcessedTime: &lastProcessedTime, frameInterval: frameInterval,
+            bestDistEver: &bestDistEver, totalFacesDetected: &totalFacesDetected,
+            sampledSoFar: &sampledSoFar, visionFrameTimes: &visionFrameTimes,
+            previewRateFn: previewRateFn
+        )
 
         if sampledSoFar > 0 && sampledSoFar % 5 == 0 {
             await pauseGate.waitIfPaused()
             if Task.isCancelled { ctx.reader.cancelReading(); break }
         }
 
-        if shouldSkip {
-            if frameTime == -1 { continue } else { break }
-        }
+        switch frameResult {
+        case .skipped: continue
+        case .finished: break
+        case let .processed(frameTime, frameMatch, previewImage):
+            hits.append(contentsOf: frameMatch.hits)
 
-        hits.append(contentsOf: frameMatch.hits)
+            if let img = previewImage {
+                await frameFn(img, frameMatch.matchedRects, frameMatch.unmatchedRects)
+            }
 
-        if let img = previewImage {
-            await frameFn(img, frameMatch.matchedRects, frameMatch.unmatchedRects)
-        }
+            if visionFrameTimes.count >= 10 {
+                let avg = visionFrameTimes.reduce(0, +) / Double(visionFrameTimes.count)
+                await visionStatsFn(avg > 0 ? 1.0 / avg : 0, avg * 1000)
+                visionFrameTimes.removeAll(keepingCapacity: true)
+            }
 
-        if visionFrameTimes.count >= 10 {
-            let avg = visionFrameTimes.reduce(0, +) / Double(visionFrameTimes.count)
-            await visionStatsFn(avg > 0 ? 1.0 / avg : 0, avg * 1000)
-            visionFrameTimes.removeAll(keepingCapacity: true)
+            await pfLogMilestones(
+                frameTime: frameTime, duration: ctx.duration, filename: filename,
+                index: index, total: total, hits: hits, totalFacesDetected: totalFacesDetected,
+                bestDistEver: bestDistEver, milestones: milestones,
+                loggedMilestones: &loggedMilestones, progressFn: progressFn, logFn: logFn, distFn: distFn
+            )
         }
-
-        let pct = ctx.duration > 0 ? Int(frameTime / ctx.duration * 100) : 0
-        await progressFn("\(filename)  [t=\(String(format: "%.0f", frameTime))s / \(String(format: "%.0f", ctx.duration))s · \(hits.count) hit(s)]")
-        for m in milestones where pct >= m && !loggedMilestones.contains(m) {
-            loggedMilestones.insert(m)
-            let distStr = bestDistEver < .greatestFiniteMagnitude ? String(format: "%.3f", bestDistEver) : "—"
-            await logFn("    \(m)% — t=\(String(format: "%.0f", frameTime))s/\(String(format: "%.0f", ctx.duration))s, \(totalFacesDetected) faces detected, \(hits.count) hit(s), best dist \(distStr)")
-            await distFn(bestDistEver)
-        }
+        if case .finished = frameResult { break }
     }
 
     await distFn(bestDistEver)
@@ -2143,6 +2212,46 @@ private func pfBuildSortedClipEntries(results: [pfVideoResult], outputDir: Strin
     return entries.sorted { a, b in a.year == b.year ? a.clipPath < b.clipPath : a.year < b.year }
 }
 
+private func pfRunFFMpegProcess(
+    ffmpegPath: String,
+    args: [String],
+    logFn: @escaping @Sendable (String) async -> Void
+) async -> Int32 {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: ffmpegPath)
+    process.arguments = args
+    process.standardOutput = FileHandle.nullDevice
+    let stderrPipe = Pipe()
+    process.standardError = stderrPipe
+
+    var stderrData = Data()
+    stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+        let chunk = handle.availableData
+        if !chunk.isEmpty { stderrData.append(chunk) }
+    }
+
+    do { try process.run() } catch {
+        await logFn("  ⚠ Could not launch ffmpeg: \(error.localizedDescription)")
+        return -1
+    }
+
+    await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+        process.terminationHandler = { _ in cont.resume() }
+        if !process.isRunning { cont.resume() }
+    }
+    stderrPipe.fileHandleForReading.readabilityHandler = nil
+
+    if process.terminationStatus != 0 {
+        await logFn("  ⚠ ffmpeg exited with code \(process.terminationStatus)")
+        if let errStr = String(data: stderrData, encoding: .utf8), !errStr.isEmpty {
+            for line in errStr.components(separatedBy: .newlines).suffix(10) where !line.isEmpty {
+                await logFn("    stderr: \(line)")
+            }
+        }
+    }
+    return process.terminationStatus
+}
+
 private func pfConcatenateWithDecadeChapters(
     results: [pfVideoResult],
     outputDir: String,
@@ -2200,9 +2309,7 @@ private func pfConcatenateWithDecadeChapters(
     let decadeList = chapters.map(\.title).joined(separator: " · ")
     await logFn("  Building decade chapter video (\(decadeList))…")
 
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: ffmpegPath)
-    process.arguments = [
+    let args = [
         "-f", "concat", "-safe", "0", "-i", listPath,
         "-i", metaPath,
         "-map_metadata", "1",
@@ -2212,44 +2319,13 @@ private func pfConcatenateWithDecadeChapters(
         "-c:a", "aac", "-b:a", "192k",
         "-y", outputPath
     ]
-    process.standardOutput = FileHandle.nullDevice
-    let stderrPipe = Pipe()
-    process.standardError = stderrPipe
-
-    // Drain stderr asynchronously to prevent pipe buffer deadlock.
-    // ffmpeg can emit thousands of warning lines with mixed-format inputs;
-    // if the 64KB pipe buffer fills, ffmpeg blocks and the output is truncated.
-    var stderrData = Data()
-    stderrPipe.fileHandleForReading.readabilityHandler = { handle in
-        let chunk = handle.availableData
-        if !chunk.isEmpty { stderrData.append(chunk) }
-    }
-
-    do { try process.run() } catch {
-        await logFn("  ⚠ Could not launch ffmpeg: \(error.localizedDescription)")
-        try? fm.removeItem(atPath: listPath); try? fm.removeItem(atPath: metaPath)
-        return
-    }
-
-    await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-        process.terminationHandler = { _ in cont.resume() }
-        if !process.isRunning { cont.resume() }
-    }
-    stderrPipe.fileHandleForReading.readabilityHandler = nil
+    let exitCode = await pfRunFFMpegProcess(ffmpegPath: ffmpegPath, args: args, logFn: logFn)
     try? fm.removeItem(atPath: listPath); try? fm.removeItem(atPath: metaPath)
 
-    if process.terminationStatus == 0 {
+    if exitCode == 0 {
         let totalSecs = durations.reduce(0, +)
         await logFn("  → Decade video saved: \(outputPath)")
         await logFn("  → Duration: \(pfFormatDuration(totalSecs))  Chapters: \(decadeList)")
-    } else {
-        await logFn("  ⚠ ffmpeg exited with code \(process.terminationStatus)")
-        if let errStr = String(data: stderrData, encoding: .utf8), !errStr.isEmpty {
-            let lines = errStr.components(separatedBy: .newlines).suffix(10)
-            for line in lines where !line.isEmpty {
-                await logFn("    stderr: \(line)")
-            }
-        }
     }
 }
 
