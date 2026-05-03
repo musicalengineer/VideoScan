@@ -144,26 +144,75 @@ struct IdentifyFamilyView: View {
                 Text(scanProgressLabel)
                     .font(.callout.monospacedDigit())
                     .foregroundStyle(.secondary)
+                    .frame(minWidth: 60, alignment: .trailing)
+                Button("Cancel") { model.cancel() }
             }
 
-            HStack(spacing: 24) {
-                metric("Videos", value: "\(model.processedVideos)/\(max(model.totalVideos, model.processedVideos))")
-                metric("Faces found", value: "\(model.totalFaces)")
-                if !model.currentFile.isEmpty {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Current")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Text(model.currentFile)
-                            .font(.callout).lineLimit(1).truncationMode(.middle)
-                    }
-                }
+            HStack(spacing: 18) {
+                bigStat(value: "\(model.processedVideos)",
+                        sub: "of \(max(model.totalVideos, model.processedVideos))",
+                        label: "videos scanned")
+                bigStat(value: "\(model.totalFaces)",
+                        sub: model.facesPerSecond.map { String(format: "%.1f / sec", $0) } ?? "",
+                        label: "faces extracted")
+                bigStat(value: formatElapsed(model.elapsedSecs),
+                        sub: "",
+                        label: "elapsed")
+                bigStat(value: model.scanETA.map(formatElapsed) ?? "—",
+                        sub: "",
+                        label: "remaining")
                 Spacer()
-                Button("Cancel") { model.cancel() }
+            }
+
+            if !model.currentFile.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("now scanning")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .textCase(.uppercase)
+                    Text(model.currentFile)
+                        .font(.system(size: 14, weight: .medium, design: .monospaced))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .foregroundStyle(.primary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .background(Color(NSColor.controlBackgroundColor),
+                            in: RoundedRectangle(cornerRadius: 6))
             }
 
             consoleScroll
         }
         .padding(16)
+    }
+
+    private func bigStat(value: String, sub: String, label: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value)
+                .font(.system(size: 26, weight: .semibold, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(.primary)
+            if !sub.isEmpty {
+                Text(sub)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+        }
+        .frame(minWidth: 110, alignment: .leading)
+    }
+
+    private func formatElapsed(_ secs: TimeInterval) -> String {
+        guard secs.isFinite, secs >= 0 else { return "—" }
+        let s = Int(secs)
+        let h = s / 3600
+        let m = (s % 3600) / 60
+        let sec = s % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, sec)
+                     : String(format: "%d:%02d", m, sec)
     }
 
     private var scanProgressValue: Double {
