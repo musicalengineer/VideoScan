@@ -33,6 +33,9 @@ final class IdentifyFamilyModel: ObservableObject {
     @Published private(set) var totalFaces: Int = 0
     @Published private(set) var currentFile: String = ""
     @Published private(set) var consoleLines: [String] = []
+    @Published private(set) var scanStartedAt: Date?
+    @Published private(set) var elapsedSecs: TimeInterval = 0
+    private var elapsedTimer: Timer?
 
     // Review phase
     @Published var clusters: [FaceCluster] = []
@@ -96,6 +99,9 @@ final class IdentifyFamilyModel: ObservableObject {
         totalVideos = 0
         totalFaces = 0
         currentFile = ""
+        scanStartedAt = Date()
+        elapsedSecs = 0
+        startElapsedTimer()
         phase = .scanning
 
         launch(folder: folder, runName: effectiveName)
@@ -104,7 +110,38 @@ final class IdentifyFamilyModel: ObservableObject {
     func cancel() {
         process?.terminate()
         process = nil
+        stopElapsedTimer()
         phase = .idle
+    }
+
+    private func startElapsedTimer() {
+        stopElapsedTimer()
+        let started = scanStartedAt ?? Date()
+        elapsedTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.elapsedSecs = Date().timeIntervalSince(started) }
+        }
+    }
+
+    private func stopElapsedTimer() {
+        elapsedTimer?.invalidate()
+        elapsedTimer = nil
+    }
+
+    /// Average faces extracted per second. Returns nil when too early to estimate.
+    var facesPerSecond: Double? {
+        guard elapsedSecs > 1, totalFaces > 0 else { return nil }
+        return Double(totalFaces) / elapsedSecs
+    }
+
+    /// ETA for scanning phase, based on per-video rate. Nil until at least one
+    /// video has been processed and total is known.
+    var scanETA: TimeInterval? {
+        guard processedVideos > 0,
+              totalVideos > processedVideos,
+              elapsedSecs > 1 else { return nil }
+        let remaining = totalVideos - processedVideos
+        let perVideo = elapsedSecs / Double(processedVideos)
+        return Double(remaining) * perVideo
     }
 
     func resetToIdle() {
@@ -154,10 +191,14 @@ final class IdentifyFamilyModel: ObservableObject {
         let proc = Process()
         proc.executableURL = pythonPath
         proc.arguments = [
-            scriptPath.path,
-            folder.path,
-            "--run-name", runName
+            "-u",                 // unbuffered stdout/stderr — without this, Python
+            scriptPath.path,      // line-buffers when piped to a non-TTY subprocess
+            folder.path,          // and Swift sees nothing for ~8KB at a time, which
+            "--run-name", runName // makes the UI freeze at "Videos 0/0".
         ]
+        var env = ProcessInfo.processInfo.environment
+        env["PYTHONUNBUFFERED"] = "1"
+        proc.environment = env
         let outPipe = Pipe()
         let errPipe = Pipe()
         proc.standardOutput = outPipe
@@ -256,6 +297,7 @@ final class IdentifyFamilyModel: ObservableObject {
 
     private func handleTermination(status: Int32) {
         process = nil
+        stopElapsedTimer()
         if status == 0 {
             loadClusters()
         } else if case .scanning = phase {
