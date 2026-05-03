@@ -248,6 +248,13 @@ struct IdentifyFamilyView: View {
     private var reviewView: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
+                Button {
+                    model.resetToIdle()
+                } label: {
+                    Label("Back", systemImage: "chevron.left")
+                }
+                .buttonStyle(.bordered)
+
                 Text("Found \(realClusterCount) people-shaped clusters")
                     .font(.headline)
                 if let noise = model.clusters.first(where: { $0.id == -1 }) {
@@ -255,23 +262,72 @@ struct IdentifyFamilyView: View {
                         .font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
+                if !model.runName.isEmpty {
+                    Button {
+                        model.loadExistingRun(named: model.runName)
+                    } label: {
+                        Label("Reload from Disk", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Re-read cluster_summary.csv — useful if the CSV was written after the in-app scan finished (race with a parallel scan).")
+                }
+                if let runDir = model.runDir {
+                    Button {
+                        NSWorkspace.shared.open(runDir)
+                    } label: {
+                        Label("Reveal Run Folder", systemImage: "folder")
+                    }
+                    .buttonStyle(.bordered)
+                }
                 Button("Save Names") { model.saveNames() }
+                    .disabled(realClusterCount == 0)
             }
             .padding(12)
             Divider()
 
-            ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 14)],
-                          spacing: 14) {
-                    ForEach(model.clusters) { cluster in
-                        ClusterCard(cluster: cluster) { newName in
-                            model.setName(newName, for: cluster.id)
+            if realClusterCount == 0 {
+                emptyClustersDiagnostic
+            } else {
+                ScrollView {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 14)],
+                              spacing: 14) {
+                        ForEach(model.clusters) { cluster in
+                            ClusterCard(cluster: cluster) { newName in
+                                model.setName(newName, for: cluster.id)
+                            }
                         }
                     }
+                    .padding(14)
                 }
-                .padding(14)
             }
         }
+    }
+
+    /// Shown when reviewView is reached but no real clusters loaded — surfaces
+    /// what we read so the user (or future-debugger) can see the actual state
+    /// instead of staring at "Found 0" with no recourse.
+    private var emptyClustersDiagnostic: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label("No clusters loaded into the review view", systemImage: "exclamationmark.triangle.fill")
+                .font(.headline)
+                .foregroundStyle(.orange)
+            if let runDir = model.runDir {
+                Text("Run folder: \(runDir.path)")
+                    .font(.system(size: 12, design: .monospaced))
+                    .textSelection(.enabled)
+            }
+            if !model.lastLoadDiagnostic.isEmpty {
+                Text(model.lastLoadDiagnostic)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            Text("If the run folder contains cluster_001/, cluster_002/, etc. on disk but they did not load, the CSV parse failed. Use Reveal Run Folder above to inspect, then send the path so we can fix the parser.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(20)
     }
 
     private var realClusterCount: Int {
