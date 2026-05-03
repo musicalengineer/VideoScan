@@ -39,6 +39,10 @@ final class IdentifyFamilyModel: ObservableObject {
 
     // Review phase
     @Published var clusters: [FaceCluster] = []
+    /// One-line summary from the last loadClusters() attempt — surfaced in the
+    /// review view when the cluster list comes up empty so silent parse
+    /// failures stop being silent.
+    @Published private(set) var lastLoadDiagnostic: String = ""
 
     // MARK: - Subprocess plumbing
 
@@ -326,13 +330,17 @@ final class IdentifyFamilyModel: ObservableObject {
         // The script names cluster directories by rank (cluster_001, ...),
         // not cluster_id, so we use the thumb_dir column directly.
         var parsed: [FaceCluster] = []
-        let lines = text.split(separator: "\n")
+        var rejectedRows = 0
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
         for (i, raw) in lines.enumerated() where i > 0 {
             let cols = parseCSVRow(String(raw))
             guard cols.count >= 6,
                   let id = Int(cols[0]),
                   let faceCount = Int(cols[2]),
-                  let videoCount = Int(cols[3]) else { continue }
+                  let videoCount = Int(cols[3]) else {
+                rejectedRows += 1
+                continue
+            }
             let thumbDir = cols[5]
             let dir = runDir.appendingPathComponent(thumbDir)
             let grid = dir.appendingPathComponent("grid.jpg")
@@ -351,6 +359,10 @@ final class IdentifyFamilyModel: ObservableObject {
             if rhs.id == -1 { return true }
             return lhs.faceCount > rhs.faceCount
         }
+        let dataRows = max(lines.count - 1, 0)
+        let real = parsed.filter { $0.id != -1 }.count
+        let noise = parsed.first(where: { $0.id == -1 })?.faceCount ?? 0
+        lastLoadDiagnostic = "CSV \(text.count)B, \(dataRows) data row(s), parsed \(parsed.count) (rejected \(rejectedRows)). Real clusters: \(real). Noise faces: \(noise)."
         phase = .reviewing
     }
 
