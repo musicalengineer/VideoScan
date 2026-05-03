@@ -4,6 +4,9 @@ __pycache__/
 *.pyc
 *.pyo
 
+# ignore experiment dir for experiments
+experiment
+
 # Xcode / Swift
 build/
 .deriveddata/
