@@ -43,6 +43,9 @@ struct TriageView: View {
     @State private var selectedIDs: Set<UUID> = []
     @State private var searchText: String = ""
     @State private var sortOrder = [KeyPathComparator(\VideoRecord.filename)]
+    @State private var isAnalyzing = false
+    @State private var analysisSummary: MediaAnalyzer.AnalysisSummary?
+    @State private var showAnalysisSummary = false
 
     private var triageRecords: [VideoRecord] {
         model.records.filter { $0.lifecycleStage != .archived }
@@ -211,6 +214,11 @@ struct TriageView: View {
     private var mainContent: some View {
         VStack(spacing: 0) {
             toolbar
+
+            if let summary = analysisSummary, showAnalysisSummary {
+                analysisBanner(summary)
+            }
+
             Divider()
 
             let rows = filteredRecords.sorted(using: sortOrder)
@@ -232,6 +240,34 @@ struct TriageView: View {
             Spacer()
 
             triageButtons
+
+            Button {
+                promoteSelectedToArchive()
+            } label: {
+                Label("Archive", systemImage: "archivebox.fill")
+            }
+            .buttonStyle(.bordered)
+            .tint(.green)
+            .disabled(selectedIDs.isEmpty)
+            .help("Promote selected to Archive vault")
+
+            Menu {
+                Button("Analyze All (\(triageRecords.count))") {
+                    runAnalysis(records: triageRecords)
+                }
+                if !selectedIDs.isEmpty {
+                    Button("Analyze Selected (\(selectedIDs.count))") {
+                        let selected = triageRecords.filter { selectedIDs.contains($0.id) }
+                        runAnalysis(records: selected)
+                    }
+                }
+            } label: {
+                Label(isAnalyzing ? "Analyzing..." : "Analyze", systemImage: "wand.and.stars")
+            }
+            .menuStyle(.borderedButton)
+            .controlSize(.large)
+            .disabled(triageRecords.isEmpty || isAnalyzing)
+            .help("Score and classify files using heuristics")
 
             TextField("Search", text: $searchText)
                 .textFieldStyle(.roundedBorder)
@@ -352,11 +388,18 @@ struct TriageView: View {
             }
             .width(min: 40, ideal: 50)
 
-            TableColumn("Notes") { rec in
-                Text(rec.notes.isEmpty ? "—" : rec.notes)
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
+            TableColumn("Why") { rec in
+                if !rec.junkReasons.isEmpty {
+                    Text(rec.junkReasons.joined(separator: " · "))
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .help(rec.junkReasons.joined(separator: "\n"))
+                } else {
+                    Text("—")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
             }
             .width(min: 100, ideal: 180)
         }
@@ -462,5 +505,64 @@ struct TriageView: View {
         model.pendingCatalogSelection = id
         model.pendingCatalogPairMode = false
         selectedTab = 1
+    }
+
+    private func promoteSelectedToArchive() {
+        for id in selectedIDs {
+            guard let rec = model.records.first(where: { $0.id == id }) else { continue }
+            rec.lifecycleStage = .archived
+        }
+        selectedIDs = []
+        model.saveCatalogDebounced()
+    }
+
+    // MARK: - Analysis
+
+    private func runAnalysis(records: [VideoRecord]) {
+        isAnalyzing = true
+        DispatchQueue.global(qos: .userInitiated).async {
+            let summary = MediaAnalyzer.analyzeAll(records)
+            DispatchQueue.main.async {
+                analysisSummary = summary
+                showAnalysisSummary = true
+                isAnalyzing = false
+            }
+        }
+    }
+
+    private func analysisBanner(_ summary: MediaAnalyzer.AnalysisSummary) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundColor(.green)
+            Text("Analyzed \(summary.total):")
+                .font(.system(size: 13, weight: .medium))
+            Group {
+                Label("\(summary.junkCount) junk", systemImage: "exclamationmark.triangle")
+                    .foregroundColor(.orange)
+                Label("\(summary.familyCount) family", systemImage: "person.2.fill")
+                    .foregroundColor(.blue)
+                if summary.recoverableCount > 0 {
+                    Label("\(summary.recoverableCount) recoverable", systemImage: "wrench.and.screwdriver.fill")
+                        .foregroundColor(.teal)
+                }
+                Text("\(summary.stillUnreviewed) unclassified")
+                    .foregroundColor(.secondary)
+                if summary.unchanged > 0 {
+                    Text("(\(summary.unchanged) unchanged)")
+                        .foregroundColor(.secondary)
+                }
+            }
+            .font(.system(size: 12))
+            Spacer()
+            Button {
+                showAnalysisSummary = false
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.green.opacity(0.08))
     }
 }

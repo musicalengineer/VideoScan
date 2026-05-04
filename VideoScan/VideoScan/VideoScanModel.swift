@@ -278,6 +278,21 @@ final class VideoScanModel: ObservableObject {
         if !restored.isEmpty {
             records = restored
             log("Restored \(restored.count) records from previous session.")
+            // Migrate: backfill lifecycleStage for records that predate the field.
+            var migrated = 0
+            for rec in records where rec.lifecycleStage == .cataloged {
+                if rec.archiveStage >= .masterAssigned {
+                    rec.lifecycleStage = .archived
+                    migrated += 1
+                } else if rec.mediaDisposition != .unreviewed {
+                    rec.lifecycleStage = .reviewing
+                    migrated += 1
+                }
+            }
+            if migrated > 0 {
+                log("Migrated \(migrated) records to lifecycleStage.")
+                catalogStore.scheduleSave(records: records)
+            }
         }
         // Backfill: for any scan target that has zero records in the restored
         // snapshot, pull whatever the SQLite metadata cache has under that
