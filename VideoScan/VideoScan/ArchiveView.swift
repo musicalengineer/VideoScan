@@ -762,14 +762,9 @@ struct ArchiveView: View {
 
     // MARK: - Filtering
 
-    /// Base pool: only keepers — files explicitly marked important/recoverable
-    /// by the user, or already promoted to the archive pipeline (master+).
+    /// Base pool: only files explicitly promoted to the vault.
     private var keeperRecords: [VideoRecord] {
-        model.records.filter {
-            $0.mediaDisposition == .important ||
-            $0.mediaDisposition == .recoverable ||
-            $0.archiveStage >= .masterAssigned
-        }
+        model.records.filter { $0.lifecycleStage == .archived }
     }
 
     private var filteredRecords: [VideoRecord] {
