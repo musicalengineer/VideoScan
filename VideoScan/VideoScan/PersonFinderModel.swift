@@ -121,6 +121,11 @@ struct PersonFinderSettings: Equatable {
     var concurrency: Int = 8
     var concatOutput: Bool = true
     var decadeChapters: Bool = false    // sort by decade with chapter markers
+    /// When true (default), the per-bucket compilations are merged into ONE
+    /// final video file via h264_videotoolbox re-encode. When false, the
+    /// individual bucket files are kept (legacy behavior — useful for users
+    /// who want lossless stream-copy concat output).
+    var singleFileCompilation: Bool = true
     var skipBundles: Bool = true        // skip .fcpbundle, .imovielibrary, etc.
     var skipCatalogBadFiles: Bool = true // skip audio-only, no-streams, ffprobe-failed from catalog
     var largestFaceOnly: Bool = false   // use only the largest detected face per reference photo
@@ -234,6 +239,7 @@ struct PersonFinderSettings: Equatable {
         if d.object(forKey: "\(p)requirePrimary") != nil { s.requirePrimary = d.bool(forKey: "\(p)requirePrimary") }
         if d.object(forKey: "\(p)concatOutput") != nil { s.concatOutput = d.bool(forKey: "\(p)concatOutput") }
         if d.object(forKey: "\(p)decadeChapters") != nil { s.decadeChapters = d.bool(forKey: "\(p)decadeChapters") }
+        if d.object(forKey: "\(p)singleFileCompilation") != nil { s.singleFileCompilation = d.bool(forKey: "\(p)singleFileCompilation") }
         if d.object(forKey: "\(p)skipBundles") != nil { s.skipBundles = d.bool(forKey: "\(p)skipBundles") }
         if d.object(forKey: "\(p)skipCatalogBadFiles") != nil { s.skipCatalogBadFiles = d.bool(forKey: "\(p)skipCatalogBadFiles") }
         if d.object(forKey: "\(p)largestFaceOnly") != nil { s.largestFaceOnly = d.bool(forKey: "\(p)largestFaceOnly") }
@@ -299,6 +305,7 @@ struct PersonFinderSettings: Equatable {
         d.set(requirePrimary, forKey: "\(p)requirePrimary")
         d.set(concatOutput, forKey: "\(p)concatOutput")
         d.set(decadeChapters, forKey: "\(p)decadeChapters")
+        d.set(singleFileCompilation, forKey: "\(p)singleFileCompilation")
         d.set(skipBundles, forKey: "\(p)skipBundles")
         d.set(skipCatalogBadFiles, forKey: "\(p)skipCatalogBadFiles")
         d.set(largestFaceOnly, forKey: "\(p)largestFaceOnly")
@@ -477,7 +484,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
 // MARK: - Job Status
 
 enum ScanJobStatus: Equatable {
-    case idle, loading, scanning, paused, extracting, done, cancelled
+    case idle, loading, scanning, paused, extracting, compiling, done, cancelled
     case failed(String)
 
     var label: String {
@@ -487,6 +494,7 @@ enum ScanJobStatus: Equatable {
         case .scanning:   return "Scanning…"
         case .paused:     return "Paused"
         case .extracting: return "Extracting clips…"
+        case .compiling:  return "Compiling video — results below"
         case .done:       return "Done"
         case .cancelled:  return "Cancelled"
         case .failed(let msg): return "Error: \(msg)"
@@ -494,7 +502,7 @@ enum ScanJobStatus: Equatable {
     }
 
     var isActive: Bool {
-        switch self { case .loading, .scanning, .paused, .extracting: return true; default: return false }
+        switch self { case .loading, .scanning, .paused, .extracting, .compiling: return true; default: return false }
     }
     var isIdle: Bool { self == .idle }
     var isDone: Bool { if case .done = self { return true }; return false }
@@ -1289,13 +1297,48 @@ final class PersonFinderModel: ObservableObject {
             await job.appendLog("compilation lands. See docs/compilation-bucketing.md.")
         }
         await job.appendLog("\nBuilding compatibility-bucketed compilations…")
-        let compiled = await pfCompileBuckets(
+        let bucketCompiled = await pfCompileBuckets(
             results: workResults,
             outputDir: outputDir,
             jobName: name,
             stamp: stamp,
             logFn: { line in await job.appendLog(line) }
         )
+
+        // Merge buckets into one chunky output. The strict CompatKey bucketing
+        // produces too many small files for browsing — typical home-video
+        // scans yield 30–45 buckets. The user wants ~one watchable file. So
+        // re-encode all bucket files into a single normalized output via
+        // h264_videotoolbox (Apple Silicon hardware encoder, fast on M4 Max).
+        // If the merge fails for any reason, keep the bucket files as a
+        // safe fallback rather than leaving the user with no output.
+        var compiled = bucketCompiled
+        if bucketCompiled.count > 1 && settings.singleFileCompilation {
+            await job.appendLog("\nMerging \(bucketCompiled.count) bucket(s) into a single compilation…")
+            let mergedName = "\(name)_compilation_\(stamp).mp4"
+            let mergedPath = (outputDir as NSString).appendingPathComponent(mergedName)
+            if await pfMergeBucketsToSingleFile(
+                bucketPaths: bucketCompiled.map(\.path),
+                outputPath: mergedPath,
+                logFn: { line in await job.appendLog(line) }
+            ) {
+                // Success — replace bucket outputs with the single merged file
+                let fm = FileManager.default
+                let totalDur = bucketCompiled.reduce(0.0) { $0 + $1.durationSecs }
+                let totalClips = bucketCompiled.reduce(0) { $0 + $1.clipCount }
+                for b in bucketCompiled { try? fm.removeItem(atPath: b.path) }
+                compiled = [CompiledOutput(
+                    path: mergedPath,
+                    label: "merged",
+                    clipCount: totalClips,
+                    durationSecs: totalDur,
+                    bytesOnDisk: pfFileSize(at: mergedPath)
+                )]
+                await job.appendLog("  ✓ Merged into \(mergedName) (\(pfFormatDuration(totalDur)))")
+            } else {
+                await job.appendLog("  ⚠ Merge failed; keeping \(bucketCompiled.count) bucket files as fallback")
+            }
+        }
 
         // Clean up intermediate clip files after successful compilation.
         if !compiled.isEmpty {
@@ -1372,6 +1415,19 @@ final class PersonFinderModel: ObservableObject {
         let totalPresence = workResults.map(\.totalPresenceSecs).reduce(0, +)
         let foundClips = workResults.reduce(0) { $0 + $1.clipFiles.filter { !$0.isEmpty }.count }
 
+        // Live results — populate the results table now, BEFORE the compile
+        // phase. The user can browse what was found, play individual clips,
+        // and inspect matches while compilation runs in the background.
+        // job.status flips to .compiling so the UI knows compile is still
+        // happening, but the data is already there to read.
+        await MainActor.run {
+            job.results = clipResults
+            job.clipsFound = foundClips
+            job.presenceSecs = totalPresence
+            job.status = .compiling
+        }
+        osLog.info("Live results published: \(clipResults.count) video(s) with hits, \(foundClips) clip(s) — entering compile phase")
+
         // Bucketed compilation — see docs/compilation-bucketing.md for the
         // full design. We group consecutive clips by ffprobe-derived CompatKey,
         // then stream-copy each bucket into its own output file.
@@ -1387,9 +1443,6 @@ final class PersonFinderModel: ObservableObject {
             job: job
         )
         await MainActor.run {
-            job.results = clipResults
-            job.clipsFound = foundClips
-            job.presenceSecs = totalPresence
             job.compiledVideoPaths = finalCompiledOutputs
             job.status = .done
             job.progress = 1.0
@@ -2777,6 +2830,118 @@ private func pfStreamCopyConcat(
         }
         return nil
     }
+}
+
+/// Merge multiple bucket compilation files into ONE single output file via
+/// hardware-accelerated re-encode (h264_videotoolbox on Apple Silicon).
+///
+/// Two-pass strategy:
+///   1. Re-encode each bucket file to a normalized format (1280×720, h264,
+///      30fps, AAC 128k 48kHz stereo). Writes to a temp dir.
+///   2. Stream-copy concat the normalized files into the final output path
+///      (fast — no second re-encode).
+///
+/// Returns true on success, false on any failure (caller should keep the
+/// original bucket files as fallback).
+private func pfMergeBucketsToSingleFile(
+    bucketPaths: [String],
+    outputPath: String,
+    targetHeight: Int = 720,
+    logFn: @escaping @Sendable (String) async -> Void
+) async -> Bool {
+    let fm = FileManager.default
+    let ffmpegCandidates = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
+    guard let ffmpegPath = ffmpegCandidates.first(where: { fm.fileExists(atPath: $0) }) else {
+        await logFn("  ⚠ ffmpeg not found for merge step")
+        return false
+    }
+
+    let workDir = (NSTemporaryDirectory() as NSString)
+        .appendingPathComponent("pf_merge_\(Int(Date().timeIntervalSince1970 * 1000))")
+    try? fm.createDirectory(atPath: workDir, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(atPath: workDir) }
+
+    var normalizedPaths: [String] = []
+    for (idx, src) in bucketPaths.enumerated() {
+        let dst = (workDir as NSString)
+            .appendingPathComponent("norm_\(String(format: "%04d", idx)).mp4")
+        let ok = await pfRunFFmpeg(
+            ffmpegPath: ffmpegPath,
+            args: [
+                "-hide_banner", "-nostdin", "-y",
+                "-i", src,
+                "-vf", "scale=-2:\(targetHeight),setsar=1,format=yuv420p",
+                "-c:v", "h264_videotoolbox",
+                "-b:v", "4M",
+                "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
+                "-r", "30",
+                "-movflags", "+faststart",
+                dst
+            ]
+        )
+        if ok && fm.fileExists(atPath: dst) {
+            normalizedPaths.append(dst)
+            await logFn("  Normalized \(idx + 1)/\(bucketPaths.count) bucket(s)")
+        } else {
+            await logFn("  ⚠ Normalize failed for bucket \(idx + 1) — aborting merge")
+            return false
+        }
+    }
+    guard !normalizedPaths.isEmpty else { return false }
+
+    // Concat the normalized files (stream-copy, fast)
+    let listPath = (workDir as NSString).appendingPathComponent("concat.txt")
+    let listContent = normalizedPaths
+        .map { "file '\($0.replacingOccurrences(of: "'", with: "'\\''"))'" }
+        .joined(separator: "\n")
+    do { try listContent.write(toFile: listPath, atomically: true, encoding: .utf8) } catch {
+        await logFn("  ⚠ Could not write merge concat list: \(error.localizedDescription)")
+        return false
+    }
+
+    if fm.fileExists(atPath: outputPath) { try? fm.removeItem(atPath: outputPath) }
+
+    let ok = await pfRunFFmpeg(
+        ffmpegPath: ffmpegPath,
+        args: [
+            "-hide_banner", "-nostdin", "-y",
+            "-f", "concat", "-safe", "0", "-i", listPath,
+            "-c", "copy",
+            "-movflags", "+faststart",
+            outputPath
+        ]
+    )
+    return ok && fm.fileExists(atPath: outputPath)
+}
+
+/// Run ffmpeg synchronously (in an async context) with the given args.
+/// Returns true if exit status was 0. Drains stderr to avoid pipe deadlock.
+private func pfRunFFmpeg(ffmpegPath: String, args: [String]) async -> Bool {
+    let proc = Process()
+    proc.executableURL = URL(fileURLWithPath: ffmpegPath)
+    proc.arguments = args
+    proc.standardOutput = FileHandle.nullDevice
+    let stderrPipe = Pipe()
+    proc.standardError = stderrPipe
+    let stderrBox = pfStderrBox()
+    stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+        let chunk = handle.availableData
+        if !chunk.isEmpty { stderrBox.append(chunk) }
+    }
+    do {
+        try proc.run()
+    } catch {
+        stderrPipe.fileHandleForReading.readabilityHandler = nil
+        return false
+    }
+    await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+        DispatchQueue.global(qos: .userInitiated).async {
+            proc.waitUntilExit()
+            stderrPipe.fileHandleForReading.readabilityHandler = nil
+            cont.resume()
+        }
+    }
+    return proc.terminationStatus == 0
 }
 
 /// Tiny reference-type box so the readabilityHandler closure can append

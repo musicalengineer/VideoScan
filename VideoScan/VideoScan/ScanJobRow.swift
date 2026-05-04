@@ -619,6 +619,7 @@ struct ScanJobRow: View {
         case .scanning:   return .blue
         case .paused:     return .yellow
         case .extracting: return .orange
+        case .compiling:  return .purple
         case .done:       return .green
         case .cancelled:  return .secondary
         case .failed:     return .red
