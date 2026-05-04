@@ -15,6 +15,7 @@ struct ArchiveView: View {
     @State private var isAnalyzing = false
     @State private var analysisSummary: MediaAnalyzer.AnalysisSummary?
     @State private var showAnalysisSummary = false
+    @State private var archiveDetailRecord: VideoRecord?
 
     var body: some View {
         HSplitView {
@@ -23,6 +24,33 @@ struct ArchiveView: View {
             fileList
                 .frame(minWidth: 500)
         }
+        .onAppear {
+            handlePendingArchiveNavigation()
+            restoreFocusedMedia()
+        }
+        .onChange(of: model.pendingArchiveSelection) { handlePendingArchiveNavigation() }
+        .sheet(item: $archiveDetailRecord) { rec in
+            ArchiveDetailSheet(record: rec, allRecords: model.records)
+        }
+    }
+
+    private func handlePendingArchiveNavigation() {
+        guard let id = model.pendingArchiveSelection else { return }
+        model.pendingArchiveSelection = nil
+        selectedCategory = .allFiles
+        showFilter = .all
+        searchText = ""
+        model.focusedMediaIDs = model.focusSet(for: id)
+        selectedIDs = model.focusedMediaIDs
+    }
+
+    private func restoreFocusedMedia() {
+        guard model.pendingArchiveSelection == nil,
+              !model.focusedMediaIDs.isEmpty else { return }
+        selectedCategory = .allFiles
+        showFilter = .all
+        searchText = ""
+        selectedIDs = model.focusedMediaIDs
     }
 
     // MARK: - Sidebar
@@ -39,6 +67,10 @@ struct ArchiveView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
+                    sidebarRow(.allFiles)
+
+                    Divider().padding(.vertical, 4)
+
                     sidebarSection("KEEPER PIPELINE") {
                         sidebarRow(.unreviewed)
                         sidebarRow(.hasFamily)
@@ -95,6 +127,7 @@ struct ArchiveView: View {
         return Button {
             selectedCategory = category
             selectedIDs = []
+            model.focusedMediaIDs = []
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: category.icon)
@@ -343,6 +376,7 @@ struct ArchiveView: View {
 
     private var emptyMessage: String {
         switch selectedCategory {
+        case .allFiles:      return "No files cataloged"
         case .unreviewed:    return "No unreviewed files"
         case .hasFamily:     return "No files with family detected"
         case .recoverable:   return "No recoverable files"
@@ -355,6 +389,8 @@ struct ArchiveView: View {
 
     private var emptySubtitle: String {
         switch selectedCategory {
+        case .allFiles:
+            return "Scan volumes in the Catalog tab to build your media catalog."
         case .unreviewed:
             return "Scan volumes in the Catalog tab to populate this list, then click Analyze to auto-classify."
         case .hasFamily:
@@ -372,11 +408,20 @@ struct ArchiveView: View {
         let sorted = rows.sorted(using: sortOrder)
         return Table(sorted, selection: $selectedIDs, sortOrder: $sortOrder) {
             TableColumn("") { rec in
-                Image(systemName: rec.mediaDisposition.icon)
-                    .foregroundColor(rec.mediaDisposition.color)
-                    .help(rec.mediaDisposition.rawValue)
+                HStack(spacing: 2) {
+                    Image(systemName: rec.mediaDisposition.icon)
+                        .foregroundColor(rec.mediaDisposition.color)
+                    if rec.archiveHealth != .notApplicable {
+                        Image(systemName: rec.archiveHealth.icon)
+                            .font(.system(size: 9))
+                            .foregroundColor(rec.archiveHealth.color)
+                    }
+                }
+                .help(rec.archiveHealth != .notApplicable
+                      ? "\(rec.mediaDisposition.rawValue) — \(rec.archiveHealth.label)"
+                      : rec.mediaDisposition.rawValue)
             }
-            .width(24)
+            .width(44)
 
             TableColumn("Filename", value: \.filename) { rec in
                 Text(rec.filename)
@@ -529,6 +574,13 @@ struct ArchiveView: View {
         Divider()
 
         Button {
+            archiveDetailRecord = recs.first
+        } label: {
+            Label("Show Archive Details", systemImage: "info.circle")
+        }
+        .disabled(count != 1)
+
+        Button {
             if let rec = recs.first {
                 showInCatalog(rec)
             }
@@ -646,15 +698,17 @@ struct ArchiveView: View {
     @AppStorage("selectedTab") private var selectedTab: Int = 0
 
     private func showInCatalog(_ rec: VideoRecord) {
+        model.focusedMediaIDs = model.focusSet(for: rec.id)
         model.pendingCatalogSelection = rec.id
         model.pendingCatalogPairMode = false
-        selectedTab = 1  // Catalog tab
+        selectedTab = 1
     }
 
     private func showPairInCatalog(_ rec: VideoRecord) {
+        model.focusedMediaIDs = model.focusSet(for: rec.id)
         model.pendingCatalogSelection = rec.id
         model.pendingCatalogPairMode = true
-        selectedTab = 1  // Catalog tab
+        selectedTab = 1
     }
 
     // MARK: - Junk Deletion
@@ -733,6 +787,8 @@ struct ArchiveView: View {
         // First filter by sidebar category
         let byCategory: [VideoRecord]
         switch selectedCategory {
+        case .allFiles:
+            byCategory = model.records
         case .unreviewed:
             byCategory = model.records.filter { $0.mediaDisposition == .unreviewed }
         case .hasFamily:
@@ -779,6 +835,7 @@ struct ArchiveView: View {
 
     private func countForCategory(_ cat: ArchiveCategory) -> Int {
         switch cat {
+        case .allFiles:      return model.records.count
         case .unreviewed:    return model.records.filter { $0.mediaDisposition == .unreviewed }.count
         case .hasFamily:     return model.records.filter { $0.mediaDisposition == .important && $0.archiveStage == .none }.count
         case .recoverable:   return model.records.filter { $0.mediaDisposition == .recoverable }.count
@@ -795,6 +852,7 @@ struct ArchiveView: View {
 // MARK: - Archive Category (sidebar items)
 
 enum ArchiveCategory: String, CaseIterable {
+    case allFiles      = "allFiles"
     case unreviewed    = "unreviewed"
     case hasFamily     = "hasFamily"
     case recoverable   = "recoverable"
@@ -807,6 +865,7 @@ enum ArchiveCategory: String, CaseIterable {
 
     var label: String {
         switch self {
+        case .allFiles:      return "All Files"
         case .unreviewed:    return "Unreviewed"
         case .hasFamily:     return "Has Family"
         case .recoverable:   return "Recoverable"
@@ -821,6 +880,7 @@ enum ArchiveCategory: String, CaseIterable {
 
     var icon: String {
         switch self {
+        case .allFiles:      return "tray.full.fill"
         case .unreviewed:    return "circle"
         case .hasFamily:     return "person.2.fill"
         case .recoverable:   return "wrench.and.screwdriver.fill"
@@ -835,6 +895,7 @@ enum ArchiveCategory: String, CaseIterable {
 
     var color: Color {
         switch self {
+        case .allFiles:      return .primary
         case .unreviewed:    return .secondary
         case .hasFamily:     return .blue
         case .recoverable:   return .teal
@@ -862,6 +923,166 @@ enum ArchiveShowFilter: String, CaseIterable {
         case .junkOnly:         return "Junk"
         case .familyCandidates: return "Family"
         case .unclassified:     return "Unclassified"
+        }
+    }
+}
+
+// MARK: - Archive Detail Sheet
+
+struct ArchiveDetailSheet: View {
+    let record: VideoRecord
+    let allRecords: [VideoRecord]
+    @Environment(\.dismiss) private var dismiss
+
+    private var duplicates: [VideoRecord] {
+        guard let gid = record.duplicateGroupID else { return [] }
+        return allRecords.filter { $0.duplicateGroupID == gid && $0.id != record.id }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            // Header
+            HStack {
+                Image(systemName: record.archiveHealth.icon)
+                    .font(.title2)
+                    .foregroundColor(record.archiveHealth.color)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(record.filename)
+                        .font(.headline)
+                    Text(record.fullPath)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                Spacer()
+                Button("Done") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .padding()
+            .background(record.archiveHealth.color.opacity(0.08))
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    detailSection("Status") {
+                        detailRow("Classification", record.mediaDisposition.rawValue,
+                                  icon: record.mediaDisposition.icon, color: record.mediaDisposition.color)
+                        detailRow("Rating", record.starRating > 0
+                                  ? String(repeating: "\u{2605}", count: record.starRating)
+                                  : "Not rated")
+                        detailRow("Archive Health", record.archiveHealth.label,
+                                  icon: record.archiveHealth.icon, color: record.archiveHealth.color)
+                    }
+
+                    detailSection("Media") {
+                        detailRow("Stream Type", record.streamType.rawValue)
+                        if !record.duration.isEmpty { detailRow("Duration", record.duration) }
+                        if !record.size.isEmpty { detailRow("Size", record.size) }
+                        if !record.resolution.isEmpty { detailRow("Resolution", record.resolution) }
+                        if !record.videoCodec.isEmpty { detailRow("Video Codec", record.videoCodec) }
+                        if !record.audioCodec.isEmpty { detailRow("Audio Codec", record.audioCodec) }
+                        detailRow("Volume", record.volumeName)
+                    }
+
+                    detailSection("Archive Pipeline") {
+                        pipelineRow("Healthy", record.archiveStage >= .healthy)
+                        pipelineRow("Master Assigned", record.archiveStage >= .masterAssigned,
+                                    detail: record.masterLocation.isEmpty ? nil : record.masterLocation)
+                        pipelineRow("Backed Up", record.archiveStage >= .backedUp,
+                                    detail: record.backupDestinations.isEmpty
+                                    ? nil
+                                    : record.backupDestinations.map { "\($0.name) (\($0.kind.rawValue))" }.joined(separator: ", "))
+                        pipelineRow("Ready for Archive", record.archiveStage >= .readyForArchive)
+                        pipelineRow("Archived", record.archiveStage >= .archived)
+                    }
+
+                    if !record.notes.isEmpty {
+                        detailSection("Notes") {
+                            Text(record.notes)
+                                .font(.system(size: 13))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+
+                    if !duplicates.isEmpty {
+                        detailSection("Copies (\(duplicates.count))") {
+                            ForEach(duplicates) { dup in
+                                HStack(spacing: 6) {
+                                    Image(systemName: VolumeReachability.isReachable(path: dup.fullPath)
+                                          ? "externaldrive.fill" : "externaldrive.badge.xmark")
+                                        .foregroundColor(VolumeReachability.isReachable(path: dup.fullPath) ? .green : .secondary)
+                                        .frame(width: 16)
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(dup.filename)
+                                            .font(.system(size: 12, weight: .medium))
+                                        Text("\(dup.volumeName)\(VolumeReachability.isReachable(path: dup.fullPath) ? "" : " (offline)")")
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if record.pairedWith != nil {
+                        detailSection("A/V Pair") {
+                            if let partner = record.pairedWith {
+                                detailRow("Partner", partner.filename)
+                                detailRow("Partner Type", partner.streamType.rawValue)
+                            }
+                        }
+                    }
+                }
+                .padding()
+            }
+        }
+        .frame(width: 480, height: 520)
+    }
+
+    @ViewBuilder
+    private func detailSection(_ title: String, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title.uppercased())
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.secondary)
+            content()
+        }
+    }
+
+    private func detailRow(_ label: String, _ value: String,
+                           icon: String? = nil, color: Color? = nil) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.system(size: 13))
+                .foregroundColor(.secondary)
+                .frame(width: 120, alignment: .trailing)
+            if let icon = icon {
+                Image(systemName: icon)
+                    .foregroundColor(color ?? .primary)
+                    .frame(width: 16)
+            }
+            Text(value)
+                .font(.system(size: 13, weight: .medium))
+            Spacer()
+        }
+    }
+
+    private func pipelineRow(_ label: String, _ passed: Bool, detail: String? = nil) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: passed ? "checkmark.circle.fill" : "circle")
+                .foregroundColor(passed ? .green : .secondary.opacity(0.4))
+                .frame(width: 16)
+            Text(label)
+                .font(.system(size: 13, weight: passed ? .medium : .regular))
+                .foregroundColor(passed ? .primary : .secondary)
+            if let detail = detail {
+                Text("— \(detail)")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
         }
     }
 }

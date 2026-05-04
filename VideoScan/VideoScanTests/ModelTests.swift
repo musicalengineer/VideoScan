@@ -352,3 +352,98 @@ struct CombineJobStatusTests {
         #expect(CombineJobStatus.CombineTechnique.reencodeH264.rawValue == "Re-encode → H.264")
     }
 }
+
+// MARK: - ArchiveHealth Tests
+
+struct ArchiveHealthTests {
+
+    private func makeRecord(
+        streamType: String = "Video+Audio",
+        disposition: MediaDisposition = .unreviewed,
+        stage: ArchiveStage = .none,
+        backups: [BackupEntry] = []
+    ) -> VideoRecord {
+        let rec = VideoRecord()
+        rec.streamTypeRaw = streamType
+        rec.mediaDisposition = disposition
+        rec.archiveStage = stage
+        rec.backupDestinations = backups
+        return rec
+    }
+
+    private let sampleBackup = BackupEntry(
+        name: "LTA_Crucial", kind: .local, date: Date()
+    )
+
+    @Test func junkIsNotApplicable() {
+        let rec = makeRecord(disposition: .confirmedJunk)
+        #expect(rec.archiveHealth == .notApplicable)
+
+        let suspected = makeRecord(disposition: .suspectedJunk)
+        #expect(suspected.archiveHealth == .notApplicable)
+    }
+
+    @Test func defaultRecordNeedsAttention() {
+        let rec = makeRecord()
+        #expect(rec.archiveHealth == .needsAttention)
+    }
+
+    @Test func reviewedButNotBackedUpIsInProgress() {
+        let rec = makeRecord(disposition: .important)
+        #expect(rec.archiveHealth == .inProgress)
+    }
+
+    @Test func healthyStageIsInProgress() {
+        let rec = makeRecord(stage: .healthy)
+        #expect(rec.archiveHealth == .inProgress)
+    }
+
+    @Test func fullyArchivedIsSafe() {
+        let rec = makeRecord(
+            disposition: .important,
+            stage: .backedUp,
+            backups: [sampleBackup]
+        )
+        #expect(rec.archiveHealth == .safe)
+    }
+
+    @Test func backedUpButAudioOnlyStillInProgress() {
+        let rec = makeRecord(
+            streamType: "Audio only",
+            disposition: .important,
+            stage: .backedUp,
+            backups: [sampleBackup]
+        )
+        #expect(rec.archiveHealth == .inProgress)
+    }
+
+    @Test func backedUpWithNoDestinationsIsInProgress() {
+        let rec = makeRecord(
+            disposition: .important,
+            stage: .backedUp,
+            backups: []
+        )
+        #expect(rec.archiveHealth == .inProgress)
+    }
+
+    @Test func recoverableAndBackedUpIsSafe() {
+        let rec = makeRecord(
+            disposition: .recoverable,
+            stage: .archived,
+            backups: [sampleBackup]
+        )
+        #expect(rec.archiveHealth == .safe)
+    }
+
+    @Test func healthLabelsAndIcons() {
+        #expect(ArchiveHealth.safe.label == "Safe")
+        #expect(ArchiveHealth.inProgress.label == "In Progress")
+        #expect(ArchiveHealth.needsAttention.label == "Needs Attention")
+        #expect(ArchiveHealth.notApplicable.label == "")
+
+        #expect(!ArchiveHealth.safe.icon.isEmpty)
+        #expect(!ArchiveHealth.inProgress.icon.isEmpty)
+        #expect(!ArchiveHealth.needsAttention.icon.isEmpty)
+        #expect(ArchiveHealth.notApplicable.icon.isEmpty)
+    }
+}

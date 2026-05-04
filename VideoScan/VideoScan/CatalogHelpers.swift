@@ -299,6 +299,7 @@ struct CatalogContent: View {
     var onShowPair: ((UUID, UUID) -> Void)?
     var onFindAVPair: ((VideoRecord) -> Void)?
     var onClearFilter: (() -> Void)?
+    var onShowInArchive: ((VideoRecord) -> Void)?
 
     @State private var player: AVPlayer?
     @State private var isPlaying = false
@@ -667,12 +668,17 @@ struct CatalogContent: View {
                             .font(.system(size: 9))
                             .foregroundColor(.secondary)
                     }
+                    if rec.archiveHealth != .notApplicable {
+                        Image(systemName: rec.archiveHealth.icon)
+                            .font(.system(size: 9))
+                            .foregroundColor(rec.archiveHealth.color)
+                    }
                 }
                 .help(rec.notes.isEmpty
                       ? rec.mediaDisposition.rawValue
                       : "\(rec.mediaDisposition.rawValue) — \(rec.notes)")
             }
-            .width(min: 70, ideal: 110)
+            .width(min: 70, ideal: 120)
 
             TableColumn("Duplicate") { rec in
                 DuplicateDispositionCell(record: rec)
@@ -831,6 +837,11 @@ struct CatalogContent: View {
                     }
                 }
                 Divider()
+                Button {
+                    onShowInArchive?(rec)
+                } label: {
+                    Label("Show in Archive", systemImage: "archivebox")
+                }
                 Button("Copy Path") {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(rec.fullPath, forType: .string)

@@ -171,6 +171,12 @@ final class VideoScanModel: ObservableObject {
     /// When true, Show Pair mode: filter catalog to show the selected file
     /// and its correlated pair instead of just the one file.
     @Published var pendingCatalogPairMode: Bool = false
+    /// Set by Catalog tab to navigate the Archive tab to a specific record.
+    @Published var pendingArchiveSelection: UUID?
+    /// The file(s) currently "under the microscope" — persists across tab
+    /// switches so both Catalog and Archive highlight the same set. Includes
+    /// the primary record plus any duplicate-group members.
+    @Published var focusedMediaIDs: Set<UUID> = []
     /// Set when the user selects a record whose source volume isn't currently
     /// mounted. CatalogContent renders an "Volume Offline" placeholder
     /// instead of trying to load a thumbnail.
@@ -689,6 +695,19 @@ final class VideoScanModel: ObservableObject {
             ids.insert(partner.id)
         } else if let gid = rec.pairGroupID {
             for r in records where r.pairGroupID == gid && r.id != recordID {
+                ids.insert(r.id)
+            }
+        }
+        return ids
+    }
+
+    /// Expand a single record into a focus set: the record itself plus all
+    /// duplicate-group members.
+    func focusSet(for recordID: UUID) -> Set<UUID> {
+        var ids: Set<UUID> = [recordID]
+        if let rec = records.first(where: { $0.id == recordID }),
+           let gid = rec.duplicateGroupID {
+            for r in records where r.duplicateGroupID == gid {
                 ids.insert(r.id)
             }
         }
