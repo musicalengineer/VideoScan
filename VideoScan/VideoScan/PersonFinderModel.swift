@@ -771,6 +771,18 @@ final class PersonFinderModel: ObservableObject {
         // Pre-flight checks (before reset clears console)
         osLog.info("runJob: person=\(jobSettings.personName, privacy: .public) engine=\(jobSettings.recognitionEngine.rawValue, privacy: .public) folder=\(jobSettings.searchPath, privacy: .public) faces=\(faces.count) prints=\(faces.count)")
 
+        // Volume reachability — common failure mode is targeting an offline
+        // external drive. Without this check, findVideos returns 0 and the
+        // user gets a confusing "No videos found" instead of "Volume offline."
+        if !VolumeReachability.isReachable(path: jobSettings.searchPath) {
+            let volumeName = VolumeReachability.volumeName(forPath: jobSettings.searchPath)
+            let msg = "⚠ Volume \"\(volumeName)\" is offline. Mount it and try again."
+            job.appendLog(msg)
+            osLog.error("runJob bailed: volume offline (\(jobSettings.searchPath, privacy: .public))")
+            job.status = .failed("Volume \"\(volumeName)\" offline")
+            return
+        }
+
         if jobSettings.recognitionEngine == .dlib {
             guard jobSettings.dlibReady else {
                 let msg = "⚠ Set Python path and script path in Settings before scanning with dlib."
