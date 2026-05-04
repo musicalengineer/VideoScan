@@ -834,6 +834,7 @@ final class PersonFinderModel: ObservableObject {
         job.startElapsedTimer()
 
         let prints = jobSettings.recognitionEngine == .vision ? faces.map(\.featurePrint) : []
+        let refFilenames = faces.map(\.sourceFilename)
 
         // Diagnostic log — after reset so these survive in the console
         job.appendLog("Person: \(jobSettings.personName)")
@@ -859,7 +860,7 @@ final class PersonFinderModel: ObservableObject {
                 dash?.visionActive = settings.recognitionEngine == .vision || settings.recognitionEngine == .arcface
                 dash?.activeEngineLabel = settings.recognitionEngine == .arcface ? "ArcFace / CoreML + ANE" : "Vision / ANE"
             }
-            await PersonFinderModel.runScan(job: job, prints: prints, settings: settings, dashboard: dash)
+            await PersonFinderModel.runScan(job: job, prints: prints, settings: settings, refFilenames: refFilenames, dashboard: dash)
             await MainActor.run {
                 dash?.visionActive = false; dash?.visionFPS = 0; dash?.visionMsPerFrame = 0
                 // Clear scanningPersonName when no jobs are still scanning
@@ -1087,6 +1088,7 @@ final class PersonFinderModel: ObservableObject {
         videoFiles: [String],
         prints: [VNFeaturePrintObservation],
         settings: PersonFinderSettings,
+        refFilenames: [String],
         job: ScanJob,
         dash: DashboardState?
     ) async -> [pfVideoResult?] {
@@ -1110,7 +1112,8 @@ final class PersonFinderModel: ObservableObject {
                 group.addTask {
                     await processOneVideo(
                         idx: i, videoFiles: videoFiles, prints: prints,
-                        settings: settings, total: total, job: job, dash: dash
+                        settings: settings, refFilenames: refFilenames,
+                        total: total, job: job, dash: dash
                     )
                 }
                 submitted += 1
@@ -1132,7 +1135,8 @@ final class PersonFinderModel: ObservableObject {
                     group.addTask {
                         await processOneVideo(
                             idx: nextIdx, videoFiles: videoFiles, prints: prints,
-                            settings: settings, total: total, job: job, dash: dash
+                            settings: settings, refFilenames: refFilenames,
+                            total: total, job: job, dash: dash
                         )
                     }
                     submitted += 1
@@ -1146,11 +1150,26 @@ final class PersonFinderModel: ObservableObject {
     // swiftlint:disable:next function_parameter_count
     private nonisolated static func processOneVideo(
         idx: Int, videoFiles: [String], prints: [VNFeaturePrintObservation],
-        settings: PersonFinderSettings, total: Int,
+        settings: PersonFinderSettings, refFilenames: [String],
+        total: Int,
         job: ScanJob, dash: DashboardState?
     ) async -> (Int, pfVideoResult?) {
         await job.pauseGate.waitIfPaused()
         if Task.isCancelled { return (idx, nil) }
+
+        let filePath = videoFiles[idx]
+        let threshold = settings.recognitionEngine == .arcface
+            ? settings.arcfaceThreshold : settings.threshold
+
+        if let cacheKey = PersonFinderCache.makeKey(
+            videoPath: filePath, personName: settings.personName,
+            engine: settings.recognitionEngine,
+            threshold: threshold, refFilenames: refFilenames
+        ), let cached = PersonFinderCache.shared.lookup(key: cacheKey) {
+            let tag = cached.segments.isEmpty ? "no hits" : "\(cached.segments.count) segment(s)"
+            await job.appendLog("[\(idx + 1)/\(total)] \((filePath as NSString).lastPathComponent) — cache hit (\(tag))")
+            return (idx, cached)
+        }
 
         await MemoryPressureMonitor.shared.acquireWorkerSlot(
             requested: settings.concurrency,
@@ -1228,6 +1247,17 @@ final class PersonFinderModel: ObservableObject {
                 r = await runDlib()
             }
         }
+
+        if let r {
+            if let cacheKey = PersonFinderCache.makeKey(
+                videoPath: filePath, personName: settings.personName,
+                engine: settings.recognitionEngine,
+                threshold: threshold, refFilenames: refFilenames
+            ) {
+                PersonFinderCache.shared.store(key: cacheKey, result: r)
+            }
+        }
+
         return (idx, r)
     }
 
@@ -1358,6 +1388,7 @@ final class PersonFinderModel: ObservableObject {
         job: ScanJob,
         prints: [VNFeaturePrintObservation],
         settings: PersonFinderSettings,
+        refFilenames: [String],
         dashboard: DashboardState?
     ) async {
         let path = await job.searchPath
@@ -1369,7 +1400,8 @@ final class PersonFinderModel: ObservableObject {
 
         let orderedResults = await scanAllVideos(
             videoFiles: videoFiles, prints: prints,
-            settings: settings, job: job, dash: dashboard
+            settings: settings, refFilenames: refFilenames,
+            job: job, dash: dashboard
         )
 
         if Task.isCancelled { await MainActor.run { job.status = .cancelled; job.stopElapsedTimer() }; return }
@@ -1381,6 +1413,32 @@ final class PersonFinderModel: ObservableObject {
         }
 
         let outputDir = resolveOutputDir(settings)
+
+        // Preliminary results — published BEFORE extraction so the user
+        // sees the per-video matches table immediately when scanning ends,
+        // not after several minutes of clip extraction. Each row has the
+        // filename, hits, presence time, and best cosine; only `clipFiles`
+        // is empty (no extracted-clip paths yet) and gets filled in by
+        // the second publish below after extraction runs.
+        let preliminaryResults: [ClipResult] = validResults.compactMap { r -> ClipResult? in
+            guard !r.segments.isEmpty else { return nil }
+            return ClipResult(
+                videoFilename: r.filename,
+                videoPath: r.filePath,
+                videoDuration: r.durationSeconds,
+                presenceSecs: r.totalPresenceSecs,
+                segmentCount: r.segments.count,
+                bestDistance: r.segments.map(\.bestDistance).min() ?? 0,
+                clipFiles: [],
+                outputDir: outputDir
+            )
+        }
+        let preliminaryPresence = validResults.map(\.totalPresenceSecs).reduce(0, +)
+        await MainActor.run {
+            job.results = preliminaryResults
+            job.presenceSecs = preliminaryPresence
+        }
+        osLog.info("Preliminary results published: \(preliminaryResults.count) video(s) with hits — extraction starts now")
 
         // Extract clips
         await MainActor.run { job.status = .extracting; job.currentFile = "" }
