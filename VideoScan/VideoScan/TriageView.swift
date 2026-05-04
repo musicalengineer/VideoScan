@@ -82,6 +82,19 @@ struct TriageView: View {
             mainContent
                 .frame(minWidth: 500)
         }
+        .onChange(of: selectedIDs) {
+            if let first = selectedIDs.first {
+                model.focusedMediaIDs = model.focusSet(for: first)
+            }
+        }
+        .onAppear {
+            restoreFocus()
+        }
+    }
+
+    private func restoreFocus() {
+        guard !model.focusedMediaIDs.isEmpty else { return }
+        selectedIDs = model.focusedMediaIDs
     }
 
     // MARK: - Sidebar
