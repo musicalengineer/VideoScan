@@ -5,16 +5,10 @@ import SwiftUI
 struct ArchiveView: View {
     @EnvironmentObject var model: VideoScanModel
 
-    @State private var selectedCategory: ArchiveCategory = .unreviewed
+    @State private var selectedCategory: ArchiveCategory = .allFiles
     @State private var selectedIDs: Set<UUID> = []
     @State private var searchText: String = ""
-    @State private var showDeleteConfirm = false
-    @State private var pendingDeleteIDs: Set<UUID> = []
-    @State private var showFilter: ArchiveShowFilter = .all
     @State private var sortOrder = [KeyPathComparator(\VideoRecord.filename)]
-    @State private var isAnalyzing = false
-    @State private var analysisSummary: MediaAnalyzer.AnalysisSummary?
-    @State private var showAnalysisSummary = false
     @State private var archiveDetailRecord: VideoRecord?
 
     var body: some View {
@@ -38,7 +32,6 @@ struct ArchiveView: View {
         guard let id = model.pendingArchiveSelection else { return }
         model.pendingArchiveSelection = nil
         selectedCategory = .allFiles
-        showFilter = .all
         searchText = ""
         model.focusedMediaIDs = model.focusSet(for: id)
         selectedIDs = model.focusedMediaIDs
@@ -48,7 +41,6 @@ struct ArchiveView: View {
         guard model.pendingArchiveSelection == nil,
               !model.focusedMediaIDs.isEmpty else { return }
         selectedCategory = .allFiles
-        showFilter = .all
         searchText = ""
         selectedIDs = model.focusedMediaIDs
     }
@@ -253,46 +245,12 @@ struct ArchiveView: View {
 
                 Spacer()
 
-                // Show filter
-                Picker("Show", selection: $showFilter) {
-                    ForEach(ArchiveShowFilter.allCases, id: \.self) { filter in
-                        Text(filter.label).tag(filter)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .frame(maxWidth: 360)
-
                 TextField("Search", text: $searchText)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 180)
-
-                // Analyze
-                Menu {
-                    Button("Analyze All (\(model.records.count))") {
-                        runAnalysis(records: model.records)
-                    }
-                    if !selectedIDs.isEmpty {
-                        Button("Analyze Selected (\(selectedIDs.count))") {
-                            let selected = model.records.filter { selectedIDs.contains($0.id) }
-                            runAnalysis(records: selected)
-                        }
-                    }
-                } label: {
-                    Label(isAnalyzing ? "Analyzing..." : "Analyze", systemImage: "wand.and.stars")
-                }
-                .menuStyle(.borderedButton)
-                .controlSize(.large)
-                .disabled(model.records.isEmpty || isAnalyzing)
-                .help("Score and classify catalog records using heuristics")
-
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-
-            // Analysis summary banner
-            if let summary = analysisSummary, showAnalysisSummary {
-                analysisBanner(summary)
-            }
 
             Divider()
 
@@ -306,42 +264,6 @@ struct ArchiveView: View {
         }
     }
 
-    @ViewBuilder
-    private var junkActions: some View {
-        if selectedCategory == .suspectedJunk {
-            Button("Confirm Selected as Junk") {
-                for id in selectedIDs {
-                    if let rec = model.records.first(where: { $0.id == id }) {
-                        rec.mediaDisposition = .confirmedJunk
-                    }
-                }
-                selectedIDs = []
-            }
-            .disabled(selectedIDs.isEmpty)
-            .buttonStyle(.bordered)
-
-            Button("Keep Selected") {
-                for id in selectedIDs {
-                    if let rec = model.records.first(where: { $0.id == id }) {
-                        rec.mediaDisposition = .important
-                    }
-                }
-                selectedIDs = []
-            }
-            .disabled(selectedIDs.isEmpty)
-            .buttonStyle(.bordered)
-        }
-
-        if selectedCategory == .confirmedJunk {
-            Button("Delete Selected") {
-                pendingDeleteIDs = selectedIDs
-                showDeleteConfirm = true
-            }
-            .disabled(selectedIDs.isEmpty)
-            .buttonStyle(.bordered)
-            .foregroundColor(.red)
-        }
-    }
 
     private var emptyState: some View {
         VStack(spacing: 8) {
@@ -452,34 +374,9 @@ struct ArchiveView: View {
             }
             .width(min: 140, ideal: 180)
 
-            TableColumn("Score", value: \.junkScore) { rec in
-                junkScoreCell(rec)
-            }
-            .width(min: 40, ideal: 50)
-
-            TableColumn("Why") { rec in
-                junkReasonsCell(rec)
-            }
-            .width(min: 120, ideal: 200)
         }
         .contextMenu(forSelectionType: UUID.self) { ids in
             recordContextMenu(for: ids)
-        }
-        .alert("Delete Confirmed Junk", isPresented: $showDeleteConfirm) {
-            Button("Move to Trash", role: .destructive) {
-                deleteConfirmedJunk(ids: pendingDeleteIDs)
-                pendingDeleteIDs = []
-                selectedIDs = []
-            }
-            Button("Cancel", role: .cancel) {
-                pendingDeleteIDs = []
-            }
-        } message: {
-            let count = pendingDeleteIDs.count
-            let bytes = pendingDeleteIDs.compactMap { id in
-                model.records.first { $0.id == id }?.sizeBytes
-            }.reduce(0, +)
-            Text("Delete \(count) file(s) (\(Formatting.humanSize(bytes)))?\n\nLocal files will be moved to Trash. Network files will be permanently deleted.")
         }
     }
 
@@ -518,37 +415,7 @@ struct ArchiveView: View {
         let recs = ids.compactMap { id in model.records.first { $0.id == id } }
         let count = recs.count
 
-        Section("Disposition") {
-            Button {
-                for rec in recs { rec.mediaDisposition = .important }
-            } label: {
-                Label("Mark as Important", systemImage: "star.fill")
-            }
-            Button {
-                for rec in recs { rec.mediaDisposition = .recoverable }
-            } label: {
-                Label("Mark as Recoverable", systemImage: "wrench.and.screwdriver.fill")
-            }
-            Button {
-                for rec in recs { rec.mediaDisposition = .suspectedJunk }
-            } label: {
-                Label("Mark as Suspected Junk", systemImage: "exclamationmark.triangle")
-            }
-            Button {
-                for rec in recs { rec.mediaDisposition = .confirmedJunk }
-            } label: {
-                Label("Confirm as Junk", systemImage: "xmark.circle.fill")
-            }
-            Button {
-                for rec in recs { rec.mediaDisposition = .unreviewed }
-            } label: {
-                Label("Reset to Unreviewed", systemImage: "arrow.counterclockwise")
-            }
-        }
-
-        if recs.allSatisfy({ $0.mediaDisposition == .important }) {
-            lifecycleAndBackupSections(for: recs)
-        }
+        lifecycleAndBackupSections(for: recs)
 
         Divider()
 
@@ -586,33 +453,6 @@ struct ArchiveView: View {
         .disabled(count != 1)
     }
 
-    @ViewBuilder
-    private func junkScoreCell(_ rec: VideoRecord) -> some View {
-        if rec.junkScore > 0 {
-            Text("\(rec.junkScore)")
-                .font(.system(size: 12, weight: .medium, design: .monospaced))
-                .foregroundColor(rec.junkScore >= 8 ? .red : rec.junkScore >= 5 ? .orange : .yellow)
-        } else {
-            Text("—")
-                .font(.system(size: 12))
-                .foregroundColor(.secondary)
-        }
-    }
-
-    @ViewBuilder
-    private func junkReasonsCell(_ rec: VideoRecord) -> some View {
-        if !rec.junkReasons.isEmpty {
-            Text(rec.junkReasons.joined(separator: " · "))
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-                .lineLimit(2)
-                .help(rec.junkReasons.joined(separator: "\n"))
-        } else {
-            Text("—")
-                .font(.system(size: 11))
-                .foregroundColor(.secondary)
-        }
-    }
 
     @ViewBuilder
     private func lifecycleAndBackupSections(for recs: [VideoRecord]) -> some View {
@@ -690,75 +530,6 @@ struct ArchiveView: View {
         selectedTab = 1
     }
 
-    // MARK: - Junk Deletion
-
-    private func deleteConfirmedJunk(ids: Set<UUID>) {
-        let fm = FileManager.default
-        for id in ids {
-            guard let rec = model.records.first(where: { $0.id == id }),
-                  rec.mediaDisposition == .confirmedJunk else { continue }
-            let url = URL(fileURLWithPath: rec.fullPath)
-            do {
-                // Try Trash first (works on local volumes)
-                try fm.trashItem(at: url, resultingItemURL: nil)
-            } catch {
-                // Network volumes don't support Trash — permanent delete
-                try? fm.removeItem(at: url)
-            }
-            // Remove from catalog
-            model.records.removeAll { $0.id == id }
-        }
-    }
-
-    // MARK: - Analysis
-
-    private func runAnalysis(records: [VideoRecord]) {
-        isAnalyzing = true
-        DispatchQueue.global(qos: .userInitiated).async {
-            let summary = MediaAnalyzer.analyzeAll(records)
-            DispatchQueue.main.async {
-                analysisSummary = summary
-                showAnalysisSummary = true
-                isAnalyzing = false
-            }
-        }
-    }
-
-    private func analysisBanner(_ summary: MediaAnalyzer.AnalysisSummary) -> some View {
-        HStack(spacing: 14) {
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundColor(.green)
-            Text("Analyzed \(summary.total):")
-                .font(.system(size: 13, weight: .medium))
-            Group {
-                Label("\(summary.junkCount) junk", systemImage: "exclamationmark.triangle")
-                    .foregroundColor(.orange)
-                Label("\(summary.familyCount) family", systemImage: "person.2.fill")
-                    .foregroundColor(.blue)
-                if summary.recoverableCount > 0 {
-                    Label("\(summary.recoverableCount) recoverable", systemImage: "wrench.and.screwdriver.fill")
-                        .foregroundColor(.teal)
-                }
-                Text("\(summary.stillUnreviewed) unclassified")
-                    .foregroundColor(.secondary)
-                if summary.unchanged > 0 {
-                    Text("(\(summary.unchanged) unchanged)")
-                        .foregroundColor(.secondary)
-                }
-            }
-            .font(.system(size: 12))
-            Spacer()
-            Button {
-                showAnalysisSummary = false
-            } label: {
-                Image(systemName: "xmark")
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(Color.green.opacity(0.08))
-    }
 
     // MARK: - Filtering
 
@@ -786,21 +557,9 @@ struct ArchiveView: View {
             byCategory = keeperRecords
         }
 
-        // Then apply Show filter
-        let byShow: [VideoRecord]
-        switch showFilter {
-        case .all:
-            byShow = byCategory
-        case .familyCandidates:
-            byShow = byCategory.filter { $0.mediaDisposition == .important }
-        default:
-            byShow = byCategory
-        }
-
-        // Then apply search text
-        if searchText.isEmpty { return byShow }
+        if searchText.isEmpty { return byCategory }
         let q = searchText.lowercased()
-        return byShow.filter {
+        return byCategory.filter {
             $0.filename.lowercased().contains(q) ||
             $0.fullPath.lowercased().contains(q) ||
             $0.videoCodec.lowercased().contains(q) ||
@@ -824,77 +583,43 @@ struct ArchiveView: View {
 // MARK: - Archive Category (sidebar items)
 
 enum ArchiveCategory: String, CaseIterable {
-    case allFiles      = "allFiles"
-    case unreviewed    = "unreviewed"
-    case hasFamily     = "hasFamily"
-    case recoverable   = "recoverable"
-    case masterSet     = "masterSet"
-    case backedUp      = "backedUp"
-    case ready         = "ready"
-    case archived      = "archived"
-    case suspectedJunk = "suspectedJunk"
-    case confirmedJunk = "confirmedJunk"
+    case allFiles   = "allFiles"
+    case hasFamily  = "hasFamily"
+    case masterSet  = "masterSet"
+    case backedUp   = "backedUp"
+    case ready      = "ready"
+    case archived   = "archived"
 
     var label: String {
         switch self {
-        case .allFiles:      return "All Files"
-        case .unreviewed:    return "Unreviewed"
-        case .hasFamily:     return "Has Family"
-        case .recoverable:   return "Recoverable"
-        case .masterSet:     return "Master Set"
-        case .backedUp:      return "Backed Up"
-        case .ready:         return "Ready for Archive"
-        case .archived:      return "Archived"
-        case .suspectedJunk: return "Suspected Junk"
-        case .confirmedJunk: return "Confirmed Junk"
+        case .allFiles:  return "All Keepers"
+        case .hasFamily: return "Has Family"
+        case .masterSet: return "Master Set"
+        case .backedUp:  return "Backed Up"
+        case .ready:     return "Ready for Archive"
+        case .archived:  return "Fully Archived"
         }
     }
 
     var icon: String {
         switch self {
-        case .allFiles:      return "tray.full.fill"
-        case .unreviewed:    return "circle"
-        case .hasFamily:     return "person.2.fill"
-        case .recoverable:   return "wrench.and.screwdriver.fill"
-        case .masterSet:     return "crown.fill"
-        case .backedUp:      return "doc.on.doc.fill"
-        case .ready:         return "checkmark.seal.fill"
-        case .archived:      return "archivebox.fill"
-        case .suspectedJunk: return "exclamationmark.triangle"
-        case .confirmedJunk: return "xmark.circle.fill"
+        case .allFiles:  return "tray.full.fill"
+        case .hasFamily: return "person.2.fill"
+        case .masterSet: return "crown.fill"
+        case .backedUp:  return "doc.on.doc.fill"
+        case .ready:     return "checkmark.seal.fill"
+        case .archived:  return "archivebox.fill"
         }
     }
 
     var color: Color {
         switch self {
-        case .allFiles:      return .primary
-        case .unreviewed:    return .secondary
-        case .hasFamily:     return .blue
-        case .recoverable:   return .teal
-        case .masterSet:     return .purple
-        case .backedUp:      return .indigo
-        case .ready:         return .mint
-        case .archived:      return .green
-        case .suspectedJunk: return .orange
-        case .confirmedJunk: return .red
-        }
-    }
-}
-
-// MARK: - Show Filter (toolbar segmented control)
-
-enum ArchiveShowFilter: String, CaseIterable {
-    case all              = "all"
-    case junkOnly         = "junk"
-    case familyCandidates = "family"
-    case unclassified     = "unclassified"
-
-    var label: String {
-        switch self {
-        case .all:              return "All"
-        case .junkOnly:         return "Junk"
-        case .familyCandidates: return "Family"
-        case .unclassified:     return "Unclassified"
+        case .allFiles:  return .primary
+        case .hasFamily: return .blue
+        case .masterSet: return .purple
+        case .backedUp:  return .indigo
+        case .ready:     return .mint
+        case .archived:  return .green
         }
     }
 }
