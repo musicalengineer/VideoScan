@@ -1420,7 +1420,7 @@ struct InspectorPanel: View {
 
     // MARK: - Copy Metadata
 
-    private func formatAllMetadata(_ rec: VideoRecord) -> String {
+    func formatAllMetadata(_ rec: VideoRecord) -> String {
         var lines: [String] = []
         func add(_ label: String, _ value: String) {
             guard !value.isEmpty else { return }
@@ -1487,8 +1487,8 @@ struct InspectorPanel: View {
             }
         }
 
-        formatDuplicateSection(rec, lines: &lines, add: add, section: section)
-        formatAvidSection(rec, lines: &lines, add: add, section: section)
+        formatDuplicateSection(rec, add: add, section: section, appendLine: { lines.append($0) })
+        formatAvidSection(rec, add: add, section: section)
 
         // Notes
         if !rec.notes.isEmpty {
@@ -1505,9 +1505,10 @@ struct InspectorPanel: View {
         return lines.joined(separator: "\n")
     }
 
-    private func formatDuplicateSection(
-        _ rec: VideoRecord, lines: inout [String],
-        add: (String, String) -> Void, section: (String) -> Void
+    func formatDuplicateSection(
+        _ rec: VideoRecord,
+        add: (String, String) -> Void, section: (String) -> Void,
+        appendLine: (String) -> Void
     ) {
         guard rec.duplicateDisposition != .none || !rec.duplicateBestMatchFilename.isEmpty else { return }
         section("Duplicates")
@@ -1520,20 +1521,20 @@ struct InspectorPanel: View {
         add("Reasons", rec.duplicateReasons)
         if let conf = rec.duplicateConfidence { add("Confidence", conf.rawValue) }
         if !duplicateGroupMembers.isEmpty {
-            lines.append("")
-            lines.append("  Duplicate Group (\(duplicateGroupMembers.count + 1) total):")
+            appendLine("")
+            appendLine("  Duplicate Group (\(duplicateGroupMembers.count + 1) total):")
             let thisVol = VolumeReachability.volumeName(forPath: rec.fullPath)
-            lines.append("    ★ \(rec.filename)  [\(thisVol)]  \(rec.duplicateDisposition.rawValue)")
+            appendLine("    ★ \(rec.filename)  [\(thisVol)]  \(rec.duplicateDisposition.rawValue)")
             for member in duplicateGroupMembers {
                 let vol = VolumeReachability.volumeName(forPath: member.fullPath)
                 let online = VolumeReachability.isReachable(path: member.fullPath)
-                lines.append("    · \(member.filename)  [\(vol)]\(online ? "" : " (offline)")  \(member.duplicateDisposition.rawValue)")
+                appendLine("    · \(member.filename)  [\(vol)]\(online ? "" : " (offline)")  \(member.duplicateDisposition.rawValue)")
             }
         }
     }
 
-    private func formatAvidSection(
-        _ rec: VideoRecord, lines: inout [String],
+    func formatAvidSection(
+        _ rec: VideoRecord,
         add: (String, String) -> Void, section: (String) -> Void
     ) {
         guard rec.hasAvidMetadata else { return }
