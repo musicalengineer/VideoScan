@@ -8,6 +8,12 @@
 import Foundation
 import AppKit
 import Combine
+import os
+
+private let log = Logger(
+    subsystem: "Rick-Breen.VideoScan",
+    category: "identifyfamily"
+)
 
 @MainActor
 final class IdentifyFamilyModel: ObservableObject {
@@ -174,6 +180,7 @@ final class IdentifyFamilyModel: ObservableObject {
     /// Useful when a previous run completed (or partially completed) and we
     /// want to inspect the clusters without re-running collection.
     func loadExistingRun(named name: String) {
+        log.info("Load existing run: \(name, privacy: .public)")
         let dir = outputRoot.appendingPathComponent(name)
         runName = name
         runDir = dir
@@ -370,6 +377,7 @@ final class IdentifyFamilyModel: ObservableObject {
         let real = parsed.filter { $0.id != -1 }.count
         let noise = parsed.first(where: { $0.id == -1 })?.faceCount ?? 0
         lastLoadDiagnostic = "CSV \(text.count)B, \(dataRows) data row(s), parsed \(parsed.count) (rejected \(rejectedRows)). Real clusters: \(real). Noise faces: \(noise)."
+        log.info("Loaded \(real) real clusters + \(noise) noise from \(summaryURL.path, privacy: .public) (parsed=\(parsed.count) rejected=\(rejectedRows))")
         phase = .reviewing
     }
 
@@ -435,6 +443,7 @@ final class IdentifyFamilyModel: ObservableObject {
     /// confirmed promotion — without touching any files. The returned list
     /// drives the confirmation sheet.
     func planPromotion() -> [PromotionAction] {
+        log.info("Plan promotion: clusters=\(self.clusters.count, privacy: .public), runName=\(self.runName, privacy: .public)")
         let existing = Set(POIProfile.listAll().map { POIStorage.sanitize($0.name) })
         var plan: [PromotionAction] = []
         for c in clusters where c.id != -1 {
@@ -460,6 +469,10 @@ final class IdentifyFamilyModel: ObservableObject {
                 ))
             }
         }
+        let creates = plan.filter { if case .create = $0 { return true } else { return false } }.count
+        let merges = plan.filter { if case .merge = $0 { return true } else { return false } }.count
+        let skips = plan.filter { if case .skip = $0 { return true } else { return false } }.count
+        log.info("Plan ready: \(creates) create, \(merges) merge, \(skips) skip")
         return plan
     }
 
@@ -469,6 +482,7 @@ final class IdentifyFamilyModel: ObservableObject {
     /// which faces came from which cluster.
     /// Returns a summary string for the toast/log.
     func executePromotion(_ plan: [PromotionAction]) -> String {
+        log.info("Execute promotion: \(plan.count) action(s)")
         let runNameForBreadcrumb = runName
         var created = 0, merged = 0, copiedFaces = 0
         var breadcrumb: [String: [String: String]] = [:]
@@ -480,7 +494,10 @@ final class IdentifyFamilyModel: ObservableObject {
             case .skip:
                 continue
             case .create(let cid, let name, _), .merge(let cid, let name, _, _):
-                guard let cluster = clusters.first(where: { $0.id == cid }) else { continue }
+                guard let cluster = clusters.first(where: { $0.id == cid }) else {
+                    log.error("Cluster \(cid) not found in clusters array — skipping")
+                    continue
+                }
                 let copied = copyClusterFacesToPOI(cluster: cluster, poiName: name)
                 copiedFaces += copied
 
@@ -494,8 +511,10 @@ final class IdentifyFamilyModel: ObservableObject {
                     }
                     try? profile.save()
                     created += 1
+                    log.info("Created POI \(name, privacy: .public) from cluster \(cid) — \(copied) faces copied")
                 } else {
                     merged += 1
+                    log.info("Merged cluster \(cid) into existing POI \(name, privacy: .public) — \(copied) faces copied")
                 }
 
                 let key = String(format: "cluster_%03d", cid)
@@ -518,7 +537,9 @@ final class IdentifyFamilyModel: ObservableObject {
             }
         }
 
-        return "Promoted: \(created) new POI, \(merged) merged, \(copiedFaces) faces copied."
+        let summary = "Promoted: \(created) new POI, \(merged) merged, \(copiedFaces) faces copied."
+        log.info("\(summary, privacy: .public)")
+        return summary
     }
 
     /// Copy every image file in a cluster directory into the named POI's

@@ -29,13 +29,23 @@ every agent.
 
 When two Claude windows are active on this repo:
 
-- **Use git worktrees, never share the working tree.** See
-  `~/.claude/projects/-Users-rickb-dev-VideoScan/memory/feedback_two_claudes_coordination.md`
-  for the gory why. Short version: agents stomping on the same checkout
-  has caused silent test failures from one agent's uncommitted files.
+- **Use git worktrees only when there's an active parallel build or
+  long-running script.** Worktrees lock the branch — meaning Rick
+  cannot `git checkout` that branch in his usual `~/dev/VideoScan`
+  shell while the worktree exists. So they're a tool for *running
+  things*, not for code authoring.
+- **Critical rule: commit + push + remove the worktree as soon as
+  the build finishes.** Then Rick can check out and build the branch
+  the normal way. Leaving a worktree alive blocks his workflow.
 - **Pattern:** `git worktree add /tmp/vs-<my-id> <branch>` plus
-  `-derivedDataPath /tmp/vs-<my-id>-dd` for builds. Clean up after.
-- **Pgrep guard before xcodebuild test/build:**
+  `-derivedDataPath /tmp/vs-<my-id>-dd` for builds. The moment the
+  build is done and committed, `git worktree remove /tmp/vs-<my-id>`
+  and `rm -rf /tmp/vs-<my-id>-dd`.
+- **Never push an empty branch ref.** Always commit before push, or
+  the user gets an empty branch and is confused. If you need to push
+  before commit (you don't, this is a footgun), at least say so.
+- **Pgrep guard before xcodebuild test/build is still useful as
+  courtesy** between two agents:
   ```
   until ! pgrep -x xcodebuild >/dev/null && \
         ! pgrep -f VideoScanTests.xctest >/dev/null && \
@@ -43,8 +53,67 @@ When two Claude windows are active on this repo:
     sleep 15
   done
   ```
-  Courtesy, not correctness — the worktree isolation is what keeps
-  things sane.
+
+**Why the worktree matters at all** (still useful in some cases):
+- See `~/.claude/projects/-Users-rickb-dev-VideoScan/memory/feedback_two_claudes_coordination.md`
+  for past incidents where shared working tree caused silent test
+  failures from another agent's uncommitted files.
+- But Rick's primary workflow is `git checkout <branch>` in his own
+  shell, build in Xcode. Worktrees should never block that.
+
+## Logging
+
+When you introduce a new feature or wire up a new code path, add logs.
+Without them, agents working remotely cannot see what the user clicks
+or where the code reaches.
+
+**Convention:** Apple `Logger` (`import os`).
+
+```swift
+import os
+
+private let log = Logger(
+    subsystem: "Rick-Breen.VideoScan",
+    category: "identifyfamily"   // pick a per-feature category
+)
+
+log.info("Load Existing Run: name=\(name, privacy: .public)")
+log.debug("Parsed \(parsed) clusters, rejected \(rejected)")
+log.error("Failed to copy \(src.path, privacy: .public): \(error)")
+```
+
+**Categories already in use (extend as needed):**
+- `identifyfamily` — clustering, naming, promotion
+- `personfinder` — Find Person scans, engine dispatch
+- `scan` — Catalog scans, ffprobe, walking
+- `combine` — A/V muxing
+- `archive` — Archive tab and disposition lifecycle
+
+**What to log:**
+- User actions (button click, folder pick, file load).
+- State transitions (idle → scanning → reviewing).
+- Filesystem writes (created POI X, copied N files to Y).
+- External-process kickoffs and exit (subprocess pid, exit status).
+- Anomalies that aren't fatal (parser rejected row N, file size 0).
+
+**What NOT to log:**
+- Loop bodies running on every frame, every face, every byte.
+- Anything that runs more than a few times per second.
+- Sensitive data in `.public`. Default is `.private` (redacts in stream
+  output for non-developers); use `.public` only for non-sensitive
+  identifiers like POI names that you and the user already share.
+
+**How agents stream remotely:**
+
+```
+log stream --process VideoScan \
+  --predicate 'subsystem == "Rick-Breen.VideoScan"' \
+  --style compact
+```
+
+User-facing in-app console (the existing `dashboard.log(msg)` pattern,
+or per-model `consoleLines`) is for the user. The OSLog stream is for
+the agent. Most user-visible actions should hit both.
 
 ## Automation on branches
 
