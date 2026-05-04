@@ -14,14 +14,46 @@ import SwiftUI
 
 struct IdentifyFamilyView: View {
     @EnvironmentObject var model: IdentifyFamilyModel
+    @EnvironmentObject var personFinderModel: PersonFinderModel
+
+    /// Plan computed at the moment the user clicks "Save & Promote" — held
+    /// here so the confirmation sheet has something to display and execute.
+    @State private var pendingPlan: [IdentifyFamilyModel.PromotionAction] = []
+    @State private var showPromoteSheet = false
+    @State private var promotionResult: String?
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider()
             content
+            if let result = promotionResult {
+                Divider()
+                HStack {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    Text(result).font(.callout)
+                    Spacer()
+                    Button("Dismiss") { promotionResult = nil }.buttonStyle(.borderless)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 8)
+                .background(Color.green.opacity(0.08))
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .sheet(isPresented: $showPromoteSheet) {
+            PromotePreviewSheet(
+                plan: pendingPlan,
+                onConfirm: {
+                    let summary = model.executePromotion(pendingPlan)
+                    personFinderModel.savedProfiles = POIProfile.listAll()
+                    promotionResult = summary
+                    showPromoteSheet = false
+                },
+                onCancel: {
+                    showPromoteSheet = false
+                }
+            )
+        }
     }
 
     private var header: some View {
@@ -281,6 +313,16 @@ struct IdentifyFamilyView: View {
                 }
                 Button("Save Names") { model.saveNames() }
                     .disabled(realClusterCount == 0)
+                Button {
+                    model.saveNames()
+                    pendingPlan = model.planPromotion()
+                    showPromoteSheet = true
+                } label: {
+                    Label("Save & Promote to People", systemImage: "person.crop.circle.badge.plus")
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(realClusterCount == 0)
+                .help("Persist names AND copy each named cluster's faces into a POI in the People tab — creates new POIs or merges into existing ones.")
             }
             .padding(12)
             Divider()
