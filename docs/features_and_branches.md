@@ -29,11 +29,15 @@ every agent.
 
 When two Claude windows are active on this repo:
 
-- **Use git worktrees only when there's an active parallel build or
-  long-running script.** Worktrees lock the branch — meaning Rick
-  cannot `git checkout` that branch in his usual `~/dev/VideoScan`
-  shell while the worktree exists. So they're a tool for *running
-  things*, not for code authoring.
+- **Worktrees and /tmp are fine for an agent's *private* work** —
+  research scripts, sandbox experiments, diagnostic dumps, brainstorms
+  Rick will not touch. Use them freely there.
+- **For *shared* work that Rick will build, test, or merge: never
+  leave a worktree alive on a branch Rick needs to check out.**
+  Worktrees lock branches; Rick uses `git checkout` in his
+  `~/dev/VideoScan` shell as his primary flow.
+- **The rule:** if the work crosses into Rick's hands, push the
+  commits and remove the worktree before telling him it's ready.
 - **Critical rule: commit + push + remove the worktree as soon as
   the build finishes.** Then Rick can check out and build the branch
   the normal way. Leaving a worktree alive blocks his workflow.
