@@ -13,6 +13,7 @@ struct PersonFinderView: View {
     @State private var selectedResultIDs = Set<UUID>()
     @State private var inspectedResult: ClipResult?
     @State private var resultSortOrder = [KeyPathComparator(\ClipResult.videoFilename)]
+    @State private var resultTableData: [ClipResult] = []
 
     var selectedJobID: UUID? {
         get { model.selectedJobID }
@@ -608,10 +609,19 @@ struct PersonFinderView: View {
 
     // MARK: Results table
 
+    private var selectedResult: ClipResult? {
+        guard let id = selectedResultIDs.first else { return nil }
+        return resultTableData.first { $0.id == id }
+    }
+
+    private func recomputeResults() {
+        let raw = selectedJob?.results ?? model.jobs.flatMap { $0.results }
+        resultTableData = raw.sorted(using: resultSortOrder)
+    }
+
     var resultsTable: some View {
-        let results = selectedJob?.results ?? model.jobs.flatMap { $0.results }
-        return Group {
-            if results.isEmpty {
+        Group {
+            if resultTableData.isEmpty {
                 HStack(spacing: 6) {
                     let anyDone = model.jobs.contains { $0.status == .done || $0.status == .cancelled }
                     let anyActive = model.jobs.contains { $0.status.isActive }
@@ -629,80 +639,180 @@ struct PersonFinderView: View {
                 .frame(height: 36)
                 .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
             } else {
-                Table(results.sorted(using: resultSortOrder), selection: $selectedResultIDs, sortOrder: $resultSortOrder) {
-                    TableColumn("Video File", value: \.videoFilename) { r in
-                        Text(r.videoFilename)
-                            .font(.system(.body, design: .monospaced))
-                            .lineLimit(1)
-                            .help(r.videoPath)
-                    }
-                    .width(min: 200, ideal: 300)
-
-                    TableColumn("Duration", value: \.videoDuration) { r in
-                        Text(pfFormatDuration(r.videoDuration))
-                            .font(.system(.body, design: .monospaced))
-                    }
-                    .width(min: 70, ideal: 80)
-
-                    TableColumn("Presence", value: \.presenceSecs) { r in
-                        Text(pfFormatDuration(r.presenceSecs))
-                            .font(.system(.body, design: .monospaced).weight(.medium))
-                            .foregroundColor(.green)
-                    }
-                    .width(min: 70, ideal: 80)
-
-                    TableColumn("Clips", value: \.segmentCount) { r in
-                        Text("\(r.segmentCount)")
-                            .font(.body)
-                    }
-                    .width(min: 50, ideal: 60)
-
-                    TableColumn("Best Match", value: \.bestDistance) { r in
-                        Text(String(format: "%.3f", r.bestDistance))
-                            .font(.system(.body, design: .monospaced))
-                            .foregroundColor(r.bestDistance < 0.5 ? .green : r.bestDistance < 0.65 ? .yellow : .orange)
-                    }
-                    .width(min: 80, ideal: 90)
-                }
-                .contextMenu(forSelectionType: UUID.self) { ids in
-                    if let id = ids.first,
-                       let rec = results.first(where: { $0.id == id }) {
-                        Button("Reveal in Finder") {
-                            NSWorkspace.shared.selectFile(rec.videoPath, inFileViewerRootedAtPath: "")
+                VStack(spacing: 0) {
+                    Table(resultTableData, selection: $selectedResultIDs, sortOrder: $resultSortOrder) {
+                        TableColumn("Video File", value: \.videoFilename) { r in
+                            Text(r.videoFilename)
+                                .font(.system(.body, design: .monospaced))
+                                .lineLimit(1)
+                                .help(r.videoPath)
                         }
-                        Button("Open in QuickTime Player") {
-                            if let qtURL = NSWorkspace.shared.urlForApplication(
-                                withBundleIdentifier: "com.apple.QuickTimePlayerX"
-                            ) {
-                                NSWorkspace.shared.open(
-                                    [URL(fileURLWithPath: rec.videoPath)],
-                                    withApplicationAt: qtURL,
-                                    configuration: NSWorkspace.OpenConfiguration()
-                                )
+                        .width(min: 200, ideal: 300)
+
+                        TableColumn("Duration", value: \.videoDuration) { r in
+                            Text(pfFormatDuration(r.videoDuration))
+                                .font(.system(.body, design: .monospaced))
+                        }
+                        .width(min: 70, ideal: 80)
+
+                        TableColumn("Presence", value: \.presenceSecs) { r in
+                            Text(pfFormatDuration(r.presenceSecs))
+                                .font(.system(.body, design: .monospaced).weight(.medium))
+                                .foregroundColor(.green)
+                        }
+                        .width(min: 70, ideal: 80)
+
+                        TableColumn("Clips", value: \.segmentCount) { r in
+                            Text("\(r.segmentCount)")
+                                .font(.body)
+                        }
+                        .width(min: 50, ideal: 60)
+
+                        TableColumn("Best Match", value: \.bestDistance) { r in
+                            Text(String(format: "%.3f", r.bestDistance))
+                                .font(.system(.body, design: .monospaced))
+                                .foregroundColor(r.bestDistance < 0.5 ? .green : r.bestDistance < 0.65 ? .yellow : .orange)
+                        }
+                        .width(min: 80, ideal: 90)
+                    }
+                    .onChange(of: resultSortOrder) {
+                        resultTableData.sort(using: resultSortOrder)
+                    }
+                    .contextMenu(forSelectionType: UUID.self) { ids in
+                        if let id = ids.first,
+                           let rec = resultTableData.first(where: { $0.id == id }) {
+                            Button("Reveal in Finder") {
+                                NSWorkspace.shared.selectFile(rec.videoPath, inFileViewerRootedAtPath: "")
+                            }
+                            Button("Open in QuickTime Player") {
+                                if let qtURL = NSWorkspace.shared.urlForApplication(
+                                    withBundleIdentifier: "com.apple.QuickTimePlayerX"
+                                ) {
+                                    NSWorkspace.shared.open(
+                                        [URL(fileURLWithPath: rec.videoPath)],
+                                        withApplicationAt: qtURL,
+                                        configuration: NSWorkspace.OpenConfiguration()
+                                    )
+                                }
+                            }
+                            if !rec.clipFiles.isEmpty {
+                                Button("Reveal Clips in Finder") {
+                                    revealClips(for: rec)
+                                }
+                            }
+                            Divider()
+                            Button("More Info\u{2026}") {
+                                inspectedResult = rec
+                            }
+                            Divider()
+                            Button("Copy Path") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(rec.videoPath, forType: .string)
                             }
                         }
-                        if !rec.clipFiles.isEmpty {
-                            Button("Reveal Clips in Finder") {
-                                revealClips(for: rec)
-                            }
-                        }
-                        Divider()
-                        Button("More Info…") {
-                            inspectedResult = rec
-                        }
-                        Divider()
-                        Button("Copy Path") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(rec.videoPath, forType: .string)
-                        }
                     }
-                }
-                .frame(minHeight: 160)
-                .popover(item: $inspectedResult, arrowEdge: .trailing) { rec in
-                    resultInfoPopover(rec)
+                    .frame(minHeight: 120)
+                    .popover(item: $inspectedResult, arrowEdge: .trailing) { rec in
+                        resultInfoPopover(rec)
+                    }
+
+                    // Detail bar — shows info for the selected result
+                    if let rec = selectedResult {
+                        Divider()
+                        resultDetailBar(rec)
+                    }
                 }
             }
         }
+        .onAppear { recomputeResults() }
+        .onChange(of: selectedJobID) { recomputeResults() }
+        .onChange(of: model.jobs.flatMap(\.results).count) { recomputeResults() }
+    }
+
+    private func resultDetailBar(_ rec: ClipResult) -> some View {
+        HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(rec.videoFilename)
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                Text(rec.videoPath)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer()
+
+            HStack(spacing: 12) {
+                VStack(spacing: 1) {
+                    Text("Duration")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                    Text(pfFormatDuration(rec.videoDuration))
+                        .font(.system(size: 13, weight: .medium, design: .monospaced))
+                }
+                VStack(spacing: 1) {
+                    Text("Presence")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                    Text(pfFormatDuration(rec.presenceSecs))
+                        .font(.system(size: 13, weight: .medium, design: .monospaced))
+                        .foregroundColor(.green)
+                }
+                VStack(spacing: 1) {
+                    Text("Clips")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                    Text("\(rec.segmentCount)")
+                        .font(.system(size: 13, weight: .medium))
+                }
+                VStack(spacing: 1) {
+                    Text("Best Match")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                    Text(String(format: "%.3f", rec.bestDistance))
+                        .font(.system(size: 13, weight: .medium, design: .monospaced))
+                        .foregroundColor(rec.bestDistance < 0.5 ? .green : rec.bestDistance < 0.65 ? .yellow : .orange)
+                }
+            }
+
+            HStack(spacing: 6) {
+                Button {
+                    NSWorkspace.shared.selectFile(rec.videoPath, inFileViewerRootedAtPath: "")
+                } label: {
+                    Label("Reveal", systemImage: "folder")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Button {
+                    if let qtURL = NSWorkspace.shared.urlForApplication(
+                        withBundleIdentifier: "com.apple.QuickTimePlayerX"
+                    ) {
+                        NSWorkspace.shared.open(
+                            [URL(fileURLWithPath: rec.videoPath)],
+                            withApplicationAt: qtURL,
+                            configuration: NSWorkspace.OpenConfiguration()
+                        )
+                    }
+                } label: {
+                    Label("Play", systemImage: "play.fill")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+
+                Button {
+                    inspectedResult = rec
+                } label: {
+                    Label("Info", systemImage: "info.circle")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color(NSColor.controlBackgroundColor))
     }
 
     // Console pane removed from main window — use the Console toolbar

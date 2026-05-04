@@ -769,16 +769,16 @@ final class PersonFinderModel: ObservableObject {
         let faces = job.assignedProfile != nil ? job.assignedFaces : self.referenceFaces
 
         // Pre-flight checks (before reset clears console)
-        osLog.info("runJob: person=\(jobSettings.personName, privacy: .public) engine=\(jobSettings.recognitionEngine.rawValue, privacy: .public) folder=\(jobSettings.searchPath, privacy: .public) faces=\(faces.count) prints=\(faces.count)")
+        osLog.info("runJob: person=\(jobSettings.personName, privacy: .public) engine=\(jobSettings.recognitionEngine.rawValue, privacy: .public) folder=\(job.searchPath, privacy: .public) faces=\(faces.count) prints=\(faces.count)")
 
         // Volume reachability — common failure mode is targeting an offline
         // external drive. Without this check, findVideos returns 0 and the
         // user gets a confusing "No videos found" instead of "Volume offline."
-        if !VolumeReachability.isReachable(path: jobSettings.searchPath) {
-            let volumeName = VolumeReachability.volumeName(forPath: jobSettings.searchPath)
+        if !VolumeReachability.isReachable(path: job.searchPath) {
+            let volumeName = VolumeReachability.volumeName(forPath: job.searchPath)
             let msg = "⚠ Volume \"\(volumeName)\" is offline. Mount it and try again."
             job.appendLog(msg)
-            osLog.error("runJob bailed: volume offline (\(jobSettings.searchPath, privacy: .public))")
+            osLog.error("runJob bailed: volume offline (\(job.searchPath, privacy: .public))")
             job.status = .failed("Volume \"\(volumeName)\" offline")
             return
         }
@@ -1238,7 +1238,7 @@ final class PersonFinderModel: ObservableObject {
         }.value
         guard !videoFiles.isEmpty else {
             await job.appendLog("No video files found.")
-            osLog.error("Scan bailed: no videos found in \(job.settings.searchPath, privacy: .public)")
+            osLog.error("Scan bailed: no videos found in \(path, privacy: .public)")
             await MainActor.run { job.status = .failed("No videos found") }
             return nil
         }
@@ -1255,7 +1255,7 @@ final class PersonFinderModel: ObservableObject {
                 }
                 if videoFiles.isEmpty {
                     await job.appendLog("No scannable video files remain after catalog filter.")
-                    osLog.error("Scan bailed: catalog filter removed all videos in \(job.settings.searchPath, privacy: .public)")
+                    osLog.error("Scan bailed: catalog filter removed all videos in \(path, privacy: .public)")
                     await MainActor.run { job.status = .failed("All files filtered by catalog") }
                     return nil
                 }
