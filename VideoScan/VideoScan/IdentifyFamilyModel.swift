@@ -331,7 +331,14 @@ final class IdentifyFamilyModel: ObservableObject {
         // not cluster_id, so we use the thumb_dir column directly.
         var parsed: [FaceCluster] = []
         var rejectedRows = 0
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
+        // CRITICAL: split on ANY newline, not just "\n". Python's csv writer
+        // emits CRLF; Swift treats "\r\n" as a single extended grapheme
+        // cluster, so split(separator: "\n") finds zero matches and returns
+        // the whole file as one substring (parsed=0, silent failure).
+        let lines = text.split(
+            omittingEmptySubsequences: true,
+            whereSeparator: { $0.isNewline }
+        )
         for (i, raw) in lines.enumerated() where i > 0 {
             let cols = parseCSVRow(String(raw))
             guard cols.count >= 6,
