@@ -10,6 +10,20 @@ import CoreGraphics
 import CoreML
 import SwiftUI
 import Combine
+import os
+
+/// Logger for the personfinder code path. Streamed remotely via:
+///   log stream --process VideoScan \
+///     --predicate 'subsystem == "Rick-Breen.VideoScan"' --style compact
+///
+/// Named `osLog` (not `log`) because there's a local `log = PersistentLog(...)`
+/// inside runJob that would otherwise shadow this. In-app console
+/// (job.appendLog) is for the user; this Logger is for the agent watching
+/// remotely. Most failure paths log to both.
+private let osLog = Logger(
+    subsystem: "Rick-Breen.VideoScan",
+    category: "personfinder"
+)
 
 // MARK: - Settings
 
@@ -755,18 +769,26 @@ final class PersonFinderModel: ObservableObject {
         let faces = job.assignedProfile != nil ? job.assignedFaces : self.referenceFaces
 
         // Pre-flight checks (before reset clears console)
+        osLog.info("runJob: person=\(jobSettings.personName, privacy: .public) engine=\(jobSettings.recognitionEngine.rawValue, privacy: .public) folder=\(jobSettings.searchPath, privacy: .public) faces=\(faces.count) prints=\(faces.count)")
+
         if jobSettings.recognitionEngine == .dlib {
             guard jobSettings.dlibReady else {
-                job.appendLog("⚠ Set Python path and script path in Settings before scanning with dlib.")
+                let msg = "⚠ Set Python path and script path in Settings before scanning with dlib."
+                job.appendLog(msg)
+                osLog.error("runJob bailed: dlib not configured (person=\(jobSettings.personName, privacy: .public))")
                 return
             }
             guard !jobSettings.referencePath.isEmpty else {
-                job.appendLog("⚠ Set reference photos path first.")
+                let msg = "⚠ Set reference photos path first."
+                job.appendLog(msg)
+                osLog.error("runJob bailed: empty referencePath (person=\(jobSettings.personName, privacy: .public))")
                 return
             }
         } else {
             guard !faces.isEmpty else {
-                job.appendLog("⚠ Load reference photos first. Select a person with \"Find Person\" or load photos globally.")
+                let msg = "⚠ Load reference photos first. Select a person with \"Find Person\" or load photos globally."
+                job.appendLog(msg)
+                osLog.error("runJob bailed: faces.isEmpty (person=\(jobSettings.personName, privacy: .public), engine=\(jobSettings.recognitionEngine.rawValue, privacy: .public))")
                 return
             }
         }
@@ -802,6 +824,7 @@ final class PersonFinderModel: ObservableObject {
             job.appendLog("  Profile rejected: \(profile.rejectedFiles.count) files")
         }
         job.appendLog("  References loaded: \(faces.count)")
+        osLog.info("References ready: \(faces.count) face(s) for \(jobSettings.personName, privacy: .public)")
         job.appendLog("  Feature prints for matching: \(prints.count)")
         if jobSettings.recognitionEngine == .dlib {
             job.appendLog("  Python: \(jobSettings.pythonPath.isEmpty ? "(empty)" : jobSettings.pythonPath)")
@@ -1203,6 +1226,7 @@ final class PersonFinderModel: ObservableObject {
         }.value
         guard !videoFiles.isEmpty else {
             await job.appendLog("No video files found.")
+            osLog.error("Scan bailed: no videos found in \(job.settings.searchPath, privacy: .public)")
             await MainActor.run { job.status = .failed("No videos found") }
             return nil
         }
@@ -1219,6 +1243,7 @@ final class PersonFinderModel: ObservableObject {
                 }
                 if videoFiles.isEmpty {
                     await job.appendLog("No scannable video files remain after catalog filter.")
+                    osLog.error("Scan bailed: catalog filter removed all videos in \(job.settings.searchPath, privacy: .public)")
                     await MainActor.run { job.status = .failed("All files filtered by catalog") }
                     return nil
                 }
