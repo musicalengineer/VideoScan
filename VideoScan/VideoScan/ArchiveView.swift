@@ -426,6 +426,7 @@ struct ArchiveView: View {
             TableColumn("Filename", value: \.filename) { rec in
                 Text(rec.filename)
                     .font(.system(size: 13, design: .monospaced))
+                    .foregroundColor(rec.filenameColor)
                     .lineLimit(1)
                     .help(rec.fullPath)
             }
