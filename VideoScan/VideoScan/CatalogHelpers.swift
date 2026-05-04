@@ -590,7 +590,7 @@ struct CatalogContent: View {
                         .foregroundColor(offline ? .secondary
                             : (showPairsOnly && rec.pairedWith != nil
                                ? (rec.streamType == .videoOnly ? .blue : .green)
-                               : .primary))
+                               : rec.filenameColor))
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 2)

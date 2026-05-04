@@ -207,6 +207,32 @@ class VideoRecord: Identifiable, Codable {
         VolumeReachability.volumeName(forPath: fullPath)
     }
 
+    /// Filename tint color based on archival/disposition status.
+    /// Priority: damaged (red) → junk (gray) → archived (green) →
+    /// master (blue) → in-progress (orange) → flagged (yellow) → default (primary).
+    var filenameColor: Color {
+        if streamType == .ffprobeFailed || streamType == .noStreams {
+            return .red
+        }
+        if mediaDisposition == .confirmedJunk {
+            return .secondary
+        }
+        if mediaDisposition == .suspectedJunk {
+            return Color.secondary.opacity(0.7)
+        }
+        if archiveStage >= .backedUp && !backupDestinations.isEmpty {
+            return .green
+        }
+        if archiveStage == .masterAssigned {
+            return .blue
+        }
+        if mediaDisposition == .important || mediaDisposition == .recoverable
+            || archiveStage >= .healthy {
+            return .orange
+        }
+        return .primary
+    }
+
     /// Quick archive-health traffic light: green (safe), yellow (in progress), red (needs attention).
     var archiveHealth: ArchiveHealth {
         if mediaDisposition == .confirmedJunk || mediaDisposition == .suspectedJunk {
