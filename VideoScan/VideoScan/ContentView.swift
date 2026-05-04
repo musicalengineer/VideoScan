@@ -122,6 +122,7 @@ enum VolumeFilter: String, CaseIterable, Hashable {
 
 struct CatalogView: View {
     @EnvironmentObject var model: VideoScanModel
+    @AppStorage("selectedTab") private var selectedTab: Int = 0
     @State private var selectedIDs: Set<UUID> = []
     @State private var showCombineSheet = false
     @State private var showDashboard = false
@@ -300,6 +301,11 @@ struct CatalogView: View {
                 onClearFilter: {
                     filterByIDs = []
                     focusMatchScore = nil
+                },
+                onShowInArchive: { rec in
+                    model.focusedMediaIDs = model.focusSet(for: rec.id)
+                    model.pendingArchiveSelection = rec.id
+                    selectedTab = 2
                 }
             )
             .onChange(of: selectedIDs) {
@@ -314,14 +320,17 @@ struct CatalogView: View {
                     highlightedTargetPath = ""
                 }
             }
-            .onAppear { handlePendingCatalogNavigation() }
+            .onAppear {
+                handlePendingCatalogNavigation()
+                restoreFocusedMedia()
+            }
             .onChange(of: model.pendingCatalogSelection) { handlePendingCatalogNavigation() }
-            // Clear the ID filter when user types in search or selects a volume
+            // Clear the ID filter and focus when user types in search or selects a volume
             .onChange(of: searchText) {
-                if !searchText.isEmpty { filterByIDs = []; focusMatchScore = nil }
+                if !searchText.isEmpty { filterByIDs = []; focusMatchScore = nil; model.focusedMediaIDs = [] }
             }
             .onChange(of: selectedVolumeIDs) {
-                if !selectedVolumeIDs.isEmpty { filterByIDs = []; focusMatchScore = nil }
+                if !selectedVolumeIDs.isEmpty { filterByIDs = []; focusMatchScore = nil; model.focusedMediaIDs = [] }
             }
                 }  // end bottom VStack
             }  // end VerticalSplitView
@@ -447,11 +456,23 @@ struct CatalogView: View {
         filterByIDs = ids
         focusMatchScore = nil
         selectedIDs = ids
+        model.focusedMediaIDs = model.focusSet(for: id)
         // Generate thumbnail
         if let rec = model.records.first(where: { $0.id == id }),
            rec.streamType == .videoOnly || rec.streamType == .videoAndAudio {
             model.generateThumbnail(for: rec)
         }
+    }
+
+    private func restoreFocusedMedia() {
+        guard model.pendingCatalogSelection == nil,
+              !model.focusedMediaIDs.isEmpty else { return }
+        selectedVolumeIDs = []
+        searchText = ""
+        showPairsOnly = false
+        filterByIDs = model.focusedMediaIDs
+        focusMatchScore = nil
+        selectedIDs = model.focusedMediaIDs
     }
 
     // MARK: - Volume Filter Helpers

@@ -207,6 +207,25 @@ class VideoRecord: Identifiable, Codable {
         VolumeReachability.volumeName(forPath: fullPath)
     }
 
+    /// Quick archive-health traffic light: green (safe), yellow (in progress), red (needs attention).
+    var archiveHealth: ArchiveHealth {
+        if mediaDisposition == .confirmedJunk || mediaDisposition == .suspectedJunk {
+            return .notApplicable
+        }
+        let hasAV = streamType == .videoAndAudio
+        let isReviewed = mediaDisposition == .important || mediaDisposition == .recoverable
+        let isArchived = archiveStage >= .backedUp
+        let hasBackup = !backupDestinations.isEmpty
+
+        if hasAV && isReviewed && isArchived && hasBackup {
+            return .safe
+        } else if isReviewed || archiveStage >= .healthy {
+            return .inProgress
+        } else {
+            return .needsAttention
+        }
+    }
+
     init() {}
 
     // MARK: Codable
@@ -444,6 +463,51 @@ enum ArchiveStage: String, Codable, CaseIterable, Comparable {
     static func < (lhs: ArchiveStage, rhs: ArchiveStage) -> Bool {
         let order: [ArchiveStage] = allCases
         return (order.firstIndex(of: lhs) ?? 0) < (order.firstIndex(of: rhs) ?? 0)
+    }
+}
+
+// MARK: - Archive Health (traffic-light summary)
+
+enum ArchiveHealth {
+    case safe            // green: reviewed, has A/V, backed up
+    case inProgress      // yellow: partially classified or archived
+    case needsAttention  // red: unreviewed, no backups
+    case notApplicable   // junk — no badge
+
+    var icon: String {
+        switch self {
+        case .safe:           return "checkmark.shield.fill"
+        case .inProgress:     return "clock.badge.checkmark"
+        case .needsAttention: return "exclamationmark.shield.fill"
+        case .notApplicable:  return ""
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .safe:           return .green
+        case .inProgress:     return .yellow
+        case .needsAttention: return .red
+        case .notApplicable:  return .clear
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .safe:           return "Safe"
+        case .inProgress:     return "In Progress"
+        case .needsAttention: return "Needs Attention"
+        case .notApplicable:  return ""
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .safe:           return "Reviewed, has audio/video, backed up"
+        case .inProgress:     return "Partially reviewed or archived"
+        case .needsAttention: return "Not yet reviewed or backed up"
+        case .notApplicable:  return ""
+        }
     }
 }
 
