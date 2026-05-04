@@ -12,7 +12,8 @@ struct ContentView: View {
     private let tabs: [(label: String, icon: String, tag: Int)] = [
         ("People", "person.2.fill", 0),
         ("Catalog", "film.stack", 1),
-        ("Archive", "archivebox.fill", 2)
+        ("Triage", "checklist", 2),
+        ("Archive", "archivebox.fill", 3)
     ]
 
     var body: some View {
@@ -67,6 +68,8 @@ struct ContentView: View {
                 case 1:
                     CatalogView()
                 case 2:
+                    TriageView()
+                case 3:
                     ArchiveView()
                 default:
                     PeopleTabView()

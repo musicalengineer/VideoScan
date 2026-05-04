@@ -147,7 +147,8 @@ class VideoRecord: Identifiable, Codable {
     var duplicateBestMatchFilename: String = ""
     var duplicateGroupCount: Int = 0
 
-    // Media lifecycle (Archive tab)
+    // Media lifecycle
+    var lifecycleStage: LifecycleStage = .cataloged
     var mediaDisposition: MediaDisposition = .unreviewed
     var archiveStage: ArchiveStage = .none
     var masterLocation: String = ""           // e.g. "Mac Studio SSD"
@@ -267,7 +268,7 @@ class VideoRecord: Identifiable, Codable {
         case pairedWithID, pairGroupID, pairConfidence
         case duplicateGroupID, duplicateConfidence, duplicateDisposition
         case duplicateReasons, duplicateBestMatchFilename, duplicateGroupCount
-        case mediaDisposition, archiveStage, masterLocation, backupDestinations
+        case lifecycleStage, mediaDisposition, archiveStage, masterLocation, backupDestinations
         case junkScore, junkReasons
         case starRating, combinedFromPairID
         case sourceHost
@@ -326,6 +327,7 @@ class VideoRecord: Identifiable, Codable {
         duplicateBestMatchFilename  = try c.decodeIfPresent(String.self, forKey: .duplicateBestMatchFilename) ?? ""
         duplicateGroupCount         = try c.decodeIfPresent(Int.self, forKey: .duplicateGroupCount) ?? 0
         sourceHost                  = try c.decodeIfPresent(String.self, forKey: .sourceHost) ?? ""
+        lifecycleStage              = try c.decodeIfPresent(LifecycleStage.self, forKey: .lifecycleStage) ?? .cataloged
         mediaDisposition            = try c.decodeIfPresent(MediaDisposition.self, forKey: .mediaDisposition) ?? .unreviewed
         archiveStage                = try c.decodeIfPresent(ArchiveStage.self, forKey: .archiveStage) ?? .none
         masterLocation              = try c.decodeIfPresent(String.self, forKey: .masterLocation) ?? ""
@@ -389,6 +391,7 @@ class VideoRecord: Identifiable, Codable {
         try c.encode(duplicateBestMatchFilename, forKey: .duplicateBestMatchFilename)
         try c.encode(duplicateGroupCount, forKey: .duplicateGroupCount)
         try c.encode(sourceHost, forKey: .sourceHost)
+        try c.encode(lifecycleStage, forKey: .lifecycleStage)
         try c.encode(mediaDisposition, forKey: .mediaDisposition)
         try c.encode(archiveStage, forKey: .archiveStage)
         if !masterLocation.isEmpty {
@@ -424,6 +427,14 @@ class VideoRecord: Identifiable, Codable {
         default:             return Color.clear
         }
     }
+}
+
+// MARK: - Lifecycle Stage (which tab shows this file)
+
+enum LifecycleStage: String, Codable, CaseIterable {
+    case cataloged = "Cataloged"
+    case reviewing = "In Triage"
+    case archived  = "Archived"
 }
 
 // MARK: - Media Disposition (per-file lifecycle)
