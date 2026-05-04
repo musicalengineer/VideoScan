@@ -71,21 +71,12 @@ struct ArchiveView: View {
 
                     Divider().padding(.vertical, 4)
 
-                    sidebarSection("KEEPER PIPELINE") {
-                        sidebarRow(.unreviewed)
+                    sidebarSection("PIPELINE") {
                         sidebarRow(.hasFamily)
-                        sidebarRow(.recoverable)
                         sidebarRow(.masterSet)
                         sidebarRow(.backedUp)
                         sidebarRow(.ready)
                         sidebarRow(.archived)
-                    }
-
-                    Divider().padding(.vertical, 8)
-
-                    sidebarSection("JUNK REVIEW") {
-                        sidebarRow(.suspectedJunk)
-                        sidebarRow(.confirmedJunk)
                     }
 
                     Divider().padding(.vertical, 8)
@@ -232,20 +223,18 @@ struct ArchiveView: View {
     }
 
     private var volumeProgressBar: some View {
-        let total = model.records.count
-        let resolved = model.records.filter {
-            $0.mediaDisposition == .confirmedJunk ||
-            $0.archiveStage >= .readyForArchive
-        }.count
-        let pct = total > 0 ? Double(resolved) / Double(total) : 0
+        let total = keeperRecords.count
+        let fullyArchived = keeperRecords.filter { $0.archiveStage >= .archived }.count
+        let backedUp = keeperRecords.filter { $0.archiveStage >= .backedUp }.count
+        let pct = total > 0 ? Double(backedUp) / Double(total) : 0
 
         return VStack(alignment: .leading, spacing: 4) {
-            Text("\(total) files total")
+            Text("\(total) keepers")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundColor(.secondary)
             ProgressView(value: pct)
                 .tint(pct >= 1.0 ? .green : .accentColor)
-            Text("\(Int(pct * 100))% resolved")
+            Text("\(backedUp) backed up · \(fullyArchived) archived")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
         }
@@ -296,9 +285,6 @@ struct ArchiveView: View {
                 .disabled(model.records.isEmpty || isAnalyzing)
                 .help("Score and classify catalog records using heuristics")
 
-                if selectedCategory == .suspectedJunk || selectedCategory == .confirmedJunk {
-                    junkActions
-                }
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
@@ -376,12 +362,8 @@ struct ArchiveView: View {
 
     private var emptyMessage: String {
         switch selectedCategory {
-        case .allFiles:      return "No files cataloged"
-        case .unreviewed:    return "No unreviewed files"
+        case .allFiles:      return "No keepers yet"
         case .hasFamily:     return "No files with family detected"
-        case .recoverable:   return "No recoverable files"
-        case .suspectedJunk: return "No suspected junk"
-        case .confirmedJunk: return "No confirmed junk"
         case .archived:      return "Nothing archived yet"
         default:             return "No files in this category"
         }
@@ -390,15 +372,11 @@ struct ArchiveView: View {
     private var emptySubtitle: String {
         switch selectedCategory {
         case .allFiles:
-            return "Scan volumes in the Catalog tab to build your media catalog."
-        case .unreviewed:
-            return "Scan volumes in the Catalog tab to populate this list, then click Analyze to auto-classify."
+            return "Mark files as Important or Recoverable in the Triage tab to see them here."
         case .hasFamily:
             return "Run Person Finder in the People tab to detect family members in your media."
-        case .recoverable:
-            return "Run Correlate in the Catalog tab to find audio/video pairs, then Analyze to identify recoverable files."
-        case .suspectedJunk:
-            return "Click Analyze to automatically identify likely junk files from catalog metadata."
+        case .archived:
+            return "Promote backed-up keepers to Archived once they have verified 3-2-1 redundancy."
         default:
             return ""
         }
@@ -784,30 +762,33 @@ struct ArchiveView: View {
 
     // MARK: - Filtering
 
+    /// Base pool: only keepers — files marked important/recoverable or already
+    /// progressing through the archive pipeline.
+    private var keeperRecords: [VideoRecord] {
+        model.records.filter {
+            $0.mediaDisposition == .important ||
+            $0.mediaDisposition == .recoverable ||
+            $0.archiveStage >= .healthy
+        }
+    }
+
     private var filteredRecords: [VideoRecord] {
-        // First filter by sidebar category
         let byCategory: [VideoRecord]
         switch selectedCategory {
         case .allFiles:
-            byCategory = model.records
-        case .unreviewed:
-            byCategory = model.records.filter { $0.mediaDisposition == .unreviewed }
+            byCategory = keeperRecords
         case .hasFamily:
-            byCategory = model.records.filter { $0.mediaDisposition == .important && $0.archiveStage == .none }
-        case .recoverable:
-            byCategory = model.records.filter { $0.mediaDisposition == .recoverable }
+            byCategory = keeperRecords.filter { $0.mediaDisposition == .important && $0.archiveStage < .masterAssigned }
         case .masterSet:
-            byCategory = model.records.filter { $0.archiveStage == .masterAssigned }
+            byCategory = keeperRecords.filter { $0.archiveStage == .masterAssigned }
         case .backedUp:
-            byCategory = model.records.filter { $0.archiveStage == .backedUp }
+            byCategory = keeperRecords.filter { $0.archiveStage == .backedUp }
         case .ready:
-            byCategory = model.records.filter { $0.archiveStage == .readyForArchive }
+            byCategory = keeperRecords.filter { $0.archiveStage == .readyForArchive }
         case .archived:
-            byCategory = model.records.filter { $0.archiveStage == .archived }
-        case .suspectedJunk:
-            byCategory = model.records.filter { $0.mediaDisposition == .suspectedJunk }
-        case .confirmedJunk:
-            byCategory = model.records.filter { $0.mediaDisposition == .confirmedJunk }
+            byCategory = keeperRecords.filter { $0.archiveStage == .archived }
+        default:
+            byCategory = keeperRecords
         }
 
         // Then apply Show filter
@@ -815,12 +796,10 @@ struct ArchiveView: View {
         switch showFilter {
         case .all:
             byShow = byCategory
-        case .junkOnly:
-            byShow = byCategory.filter { $0.junkScore >= 5 }
         case .familyCandidates:
-            byShow = byCategory.filter { $0.mediaDisposition == .important || $0.junkScore == 0 }
-        case .unclassified:
-            byShow = byCategory.filter { $0.mediaDisposition == .unreviewed && $0.junkScore == 0 }
+            byShow = byCategory.filter { $0.mediaDisposition == .important }
+        default:
+            byShow = byCategory
         }
 
         // Then apply search text
@@ -830,22 +809,19 @@ struct ArchiveView: View {
             $0.filename.lowercased().contains(q) ||
             $0.fullPath.lowercased().contains(q) ||
             $0.videoCodec.lowercased().contains(q) ||
-            $0.junkReasons.joined().lowercased().contains(q)
+            $0.notes.lowercased().contains(q)
         }
     }
 
     private func countForCategory(_ cat: ArchiveCategory) -> Int {
         switch cat {
-        case .allFiles:      return model.records.count
-        case .unreviewed:    return model.records.filter { $0.mediaDisposition == .unreviewed }.count
-        case .hasFamily:     return model.records.filter { $0.mediaDisposition == .important && $0.archiveStage == .none }.count
-        case .recoverable:   return model.records.filter { $0.mediaDisposition == .recoverable }.count
-        case .masterSet:     return model.records.filter { $0.archiveStage == .masterAssigned }.count
-        case .backedUp:      return model.records.filter { $0.archiveStage == .backedUp }.count
-        case .ready:         return model.records.filter { $0.archiveStage == .readyForArchive }.count
-        case .archived:      return model.records.filter { $0.archiveStage == .archived }.count
-        case .suspectedJunk: return model.records.filter { $0.mediaDisposition == .suspectedJunk }.count
-        case .confirmedJunk: return model.records.filter { $0.mediaDisposition == .confirmedJunk }.count
+        case .allFiles:      return keeperRecords.count
+        case .hasFamily:     return keeperRecords.filter { $0.mediaDisposition == .important && $0.archiveStage < .masterAssigned }.count
+        case .masterSet:     return keeperRecords.filter { $0.archiveStage == .masterAssigned }.count
+        case .backedUp:      return keeperRecords.filter { $0.archiveStage == .backedUp }.count
+        case .ready:         return keeperRecords.filter { $0.archiveStage == .readyForArchive }.count
+        case .archived:      return keeperRecords.filter { $0.archiveStage == .archived }.count
+        default:             return 0
         }
     }
 }
