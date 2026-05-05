@@ -447,3 +447,91 @@ struct ArchiveHealthTests {
         #expect(ArchiveHealth.notApplicable.icon.isEmpty)
     }
 }
+
+// MARK: - DetectedPeople Codable Tests
+
+struct DetectedPeopleTests {
+
+    @Test func defaultsToEmpty() {
+        let rec = VideoRecord()
+        #expect(rec.detectedPeople.isEmpty)
+    }
+
+    @Test func roundTrip() throws {
+        let rec = VideoRecord()
+        rec.filename = "holiday_1992.mov"
+        rec.detectedPeople = ["Donna", "Timmy"]
+
+        let data = try JSONEncoder().encode(rec)
+        let decoded = try JSONDecoder().decode(VideoRecord.self, from: data)
+
+        #expect(decoded.detectedPeople == ["Donna", "Timmy"])
+    }
+
+    @Test func backwardCompatMissingField() throws {
+        let rec = VideoRecord()
+        rec.filename = "old_catalog_entry.mov"
+        let data = try JSONEncoder().encode(rec)
+
+        // Simulate an old catalog entry that never had the field:
+        // remove "detectedPeople" key from the JSON
+        var json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        json.removeValue(forKey: "detectedPeople")
+        let stripped = try JSONSerialization.data(withJSONObject: json)
+
+        let decoded = try JSONDecoder().decode(VideoRecord.self, from: stripped)
+        #expect(decoded.detectedPeople.isEmpty)
+    }
+
+    @Test func emptyArrayNotEncoded() throws {
+        let rec = VideoRecord()
+        rec.filename = "no_people.mov"
+        rec.detectedPeople = []
+
+        let data = try JSONEncoder().encode(rec)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+
+        // Empty array should be omitted to keep catalog JSON compact
+        #expect(json["detectedPeople"] == nil)
+    }
+}
+
+// MARK: - LifecycleStage Tests
+
+struct LifecycleStageTests {
+
+    @Test func defaultIsCataloged() {
+        let rec = VideoRecord()
+        #expect(rec.lifecycleStage == .cataloged)
+    }
+
+    @Test func codableRoundTrip() throws {
+        let rec = VideoRecord()
+        rec.filename = "test.mov"
+        rec.lifecycleStage = .archived
+
+        let data = try JSONEncoder().encode(rec)
+        let decoded = try JSONDecoder().decode(VideoRecord.self, from: data)
+
+        #expect(decoded.lifecycleStage == .archived)
+    }
+
+    @Test func backwardCompatMissingField() throws {
+        let rec = VideoRecord()
+        rec.filename = "legacy.mov"
+        let data = try JSONEncoder().encode(rec)
+
+        var json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        json.removeValue(forKey: "lifecycleStage")
+        let stripped = try JSONSerialization.data(withJSONObject: json)
+
+        let decoded = try JSONDecoder().decode(VideoRecord.self, from: stripped)
+        #expect(decoded.lifecycleStage == .cataloged)
+    }
+
+    @Test func allCasesHaveRawValues() {
+        #expect(LifecycleStage.cataloged.rawValue == "Cataloged")
+        #expect(LifecycleStage.reviewing.rawValue == "In Triage")
+        #expect(LifecycleStage.archived.rawValue == "Archived")
+    }
+}
