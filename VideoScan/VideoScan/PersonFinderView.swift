@@ -32,8 +32,6 @@ struct PersonFinderView: View {
             Divider()
             loadedFacesStrip
             Divider()
-            outputBar
-            Divider()
             jobsSection
             Divider()
             resultsTable
@@ -440,42 +438,6 @@ struct PersonFinderView: View {
                     )
             }
         } // else (faces loaded)
-    }
-
-    // MARK: Output bar — where does output go?
-
-    var outputBar: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "folder.badge.gearshape")
-                .font(.title3)
-                .foregroundColor(.secondary)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Output Folder").font(.headline)
-                Text("Where clips and compiled video are saved")
-                    .font(.caption).foregroundColor(.secondary)
-            }
-
-            TextField(
-                "Default: ~/Desktop/\(pfSanitize(model.settings.personName))_clips",
-                text: model.settingsBinding.outputDir
-            )
-            .textFieldStyle(.roundedBorder)
-            .font(.system(.body, design: .monospaced))
-
-            Button("Browse…") { browseForOutput() }
-                .controlSize(.large)
-
-            if !model.settings.outputDir.isEmpty {
-                Button("Reveal") {
-                    NSWorkspace.shared.open(URL(fileURLWithPath: model.settings.outputDir))
-                }
-                .controlSize(.large)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(Color(NSColor.windowBackgroundColor))
     }
 
     // MARK: Jobs section

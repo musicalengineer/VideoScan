@@ -1,5 +1,8 @@
 import Foundation
 import SQLite3
+import os
+
+private let cacheLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "cache")
 
 /// Persistent SQLite cache of Person Finder scan results.
 /// Keyed by (videoPath, fileSize, modDate, personName, engine, threshold, refPhotosHash).
@@ -23,9 +26,11 @@ final class PersonFinderCache {
 
     init() {
         guard sqlite3_open(Self.dbPath, &db) == SQLITE_OK else {
+            cacheLog.error("Failed to open cache DB at \(Self.dbPath, privacy: .public)")
             db = nil
             return
         }
+        cacheLog.info("Cache opened: \(Self.dbPath, privacy: .public)")
         exec("PRAGMA journal_mode=WAL")
         exec("PRAGMA synchronous=NORMAL")
         exec("""
@@ -81,6 +86,7 @@ final class PersonFinderCache {
             return nil
         }
         let refHash = stableHash(refFilenames)
+        cacheLog.debug("makeKey: refHash=\(refHash, privacy: .public) refs=\(refFilenames.count) person=\(personName, privacy: .public) engine=\(engine.rawValue, privacy: .public)")
         return CacheKey(
             videoPath: videoPath,
             fileSize: fileSize,
@@ -94,9 +100,13 @@ final class PersonFinderCache {
 
     private static func stableHash(_ filenames: [String]) -> String {
         let joined = filenames.sorted().joined(separator: "|")
-        var hasher = Hasher()
-        hasher.combine(joined)
-        return String(format: "%016llx", UInt64(bitPattern: Int64(hasher.finalize())))
+        let utf8 = Array(joined.utf8)
+        var h: UInt64 = 0xcbf29ce484222325
+        for byte in utf8 {
+            h ^= UInt64(byte)
+            h &*= 0x100000001b3
+        }
+        return String(format: "%016llx", h)
     }
 
     // MARK: - Lookup
@@ -122,7 +132,10 @@ final class PersonFinderCache {
         sqlite3_bind_double(stmt, 6, Double(key.threshold))
         bind(stmt, 7, key.refHash)
 
-        guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
+        guard sqlite3_step(stmt) == SQLITE_ROW else {
+            cacheLog.debug("MISS: \((key.videoPath as NSString).lastPathComponent, privacy: .public) refHash=\(key.refHash, privacy: .public)")
+            return nil
+        }
 
         let duration = sqlite3_column_double(stmt, 0)
         let fps = sqlite3_column_double(stmt, 1)
@@ -131,6 +144,7 @@ final class PersonFinderCache {
 
         let segments = decodeSegments(segJson)
         let filename = (key.videoPath as NSString).lastPathComponent
+        cacheLog.debug("HIT: \(filename, privacy: .public) hits=\(totalHits)")
         return pfVideoResult(
             filename: filename,
             filePath: key.videoPath,

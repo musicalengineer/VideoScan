@@ -157,39 +157,24 @@ private struct ActiveJobFaceDetectView: View {
             ZStack {
                 Color.black
 
-                if job.status == .done || job.status == .extracting {
-                    // Scan finished — clear the frame and show completion message
+                if job.status == .done {
                     VStack(spacing: 14) {
-                        Image(systemName: job.status == .extracting ? "scissors" : "checkmark.circle")
+                        Image(systemName: "checkmark.circle")
                             .font(.system(size: 56))
-                            .foregroundStyle(job.status == .extracting ? .orange : .green)
+                            .foregroundStyle(.green)
 
-                        if job.status == .extracting {
-                            Text("Generating Clips")
-                                .font(.system(size: 24, weight: .semibold))
-                                .foregroundStyle(.white)
-                            if !personName.isEmpty {
-                                Text("for \(personName)")
-                                    .font(.system(size: 18, weight: .medium))
-                                    .foregroundStyle(.white.opacity(0.8))
-                            }
-                            ProgressView()
-                                .colorScheme(.dark)
-                                .scaleEffect(1.2)
-                        } else {
-                            Text("Search Complete")
-                                .font(.system(size: 24, weight: .semibold))
-                                .foregroundStyle(.white)
-                            if !personName.isEmpty {
-                                Text(personName)
-                                    .font(.system(size: 20, weight: .medium))
-                                    .foregroundStyle(.white.opacity(0.85))
-                            }
-                            Text(engineTitle)
-                                .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                                .foregroundStyle(.cyan)
-                                .padding(.top, -6)
+                        Text("Search Complete")
+                            .font(.system(size: 24, weight: .semibold))
+                            .foregroundStyle(.white)
+                        if !personName.isEmpty {
+                            Text(personName)
+                                .font(.system(size: 20, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.85))
                         }
+                        Text(engineTitle)
+                            .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(.cyan)
+                            .padding(.top, -6)
 
                         // Stats grid
                         HStack(spacing: 24) {

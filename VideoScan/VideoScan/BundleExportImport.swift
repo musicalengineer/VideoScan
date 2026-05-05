@@ -99,8 +99,6 @@ struct SettingsSnapshot: Codable {
     var minPresenceSecs: Double
     var requirePrimary: Bool
     var concurrency: Int
-    var concatOutput: Bool
-    var decadeChapters: Bool
     var skipBundles: Bool
     var skipCatalogBadFiles: Bool
     var largestFaceOnly: Bool
@@ -119,8 +117,6 @@ struct SettingsSnapshot: Codable {
         self.minPresenceSecs = settings.minPresenceSecs
         self.requirePrimary = settings.requirePrimary
         self.concurrency = settings.concurrency
-        self.concatOutput = settings.concatOutput
-        self.decadeChapters = settings.decadeChapters
         self.skipBundles = settings.skipBundles
         self.skipCatalogBadFiles = settings.skipCatalogBadFiles
         self.largestFaceOnly = settings.largestFaceOnly
@@ -141,8 +137,6 @@ struct SettingsSnapshot: Codable {
         settings.minPresenceSecs = minPresenceSecs
         settings.requirePrimary = requirePrimary
         settings.concurrency = concurrency
-        settings.concatOutput = concatOutput
-        settings.decadeChapters = decadeChapters
         settings.skipBundles = skipBundles
         settings.skipCatalogBadFiles = skipCatalogBadFiles
         settings.largestFaceOnly = largestFaceOnly
