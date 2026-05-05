@@ -454,11 +454,13 @@ struct ArchiveHealthTests {
 
 struct DetectedPeopleTests {
 
+    // regression: #46 — VideoRecord ships with empty detectedPeople by default (decoupling additive field)
     @Test func defaultsToEmpty() {
         let rec = VideoRecord()
         #expect(rec.detectedPeople.isEmpty)
     }
 
+    // regression: #46 — Recognition results survive catalog encode/decode round-trip
     @Test func roundTrip() throws {
         let rec = VideoRecord()
         rec.filename = "holiday_1992.mov"
@@ -470,6 +472,7 @@ struct DetectedPeopleTests {
         #expect(decoded.detectedPeople == ["Donna", "Timmy"])
     }
 
+    // regression: #46 — Old catalog files (pre-decouple) decode cleanly: missing detectedPeople → empty array
     @Test func backwardCompatMissingField() throws {
         let rec = VideoRecord()
         rec.filename = "old_catalog_entry.mov"
@@ -485,6 +488,7 @@ struct DetectedPeopleTests {
         #expect(decoded.detectedPeople.isEmpty)
     }
 
+    // regression: #46 — Empty detectedPeople is omitted from JSON to keep catalog files compact
     @Test func emptyArrayNotEncoded() throws {
         let rec = VideoRecord()
         rec.filename = "no_people.mov"
@@ -502,11 +506,13 @@ struct DetectedPeopleTests {
 
 struct LifecycleStageTests {
 
+    // regression: #45 — Lifecycle field defaults to .cataloged so existing records flow into the new pipeline
     @Test func defaultIsCataloged() {
         let rec = VideoRecord()
         #expect(rec.lifecycleStage == .cataloged)
     }
 
+    // regression: #45 — Lifecycle stage survives catalog round-trip (Archive tab depends on this)
     @Test func codableRoundTrip() throws {
         let rec = VideoRecord()
         rec.filename = "test.mov"
@@ -518,6 +524,7 @@ struct LifecycleStageTests {
         #expect(decoded.lifecycleStage == .archived)
     }
 
+    // regression: #45 — Pre-lifecycle catalog files decode cleanly: missing field → .cataloged default
     @Test func backwardCompatMissingField() throws {
         let rec = VideoRecord()
         rec.filename = "legacy.mov"

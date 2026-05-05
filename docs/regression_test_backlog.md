@@ -75,20 +75,53 @@ These are pure-function tests with no UI or network dependency. Cheap to write, 
 - **Test:** Hard to assert "main isn't blocked" deterministically. Practical alternative: instrument the combine entry to record the actor it ran on, assert it ran off-main. Less rigorous but catches naive regressions.
 - **Estimated time:** 1-2 hours.
 
-### #1 — MP4 corrupted when codecs muxed
+### #1 — MP4 corrupted when codecs muxed ✅ Done (markered, revert audit pending)
 - **Fix:** Combine engine detects codec incompatibility before stream-copy mux, falls back to re-encode.
-- **Test:** Likely covered in `CombineTests.swift`. Verify the codec-detect path has a regression test that would fail if the auto-detect was reverted. Add a `// regression: #1` marker if the test exists; write one if it doesn't.
-- **Status:** Verify-existing.
-- **Estimated time:** 30 min verification.
+- **Tests:** `VideoScanTests/CombineTests.swift`
+  - `combineMP4VideoWithM4AAudio` — output streams parse cleanly
+  - `combineAvidMXFPair` — Avid V/A pair muxes cleanly
+  - `combineReencodeH264` — re-encode path produces valid H.264+AAC
+  - `verifyDecodesRealFramesInValidCombine` — output has real decodable frames
+- **Next step:** revert the codec-incompat check, confirm at least one of these goes red.
+
+### #23 — Catalog-aided skip during person search ✅ Done (markered, revert audit pending)
+- **Fix:** Person scan filters out catalog-known-bad records (audio-only, ffprobe-failed, no-streams) via `pfCatalogSkipPaths(from:)` (pure helper extracted for testing) and `pfCatalogSkipSet()` (MainActor entry).
+- **Tests:** `VideoScanTests/CatalogTests.swift` — `CatalogSkipSetTests` (6 tests covering audioOnly / noStreams / ffprobeFailed / scannable / mixed / empty path / empty input + the default `skipCatalogBadFiles == true`).
+- **Next step:** revert `pfCatalogSkipPaths` to return `[]` unconditionally, confirm tests fail.
 
 ---
 
 ## Priority 3 — Worth doing eventually
 
-### #12 — Delete duplicates safety
+### #12 — Delete duplicates safety ✅ Done (markered, revert audit pending)
 - **Fix:** Cross-volume duplicates are not flagged for deletion — only same-volume duplicates where keeper exists on the same volume.
-- **Test:** Construct a duplicate group split across two volumes; assert `volumesWithDeletableDuplicates` does NOT include them. *Probably already exists as `VolumesWithDeletableDuplicatesTests/crossVolumeDupsNotReported`.*
-- **Status:** Verify-existing — find and add `// regression: #12` marker.
+- **Tests:** `VideoScanTests/DuplicateDetectorTests.swift`
+  - `keeperOnSameVolumeIsDeletable` — within one volume, keeper + extra produced
+  - `sameVolumeIsReported` — `volumesWithDeletableDuplicates` lists same-volume hits
+  - `crossVolumeDupsNotReported` — cross-volume groups never flagged (catastrophic-loss guard)
+- **Next step:** revert the cross-volume guard, confirm `crossVolumeDupsNotReported` fails.
+
+### #9 — Pluggable FD architecture ✅ Done (markered, revert audit pending)
+- **Fix:** `RecognitionEngine` enum lists Vision/ArcFace/dlib/Hybrid; UI registry uses `allCases`.
+- **Tests:** `VideoScanTests/ModelTests.swift` — `RecognitionEngineTests` (`allCasesExist`, `titlesAreNonEmpty`).
+- **Next step:** delete a case (e.g. `.hybrid`) from the enum, confirm `allCasesExist` fails.
+
+### #41 — Combine technique propagation ✅ Done (markered, revert audit pending)
+- **Fix:** `CombineJobStatus.technique` round-trips the user's choice (streamCopy / reencodeH264 / reencodeProRes) into every job in the batch.
+- **Tests:** `VideoScanTests/CombineTests.swift` — `CombineTechniquePropagationTests` (`techniqueSetAtJobCreation`, `techniqueH264SetAtJobCreation`, `techniquePreservedAcrossMultipleJobs`).
+- **Next step:** force `technique` to a fixed value in the init, confirm those tests fail.
+
+### #30 — Catalog import/export round-trip ✅ Done (markered, revert audit pending)
+- **Fix:** Cross-machine catalog sharing — JSON catalog export imports cleanly into a fresh catalog; idempotent on re-import.
+- **Tests:** `VideoScanTests/CatalogTests.swift` — `CatalogImportExportTests` (`exportThenImportIntoEmptyCatalogAddsEverything`, `importSkipsRecordsAlreadyPresentByContentIdentity`).
+
+### #45 — Lifecycle stage ✅ Done (markered, revert audit pending)
+- **Fix:** `VideoRecord.lifecycleStage` (cataloged/reviewing/archived) drives the four-tab People→Catalog→Triage→Archive flow.
+- **Tests:** `VideoScanTests/ModelTests.swift` — `LifecycleStageTests` (`defaultIsCataloged`, `codableRoundTrip`, `backwardCompatMissingField`, `allCasesHaveRawValues`).
+
+### #46 — Decouple recognition from compilation ✅ Done (markered, revert audit pending)
+- **Fix:** `VideoRecord.detectedPeople` field captures recognition output as catalog-tagged data so the compilation step can run independently.
+- **Tests:** `VideoScanTests/ModelTests.swift` — `DetectedPeopleTests` (`defaultsToEmpty`, `roundTrip`, `backwardCompatMissingField`, `emptyArrayNotEncoded`).
 
 ### #37 — Add/remove photos from POI
 - **Fix:** Edit-Person sheet adds/removes reference photos from the POI folder cleanly.
