@@ -195,6 +195,7 @@ struct FormattingBoundaryTests {
 
 struct CatalogFilterBoundaryTests {
 
+    // regression: #39 — Show in Catalog: missing-record fallback returns the requested ID alone
     @Test func emptyRecordsList() {
         let id = UUID()
         let result = VideoScanModel.catalogFilterIDs(for: id, pairMode: true, in: [])
@@ -224,6 +225,7 @@ struct CatalogFilterBoundaryTests {
         #expect(result == [a.id])
     }
 
+    // regression: #39 — Show in Catalog: pairGroupID expands to all members of the group
     @Test func pairGroupWithMultipleMembers() {
         let gid = UUID()
         let records = (0..<5).map { i -> VideoRecord in
@@ -802,6 +804,7 @@ struct AvbParserBoundaryTests {
 
 struct VolumeReachabilityBoundaryTests {
 
+    // regression: #5 — Volume reachability: empty paths must not falsely report online
     @Test func emptyPath() {
         let result = VolumeReachability.isReachable(path: "")
         #expect(result == false)
@@ -817,6 +820,7 @@ struct VolumeReachabilityBoundaryTests {
         #expect(result == true)
     }
 
+    // regression: #5 — Volume reachability: missing /Volumes/<name> path correctly reports offline
     @Test func nonexistentVolume() {
         let result = VolumeReachability.isReachable(path: "/Volumes/NoSuchVolumeEver_\(UUID())/file.mov")
         #expect(result == false)
