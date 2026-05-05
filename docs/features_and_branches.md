@@ -25,45 +25,66 @@ every agent.
   agent moved main forward), rebase the feature branch onto
   `origin/main` first, then push.
 
-## Two-agent coordination
+## Worktree policy
 
-When two Claude windows are active on this repo:
+**`~/dev/VideoScan` is Rick's primary workspace.** He builds, launches,
+and iterates here using `git checkout <branch>`. This directory must
+always be clean and switchable — no agent should leave uncommitted
+changes, locked branches, or stale state that interferes with Rick's
+ability to `git checkout` freely.
 
-- **Worktrees and /tmp are fine for an agent's *private* work** —
-  research scripts, sandbox experiments, diagnostic dumps, brainstorms
-  Rick will not touch. Use them freely there.
-- **For *shared* work that Rick will build, test, or merge: never
-  leave a worktree alive on a branch Rick needs to check out.**
-  Worktrees lock branches; Rick uses `git checkout` in his
-  `~/dev/VideoScan` shell as his primary flow.
-- **The rule:** if the work crosses into Rick's hands, push the
-  commits and remove the worktree before telling him it's ready.
-- **Critical rule: commit + push + remove the worktree as soon as
-  the build finishes.** Then Rick can check out and build the branch
-  the normal way. Leaving a worktree alive blocks his workflow.
-- **Pattern:** `git worktree add /tmp/vs-<my-id> <branch>` plus
-  `-derivedDataPath /tmp/vs-<my-id>-dd` for builds. The moment the
-  build is done and committed, `git worktree remove /tmp/vs-<my-id>`
-  and `rm -rf /tmp/vs-<my-id>-dd`.
-- **Never push an empty branch ref.** Always commit before push, or
-  the user gets an empty branch and is confused. If you need to push
-  before commit (you don't, this is a footgun), at least say so.
-- **Pgrep guard before xcodebuild test/build is still useful as
-  courtesy** between two agents:
-  ```
-  until ! pgrep -x xcodebuild >/dev/null && \
-        ! pgrep -f VideoScanTests.xctest >/dev/null && \
-        ! pgrep -f VideoScanUITests-Runner >/dev/null; do
-    sleep 15
-  done
-  ```
+**Agents use worktrees for everything that doesn't need Rick in the
+loop.** This includes:
+- Unit/regression test development and execution
+- Background automation (linting, coverage, diagnostics)
+- Research scripts, sandbox experiments, brainstorms
+- Any work on a branch that Rick isn't actively building/launching
 
-**Why the worktree matters at all** (still useful in some cases):
-- See `~/.claude/projects/-Users-rickb-dev-VideoScan/memory/feedback_two_claudes_coordination.md`
-  for past incidents where shared working tree caused silent test
-  failures from another agent's uncommitted files.
-- But Rick's primary workflow is `git checkout <branch>` in his own
-  shell, build in Xcode. Worktrees should never block that.
+**Worktrees are NOT for Rick's rapid-dev loop.** When Rick is doing
+build-launch-tweak cycles, he works in `~/dev/VideoScan` on the
+branch directly. Never ask Rick to build or launch from a `/tmp`
+worktree path — that's confusing and breaks his flow.
+
+**Think of it this way:**
+- Rick's hands on the keyboard → `~/dev/VideoScan`
+- Agent working autonomously → worktree
+
+### Worktree mechanics
+
+A worktree is a second checkout sharing the same `.git` database.
+Commits made in the worktree appear in `git log` from either
+directory. It's not a copy or clone — it's another window into the
+same repo.
+
+- **Location:** `~/dev/worktrees/vs-<purpose>` for anything meant to
+  persist across sessions. `/tmp/vs-<id>` for throwaway work.
+- **DerivedData:** Always use `-derivedDataPath` to isolate builds:
+  `~/dev/worktrees/vs-<purpose>-dd` or `/tmp/vs-<id>-dd`.
+- **Branch locking:** A worktree locks its branch — no one else can
+  check it out. This is why agents must never worktree a branch Rick
+  needs.
+- **Cleanup:** `git worktree remove <path>` when done. If you just
+  deleted the directory, `git worktree prune` tidies the bookkeeping.
+
+### Handoff from worktree to Rick
+
+When agent work is ready for Rick to test:
+1. Commit and push the branch from the worktree.
+2. `git worktree remove <path>` and `rm -rf <dd-path>`.
+3. Tell Rick the branch is ready — he checks it out normally.
+
+Never leave a worktree alive on a branch Rick needs. Never push an
+empty branch ref — always commit before push.
+
+### Courtesy guards between agents
+
+```
+until ! pgrep -x xcodebuild >/dev/null && \
+      ! pgrep -f VideoScanTests.xctest >/dev/null && \
+      ! pgrep -f VideoScanUITests-Runner >/dev/null; do
+  sleep 15
+done
+```
 
 ## Logging
 
