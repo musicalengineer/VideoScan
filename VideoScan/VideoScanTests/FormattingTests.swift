@@ -23,6 +23,7 @@ struct FormattingTests {
         #expect(Formatting.fraction("notafraction") == "notafraction")
     }
 
+    // regression: #28 — Byte size formatting: scale crossings (B→KB→MB→GB→TB) render correctly
     @Test func humanSize() {
         #expect(Formatting.humanSize(0) == "0.0 B")
         #expect(Formatting.humanSize(512) == "512.0 B")
@@ -54,6 +55,7 @@ struct FormattingExtendedTests {
         #expect(Formatting.duration(86400) == "24:00:00")
     }
 
+    // regression: #28 — Byte size formatting: sub-KB and non-round values format with one decimal
     @Test func humanSizeEdgeCases() {
         #expect(Formatting.humanSize(0) == "0.0 B")
         #expect(Formatting.humanSize(1) == "1.0 B")

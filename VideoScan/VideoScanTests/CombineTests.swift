@@ -605,6 +605,7 @@ struct DashboardCombineCounterTests {
 
 struct CatalogNavigationTests {
 
+    // regression: #39 — Show in Catalog: pair-mode off returns only the requested record
     @Test func singleRecordNoPairMode() {
         let rec = VideoRecord()
         rec.filename = "test.mov"
@@ -612,6 +613,7 @@ struct CatalogNavigationTests {
         #expect(ids == [rec.id])
     }
 
+    // regression: #39 — Show in Catalog: pair-mode follows pairedWith reference
     @Test func pairModeWithPairedWith() {
         let video = VideoRecord()
         video.filename = "clip.V1A.mxf"
@@ -627,6 +629,7 @@ struct CatalogNavigationTests {
         #expect(ids.contains(audio.id))
     }
 
+    // regression: #39 — Show in Catalog: cross-volume pair recovers via pairGroupID when pairedWith is nil
     @Test func pairModeWithPairGroupIDFallback() {
         let gid = UUID()
         let video = VideoRecord()
@@ -648,6 +651,7 @@ struct CatalogNavigationTests {
         #expect(ids.contains(audio.id))
     }
 
+    // regression: #39 — Show in Catalog: navigation works equivalently from the audio side of the pair
     @Test func pairModeFromAudioSide() {
         let gid = UUID()
         let video = VideoRecord()

@@ -64,11 +64,13 @@ struct ScanConfigurationTests {
 
     // MARK: Per-job engine resolution
 
+    // regression: #7 — Per-volume FD engine selection: default falls through to Vision
     @Test func effectiveEngineDefaultsToVision() {
         let job = ScanJob(searchPath: "/tmp")
         #expect(job.effectiveEngine == .vision)
     }
 
+    // regression: #7 — Per-volume FD engine selection: profile.engine resolves when no override
     @Test func effectiveEngineUsesProfileEngine() {
         let job = ScanJob(searchPath: "/tmp")
         job.assignedProfile = POIProfile(name: "Test", referencePath: "/tmp",
@@ -76,6 +78,7 @@ struct ScanConfigurationTests {
         #expect(job.effectiveEngine == .arcface)
     }
 
+    // regression: #7 — Per-volume FD engine selection: assignedEngine override wins over profile
     @Test func effectiveEngineJobOverrideTakesPriority() {
         let job = ScanJob(searchPath: "/tmp")
         job.assignedProfile = POIProfile(name: "Test", referencePath: "/tmp",
