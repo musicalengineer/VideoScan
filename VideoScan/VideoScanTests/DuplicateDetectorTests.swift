@@ -182,6 +182,7 @@ struct DuplicateDetectorTests {
 
 struct DuplicateDeletionSafetyTests {
 
+    // regression: #12 — Duplicate within one volume produces a deletable extra-copy + keeper
     @Test func keeperOnSameVolumeIsDeletable() {
         let keeper = makeDuplicateRecord(
             filename: "original.mov", streamType: .videoAndAudio,
@@ -298,6 +299,7 @@ struct KeepersByGroupIDTests {
 @MainActor
 struct VolumesWithDeletableDuplicatesTests {
 
+    // regression: #12 — Volume with same-volume duplicates is reported as having deletable extras
     @Test func sameVolumeIsReported() {
         let model = VideoScanModel()
         let groupID = UUID()
@@ -321,6 +323,7 @@ struct VolumesWithDeletableDuplicatesTests {
         #expect(result.first?.count == 1)
     }
 
+    // regression: #12 — Cross-volume duplicates are NEVER flagged for deletion (catastrophic-data-loss guard)
     @Test func crossVolumeDupsNotReported() {
         let model = VideoScanModel()
         let groupID = UUID()

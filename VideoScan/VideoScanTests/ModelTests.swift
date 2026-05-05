@@ -199,6 +199,7 @@ struct CombinePairItemTests {
 
 struct RecognitionEngineTests {
 
+    // regression: #9 — Pluggable FD architecture: all four engines (Vision, ArcFace, dlib, Hybrid) remain registered
     @Test func allCasesExist() {
         let engines = RecognitionEngine.allCases
         #expect(engines.count == 4)
@@ -208,6 +209,7 @@ struct RecognitionEngineTests {
         #expect(engines.contains(.hybrid))
     }
 
+    // regression: #9 — Every engine must surface a UI title and short label (catches broken UI registry)
     @Test func titlesAreNonEmpty() {
         for engine in RecognitionEngine.allCases {
             #expect(!engine.title.isEmpty, "\(engine) has empty title")

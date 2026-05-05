@@ -15,6 +15,7 @@ import Foundation
         return repoRoot.appendingPathComponent("tests/fixtures/videos").path
     }()
 
+    // regression: #1 — Combined MP4 must not be corrupt when codecs are muxed (verifies output streams parse cleanly)
     @Test func combineMP4VideoWithM4AAudio() async throws {
         let videoPath = "\(Self.fixturesDir)/test_video_only.mp4"
         let audioPath = "\(Self.fixturesDir)/test_audio_only.m4a"
@@ -74,6 +75,7 @@ import Foundation
         #expect(!result.stderr.isEmpty, "stderr should capture ffmpeg output")
     }
 
+    // regression: #1 — Avid MXF pair muxes cleanly: video + audio streams both present in output
     @Test func combineAvidMXFPair() async throws {
         let videoPath = "\(Self.fixturesDir)/video-only-test-1.mxf"
         let audioPath = "\(Self.fixturesDir)/audio-only-test-1.mxf"
@@ -248,6 +250,7 @@ import Foundation
         #expect(verify.ok == true, "Full verify failed: \(verify.reason)")
     }
 
+    // regression: #1 — Re-encode path produces a valid H.264 + AAC output (incompatible-codec fallback)
     @Test func combineReencodeH264() async throws {
         guard TestMediaGenerator.isAvailable else { return }
 
@@ -406,6 +409,7 @@ import Foundation
         }
     }
 
+    // regression: #1 — Combined MP4 contains real decodable video frames, not just a header
     @Test func verifyDecodesRealFramesInValidCombine() async throws {
         guard TestMediaGenerator.isAvailable else { return }
 
@@ -935,6 +939,7 @@ struct CatalogNavigationTests {
 
 @Suite @MainActor struct CombineTechniquePropagationTests {
 
+    // regression: #41 — Combine technique selected by user (re-encode) is preserved on the job, not lost
     @Test func techniqueSetAtJobCreation() {
         let job = CombineJobStatus(
             pairIndex: 0, videoFilename: "v.mxf", audioFilename: "a.mxf",
@@ -946,6 +951,7 @@ struct CatalogNavigationTests {
         #expect(job.technique == .reencodeProRes)
     }
 
+    // regression: #41 — Combine dialog H.264 selection round-trips into the job
     @Test func techniqueH264SetAtJobCreation() {
         let job = CombineJobStatus(
             pairIndex: 0, videoFilename: "v.mxf", audioFilename: "a.mxf",
@@ -988,6 +994,7 @@ struct CatalogNavigationTests {
         #expect(dash.combineJobs.isEmpty)
     }
 
+    // regression: #41 — Re-encode technique propagates to every job in a multi-pair combine batch
     @Test func techniquePreservedAcrossMultipleJobs() {
         let dash = DashboardState()
         dash.resetForCombine(total: 3)
