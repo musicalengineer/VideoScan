@@ -18,6 +18,7 @@ struct CatalogImportExportTests {
         return r
     }
 
+    // regression: #30 — Cross-machine catalog sharing: export+import round-trips records into an empty catalog
     @Test func exportThenImportIntoEmptyCatalogAddsEverything() throws {
         let source = VideoScanModel()
         source.records = []
@@ -41,6 +42,7 @@ struct CatalogImportExportTests {
         #expect(dest.records.allSatisfy { !$0.sourceHost.isEmpty })
     }
 
+    // regression: #30 — Catalog import is idempotent: records already present (by content identity) are skipped, not duplicated
     @Test func importSkipsRecordsAlreadyPresentByContentIdentity() throws {
         let source = VideoScanModel()
         source.records = [
