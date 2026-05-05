@@ -97,7 +97,7 @@ struct ScanJobRow: View {
                     case .done: return "Done:"
                     case .cancelled: return "Stopped:"
                     case .failed: return "Failed:"
-                    case .scanning, .extracting: return "Searching for"
+                    case .scanning: return "Searching for"
                     case .paused: return "Paused:"
                     default: return ""
                     }
@@ -364,13 +364,6 @@ struct ScanJobRow: View {
 
             Divider()
 
-            // Compile options
-            Toggle("Compile to one video", isOn: model.settingsBinding.concatOutput)
-                .disabled(model.settings.decadeChapters)
-            Toggle("Decade chapter video", isOn: model.settingsBinding.decadeChapters)
-
-            Divider()
-
             LabeledControl("Parallel Jobs") {
                 TextField("", value: model.settingsBinding.concurrency, format: .number)
                     .textFieldStyle(.roundedBorder).frame(width: 54)
@@ -403,10 +396,6 @@ struct ScanJobRow: View {
             Text("Paused")
                 .font(.body.weight(.semibold))
                 .foregroundColor(.yellow)
-        case .extracting:
-            Text("Extracting")
-                .font(.body.weight(.semibold))
-                .foregroundColor(.orange)
         case .failed:
             Text("Failed")
                 .font(.body.weight(.semibold))
@@ -436,7 +425,7 @@ struct ScanJobRow: View {
                         case .done: return "Done:"
                         case .cancelled: return "Stopped:"
                         case .failed: return "Failed:"
-                        case .scanning, .extracting: return "Searching for"
+                        case .scanning: return "Searching for"
                         case .paused: return "Paused:"
                         default: return ""
                         }
@@ -503,11 +492,162 @@ struct ScanJobRow: View {
                 }
             }
 
+            // Create Composite Video panel — appears when scan is done with results
+            if job.status.isDone && !job.results.isEmpty {
+                compilationPanel
+            }
+
             // Compiled outputs
             if !job.compiledVideoPaths.isEmpty {
                 compiledOutputsView
             }
         }
+    }
+
+    // MARK: - Create Composite Video panel
+
+    private var compilationPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "film.stack.fill")
+                    .foregroundColor(.accentColor)
+                Text("Create Composite Video")
+                    .font(.system(.callout, weight: .semibold))
+            }
+
+            // Output folder — always visible
+            HStack(spacing: 8) {
+                Image(systemName: "folder")
+                    .foregroundColor(.secondary)
+                if job.compilationStatus.isActive {
+                    Text(model.settings.outputDir.isEmpty
+                         ? "~/Desktop/\(pfSanitize(job.assignedProfile?.name ?? "clips"))_clips"
+                         : model.settings.outputDir)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } else {
+                    TextField(
+                        "Default: ~/Desktop/\(pfSanitize(job.assignedProfile?.name ?? "clips"))_clips",
+                        text: model.settingsBinding.outputDir
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.caption, design: .monospaced))
+                }
+
+                Button("Browse…") {
+                    let panel = NSOpenPanel()
+                    panel.canChooseDirectories = true
+                    panel.canChooseFiles = false
+                    panel.canCreateDirectories = true
+                    panel.allowsMultipleSelection = false
+                    panel.prompt = "Select"
+                    panel.begin { response in
+                        if response == .OK, let url = panel.url {
+                            model.settings.outputDir = url.path
+                            model.settings.save()
+                        }
+                    }
+                }
+                .controlSize(.small)
+                .disabled(job.compilationStatus.isActive)
+
+                if !model.settings.outputDir.isEmpty {
+                    Button("Reveal") {
+                        NSWorkspace.shared.open(URL(fileURLWithPath: model.settings.outputDir))
+                    }
+                    .controlSize(.small)
+                }
+            }
+
+            if job.compilationStatus.isActive {
+                VStack(alignment: .leading, spacing: 6) {
+                    if job.compilationStatus == .extracting {
+                        ProgressView(value: job.compilationProgress, total: 1.0)
+                            .progressViewStyle(.linear)
+                    } else {
+                        ProgressView()
+                            .progressViewStyle(.linear)
+                    }
+
+                    HStack(spacing: 8) {
+                        Text(job.compilationStatus.label)
+                            .font(.headline)
+                            .foregroundColor(.orange)
+                        Text(job.compilationPhase)
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        if job.compilationStatus == .extracting, job.compilationClipsTotal > 0 {
+                            Text("\(job.compilationClipsDone)/\(job.compilationClipsTotal) clips")
+                                .font(.system(.subheadline, design: .monospaced))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    Button(role: .destructive) {
+                        model.cancelCompilation(job: job)
+                    } label: {
+                        Label("Cancel", systemImage: "xmark.circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            } else if job.compilationStatus == .done {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                    Text(job.compilationPhase)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Button("Generate Again") {
+                        model.startCompilation(job: job)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            } else {
+                // Mode + Generate
+                HStack(spacing: 12) {
+                    Picker("Output", selection: Binding(
+                        get: { model.compilationSettings.mode },
+                        set: { model.compilationSettings.mode = $0 }
+                    )) {
+                        ForEach(CompilationMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(maxWidth: 320)
+
+                    Spacer()
+
+                    Button {
+                        model.startCompilation(job: job)
+                    } label: {
+                        Label("Generate", systemImage: "film.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+                    .disabled(job.recognitionResults.isEmpty)
+                }
+
+                Text("\(job.clipsFound) segment(s) from \(job.results.count) video(s) ready to compile")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(10)
+        .background(Color.accentColor.opacity(0.06))
+        .cornerRadius(8)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(Color.accentColor.opacity(0.2), lineWidth: 1)
+        )
     }
 
     // MARK: - Expanded action buttons (full labels)
@@ -618,8 +758,6 @@ struct ScanJobRow: View {
         case .loading:    return .yellow
         case .scanning:   return .blue
         case .paused:     return .yellow
-        case .extracting: return .orange
-        case .compiling:  return .purple
         case .done:       return .green
         case .cancelled:  return .secondary
         case .failed:     return .red

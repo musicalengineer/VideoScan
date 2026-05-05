@@ -119,13 +119,6 @@ struct PersonFinderSettings: Equatable {
     var minPresenceSecs: Double = 5.0
     var requirePrimary: Bool = false
     var concurrency: Int = 8
-    var concatOutput: Bool = true
-    var decadeChapters: Bool = false    // sort by decade with chapter markers
-    /// When true (default), the per-bucket compilations are merged into ONE
-    /// final video file via h264_videotoolbox re-encode. When false, the
-    /// individual bucket files are kept (legacy behavior — useful for users
-    /// who want lossless stream-copy concat output).
-    var singleFileCompilation: Bool = true
     var skipBundles: Bool = true        // skip .fcpbundle, .imovielibrary, etc.
     var skipCatalogBadFiles: Bool = true // skip audio-only, no-streams, ffprobe-failed from catalog
     var largestFaceOnly: Bool = false   // use only the largest detected face per reference photo
@@ -237,9 +230,6 @@ struct PersonFinderSettings: Equatable {
     private static func restoreBoolValues(_ s: inout PersonFinderSettings) {
         let d = defaults; let p = prefix
         if d.object(forKey: "\(p)requirePrimary") != nil { s.requirePrimary = d.bool(forKey: "\(p)requirePrimary") }
-        if d.object(forKey: "\(p)concatOutput") != nil { s.concatOutput = d.bool(forKey: "\(p)concatOutput") }
-        if d.object(forKey: "\(p)decadeChapters") != nil { s.decadeChapters = d.bool(forKey: "\(p)decadeChapters") }
-        if d.object(forKey: "\(p)singleFileCompilation") != nil { s.singleFileCompilation = d.bool(forKey: "\(p)singleFileCompilation") }
         if d.object(forKey: "\(p)skipBundles") != nil { s.skipBundles = d.bool(forKey: "\(p)skipBundles") }
         if d.object(forKey: "\(p)skipCatalogBadFiles") != nil { s.skipCatalogBadFiles = d.bool(forKey: "\(p)skipCatalogBadFiles") }
         if d.object(forKey: "\(p)largestFaceOnly") != nil { s.largestFaceOnly = d.bool(forKey: "\(p)largestFaceOnly") }
@@ -303,9 +293,6 @@ struct PersonFinderSettings: Equatable {
         d.set(minPresenceSecs, forKey: "\(p)minPresenceSecs")
         d.set(concurrency, forKey: "\(p)concurrency")
         d.set(requirePrimary, forKey: "\(p)requirePrimary")
-        d.set(concatOutput, forKey: "\(p)concatOutput")
-        d.set(decadeChapters, forKey: "\(p)decadeChapters")
-        d.set(singleFileCompilation, forKey: "\(p)singleFileCompilation")
         d.set(skipBundles, forKey: "\(p)skipBundles")
         d.set(skipCatalogBadFiles, forKey: "\(p)skipCatalogBadFiles")
         d.set(largestFaceOnly, forKey: "\(p)largestFaceOnly")
@@ -484,7 +471,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
 // MARK: - Job Status
 
 enum ScanJobStatus: Equatable {
-    case idle, loading, scanning, paused, extracting, compiling, done, cancelled
+    case idle, loading, scanning, paused, done, cancelled
     case failed(String)
 
     var label: String {
@@ -493,8 +480,6 @@ enum ScanJobStatus: Equatable {
         case .loading:    return "Loading reference…"
         case .scanning:   return "Scanning…"
         case .paused:     return "Paused"
-        case .extracting: return "Extracting clips…"
-        case .compiling:  return "Compiling video — results below"
         case .done:       return "Done"
         case .cancelled:  return "Cancelled"
         case .failed(let msg): return "Error: \(msg)"
@@ -502,11 +487,68 @@ enum ScanJobStatus: Equatable {
     }
 
     var isActive: Bool {
-        switch self { case .loading, .scanning, .paused, .extracting, .compiling: return true; default: return false }
+        switch self { case .loading, .scanning, .paused: return true; default: return false }
     }
     var isIdle: Bool { self == .idle }
     var isDone: Bool { if case .done = self { return true }; return false }
     var isPaused: Bool { self == .paused }
+}
+
+// MARK: - Compilation
+
+enum CompilationMode: String, CaseIterable, Identifiable {
+    case singleVideo = "One video"
+    case perBucket   = "Separate by codec/resolution"
+    var id: String { rawValue }
+}
+
+struct CompilationSettings: Equatable {
+    var mode: CompilationMode = .singleVideo
+    var pad: Double = 2.0
+    var concurrency: Int = 8
+
+    private static let defaults = UserDefaults.standard
+    private static let prefix = "comp_"
+
+    static func restored() -> CompilationSettings {
+        var s = CompilationSettings()
+        let d = defaults; let p = prefix
+        if let v = d.string(forKey: "\(p)mode"), let m = CompilationMode(rawValue: v) { s.mode = m }
+        if d.object(forKey: "\(p)pad") != nil { s.pad = d.double(forKey: "\(p)pad") }
+        if d.object(forKey: "\(p)concurrency") != nil { s.concurrency = d.integer(forKey: "\(p)concurrency") }
+        return s
+    }
+
+    func save() {
+        let d = Self.defaults; let p = Self.prefix
+        d.set(mode.rawValue, forKey: "\(p)mode")
+        d.set(pad, forKey: "\(p)pad")
+        d.set(concurrency, forKey: "\(p)concurrency")
+    }
+}
+
+enum CompilationStatus: Equatable {
+    case idle
+    case extracting
+    case compiling
+    case merging
+    case done
+    case failed(String)
+
+    var isActive: Bool {
+        switch self { case .extracting, .compiling, .merging: return true; default: return false }
+    }
+
+    var label: String {
+        switch self {
+        case .idle:       return ""
+        case .extracting: return "Extracting clips…"
+        case .compiling:  return "Building compilations…"
+        case .merging:    return "Merging to single file…"
+        case .done:       return "Complete"
+        case .failed(let msg): return "Failed: \(msg)"
+        }
+    }
 }
 
 // MARK: - Reference Face
@@ -610,6 +652,18 @@ final class ScanJob: ObservableObject, Identifiable {
     @Published var compiledVideoPaths: [CompiledOutput] = []
     @Published var elapsedSecs: Double = 0.0
 
+    // Compilation state (separate from scan lifecycle)
+    @Published var compilationStatus: CompilationStatus = .idle
+    @Published var compilationProgress: Double = 0.0
+    @Published var compilationPhase: String = ""
+    @Published var compilationClipsTotal: Int = 0
+    @Published var compilationClipsDone: Int = 0
+    fileprivate var compilationTask: Task<Void, Never>?
+
+    /// Raw recognition results preserved for on-demand compilation.
+    nonisolated(unsafe) var recognitionResults: [pfVideoResult] = []
+    nonisolated(unsafe) var recognitionOutputDir: String = ""
+
     // Live frame preview
     @Published var liveFrame: CGImage?
     @Published var liveMatchedRects: [CGRect] = []     // Vision normalized coords, bottom-left origin
@@ -643,15 +697,19 @@ final class ScanJob: ObservableObject, Identifiable {
 
     func reset() {
         scanTask?.cancel(); timerTask?.cancel()
+        compilationTask?.cancel()
         Task { await pauseGate.resume() }  // release any waiters
         status = .idle; progress = 0; currentFile = ""
         videosTotal = 0; videosScanned = 0; videosWithHits = 0
         clipsFound = 0; presenceSecs = 0
         results = []; consoleLines = []
         compiledVideoPaths = []; elapsedSecs = 0
+        compilationStatus = .idle; compilationProgress = 0
+        compilationPhase = ""; compilationClipsTotal = 0; compilationClipsDone = 0
+        recognitionResults = []; recognitionOutputDir = ""
         liveFrame = nil; liveMatchedRects = []; liveUnmatchedRects = []
         bestDist = .greatestFiniteMagnitude
-        scanTask = nil; timerTask = nil; taskStarted = nil
+        scanTask = nil; timerTask = nil; compilationTask = nil; taskStarted = nil
     }
 
     fileprivate func startElapsedTimer() {
@@ -737,12 +795,85 @@ final class PersonFinderModel: ObservableObject {
         let rejected = Set(profile.rejectedFiles)
         job.assignedFaces = rejected.isEmpty ? faces : faces.filter { !rejected.contains($0.sourceFilename) }
         job.status = .idle
+
+        if !job.searchPath.isEmpty && !job.assignedFaces.isEmpty {
+            restoreFromCache(job: job)
+        }
     }
 
     func removeJob(_ job: ScanJob) {
         job.scanTask?.cancel()
         job.timerTask?.cancel()
         jobs.removeAll { $0.id == job.id }
+    }
+
+    func restoreFromCache(job: ScanJob) {
+        guard job.status.isIdle else { return }
+        guard let profile = job.assignedProfile, !job.searchPath.isEmpty else { return }
+
+        let personName = profile.name
+        let engine = job.effectiveEngine
+        let threshold = engine == .arcface ? profile.arcfaceThreshold : profile.visionThreshold
+        let refFilenames = job.assignedFaces.map(\.sourceFilename)
+        guard !refFilenames.isEmpty else { return }
+
+        let searchPath = job.searchPath
+        let jobSettings = self.settings
+
+        job.scanTask = Task.detached(priority: .utility) {
+            let skipBundles = jobSettings.skipBundles
+            let videoFiles = pfFindVideoFiles(at: searchPath, skipBundles: skipBundles)
+            guard !videoFiles.isEmpty else { return }
+
+            var cachedResults: [pfVideoResult] = []
+            var hits = 0
+            for path in videoFiles {
+                guard let key = PersonFinderCache.makeKey(
+                    videoPath: path, personName: personName,
+                    engine: engine, threshold: threshold,
+                    refFilenames: refFilenames
+                ), let result = PersonFinderCache.shared.lookup(key: key) else { continue }
+                hits += 1
+                if !result.segments.isEmpty {
+                    cachedResults.append(result)
+                }
+            }
+
+            guard hits > 0 else { return }
+            osLog.info("Cache restore: \(hits)/\(videoFiles.count) cached, \(cachedResults.count) with hits for \(personName, privacy: .public)")
+
+            let outputDir = Self.resolveOutputDir(jobSettings)
+            let (validResults, _) = Self.filterByPresence(cachedResults, settings: jobSettings)
+
+            let clipResults: [ClipResult] = validResults.compactMap { r -> ClipResult? in
+                guard !r.segments.isEmpty else { return nil }
+                return ClipResult(
+                    videoFilename: r.filename,
+                    videoPath: r.filePath,
+                    videoDuration: r.durationSeconds,
+                    presenceSecs: r.totalPresenceSecs,
+                    segmentCount: r.segments.count,
+                    bestDistance: r.segments.map(\.bestDistance).min() ?? 0,
+                    clipFiles: [],
+                    outputDir: outputDir
+                )
+            }
+            let totalPresence = validResults.map(\.totalPresenceSecs).reduce(0, +)
+            let totalSegments = validResults.reduce(0) { $0 + $1.segments.count }
+
+            await MainActor.run {
+                job.results = clipResults
+                job.recognitionResults = validResults
+                job.recognitionOutputDir = outputDir
+                job.presenceSecs = totalPresence
+                job.clipsFound = totalSegments
+                job.videosTotal = videoFiles.count
+                job.videosScanned = hits
+                job.videosWithHits = clipResults.count
+                job.status = .done
+                job.appendLog("Restored from cache: \(clipResults.count) video(s) with hits, \(totalSegments) segment(s)")
+            }
+        }
     }
 
     func startJob(_ job: ScanJob) {
@@ -922,6 +1053,153 @@ final class PersonFinderModel: ObservableObject {
 
     var hasActiveJobs: Bool { jobs.contains { $0.status == .scanning } }
     var hasPausedJobs: Bool { jobs.contains { $0.status == .paused } }
+
+    // MARK: - Compilation (on-demand)
+
+    @Published var compilationSettings = CompilationSettings.restored() {
+        didSet { compilationSettings.save() }
+    }
+
+    func startCompilation(job: ScanJob) {
+        guard job.status.isDone else { return }
+        guard !job.recognitionResults.isEmpty else {
+            job.appendLog("⚠ No recognition results to compile.")
+            return
+        }
+        guard !job.compilationStatus.isActive else { return }
+
+        let results = job.recognitionResults
+        let outputDir = job.recognitionOutputDir
+        let personName = job.assignedProfile?.name ?? "Unknown"
+        let compSettings = compilationSettings
+        let scanSettings = settings
+        let totalSegs = results.reduce(0) { $0 + $1.segments.count }
+        osLog.info("Compilation started: person=\(personName, privacy: .public) mode=\(compSettings.mode.rawValue, privacy: .public) segments=\(totalSegs) videos=\(results.count)")
+
+        job.compilationStatus = .extracting
+        job.compilationProgress = 0
+        job.compilationPhase = "Extracting clips…"
+        job.compilationClipsTotal = results.reduce(0) { $0 + $1.segments.count }
+        job.compilationClipsDone = 0
+        job.compiledVideoPaths = []
+        job.appendLog("\n━ Compilation started ━━━━━━━━━━━━━━━━━━━━━")
+
+        job.compilationTask = Task.detached(priority: .userInitiated) {
+            await Self.runCompilation(
+                job: job,
+                results: results,
+                outputDir: outputDir,
+                personName: personName,
+                compilationSettings: compSettings,
+                scanSettings: scanSettings
+            )
+        }
+    }
+
+    func cancelCompilation(job: ScanJob) {
+        osLog.info("Compilation cancelled by user")
+        job.compilationTask?.cancel()
+        job.compilationStatus = .idle
+        job.compilationPhase = ""
+        job.compilationProgress = 0
+    }
+
+    private nonisolated static func runCompilation(
+        job: ScanJob,
+        results: [pfVideoResult],
+        outputDir: String,
+        personName: String,
+        compilationSettings: CompilationSettings,
+        scanSettings: PersonFinderSettings
+    ) async {
+        let totalClips = results.reduce(0) { $0 + $1.segments.count }
+        osLog.info("Extraction phase: \(totalClips) clip(s) from \(results.count) video(s) → \(outputDir, privacy: .public)")
+        await job.appendLog("Extracting \(totalClips) clip(s) to: \(outputDir)")
+
+        var workResults = results
+        var clipsDone = 0
+        let clipTotal = totalClips
+
+        for i in 0..<workResults.count {
+            if Task.isCancelled {
+                await MainActor.run { job.compilationStatus = .idle; job.compilationPhase = "Cancelled" }
+                return
+            }
+            let r = workResults[i]
+            let segCount = r.segments.count
+            if segCount == 0 { continue }
+
+            await MainActor.run {
+                job.compilationPhase = "Extracting from \(r.filename) (\(clipsDone + 1)–\(clipsDone + segCount) of \(clipTotal))"
+            }
+
+            // Extract clips for this single video result
+            var single = [workResults[i]]
+            await pfExtractAllClips(
+                results: &single, personName: personName,
+                outputDir: outputDir, concurrency: compilationSettings.concurrency,
+                logFn: { line in await job.appendLog(line) }
+            )
+            workResults[i] = single[0]
+            clipsDone += segCount
+            await MainActor.run {
+                job.compilationClipsDone = clipsDone
+                job.compilationProgress = Double(clipsDone) / Double(clipTotal)
+            }
+        }
+
+        if Task.isCancelled {
+            await MainActor.run { job.compilationStatus = .idle; job.compilationPhase = "Cancelled" }
+            return
+        }
+
+        let clipResults: [ClipResult] = workResults.compactMap { r -> ClipResult? in
+            guard !r.segments.isEmpty else { return nil }
+            return ClipResult(
+                videoFilename: r.filename,
+                videoPath: r.filePath,
+                videoDuration: r.durationSeconds,
+                presenceSecs: r.totalPresenceSecs,
+                segmentCount: r.segments.count,
+                bestDistance: r.segments.map(\.bestDistance).min() ?? 0,
+                clipFiles: r.clipFiles,
+                outputDir: outputDir
+            )
+        }
+        let foundClips = workResults.reduce(0) { $0 + $1.clipFiles.filter { !$0.isEmpty }.count }
+        osLog.info("Extraction done: \(foundClips) clip file(s) — entering compile phase")
+
+        await MainActor.run {
+            job.results = clipResults
+            job.clipsFound = foundClips
+        }
+
+        let allClipPaths = workResults.flatMap(\.clipFiles).filter { !$0.isEmpty }
+            .map { (outputDir as NSString).appendingPathComponent($0) }
+
+        let compiled = await compileAndCleanup(
+            workResults: workResults,
+            foundClips: foundClips,
+            compilationSettings: compilationSettings,
+            personName: personName,
+            outputDir: outputDir,
+            allClipPaths: allClipPaths,
+            job: job
+        )
+
+        await MainActor.run {
+            job.compiledVideoPaths = compiled
+            job.compilationStatus = .done
+            job.compilationProgress = 1.0
+            let totalDur = compiled.reduce(0.0) { $0 + $1.durationSecs }
+            job.compilationPhase = compiled.isEmpty
+                ? "No clips to compile"
+                : "\(compiled.count) video(s), \(pfFormatDuration(totalDur))"
+            job.appendLog("\n━ Compilation complete: \(compiled.count) output(s), \(foundClips) clip(s) ━")
+        }
+        let totalBytes = compiled.reduce(Int64(0)) { $0 + $1.bytesOnDisk }
+        osLog.info("Compilation done: \(compiled.count) output(s), \(foundClips) clip(s), \(totalBytes) bytes on disk")
+    }
 
     // MARK: Reference loading
 
@@ -1312,21 +1590,19 @@ final class PersonFinderModel: ObservableObject {
     private nonisolated static func compileAndCleanup(
         workResults: [pfVideoResult],
         foundClips: Int,
-        settings: PersonFinderSettings,
+        compilationSettings: CompilationSettings,
+        personName: String,
         outputDir: String,
         allClipPaths: [String],
         job: ScanJob
     ) async -> [CompiledOutput] {
-        guard foundClips > 0, settings.concatOutput || settings.decadeChapters else { return [] }
+        guard foundClips > 0 else { return [] }
 
         let df = DateFormatter(); df.dateFormat = "yyyyMMdd_HHmmss"
         let stamp = df.string(from: Date())
-        let name = pfSanitize(settings.personName)
-        if settings.decadeChapters {
-            await job.appendLog("\nNote: decade-chapter output is paused while bucketed")
-            await job.appendLog("compilation lands. See docs/compilation-bucketing.md.")
-        }
+        let name = pfSanitize(personName)
         await job.appendLog("\nBuilding compatibility-bucketed compilations…")
+        await MainActor.run { job.compilationStatus = .compiling; job.compilationProgress = 0; job.compilationPhase = "Building compilations…" }
         let bucketCompiled = await pfCompileBuckets(
             results: workResults,
             outputDir: outputDir,
@@ -1335,15 +1611,9 @@ final class PersonFinderModel: ObservableObject {
             logFn: { line in await job.appendLog(line) }
         )
 
-        // Merge buckets into one chunky output. The strict CompatKey bucketing
-        // produces too many small files for browsing — typical home-video
-        // scans yield 30–45 buckets. The user wants ~one watchable file. So
-        // re-encode all bucket files into a single normalized output via
-        // h264_videotoolbox (Apple Silicon hardware encoder, fast on M4 Max).
-        // If the merge fails for any reason, keep the bucket files as a
-        // safe fallback rather than leaving the user with no output.
         var compiled = bucketCompiled
-        if bucketCompiled.count > 1 && settings.singleFileCompilation {
+        if bucketCompiled.count > 1 && compilationSettings.mode == .singleVideo {
+            await MainActor.run { job.compilationStatus = .merging; job.compilationProgress = 0; job.compilationPhase = "Merging \(bucketCompiled.count) bucket(s) into single file…" }
             await job.appendLog("\nMerging \(bucketCompiled.count) bucket(s) into a single compilation…")
             let mergedName = "\(name)_compilation_\(stamp).mp4"
             let mergedPath = (outputDir as NSString).appendingPathComponent(mergedName)
@@ -1352,7 +1622,6 @@ final class PersonFinderModel: ObservableObject {
                 outputPath: mergedPath,
                 logFn: { line in await job.appendLog(line) }
             ) {
-                // Success — replace bucket outputs with the single merged file
                 let fm = FileManager.default
                 let totalDur = bucketCompiled.reduce(0.0) { $0 + $1.durationSecs }
                 let totalClips = bucketCompiled.reduce(0) { $0 + $1.clipCount }
@@ -1370,7 +1639,6 @@ final class PersonFinderModel: ObservableObject {
             }
         }
 
-        // Clean up intermediate clip files after successful compilation.
         if !compiled.isEmpty {
             let outputPaths = Set(compiled.map(\.path))
             let fm = FileManager.default
@@ -1438,76 +1706,23 @@ final class PersonFinderModel: ObservableObject {
             job.results = preliminaryResults
             job.presenceSecs = preliminaryPresence
         }
-        osLog.info("Preliminary results published: \(preliminaryResults.count) video(s) with hits — extraction starts now")
+        let totalSegments = validResults.reduce(0) { $0 + $1.segments.count }
+        osLog.info("Scan complete: \(preliminaryResults.count) video(s) with hits, \(totalSegments) segment(s), \(pfFormatDuration(preliminaryPresence), privacy: .public) presence — ready for compilation")
 
-        // Extract clips
-        await MainActor.run { job.status = .extracting; job.currentFile = "" }
-
-        let totalClips = validResults.reduce(0) { $0 + $1.segments.count }
-        if totalClips > 0 {
-            await job.appendLog("Extracting \(totalClips) clip(s) to: \(outputDir)\n")
-        }
-
-        var workResults = validResults
-        await pfExtractAllClips(
-            results: &workResults, personName: settings.personName,
-            outputDir: outputDir, concurrency: settings.concurrency,
-            logFn: { line in await job.appendLog(line) }
-        )
-
-        // Build ClipResult objects for the UI results table
-        let clipResults: [ClipResult] = workResults.compactMap { r -> ClipResult? in
-            guard !r.segments.isEmpty else { return nil }
-            return ClipResult(
-                videoFilename: r.filename,
-                videoPath: r.filePath,
-                videoDuration: r.durationSeconds,
-                presenceSecs: r.totalPresenceSecs,
-                segmentCount: r.segments.count,
-                bestDistance: r.segments.map(\.bestDistance).min() ?? 0,
-                clipFiles: r.clipFiles,
-                outputDir: outputDir
-            )
-        }
-
-        let totalPresence = workResults.map(\.totalPresenceSecs).reduce(0, +)
-        let foundClips = workResults.reduce(0) { $0 + $1.clipFiles.filter { !$0.isEmpty }.count }
-
-        // Live results — populate the results table now, BEFORE the compile
-        // phase. The user can browse what was found, play individual clips,
-        // and inspect matches while compilation runs in the background.
-        // job.status flips to .compiling so the UI knows compile is still
-        // happening, but the data is already there to read.
+        // Store recognition data for on-demand compilation later
         await MainActor.run {
-            job.results = clipResults
-            job.clipsFound = foundClips
-            job.presenceSecs = totalPresence
-            job.status = .compiling
-        }
-        osLog.info("Live results published: \(clipResults.count) video(s) with hits, \(foundClips) clip(s) — entering compile phase")
-
-        // Bucketed compilation — see docs/compilation-bucketing.md for the
-        // full design. We group consecutive clips by ffprobe-derived CompatKey,
-        // then stream-copy each bucket into its own output file.
-        let allClipPaths = workResults.flatMap(\.clipFiles).filter { !$0.isEmpty }
-            .map { (outputDir as NSString).appendingPathComponent($0) }
-
-        let finalCompiledOutputs = await compileAndCleanup(
-            workResults: workResults,
-            foundClips: foundClips,
-            settings: settings,
-            outputDir: outputDir,
-            allClipPaths: allClipPaths,
-            job: job
-        )
-        await MainActor.run {
-            job.compiledVideoPaths = finalCompiledOutputs
+            job.recognitionResults = validResults
+            job.recognitionOutputDir = outputDir
+            job.clipsFound = totalSegments
             job.status = .done
             job.progress = 1.0
             job.currentFile = ""
             job.stopElapsedTimer()
             job.appendLog("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            job.appendLog("Done. \(job.videosWithHits) video(s) with hits, \(foundClips) clip(s), \(pfFormatDuration(totalPresence)) total presence.")
+            job.appendLog("Done. \(job.videosWithHits) video(s) with hits, \(totalSegments) segment(s), \(pfFormatDuration(preliminaryPresence)) total presence.")
+            if totalSegments > 0 {
+                job.appendLog("Use Create Composite Video to extract and compile clips.")
+            }
         }
     }
 }
