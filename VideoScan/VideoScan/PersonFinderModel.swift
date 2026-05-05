@@ -1927,13 +1927,10 @@ private nonisolated func pfLoadReferencePhotos(from path: String, largestFaceOnl
 
 // MARK: - Catalog skip set
 
-/// Build a set of full paths that should be skipped during person search because
-/// they are known from prior catalog scans to be unscannable (audio-only, no streams,
-/// ffprobe failures). Must be called on MainActor since CatalogStore is MainActor-isolated.
-@MainActor
-func pfCatalogSkipSet() -> Set<String> {
-    let records = CatalogStore.shared.load()
-    guard !records.isEmpty else { return [] }
+/// Pure helper: from a list of records, return paths known to be unscannable
+/// (audio-only, no streams, ffprobe failures). Pulled out for unit testing —
+/// `pfCatalogSkipSet()` calls this with `CatalogStore.shared.load()`.
+nonisolated func pfCatalogSkipPaths(from records: [VideoRecord]) -> Set<String> {
     var skip = Set<String>()
     for rec in records {
         switch rec.streamType {
@@ -1944,6 +1941,14 @@ func pfCatalogSkipSet() -> Set<String> {
         }
     }
     return skip
+}
+
+/// Build a set of full paths that should be skipped during person search because
+/// they are known from prior catalog scans to be unscannable (audio-only, no streams,
+/// ffprobe failures). Must be called on MainActor since CatalogStore is MainActor-isolated.
+@MainActor
+func pfCatalogSkipSet() -> Set<String> {
+    pfCatalogSkipPaths(from: CatalogStore.shared.load())
 }
 
 // MARK: - Video discovery

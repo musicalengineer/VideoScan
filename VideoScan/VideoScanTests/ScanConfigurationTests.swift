@@ -319,3 +319,4 @@ struct ScanConfigurationTests {
         model.stopAll()
     }
 }
+

@@ -187,41 +187,31 @@ struct ScanContextTests {
     }
 }
 
-// MARK: - Catalog Skip Set Tests
+// MARK: - Catalog Skip Set Tests (Issue #23)
+//
+// Person scan filters out catalog-known-bad records (audio-only,
+// no-streams, ffprobe-failed) before processing. Tests exercise the
+// pure helper `pfCatalogSkipPaths(from:)` directly.
 
 struct CatalogSkipSetTests {
 
-    @Test func skipSetFiltersAudioOnly() async {
-        let rec1 = VideoRecord()
-        rec1.fullPath = "/vol/video1.mov"
-        rec1.streamTypeRaw = StreamType.videoAndAudio.rawValue
+    private func record(_ path: String, _ streamType: StreamType) -> VideoRecord {
+        let r = VideoRecord()
+        r.fullPath = path
+        r.streamTypeRaw = streamType.rawValue
+        return r
+    }
 
-        let rec2 = VideoRecord()
-        rec2.fullPath = "/vol/audio.wav"
-        rec2.streamTypeRaw = StreamType.audioOnly.rawValue
-
-        let rec3 = VideoRecord()
-        rec3.fullPath = "/vol/broken.mxf"
-        rec3.streamTypeRaw = StreamType.ffprobeFailed.rawValue
-
-        let rec4 = VideoRecord()
-        rec4.fullPath = "/vol/empty.avi"
-        rec4.streamTypeRaw = StreamType.noStreams.rawValue
-
-        let rec5 = VideoRecord()
-        rec5.fullPath = "/vol/video2.mp4"
-        rec5.streamTypeRaw = StreamType.videoOnly.rawValue
-
-        var skip = Set<String>()
-        for rec in [rec1, rec2, rec3, rec4, rec5] {
-            switch rec.streamType {
-            case .audioOnly, .noStreams, .ffprobeFailed:
-                if !rec.fullPath.isEmpty { skip.insert(rec.fullPath) }
-            case .videoAndAudio, .videoOnly:
-                break
-            }
-        }
-
+    // regression: #23 — Catalog skip set filters audio-only, ffprobe-failed, no-streams
+    @Test func skipSetFiltersAudioOnly() {
+        let recs = [
+            record("/vol/video1.mov", .videoAndAudio),
+            record("/vol/audio.wav", .audioOnly),
+            record("/vol/broken.mxf", .ffprobeFailed),
+            record("/vol/empty.avi", .noStreams),
+            record("/vol/video2.mp4", .videoOnly),
+        ]
+        let skip = pfCatalogSkipPaths(from: recs)
         #expect(skip.count == 3)
         #expect(skip.contains("/vol/audio.wav"))
         #expect(skip.contains("/vol/broken.mxf"))
@@ -230,7 +220,8 @@ struct CatalogSkipSetTests {
         #expect(!skip.contains("/vol/video2.mp4"))
     }
 
-    @Test func skipSetFilteringReducesFileList() async {
+    // regression: #23 — Applying the skip set to a file list shrinks it to scannable items
+    @Test func skipSetFilteringReducesFileList() {
         let allFiles = [
             "/vol/video1.mov",
             "/vol/audio.wav",
@@ -248,44 +239,28 @@ struct CatalogSkipSetTests {
         #expect(filtered.contains("/vol/video2.mp4"))
     }
 
-    @Test func skipSetEmptyWhenNoBadFiles() async {
-        let rec1 = VideoRecord()
-        rec1.fullPath = "/vol/good1.mov"
-        rec1.streamTypeRaw = StreamType.videoAndAudio.rawValue
-
-        let rec2 = VideoRecord()
-        rec2.fullPath = "/vol/good2.mp4"
-        rec2.streamTypeRaw = StreamType.videoOnly.rawValue
-
-        var skip = Set<String>()
-        for rec in [rec1, rec2] {
-            switch rec.streamType {
-            case .audioOnly, .noStreams, .ffprobeFailed:
-                if !rec.fullPath.isEmpty { skip.insert(rec.fullPath) }
-            case .videoAndAudio, .videoOnly:
-                break
-            }
-        }
-
-        #expect(skip.isEmpty)
+    // regression: #23 — All-good catalog produces an empty skip set
+    @Test func skipSetEmptyWhenNoBadFiles() {
+        let recs = [
+            record("/vol/good1.mov", .videoAndAudio),
+            record("/vol/good2.mp4", .videoOnly),
+        ]
+        #expect(pfCatalogSkipPaths(from: recs).isEmpty)
     }
 
-    @Test func skipSetIgnoresEmptyPaths() async {
-        let rec = VideoRecord()
-        rec.fullPath = ""
-        rec.streamTypeRaw = StreamType.audioOnly.rawValue
-
-        var skip = Set<String>()
-        switch rec.streamType {
-        case .audioOnly, .noStreams, .ffprobeFailed:
-            if !rec.fullPath.isEmpty { skip.insert(rec.fullPath) }
-        case .videoAndAudio, .videoOnly:
-            break
-        }
-
-        #expect(skip.isEmpty, "Empty paths should not be added to skip set")
+    // regression: #23 — Empty fullPath does not pollute the skip set with empty string
+    @Test func skipSetIgnoresEmptyPaths() {
+        let rec = record("", .audioOnly)
+        #expect(pfCatalogSkipPaths(from: [rec]).isEmpty,
+                "Empty paths should not be added to skip set")
     }
 
+    // regression: #23 — Empty input returns empty skip set without crashing
+    @Test func skipSetEmptyInputReturnsEmpty() {
+        #expect(pfCatalogSkipPaths(from: []).isEmpty)
+    }
+
+    // regression: #23 — Default opt-in: setting `skipCatalogBadFiles` ships true
     @Test func settingDefaultsToTrue() {
         let settings = PersonFinderSettings()
         #expect(settings.skipCatalogBadFiles == true)
