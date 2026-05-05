@@ -156,6 +156,7 @@ class VideoRecord: Identifiable, Codable {
     var junkScore: Int = 0
     var junkReasons: [String] = []
     var starRating: Int = 0                   // 0 = unrated, 1-3 stars
+    var detectedPeople: [String] = []
     var combinedFromPairID: UUID?             // links back to source pair group
 
     /// Hostname of the machine that originally cataloged this record.
@@ -270,7 +271,7 @@ class VideoRecord: Identifiable, Codable {
         case duplicateReasons, duplicateBestMatchFilename, duplicateGroupCount
         case lifecycleStage, mediaDisposition, archiveStage, masterLocation, backupDestinations
         case junkScore, junkReasons
-        case starRating, combinedFromPairID
+        case starRating, detectedPeople, combinedFromPairID
         case sourceHost
         case scanContext
     }
@@ -335,6 +336,7 @@ class VideoRecord: Identifiable, Codable {
         junkScore                   = try c.decodeIfPresent(Int.self, forKey: .junkScore) ?? 0
         junkReasons                 = try c.decodeIfPresent([String].self, forKey: .junkReasons) ?? []
         starRating                  = try c.decodeIfPresent(Int.self, forKey: .starRating) ?? 0
+        detectedPeople              = try c.decodeIfPresent([String].self, forKey: .detectedPeople) ?? []
         combinedFromPairID          = try c.decodeIfPresent(UUID.self, forKey: .combinedFromPairID)
         scanContext                 = try c.decodeIfPresent(ScanContext.self, forKey: .scanContext) ?? ScanContext()
     }
@@ -406,6 +408,9 @@ class VideoRecord: Identifiable, Codable {
         }
         if starRating > 0 {
             try c.encode(starRating, forKey: .starRating)
+        }
+        if !detectedPeople.isEmpty {
+            try c.encode(detectedPeople, forKey: .detectedPeople)
         }
         if combinedFromPairID != nil {
             try c.encode(combinedFromPairID, forKey: .combinedFromPairID)

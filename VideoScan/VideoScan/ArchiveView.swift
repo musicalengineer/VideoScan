@@ -307,76 +307,69 @@ struct ArchiveView: View {
     private func fileTable(rows: [VideoRecord]) -> some View {
         let sorted = rows.sorted(using: sortOrder)
         return Table(sorted, selection: $selectedIDs, sortOrder: $sortOrder) {
-            TableColumn("") { rec in
-                HStack(spacing: 2) {
-                    Image(systemName: rec.mediaDisposition.icon)
-                        .foregroundColor(rec.mediaDisposition.color)
-                    if rec.archiveHealth != .notApplicable {
-                        Image(systemName: rec.archiveHealth.icon)
-                            .font(.system(size: 9))
-                            .foregroundColor(rec.archiveHealth.color)
-                    }
-                }
-                .help(rec.archiveHealth != .notApplicable
-                      ? "\(rec.mediaDisposition.rawValue) — \(rec.archiveHealth.label)"
-                      : rec.mediaDisposition.rawValue)
-            }
-            .width(44)
-
             TableColumn("Filename", value: \.filename) { rec in
                 Text(rec.filename)
                     .font(.system(size: 13, design: .monospaced))
-                    .foregroundColor(rec.filenameColor)
+                    .foregroundColor(.green)
                     .lineLimit(1)
                     .help(rec.fullPath)
             }
-            .width(min: 150, ideal: 250)
-
-            TableColumn("Type", value: \.streamTypeRaw) { rec in
-                Text(rec.streamType.rawValue)
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-            }
-            .width(min: 80, ideal: 100)
+            .width(min: 180, ideal: 280)
 
             TableColumn("Duration", value: \.durationSeconds) { rec in
                 Text(rec.duration.isEmpty ? "—" : rec.duration)
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(.secondary)
             }
-            .width(min: 60, ideal: 70)
+            .width(min: 60, ideal: 75)
 
-            TableColumn("Size", value: \.sizeBytes) { rec in
-                Text(rec.size.isEmpty ? "—" : rec.size)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(.secondary)
+            TableColumn("People") { rec in
+                if rec.detectedPeople.isEmpty {
+                    Text("—")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                } else {
+                    Text(rec.detectedPeople.joined(separator: ", "))
+                        .font(.system(size: 12))
+                        .foregroundColor(.blue)
+                        .lineLimit(1)
+                }
             }
-            .width(min: 60, ideal: 80)
+            .width(min: 80, ideal: 120)
 
-            TableColumn("Volume", value: \.volumeName) { rec in
-                Text(rec.volumeName)
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
+            TableColumn("Archived To") { rec in
+                archiveDestinations(rec)
             }
-            .width(min: 80, ideal: 110)
+            .width(min: 160, ideal: 240)
 
-            TableColumn("Rating") { rec in
-                StarRatingView(rating: Binding(
-                    get: { rec.starRating },
-                    set: { rec.starRating = $0 }
-                ))
-            }
-            .width(min: 60, ideal: 70)
-
-            // Keeper checkmarks
             TableColumn("Lifecycle") { rec in
                 lifecycleCheckmarks(rec)
             }
             .width(min: 140, ideal: 180)
-
         }
         .contextMenu(forSelectionType: UUID.self) { ids in
             recordContextMenu(for: ids)
+        }
+    }
+
+    private func archiveDestinations(_ rec: VideoRecord) -> some View {
+        HStack(spacing: 6) {
+            if rec.backupDestinations.isEmpty && rec.masterLocation.isEmpty {
+                Text("No destinations recorded")
+                    .font(.system(size: 12))
+                    .foregroundColor(.orange)
+            } else {
+                if !rec.masterLocation.isEmpty {
+                    Label(rec.masterLocation, systemImage: "crown.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(.purple)
+                }
+                ForEach(rec.backupDestinations) { entry in
+                    Label(entry.name, systemImage: entry.kind.icon)
+                        .font(.system(size: 11))
+                        .foregroundColor(entry.kind == .cloud ? .blue : entry.kind == .offsite ? .teal : .secondary)
+                }
+            }
         }
     }
 
@@ -563,7 +556,8 @@ struct ArchiveView: View {
             $0.filename.lowercased().contains(q) ||
             $0.fullPath.lowercased().contains(q) ||
             $0.videoCodec.lowercased().contains(q) ||
-            $0.notes.lowercased().contains(q)
+            $0.notes.lowercased().contains(q) ||
+            $0.detectedPeople.contains { $0.lowercased().contains(q) }
         }
     }
 
