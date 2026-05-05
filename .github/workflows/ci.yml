@@ -103,6 +103,12 @@ jobs:
             exit 1
           fi
 
+      - name: Test Summary (pass/fail with details)
+        if: always()
+        run: |
+          chmod +x scripts/ci_test_summary.sh
+          scripts/ci_test_summary.sh TestResults.xcresult
+
       - name: Coverage Summary
         if: always()
         run: |
