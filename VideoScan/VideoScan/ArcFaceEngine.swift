@@ -8,6 +8,7 @@ import Vision
 import CoreImage
 import CoreGraphics
 import AVFoundation
+import os
 
 // MARK: - ArcFace CoreML Model Singleton
 
@@ -389,6 +390,7 @@ private nonisolated func arcFaceSampleNextFrame(
     lastProcessedTime: inout Double, frameInterval: Double,
     bestCosineEver: inout Float, totalFacesDetected: inout Int,
     sampledSoFar: inout Int, visionFrameTimes: inout [Double],
+    perf: inout FramePerfAccumulator,
     previewRateFn: @escaping @Sendable () -> Int
 ) -> ArcFaceFrameResult {
     var frameTime: Double = 0
@@ -397,11 +399,13 @@ private nonisolated func arcFaceSampleNextFrame(
     var shouldSkip = false
 
     autoreleasepool {
+        let t0 = CFAbsoluteTimeGetCurrent()
         guard let sampleBuffer = ctx.trackOutput.copyNextSampleBuffer() else {
             shouldSkip = true; return
         }
         let t = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
         guard t - lastProcessedTime >= frameInterval else {
+            perf.skippedFrames += 1
             shouldSkip = true; frameTime = -1; return
         }
         lastProcessedTime = t
@@ -410,15 +414,20 @@ private nonisolated func arcFaceSampleNextFrame(
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             shouldSkip = true; frameTime = -1; return
         }
+        let t1 = CFAbsoluteTimeGetCurrent()
 
-        let frameStart = CFAbsoluteTimeGetCurrent()
         let allFaces = pfDetectFacesInBuffer(pixelBuffer, orientation: ctx.orientation)
         let candidates: [VNFaceObservation] = settings.requirePrimary
             ? (allFaces.max(by: { ($0.boundingBox.width * $0.boundingBox.height) < ($1.boundingBox.width * $1.boundingBox.height) }).map { [$0] } ?? [])
             : allFaces
+        let t2 = CFAbsoluteTimeGetCurrent()
 
+        var orientTime = 0.0
+        var matchTime = 0.0
         if !candidates.isEmpty,
            let img = pfOrientedCGImage(from: pixelBuffer, transform: ctx.transform) {
+            let t3 = CFAbsoluteTimeGetCurrent()
+            orientTime = t3 - t2
             frameMatch = arcFaceMatchCandidates(
                 timeSecs: t,
                 orientedImage: img,
@@ -428,6 +437,7 @@ private nonisolated func arcFaceSampleNextFrame(
                 model: model,
                 cosineThreshold: cosineThreshold
             )
+            matchTime = CFAbsoluteTimeGetCurrent() - t3
             if frameMatch.bestCosineInFrame > bestCosineEver {
                 bestCosineEver = frameMatch.bestCosineInFrame
             }
@@ -435,8 +445,9 @@ private nonisolated func arcFaceSampleNextFrame(
             let rate = max(1, previewRateFn())
             if (sampledSoFar + 1) % rate == 0 { previewImage = img }
         }
+        perf.addFrame(decode: t1 - t0, detect: t2 - t1, orient: orientTime, match: matchTime)
         sampledSoFar += 1
-        visionFrameTimes.append(CFAbsoluteTimeGetCurrent() - frameStart)
+        visionFrameTimes.append(CFAbsoluteTimeGetCurrent() - t0)
     }
 
     if shouldSkip {
@@ -480,14 +491,21 @@ nonisolated func pfProcessVideoWithArcFace(
     previewRateFn: @escaping @Sendable () -> Int = { 5 }
 ) async -> pfVideoResult? {
     let filename = (filePath as NSString).lastPathComponent
+    var perf = FramePerfAccumulator()
+    let videoOpenStart = CFAbsoluteTimeGetCurrent()
+    let spVideo = signpostLog.beginInterval("video", id: .exclusive, "\(filename, privacy: .public)")
     guard let ctx = await openArcFaceVideoReader(
         filePath: filePath, filename: filename, index: index, total: total, logFn: logFn
-    ) else { return nil }
+    ) else {
+        signpostLog.endInterval("video", spVideo)
+        return nil
+    }
+    perf.videoOpenMs = (CFAbsoluteTimeGetCurrent() - videoOpenStart) * 1000
+    let wallStart = CFAbsoluteTimeGetCurrent()
 
     await progressFn(filename)
     await logFn("[\(index)/\(total)] \(filename)  (\(pfFormatDuration(ctx.duration)), \(String(format: "%.1f", ctx.fps)) fps)  [ArcFace]")
 
-    // ArcFace uses cosine similarity (higher = better match); default 0.40 ~ Vision 0.52.
     let cosineThreshold = settings.arcfaceThreshold
 
     var hits: [(timeSecs: Double, distance: Float)] = []
@@ -509,6 +527,7 @@ nonisolated func pfProcessVideoWithArcFace(
             lastProcessedTime: &lastProcessedTime, frameInterval: frameInterval,
             bestCosineEver: &bestCosineEver, totalFacesDetected: &totalFacesDetected,
             sampledSoFar: &sampledSoFar, visionFrameTimes: &visionFrameTimes,
+            perf: &perf,
             previewRateFn: previewRateFn
         )
 
@@ -542,6 +561,11 @@ nonisolated func pfProcessVideoWithArcFace(
         }
         if case .finished = frameResult { break }
     }
+
+    let wallMs = (CFAbsoluteTimeGetCurrent() - wallStart) * 1000
+    let summary = perf.summary(filename: filename, wallMs: wallMs)
+    perfLog.info("\(summary, privacy: .public)")
+    signpostLog.endInterval("video", spVideo)
 
     if bestCosineEver > -1 { await distFn(1.0 - bestCosineEver) }
     if ctx.reader.status == .failed {

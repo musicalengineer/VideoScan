@@ -25,6 +25,55 @@ private let osLog = Logger(
     category: "personfinder"
 )
 
+let perfLog = Logger(
+    subsystem: "Rick-Breen.VideoScan",
+    category: "perf"
+)
+let signpostLog = OSSignposter(
+    subsystem: "Rick-Breen.VideoScan",
+    category: "perf"
+)
+
+struct FramePerfAccumulator {
+    var decodeMs: Double = 0
+    var faceDetectMs: Double = 0
+    var orientMs: Double = 0
+    var matchMs: Double = 0
+    var frameCount: Int = 0
+    var skippedFrames: Int = 0
+    var videoOpenMs: Double = 0
+
+    mutating func addFrame(decode: Double, detect: Double, orient: Double, match: Double) {
+        decodeMs += decode * 1000
+        faceDetectMs += detect * 1000
+        orientMs += orient * 1000
+        matchMs += match * 1000
+        frameCount += 1
+    }
+
+    var totalMs: Double { decodeMs + faceDetectMs + orientMs + matchMs }
+
+    func summary(filename: String, wallMs: Double) -> String {
+        let idle = wallMs - totalMs
+        return String(format: """
+            PERF %@ — %d frames in %.1fs wall \
+            | decode %.0fms (%.0f%%) \
+            | faceDetect %.0fms (%.0f%%) \
+            | orient %.0fms (%.0f%%) \
+            | match %.0fms (%.0f%%) \
+            | idle/await %.0fms (%.0f%%) \
+            | skipped %d | open %.0fms
+            """,
+            filename, frameCount, wallMs / 1000,
+            decodeMs, wallMs > 0 ? decodeMs / wallMs * 100 : 0,
+            faceDetectMs, wallMs > 0 ? faceDetectMs / wallMs * 100 : 0,
+            orientMs, wallMs > 0 ? orientMs / wallMs * 100 : 0,
+            matchMs, wallMs > 0 ? matchMs / wallMs * 100 : 0,
+            idle, wallMs > 0 ? idle / wallMs * 100 : 0,
+            skippedFrames, videoOpenMs)
+    }
+}
+
 // MARK: - Settings
 
 // MARK: - Recognition Engine Registry
@@ -2177,6 +2226,7 @@ private nonisolated func pfSampleNextFrame(
     lastProcessedTime: inout Double, frameInterval: Double,
     bestDistEver: inout Float, totalFacesDetected: inout Int,
     sampledSoFar: inout Int, visionFrameTimes: inout [Double],
+    perf: inout FramePerfAccumulator,
     previewRateFn: @escaping @Sendable () -> Int
 ) -> PFFrameResult {
     var frameTime: Double = 0
@@ -2185,11 +2235,13 @@ private nonisolated func pfSampleNextFrame(
     var shouldSkip = false
 
     autoreleasepool {
+        let t0 = CFAbsoluteTimeGetCurrent()
         guard let sampleBuffer = ctx.trackOutput.copyNextSampleBuffer() else {
             shouldSkip = true; return
         }
         let t = CMTimeGetSeconds(CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
         guard t - lastProcessedTime >= frameInterval else {
+            perf.skippedFrames += 1
             shouldSkip = true; frameTime = -1; return
         }
         lastProcessedTime = t
@@ -2198,15 +2250,20 @@ private nonisolated func pfSampleNextFrame(
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
             shouldSkip = true; frameTime = -1; return
         }
+        let t1 = CFAbsoluteTimeGetCurrent()
 
-        let frameStart = CFAbsoluteTimeGetCurrent()
         let allFaces = pfDetectFacesInBuffer(pixelBuffer, orientation: ctx.orientation)
         let candidates: [VNFaceObservation] = settings.requirePrimary
             ? (allFaces.max(by: { ($0.boundingBox.width * $0.boundingBox.height) < ($1.boundingBox.width * $1.boundingBox.height) }).map { [$0] } ?? [])
             : allFaces
+        let t2 = CFAbsoluteTimeGetCurrent()
 
+        var orientTime = 0.0
+        var matchTime = 0.0
         if !candidates.isEmpty,
            let img = pfOrientedCGImage(from: pixelBuffer, transform: ctx.transform) {
+            let t3 = CFAbsoluteTimeGetCurrent()
+            orientTime = t3 - t2
             frameMatch = pfVisionMatchCandidates(
                 timeSecs: t,
                 orientedImage: img,
@@ -2214,6 +2271,7 @@ private nonisolated func pfSampleNextFrame(
                 referencePrints: prints,
                 settings: settings
             )
+            matchTime = CFAbsoluteTimeGetCurrent() - t3
             if frameMatch.bestDistInFrame < bestDistEver {
                 bestDistEver = frameMatch.bestDistInFrame
             }
@@ -2221,8 +2279,9 @@ private nonisolated func pfSampleNextFrame(
             let rate = max(1, previewRateFn())
             if (sampledSoFar + 1) % rate == 0 { previewImage = img }
         }
+        perf.addFrame(decode: t1 - t0, detect: t2 - t1, orient: orientTime, match: matchTime)
         sampledSoFar += 1
-        visionFrameTimes.append(CFAbsoluteTimeGetCurrent() - frameStart)
+        visionFrameTimes.append(CFAbsoluteTimeGetCurrent() - t0)
     }
 
     if shouldSkip {
@@ -2265,9 +2324,17 @@ private nonisolated func pfProcessVideo(
     previewRateFn: @escaping @Sendable () -> Int = { 5 }
 ) async -> pfVideoResult? {
     let filename = (filePath as NSString).lastPathComponent
+    var perf = FramePerfAccumulator()
+    let videoOpenStart = CFAbsoluteTimeGetCurrent()
+    let spVideo = signpostLog.beginInterval("video", id: .exclusive, "\(filename, privacy: .public)")
     guard let ctx = await pfOpenVisionVideoReader(
         filePath: filePath, filename: filename, index: index, total: total, logFn: logFn
-    ) else { return nil }
+    ) else {
+        signpostLog.endInterval("video", spVideo)
+        return nil
+    }
+    perf.videoOpenMs = (CFAbsoluteTimeGetCurrent() - videoOpenStart) * 1000
+    let wallStart = CFAbsoluteTimeGetCurrent()
 
     await progressFn(filename)
     await logFn("[\(index)/\(total)] \(filename)  (\(pfFormatDuration(ctx.duration)), \(String(format: "%.1f", ctx.fps)) fps)")
@@ -2290,6 +2357,7 @@ private nonisolated func pfProcessVideo(
             lastProcessedTime: &lastProcessedTime, frameInterval: frameInterval,
             bestDistEver: &bestDistEver, totalFacesDetected: &totalFacesDetected,
             sampledSoFar: &sampledSoFar, visionFrameTimes: &visionFrameTimes,
+            perf: &perf,
             previewRateFn: previewRateFn
         )
 
@@ -2323,6 +2391,11 @@ private nonisolated func pfProcessVideo(
         }
         if case .finished = frameResult { break }
     }
+
+    let wallMs = (CFAbsoluteTimeGetCurrent() - wallStart) * 1000
+    let summary = perf.summary(filename: filename, wallMs: wallMs)
+    perfLog.info("\(summary, privacy: .public)")
+    signpostLog.endInterval("video", spVideo)
 
     await distFn(bestDistEver)
     if ctx.reader.status == .failed {
