@@ -957,7 +957,7 @@ final class PersonFinderModel: ObservableObject {
         let faces = job.assignedProfile != nil ? job.assignedFaces : self.referenceFaces
 
         // Pre-flight checks (before reset clears console)
-        osLog.info("runJob: person=\(jobSettings.personName, privacy: .public) engine=\(jobSettings.recognitionEngine.rawValue, privacy: .public) folder=\(job.searchPath, privacy: .public) faces=\(faces.count) prints=\(faces.count)")
+        osLog.notice("runJob: person=\(jobSettings.personName, privacy: .public) engine=\(jobSettings.recognitionEngine.rawValue, privacy: .public) folder=\(job.searchPath, privacy: .public) faces=\(faces.count) prints=\(faces.count)")
 
         // Volume reachability — common failure mode is targeting an offline
         // external drive. Without this check, findVideos returns 0 and the
@@ -1756,7 +1756,7 @@ final class PersonFinderModel: ObservableObject {
             job.presenceSecs = preliminaryPresence
         }
         let totalSegments = validResults.reduce(0) { $0 + $1.segments.count }
-        osLog.info("Scan complete: \(preliminaryResults.count) video(s) with hits, \(totalSegments) segment(s), \(pfFormatDuration(preliminaryPresence), privacy: .public) presence — ready for compilation")
+        osLog.notice("Scan complete: \(preliminaryResults.count) video(s) with hits, \(totalSegments) segment(s), \(pfFormatDuration(preliminaryPresence), privacy: .public) presence — ready for compilation")
 
         // Store recognition data for on-demand compilation later
         await MainActor.run {
@@ -2394,7 +2394,7 @@ private nonisolated func pfProcessVideo(
 
     let wallMs = (CFAbsoluteTimeGetCurrent() - wallStart) * 1000
     let summary = perf.summary(filename: filename, wallMs: wallMs)
-    perfLog.info("\(summary, privacy: .public)")
+    perfLog.notice("\(summary, privacy: .public)")
     signpostLog.endInterval("video", spVideo)
 
     await distFn(bestDistEver)

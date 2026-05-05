@@ -133,7 +133,7 @@ final class PersonFinderCache {
         bind(stmt, 7, key.refHash)
 
         guard sqlite3_step(stmt) == SQLITE_ROW else {
-            cacheLog.debug("MISS: \((key.videoPath as NSString).lastPathComponent, privacy: .public) refHash=\(key.refHash, privacy: .public)")
+            cacheLog.notice("MISS: \((key.videoPath as NSString).lastPathComponent, privacy: .public) refHash=\(key.refHash, privacy: .public)")
             return nil
         }
 
@@ -144,7 +144,7 @@ final class PersonFinderCache {
 
         let segments = decodeSegments(segJson)
         let filename = (key.videoPath as NSString).lastPathComponent
-        cacheLog.debug("HIT: \(filename, privacy: .public) hits=\(totalHits)")
+        cacheLog.notice("HIT: \(filename, privacy: .public) hits=\(totalHits)")
         return pfVideoResult(
             filename: filename,
             filePath: key.videoPath,
