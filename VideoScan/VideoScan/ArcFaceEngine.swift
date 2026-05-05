@@ -564,7 +564,7 @@ nonisolated func pfProcessVideoWithArcFace(
 
     let wallMs = (CFAbsoluteTimeGetCurrent() - wallStart) * 1000
     let summary = perf.summary(filename: filename, wallMs: wallMs)
-    perfLog.info("\(summary, privacy: .public)")
+    perfLog.notice("\(summary, privacy: .public)")
     signpostLog.endInterval("video", spVideo)
 
     if bestCosineEver > -1 { await distFn(1.0 - bestCosineEver) }
