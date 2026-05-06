@@ -546,8 +546,6 @@ struct ArchiveView: View {
             byCategory = keeperRecords.filter { $0.archiveStage == .readyForArchive }
         case .archived:
             byCategory = keeperRecords.filter { $0.archiveStage == .archived }
-        default:
-            byCategory = keeperRecords
         }
 
         if searchText.isEmpty { return byCategory }
@@ -569,7 +567,6 @@ struct ArchiveView: View {
         case .backedUp:      return keeperRecords.filter { $0.archiveStage == .backedUp }.count
         case .ready:         return keeperRecords.filter { $0.archiveStage == .readyForArchive }.count
         case .archived:      return keeperRecords.filter { $0.archiveStage == .archived }.count
-        default:             return 0
         }
     }
 }

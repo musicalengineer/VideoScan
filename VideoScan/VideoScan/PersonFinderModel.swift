@@ -3,7 +3,7 @@
 // Each ScanJob represents one search target (volume or folder).
 
 import Foundation
-import AVFoundation
+@preconcurrency import AVFoundation
 import Vision
 import CoreImage
 import CoreGraphics
