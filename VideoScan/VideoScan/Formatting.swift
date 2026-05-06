@@ -52,3 +52,54 @@ enum Formatting {
         return v
     }
 }
+
+enum CatalogCSVWriter {
+    static let headers = [
+        "Filename", "Extension", "Stream Type", "Size", "Size (Bytes)", "Duration",
+        "Date Created", "Date Modified", "Container", "Video Codec", "Resolution",
+        "Frame Rate", "Video Bitrate", "Total Bitrate", "Color Space", "Bit Depth",
+        "Scan Type", "Audio Codec", "Audio Channels", "Audio Sample Rate", "Timecode",
+        "Tape Name", "Is Playable", "Partial MD5", "Duplicate Group", "Duplicate Confidence",
+        "Duplicate Disposition", "Duplicate Match", "Duplicate Reasons", "Full Path", "Directory", "Notes"
+    ]
+
+    static func csvText(records: [VideoRecord]) -> String {
+        var lines = [headers.joined(separator: ",")]
+        for record in records {
+            lines.append(row(for: record))
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    static func row(for record: VideoRecord) -> String {
+        [
+            record.filename, record.ext, record.streamTypeRaw, record.size, String(record.sizeBytes),
+            record.duration, record.dateCreated, record.dateModified, record.container,
+            record.videoCodec, record.resolution, record.frameRate, record.videoBitrate,
+            record.totalBitrate, record.colorSpace, record.bitDepth, record.scanType,
+            record.audioCodec, record.audioChannels, record.audioSampleRate, record.timecode,
+            record.tapeName, record.isPlayable, record.partialMD5, record.duplicateGroupID?.uuidString ?? "",
+            record.duplicateConfidence?.rawValue ?? "", record.duplicateDisposition.rawValue,
+            record.duplicateBestMatchFilename, record.duplicateReasons, record.fullPath, record.directory, record.notes
+        ].map { Formatting.csvEscape($0) }.joined(separator: ",")
+    }
+
+    static func outputURL(root: String, date: Date = Date()) -> URL {
+        let folderName = URL(fileURLWithPath: root).lastPathComponent
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyyMMdd_HHmmss"
+        return FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Desktop")
+            .appendingPathComponent("VideoScan_\(folderName)_\(formatter.string(from: date)).csv")
+    }
+
+    static func write(records: [VideoRecord], root: String, date: Date = Date()) -> String? {
+        let outURL = outputURL(root: root, date: date)
+        do {
+            try csvText(records: records).write(to: outURL, atomically: true, encoding: .utf8)
+            return outURL.path
+        } catch {
+            return nil
+        }
+    }
+}

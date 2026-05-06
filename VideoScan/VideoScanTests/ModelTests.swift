@@ -2,6 +2,42 @@ import Testing
 import Foundation
 @testable import VideoScan
 
+// MARK: - ToolLocator Tests
+
+struct ToolLocatorTests {
+
+    @Test func firstExecutableSelectsFirstExecutableCandidate() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ToolLocatorTests_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let missing = dir.appendingPathComponent("missing").path
+        let notExecutable = dir.appendingPathComponent("not-executable").path
+        let executable = dir.appendingPathComponent("tool").path
+        FileManager.default.createFile(atPath: notExecutable, contents: Data())
+        FileManager.default.createFile(atPath: executable, contents: Data())
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: executable
+        )
+
+        #expect(ToolLocator.firstExecutable(in: [missing, notExecutable, executable]) == executable)
+    }
+
+    @Test func firstExecutableReturnsNilWhenNoCandidateCanRun() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ToolLocatorTests_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let path = dir.appendingPathComponent("plain-file").path
+        FileManager.default.createFile(atPath: path, contents: Data())
+
+        #expect(ToolLocator.firstExecutable(in: [path]) == nil)
+    }
+}
+
 // MARK: - StreamType Tests
 
 struct StreamTypeTests {
