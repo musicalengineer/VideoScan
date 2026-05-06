@@ -1,5 +1,6 @@
-import Foundation
 import CryptoKit
+import Darwin
+import Foundation
 
 // MARK: - FileHasher
 
