@@ -178,14 +178,21 @@ final class VolumeRescueOperation: ObservableObject {
         for (idx, rec) in files.enumerated() {
             if Task.isCancelled { break }
 
+            // Pull Sendable fields off the VideoRecord up front. VideoRecord
+            // is a class with mutable state so closures can't capture it
+            // across the MainActor boundary; capturing the String/Int64
+            // values is safe and keeps the type checker happy.
             let srcFile = rec.fullPath
-            let relative = Self.relativePath(srcFile, under: sourcePath, fallback: rec.filename)
+            let filename = rec.filename
+            let sizeBytes = rec.sizeBytes
+            let relative = Self.relativePath(srcFile, under: sourcePath, fallback: filename)
             let destFile = (rescueDir as NSString).appendingPathComponent(relative)
             let destDir = (destFile as NSString).deletingLastPathComponent
+            let progressFraction = Double(idx) / Double(total)
 
             await MainActor.run { [weak self] in
-                self?.currentFile = rec.filename
-                self?.progress = Double(idx) / Double(total)
+                self?.currentFile = filename
+                self?.progress = progressFraction
             }
 
             do {
@@ -201,7 +208,7 @@ final class VolumeRescueOperation: ObservableObject {
             if fm.fileExists(atPath: destFile) {
                 await MainActor.run { [weak self] in
                     self?.filesCopied += 1
-                    self?.bytesWritten += rec.sizeBytes
+                    self?.bytesWritten += sizeBytes
                 }
                 continue
             }
@@ -210,7 +217,7 @@ final class VolumeRescueOperation: ObservableObject {
                 try fm.copyItem(atPath: srcFile, toPath: destFile)
                 await MainActor.run { [weak self] in
                     self?.filesCopied += 1
-                    self?.bytesWritten += rec.sizeBytes
+                    self?.bytesWritten += sizeBytes
                 }
             } catch {
                 await MainActor.run { [weak self] in
@@ -229,14 +236,18 @@ final class VolumeRescueOperation: ObservableObject {
         for (idx, rec) in files.enumerated() {
             if Task.isCancelled { break }
 
+            // See fastCopy: capture Sendable fields, not the VideoRecord ref.
             let srcFile = rec.fullPath
-            let relative = Self.relativePath(srcFile, under: sourcePath, fallback: rec.filename)
+            let filename = rec.filename
+            let sizeBytes = rec.sizeBytes
+            let relative = Self.relativePath(srcFile, under: sourcePath, fallback: filename)
             let destFile = (rescueDir as NSString).appendingPathComponent(relative)
             let destDir = (destFile as NSString).deletingLastPathComponent
+            let progressFraction = Double(idx) / Double(total)
 
             await MainActor.run { [weak self] in
-                self?.currentFile = rec.filename
-                self?.progress = Double(idx) / Double(total)
+                self?.currentFile = filename
+                self?.progress = progressFraction
             }
 
             // Create destination directory
@@ -275,7 +286,7 @@ final class VolumeRescueOperation: ObservableObject {
                 if proc.terminationStatus == 0 {
                     await MainActor.run { [weak self] in
                         self?.filesCopied += 1
-                        self?.bytesWritten += rec.sizeBytes
+                        self?.bytesWritten += sizeBytes
                     }
                 } else {
                     let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
