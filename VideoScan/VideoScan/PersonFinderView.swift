@@ -10,8 +10,12 @@ import UniformTypeIdentifiers
 struct PersonFinderView: View {
     @EnvironmentObject var dashboard: DashboardState
     @EnvironmentObject var model: PersonFinderModel
+    @EnvironmentObject var catalogModel: VideoScanModel
+    @AppStorage("selectedTab") private var selectedTab: Int = 0
     @State private var selectedResultIDs = Set<UUID>()
-    @State private var inspectedResult: ClipResult?
+    @State private var inspectorShown = false
+    @State private var inspectorStreamInfo: StreamInspectInfo?
+    @State private var inspectorLoading = false
     @State private var resultSortOrder = [KeyPathComparator(\ClipResult.videoFilename)]
     @State private var resultTableData: [ClipResult] = []
 
@@ -574,6 +578,77 @@ struct PersonFinderView: View {
 
     // MARK: Results table
 
+    private func matchColor(_ dist: Float) -> Color {
+        if dist < 0.5 { return .green }
+        if dist < 0.65 { return .yellow }
+        return .orange
+    }
+
+    private var resultTableView: some View {
+        resultTableCore
+            .onChange(of: resultSortOrder) {
+                resultTableData.sort(using: resultSortOrder)
+            }
+            .contextMenu(forSelectionType: UUID.self) { ids in
+                resultContextMenu(ids: ids)
+            }
+            .frame(minHeight: 120)
+            .popover(isPresented: $inspectorShown, arrowEdge: .trailing) {
+                if let rec = selectedResult {
+                    inspectorPopover(rec)
+                }
+            }
+            .onChange(of: selectedResultIDs) {
+                guard inspectorShown, let rec = selectedResult else { return }
+                loadStreamInfo(for: rec)
+            }
+            .onKeyPress(phases: .down) { press in
+                guard press.key == KeyEquivalent("i"),
+                      press.modifiers == .command,
+                      let rec = selectedResult else { return .ignored }
+                openInspector(for: rec)
+                return .handled
+            }
+    }
+
+    private var resultTableCore: some View {
+        Table(resultTableData, selection: $selectedResultIDs, sortOrder: $resultSortOrder) {
+            TableColumn("Video File", value: \.videoFilename) { r in
+                Text(r.videoFilename)
+                    .font(.system(.body, design: .monospaced))
+                    .lineLimit(1)
+                    .help(r.videoPath)
+            }
+            .width(min: 200, ideal: 300)
+
+            TableColumn("Duration", value: \.videoDuration) { r in
+                Text(pfFormatDuration(r.videoDuration))
+                    .font(.system(.body, design: .monospaced))
+            }
+            .width(min: 70, ideal: 80)
+
+            TableColumn("Presence", value: \.presenceSecs) { r in
+                Text(pfFormatDuration(r.presenceSecs))
+                    .font(.system(.body, design: .monospaced).weight(.medium))
+                    .foregroundColor(.green)
+            }
+            .width(min: 70, ideal: 80)
+
+            TableColumn("Clips", value: \.segmentCount) { r in
+                Text("\(r.segmentCount)")
+                    .font(.body)
+            }
+            .width(min: 50, ideal: 60)
+
+            TableColumn("Best Match", value: \.bestDistance) { r in
+                Text(String(format: "%.3f", r.bestDistance))
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundColor(matchColor(r.bestDistance))
+            }
+            .width(min: 80, ideal: 90)
+        }
+    }
+
     private var selectedResult: ClipResult? {
         guard let id = selectedResultIDs.first else { return nil }
         return resultTableData.first { $0.id == id }
@@ -605,83 +680,7 @@ struct PersonFinderView: View {
                 .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
             } else {
                 VStack(spacing: 0) {
-                    Table(resultTableData, selection: $selectedResultIDs, sortOrder: $resultSortOrder) {
-                        TableColumn("Video File", value: \.videoFilename) { r in
-                            Text(r.videoFilename)
-                                .font(.system(.body, design: .monospaced))
-                                .lineLimit(1)
-                                .help(r.videoPath)
-                        }
-                        .width(min: 200, ideal: 300)
-
-                        TableColumn("Duration", value: \.videoDuration) { r in
-                            Text(pfFormatDuration(r.videoDuration))
-                                .font(.system(.body, design: .monospaced))
-                        }
-                        .width(min: 70, ideal: 80)
-
-                        TableColumn("Presence", value: \.presenceSecs) { r in
-                            Text(pfFormatDuration(r.presenceSecs))
-                                .font(.system(.body, design: .monospaced).weight(.medium))
-                                .foregroundColor(.green)
-                        }
-                        .width(min: 70, ideal: 80)
-
-                        TableColumn("Clips", value: \.segmentCount) { r in
-                            Text("\(r.segmentCount)")
-                                .font(.body)
-                        }
-                        .width(min: 50, ideal: 60)
-
-                        TableColumn("Best Match", value: \.bestDistance) { r in
-                            Text(String(format: "%.3f", r.bestDistance))
-                                .font(.system(.body, design: .monospaced))
-                                .foregroundColor(r.bestDistance < 0.5 ? .green : r.bestDistance < 0.65 ? .yellow : .orange)
-                        }
-                        .width(min: 80, ideal: 90)
-                    }
-                    .onChange(of: resultSortOrder) {
-                        resultTableData.sort(using: resultSortOrder)
-                    }
-                    .contextMenu(forSelectionType: UUID.self) { ids in
-                        if let id = ids.first,
-                           let rec = resultTableData.first(where: { $0.id == id }) {
-                            Button("Reveal in Finder") {
-                                NSWorkspace.shared.selectFile(rec.videoPath, inFileViewerRootedAtPath: "")
-                            }
-                            Button("Open in QuickTime Player") {
-                                if let qtURL = NSWorkspace.shared.urlForApplication(
-                                    withBundleIdentifier: "com.apple.QuickTimePlayerX"
-                                ) {
-                                    NSWorkspace.shared.open(
-                                        [URL(fileURLWithPath: rec.videoPath)],
-                                        withApplicationAt: qtURL,
-                                        configuration: NSWorkspace.OpenConfiguration()
-                                    )
-                                }
-                            }
-                            if !rec.clipFiles.isEmpty {
-                                Button("Reveal Clips in Finder") {
-                                    revealClips(for: rec)
-                                }
-                            }
-                            Divider()
-                            Button("More Info\u{2026}") {
-                                inspectedResult = rec
-                            }
-                            Divider()
-                            Button("Copy Path") {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(rec.videoPath, forType: .string)
-                            }
-                        }
-                    }
-                    .frame(minHeight: 120)
-                    .popover(item: $inspectedResult, arrowEdge: .trailing) { rec in
-                        resultInfoPopover(rec)
-                    }
-
-                    // Detail bar — shows info for the selected result
+                    resultTableView
                     if let rec = selectedResult {
                         Divider()
                         resultDetailBar(rec)
@@ -767,9 +766,9 @@ struct PersonFinderView: View {
                 .controlSize(.small)
 
                 Button {
-                    inspectedResult = rec
+                    openInspector(for: rec)
                 } label: {
-                    Label("Info", systemImage: "info.circle")
+                    Label("Inspect", systemImage: "info.circle")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -783,25 +782,101 @@ struct PersonFinderView: View {
     // Console pane removed from main window — use the Console toolbar
     // button which opens a floating window with a per-job picker.
 
-    // MARK: Result Info Popover
+    // MARK: Result Context Menu
 
-    func resultInfoPopover(_ rec: ClipResult) -> some View {
+    @ViewBuilder
+    private func resultContextMenu(ids: Set<UUID>) -> some View {
+        if let id = ids.first,
+           let rec = resultTableData.first(where: { $0.id == id }) {
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.selectFile(rec.videoPath, inFileViewerRootedAtPath: "")
+            }
+            Button("Open in QuickTime Player") {
+                if let qtURL = NSWorkspace.shared.urlForApplication(
+                    withBundleIdentifier: "com.apple.QuickTimePlayerX"
+                ) {
+                    NSWorkspace.shared.open(
+                        [URL(fileURLWithPath: rec.videoPath)],
+                        withApplicationAt: qtURL,
+                        configuration: NSWorkspace.OpenConfiguration()
+                    )
+                }
+            }
+            if !rec.clipFiles.isEmpty {
+                Button("Reveal Clips in Finder") {
+                    revealClips(for: rec)
+                }
+            }
+            Divider()
+            Button("Inspect\u{2026}") {
+                openInspector(for: rec)
+            }
+            Button("Show in Catalog") {
+                showInCatalog(path: rec.videoPath)
+            }
+            .disabled(!isInCatalog(path: rec.videoPath))
+            Divider()
+            Button("Copy Path") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(rec.videoPath, forType: .string)
+            }
+        }
+    }
+
+    // MARK: Catalog Navigation
+
+    private func isInCatalog(path: String) -> Bool {
+        catalogModel.records.contains { $0.fullPath == path }
+    }
+
+    private func showInCatalog(path: String) {
+        guard let rec = catalogModel.records.first(where: { $0.fullPath == path }) else { return }
+        catalogModel.pendingCatalogSelection = rec.id
+        selectedTab = 1
+    }
+
+    // MARK: Inspector
+
+    private func openInspector(for rec: ClipResult) {
+        selectedResultIDs = [rec.id]
+        inspectorStreamInfo = nil
+        inspectorShown = true
+        loadStreamInfo(for: rec)
+    }
+
+    private func loadStreamInfo(for rec: ClipResult) {
+        inspectorStreamInfo = nil
+        inspectorLoading = true
+        Task {
+            let info = await StreamInspectInfo.probe(path: rec.videoPath)
+            inspectorStreamInfo = info
+            inspectorLoading = false
+        }
+    }
+
+    func inspectorPopover(_ rec: ClipResult) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(rec.videoFilename)
-                .font(.headline)
+            HStack {
+                Text(rec.videoFilename).font(.headline)
+                Spacer()
+                Text("\u{2191}\u{2193} to browse")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
+
             Divider()
             infoRow("Path", rec.videoPath)
             infoRow("Duration", pfFormatDuration(rec.videoDuration))
             infoRow("Presence", pfFormatDuration(rec.presenceSecs))
-            infoRow("Clips", "\(rec.segmentCount)")
+            infoRow("Segments", "\(rec.segmentCount)")
             infoRow("Best Match", String(format: "%.3f", rec.bestDistance))
             if !rec.outputDir.isEmpty {
                 infoRow("Output Dir", rec.outputDir)
             }
+
             if !rec.clipFiles.isEmpty {
                 Divider()
-                Text("Clip Files")
-                    .font(.subheadline.weight(.medium))
+                Text("Clip Files").font(.subheadline.weight(.medium))
                 ForEach(rec.clipFiles, id: \.self) { clip in
                     Text(clip)
                         .font(.system(size: 11, design: .monospaced))
@@ -810,9 +885,59 @@ struct PersonFinderView: View {
                         .truncationMode(.middle)
                 }
             }
+
+            Divider()
+
+            if inspectorLoading {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Probing streams\u{2026}")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+            } else if let info = inspectorStreamInfo {
+                infoRow("Format", info.formatName)
+                infoRow("File Size", info.fileSize)
+                infoRow("Bitrate", info.bitrate)
+
+                if info.streams.isEmpty {
+                    Text("No streams detected")
+                        .font(.system(size: 11))
+                        .foregroundColor(.red)
+                } else {
+                    ForEach(Array(info.streams.enumerated()), id: \.offset) { _, stream in
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: stream.icon)
+                                .foregroundColor(stream.color)
+                                .frame(width: 16)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(stream.summary)
+                                    .font(.system(size: 11, design: .monospaced))
+                                if !stream.detail.isEmpty {
+                                    Text(stream.detail)
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if info.hasVideo && !info.hasAudio {
+                    Label("No audio track", systemImage: "speaker.slash.fill")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.orange)
+                }
+
+                if let diagnosis = info.diagnosis {
+                    Label(diagnosis, systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(.red)
+                }
+            }
         }
         .padding()
-        .frame(minWidth: 320, maxWidth: 480)
+        .frame(minWidth: 360, maxWidth: 520)
     }
 
     private func infoRow(_ label: String, _ value: String) -> some View {
@@ -1276,5 +1401,112 @@ struct SpinningRing: View {
                 rotation = 360
             }
         }
+    }
+}
+
+// MARK: - Stream Inspection
+
+struct StreamInspectInfo: Identifiable {
+    let id = UUID()
+    let filename: String
+    let formatName: String
+    let duration: String
+    let fileSize: String
+    let bitrate: String
+    let streams: [StreamDetail]
+    let hasVideo: Bool
+    let hasAudio: Bool
+    let diagnosis: String?
+
+    struct StreamDetail {
+        let icon: String
+        let color: Color
+        let summary: String
+        let detail: String
+    }
+
+    static func probe(path: String) async -> StreamInspectInfo {
+        let url = URL(fileURLWithPath: path)
+        let filename = url.lastPathComponent
+        let result = await ScanEngine.runFFProbe(url: url)
+
+        guard let output = result.output else {
+            let diag = ScanEngine.humanReadableDiagnosis(stderr: result.stderr)
+            return StreamInspectInfo(
+                filename: filename, formatName: "Unknown", duration: "—",
+                fileSize: "—", bitrate: "—", streams: [], hasVideo: false,
+                hasAudio: false, diagnosis: diag.detail.isEmpty ? "ffprobe failed" : diag.detail
+            )
+        }
+
+        let fmt = output.format
+        let dur: String = {
+            guard let d = fmt?.duration, let secs = Double(d) else { return "—" }
+            let m = Int(secs) / 60
+            let s = Int(secs) % 60
+            return String(format: "%dm %02ds", m, s)
+        }()
+        let size: String = {
+            guard let s = fmt?.size, let bytes = Int64(s) else { return "—" }
+            return Formatting.humanSize(bytes)
+        }()
+        let br: String = {
+            guard let b = fmt?.bit_rate, let bps = Int(b) else { return "—" }
+            if bps > 1_000_000 { return String(format: "%.1f Mbps", Double(bps) / 1_000_000) }
+            return String(format: "%d kbps", bps / 1_000)
+        }()
+
+        var details: [StreamDetail] = []
+        var hasV = false, hasA = false
+
+        for stream in output.streams ?? [] {
+            let codec = stream.codec_name ?? "unknown"
+            switch stream.codec_type {
+            case "video":
+                hasV = true
+                let res = (stream.width != nil && stream.height != nil)
+                    ? "\(stream.width!)×\(stream.height!)" : ""
+                let fps: String = {
+                    guard let r = stream.r_frame_rate, let slash = r.firstIndex(of: "/"),
+                          let num = Double(r[r.startIndex..<slash]),
+                          let den = Double(r[r.index(after: slash)...]),
+                          den > 0 else { return "" }
+                    return String(format: "%.1f fps", num / den)
+                }()
+                details.append(StreamDetail(
+                    icon: "film", color: .blue,
+                    summary: "Video: \(codec)",
+                    detail: [res, fps, stream.color_space].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")
+                ))
+            case "audio":
+                hasA = true
+                let ch = stream.channels.map { "\($0)ch" } ?? ""
+                let sr = stream.sample_rate.map { "\($0) Hz" } ?? ""
+                details.append(StreamDetail(
+                    icon: "speaker.wave.2", color: .green,
+                    summary: "Audio: \(codec)",
+                    detail: [ch, sr].filter { !$0.isEmpty }.joined(separator: " · ")
+                ))
+            default:
+                details.append(StreamDetail(
+                    icon: "doc.text", color: .secondary,
+                    summary: "\(stream.codec_type ?? "data"): \(codec)",
+                    detail: ""
+                ))
+            }
+        }
+
+        let stderrDiag: String? = {
+            let trimmed = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            let diag = ScanEngine.humanReadableDiagnosis(stderr: trimmed)
+            return diag.detail.isEmpty ? nil : diag.detail
+        }()
+
+        return StreamInspectInfo(
+            filename: filename, formatName: fmt?.format_long_name ?? fmt?.format_name ?? "Unknown",
+            duration: dur, fileSize: size, bitrate: br, streams: details,
+            hasVideo: hasV, hasAudio: hasA, diagnosis: stderrDiag
+        )
     }
 }
