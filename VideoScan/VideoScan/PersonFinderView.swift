@@ -32,9 +32,12 @@ struct PersonFinderView: View {
             Divider()
             loadedFacesStrip
             Divider()
-            jobsSection
-            Divider()
-            resultsTable
+            VSplitView {
+                jobsSection
+                    .frame(minHeight: 120)
+                resultsTable
+                    .frame(minHeight: 100)
+            }
         }
         .frame(minWidth: 960, maxHeight: .infinity, alignment: .top)
         .onAppear {
