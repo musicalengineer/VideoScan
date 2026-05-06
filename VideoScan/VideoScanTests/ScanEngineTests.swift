@@ -36,6 +36,34 @@ struct AsyncSemaphoreTests {
     }
 }
 
+// MARK: - ProcessRunner Tests
+
+struct ProcessRunnerTests {
+
+    @Test func drainsLargeStdoutAndStderrWithoutDeadlock() async throws {
+        let python = "/usr/bin/python3"
+        guard FileManager.default.isExecutableFile(atPath: python) else { return }
+
+        let script = """
+        import sys
+        sys.stdout.write("o" * 200000)
+        sys.stdout.flush()
+        sys.stderr.write("e" * 200000)
+        sys.stderr.flush()
+        """
+
+        let result = await ProcessRunner.runProcess(
+            executable: python,
+            arguments: ["-c", script],
+            stderrLimitBytes: 220_000
+        )
+
+        #expect(result.exitCode == 0)
+        #expect(result.stdout?.count == 200_000)
+        #expect(result.stderr.count == 200_000)
+    }
+}
+
 // MARK: - MemoryPressureMonitor Tests
 
 struct MemoryPressureMonitorTests {
