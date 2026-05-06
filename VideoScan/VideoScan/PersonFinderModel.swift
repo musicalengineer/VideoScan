@@ -1017,6 +1017,7 @@ final class PersonFinderModel: ObservableObject {
         let refFilenames = faces.map(\.sourceFilename)
 
         // Diagnostic log — after reset so these survive in the console
+        job.appendLog("Build: \(BuildInfo.summary)")
         job.appendLog("Person: \(jobSettings.personName)")
         job.appendLog("Engine: \(jobSettings.recognitionEngine.title)")
         job.appendLog("  Threshold: \(String(format: "%.2f", jobSettings.threshold)), Confidence: \(String(format: "%.2f", jobSettings.minFaceConfidence))")
@@ -1422,6 +1423,32 @@ final class PersonFinderModel: ObservableObject {
         let total = videoFiles.count
         var orderedResults = [pfVideoResult?](repeating: nil, count: total)
 
+        // Start serialized disk feeder for slow volumes (external HDD/USB/SMB).
+        // One thread reads sequentially at full bandwidth; workers wait for warm pages.
+        let feeder: DiskFeeder?
+        if let firstFile = videoFiles.first,
+           VolumeSpeed.detect(path: firstFile) == .slow {
+            let threshold = settings.recognitionEngine == .arcface
+                ? settings.arcfaceThreshold : settings.threshold
+            let personName = settings.personName
+            let engine = settings.recognitionEngine
+            let refFilenames = refFilenames
+            let skipCheck: @Sendable (String) -> Bool = { path in
+                guard let key = PersonFinderCache.makeKey(
+                    videoPath: path, personName: personName,
+                    engine: engine, threshold: threshold,
+                    refFilenames: refFilenames
+                ) else { return false }
+                return PersonFinderCache.shared.lookup(key: key) != nil
+            }
+            let f = DiskFeeder(files: videoFiles, budgetBytes: PageCacheWarmer.budgetBytes, shouldSkip: skipCheck)
+            await f.start()
+            feeder = f
+            await job.appendLog("Disk feeder: warming files sequentially for \(total) video(s) on slow volume")
+        } else {
+            feeder = nil
+        }
+
         await withTaskGroup(of: (Int, pfVideoResult?).self) { group in
             var submitted = 0
             let scanConcurrency = await MemoryPressureMonitor.shared.recommendedConcurrency(
@@ -1437,10 +1464,11 @@ final class PersonFinderModel: ObservableObject {
             let seed = min(scanConcurrency, total)
             for i in 0..<seed {
                 group.addTask {
-                    await processOneVideo(
+                    return await processOneVideo(
                         idx: i, videoFiles: videoFiles, prints: prints,
                         settings: settings, refFilenames: refFilenames,
-                        total: total, job: job, dash: dash
+                        total: total, job: job, dash: dash,
+                        feeder: feeder
                     )
                 }
                 submitted += 1
@@ -1460,15 +1488,24 @@ final class PersonFinderModel: ObservableObject {
                 if submitted < total {
                     let nextIdx = submitted
                     group.addTask {
-                        await processOneVideo(
+                        return await processOneVideo(
                             idx: nextIdx, videoFiles: videoFiles, prints: prints,
                             settings: settings, refFilenames: refFilenames,
-                            total: total, job: job, dash: dash
+                            total: total, job: job, dash: dash,
+                            feeder: feeder
                         )
                     }
                     submitted += 1
                 }
             }
+        }
+
+        // Clean up feeder
+        if let feeder = feeder {
+            await feeder.cancel()
+            let warmed = await feeder.bytesWarmed
+            let skipped = await feeder.skippedCount
+            await job.appendLog("Disk feeder done: \(warmed / (1024*1024*1024))GB warmed, \(skipped) files cache-skipped")
         }
 
         return orderedResults
@@ -1479,7 +1516,8 @@ final class PersonFinderModel: ObservableObject {
         idx: Int, videoFiles: [String], prints: [VNFeaturePrintObservation],
         settings: PersonFinderSettings, refFilenames: [String],
         total: Int,
-        job: ScanJob, dash: DashboardState?
+        job: ScanJob, dash: DashboardState?,
+        feeder: DiskFeeder? = nil
     ) async -> (Int, pfVideoResult?) {
         await job.pauseGate.waitIfPaused()
         if Task.isCancelled { return (idx, nil) }
@@ -1488,6 +1526,7 @@ final class PersonFinderModel: ObservableObject {
         let threshold = settings.recognitionEngine == .arcface
             ? settings.arcfaceThreshold : settings.threshold
 
+        // Cache check BEFORE waiting for disk warm — cache hits skip I/O entirely
         if let cacheKey = PersonFinderCache.makeKey(
             videoPath: filePath, personName: settings.personName,
             engine: settings.recognitionEngine,
@@ -1497,6 +1536,9 @@ final class PersonFinderModel: ObservableObject {
             await job.appendLog("[\(idx + 1)/\(total)] \((filePath as NSString).lastPathComponent) — cache hit (\(tag))")
             return (idx, cached)
         }
+
+        // Cache miss — wait for disk feeder to warm this file before proceeding
+        await feeder?.waitForWarm(idx)
 
         await MemoryPressureMonitor.shared.acquireWorkerSlot(
             requested: settings.concurrency,
@@ -2076,8 +2118,11 @@ private func pfOpenVisionVideoReader(
     total: Int,
     logFn: @escaping @Sendable (String) async -> Void
 ) async -> PFVisionReaderContext? {
-    let asset = AVURLAsset(url: URL(fileURLWithPath: filePath),
+    let fileURL = URL(fileURLWithPath: filePath)
+
+    let asset = AVURLAsset(url: fileURL,
                            options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
+
     let videoTrack: AVAssetTrack
     let duration: Double
     let fps: Double
