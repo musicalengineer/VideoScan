@@ -103,19 +103,51 @@ except ImportError as e:
 # Args
 # ─────────────────────────────────────────────────────────────────────────────
 
+class JSONArgumentParser(argparse.ArgumentParser):
+    def error(self, message):
+        _fatal("", f"Invalid argument: {message}")
+
+
+def _positive_int(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be an integer")
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be greater than 0")
+    return parsed
+
+
+def _nonnegative_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a number")
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("must be greater than or equal to 0")
+    return parsed
+
+
+def _unit_float(value: str) -> float:
+    parsed = _nonnegative_float(value)
+    if parsed > 1:
+        raise argparse.ArgumentTypeError("must be between 0 and 1")
+    return parsed
+
+
 def parse_args():
-    p = argparse.ArgumentParser(add_help=True)
+    p = JSONArgumentParser(add_help=True)
     p.add_argument("--ref-path",     default="", help="Reference photos directory")
     p.add_argument("--video",        default="", help="Video file to analyze")
-    p.add_argument("--threshold",    type=float, default=0.52)
-    p.add_argument("--frame-step",   type=int,   default=5)
-    p.add_argument("--min-conf",     type=float, default=0.55,
+    p.add_argument("--threshold",    type=_unit_float, default=0.52)
+    p.add_argument("--frame-step",   type=_positive_int, default=5)
+    p.add_argument("--min-conf",     type=_unit_float, default=0.55,
                    help="Minimum face detection confidence (0–1, HOG-based approximation)")
-    p.add_argument("--pad",          type=float, default=2.0,
+    p.add_argument("--pad",          type=_nonnegative_float, default=2.0,
                    help="Seconds to pad each segment start/end")
-    p.add_argument("--min-duration", type=float, default=1.0,
+    p.add_argument("--min-duration", type=_nonnegative_float, default=1.0,
                    help="Minimum segment duration in seconds")
-    p.add_argument("--gap-tolerance",type=float, default=0.0,
+    p.add_argument("--gap-tolerance",type=_nonnegative_float, default=0.0,
                    help="Override gap tolerance for segment clustering (0 = auto: 3×frame_interval)")
     p.add_argument("--self-test",    action="store_true",
                    help="Validate imports and process setup without loading private media")
