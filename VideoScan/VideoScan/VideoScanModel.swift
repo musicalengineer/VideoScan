@@ -2683,38 +2683,7 @@ final class VideoScanModel: ObservableObject {
     // MARK: - CSV
 
     func writeCSV(records: [VideoRecord], root: String) -> String? {
-        let headers = [
-            "Filename", "Extension", "Stream Type", "Size", "Size (Bytes)", "Duration",
-            "Date Created", "Date Modified", "Container", "Video Codec", "Resolution",
-            "Frame Rate", "Video Bitrate", "Total Bitrate", "Color Space", "Bit Depth",
-            "Scan Type", "Audio Codec", "Audio Channels", "Audio Sample Rate", "Timecode",
-            "Tape Name", "Is Playable", "Partial MD5", "Duplicate Group", "Duplicate Confidence",
-            "Duplicate Disposition", "Duplicate Match", "Duplicate Reasons", "Full Path", "Directory", "Notes"
-        ]
-        var lines = [headers.joined(separator: ",")]
-        for r in records {
-            let row = [
-                r.filename, r.ext, r.streamTypeRaw, r.size, String(r.sizeBytes),
-                r.duration, r.dateCreated, r.dateModified, r.container,
-                r.videoCodec, r.resolution, r.frameRate, r.videoBitrate,
-                r.totalBitrate, r.colorSpace, r.bitDepth, r.scanType,
-                r.audioCodec, r.audioChannels, r.audioSampleRate, r.timecode,
-                r.tapeName, r.isPlayable, r.partialMD5, r.duplicateGroupID?.uuidString ?? "",
-                r.duplicateConfidence?.rawValue ?? "", r.duplicateDisposition.rawValue,
-                r.duplicateBestMatchFilename, r.duplicateReasons, r.fullPath, r.directory, r.notes
-            ].map { Formatting.csvEscape($0) }.joined(separator: ",")
-            lines.append(row)
-        }
-
-        let folderName = URL(fileURLWithPath: root).lastPathComponent
-        let df = DateFormatter(); df.dateFormat = "yyyyMMdd_HHmmss"
-        let outURL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Desktop")
-            .appendingPathComponent("VideoScan_\(folderName)_\(df.string(from: Date())).csv")
-        do {
-            try lines.joined(separator: "\n").write(to: outURL, atomically: true, encoding: .utf8)
-            return outURL.path
-        } catch { return nil }
+        CatalogCSVWriter.write(records: records, root: root)
     }
 
     // MARK: - Thumbnail Preview
