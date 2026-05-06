@@ -167,7 +167,7 @@ class VideoRecord: Identifiable, Codable {
     /// Provenance captured at scan time: which machine ran the scan, what
     /// kind of volume the file lived on (local/smb/nfs/afp), the volume's
     /// stable UUID if available, and the remote server name for network
-    /// mounts. Populated automatically in ScanEngine.probeFile; refreshed
+    /// mounts. Populated automatically during file probing; refreshed
     /// on every rescan so old records backfill naturally.
     var scanContext: ScanContext = ScanContext()
 
