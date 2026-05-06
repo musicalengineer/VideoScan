@@ -1,0 +1,261 @@
+name: Nightly Static Analysis
+
+# Runs every night at 01:00 EDT (05:00 UTC, May–Nov) and can be
+# triggered on-demand from the Actions tab. Three jobs run in
+# parallel:
+#
+#   strict-concurrency  — Swift compiler with -strict-concurrency=complete
+#                         (data race / Sendable / actor-isolation analysis)
+#   codeql              — GitHub's CodeQL on Swift (security + correctness queries)
+#   aggregate           — collects counts and appends a row to the metrics branch
+#
+# Findings show up in three places:
+#   1. The run's Summary panel (markdown — green or per-finding details)
+#   2. GitHub's Security → Code Scanning tab (CodeQL alerts, deduped over time)
+#   3. metrics/static_analysis.jsonl (history for the dashboard)
+
+on:
+  schedule:
+    # 05:00 UTC daily — that's 01:00 EDT in summer, 00:00 EST in winter.
+    # GitHub schedules can drift by minutes under load.
+    - cron: '0 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write          # needed for the metrics push step
+  security-events: write   # needed for CodeQL SARIF upload
+
+jobs:
+
+  # -------------------------------------------------------------------
+  strict-concurrency:
+    name: Swift strict concurrency
+    runs-on: macos-15
+    timeout-minutes: 25
+    outputs:
+      warning_count: ${{ steps.count.outputs.warnings }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+
+      - name: Build with strict concurrency
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project VideoScan/VideoScan.xcodeproj \
+            -scheme VideoScan \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            MACOSX_DEPLOYMENT_TARGET=15.0 \
+            SWIFT_STRICT_CONCURRENCY=complete \
+            OTHER_SWIFT_FLAGS='$(inherited) -Xfrontend -warn-concurrency -Xfrontend -enable-actor-data-race-checks' \
+            2>&1 | tee strict-concurrency.log
+          # Don't fail the job on warnings — this is a reporting job.
+          # Bail only on actual build errors.
+          if grep -q "BUILD FAILED" strict-concurrency.log; then
+            echo "::error::Build itself failed (not a warning issue) — see log"
+            exit 1
+          fi
+
+      - name: Count + summarise findings
+        id: count
+        if: always()
+        run: |
+          # Concurrency warnings come through as compiler warnings with phrases
+          # like "non-sendable", "data race", "actor-isolated", "main actor",
+          # "concurrency". Filter the Xcode-style warning lines.
+          # Format: "/path/to/File.swift:LINE:COL: warning: <message>"
+          if [ -f strict-concurrency.log ]; then
+            grep -E ': warning: .*(sendable|data race|actor-isolated|concurrency|main actor|nonisolated|@Sendable)' \
+              strict-concurrency.log \
+              | sort -u > concurrency-findings.txt || true
+          else
+            : > concurrency-findings.txt
+          fi
+
+          COUNT=$(wc -l < concurrency-findings.txt | tr -d ' ')
+          echo "warnings=$COUNT" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Swift strict concurrency"
+            echo ""
+            if [ "$COUNT" = "0" ]; then
+              echo "✅ **No concurrency warnings** with \`-strict-concurrency=complete\`."
+            else
+              echo "⚠️ **$COUNT concurrency warnings** with \`-strict-concurrency=complete\`."
+              echo ""
+              echo "<details><summary>Show all $COUNT findings</summary>"
+              echo ""
+              echo '```'
+              cat concurrency-findings.txt
+              echo '```'
+              echo ""
+              echo "</details>"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload concurrency log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: strict-concurrency-log
+          path: |
+            strict-concurrency.log
+            concurrency-findings.txt
+          retention-days: 30
+
+  # -------------------------------------------------------------------
+  codeql:
+    name: CodeQL (Swift)
+    runs-on: macos-15
+    timeout-minutes: 35
+    outputs:
+      finding_count: ${{ steps.count.outputs.findings }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+
+      - name: Initialise CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: swift
+          # Includes both 'security-and-quality' and the default suite for
+          # broader correctness coverage.
+          queries: security-and-quality
+
+      - name: Build for CodeQL
+        run: |
+          xcodebuild build \
+            -project VideoScan/VideoScan.xcodeproj \
+            -scheme VideoScan \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            MACOSX_DEPLOYMENT_TARGET=15.0 \
+            2>&1 | tail -50
+
+      - name: Analyse with CodeQL
+        id: analyze
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:swift'
+          # Upload SARIF results so they appear in Security → Code Scanning.
+          upload: always
+          # Also produce a local copy we can count.
+          output: codeql-results
+
+      - name: Count + summarise findings
+        id: count
+        if: always()
+        run: |
+          # CodeQL writes one SARIF file per language. Count the 'results'
+          # array length. macOS runners have python3 by default.
+          COUNT=0
+          if [ -d codeql-results ]; then
+            for sarif in codeql-results/*.sarif; do
+              [ -f "$sarif" ] || continue
+              N=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(sum(len(r.get('results',[])) for r in d.get('runs',[])))" "$sarif")
+              COUNT=$((COUNT + N))
+            done
+          fi
+          echo "findings=$COUNT" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## CodeQL (Swift)"
+            echo ""
+            if [ "$COUNT" = "0" ]; then
+              echo "✅ **No CodeQL findings** with security-and-quality queries."
+            else
+              echo "⚠️ **$COUNT CodeQL findings.** See **Security → Code Scanning** for details, dedup, and dismiss flow."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload CodeQL SARIF
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-results
+          path: codeql-results
+          retention-days: 30
+
+  # -------------------------------------------------------------------
+  aggregate:
+    name: Aggregate & push to metrics branch
+    needs: [strict-concurrency, codeql]
+    if: always()
+    runs-on: macos-15
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout (full history — need metrics branch)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Build aggregate row + push
+        env:
+          CONCURRENCY_WARNINGS: ${{ needs.strict-concurrency.outputs.warning_count }}
+          CODEQL_FINDINGS: ${{ needs.codeql.outputs.finding_count }}
+        run: |
+          set -e
+          TS="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          SHA="${GITHUB_SHA:0:8}"
+          ROW=$(printf '{"ts":"%s","sha":"%s","run_kind":"nightly","concurrency_warnings":%s,"codeql_findings":%s}' \
+                "$TS" "$SHA" \
+                "${CONCURRENCY_WARNINGS:-null}" \
+                "${CODEQL_FINDINGS:-null}")
+          echo "Row: $ROW"
+
+          # Append to metrics/static_analysis.jsonl on the orphan `metrics`
+          # branch. Same pattern as the existing CI metrics step.
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+
+          # Either fetch existing metrics branch or initialise it.
+          if git ls-remote --exit-code --heads origin metrics >/dev/null 2>&1; then
+            git fetch origin metrics
+            git switch metrics
+          else
+            git switch --orphan metrics
+            : > .gitkeep
+            git add .gitkeep
+            git commit -m 'init metrics branch'
+          fi
+
+          mkdir -p metrics
+          touch metrics/static_analysis.jsonl
+          echo "$ROW" >> metrics/static_analysis.jsonl
+          git add metrics/static_analysis.jsonl
+          git commit -m "static analysis nightly $TS — concurrency=$CONCURRENCY_WARNINGS codeql=$CODEQL_FINDINGS" || {
+            echo "Nothing to commit"
+            exit 0
+          }
+          git push origin metrics
+
+      - name: Top-line summary
+        if: always()
+        env:
+          CONCURRENCY_WARNINGS: ${{ needs.strict-concurrency.outputs.warning_count }}
+          CODEQL_FINDINGS: ${{ needs.codeql.outputs.finding_count }}
+        run: |
+          {
+            echo "## Nightly static analysis — $(date -u +'%Y-%m-%d')"
+            echo ""
+            echo "| Tool | Findings |"
+            echo "|---|---:|"
+            echo "| Swift strict concurrency | ${CONCURRENCY_WARNINGS:-?} |"
+            echo "| CodeQL (Swift) | ${CODEQL_FINDINGS:-?} |"
+            echo ""
+            echo "Per-job details are above. CodeQL alerts also live under **Security → Code Scanning**."
+            echo "Trend history: \`metrics/static_analysis.jsonl\` on the \`metrics\` branch."
+          } >> "$GITHUB_STEP_SUMMARY"
