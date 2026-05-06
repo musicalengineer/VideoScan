@@ -13,7 +13,8 @@ struct ContentView: View {
         ("People", "person.2.fill", 0),
         ("Catalog", "film.stack", 1),
         ("Triage", "checklist", 2),
-        ("Archive", "archivebox.fill", 3)
+        ("Archive", "archivebox.fill", 3),
+        ("Family Tree", "person.3.sequence.fill", 4)
     ]
 
     var body: some View {
@@ -71,6 +72,8 @@ struct ContentView: View {
                     TriageView()
                 case 3:
                     ArchiveView()
+                case 4:
+                    FamilyTreeView()
                 default:
                     PeopleTabView()
                         .environmentObject(personFinderModel)
