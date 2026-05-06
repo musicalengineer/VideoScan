@@ -234,7 +234,12 @@ jobs:
 
       - name: Run unit tests under TSan
         run: |
-          set -o pipefail
+          # This is a *reporting* job — we want to capture TSan output
+          # even when tests fail. Tests can fail under instrumentation
+          # because TSan exposes real races, slows execution enough to
+          # blow timeouts, or both. We don't want any of those to mask
+          # the report. Final `|| true` swallows xcodebuild's non-zero
+          # exit; the count step below is authoritative.
           xcodebuild test \
             -project VideoScan/VideoScan.xcodeproj \
             -scheme VideoScan \
@@ -245,10 +250,7 @@ jobs:
             -resultBundlePath TSanResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
-            2>&1 | tee tsan.log
-          # TSan reports don't fail the build by default — this is a
-          # reporting run, so we let xcodebuild's pass/fail be authoritative
-          # and just count the TSan lines below.
+            2>&1 | tee tsan.log || true
 
       - name: Count + summarise findings
         id: count
@@ -256,25 +258,39 @@ jobs:
         run: |
           if [ -f tsan.log ]; then
             grep -E "ThreadSanitizer: " tsan.log | sort -u > tsan-findings.txt || true
+            # Also pull the list of tests that failed under instrumentation.
+            grep -E "^Test case '.*' failed on" tsan.log | sort -u > tsan-failed-tests.txt || true
           else
-            : > tsan-findings.txt
+            : > tsan-findings.txt; : > tsan-failed-tests.txt
           fi
           COUNT=$(wc -l < tsan-findings.txt | tr -d ' ')
+          FAILED_TESTS=$(wc -l < tsan-failed-tests.txt | tr -d ' ')
           echo "tsan_issues=$COUNT" >> "$GITHUB_OUTPUT"
 
           {
             echo "## Thread Sanitizer"
             echo ""
-            if [ "$COUNT" = "0" ]; then
-              echo "✅ **No TSan reports** in the unit test run."
-            else
-              echo "⚠️ **$COUNT distinct TSan reports** during unit tests."
-              echo ""
-              echo "<details><summary>Show all $COUNT</summary>"
+            echo "| Metric | Count |"
+            echo "|---|---:|"
+            echo "| TSan race reports | $COUNT |"
+            echo "| Tests failing under instrumentation | $FAILED_TESTS |"
+            echo ""
+            if [ "$COUNT" != "0" ]; then
+              echo "<details><summary>TSan race reports ($COUNT)</summary>"
               echo ""
               echo '```'
               head -200 tsan-findings.txt
               if [ "$COUNT" -gt 200 ]; then echo "... (truncated)"; fi
+              echo '```'
+              echo ""
+              echo "</details>"
+              echo ""
+            fi
+            if [ "$FAILED_TESTS" != "0" ]; then
+              echo "<details><summary>Failed tests under TSan ($FAILED_TESTS)</summary>"
+              echo ""
+              echo '```'
+              head -100 tsan-failed-tests.txt
               echo '```'
               echo ""
               echo "</details>"
@@ -345,8 +361,15 @@ jobs:
         id: count
         if: always()
         run: |
-          SL=$(grep -c ": warning:\|: error:" swiftlint-strict.txt 2>/dev/null || echo 0)
-          PF=$(grep -c "^/" periphery-strict.txt 2>/dev/null || echo 0)
+          # `grep -c` already prints "0" on no-match (and exits 1).
+          # Pairing that with `|| echo 0` was producing "0\n0" — a
+          # multi-line value GH Actions then rejected as malformed
+          # output ("Invalid format '0'"). Using `|| true` swallows
+          # the exit code without re-printing.
+          SL=$(grep -c ": warning:\|: error:" swiftlint-strict.txt 2>/dev/null || true)
+          PF=$(grep -c "^/" periphery-strict.txt 2>/dev/null || true)
+          SL=${SL:-0}
+          PF=${PF:-0}
           echo "swiftlint=$SL" >> "$GITHUB_OUTPUT"
           echo "periphery=$PF" >> "$GITHUB_OUTPUT"
 
