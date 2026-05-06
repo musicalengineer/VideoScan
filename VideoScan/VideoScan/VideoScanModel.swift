@@ -29,7 +29,10 @@ struct ScanOptions: Equatable {
     var skipChecksums: Bool = false
 
     // MARK: Persistence
-    private static let defaults = UserDefaults.standard
+    // UserDefaults.standard is documented thread-safe (CFPreferences-backed
+    // with internal locking). nonisolated(unsafe) tells strict concurrency
+    // we know what we're doing.
+    nonisolated(unsafe) private static let defaults = UserDefaults.standard
     private static let prefix = "scanopts_"
 
     static func restored() -> ScanOptions {
@@ -119,7 +122,8 @@ struct ScanPerformanceSettings {
 
     // MARK: Persistence
 
-    private static let defaults = UserDefaults.standard
+    // See ScanOptions.defaults — UserDefaults is thread-safe.
+    nonisolated(unsafe) private static let defaults = UserDefaults.standard
     private static let prefix = "perf_"
 
     static func restored() -> ScanPerformanceSettings {
@@ -340,11 +344,14 @@ final class VideoScanModel: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] note in
+            // Notification is non-Sendable; pull the userInfo URL out before
+            // hopping to the main actor so we don't capture `note` itself.
+            let volumeURL = note.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL
             Task { @MainActor in
                 guard let self else { return }
                 self.refreshTargetReachability()
                 // Auto-add newly mounted volume as a scan target (skip RAM disk)
-                if let url = note.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL {
+                if let url = volumeURL {
                     let path = url.path
                     let volumeRoot = url.path
                     for t in self.scanTargets where t.searchPath.hasPrefix(volumeRoot) {
@@ -2727,8 +2734,10 @@ final class VideoScanModel: ObservableObject {
                         if let image { cont.resume(returning: image) } else { cont.resume(throwing: error ?? CocoaError(.fileReadUnknown)) }
                     }
                 }
-                let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+                // CGImage is Sendable; NSImage isn't. Build the NSImage on
+                // the main actor so we never cross actor boundaries with it.
                 await MainActor.run {
+                    let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
                     self.thumbnailCache.setObject(nsImage, forKey: cacheKey)
                     self.previewImage = nsImage
                 }

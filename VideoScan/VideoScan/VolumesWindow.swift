@@ -140,7 +140,10 @@ private struct VolumeListRow: View {
 }
 
 private struct SidebarWidthKey: PreferenceKey {
-    static var defaultValue: CGFloat = 320
+    // PreferenceKey's `static var defaultValue { get }` requirement is
+    // satisfied by a `let` (gets you the getter for free) and avoids the
+    // global-mutable-state warning.
+    static let defaultValue: CGFloat = 320
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = nextValue()
     }
