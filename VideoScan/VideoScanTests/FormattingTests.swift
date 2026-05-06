@@ -41,6 +41,44 @@ struct FormattingTests {
     }
 }
 
+// MARK: - Catalog CSV Writer Tests
+
+struct CatalogCSVWriterTests {
+
+    @Test func csvTextIncludesHeadersAndEscapedRecordFields() {
+        let record = VideoRecord()
+        record.filename = "clip, \"one\".mov"
+        record.ext = "mov"
+        record.streamTypeRaw = "Video+Audio"
+        record.size = "1.0 MB"
+        record.sizeBytes = 1_048_576
+        record.duration = "00:00:10"
+        record.duplicateDisposition = .extraCopy
+        record.duplicateBestMatchFilename = "keeper.mov"
+        record.duplicateReasons = "same hash, size"
+        record.fullPath = "/Volumes/Archive/clip, \"one\".mov"
+        record.directory = "/Volumes/Archive"
+        record.notes = "line one\nline two"
+
+        let lines = CatalogCSVWriter.csvText(records: [record]).components(separatedBy: "\n")
+
+        #expect(lines.first?.hasPrefix("Filename,Extension,Stream Type") == true)
+        #expect(lines.count == 3)
+        #expect(lines[1].hasPrefix("\"clip, \"\"one\"\".mov\",mov,Video+Audio"))
+        #expect(lines[1].contains("\"same hash, size\""))
+        #expect(lines[1].hasSuffix("\"line one"))
+        #expect(lines[2] == "line two\"")
+    }
+
+    @Test func outputURLUsesScannedFolderName() {
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let path = CatalogCSVWriter.outputURL(root: "/Volumes/Family Media", date: date).path
+
+        #expect(path.contains("/Desktop/VideoScan_Family Media_"))
+        #expect(path.hasSuffix(".csv"))
+    }
+}
+
 // MARK: - Formatting Extended Tests
 
 struct FormattingExtendedTests {
