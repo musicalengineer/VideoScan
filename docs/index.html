@@ -159,6 +159,19 @@
   }
   canvas { width: 100% !important; height: 240px !important; }
 
+  /* Section heading (between the per-push and nightly blocks) */
+  .section-heading {
+    margin: 32px 0 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--muted);
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+  }
+  .section-heading:first-of-type { margin-top: 8px; }
+
   /* Footer */
   .footer {
     margin-top: 32px;
@@ -189,11 +202,15 @@
 </div>
 
 <div class="subtitle">
-  Code health dashboard &mdash; tracking coverage, lint, complexity, and test count over time.<br>
+  Code health dashboard &mdash; coverage, lint, complexity, tests on every push;
+  static analysis (concurrency, CodeQL, TSan) every night.<br>
   <a href="https://github.com/musicalengineer/VideoScan">musicalengineer/VideoScan</a>
 </div>
 
 <div id="status">Loading metrics&hellip;</div>
+
+<!-- ============ PER-PUSH SECTION ============ -->
+<h3 class="section-heading">Per-Push (every CI run)</h3>
 
 <!-- Summary cards -->
 <div class="cards" id="cards"></div>
@@ -206,18 +223,40 @@
   <div class="chart-box"><h2>Total Swift Lines of Code</h2><canvas id="chart-loc"></canvas></div>
   <div class="chart-box"><h2>Files Over 1,000 Lines</h2><canvas id="chart-fat-files"></canvas></div>
   <div class="chart-box"><h2>Test Count</h2><canvas id="chart-tests"></canvas></div>
+  <div class="chart-box"><h2>Regression Tests Locked-In</h2><canvas id="chart-regressions"></canvas></div>
+</div>
+
+<!-- ============ NIGHTLY STATIC ANALYSIS SECTION ============ -->
+<h3 class="section-heading">Nightly Static Analysis (full strictness, run at 01:00 EDT)</h3>
+
+<!-- Cards -->
+<div class="cards" id="nightly-cards"></div>
+
+<!-- Charts -->
+<div class="charts">
+  <div class="chart-box"><h2>Swift Strict Concurrency Warnings</h2><canvas id="chart-concurrency"></canvas></div>
+  <div class="chart-box"><h2>CodeQL Findings (security &amp; quality)</h2><canvas id="chart-codeql"></canvas></div>
+  <div class="chart-box"><h2>Thread Sanitizer Race Reports</h2><canvas id="chart-tsan"></canvas></div>
+  <div class="chart-box"><h2>SwiftLint --strict</h2><canvas id="chart-swiftlint-strict"></canvas></div>
+  <div class="chart-box"><h2>Periphery (no --retain-public)</h2><canvas id="chart-periphery-strict"></canvas></div>
 </div>
 
 <div class="footer">
-  Data collected by CI on each push to <code>main</code>.
-  Run <code>scripts/collect_metrics.sh</code> locally to add a data point.
+  Per-push data collected on every push to <code>main</code>; nightly data
+  collected at 01:00 EDT or via manual <code>workflow_dispatch</code>.
+  Both stored on the <code>metrics</code> branch.
   &bull; <a href="https://github.com/musicalengineer/VideoScan">Source</a>
 </div>
 
 <script>
-// Try GitHub raw URL first (works on Pages), fall back to local file
-const GITHUB_RAW = "https://raw.githubusercontent.com/musicalengineer/VideoScan/metrics/metrics/history.jsonl";
-const LOCAL_FILE = `./history.jsonl?t=${Date.now()}`;
+// Try GitHub raw URL first (works on Pages), fall back to local file.
+// Two streams: per-CI history and nightly static analysis. Both live on
+// the orphan `metrics` branch.
+const RAW_BASE = "https://raw.githubusercontent.com/musicalengineer/VideoScan/metrics/metrics";
+const HISTORY_URL = `${RAW_BASE}/history.jsonl`;
+const NIGHTLY_URL = `${RAW_BASE}/static_analysis.jsonl`;
+const HISTORY_LOCAL = `./history.jsonl?t=${Date.now()}`;
+const NIGHTLY_LOCAL = `./static_analysis.jsonl?t=${Date.now()}`;
 
 const $status = document.getElementById("status");
 function fail(msg) { $status.classList.add("error"); $status.textContent = msg; }
@@ -300,40 +339,64 @@ function drawLine(canvasId, labels, datasets) {
   });
 }
 
-async function loadData() {
-  let text;
+async function fetchText(remote, local) {
   try {
-    const resp = await fetch(GITHUB_RAW);
-    if (resp.ok) text = await resp.text();
+    const r = await fetch(remote);
+    if (r.ok) return await r.text();
   } catch {}
-  if (!text) {
-    try {
-      const resp = await fetch(LOCAL_FILE);
-      if (resp.ok) text = await resp.text();
-    } catch {}
-  }
-  if (!text) {
+  try {
+    const r = await fetch(local);
+    if (r.ok) return await r.text();
+  } catch {}
+  return null;
+}
+
+function dateLabels(rows) {
+  return rows.map(r => {
+    if (!r.ts) return "";
+    const d = new Date(r.ts);
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  });
+}
+
+async function loadData() {
+  // ---- Per-push history ----
+  const historyText = await fetchText(HISTORY_URL, HISTORY_LOCAL);
+  if (!historyText) {
     fail("No metrics data available. Push to main or run scripts/collect_metrics.sh locally.");
     return;
   }
-
-  const rows = parseJsonl(text);
+  const rows = parseJsonl(historyText);
   if (rows.length === 0) {
     fail("Metrics file exists but contains no valid data.");
     return;
   }
-
   rows.sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
 
   const last = rows[rows.length - 1];
   const prev = rows.length > 1 ? rows[rows.length - 2] : {};
 
+  // ---- Nightly static analysis (optional \u2014 may not exist yet) ----
+  const nightlyText = await fetchText(NIGHTLY_URL, NIGHTLY_LOCAL);
+  const nightlyRows = nightlyText ? parseJsonl(nightlyText) : [];
+  nightlyRows.sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
+  const nLast = nightlyRows.length ? nightlyRows[nightlyRows.length - 1] : {};
+  const nPrev = nightlyRows.length > 1 ? nightlyRows[nightlyRows.length - 2] : {};
+
+  // ---- Status line ----
   const date = last.ts ? new Date(last.ts).toLocaleDateString("en-US", {
     month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit"
   }) : "unknown";
-  $status.textContent = `${rows.length} data points \u2022 last update: ${date} \u2022 ${last.sha}`;
+  const nightlyDate = nLast.ts ? new Date(nLast.ts).toLocaleDateString("en-US", {
+    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"
+  }) : null;
+  $status.textContent =
+    `${rows.length} per-push points \u2022 last: ${date} \u2022 ${last.sha}` +
+    (nightlyDate
+      ? ` \u2022 ${nightlyRows.length} nightly points \u2022 last nightly: ${nightlyDate}`
+      : ` \u2022 no nightly runs yet`);
 
-  // Cards
+  // ---- Per-push cards ----
   const cardsEl = document.getElementById("cards");
   cardsEl.appendChild(card("Logic Coverage",
     last.coverage_logic_pct != null ? last.coverage_logic_pct.toFixed(1) + "%" : "\u2014",
@@ -348,89 +411,68 @@ async function loadData() {
     last.total_swift_lines?.toLocaleString(), prev.total_swift_lines, last.total_swift_lines, false, "var(--muted)"));
   cardsEl.appendChild(card("Tests",
     last.test_count, prev.test_count, last.test_count, false, "var(--good)"));
+  cardsEl.appendChild(card("Regression Tests",
+    last.regression_count, prev.regression_count, last.regression_count, false, "var(--purple)"));
   cardsEl.appendChild(card("Files > 1K Lines",
     last.files_over_1000, prev.files_over_1000, last.files_over_1000, true, "var(--bad)"));
   cardsEl.appendChild(card("Largest File",
     last.worst_file || "\u2014", null, null, false, "var(--purple)"));
 
-  // Charts
-  const labels = rows.map(r => {
-    if (!r.ts) return "";
-    const d = new Date(r.ts);
-    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  });
+  // ---- Nightly cards ----
+  const nightlyEl = document.getElementById("nightly-cards");
+  if (nightlyRows.length) {
+    nightlyEl.appendChild(card("Concurrency Warns",
+      nLast.concurrency_warnings, nPrev.concurrency_warnings, nLast.concurrency_warnings, true, "var(--warn)"));
+    nightlyEl.appendChild(card("CodeQL Findings",
+      nLast.codeql_findings, nPrev.codeql_findings, nLast.codeql_findings, true, "var(--bad)"));
+    nightlyEl.appendChild(card("TSan Races",
+      nLast.tsan_issues, nPrev.tsan_issues, nLast.tsan_issues, true, "var(--bad)"));
+    nightlyEl.appendChild(card("SwiftLint --strict",
+      nLast.swiftlint_strict, nPrev.swiftlint_strict, nLast.swiftlint_strict, true, "var(--warn)"));
+    nightlyEl.appendChild(card("Periphery Strict",
+      nLast.periphery_aggressive, nPrev.periphery_aggressive, nLast.periphery_aggressive, true, "var(--accent)"));
+  } else {
+    nightlyEl.innerHTML = `<div class="card" style="grid-column: 1 / -1;">
+      <div class="indicator" style="background: var(--muted)"></div>
+      <div class="label">Waiting for first nightly run</div>
+      <div class="value" style="font-size: 14px;">Trigger via <code>Actions &rarr; Nightly Static Analysis &rarr; Run workflow</code> or wait for 01:00 EDT.</div>
+    </div>`;
+  }
+
+  // ---- Per-push charts ----
+  const labels = dateLabels(rows);
   const col = key => rows.map(r => r[key]);
 
-  drawLine("chart-coverage", labels, [{
-    label: "coverage %",
-    data: col("coverage_logic_pct"),
-    borderColor: "#3fb950",
-    backgroundColor: "#3fb95018",
+  const lineStyle = (color) => ({
+    borderColor: color,
+    backgroundColor: color + "18",
     fill: true,
     pointBackgroundColor: "#0d1117",
-    pointBorderColor: "#3fb950",
-  }]);
+    pointBorderColor: color,
+  });
 
+  drawLine("chart-coverage", labels, [{ label: "coverage %", data: col("coverage_logic_pct"), ...lineStyle("#3fb950") }]);
   drawLine("chart-swiftlint", labels, [
-    {
-      label: "warnings",
-      data: col("swiftlint_warnings"),
-      borderColor: "#d29922",
-      backgroundColor: "#d2992218",
-      fill: true,
-      pointBackgroundColor: "#0d1117",
-      pointBorderColor: "#d29922",
-    },
-    {
-      label: "errors",
-      data: col("swiftlint_errors"),
-      borderColor: "#f85149",
-      backgroundColor: "#f8514918",
-      fill: true,
-      pointBackgroundColor: "#0d1117",
-      pointBorderColor: "#f85149",
-    },
+    { label: "warnings", data: col("swiftlint_warnings"), ...lineStyle("#d29922") },
+    { label: "errors", data: col("swiftlint_errors"), ...lineStyle("#f85149") },
   ]);
+  drawLine("chart-periphery", labels, [{ label: "findings", data: col("periphery_findings"), ...lineStyle("#58a6ff") }]);
+  drawLine("chart-loc", labels, [{ label: "total LOC", data: col("total_swift_lines"), ...lineStyle("#8b949e") }]);
+  drawLine("chart-fat-files", labels, [{ label: "files > 1000", data: col("files_over_1000"), ...lineStyle("#f85149") }]);
+  drawLine("chart-tests", labels, [{ label: "test count", data: col("test_count"), ...lineStyle("#3fb950") }]);
+  drawLine("chart-regressions", labels, [{ label: "regression markers", data: col("regression_count"), ...lineStyle("#bc8cff") }]);
 
-  drawLine("chart-periphery", labels, [{
-    label: "findings",
-    data: col("periphery_findings"),
-    borderColor: "#58a6ff",
-    backgroundColor: "#58a6ff18",
-    fill: true,
-    pointBackgroundColor: "#0d1117",
-    pointBorderColor: "#58a6ff",
-  }]);
+  // ---- Nightly charts ----
+  if (nightlyRows.length) {
+    const nLabels = dateLabels(nightlyRows);
+    const nCol = key => nightlyRows.map(r => r[key]);
 
-  drawLine("chart-loc", labels, [{
-    label: "total LOC",
-    data: col("total_swift_lines"),
-    borderColor: "#8b949e",
-    backgroundColor: "#8b949e18",
-    fill: true,
-    pointBackgroundColor: "#0d1117",
-    pointBorderColor: "#8b949e",
-  }]);
-
-  drawLine("chart-fat-files", labels, [{
-    label: "files > 1000",
-    data: col("files_over_1000"),
-    borderColor: "#f85149",
-    backgroundColor: "#f8514918",
-    fill: true,
-    pointBackgroundColor: "#0d1117",
-    pointBorderColor: "#f85149",
-  }]);
-
-  drawLine("chart-tests", labels, [{
-    label: "test count",
-    data: col("test_count"),
-    borderColor: "#3fb950",
-    backgroundColor: "#3fb95018",
-    fill: true,
-    pointBackgroundColor: "#0d1117",
-    pointBorderColor: "#3fb950",
-  }]);
+    drawLine("chart-concurrency", nLabels, [{ label: "concurrency warnings", data: nCol("concurrency_warnings"), ...lineStyle("#d29922") }]);
+    drawLine("chart-codeql", nLabels, [{ label: "CodeQL findings", data: nCol("codeql_findings"), ...lineStyle("#f85149") }]);
+    drawLine("chart-tsan", nLabels, [{ label: "TSan reports", data: nCol("tsan_issues"), ...lineStyle("#f85149") }]);
+    drawLine("chart-swiftlint-strict", nLabels, [{ label: "SwiftLint --strict", data: nCol("swiftlint_strict"), ...lineStyle("#d29922") }]);
+    drawLine("chart-periphery-strict", nLabels, [{ label: "Periphery (no --retain-public)", data: nCol("periphery_aggressive"), ...lineStyle("#58a6ff") }]);
+  }
 }
 
 loadData();
