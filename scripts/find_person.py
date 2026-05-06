@@ -141,7 +141,7 @@ def list_persons_in_gallery() -> dict[str, int]:
     import numpy as np
     if not EMB_PATH.exists():
         return {}
-    data = np.load(EMB_PATH, allow_pickle=True)
+    data = np.load(EMB_PATH, allow_pickle=False)
     persons = data["persons"]
     fnet_mask = data["facenet_mask"]
     counts: dict[str, int] = {}
@@ -156,7 +156,7 @@ def load_gallery(person: str):
     import numpy as np
     if not EMB_PATH.exists():
         sys.exit(f"No gallery at {EMB_PATH}. Run fd_diagnostic.py first.")
-    data = np.load(EMB_PATH, allow_pickle=True)
+    data = np.load(EMB_PATH, allow_pickle=False)
     persons = data["persons"]
     fnet_mask = data["facenet_mask"]
     fnet = data["facenet"]

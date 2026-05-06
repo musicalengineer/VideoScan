@@ -201,8 +201,8 @@ final class VideoScanModel: ObservableObject {
     /// Thumbnail cache — keyed by fullPath, avoids regenerating from video file on re-click
     private let thumbnailCache = NSCache<NSString, NSImage>()
 
-    let ffprobePath = "/opt/homebrew/bin/ffprobe"
-    let ffmpegPath  = "/opt/homebrew/bin/ffmpeg"
+    let ffprobePath = ToolLocator.ffprobePath
+    let ffmpegPath  = ToolLocator.ffmpegPath
 
     let videoExtensions: Set<String> = [
         "mov", "mp4", "m4v", "avi", "mkv", "mxf", "mts", "m2ts", "ts", "mpg", "mpeg",
@@ -1829,17 +1829,21 @@ final class VideoScanModel: ObservableObject {
                 }
                 probeGroup.addTask { [self] in
                     await target.pauseGate.waitIfPaused()
-                    return await sem.withPermit {
-                        await self.probeAndRecord(
-                            url: url,
-                            volName: volName,
-                            root: root,
-                            rootIsNetwork: rootIsNetwork,
-                            ramMountPoint: ramMountPoint,
-                            skipHashing: skipHashingCaptured,
-                            useTimeout: true,
-                            echoFilename: false
-                        )
+                    do {
+                        return try await sem.withPermit {
+                            await self.probeAndRecord(
+                                url: url,
+                                volName: volName,
+                                root: root,
+                                rootIsNetwork: rootIsNetwork,
+                                ramMountPoint: ramMountPoint,
+                                skipHashing: skipHashingCaptured,
+                                useTimeout: true,
+                                echoFilename: false
+                            )
+                        }
+                    } catch {
+                        return self.cancelledProbeRecord(url: url)
                     }
                 }
             }
@@ -2014,17 +2018,21 @@ final class VideoScanModel: ObservableObject {
                 }
                 probeGroup.addTask {
                     await self.pauseGate.waitIfPaused()
-                    return await sem.withPermit {
-                        await self.probeAndRecord(
-                            url: url,
-                            volName: volName,
-                            root: root,
-                            rootIsNetwork: rootIsNetwork,
-                            ramMountPoint: ramMountPoint,
-                            skipHashing: skipHashing,
-                            useTimeout: false,
-                            echoFilename: true
-                        )
+                    do {
+                        return try await sem.withPermit {
+                            await self.probeAndRecord(
+                                url: url,
+                                volName: volName,
+                                root: root,
+                                rootIsNetwork: rootIsNetwork,
+                                ramMountPoint: ramMountPoint,
+                                skipHashing: skipHashing,
+                                useTimeout: false,
+                                echoFilename: true
+                            )
+                        }
+                    } catch {
+                        return self.cancelledProbeRecord(url: url)
                     }
                 }
             }
@@ -2146,6 +2154,18 @@ final class VideoScanModel: ObservableObject {
     /// SMB mounts on sleepy external drives — a too-short timeout was flagging
     /// healthy network volumes as "stalled" when they just needed to spin up.
     private let probeTimeoutSeconds: UInt64 = 300
+
+    nonisolated private func cancelledProbeRecord(url: URL) -> VideoRecord {
+        let rec = VideoRecord()
+        rec.filename      = url.lastPathComponent
+        rec.ext           = url.pathExtension.uppercased()
+        rec.fullPath      = url.path
+        rec.directory     = url.deletingLastPathComponent().path
+        rec.isPlayable    = "Cancelled"
+        rec.notes         = "Probe cancelled before acquiring a concurrency permit"
+        rec.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+        return rec
+    }
 
     /// Wrapper that races probeFile against a timeout. If probeFile takes
     /// longer than probeTimeoutSeconds, returns a timed-out record so the
@@ -2663,38 +2683,7 @@ final class VideoScanModel: ObservableObject {
     // MARK: - CSV
 
     func writeCSV(records: [VideoRecord], root: String) -> String? {
-        let headers = [
-            "Filename", "Extension", "Stream Type", "Size", "Size (Bytes)", "Duration",
-            "Date Created", "Date Modified", "Container", "Video Codec", "Resolution",
-            "Frame Rate", "Video Bitrate", "Total Bitrate", "Color Space", "Bit Depth",
-            "Scan Type", "Audio Codec", "Audio Channels", "Audio Sample Rate", "Timecode",
-            "Tape Name", "Is Playable", "Partial MD5", "Duplicate Group", "Duplicate Confidence",
-            "Duplicate Disposition", "Duplicate Match", "Duplicate Reasons", "Full Path", "Directory", "Notes"
-        ]
-        var lines = [headers.joined(separator: ",")]
-        for r in records {
-            let row = [
-                r.filename, r.ext, r.streamTypeRaw, r.size, String(r.sizeBytes),
-                r.duration, r.dateCreated, r.dateModified, r.container,
-                r.videoCodec, r.resolution, r.frameRate, r.videoBitrate,
-                r.totalBitrate, r.colorSpace, r.bitDepth, r.scanType,
-                r.audioCodec, r.audioChannels, r.audioSampleRate, r.timecode,
-                r.tapeName, r.isPlayable, r.partialMD5, r.duplicateGroupID?.uuidString ?? "",
-                r.duplicateConfidence?.rawValue ?? "", r.duplicateDisposition.rawValue,
-                r.duplicateBestMatchFilename, r.duplicateReasons, r.fullPath, r.directory, r.notes
-            ].map { Formatting.csvEscape($0) }.joined(separator: ",")
-            lines.append(row)
-        }
-
-        let folderName = URL(fileURLWithPath: root).lastPathComponent
-        let df = DateFormatter(); df.dateFormat = "yyyyMMdd_HHmmss"
-        let outURL = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Desktop")
-            .appendingPathComponent("VideoScan_\(folderName)_\(df.string(from: Date())).csv")
-        do {
-            try lines.joined(separator: "\n").write(to: outURL, atomically: true, encoding: .utf8)
-            return outURL.path
-        } catch { return nil }
+        CatalogCSVWriter.write(records: records, root: root)
     }
 
     // MARK: - Thumbnail Preview

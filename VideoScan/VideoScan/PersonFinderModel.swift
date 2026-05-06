@@ -186,12 +186,7 @@ struct PersonFinderSettings: Equatable {
 
     /// Auto-detect Python venv and script from project layout.
     private static var defaultPythonPath: String {
-        // Look for venv relative to the app bundle's ancestor dev directory
-        let candidates = [
-            NSHomeDirectory() + "/dev/VideoScan/venv/bin/python3",
-            "/opt/homebrew/bin/python3"
-        ]
-        return candidates.first { FileManager.default.fileExists(atPath: $0) } ?? ""
+        ToolLocator.pythonPath
     }
 
     private static var defaultScriptPath: String {
@@ -216,21 +211,12 @@ struct PersonFinderSettings: Equatable {
     private static let defaults = UserDefaults.standard
     private static let prefix = "pf_"
 
-    private static func firstExistingPath(_ candidates: [String]) -> String {
-        candidates.first { FileManager.default.isExecutableFile(atPath: $0) } ?? ""
-    }
-
     private static func firstExistingFile(_ candidates: [String]) -> String {
         candidates.first { FileManager.default.fileExists(atPath: $0) } ?? ""
     }
 
     private static func detectedPythonPath() -> String {
-        let cwd = FileManager.default.currentDirectoryPath
-        return firstExistingPath([
-            (cwd as NSString).appendingPathComponent(".venv/bin/python"),
-            (cwd as NSString).appendingPathComponent("venv/bin/python"),
-            "/usr/bin/python3"
-        ])
+        ToolLocator.pythonPath
     }
 
     private static func detectedRecognitionScript() -> String {
@@ -2722,198 +2708,6 @@ private func pfBuildSortedClipEntries(results: [pfVideoResult], outputDir: Strin
     return entries.sorted { a, b in a.year == b.year ? a.clipPath < b.clipPath : a.year < b.year }
 }
 
-private func pfRunFFMpegProcess(
-    ffmpegPath: String,
-    args: [String],
-    logFn: @escaping @Sendable (String) async -> Void
-) async -> Int32 {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: ffmpegPath)
-    process.arguments = args
-    process.standardOutput = FileHandle.nullDevice
-    let stderrPipe = Pipe()
-    process.standardError = stderrPipe
-
-    var stderrData = Data()
-    stderrPipe.fileHandleForReading.readabilityHandler = { handle in
-        let chunk = handle.availableData
-        if !chunk.isEmpty { stderrData.append(chunk) }
-    }
-
-    do { try process.run() } catch {
-        await logFn("  ⚠ Could not launch ffmpeg: \(error.localizedDescription)")
-        return -1
-    }
-
-    await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-        process.terminationHandler = { _ in cont.resume() }
-        if !process.isRunning { cont.resume() }
-    }
-    stderrPipe.fileHandleForReading.readabilityHandler = nil
-
-    if process.terminationStatus != 0 {
-        await logFn("  ⚠ ffmpeg exited with code \(process.terminationStatus)")
-        if let errStr = String(data: stderrData, encoding: .utf8), !errStr.isEmpty {
-            for line in errStr.components(separatedBy: .newlines).suffix(10) where !line.isEmpty {
-                await logFn("    stderr: \(line)")
-            }
-        }
-    }
-    return process.terminationStatus
-}
-
-private func pfConcatenateWithDecadeChapters(
-    results: [pfVideoResult],
-    outputDir: String,
-    outputPath: String,
-    logFn: @escaping @Sendable (String) async -> Void
-) async {
-    let entries = pfBuildSortedClipEntries(results: results, outputDir: outputDir)
-    guard !entries.isEmpty else { await logFn("  No clips to compile."); return }
-
-    let fm = FileManager.default
-    let ffmpegCandidates = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
-    guard let ffmpegPath = ffmpegCandidates.first(where: { fm.fileExists(atPath: $0) }) else {
-        await logFn("  ⚠ ffmpeg not found — install via: brew install ffmpeg")
-        return
-    }
-
-    // Load durations for chapter timestamp calculation
-    var durations: [Double] = []
-    for e in entries {
-        let a = AVURLAsset(url: URL(fileURLWithPath: e.clipPath),
-                           options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
-        let dur = (try? await CMTimeGetSeconds(a.load(.duration))) ?? 0
-        durations.append(dur)
-    }
-
-    // Compute chapter boundaries at decade transitions
-    struct PFChapter { let title: String; let startMs: Int64 }
-    var chapters: [PFChapter] = []
-    var cumulativeMs: Int64 = 0
-    var currentDecade = ""
-    for (i, entry) in entries.enumerated() {
-        if entry.decade != currentDecade {
-            chapters.append(PFChapter(title: entry.decade, startMs: cumulativeMs))
-            currentDecade = entry.decade
-        }
-        cumulativeMs += Int64(durations[i] * 1000)
-    }
-
-    let tmp = NSTemporaryDirectory()
-    let ts = Int(Date().timeIntervalSince1970)
-    let listPath = (tmp as NSString).appendingPathComponent("pf_dlist_\(ts).txt")
-    let metaPath = (tmp as NSString).appendingPathComponent("pf_dmeta_\(ts).txt")
-
-    let listContent = entries.map { "file '\($0.clipPath)'" }.joined(separator: "\n")
-    try? listContent.write(toFile: listPath, atomically: true, encoding: .utf8)
-
-    var meta = ";FFMETADATA1\n\n"
-    for (i, ch) in chapters.enumerated() {
-        let end = i + 1 < chapters.count ? chapters[i + 1].startMs : cumulativeMs
-        meta += "[CHAPTER]\nTIMEBASE=1/1000\nSTART=\(ch.startMs)\nEND=\(end)\ntitle=\(ch.title)\n\n"
-    }
-    try? meta.write(toFile: metaPath, atomically: true, encoding: .utf8)
-
-    if fm.fileExists(atPath: outputPath) { try? fm.removeItem(atPath: outputPath) }
-    let decadeList = chapters.map(\.title).joined(separator: " · ")
-    await logFn("  Building decade chapter video (\(decadeList))…")
-
-    let args = [
-        "-f", "concat", "-safe", "0", "-i", listPath,
-        "-i", metaPath,
-        "-map_metadata", "1",
-        "-map_chapters", "1",
-        "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30000/1001",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-        "-c:a", "aac", "-b:a", "192k",
-        "-y", outputPath
-    ]
-    let exitCode = await pfRunFFMpegProcess(ffmpegPath: ffmpegPath, args: args, logFn: logFn)
-    try? fm.removeItem(atPath: listPath); try? fm.removeItem(atPath: metaPath)
-
-    if exitCode == 0 {
-        let totalSecs = durations.reduce(0, +)
-        await logFn("  → Decade video saved: \(outputPath)")
-        await logFn("  → Duration: \(pfFormatDuration(totalSecs))  Chapters: \(decadeList)")
-    }
-}
-
-// MARK: - Concat (simple, no chapters)
-
-private func pfConcatenateClips(
-    results: [pfVideoResult],
-    outputDir: String,
-    outputPath: String,
-    logFn: @escaping @Sendable (String) async -> Void
-) async {
-    let paths = results.flatMap(\.clipFiles).filter { !$0.isEmpty }
-        .map { (outputDir as NSString).appendingPathComponent($0) }
-    guard !paths.isEmpty else { return }
-
-    let fm = FileManager.default
-    let ffmpegCandidates = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
-    guard let ffmpegPath = ffmpegCandidates.first(where: { fm.fileExists(atPath: $0) }) else {
-        await logFn("  ⚠ ffmpeg not found — install via: brew install ffmpeg")
-        return
-    }
-
-    let tmp = NSTemporaryDirectory()
-    let ts = Int(Date().timeIntervalSince1970)
-    let listPath = (tmp as NSString).appendingPathComponent("pf_concat_\(ts).txt")
-    let listContent = paths.map { "file '\($0)'" }.joined(separator: "\n")
-    try? listContent.write(toFile: listPath, atomically: true, encoding: .utf8)
-
-    if fm.fileExists(atPath: outputPath) { try? fm.removeItem(atPath: outputPath) }
-
-    await logFn("  Normalising and compiling \(paths.count) clips via ffmpeg…")
-
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: ffmpegPath)
-    process.arguments = [
-        "-f", "concat", "-safe", "0", "-i", listPath,
-        "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30000/1001",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "18",
-        "-c:a", "aac", "-b:a", "192k",
-        "-y", outputPath
-    ]
-    process.standardOutput = FileHandle.nullDevice
-    let stderrPipe = Pipe()
-    process.standardError = stderrPipe
-
-    // Drain stderr asynchronously to prevent pipe buffer deadlock.
-    var stderrData = Data()
-    stderrPipe.fileHandleForReading.readabilityHandler = { handle in
-        let chunk = handle.availableData
-        if !chunk.isEmpty { stderrData.append(chunk) }
-    }
-
-    do { try process.run() } catch {
-        await logFn("  ⚠ Could not launch ffmpeg: \(error.localizedDescription)")
-        try? fm.removeItem(atPath: listPath)
-        return
-    }
-
-    await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-        process.terminationHandler = { _ in cont.resume() }
-        if !process.isRunning { cont.resume() }
-    }
-    stderrPipe.fileHandleForReading.readabilityHandler = nil
-    try? fm.removeItem(atPath: listPath)
-
-    if process.terminationStatus == 0 {
-        await logFn("  → Compiled video: \(outputPath)")
-    } else {
-        await logFn("  ⚠ ffmpeg concat exited with code \(process.terminationStatus)")
-        if let errStr = String(data: stderrData, encoding: .utf8), !errStr.isEmpty {
-            let lines = errStr.components(separatedBy: .newlines).suffix(10)
-            for line in lines where !line.isEmpty {
-                await logFn("    stderr: \(line)")
-            }
-        }
-    }
-}
-
 // MARK: - Compatibility bucketing
 //
 // See docs/compilation-bucketing.md for design rationale. The short version:
@@ -3016,8 +2810,7 @@ private struct CompatKey: Hashable {
 /// probe failed or the file lacks a video stream.
 private func pfProbeCompatKey(path: String) async -> CompatKey? {
     let fm = FileManager.default
-    let ffprobeCandidates = ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe", "/usr/bin/ffprobe"]
-    guard let ffprobePath = ffprobeCandidates.first(where: { fm.fileExists(atPath: $0) }) else { return nil }
+    guard let ffprobePath = ToolLocator.firstExecutable(in: ToolLocator.ffprobeCandidates) else { return nil }
     guard fm.fileExists(atPath: path) else { return nil }
 
     let proc = Process()
@@ -3142,9 +2935,7 @@ private func pfCompileBuckets(
 
     await logFn("  Found \(entries.count) clip(s) → \(buckets.count) compatibility bucket(s).")
 
-    let fm = FileManager.default
-    let ffmpegCandidates = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
-    guard let ffmpegPath = ffmpegCandidates.first(where: { fm.fileExists(atPath: $0) }) else {
+    guard let ffmpegPath = ToolLocator.firstExecutable(in: ToolLocator.ffmpegCandidates) else {
         await logFn("  ⚠ ffmpeg not found — install via: brew install ffmpeg")
         return []
     }
@@ -3270,8 +3061,7 @@ private func pfMergeBucketsToSingleFile(
     logFn: @escaping @Sendable (String) async -> Void
 ) async -> Bool {
     let fm = FileManager.default
-    let ffmpegCandidates = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
-    guard let ffmpegPath = ffmpegCandidates.first(where: { fm.fileExists(atPath: $0) }) else {
+    guard let ffmpegPath = ToolLocator.firstExecutable(in: ToolLocator.ffmpegCandidates) else {
         await logFn("  ⚠ ffmpeg not found for merge step")
         return false
     }
