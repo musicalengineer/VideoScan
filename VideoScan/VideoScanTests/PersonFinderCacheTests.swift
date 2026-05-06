@@ -214,7 +214,7 @@ struct PersonFinderCacheTests {
         #expect(cache.count == 2)
 
         cache.clearAll()
-        #expect(cache.count.isZero)
+        #expect(cache.count < 1)
     }
 
     // MARK: - stableHash regression
