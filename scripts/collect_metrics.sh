@@ -117,9 +117,17 @@ TEST_COUNT=$(grep -rEh '^\s*@Test[[:space:](]|^\s*func test[A-Z_]' \
                  VideoScan/VideoScanTests 2>/dev/null | wc -l | tr -d ' ')
 TEST_COUNT="${TEST_COUNT:-0}"
 
+# ---------- Regression test markers ----------
+# Greppable `// regression: #NN — summary` comments are how we link a test
+# back to the bug it locks out. Tracking the count surfaces "how many
+# fixed bugs do we have a regression net under?" — a more meaningful
+# coverage metric than raw test count.
+REGRESSION_COUNT=$(grep -rh '^\s*// regression:' VideoScan/VideoScanTests 2>/dev/null | wc -l | tr -d ' ')
+REGRESSION_COUNT="${REGRESSION_COUNT:-0}"
+
 # ---------- Emit JSON row ----------
 # All numeric fields come from variables that are either a number or the
 # literal string "null" — both safely interpolate into JSON.
 cat <<JSON
-{"ts":"$TS","sha":"$SHORT_SHA","branch":"$BRANCH","coverage_overall_pct":$COV_OVERALL,"coverage_logic_pct":$COV_LOGIC,"logic_lines":$LOGIC_LINES,"logic_covered":$LOGIC_COVERED,"swiftlint_warnings":$SWIFTLINT_WARN,"swiftlint_errors":$SWIFTLINT_ERR,"periphery_findings":$PERIPHERY_FINDINGS,"total_swift_lines":$TOTAL_LINES,"files_over_1000":$FILES_OVER_1000,"worst_file":"$WORST_FILE","test_count":$TEST_COUNT}
+{"ts":"$TS","sha":"$SHORT_SHA","branch":"$BRANCH","coverage_overall_pct":$COV_OVERALL,"coverage_logic_pct":$COV_LOGIC,"logic_lines":$LOGIC_LINES,"logic_covered":$LOGIC_COVERED,"swiftlint_warnings":$SWIFTLINT_WARN,"swiftlint_errors":$SWIFTLINT_ERR,"periphery_findings":$PERIPHERY_FINDINGS,"total_swift_lines":$TOTAL_LINES,"files_over_1000":$FILES_OVER_1000,"worst_file":"$WORST_FILE","test_count":$TEST_COUNT,"regression_count":$REGRESSION_COUNT}
 JSON
