@@ -29,7 +29,10 @@ struct ScanOptions: Equatable {
     var skipChecksums: Bool = false
 
     // MARK: Persistence
-    private static let defaults = UserDefaults.standard
+    // UserDefaults.standard is documented thread-safe (CFPreferences-backed
+    // with internal locking). nonisolated(unsafe) tells strict concurrency
+    // we know what we're doing.
+    nonisolated(unsafe) private static let defaults = UserDefaults.standard
     private static let prefix = "scanopts_"
 
     static func restored() -> ScanOptions {
@@ -119,7 +122,8 @@ struct ScanPerformanceSettings {
 
     // MARK: Persistence
 
-    private static let defaults = UserDefaults.standard
+    // See ScanOptions.defaults — UserDefaults is thread-safe.
+    nonisolated(unsafe) private static let defaults = UserDefaults.standard
     private static let prefix = "perf_"
 
     static func restored() -> ScanPerformanceSettings {
