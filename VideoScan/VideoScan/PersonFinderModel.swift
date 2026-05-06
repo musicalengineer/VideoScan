@@ -1425,20 +1425,31 @@ final class PersonFinderModel: ObservableObject {
         let total = videoFiles.count
         var orderedResults = [pfVideoResult?](repeating: nil, count: total)
 
+        // Cache summary — so the user can see how many will be fast (cached) vs slow (new)
+        let cacheThreshold = settings.recognitionEngine == .arcface
+            ? settings.arcfaceThreshold : settings.threshold
+        var cachedCount = 0
+        for path in videoFiles {
+            if let key = PersonFinderCache.makeKey(
+                videoPath: path, personName: settings.personName,
+                engine: settings.recognitionEngine, threshold: cacheThreshold,
+                refFilenames: refFilenames
+            ), PersonFinderCache.shared.lookup(key: key) != nil {
+                cachedCount += 1
+            }
+        }
+        let toProcess = total - cachedCount
+        await job.appendLog("Cache: \(cachedCount)/\(total) cached, \(toProcess) to process")
+
         // Start serialized disk feeder for slow volumes (external HDD/USB/SMB).
         // One thread reads sequentially at full bandwidth; workers wait for warm pages.
         let feeder: DiskFeeder?
         if let firstFile = videoFiles.first,
            VolumeSpeed.detect(path: firstFile) == .slow {
-            let threshold = settings.recognitionEngine == .arcface
-                ? settings.arcfaceThreshold : settings.threshold
-            let personName = settings.personName
-            let engine = settings.recognitionEngine
-            let refFilenames = refFilenames
             let skipCheck: @Sendable (String) -> Bool = { path in
                 guard let key = PersonFinderCache.makeKey(
-                    videoPath: path, personName: personName,
-                    engine: engine, threshold: threshold,
+                    videoPath: path, personName: settings.personName,
+                    engine: settings.recognitionEngine, threshold: cacheThreshold,
                     refFilenames: refFilenames
                 ) else { return false }
                 return PersonFinderCache.shared.lookup(key: key) != nil
@@ -1619,13 +1630,21 @@ final class PersonFinderModel: ObservableObject {
             }
         }
 
-        if let r {
-            if let cacheKey = PersonFinderCache.makeKey(
-                videoPath: filePath, personName: settings.personName,
-                engine: settings.recognitionEngine,
-                threshold: threshold, refFilenames: refFilenames
-            ) {
+        if let cacheKey = PersonFinderCache.makeKey(
+            videoPath: filePath, personName: settings.personName,
+            engine: settings.recognitionEngine,
+            threshold: threshold, refFilenames: refFilenames
+        ) {
+            if let r {
                 PersonFinderCache.shared.store(key: cacheKey, result: r)
+            } else if !Task.isCancelled {
+                let skip = pfVideoResult(
+                    filename: (filePath as NSString).lastPathComponent,
+                    filePath: filePath, durationSeconds: 0, fps: 0,
+                    totalHits: 0, segments: []
+                )
+                PersonFinderCache.shared.store(key: cacheKey, result: skip)
+                await job.appendLog("  [\(idx + 1)/\(total)] \((filePath as NSString).lastPathComponent) — cached as unreadable")
             }
         }
 

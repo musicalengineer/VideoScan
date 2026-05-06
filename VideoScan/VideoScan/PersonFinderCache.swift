@@ -24,13 +24,14 @@ final class PersonFinderCache {
         return dir.appendingPathComponent("personfinder_cache.sqlite").path
     }
 
-    init() {
-        guard sqlite3_open(Self.dbPath, &db) == SQLITE_OK else {
-            cacheLog.error("Failed to open cache DB at \(Self.dbPath, privacy: .public)")
+    init(path: String? = nil) {
+        let dbPath = path ?? Self.dbPath
+        guard sqlite3_open(dbPath, &db) == SQLITE_OK else {
+            cacheLog.error("Failed to open cache DB at \(dbPath, privacy: .public)")
             db = nil
             return
         }
-        cacheLog.info("Cache opened: \(Self.dbPath, privacy: .public)")
+        cacheLog.info("Cache opened: \(dbPath, privacy: .public)")
         exec("PRAGMA journal_mode=WAL")
         exec("PRAGMA synchronous=NORMAL")
         exec("""
