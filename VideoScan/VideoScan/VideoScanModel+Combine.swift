@@ -479,13 +479,17 @@ extension VideoScanModel {
                     if Task.isCancelled { break }
                     let jobIndex = jobOffset + i
                     group.addTask { [self] in
-                        await semaphore.withPermit {
-                            await self.processCombinePair(
-                                video: video, audio: audio,
-                                outputFolder: outputFolder,
-                                tempBase: tempBase, hasRAMDisk: hasRAMDisk,
-                                jobIndex: jobIndex
-                            )
+                        do {
+                            return try await semaphore.withPermit {
+                                await self.processCombinePair(
+                                    video: video, audio: audio,
+                                    outputFolder: outputFolder,
+                                    tempBase: tempBase, hasRAMDisk: hasRAMDisk,
+                                    jobIndex: jobIndex
+                                )
+                            }
+                        } catch {
+                            return false
                         }
                     }
                 }

@@ -8,11 +8,11 @@ struct AsyncSemaphoreTests {
 
     @Test func basicWaitAndSignal() async {
         let sem = AsyncSemaphore(limit: 2)
-        await sem.wait()
-        await sem.wait()
+        try? await sem.wait()
+        try? await sem.wait()
         await sem.signal()
         await sem.signal()
-        await sem.wait()
+        try? await sem.wait()
         await sem.signal()
     }
 
@@ -24,7 +24,7 @@ struct AsyncSemaphoreTests {
         await withTaskGroup(of: Void.self) { group in
             for _ in 0..<iterations {
                 group.addTask {
-                    await sem.withPermit {
+                    try? await sem.withPermit {
                         let current = await counter.increment()
                         #expect(current <= 3, "Semaphore allowed more than 3 concurrent tasks")
                         try? await Task.sleep(for: .milliseconds(5))
@@ -33,6 +33,45 @@ struct AsyncSemaphoreTests {
                 }
             }
         }
+    }
+
+    @Test func cancelledWaiterDoesNotConsumePermit() async throws {
+        let sem = AsyncSemaphore(limit: 1)
+        try await sem.wait()
+
+        let waiting = Task {
+            try await sem.wait()
+        }
+        try await Task.sleep(for: .milliseconds(20))
+        waiting.cancel()
+        await #expect(throws: CancellationError.self) {
+            try await waiting.value
+        }
+
+        await sem.signal()
+        try await sem.wait()
+        await sem.signal()
+    }
+
+    @Test func withPermitSignalsWhenTaskIsCancelled() async throws {
+        let sem = AsyncSemaphore(limit: 1)
+        let started = TestFlag()
+
+        let task = Task {
+            try await sem.withPermit {
+                await started.set()
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(5))
+                }
+            }
+        }
+
+        await started.waitUntilSet()
+        task.cancel()
+        try await task.value
+
+        try await sem.wait()
+        await sem.signal()
     }
 }
 

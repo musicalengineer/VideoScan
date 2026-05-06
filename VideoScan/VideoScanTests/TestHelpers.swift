@@ -18,6 +18,20 @@ actor TestCounter {
     }
 }
 
+actor TestFlag {
+    private var isSet = false
+
+    func set() {
+        isSet = true
+    }
+
+    func waitUntilSet() async {
+        while !isSet {
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+    }
+}
+
 /// Factory for creating VideoRecord instances pre-populated with duplicate metadata.
 func makeDuplicateRecord(
     filename: String,
