@@ -234,7 +234,9 @@ private func openArcFaceVideoReader(
     total: Int,
     logFn: @escaping @Sendable (String) async -> Void
 ) async -> ArcFaceReaderContext? {
-    let asset = AVURLAsset(url: URL(fileURLWithPath: filePath),
+    let fileURL = URL(fileURLWithPath: filePath)
+
+    let asset = AVURLAsset(url: fileURL,
                            options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
 
     let videoTrack: AVAssetTrack
