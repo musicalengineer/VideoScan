@@ -4,7 +4,7 @@ import Foundation
 /// Supports stream copy (no re-encode) and re-encode modes, with RAM disk buffering for network sources.
 enum CombineEngine {
 
-    static let ffmpegPath = "/opt/homebrew/bin/ffmpeg"
+    static var ffmpegPath: String { ToolLocator.ffmpegPath }
 
     struct CombineResult: Sendable {
         let success: Bool

@@ -201,8 +201,8 @@ final class VideoScanModel: ObservableObject {
     /// Thumbnail cache — keyed by fullPath, avoids regenerating from video file on re-click
     private let thumbnailCache = NSCache<NSString, NSImage>()
 
-    let ffprobePath = "/opt/homebrew/bin/ffprobe"
-    let ffmpegPath  = "/opt/homebrew/bin/ffmpeg"
+    let ffprobePath = ToolLocator.ffprobePath
+    let ffmpegPath  = ToolLocator.ffmpegPath
 
     let videoExtensions: Set<String> = [
         "mov", "mp4", "m4v", "avi", "mkv", "mxf", "mts", "m2ts", "ts", "mpg", "mpeg",
