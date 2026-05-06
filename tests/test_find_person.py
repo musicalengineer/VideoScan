@@ -22,10 +22,13 @@ from scripts.find_person import (
     compute_sample_timestamps,
     is_video_path,
     iter_videos,
+    list_persons_in_gallery,
+    load_gallery,
     min_distance_to_gallery,
     should_skip_dir,
     verdict_for_counts,
 )
+import scripts.find_person as find_person
 
 
 class ComputeSampleTimestampsTests(unittest.TestCase):
@@ -189,6 +192,28 @@ class MinDistanceToGalleryTests(unittest.TestCase):
         # And it equals what we get against just the closest row
         d_solo = min_distance_to_gallery(face, gallery[1:2])
         self.assertAlmostEqual(d, d_solo, places=5)
+
+
+class GalleryLoadingTests(unittest.TestCase):
+    def test_gallery_loads_without_pickle(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "embeddings.npz"
+            np.savez(
+                path,
+                persons=np.array(["donna", "rick", "donna"]),
+                facenet_mask=np.array([True, True, False]),
+                facenet=np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+            )
+            old = find_person.EMB_PATH
+            find_person.EMB_PATH = path
+            try:
+                self.assertEqual(list_persons_in_gallery(), {"donna": 1, "rick": 1})
+                np.testing.assert_array_equal(
+                    load_gallery("donna"),
+                    np.array([[1.0, 0.0]], dtype=np.float32),
+                )
+            finally:
+                find_person.EMB_PATH = old
 
 
 class ConstantsSanityTests(unittest.TestCase):
