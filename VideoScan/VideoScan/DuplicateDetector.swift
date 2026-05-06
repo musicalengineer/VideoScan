@@ -242,7 +242,11 @@ enum DuplicateDetector {
     private static let mediumConfidenceScore = 9
     private static let highConfidenceScore = 12
 
-    private static let scoringRules: [ScoringRule] = [
+    // Static immutable table of pure functions — safe to read concurrently
+    // even though ScoringRule isn't Sendable (closure parameter type
+    // VideoRecord is a class). The table is built once at type-init and
+    // never mutated thereafter.
+    nonisolated(unsafe) private static let scoringRules: [ScoringRule] = [
         // Byte-identical content: same hash AND same size. Strongest signal.
         ScoringRule(reason: "hash") { l, r in
             guard !l.partialMD5.isEmpty,
