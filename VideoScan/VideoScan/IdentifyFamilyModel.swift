@@ -57,15 +57,14 @@ final class IdentifyFamilyModel: ObservableObject {
     private var stderrPipe: Pipe?
     private var stdoutBuffer = ""
 
-    // MARK: - Paths (anchored to ~/dev/VideoScan)
+    // MARK: - Paths
 
     /// Use python3.12 explicitly: the venv's `python` symlink points at 3.14
     /// after a Homebrew upgrade, but every torch/facenet/hdbscan package is
     /// installed under the 3.12 site-packages. The script's shebang is
     /// `#!/usr/bin/env python3.12` for the same reason.
     private var pythonPath: URL {
-        URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("dev/VideoScan/venv/bin/python3.12")
+        URL(fileURLWithPath: ToolLocator.python312Path)
     }
     private var scriptPath: URL {
         URL(fileURLWithPath: NSHomeDirectory())

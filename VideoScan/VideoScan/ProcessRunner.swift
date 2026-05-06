@@ -1,5 +1,54 @@
 import Foundation
 
+enum ToolLocator {
+    static let ffmpegCandidates = [
+        "/opt/homebrew/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+        "/usr/bin/ffmpeg"
+    ]
+    static let ffprobeCandidates = [
+        "/opt/homebrew/bin/ffprobe",
+        "/usr/local/bin/ffprobe",
+        "/usr/bin/ffprobe"
+    ]
+    static let pythonCandidates = [
+        NSHomeDirectory() + "/dev/VideoScan/venv/bin/python3",
+        FileManager.default.currentDirectoryPath + "/.venv/bin/python",
+        FileManager.default.currentDirectoryPath + "/venv/bin/python",
+        "/opt/homebrew/bin/python3",
+        "/usr/bin/python3"
+    ]
+    static let python312Candidates = [
+        NSHomeDirectory() + "/dev/VideoScan/venv/bin/python3.12",
+        FileManager.default.currentDirectoryPath + "/venv/bin/python3.12",
+        "/opt/homebrew/bin/python3.12",
+        "/usr/local/bin/python3.12"
+    ]
+
+    static func firstExecutable(
+        in candidates: [String],
+        fileManager: FileManager = .default
+    ) -> String? {
+        candidates.first { fileManager.isExecutableFile(atPath: $0) }
+    }
+
+    static var ffmpegPath: String {
+        firstExecutable(in: ffmpegCandidates) ?? ffmpegCandidates[0]
+    }
+
+    static var ffprobePath: String {
+        firstExecutable(in: ffprobeCandidates) ?? ffprobeCandidates[0]
+    }
+
+    static var pythonPath: String {
+        firstExecutable(in: pythonCandidates) ?? ""
+    }
+
+    static var python312Path: String {
+        firstExecutable(in: python312Candidates) ?? python312Candidates[0]
+    }
+}
+
 /// Cancellation-aware subprocess execution.
 /// Wraps `Process` with `withTaskCancellationHandler` so running subprocesses
 /// are terminated immediately when the parent task is cancelled.

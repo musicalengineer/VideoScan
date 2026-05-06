@@ -186,12 +186,7 @@ struct PersonFinderSettings: Equatable {
 
     /// Auto-detect Python venv and script from project layout.
     private static var defaultPythonPath: String {
-        // Look for venv relative to the app bundle's ancestor dev directory
-        let candidates = [
-            NSHomeDirectory() + "/dev/VideoScan/venv/bin/python3",
-            "/opt/homebrew/bin/python3"
-        ]
-        return candidates.first { FileManager.default.fileExists(atPath: $0) } ?? ""
+        ToolLocator.pythonPath
     }
 
     private static var defaultScriptPath: String {
@@ -216,21 +211,12 @@ struct PersonFinderSettings: Equatable {
     private static let defaults = UserDefaults.standard
     private static let prefix = "pf_"
 
-    private static func firstExistingPath(_ candidates: [String]) -> String {
-        candidates.first { FileManager.default.isExecutableFile(atPath: $0) } ?? ""
-    }
-
     private static func firstExistingFile(_ candidates: [String]) -> String {
         candidates.first { FileManager.default.fileExists(atPath: $0) } ?? ""
     }
 
     private static func detectedPythonPath() -> String {
-        let cwd = FileManager.default.currentDirectoryPath
-        return firstExistingPath([
-            (cwd as NSString).appendingPathComponent(".venv/bin/python"),
-            (cwd as NSString).appendingPathComponent("venv/bin/python"),
-            "/usr/bin/python3"
-        ])
+        ToolLocator.pythonPath
     }
 
     private static func detectedRecognitionScript() -> String {
@@ -2752,9 +2738,7 @@ private func pfConcatenateWithDecadeChapters(
     let entries = pfBuildSortedClipEntries(results: results, outputDir: outputDir)
     guard !entries.isEmpty else { await logFn("  No clips to compile."); return }
 
-    let fm = FileManager.default
-    let ffmpegCandidates = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
-    guard let ffmpegPath = ffmpegCandidates.first(where: { fm.fileExists(atPath: $0) }) else {
+    guard let ffmpegPath = ToolLocator.firstExecutable(in: ToolLocator.ffmpegCandidates) else {
         await logFn("  ⚠ ffmpeg not found — install via: brew install ffmpeg")
         return
     }
@@ -2833,8 +2817,7 @@ private func pfConcatenateClips(
     guard !paths.isEmpty else { return }
 
     let fm = FileManager.default
-    let ffmpegCandidates = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
-    guard let ffmpegPath = ffmpegCandidates.first(where: { fm.fileExists(atPath: $0) }) else {
+    guard let ffmpegPath = ToolLocator.firstExecutable(in: ToolLocator.ffmpegCandidates) else {
         await logFn("  ⚠ ffmpeg not found — install via: brew install ffmpeg")
         return
     }
@@ -2997,8 +2980,7 @@ private struct CompatKey: Hashable {
 /// probe failed or the file lacks a video stream.
 private func pfProbeCompatKey(path: String) async -> CompatKey? {
     let fm = FileManager.default
-    let ffprobeCandidates = ["/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe", "/usr/bin/ffprobe"]
-    guard let ffprobePath = ffprobeCandidates.first(where: { fm.fileExists(atPath: $0) }) else { return nil }
+    guard let ffprobePath = ToolLocator.firstExecutable(in: ToolLocator.ffprobeCandidates) else { return nil }
     guard fm.fileExists(atPath: path) else { return nil }
 
     let proc = Process()
@@ -3124,8 +3106,7 @@ private func pfCompileBuckets(
     await logFn("  Found \(entries.count) clip(s) → \(buckets.count) compatibility bucket(s).")
 
     let fm = FileManager.default
-    let ffmpegCandidates = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
-    guard let ffmpegPath = ffmpegCandidates.first(where: { fm.fileExists(atPath: $0) }) else {
+    guard let ffmpegPath = ToolLocator.firstExecutable(in: ToolLocator.ffmpegCandidates) else {
         await logFn("  ⚠ ffmpeg not found — install via: brew install ffmpeg")
         return []
     }
@@ -3251,8 +3232,7 @@ private func pfMergeBucketsToSingleFile(
     logFn: @escaping @Sendable (String) async -> Void
 ) async -> Bool {
     let fm = FileManager.default
-    let ffmpegCandidates = ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
-    guard let ffmpegPath = ffmpegCandidates.first(where: { fm.fileExists(atPath: $0) }) else {
+    guard let ffmpegPath = ToolLocator.firstExecutable(in: ToolLocator.ffmpegCandidates) else {
         await logFn("  ⚠ ffmpeg not found for merge step")
         return false
     }

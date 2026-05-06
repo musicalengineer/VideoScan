@@ -10,7 +10,7 @@ enum ScanEngine {
 
     // MARK: - Configuration
 
-    static let ffprobePath = "/opt/homebrew/bin/ffprobe"
+    static var ffprobePath: String { ToolLocator.ffprobePath }
 
     // MARK: - ffprobe Execution
 
