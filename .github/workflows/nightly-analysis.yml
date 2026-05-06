@@ -1,17 +1,24 @@
 name: Nightly Static Analysis
 
-# Runs every night at 01:00 EDT (05:00 UTC, May–Nov) and can be
-# triggered on-demand from the Actions tab. Three jobs run in
-# parallel:
+# Runs every night at 01:00 EDT (05:00 UTC) and is also manually
+# triggerable from the Actions tab. Dial is turned to 11 — every
+# tool runs at maximum strictness because we have all night.
 #
-#   strict-concurrency  — Swift compiler with -strict-concurrency=complete
-#                         (data race / Sendable / actor-isolation analysis)
-#   codeql              — GitHub's CodeQL on Swift (security + correctness queries)
-#   aggregate           — collects counts and appends a row to the metrics branch
+# Jobs (run in parallel):
+#   strict-concurrency  — Swift compiler with -strict-concurrency=complete,
+#                         all upcoming features enabled as warnings,
+#                         compile-time perf warnings.
+#   codeql              — GitHub CodeQL with security-and-quality
+#                         (the broadest standard suite).
+#   thread-sanitizer    — Full unit test suite under TSan instrumentation
+#                         (catches actual races at runtime, not just static).
+#   lint-strict         — SwiftLint --strict + Periphery without retain-public.
+#   aggregate           — Collects every count and appends one row to
+#                         metrics/static_analysis.jsonl on the metrics branch.
 #
-# Findings show up in three places:
-#   1. The run's Summary panel (markdown — green or per-finding details)
-#   2. GitHub's Security → Code Scanning tab (CodeQL alerts, deduped over time)
+# Findings appear in:
+#   1. Each run's Summary panel (markdown — green or expandable details)
+#   2. Security → Code Scanning (CodeQL alerts, deduped over time)
 #   3. metrics/static_analysis.jsonl (history for the dashboard)
 
 on:
@@ -29,9 +36,9 @@ jobs:
 
   # -------------------------------------------------------------------
   strict-concurrency:
-    name: Swift strict concurrency
+    name: Swift strict concurrency (max)
     runs-on: macos-15
-    timeout-minutes: 25
+    timeout-minutes: 30
     outputs:
       warning_count: ${{ steps.count.outputs.warnings }}
 
@@ -42,9 +49,27 @@ jobs:
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
 
-      - name: Build with strict concurrency
+      - name: Build with strict concurrency + all upcoming features + perf warnings
         run: |
           set -o pipefail
+          # Every Swift "upcoming feature" we can flip on as a warning.
+          # `enable-upcoming-feature` opts a code path into Swift 6 semantics
+          # while staying on Swift 5 — perfect for nightly reporting.
+          UPCOMING_FLAGS=""
+          for feat in BareSlashRegexLiterals ConciseMagicFile \
+                      ForwardTrailingClosures ImplicitOpenExistentials \
+                      StrictConcurrency ImportObjcForwardDeclarations \
+                      DisableOutwardActorInference IsolatedDefaultValues \
+                      GlobalConcurrency InferSendableFromCaptures \
+                      RegionBasedIsolation ExistentialAny \
+                      DeprecateApplicationMain InternalImportsByDefault; do
+            UPCOMING_FLAGS+=" -Xfrontend -enable-upcoming-feature -Xfrontend $feat"
+          done
+          # Compiler-side perf cliffs (type-inference >100ms).
+          PERF_FLAGS=" -Xfrontend -warn-long-function-bodies=100 -Xfrontend -warn-long-expression-type-checking=100"
+          # Concurrency reporting flags.
+          CONCUR_FLAGS=" -Xfrontend -warn-concurrency -Xfrontend -enable-actor-data-race-checks"
+
           xcodebuild build \
             -project VideoScan/VideoScan.xcodeproj \
             -scheme VideoScan \
@@ -53,10 +78,8 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
             SWIFT_STRICT_CONCURRENCY=complete \
-            OTHER_SWIFT_FLAGS='$(inherited) -Xfrontend -warn-concurrency -Xfrontend -enable-actor-data-race-checks' \
+            OTHER_SWIFT_FLAGS="\$(inherited)$CONCUR_FLAGS$UPCOMING_FLAGS$PERF_FLAGS" \
             2>&1 | tee strict-concurrency.log
-          # Don't fail the job on warnings — this is a reporting job.
-          # Bail only on actual build errors.
           if grep -q "BUILD FAILED" strict-concurrency.log; then
             echo "::error::Build itself failed (not a warning issue) — see log"
             exit 1
@@ -66,54 +89,67 @@ jobs:
         id: count
         if: always()
         run: |
-          # Concurrency warnings come through as compiler warnings with phrases
-          # like "non-sendable", "data race", "actor-isolated", "main actor",
-          # "concurrency". Filter the Xcode-style warning lines.
-          # Format: "/path/to/File.swift:LINE:COL: warning: <message>"
           if [ -f strict-concurrency.log ]; then
-            grep -E ': warning: .*(sendable|data race|actor-isolated|concurrency|main actor|nonisolated|@Sendable)' \
-              strict-concurrency.log \
-              | sort -u > concurrency-findings.txt || true
+            grep -E ': warning: ' strict-concurrency.log | sort -u > all-warnings.txt || true
+            grep -E '(sendable|data race|actor-isolated|concurrency|main actor|nonisolated|@Sendable)' all-warnings.txt > concurrency-findings.txt || true
+            grep -E 'warn-long-function-bodies|warn-long-expression' all-warnings.txt > perf-findings.txt || true
+            grep -Ev '(sendable|data race|actor-isolated|concurrency|main actor|nonisolated|@Sendable|warn-long-function-bodies|warn-long-expression)' all-warnings.txt > other-findings.txt || true
           else
-            : > concurrency-findings.txt
+            : > all-warnings.txt; : > concurrency-findings.txt; : > perf-findings.txt; : > other-findings.txt
           fi
 
-          COUNT=$(wc -l < concurrency-findings.txt | tr -d ' ')
-          echo "warnings=$COUNT" >> "$GITHUB_OUTPUT"
+          C_COUNT=$(wc -l < concurrency-findings.txt | tr -d ' ')
+          P_COUNT=$(wc -l < perf-findings.txt | tr -d ' ')
+          O_COUNT=$(wc -l < other-findings.txt | tr -d ' ')
+          TOTAL=$(wc -l < all-warnings.txt | tr -d ' ')
+          echo "warnings=$TOTAL" >> "$GITHUB_OUTPUT"
 
           {
-            echo "## Swift strict concurrency"
+            echo "## Swift strict concurrency (max)"
             echo ""
-            if [ "$COUNT" = "0" ]; then
-              echo "✅ **No concurrency warnings** with \`-strict-concurrency=complete\`."
-            else
-              echo "⚠️ **$COUNT concurrency warnings** with \`-strict-concurrency=complete\`."
-              echo ""
-              echo "<details><summary>Show all $COUNT findings</summary>"
-              echo ""
-              echo '```'
-              cat concurrency-findings.txt
-              echo '```'
-              echo ""
-              echo "</details>"
-            fi
+            echo "| Category | Count |"
+            echo "|---|---:|"
+            echo "| Concurrency / Sendable / data race | $C_COUNT |"
+            echo "| Compile-time perf (>100ms type check) | $P_COUNT |"
+            echo "| Upcoming-feature / other | $O_COUNT |"
+            echo "| **Total** | **$TOTAL** |"
+            echo ""
+            for label_file in "Concurrency:concurrency-findings.txt" "Perf:perf-findings.txt" "Other:other-findings.txt"; do
+              label="${label_file%%:*}"
+              file="${label_file##*:}"
+              n=$(wc -l < "$file" | tr -d ' ')
+              if [ "$n" != "0" ]; then
+                echo "<details><summary>$label findings ($n)</summary>"
+                echo ""
+                echo '```'
+                head -200 "$file"
+                if [ "$n" -gt 200 ]; then echo "... (truncated, see artifact for full list)"; fi
+                echo '```'
+                echo ""
+                echo "</details>"
+                echo ""
+              fi
+            done
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload concurrency log
+      - name: Upload concurrency artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: strict-concurrency-log
           path: |
             strict-concurrency.log
+            all-warnings.txt
             concurrency-findings.txt
+            perf-findings.txt
+            other-findings.txt
           retention-days: 30
 
   # -------------------------------------------------------------------
   codeql:
-    name: CodeQL (Swift)
+    name: CodeQL (Swift, security-and-quality)
     runs-on: macos-15
-    timeout-minutes: 35
+    timeout-minutes: 40
     outputs:
       finding_count: ${{ steps.count.outputs.findings }}
 
@@ -128,8 +164,6 @@ jobs:
         uses: github/codeql-action/init@v3
         with:
           languages: swift
-          # Includes both 'security-and-quality' and the default suite for
-          # broader correctness coverage.
           queries: security-and-quality
 
       - name: Build for CodeQL
@@ -148,17 +182,13 @@ jobs:
         uses: github/codeql-action/analyze@v3
         with:
           category: '/language:swift'
-          # Upload SARIF results so they appear in Security → Code Scanning.
           upload: always
-          # Also produce a local copy we can count.
           output: codeql-results
 
       - name: Count + summarise findings
         id: count
         if: always()
         run: |
-          # CodeQL writes one SARIF file per language. Count the 'results'
-          # array length. macOS runners have python3 by default.
           COUNT=0
           if [ -d codeql-results ]; then
             for sarif in codeql-results/*.sarif; do
@@ -170,12 +200,12 @@ jobs:
           echo "findings=$COUNT" >> "$GITHUB_OUTPUT"
 
           {
-            echo "## CodeQL (Swift)"
+            echo "## CodeQL (Swift, security-and-quality)"
             echo ""
             if [ "$COUNT" = "0" ]; then
-              echo "✅ **No CodeQL findings** with security-and-quality queries."
+              echo "✅ **No CodeQL findings.**"
             else
-              echo "⚠️ **$COUNT CodeQL findings.** See **Security → Code Scanning** for details, dedup, and dismiss flow."
+              echo "⚠️ **$COUNT CodeQL findings.** Triage in **Security → Code Scanning**."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -188,9 +218,181 @@ jobs:
           retention-days: 30
 
   # -------------------------------------------------------------------
+  thread-sanitizer:
+    name: Thread Sanitizer (full unit test run)
+    runs-on: macos-15
+    timeout-minutes: 60
+    outputs:
+      issue_count: ${{ steps.count.outputs.tsan_issues }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+
+      - name: Run unit tests under TSan
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project VideoScan/VideoScan.xcodeproj \
+            -scheme VideoScan \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -only-testing:VideoScanTests \
+            -enableThreadSanitizer YES \
+            -resultBundlePath TSanResults.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            MACOSX_DEPLOYMENT_TARGET=15.0 \
+            2>&1 | tee tsan.log
+          # TSan reports don't fail the build by default — this is a
+          # reporting run, so we let xcodebuild's pass/fail be authoritative
+          # and just count the TSan lines below.
+
+      - name: Count + summarise findings
+        id: count
+        if: always()
+        run: |
+          if [ -f tsan.log ]; then
+            grep -E "ThreadSanitizer: " tsan.log | sort -u > tsan-findings.txt || true
+          else
+            : > tsan-findings.txt
+          fi
+          COUNT=$(wc -l < tsan-findings.txt | tr -d ' ')
+          echo "tsan_issues=$COUNT" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Thread Sanitizer"
+            echo ""
+            if [ "$COUNT" = "0" ]; then
+              echo "✅ **No TSan reports** in the unit test run."
+            else
+              echo "⚠️ **$COUNT distinct TSan reports** during unit tests."
+              echo ""
+              echo "<details><summary>Show all $COUNT</summary>"
+              echo ""
+              echo '```'
+              head -200 tsan-findings.txt
+              if [ "$COUNT" -gt 200 ]; then echo "... (truncated)"; fi
+              echo '```'
+              echo ""
+              echo "</details>"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload TSan log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tsan-log
+          path: |
+            tsan.log
+            tsan-findings.txt
+            TSanResults.xcresult
+          retention-days: 30
+
+  # -------------------------------------------------------------------
+  lint-strict:
+    name: SwiftLint --strict + Periphery aggressive
+    runs-on: macos-15
+    timeout-minutes: 15
+    outputs:
+      swiftlint_count: ${{ steps.count.outputs.swiftlint }}
+      periphery_count: ${{ steps.count.outputs.periphery }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+
+      - name: Install tools
+        run: |
+          brew list swiftlint >/dev/null 2>&1 || brew install swiftlint
+          brew list periphery >/dev/null 2>&1 || brew install peripheryapp/periphery/periphery
+
+      - name: SwiftLint --strict
+        run: |
+          # --strict promotes warnings to errors, but we just want to count
+          # them. Don't fail the step on non-zero exit.
+          swiftlint lint --strict --reporter xcode > swiftlint-strict.txt 2>&1 || true
+
+      - name: Build (Periphery needs the build for index data)
+        run: |
+          xcodebuild build \
+            -project VideoScan/VideoScan.xcodeproj \
+            -scheme VideoScan \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            MACOSX_DEPLOYMENT_TARGET=15.0 \
+            -derivedDataPath periphery-dd 2>&1 | tail -20
+
+      - name: Periphery aggressive (no --retain-public)
+        run: |
+          # `--retain-public` is OFF — for a single-app codebase, public API
+          # that nothing inside calls is genuinely unused.
+          periphery scan \
+            --project VideoScan/VideoScan.xcodeproj \
+            --schemes VideoScan \
+            --targets VideoScan \
+            --format xcode \
+            > periphery-strict.txt 2>&1 || true
+
+      - name: Count + summarise findings
+        id: count
+        if: always()
+        run: |
+          SL=$(grep -c ": warning:\|: error:" swiftlint-strict.txt 2>/dev/null || echo 0)
+          PF=$(grep -c "^/" periphery-strict.txt 2>/dev/null || echo 0)
+          echo "swiftlint=$SL" >> "$GITHUB_OUTPUT"
+          echo "periphery=$PF" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## SwiftLint --strict + Periphery aggressive"
+            echo ""
+            echo "| Tool | Findings |"
+            echo "|---|---:|"
+            echo "| SwiftLint --strict | $SL |"
+            echo "| Periphery (no --retain-public) | $PF |"
+            echo ""
+            if [ "$SL" != "0" ]; then
+              echo "<details><summary>SwiftLint findings ($SL)</summary>"
+              echo ""
+              echo '```'
+              head -100 swiftlint-strict.txt
+              echo '```'
+              echo ""
+              echo "</details>"
+              echo ""
+            fi
+            if [ "$PF" != "0" ]; then
+              echo "<details><summary>Periphery findings ($PF)</summary>"
+              echo ""
+              echo '```'
+              head -100 periphery-strict.txt
+              echo '```'
+              echo ""
+              echo "</details>"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload lint logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-strict
+          path: |
+            swiftlint-strict.txt
+            periphery-strict.txt
+          retention-days: 30
+
+  # -------------------------------------------------------------------
   aggregate:
     name: Aggregate & push to metrics branch
-    needs: [strict-concurrency, codeql]
+    needs: [strict-concurrency, codeql, thread-sanitizer, lint-strict]
     if: always()
     runs-on: macos-15
     timeout-minutes: 5
@@ -206,22 +408,25 @@ jobs:
         env:
           CONCURRENCY_WARNINGS: ${{ needs.strict-concurrency.outputs.warning_count }}
           CODEQL_FINDINGS: ${{ needs.codeql.outputs.finding_count }}
+          TSAN_ISSUES: ${{ needs.thread-sanitizer.outputs.issue_count }}
+          SWIFTLINT_STRICT: ${{ needs.lint-strict.outputs.swiftlint_count }}
+          PERIPHERY_AGGRESSIVE: ${{ needs.lint-strict.outputs.periphery_count }}
         run: |
           set -e
           TS="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           SHA="${GITHUB_SHA:0:8}"
-          ROW=$(printf '{"ts":"%s","sha":"%s","run_kind":"nightly","concurrency_warnings":%s,"codeql_findings":%s}' \
+          ROW=$(printf '{"ts":"%s","sha":"%s","run_kind":"nightly","concurrency_warnings":%s,"codeql_findings":%s,"tsan_issues":%s,"swiftlint_strict":%s,"periphery_aggressive":%s}' \
                 "$TS" "$SHA" \
                 "${CONCURRENCY_WARNINGS:-null}" \
-                "${CODEQL_FINDINGS:-null}")
+                "${CODEQL_FINDINGS:-null}" \
+                "${TSAN_ISSUES:-null}" \
+                "${SWIFTLINT_STRICT:-null}" \
+                "${PERIPHERY_AGGRESSIVE:-null}")
           echo "Row: $ROW"
 
-          # Append to metrics/static_analysis.jsonl on the orphan `metrics`
-          # branch. Same pattern as the existing CI metrics step.
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
 
-          # Either fetch existing metrics branch or initialise it.
           if git ls-remote --exit-code --heads origin metrics >/dev/null 2>&1; then
             git fetch origin metrics
             git switch metrics
@@ -236,7 +441,7 @@ jobs:
           touch metrics/static_analysis.jsonl
           echo "$ROW" >> metrics/static_analysis.jsonl
           git add metrics/static_analysis.jsonl
-          git commit -m "static analysis nightly $TS — concurrency=$CONCURRENCY_WARNINGS codeql=$CODEQL_FINDINGS" || {
+          git commit -m "static analysis nightly $TS" || {
             echo "Nothing to commit"
             exit 0
           }
@@ -247,15 +452,21 @@ jobs:
         env:
           CONCURRENCY_WARNINGS: ${{ needs.strict-concurrency.outputs.warning_count }}
           CODEQL_FINDINGS: ${{ needs.codeql.outputs.finding_count }}
+          TSAN_ISSUES: ${{ needs.thread-sanitizer.outputs.issue_count }}
+          SWIFTLINT_STRICT: ${{ needs.lint-strict.outputs.swiftlint_count }}
+          PERIPHERY_AGGRESSIVE: ${{ needs.lint-strict.outputs.periphery_count }}
         run: |
           {
             echo "## Nightly static analysis — $(date -u +'%Y-%m-%d')"
             echo ""
             echo "| Tool | Findings |"
             echo "|---|---:|"
-            echo "| Swift strict concurrency | ${CONCURRENCY_WARNINGS:-?} |"
-            echo "| CodeQL (Swift) | ${CODEQL_FINDINGS:-?} |"
+            echo "| Swift strict concurrency (max) | ${CONCURRENCY_WARNINGS:-?} |"
+            echo "| CodeQL (security-and-quality) | ${CODEQL_FINDINGS:-?} |"
+            echo "| Thread Sanitizer (test run) | ${TSAN_ISSUES:-?} |"
+            echo "| SwiftLint --strict | ${SWIFTLINT_STRICT:-?} |"
+            echo "| Periphery aggressive | ${PERIPHERY_AGGRESSIVE:-?} |"
             echo ""
-            echo "Per-job details are above. CodeQL alerts also live under **Security → Code Scanning**."
+            echo "Per-tool details are in the jobs above. CodeQL alerts also live under **Security → Code Scanning**."
             echo "Trend history: \`metrics/static_analysis.jsonl\` on the \`metrics\` branch."
           } >> "$GITHUB_STEP_SUMMARY"
