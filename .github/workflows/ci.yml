@@ -37,7 +37,13 @@ jobs:
 
       - name: Install SwiftLint & Periphery
         run: |
-          brew install swiftlint periphery
+          # Force latest Periphery — runner image caches an older version
+          # (was 2.21.2; tap installs are 3.x+). 3.x has new findings
+          # categories that 2.x silently misses.
+          brew install swiftlint || true
+          brew install peripheryapp/periphery/periphery 2>/dev/null \
+            || brew upgrade peripheryapp/periphery/periphery
+          echo "Periphery: $(periphery version)"
 
       - name: SwiftLint (warn-only for now)
         # Non-blocking so we can ratchet down violations gradually.
@@ -77,7 +83,9 @@ jobs:
         run: |
           echo "## Periphery — unused code" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          periphery scan 2>&1 | tee periphery-raw.txt | tee -a $GITHUB_STEP_SUMMARY || true
+          # --exclude-tests: test helpers are allowed to look "unused";
+          # the nightly job runs without this flag for the aggressive view.
+          periphery scan --exclude-tests 2>&1 | tee periphery-raw.txt | tee -a $GITHUB_STEP_SUMMARY || true
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "PERIPHERY_OUTPUT=$(pwd)/periphery-raw.txt" >> $GITHUB_ENV
 

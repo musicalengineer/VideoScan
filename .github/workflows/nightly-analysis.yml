@@ -164,6 +164,12 @@ jobs:
         uses: github/codeql-action/init@v3
         with:
           languages: swift
+          # `manual` mode tells CodeQL to extract from our explicit build
+          # below rather than racing its own autobuild. Previously the
+          # SARIF showed 177 "cannot find type 'PhotosPickerItem' in scope"
+          # indexer errors and 0 results — autobuild was producing a
+          # partial AST that the analyse step then queried.
+          build-mode: manual
           queries: security-and-quality
 
       - name: Build for CodeQL
@@ -326,8 +332,14 @@ jobs:
 
       - name: Install tools
         run: |
-          brew list swiftlint >/dev/null 2>&1 || brew install swiftlint
-          brew list periphery >/dev/null 2>&1 || brew install peripheryapp/periphery/periphery
+          # Force latest Periphery — the runner image caches 2.21.2;
+          # 3.x finds findings the older version misses (the previous
+          # nightly reported "No unused code detected" because of this).
+          brew install swiftlint || true
+          brew install peripheryapp/periphery/periphery 2>/dev/null \
+            || brew upgrade peripheryapp/periphery/periphery
+          echo "Periphery: $(periphery version)"
+          echo "SwiftLint: $(swiftlint version)"
 
       - name: SwiftLint --strict
         run: |

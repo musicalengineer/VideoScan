@@ -11,8 +11,11 @@ project: VideoScan/VideoScan.xcodeproj
 schemes:
   - VideoScan
 
-# Skip test targets from analysis — they're allowed to have unused helpers.
-exclude_tests: true
+# NOTE: --exclude-tests moved to CLI flag in Periphery 3.x (the old
+# `exclude_tests:` YAML key is rejected as invalid). Each workflow now
+# passes the flag explicitly:
+#   ci.yml          → --exclude-tests (test helpers can be unused)
+#   nightly         → no flag        (aggressive — find unused test helpers too)
 
 # Don't complain about symbols that SwiftUI and Codable need:
 # - SwiftUI `body` property and related implicit conformances
