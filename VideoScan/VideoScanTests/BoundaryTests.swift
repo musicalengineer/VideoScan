@@ -415,7 +415,7 @@ struct CodecCompatibilityBoundaryTests {
     }
 
     @Test func combineJobStatusEstimatedBytesOverflow() {
-        var job = CombineJobStatus(
+        let job = CombineJobStatus(
             pairIndex: 0,
             videoFilename: "v.mxf",
             audioFilename: "a.mxf",
@@ -492,7 +492,7 @@ struct DuplicateDetectorBoundaryTests {
         let records = (0..<3).map { i in
             makeRecord(filename: "zero_\(i).mov", duration: 0, sizeBytes: 100, md5: "same")
         }
-        let summary = DuplicateDetector.analyze(records: records)
+        _ = DuplicateDetector.analyze(records: records)
         // Should not crash; zero-duration records have limited scoring
     }
 
@@ -536,7 +536,7 @@ struct DuplicateDetectorBoundaryTests {
 
     @Test func scoreRecordNaNDuration() {
         let r = makeRecord(duration: Double.nan)
-        let result = MediaAnalyzer.score(r)
+        _ = MediaAnalyzer.score(r)
         // NaN comparisons are always false — make sure no crash
     }
 
@@ -548,7 +548,7 @@ struct DuplicateDetectorBoundaryTests {
 
     @Test func scoreRecordNegativeSize() {
         let r = makeRecord(sizeBytes: -1)
-        let result = MediaAnalyzer.score(r)
+        _ = MediaAnalyzer.score(r)
         // Should not crash
     }
 
@@ -594,7 +594,7 @@ struct DuplicateDetectorBoundaryTests {
     @Test func truncationCheckWithZeroBitrate() {
         let r = makeRecord(duration: 60, sizeBytes: 1000)
         r.totalBitrate = "0"
-        let result = MediaAnalyzer.score(r)
+        _ = MediaAnalyzer.score(r)
         // Zero bitrate means expected size is 0, so ratio comparison must not divide by zero
     }
 

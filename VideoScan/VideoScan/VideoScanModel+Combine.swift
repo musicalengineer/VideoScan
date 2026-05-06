@@ -445,7 +445,6 @@ extension VideoScanModel {
             dashboard.resetForCombine(total: filteredPairs.count)
         }
 
-        let fm = FileManager.default
         for (i, pair) in filteredPairs.enumerated() {
             let baseName = URL(fileURLWithPath: pair.video.fullPath).deletingPathExtension().lastPathComponent
             let outName = "\(baseName)_combined.mov"
@@ -496,7 +495,7 @@ extension VideoScanModel {
                 }
 
                 await self.ramDisk.unmount()
-                await self.logCombineSummary()
+                self.logCombineSummary()
             }
         }
 

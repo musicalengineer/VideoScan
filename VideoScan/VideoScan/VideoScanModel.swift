@@ -403,7 +403,7 @@ final class VideoScanModel: ObservableObject {
             // remount SMB/AFP shares that automountd won't.
             let url = URL(fileURLWithPath: path)
             if path.hasPrefix("/Volumes/") {
-                await NSWorkspace.shared.open(url)
+                NSWorkspace.shared.open(url)
                 // Give Finder a moment to mount the share
                 try? await Task.sleep(nanoseconds: 3_000_000_000)
             } else {
@@ -439,7 +439,7 @@ final class VideoScanModel: ObservableObject {
         let url = URL(fileURLWithPath: volumeRoot)
         Task.detached(priority: .userInitiated) {
             do {
-                try await NSWorkspace.shared.unmountAndEjectDevice(at: url)
+                try NSWorkspace.shared.unmountAndEjectDevice(at: url)
                 await MainActor.run { [weak self] in
                     self?.log("  \(volumeName) ejected.")
                     target.isReachable = false
