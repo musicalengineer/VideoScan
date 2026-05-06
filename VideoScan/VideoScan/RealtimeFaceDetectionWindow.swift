@@ -467,16 +467,20 @@ class PreviewWindowController {
         window = w
         // When the user closes via the red button, drop our reference so the
         // next show() builds a fresh window instead of trying to reopen one.
+        // Notification block runs on the main queue, but Swift's strict
+        // concurrency treats it as Sendable — explicit @MainActor hop.
         closeObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification,
             object: w,
             queue: .main
         ) { [weak self] _ in
-            guard let self else { return }
-            self.window = nil
-            if let obs = self.closeObserver {
-                NotificationCenter.default.removeObserver(obs)
-                self.closeObserver = nil
+            Task { @MainActor in
+                guard let self else { return }
+                self.window = nil
+                if let obs = self.closeObserver {
+                    NotificationCenter.default.removeObserver(obs)
+                    self.closeObserver = nil
+                }
             }
         }
     }
@@ -624,16 +628,20 @@ class JobConsoleWindowController {
         w.center()
         w.makeKeyAndOrderFront(nil)
         window = w
+        // Notification block runs on .main queue but Swift treats it as
+        // Sendable; explicit @MainActor hop satisfies strict concurrency.
         closeObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification,
             object: w,
             queue: .main
         ) { [weak self] _ in
-            guard let self else { return }
-            self.window = nil
-            if let obs = self.closeObserver {
-                NotificationCenter.default.removeObserver(obs)
-                self.closeObserver = nil
+            Task { @MainActor in
+                guard let self else { return }
+                self.window = nil
+                if let obs = self.closeObserver {
+                    NotificationCenter.default.removeObserver(obs)
+                    self.closeObserver = nil
+                }
             }
         }
     }
