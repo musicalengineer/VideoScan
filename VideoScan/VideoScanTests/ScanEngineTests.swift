@@ -101,6 +101,34 @@ struct ProcessRunnerTests {
         #expect(result.stdout?.count == 200_000)
         #expect(result.stderr.count == 200_000)
     }
+
+    @Test func alreadyCancelledTaskDoesNotLaunchProcess() async throws {
+        let python = "/usr/bin/python3"
+        guard FileManager.default.isExecutableFile(atPath: python) else { return }
+
+        let marker = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ProcessRunnerCancelled_\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: marker) }
+
+        let script = """
+        from pathlib import Path
+        Path("\(marker.path)").write_text("launched")
+        """
+
+        let task = Task {
+            do {
+                try await Task.sleep(nanoseconds: 50_000_000)
+            } catch {}
+            return await ProcessRunner.runProcess(executable: python, arguments: ["-c", script])
+        }
+        task.cancel()
+
+        let result = await task.value
+
+        #expect(result.exitCode == -1)
+        #expect(result.stderr == "cancelled")
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
+    }
 }
 
 // MARK: - MemoryPressureMonitor Tests

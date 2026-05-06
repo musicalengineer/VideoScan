@@ -89,6 +89,10 @@ enum ProcessRunner {
         stderrLine: (@Sendable (String) -> Void)? = nil,
         stderrLimitBytes: Int = 256 * 1024
     ) async -> Result {
+        guard !Task.isCancelled else {
+            return Result(stdout: nil, stderr: "cancelled", exitCode: -1)
+        }
+
         let proc = Process()
         proc.executableURL  = URL(fileURLWithPath: executable)
         proc.arguments      = arguments
@@ -103,6 +107,7 @@ enum ProcessRunner {
         let stderrCollector = DataCollector(limitBytes: stderrLimitBytes)
         let stderrStreamer = LineStreamer(lineHandler: stderrLine)
         let completion = CompletionBox<Result>()
+        let launchState = ProcessLaunchState()
 
         let stdoutHandle = stdoutPipe.fileHandleForReading
         let stderrHandle = stderrPipe.fileHandleForReading
@@ -143,8 +148,23 @@ enum ProcessRunner {
                         )
                     )
                 }
+                guard !Task.isCancelled else {
+                    stdoutHandle.readabilityHandler = nil
+                    stderrHandle.readabilityHandler = nil
+                    completion.resume(Result(stdout: nil, stderr: "cancelled", exitCode: -1))
+                    return
+                }
+                guard launchState.markLaunchingUnlessCancelled() else {
+                    stdoutHandle.readabilityHandler = nil
+                    stderrHandle.readabilityHandler = nil
+                    completion.resume(Result(stdout: nil, stderr: "cancelled", exitCode: -1))
+                    return
+                }
                 do {
                     try proc.run()
+                    if launchState.isCancelled, proc.isRunning {
+                        proc.terminate()
+                    }
                 } catch {
                     stdoutHandle.readabilityHandler = nil
                     stderrHandle.readabilityHandler = nil
@@ -152,12 +172,9 @@ enum ProcessRunner {
                 }
             }
         } onCancel: {
-            stdoutHandle.readabilityHandler = nil
-            stderrHandle.readabilityHandler = nil
+            launchState.markCancelled()
             if proc.isRunning {
                 proc.terminate()
-            } else {
-                completion.resume(Result(stdout: nil, stderr: "cancelled", exitCode: -1))
             }
         }
     }
@@ -283,6 +300,31 @@ enum ProcessRunner {
             } else {
                 lock.unlock()
             }
+        }
+    }
+
+    private final class ProcessLaunchState: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cancelled = false
+
+        func markLaunchingUnlessCancelled() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !cancelled else { return false }
+            return true
+        }
+
+        func markCancelled() {
+            lock.lock()
+            cancelled = true
+            lock.unlock()
+        }
+
+        var isCancelled: Bool {
+            lock.lock()
+            let result = cancelled
+            lock.unlock()
+            return result
         }
     }
 }
