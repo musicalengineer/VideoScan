@@ -777,6 +777,7 @@ final class ScanJob: ObservableObject, Identifiable {
     fileprivate func stopElapsedTimer() {
         timerTask?.cancel()
         if let s = taskStarted { elapsedSecs = Date().timeIntervalSince(s) }
+        taskStarted = nil
     }
 }
 
@@ -920,6 +921,7 @@ final class PersonFinderModel: ObservableObject {
                 job.videosScanned = hits
                 job.videosWithHits = clipResults.count
                 job.status = .done
+                job.stopElapsedTimer()
                 job.appendLog("Restored from cache: \(clipResults.count) video(s) with hits, \(totalSegments) segment(s)")
             }
         }
@@ -1646,7 +1648,7 @@ final class PersonFinderModel: ObservableObject {
         guard !videoFiles.isEmpty else {
             await job.appendLog("No video files found.")
             osLog.error("Scan bailed: no videos found in \(path, privacy: .public)")
-            await MainActor.run { job.status = .failed("No videos found") }
+            await MainActor.run { job.status = .failed("No videos found"); job.stopElapsedTimer() }
             return nil
         }
 
@@ -1663,7 +1665,7 @@ final class PersonFinderModel: ObservableObject {
                 if videoFiles.isEmpty {
                     await job.appendLog("No scannable video files remain after catalog filter.")
                     osLog.error("Scan bailed: catalog filter removed all videos in \(path, privacy: .public)")
-                    await MainActor.run { job.status = .failed("All files filtered by catalog") }
+                    await MainActor.run { job.status = .failed("All files filtered by catalog"); job.stopElapsedTimer() }
                     return nil
                 }
             }
@@ -1755,7 +1757,7 @@ final class PersonFinderModel: ObservableObject {
 
         guard let videoFiles = await discoverVideos(job: job, settings: settings) else { return }
 
-        if Task.isCancelled { await MainActor.run { job.status = .cancelled }; return }
+        if Task.isCancelled { await MainActor.run { job.status = .cancelled; job.stopElapsedTimer() }; return }
 
         let orderedResults = await scanAllVideos(
             videoFiles: videoFiles, prints: prints,
@@ -1802,9 +1804,12 @@ final class PersonFinderModel: ObservableObject {
 
         // Store recognition data for on-demand compilation later
         await MainActor.run {
+            // Guard: if stopJob() already set .cancelled, don't overwrite
+            guard job.status != .cancelled else { return }
             job.recognitionResults = validResults
             job.recognitionOutputDir = outputDir
             job.clipsFound = totalSegments
+            job.videosScanned = job.videosTotal
             job.status = .done
             job.progress = 1.0
             job.currentFile = ""
