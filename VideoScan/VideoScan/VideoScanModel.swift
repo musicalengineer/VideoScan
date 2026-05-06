@@ -1829,17 +1829,21 @@ final class VideoScanModel: ObservableObject {
                 }
                 probeGroup.addTask { [self] in
                     await target.pauseGate.waitIfPaused()
-                    return await sem.withPermit {
-                        await self.probeAndRecord(
-                            url: url,
-                            volName: volName,
-                            root: root,
-                            rootIsNetwork: rootIsNetwork,
-                            ramMountPoint: ramMountPoint,
-                            skipHashing: skipHashingCaptured,
-                            useTimeout: true,
-                            echoFilename: false
-                        )
+                    do {
+                        return try await sem.withPermit {
+                            await self.probeAndRecord(
+                                url: url,
+                                volName: volName,
+                                root: root,
+                                rootIsNetwork: rootIsNetwork,
+                                ramMountPoint: ramMountPoint,
+                                skipHashing: skipHashingCaptured,
+                                useTimeout: true,
+                                echoFilename: false
+                            )
+                        }
+                    } catch {
+                        return self.cancelledProbeRecord(url: url)
                     }
                 }
             }
@@ -2014,17 +2018,21 @@ final class VideoScanModel: ObservableObject {
                 }
                 probeGroup.addTask {
                     await self.pauseGate.waitIfPaused()
-                    return await sem.withPermit {
-                        await self.probeAndRecord(
-                            url: url,
-                            volName: volName,
-                            root: root,
-                            rootIsNetwork: rootIsNetwork,
-                            ramMountPoint: ramMountPoint,
-                            skipHashing: skipHashing,
-                            useTimeout: false,
-                            echoFilename: true
-                        )
+                    do {
+                        return try await sem.withPermit {
+                            await self.probeAndRecord(
+                                url: url,
+                                volName: volName,
+                                root: root,
+                                rootIsNetwork: rootIsNetwork,
+                                ramMountPoint: ramMountPoint,
+                                skipHashing: skipHashing,
+                                useTimeout: false,
+                                echoFilename: true
+                            )
+                        }
+                    } catch {
+                        return self.cancelledProbeRecord(url: url)
                     }
                 }
             }
@@ -2146,6 +2154,18 @@ final class VideoScanModel: ObservableObject {
     /// SMB mounts on sleepy external drives — a too-short timeout was flagging
     /// healthy network volumes as "stalled" when they just needed to spin up.
     private let probeTimeoutSeconds: UInt64 = 300
+
+    nonisolated private func cancelledProbeRecord(url: URL) -> VideoRecord {
+        let rec = VideoRecord()
+        rec.filename      = url.lastPathComponent
+        rec.ext           = url.pathExtension.uppercased()
+        rec.fullPath      = url.path
+        rec.directory     = url.deletingLastPathComponent().path
+        rec.isPlayable    = "Cancelled"
+        rec.notes         = "Probe cancelled before acquiring a concurrency permit"
+        rec.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+        return rec
+    }
 
     /// Wrapper that races probeFile against a timeout. If probeFile takes
     /// longer than probeTimeoutSeconds, returns a timed-out record so the
