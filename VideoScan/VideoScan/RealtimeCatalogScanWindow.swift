@@ -459,16 +459,20 @@ class CatalogScanWindowController {
         w.center()
         w.makeKeyAndOrderFront(nil)
         window = w
+        // Notification block runs on .main queue but Swift treats it as
+        // Sendable; explicit @MainActor hop satisfies strict concurrency.
         closeObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification,
             object: w,
             queue: .main
         ) { [weak self] _ in
-            guard let self else { return }
-            self.window = nil
-            if let obs = self.closeObserver {
-                NotificationCenter.default.removeObserver(obs)
-                self.closeObserver = nil
+            Task { @MainActor in
+                guard let self else { return }
+                self.window = nil
+                if let obs = self.closeObserver {
+                    NotificationCenter.default.removeObserver(obs)
+                    self.closeObserver = nil
+                }
             }
         }
     }
