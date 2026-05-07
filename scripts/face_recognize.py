@@ -123,6 +123,8 @@ def _nonnegative_float(value: str) -> float:
         parsed = float(value)
     except ValueError:
         raise argparse.ArgumentTypeError("must be a number")
+    if not math.isfinite(parsed):
+        raise argparse.ArgumentTypeError("must be finite")
     if parsed < 0:
         raise argparse.ArgumentTypeError("must be greater than or equal to 0")
     return parsed
