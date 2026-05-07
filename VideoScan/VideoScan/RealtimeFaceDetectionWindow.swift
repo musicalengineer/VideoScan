@@ -260,7 +260,7 @@ private struct ActiveJobFaceDetectView: View {
             .aspectRatio(16/9, contentMode: .fit)
 
             // Display Rate toolbar
-            if job.status == .scanning {
+            if job.status.isActive {
                 HStack(spacing: 10) {
                     Text("Display Rate")
                         .font(.system(size: 16, weight: .medium))

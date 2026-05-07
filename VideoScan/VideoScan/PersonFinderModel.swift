@@ -516,7 +516,7 @@ enum ScanJobStatus: Equatable {
         case .scanning:   return "Scanning…"
         case .paused:     return "Paused"
         case .done:       return "Done"
-        case .cancelled:  return "Cancelled"
+        case .cancelled:  return "Stopped"
         case .failed(let msg): return "Error: \(msg)"
         }
     }
@@ -525,8 +525,11 @@ enum ScanJobStatus: Equatable {
         switch self { case .loading, .scanning, .paused: return true; default: return false }
     }
     var isIdle: Bool { self == .idle }
-    var isDone: Bool { if case .done = self { return true }; return false }
+    var isDone: Bool { if case .done = self { return true }; if case .cancelled = self { return true }; return false }
+    var isCompleted: Bool { if case .done = self { return true }; return false }
+    var isTerminal: Bool { isDone || isFailed }
     var isPaused: Bool { self == .paused }
+    var isFailed: Bool { if case .failed = self { return true }; return false }
 }
 
 // MARK: - Compilation
@@ -983,6 +986,7 @@ final class PersonFinderModel: ObservableObject {
 
         job.reset()
         job.status = .scanning
+        osLog.info("Job started: \(job.searchPath, privacy: .public) — \(jobSettings.recognitionEngine.rawValue, privacy: .public) for \(jobSettings.personName, privacy: .public)")
         scanningPersonName = jobSettings.personName
         job.previewRate = jobSettings.previewRate
         // One log per person so a later scan of a different person can't
@@ -1042,21 +1046,28 @@ final class PersonFinderModel: ObservableObject {
     }
 
     func stopJob(_ job: ScanJob) {
+        let prev = job.status
         job.scanTask?.cancel()
         job.stopElapsedTimer()
-        if job.status.isActive { job.status = .cancelled }
+        if prev.isActive {
+            job.status = .cancelled
+            job.currentFile = ""
+            osLog.info("Job stopped: \(job.searchPath, privacy: .public) — was \(prev.label, privacy: .public), scanned \(job.videosScanned)/\(job.videosTotal)")
+        }
     }
 
     func pauseJob(_ job: ScanJob) {
         guard job.status == .scanning else { return }
         Task { await job.pauseGate.pause() }
         job.status = .paused
+        osLog.info("Job paused: \(job.searchPath, privacy: .public)")
     }
 
     func resumeJob(_ job: ScanJob) {
         guard job.status == .paused else { return }
         Task { await job.pauseGate.resume() }
         job.status = .scanning
+        osLog.info("Job resumed: \(job.searchPath, privacy: .public)")
     }
 
     func togglePauseJob(_ job: ScanJob) {
@@ -1787,7 +1798,11 @@ final class PersonFinderModel: ObservableObject {
 
         guard let videoFiles = await discoverVideos(job: job, settings: settings) else { return }
 
-        if Task.isCancelled { await MainActor.run { job.status = .cancelled; job.stopElapsedTimer() }; return }
+        if Task.isCancelled {
+            osLog.info("Job cancelled before scan: \(path, privacy: .public)")
+            await MainActor.run { job.status = .cancelled; job.currentFile = ""; job.stopElapsedTimer() }
+            return
+        }
 
         let orderedResults = await scanAllVideos(
             videoFiles: videoFiles, prints: prints,
@@ -1795,7 +1810,12 @@ final class PersonFinderModel: ObservableObject {
             job: job, dash: dashboard
         )
 
-        if Task.isCancelled { await MainActor.run { job.status = .cancelled; job.stopElapsedTimer() }; return }
+        if Task.isCancelled {
+            let (scanned, total) = await MainActor.run { (job.videosScanned, job.videosTotal) }
+            osLog.info("Job cancelled after scan: \(path, privacy: .public) — scanned \(scanned)/\(total)")
+            await MainActor.run { job.status = .cancelled; job.currentFile = ""; job.stopElapsedTimer() }
+            return
+        }
 
         // Presence filter
         let (validResults, skipped) = filterByPresence(orderedResults, settings: settings)
@@ -1834,20 +1854,24 @@ final class PersonFinderModel: ObservableObject {
 
         // Store recognition data for on-demand compilation later
         await MainActor.run {
-            // Guard: if stopJob() already set .cancelled, don't overwrite
-            guard job.status != .cancelled else { return }
+            let wasCancelled = job.status == .cancelled
             job.recognitionResults = validResults
             job.recognitionOutputDir = outputDir
             job.clipsFound = totalSegments
-            job.videosScanned = job.videosTotal
-            job.status = .done
-            job.progress = 1.0
             job.currentFile = ""
-            job.stopElapsedTimer()
-            job.appendLog("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-            job.appendLog("Done. \(job.videosWithHits) video(s) with hits, \(totalSegments) segment(s), \(pfFormatDuration(preliminaryPresence)) total presence.")
-            if totalSegments > 0 {
-                job.appendLog("Use Create Composite Video to extract and compile clips.")
+            if wasCancelled {
+                job.appendLog("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                job.appendLog("Stopped. Scanned \(job.videosScanned)/\(job.videosTotal) video(s), \(job.videosWithHits) with hits, \(totalSegments) segment(s).")
+            } else {
+                job.videosScanned = job.videosTotal
+                job.status = .done
+                job.progress = 1.0
+                job.stopElapsedTimer()
+                job.appendLog("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                job.appendLog("Done. \(job.videosWithHits) video(s) with hits, \(totalSegments) segment(s), \(pfFormatDuration(preliminaryPresence)) total presence.")
+                if totalSegments > 0 {
+                    job.appendLog("Use Create Composite Video to extract and compile clips.")
+                }
             }
         }
     }
@@ -2481,6 +2505,7 @@ private nonisolated func pfProcessVideo(
     )
     for await frame in prefetcher.frames() {
         if Task.isCancelled { ctx.reader.cancelReading(); break }
+        prefetcher.releaseSlot()
 
         let frameTime = frame.presentationTime
         var frameMatch = PFVisionFrameMatch()
@@ -2519,7 +2544,6 @@ private nonisolated func pfProcessVideo(
             sampledSoFar += 1
             visionFrameTimes.append(CFAbsoluteTimeGetCurrent() - t1 + frame.decodeSeconds)
         }
-        prefetcher.releaseSlot()
 
         hits.append(contentsOf: frameMatch.hits)
 

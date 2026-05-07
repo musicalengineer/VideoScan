@@ -138,7 +138,7 @@ struct ScanJobRow: View {
                 Text("/")
                     .font(.callout)
                     .foregroundColor(.secondary)
-                Text("\(job.status.isDone ? job.videosTotal : job.videosScanned)")
+                Text("\(job.status.isCompleted ? job.videosTotal : job.videosScanned)")
                     .font(.system(.body, design: .monospaced))
                     .foregroundColor(.secondary)
             }
@@ -459,7 +459,7 @@ struct ScanJobRow: View {
                     Label("\(job.videosWithHits) matches", systemImage: "person.fill.checkmark")
                         .font(.body.weight(.medium))
                         .foregroundColor(.green)
-                    Text("\(job.status.isDone ? job.videosTotal : job.videosScanned) / \(job.videosTotal) videos")
+                    Text("\(job.status.isCompleted ? job.videosTotal : job.videosScanned) / \(job.videosTotal) videos")
                         .font(.system(.body, design: .monospaced))
                         .foregroundColor(.secondary)
                 }
@@ -478,7 +478,7 @@ struct ScanJobRow: View {
             if job.videosTotal > 0 {
                 ScanRingChart(
                     total: job.videosTotal,
-                    scanned: job.status.isDone ? job.videosTotal : job.videosScanned,
+                    scanned: job.status.isCompleted ? job.videosTotal : job.videosScanned,
                     hits: job.videosWithHits,
                     elapsedSecs: job.elapsedSecs,
                     currentFile: isActive ? job.currentFile : "",

@@ -447,6 +447,7 @@ nonisolated func pfProcessVideoWithArcFace(
     )
     for await frame in prefetcher.frames() {
         if Task.isCancelled { ctx.reader.cancelReading(); break }
+        prefetcher.releaseSlot()
 
         let frameTime = frame.presentationTime
         var frameMatch = ArcFaceFrameMatch()
@@ -487,7 +488,6 @@ nonisolated func pfProcessVideoWithArcFace(
             sampledSoFar += 1
             visionFrameTimes.append(CFAbsoluteTimeGetCurrent() - t1 + frame.decodeSeconds)
         }
-        prefetcher.releaseSlot()
 
         hits.append(contentsOf: frameMatch.hits)
 
