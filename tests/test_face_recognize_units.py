@@ -65,21 +65,62 @@ class FaceRecognizeCLITests(unittest.TestCase):
             check=False,
         )
 
-    def test_invalid_frame_step_returns_json_error(self) -> None:
-        proc = self.run_script("--self-test", "--frame-step", "0")
-
+    def assert_json_argument_error(self, proc: subprocess.CompletedProcess[str], option: str) -> None:
         self.assertNotEqual(proc.returncode, 0)
         payload = json.loads(proc.stdout)
         self.assertIn("Invalid argument", payload["error"])
-        self.assertIn("--frame-step", payload["error"])
+        self.assertIn(option, payload["error"])
+
+    def test_self_test_returns_json_success(self) -> None:
+        proc = self.run_script("--self-test")
+
+        self.assertEqual(proc.returncode, 0)
+        payload = json.loads(proc.stdout)
+        self.assertIsNone(payload["error"])
+        self.assertEqual(payload["mode"], "self_test")
+        self.assertIn("dependencies_ready", payload)
+
+    def test_invalid_frame_step_returns_json_error(self) -> None:
+        self.assert_json_argument_error(
+            self.run_script("--self-test", "--frame-step", "0"),
+            "--frame-step",
+        )
 
     def test_invalid_threshold_returns_json_error(self) -> None:
-        proc = self.run_script("--self-test", "--threshold", "1.5")
+        self.assert_json_argument_error(
+            self.run_script("--self-test", "--threshold", "1.5"),
+            "--threshold",
+        )
 
-        self.assertNotEqual(proc.returncode, 0)
-        payload = json.loads(proc.stdout)
-        self.assertIn("Invalid argument", payload["error"])
-        self.assertIn("--threshold", payload["error"])
+    def test_invalid_min_conf_returns_json_error(self) -> None:
+        self.assert_json_argument_error(
+            self.run_script("--self-test", "--min-conf", "-0.01"),
+            "--min-conf",
+        )
+
+    def test_invalid_pad_returns_json_error(self) -> None:
+        self.assert_json_argument_error(
+            self.run_script("--self-test", "--pad", "-1"),
+            "--pad",
+        )
+
+    def test_invalid_min_duration_returns_json_error(self) -> None:
+        self.assert_json_argument_error(
+            self.run_script("--self-test", "--min-duration", "-0.5"),
+            "--min-duration",
+        )
+
+    def test_invalid_gap_tolerance_returns_json_error(self) -> None:
+        self.assert_json_argument_error(
+            self.run_script("--self-test", "--gap-tolerance", "-0.1"),
+            "--gap-tolerance",
+        )
+
+    def test_nonfinite_numeric_value_returns_json_error(self) -> None:
+        self.assert_json_argument_error(
+            self.run_script("--self-test", "--threshold", "nan"),
+            "--threshold",
+        )
 
 
 if __name__ == "__main__":
