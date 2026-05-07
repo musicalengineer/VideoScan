@@ -140,7 +140,11 @@ final class VolumeRescueOperation: ObservableObject {
         bytesWritten = 0
         errors = []
 
-        let total = files.count
+        // Snapshot up front: VideoRecord is a class and capturing it across
+        // an actor boundary trips strict-concurrency. Sendable snapshots
+        // carry every field these copy paths read.
+        let snapshots = files.snapshots()
+        let total = snapshots.count
         task = Task { [weak self] in
             let fm = FileManager.default
 
@@ -150,10 +154,10 @@ final class VolumeRescueOperation: ObservableObject {
 
             if mode == .verified {
                 // rsync mode: batch copy with checksum verification
-                await self?.rsyncCopy(files: files, sourcePath: sourcePath, rescueDir: rescueDir, total: total)
+                await self?.rsyncCopy(files: snapshots, sourcePath: sourcePath, rescueDir: rescueDir, total: total)
             } else {
                 // Fast mode: FileManager copy, no verification
-                await self?.fastCopy(files: files, sourcePath: sourcePath, rescueDir: rescueDir, total: total)
+                await self?.fastCopy(files: snapshots, sourcePath: sourcePath, rescueDir: rescueDir, total: total)
             }
 
             await MainActor.run { [weak self] in
@@ -172,16 +176,12 @@ final class VolumeRescueOperation: ObservableObject {
 
     // MARK: - Fast Copy (FileManager)
 
-    private nonisolated func fastCopy(files: [VideoRecord], sourcePath: String, rescueDir: String, total: Int) async {
+    private nonisolated func fastCopy(files: [VideoRecordSnapshot], sourcePath: String, rescueDir: String, total: Int) async {
         let fm = FileManager.default
 
         for (idx, rec) in files.enumerated() {
             if Task.isCancelled { break }
 
-            // Pull Sendable fields off the VideoRecord up front. VideoRecord
-            // is a class with mutable state so closures can't capture it
-            // across the MainActor boundary; capturing the String/Int64
-            // values is safe and keeps the type checker happy.
             let srcFile = rec.fullPath
             let filename = rec.filename
             let sizeBytes = rec.sizeBytes
@@ -230,13 +230,12 @@ final class VolumeRescueOperation: ObservableObject {
 
     // MARK: - Verified Copy (rsync)
 
-    private nonisolated func rsyncCopy(files: [VideoRecord], sourcePath: String, rescueDir: String, total: Int) async {
+    private nonisolated func rsyncCopy(files: [VideoRecordSnapshot], sourcePath: String, rescueDir: String, total: Int) async {
         // rsync individual files to preserve per-file progress reporting
         // and handle errors per-file rather than aborting the whole batch
         for (idx, rec) in files.enumerated() {
             if Task.isCancelled { break }
 
-            // See fastCopy: capture Sendable fields, not the VideoRecord ref.
             let srcFile = rec.fullPath
             let filename = rec.filename
             let sizeBytes = rec.sizeBytes
