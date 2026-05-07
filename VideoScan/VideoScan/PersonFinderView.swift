@@ -12,6 +12,8 @@ struct PersonFinderView: View {
     @EnvironmentObject var model: PersonFinderModel
     @EnvironmentObject var catalogModel: VideoScanModel
     @AppStorage("selectedTab") private var selectedTab: Int = 0
+    @AppStorage("ftHighlightedPersonName") private var ftHighlight: String = ""
+
     @State private var selectedResultIDs = Set<UUID>()
     @State private var inspectorShown = false
     @State private var inspectorStreamInfo: StreamInspectInfo?
@@ -169,6 +171,14 @@ struct PersonFinderView: View {
                                 .contextMenu {
                                     Button("Search for \(profile.name)\u{2026}") {
                                         addJobForPerson(profile)
+                                    }
+                                    Divider()
+                                    Button("Show \(profile.name) in Family Tree") {
+                                        // Drop a hint that the Family Tree
+                                        // tab can pick up on appear, then
+                                        // switch to that tab.
+                                        ftHighlight = profile.name
+                                        selectedTab = 4
                                     }
                                     Divider()
                                     Button("Edit \(profile.name)\u{2026}") {
