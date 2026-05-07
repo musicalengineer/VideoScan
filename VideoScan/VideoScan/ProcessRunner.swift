@@ -271,7 +271,7 @@ enum ProcessRunner {
         }
     }
 
-    private final class CompletionBox<T>: @unchecked Sendable {
+    private final class CompletionBox<T: Sendable>: @unchecked Sendable {
         private let lock = NSLock()
         private var continuation: CheckedContinuation<T, Never>?
         private var result: T?

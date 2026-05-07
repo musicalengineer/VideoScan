@@ -2709,7 +2709,10 @@ final class VideoScanModel: ObservableObject {
 
         previewImage = nil
         let url = URL(fileURLWithPath: record.fullPath)
-        Task.detached {
+        // Capture the cache key as Sendable String, not NSString. Re-bridge
+        // inside the MainActor block where the NSCache lives.
+        let cacheKeyString = record.fullPath
+        Task.detached { [weak self] in
             let asset = AVURLAsset(url: url)
             let generator = AVAssetImageGenerator(asset: asset)
             generator.appliesPreferredTrackTransform = true
@@ -2722,16 +2725,18 @@ final class VideoScanModel: ObservableObject {
                         if let image { cont.resume(returning: image) } else { cont.resume(throwing: error ?? CocoaError(.fileReadUnknown)) }
                     }
                 }
-                // CGImage is Sendable; NSImage isn't. Build the NSImage on
-                // the main actor so we never cross actor boundaries with it.
+                // CGImage is Sendable; NSImage and NSString aren't. Build
+                // both on the main actor so we never cross actor boundaries
+                // with them.
                 await MainActor.run {
+                    guard let self else { return }
                     let nsImage = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
-                    self.thumbnailCache.setObject(nsImage, forKey: cacheKey)
+                    self.thumbnailCache.setObject(nsImage, forKey: cacheKeyString as NSString)
                     self.previewImage = nsImage
                 }
             } catch {
-                await MainActor.run {
-                    self.previewImage = nil
+                await MainActor.run { [weak self] in
+                    self?.previewImage = nil
                 }
             }
         }
