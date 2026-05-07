@@ -20,6 +20,9 @@ struct PersonFinderView: View {
     @State private var inspectorLoading = false
     @State private var resultSortOrder = [KeyPathComparator(\ClipResult.videoFilename)]
     @State private var resultTableData: [ClipResult] = []
+    @AppStorage("resultsTableCollapsed") private var resultsCollapsed = false
+    @AppStorage("peoplePaneCollapsed") private var peopleCollapsed = false
+    @AppStorage("searchesPaneCollapsed") private var searchesCollapsed = false
 
     var selectedJobID: UUID? {
         get { model.selectedJobID }
@@ -34,21 +37,136 @@ struct PersonFinderView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            peopleGallery
+            // Section 1: People
+            sectionHeader("People", icon: "person.2.fill",
+                          collapsed: $peopleCollapsed,
+                          badge: model.savedProfiles.isEmpty ? nil : "\(model.savedProfiles.count)")
+            if !peopleCollapsed {
+                peopleGallery
+                Divider()
+                loadedFacesStrip
+            }
             Divider()
-            loadedFacesStrip
-            Divider()
-            VSplitView {
+
+            // Section 2: Searches
+            sectionHeader("Searches", icon: "magnifyingglass",
+                          collapsed: $searchesCollapsed,
+                          badge: model.jobs.isEmpty ? nil : "\(model.jobs.count)") {
+                searchHeaderButtons
+            }
+            if !searchesCollapsed {
                 jobsSection
-                    .frame(minHeight: 120)
+                    .frame(minHeight: 90, maxHeight: resultsCollapsed ? .infinity : 300)
+            }
+            Divider()
+
+            // Section 3: Results
+            sectionHeader("Results", icon: "list.bullet",
+                          collapsed: $resultsCollapsed,
+                          badge: resultTableData.isEmpty ? nil : "\(resultTableData.count)")
+            if !resultsCollapsed {
                 resultsTable
-                    .frame(minHeight: 100)
+                    .frame(maxHeight: .infinity)
             }
         }
         .frame(minWidth: 960, maxHeight: .infinity, alignment: .top)
         .onAppear {
             model.dashboard = dashboard
-            // Don't auto-load a person on launch — let user choose via gallery or Find Person
+        }
+    }
+
+    private func sectionHeader(_ title: String, icon: String,
+                               collapsed: Binding<Bool>,
+                               badge: String? = nil,
+                               @ViewBuilder trailing: () -> some View = { EmptyView() }) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { collapsed.wrappedValue.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: collapsed.wrappedValue ? "chevron.right" : "chevron.down")
+                        .font(.system(size: 11, weight: .bold))
+                        .frame(width: 14)
+                    Image(systemName: icon)
+                        .font(.system(size: 13))
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
+                    if let badge {
+                        Text(badge)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                    }
+                }
+                .foregroundColor(.primary)
+            }
+            .buttonStyle(.plain)
+            Spacer()
+            trailing()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(Color(NSColor.controlBackgroundColor).opacity(0.7))
+    }
+
+    @ViewBuilder
+    private var searchHeaderButtons: some View {
+        Menu {
+            ForEach(model.savedProfiles) { profile in
+                Button {
+                    addJobForPerson(profile)
+                } label: {
+                    Label(profile.name, systemImage: "person.circle")
+                }
+            }
+            if model.savedProfiles.isEmpty {
+                Text("Add people in the gallery above first")
+            }
+        } label: {
+            Label("New Search\u{2026}", systemImage: "plus.circle.fill")
+                .font(.system(size: 12, weight: .medium))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .disabled(model.savedProfiles.isEmpty)
+
+        Button {
+            PreviewWindowController.shared.show(model: model)
+        } label: {
+            Label("Face Detection", systemImage: "eye.fill")
+                .font(.system(size: 11))
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .disabled(model.jobs.isEmpty)
+
+        Button {
+            JobConsoleWindowController.shared.show(model: model, focusJobID: selectedJobID)
+        } label: {
+            Label("Console", systemImage: "terminal")
+                .font(.system(size: 11))
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .disabled(model.jobs.isEmpty)
+
+        let anyIdle   = model.jobs.contains { $0.status.isIdle }
+        let anyActive = model.jobs.contains { $0.status.isActive }
+        if model.jobs.count > 1 && anyIdle {
+            Button { model.startAll(); if selectedJobID == nil { selectedJobID = model.jobs.first?.id } } label: {
+                Label("Start All", systemImage: "play.fill").font(.system(size: 11))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+        if model.jobs.count > 1 && anyActive {
+            Button { model.stopAll() } label: {
+                Label("Stop All", systemImage: "stop.fill").font(.system(size: 11))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
         }
     }
 
@@ -460,83 +578,13 @@ struct PersonFinderView: View {
     // MARK: Jobs section
 
     var jobsSection: some View {
-        return VStack(spacing: 0) {
-            // Compact header: + Find Person, batch controls, windows
-            HStack(spacing: 10) {
-                Menu {
-                    ForEach(model.savedProfiles) { profile in
-                        Button {
-                            addJobForPerson(profile)
-                        } label: {
-                            Label(profile.name, systemImage: "person.circle")
-                        }
-                    }
-                    if model.savedProfiles.isEmpty {
-                        Text("Add people in the gallery above first")
-                    }
-                } label: {
-                    Label("Find Person", systemImage: "person.fill.viewfinder")
-                        .font(.title3.weight(.semibold))
-                }
-                .menuStyle(.borderedButton)
-                .controlSize(.large)
-                .disabled(model.savedProfiles.isEmpty)
-
-                Spacer()
-
-                // Start All / Stop All visibility mirrors state:
-                // hide Start All once nothing is idle (matches "Stop All is
-                // disabled when nothing is active"), so the header doesn't
-                // dangle an enabled-looking Start button during a live search.
-                let anyIdle   = model.jobs.contains { $0.status.isIdle }
-                let anyActive = model.jobs.contains { $0.status.isActive }
-                if model.jobs.count > 1 && anyIdle {
-                    Button(action: {
-                        model.startAll()
-                        if selectedJobID == nil { selectedJobID = model.jobs.first?.id }
-                    }) {
-                        Label("Start All", systemImage: "play.fill")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-                }
-                if model.jobs.count > 1 && anyActive {
-                    Button(action: { model.stopAll() }) {
-                        Label("Stop All", systemImage: "stop.fill")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
-                }
-
-                Divider().frame(height: 20)
-
-                Button {
-                    PreviewWindowController.shared.show(model: model)
-                } label: {
-                    Label("Face Detection", systemImage: "eye.fill")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .disabled(model.jobs.isEmpty)
-
-                Button {
-                    JobConsoleWindowController.shared.show(model: model, focusJobID: selectedJobID)
-                } label: {
-                    Label("Console", systemImage: "terminal")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .disabled(model.jobs.isEmpty)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-
+        VStack(spacing: 0) {
             if model.jobs.isEmpty {
                 HStack(spacing: 8) {
-                    Image(systemName: "arrow.up.left")
+                    Image(systemName: "magnifyingglass")
                         .font(.body).foregroundColor(.secondary)
-                    Text("Click \"Find Person\" to start searching")
-                        .font(.body).foregroundColor(.secondary)
+                    Text("Use \"New Search\" to start finding people in your videos")
+                        .font(.callout).foregroundColor(.secondary)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12)
@@ -568,9 +616,6 @@ struct PersonFinderView: View {
                                 onPreview: { PreviewWindowController.shared.show(model: model, focusJobID: job.id) }
                             )
                             .contentShape(Rectangle())
-                            // simultaneousGesture (not onTapGesture) so the row's
-                            // selection tap doesn't steal taps from the per-row
-                            // Start/Stop/Pause/Reset/Trash buttons living inside it.
                             .simultaneousGesture(
                                 TapGesture().onEnded { selectedJobID = job.id }
                             )
@@ -579,11 +624,9 @@ struct PersonFinderView: View {
                     .padding(.horizontal, 10)
                     .padding(.vertical, 6)
                 }
-                .frame(minHeight: 90, maxHeight: hasAnyResults ? 260 : .infinity)
             }
         }
         .background(Color(NSColor.controlBackgroundColor))
-        .fixedSize(horizontal: false, vertical: model.jobs.isEmpty)
     }
 
     // MARK: Results table
