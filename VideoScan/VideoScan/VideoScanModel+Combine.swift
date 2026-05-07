@@ -106,8 +106,8 @@ extension VideoScanModel {
     /// Process one video/audio pair end-to-end: skip-if-exists, pause-gate,
     /// stage inputs, mux, clean up. Returns true on success.
     func processCombinePair(
-        video: VideoRecord,
-        audio: VideoRecord,
+        video: VideoRecordSnapshot,
+        audio: VideoRecordSnapshot,
         outputFolder: URL,
         tempBase: URL,
         hasRAMDisk: Bool,
@@ -186,7 +186,7 @@ extension VideoScanModel {
         staged: (video: URL, audio: URL, tempDir: URL?),
         outURL: URL, outName: String,
         technique: CombineJobStatus.CombineTechnique,
-        video: VideoRecord, audio: VideoRecord,
+        video: VideoRecordSnapshot, audio: VideoRecordSnapshot,
         jobIndex: Int
     ) async -> Bool {
         await MainActor.run { self.updateJobPhase(jobIndex, .muxing) }
@@ -286,7 +286,7 @@ extension VideoScanModel {
         dashboard.combineJobs[index].phase = phase
     }
 
-    private func resolveCombineTechnique(video: VideoRecord, audio: VideoRecord, jobIndex: Int) async -> CombineJobStatus.CombineTechnique {
+    private func resolveCombineTechnique(video: VideoRecordSnapshot, audio: VideoRecordSnapshot, jobIndex: Int) async -> CombineJobStatus.CombineTechnique {
         var technique = await MainActor.run {
             guard jobIndex < self.dashboard.combineJobs.count else { return CombineJobStatus.CombineTechnique.streamCopy }
             return self.dashboard.combineJobs[jobIndex].technique
@@ -320,7 +320,7 @@ extension VideoScanModel {
     /// Build a catalog record for a successfully combined output file.
     /// Inherits the star rating from the source pair and links back via combinedFromPairID.
     nonisolated func buildCombinedRecord(
-        outputURL: URL, video: VideoRecord, audio: VideoRecord, summary: String
+        outputURL: URL, video: VideoRecordSnapshot, audio: VideoRecordSnapshot, summary: String
     ) async -> VideoRecord? {
         let (probe, _) = await CombineVerifier.runFFProbe(url: outputURL, ffprobePath: ffprobePath)
         guard let probe else { return nil }
@@ -470,12 +470,19 @@ extension VideoScanModel {
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         """)
 
+        // Snapshot the pairs once on the main actor before crossing into
+        // the Task / TaskGroup. VideoRecord is a class and would race;
+        // VideoRecordSnapshot is Sendable so the TaskGroup body can
+        // capture it freely.
+        let snapshotPairs: [(video: VideoRecordSnapshot, audio: VideoRecordSnapshot)] =
+            filteredPairs.map { (video: $0.video.snapshot(), audio: $0.audio.snapshot()) }
+
         let newTask = Task {
             let (tempBase, hasRAMDisk) = await mountCombineRAMDisk()
             let semaphore = AsyncSemaphore(limit: maxConcurrency ?? self.perfSettings.combineConcurrency)
 
             await withTaskGroup(of: Bool.self) { group in
-                for (i, (video, audio)) in filteredPairs.enumerated() {
+                for (i, (video, audio)) in snapshotPairs.enumerated() {
                     if Task.isCancelled { break }
                     let jobIndex = jobOffset + i
                     group.addTask { [self] in

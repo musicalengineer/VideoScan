@@ -520,14 +520,16 @@ struct TriageView: View {
 
     private func runAnalysis(records: [VideoRecord]) {
         isAnalyzing = true
-        DispatchQueue.global(qos: .userInitiated).async {
-            let summary = MediaAnalyzer.analyzeAll(records)
-            DispatchQueue.main.async {
-                analysisSummary = summary
-                showAnalysisSummary = true
-                isAnalyzing = false
-            }
-        }
+        // MediaAnalyzer.analyzeAll mutates each record in place
+        // (junkScore, mediaDisposition). Records are class instances,
+        // not Sendable, so can't cross to a background queue without
+        // racing. Until MediaAnalyzer is refactored to return a delta
+        // (per #66 architecture work), run synchronously on the actor
+        // that owns the records.
+        let summary = MediaAnalyzer.analyzeAll(records)
+        analysisSummary = summary
+        showAnalysisSummary = true
+        isAnalyzing = false
     }
 
     private func analysisBanner(_ summary: MediaAnalyzer.AnalysisSummary) -> some View {
