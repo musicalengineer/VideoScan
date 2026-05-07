@@ -1657,15 +1657,40 @@ final class PersonFinderModel: ObservableObject {
             return nil
         }
 
-        // Filter out catalog-known-bad files (audio-only, no streams, ffprobe failed)
+        // Catalog prefilter (issue #66) — uses all available catalog metadata
+        // to avoid expensive Vision/ArcFace work on files we already know
+        // about. Categories: unscannable (audio-only/broken), already-known
+        // (target in detectedPeople from prior scan), junk-scored, too-short,
+        // low-resolution.
         if settings.skipCatalogBadFiles {
-            let skipSet = await MainActor.run { pfCatalogSkipSet() }
-            if !skipSet.isEmpty {
+            let targetName = await MainActor.run { job.personLabel }
+            let skipResult = await MainActor.run {
+                pfPersonScanSkipResult(targetPersonName: targetName)
+            }
+            let allSkip = skipResult.all
+            if !allSkip.isEmpty {
                 let before = videoFiles.count
-                videoFiles.removeAll { skipSet.contains($0) }
+                videoFiles.removeAll { allSkip.contains($0) }
                 let skipped = before - videoFiles.count
                 if skipped > 0 {
-                    await job.appendLog("Skipped \(skipped) catalog-known-bad file(s) (audio-only, broken, etc.)")
+                    var parts: [String] = []
+                    if !skipResult.unscannable.isEmpty {
+                        parts.append("\(skipResult.unscannable.count) unscannable")
+                    }
+                    if !skipResult.alreadyKnown.isEmpty {
+                        parts.append("\(skipResult.alreadyKnown.count) already-known for \(targetName)")
+                    }
+                    if !skipResult.junkScored.isEmpty {
+                        parts.append("\(skipResult.junkScored.count) junk-scored")
+                    }
+                    if !skipResult.tooShort.isEmpty {
+                        parts.append("\(skipResult.tooShort.count) too-short")
+                    }
+                    if !skipResult.lowResolution.isEmpty {
+                        parts.append("\(skipResult.lowResolution.count) low-resolution")
+                    }
+                    let detail = parts.isEmpty ? "" : " (\(parts.joined(separator: ", ")))"
+                    await job.appendLog("Catalog prefilter skipped \(skipped) file(s)\(detail)")
                 }
                 if videoFiles.isEmpty {
                     await job.appendLog("No scannable video files remain after catalog filter.")
@@ -1959,6 +1984,122 @@ nonisolated func pfCatalogSkipPaths(from records: [VideoRecord]) -> Set<String> 
 @MainActor
 func pfCatalogSkipSet() -> Set<String> {
     pfCatalogSkipPaths(from: CatalogStore.shared.load())
+}
+
+// MARK: - Person scan prefilter (issue #66)
+//
+// Extends the basic catalog-skip set with four more rules grounded in
+// already-collected catalog metadata. Each category produces an
+// independently testable bucket; PersonFinder logs per-category counts
+// so the user can see why files were dropped.
+
+/// Result of a person-scan prefilter pass — categorised so callers can
+/// report why each file was excluded.
+struct CatalogSkipResult: Equatable {
+    /// Audio-only / no-streams / ffprobe-failed (basic catalog filter, #23).
+    var unscannable: Set<String> = []
+    /// Files where `detectedPeople` already contains the target name
+    /// (cache hit from a prior scan — re-running would just confirm).
+    var alreadyKnown: Set<String> = []
+    /// `junkScore >= junkScoreCeiling`. Probably noise.
+    var junkScored: Set<String> = []
+    /// Duration > 0 but < `minDurationSeconds`. Too short to contain a
+    /// recognisable face shot.
+    var tooShort: Set<String> = []
+    /// Resolution height < `minResolutionHeight`. Vision struggles below
+    /// 480p; signal-to-noise is poor.
+    var lowResolution: Set<String> = []
+
+    /// Union of every category — what callers actually filter against.
+    var all: Set<String> {
+        unscannable
+            .union(alreadyKnown)
+            .union(junkScored)
+            .union(tooShort)
+            .union(lowResolution)
+    }
+
+    /// Sum of every category's count (categories may overlap, so this can
+    /// exceed `all.count` — exposed for diagnostic logging only).
+    var totalDropsAcrossCategories: Int {
+        unscannable.count + alreadyKnown.count + junkScored.count
+            + tooShort.count + lowResolution.count
+    }
+}
+
+/// Parse a resolution string like "1920x1080" → 1080. Returns nil if the
+/// string can't be parsed (e.g. empty, "—", "unknown") so callers know to
+/// skip the resolution rule rather than misclassify.
+nonisolated func pfResolutionHeight(from resolution: String) -> Int? {
+    let parts = resolution.split(separator: "x", maxSplits: 1, omittingEmptySubsequences: true)
+    guard parts.count == 2, let h = Int(parts[1]) else { return nil }
+    return h
+}
+
+/// Pure helper: build a categorised skip set for person search using all
+/// available catalog metadata. Each category's bucket is independently
+/// populated so PersonFinder can log "skipped 12 too-short, 3 already-known
+/// hits for Donna, …" for diagnostic transparency.
+///
+/// Defaults match the conservative rules from issue #66 — increase
+/// thresholds to be more aggressive, set to nil to disable a rule.
+nonisolated func pfPersonScanSkipPaths(
+    from records: [VideoRecord],
+    targetPersonName: String?,
+    minDurationSeconds: Double = 5.0,
+    minResolutionHeight: Int = 480,
+    junkScoreCeiling: Int = 80
+) -> CatalogSkipResult {
+    var result = CatalogSkipResult()
+    let target = targetPersonName?
+        .trimmingCharacters(in: .whitespaces)
+        .lowercased()
+
+    for rec in records where !rec.fullPath.isEmpty {
+        // Rule 1: unscannable (existing #23 behavior)
+        switch rec.streamType {
+        case .audioOnly, .noStreams, .ffprobeFailed:
+            result.unscannable.insert(rec.fullPath)
+            continue   // no other rule matters
+        case .videoAndAudio, .videoOnly:
+            break
+        }
+
+        // Rule 2: detectedPeople already contains target (cache hit)
+        if let target, !target.isEmpty {
+            let already = rec.detectedPeople.contains { name in
+                name.lowercased() == target
+            }
+            if already { result.alreadyKnown.insert(rec.fullPath) }
+        }
+
+        // Rule 3: junkScore exceeds ceiling
+        if rec.junkScore >= junkScoreCeiling {
+            result.junkScored.insert(rec.fullPath)
+        }
+
+        // Rule 4: too short. Only fires when duration is positive AND below
+        // threshold — durationSeconds == 0 means "we don't know" → don't skip.
+        if rec.durationSeconds > 0 && rec.durationSeconds < minDurationSeconds {
+            result.tooShort.insert(rec.fullPath)
+        }
+
+        // Rule 5: low resolution. Empty / unparseable resolution string is
+        // treated as "don't know" → don't skip.
+        if let h = pfResolutionHeight(from: rec.resolution), h < minResolutionHeight {
+            result.lowResolution.insert(rec.fullPath)
+        }
+    }
+    return result
+}
+
+/// MainActor wrapper that loads the catalog and applies the full prefilter.
+@MainActor
+func pfPersonScanSkipResult(targetPersonName: String?) -> CatalogSkipResult {
+    pfPersonScanSkipPaths(
+        from: CatalogStore.shared.load(),
+        targetPersonName: targetPersonName
+    )
 }
 
 // MARK: - Video discovery

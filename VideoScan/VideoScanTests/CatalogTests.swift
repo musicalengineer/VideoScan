@@ -269,6 +269,170 @@ struct CatalogSkipSetTests {
     }
 }
 
+// MARK: - Person scan prefilter tests (Issue #66)
+//
+// Five-rule prefilter built on top of catalog metadata. Each rule has its
+// own bucket on `CatalogSkipResult`; tests assert each rule fires
+// independently and that benign records make it through.
+
+struct PersonScanPrefilterTests {
+
+    private func record(
+        _ path: String,
+        _ streamType: StreamType = .videoAndAudio,
+        duration: Double = 60,
+        resolution: String = "1920x1080",
+        junkScore: Int = 0,
+        detectedPeople: [String] = []
+    ) -> VideoRecord {
+        let r = VideoRecord()
+        r.fullPath = path
+        r.streamTypeRaw = streamType.rawValue
+        r.durationSeconds = duration
+        r.resolution = resolution
+        r.junkScore = junkScore
+        r.detectedPeople = detectedPeople
+        return r
+    }
+
+    // regression: #66 — Resolution parser extracts the height from "WxH"
+    @Test func resolutionParserGetsHeight() {
+        #expect(pfResolutionHeight(from: "1920x1080") == 1080)
+        #expect(pfResolutionHeight(from: "1280x720") == 720)
+        #expect(pfResolutionHeight(from: "640x360") == 360)
+    }
+
+    // regression: #66 — Resolution parser returns nil on unparseable input
+    @Test func resolutionParserHandlesGarbage() {
+        #expect(pfResolutionHeight(from: "") == nil)
+        #expect(pfResolutionHeight(from: "—") == nil)
+        #expect(pfResolutionHeight(from: "unknown") == nil)
+        #expect(pfResolutionHeight(from: "1920") == nil)
+    }
+
+    // regression: #66 — Rule 1 (existing #23): unscannable records routed
+    // into the unscannable bucket
+    @Test func unscannableBucketCatchesAudioOnly() {
+        let r = record("/v/clip.wav", .audioOnly)
+        let result = pfPersonScanSkipPaths(from: [r], targetPersonName: "donna")
+        #expect(result.unscannable == ["/v/clip.wav"])
+        #expect(result.alreadyKnown.isEmpty)
+        #expect(result.junkScored.isEmpty)
+        #expect(result.tooShort.isEmpty)
+        #expect(result.lowResolution.isEmpty)
+    }
+
+    // regression: #66 — Rule 2: detectedPeople contains target → alreadyKnown
+    @Test func alreadyKnownBucketCatchesPriorHits() {
+        let r = record("/v/family.mov", detectedPeople: ["Donna", "Tim"])
+        let result = pfPersonScanSkipPaths(from: [r], targetPersonName: "donna")
+        #expect(result.alreadyKnown == ["/v/family.mov"])
+    }
+
+    // regression: #66 — Rule 2: case-insensitive name match
+    @Test func alreadyKnownIsCaseInsensitive() {
+        let r = record("/v/holiday.mov", detectedPeople: ["DONNA"])
+        let result = pfPersonScanSkipPaths(from: [r], targetPersonName: "Donna")
+        #expect(result.alreadyKnown == ["/v/holiday.mov"])
+    }
+
+    // regression: #66 — Rule 2: nil/empty target = no already-known check
+    @Test func alreadyKnownSkippedWithoutTarget() {
+        let r = record("/v/family.mov", detectedPeople: ["Donna"])
+        let result = pfPersonScanSkipPaths(from: [r], targetPersonName: nil)
+        #expect(result.alreadyKnown.isEmpty)
+    }
+
+    // regression: #66 — Rule 3: junkScore >= ceiling → junkScored
+    @Test func junkScoredBucketCatchesHighScores() {
+        let high = record("/v/junk.mov", junkScore: 90)
+        let medium = record("/v/borderline.mov", junkScore: 50)
+        let result = pfPersonScanSkipPaths(from: [high, medium], targetPersonName: nil)
+        #expect(result.junkScored == ["/v/junk.mov"])
+    }
+
+    // regression: #66 — Rule 3: ceiling boundary is inclusive
+    @Test func junkScoredCeilingIsInclusive() {
+        let exactly = record("/v/edge.mov", junkScore: 80)
+        let result = pfPersonScanSkipPaths(from: [exactly], targetPersonName: nil)
+        #expect(result.junkScored == ["/v/edge.mov"])
+    }
+
+    // regression: #66 — Rule 4: very short clips → tooShort
+    @Test func tooShortBucketCatchesBriefClips() {
+        let brief = record("/v/blip.mov", duration: 2.0)
+        let normal = record("/v/clip.mov", duration: 30)
+        let result = pfPersonScanSkipPaths(from: [brief, normal], targetPersonName: nil)
+        #expect(result.tooShort == ["/v/blip.mov"])
+    }
+
+    // regression: #66 — Rule 4: zero duration is treated as "unknown" not "too short"
+    @Test func zeroDurationDoesNotTriggerTooShort() {
+        let unknown = record("/v/unknown_dur.mov", duration: 0)
+        let result = pfPersonScanSkipPaths(from: [unknown], targetPersonName: nil)
+        #expect(result.tooShort.isEmpty)
+    }
+
+    // regression: #66 — Rule 5: resolution height < min → lowResolution
+    @Test func lowResolutionBucketCatchesSubHD() {
+        let lowRes = record("/v/240p.mov", resolution: "320x240")
+        let hd = record("/v/720p.mov", resolution: "1280x720")
+        let result = pfPersonScanSkipPaths(from: [lowRes, hd], targetPersonName: nil)
+        #expect(result.lowResolution == ["/v/240p.mov"])
+    }
+
+    // regression: #66 — Rule 5: empty/unparseable resolution = "unknown" not "low"
+    @Test func emptyResolutionDoesNotTriggerLowRes() {
+        let r = record("/v/no_res.mov", resolution: "")
+        let result = pfPersonScanSkipPaths(from: [r], targetPersonName: nil)
+        #expect(result.lowResolution.isEmpty)
+    }
+
+    // regression: #66 — Mixed catalog: each rule fires independently
+    @Test func mixedCatalogPopulatesAllBuckets() {
+        let recs = [
+            record("/v/audio.wav", .audioOnly),
+            record("/v/cached.mov", detectedPeople: ["Donna"]),
+            record("/v/junk.mov", junkScore: 95),
+            record("/v/blip.mov", duration: 1.0),
+            record("/v/240p.mov", resolution: "320x240"),
+            record("/v/good.mov", duration: 60, resolution: "1920x1080",
+                   junkScore: 5, detectedPeople: ["Tim"]),
+        ]
+        let result = pfPersonScanSkipPaths(from: recs, targetPersonName: "Donna")
+        #expect(result.unscannable == ["/v/audio.wav"])
+        #expect(result.alreadyKnown == ["/v/cached.mov"])
+        #expect(result.junkScored == ["/v/junk.mov"])
+        #expect(result.tooShort == ["/v/blip.mov"])
+        #expect(result.lowResolution == ["/v/240p.mov"])
+        #expect(!result.all.contains("/v/good.mov"))
+    }
+
+    // regression: #66 — Empty input returns empty result without crashing
+    @Test func emptyInputReturnsEmptyResult() {
+        let result = pfPersonScanSkipPaths(from: [], targetPersonName: "Donna")
+        #expect(result.all.isEmpty)
+    }
+
+    // regression: #66 — Records with empty fullPath are ignored entirely
+    @Test func emptyFullPathRecordsIgnored() {
+        let r = record("", junkScore: 99)
+        let result = pfPersonScanSkipPaths(from: [r], targetPersonName: "Donna")
+        #expect(result.all.isEmpty)
+    }
+
+    // regression: #66 — Unscannable trumps all other rules (early-return)
+    @Test func unscannableTrumpsOtherRules() {
+        let r = record("/v/audio.wav", .audioOnly,
+                       duration: 60, resolution: "1920x1080",
+                       junkScore: 10, detectedPeople: ["Donna"])
+        let result = pfPersonScanSkipPaths(from: [r], targetPersonName: "Donna")
+        #expect(result.unscannable == ["/v/audio.wav"])
+        #expect(result.alreadyKnown.isEmpty)
+        #expect(result.junkScored.isEmpty)
+    }
+}
+
 // MARK: - Volume Compare Tests
 
 struct VolumeCompareTests {
