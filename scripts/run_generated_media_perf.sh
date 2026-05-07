@@ -56,8 +56,7 @@ else
     /Generated media performance results/ ||
     /\*\* TEST/ ||
     /Testing failed/ ||
-    /error:/ ||
-    /warning:/ { print }
+    /error:/ { print }
   '
 fi
 
