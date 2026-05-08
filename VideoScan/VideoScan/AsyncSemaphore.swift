@@ -56,10 +56,13 @@ actor AsyncSemaphore {
         }
     }
 
-    /// Acquire a permit, run the body, then release — guarantees signal even on cancellation.
-    func withPermit<T: Sendable>(_ body: @Sendable () async -> T) async throws -> T {
+    /// Acquire a permit, run the body, then release — guarantees signal
+    /// even on cancellation OR if the body throws. The defer is the
+    /// contract. Body is throwing so callers don't have to wrap work in
+    /// do/catch + Result just to release the permit on error.
+    func withPermit<T: Sendable>(_ body: @Sendable () async throws -> T) async throws -> T {
         try await wait()
         defer { signal() }
-        return await body()
+        return try await body()
     }
 }
