@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 
 echo "Running checked-in regression suites..."
@@ -21,4 +21,4 @@ xcodebuild test \
 
 echo
 echo "External media regressions are opt-in:"
-echo "  scripts/run_external_media_regressions.sh"
+echo "  VideoScan/scripts/run_external_media_regressions.sh"

@@ -4,7 +4,7 @@ import Testing
 
 // Manifest-driven tests for local-only media files that are too large or too
 // private to commit. The manifest and media live outside git by default under
-// tests/fixtures/external/.
+// VideoScan/VideoScanTests/Fixtures/External/.
 @MainActor
 struct ExternalMediaManifestDecodingTests {
 
@@ -157,7 +157,7 @@ struct ExternalMediaSuite {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-        return repoRoot.appendingPathComponent("tests/fixtures/external", isDirectory: true)
+        return repoRoot.appendingPathComponent("VideoScan/VideoScanTests/Fixtures/External", isDirectory: true)
     }
 
     private static func configuredManifestURL(mediaRoot: URL) -> URL {
