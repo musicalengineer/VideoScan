@@ -73,6 +73,119 @@ struct AsyncSemaphoreTests {
         try await sem.wait()
         await sem.signal()
     }
+
+    // regression: #59 — Later waiters still make progress after a queued waiter is cancelled
+    @Test func laterWaitersStillProgressAfterCancellation() async throws {
+        let sem = AsyncSemaphore(limit: 1)
+
+        // Hold the only permit.
+        try await sem.wait()
+
+        // Queue two waiters: A and B.
+        let aResult = TestFlag()
+        let aTask = Task { () -> String in
+            do {
+                try await sem.wait()
+                await aResult.set()
+                return "got"
+            } catch is CancellationError {
+                return "cancelled"
+            } catch {
+                return "error: \(error)"
+            }
+        }
+
+        let bResult = TestFlag()
+        let bTask = Task { () -> String in
+            do {
+                try await sem.wait()
+                await bResult.set()
+                return "got"
+            } catch is CancellationError {
+                return "cancelled"
+            } catch {
+                return "error: \(error)"
+            }
+        }
+
+        // Wait for both to actually be enqueued.
+        try await Task.sleep(for: .milliseconds(50))
+
+        // Cancel the first queued waiter.
+        aTask.cancel()
+        let aOutcome = await aTask.value
+        #expect(aOutcome == "cancelled")
+
+        // Release the held permit. B (the surviving waiter) must get it.
+        await sem.signal()
+        let bOutcome = await bTask.value
+        #expect(bOutcome == "got")
+
+        // B's permit released — fresh waiter must succeed.
+        await sem.signal()
+        try await sem.wait()
+        await sem.signal()
+    }
+
+    // regression: #59 — Multiple concurrent cancellations don't leak permits
+    @Test func multipleCancelledWaitersDoNotLeak() async throws {
+        let sem = AsyncSemaphore(limit: 1)
+        try await sem.wait()  // hold the permit
+
+        // Queue 5 waiters and cancel them all.
+        var cancelTasks: [Task<String, Never>] = []
+        for _ in 0..<5 {
+            let t = Task { () -> String in
+                do {
+                    try await sem.wait()
+                    await sem.signal()
+                    return "got"
+                } catch is CancellationError {
+                    return "cancelled"
+                } catch {
+                    return "error"
+                }
+            }
+            cancelTasks.append(t)
+        }
+        try await Task.sleep(for: .milliseconds(50))
+
+        for t in cancelTasks { t.cancel() }
+        for t in cancelTasks {
+            let outcome = await t.value
+            #expect(outcome == "cancelled" || outcome == "got")
+        }
+
+        // Release the original permit. Permit count must be intact (limit=1).
+        await sem.signal()
+
+        // Confirm by acquiring + releasing twice in series — no leak.
+        try await sem.wait()
+        await sem.signal()
+        try await sem.wait()
+        await sem.signal()
+    }
+
+    // regression: #59 — withPermit releases on body throw (not just task cancellation)
+    @Test func withPermitReleasesOnBodyThrow() async throws {
+        let sem = AsyncSemaphore(limit: 1)
+
+        struct CustomError: Error {}
+
+        // Body throws — defer should still signal.
+        do {
+            try await sem.withPermit {
+                throw CustomError()
+            }
+            #expect(Bool(false), "Expected throw")
+        } catch is CustomError {
+            // expected
+        }
+
+        // Permit must be back. Acquire fresh.
+        try await sem.wait()
+        await sem.signal()
+    }
 }
 
 // MARK: - ProcessRunner Tests
