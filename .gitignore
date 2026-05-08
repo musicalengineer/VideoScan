@@ -38,6 +38,12 @@ models/
 tests/fixtures/videos/*-test-*.mxf
 !tests/fixtures/videos/test_*
 
+# Local-only external media corpus. Keep the documentation and example
+# manifest in git; keep real videos/audio local.
+VideoScan/VideoScanTests/Fixtures/External/*
+!VideoScan/VideoScanTests/Fixtures/External/README.md
+!VideoScan/VideoScanTests/Fixtures/External/manifest.example.json
+
 # Local dashboard cache — populated by scripts/dashboard.sh from
 # the `metrics` branch. Never commit; it's a local snapshot.
 docs/history.jsonl
