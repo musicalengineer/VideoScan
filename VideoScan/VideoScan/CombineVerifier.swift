@@ -73,38 +73,30 @@ enum CombineVerifier {
 
     // MARK: - Audio Level Detection
 
-    /// Run ffmpeg volumedetect on the audio stream. Returns mean_volume in dB, or nil on failure.
+    /// Run ffmpeg volumedetect on the audio stream. Returns mean_volume in dB,
+    /// or nil on failure. Uses the shared ProcessRunner so stderr is drained
+    /// continuously — ffmpeg's `-v info` output for a long file can easily
+    /// exceed the OS pipe buffer (~64KB on macOS) and deadlock if we only
+    /// read after termination.
     static func detectAudioLevel(url: URL, ffmpegPath: String) async -> Double? {
         let args = ["-v", "info", "-i", url.path, "-map", "0:a:0",
                     "-af", "volumedetect", "-f", "null", "-"]
-        return await withCheckedContinuation { continuation in
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: ffmpegPath)
-            proc.arguments = args
-            let errPipe = Pipe()
-            proc.standardError = errPipe
-            proc.standardOutput = FileHandle.nullDevice
+        let result = await ProcessRunner.runCapturingStderr(executable: ffmpegPath, arguments: args)
+        return parseMeanVolumeDB(from: result.stderr)
+    }
 
-            proc.terminationHandler = { _ in
-                let data = errPipe.fileHandleForReading.readDataToEndOfFile()
-                let text = String(data: data, encoding: .utf8) ?? ""
-                var meanDB: Double?
-                for line in text.components(separatedBy: .newlines) {
-                    if line.contains("mean_volume:") {
-                        let parts = line.components(separatedBy: "mean_volume:")
-                        if parts.count > 1 {
-                            let dbStr = parts[1].trimmingCharacters(in: .whitespaces)
-                                .replacingOccurrences(of: " dB", with: "")
-                            meanDB = Double(dbStr)
-                        }
-                    }
-                }
-                continuation.resume(returning: meanDB)
-            }
-            do { try proc.run() } catch {
-                continuation.resume(returning: nil)
-            }
+    /// Pure helper — extracts the `mean_volume: -X.X dB` value from ffmpeg's
+    /// volumedetect output. Pulled out so it's directly unit-testable.
+    static func parseMeanVolumeDB(from ffmpegOutput: String) -> Double? {
+        for line in ffmpegOutput.components(separatedBy: .newlines) {
+            guard line.contains("mean_volume:") else { continue }
+            let parts = line.components(separatedBy: "mean_volume:")
+            guard parts.count > 1 else { continue }
+            let dbStr = parts[1].trimmingCharacters(in: .whitespaces)
+                .replacingOccurrences(of: " dB", with: "")
+            if let v = Double(dbStr) { return v }
         }
+        return nil
     }
 
     // MARK: - Decode Test
@@ -118,29 +110,19 @@ enum CombineVerifier {
             args = ["-v", "error", "-i", url.path, "-map", "0:a:0", "-frames:a", "1", "-f", "null", "-"]
         }
 
-        return await withCheckedContinuation { continuation in
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: ffmpegPath)
-            proc.arguments = args
-            let errPipe = Pipe()
-            proc.standardError = errPipe
-            proc.standardOutput = FileHandle.nullDevice
-
-            proc.terminationHandler = { p in
-                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-                let errStr = String(data: errData, encoding: .utf8) ?? ""
-                if p.terminationStatus != 0 {
-                    continuation.resume(returning: (false, "exit \(p.terminationStatus): \(String(errStr.prefix(200)))"))
-                } else if !errStr.isEmpty {
-                    continuation.resume(returning: (false, "decode errors: \(String(errStr.prefix(200)))"))
-                } else {
-                    continuation.resume(returning: (true, ""))
-                }
-            }
-            do { try proc.run() } catch {
-                continuation.resume(returning: (false, "launch failed: \(error.localizedDescription)"))
-            }
+        // Use shared ProcessRunner: drains stderr continuously so a chatty
+        // ffmpeg can't deadlock by filling the pipe buffer. Need the full
+        // Result here (not runCapturingStderr) because we still want the
+        // exit-code branch from the original implementation.
+        let result = await ProcessRunner.runProcess(executable: ffmpegPath, arguments: args)
+        let errStr = result.stderr
+        if result.exitCode != 0 {
+            return (false, "exit \(result.exitCode): \(String(errStr.prefix(200)))")
         }
+        if !errStr.isEmpty {
+            return (false, "decode errors: \(String(errStr.prefix(200)))")
+        }
+        return (true, "")
     }
 
     // MARK: - FFProbe
