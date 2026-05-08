@@ -405,6 +405,10 @@ struct TriageView: View {
         }
         .contextMenu(forSelectionType: UUID.self) { ids in
             triageContextMenu(for: ids)
+        } primaryAction: { ids in
+            // Double-click / Return on row(s) → open in QuickTime.
+            let recs = ids.compactMap { id in rows.first { $0.id == id } }
+            MediaOpener.openInQuickTime(recs)
         }
     }
 
