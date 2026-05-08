@@ -201,7 +201,6 @@ final class VideoScanModel: ObservableObject {
     private let thumbnailCache = NSCache<NSString, NSImage>()
 
     let ffprobePath = ToolLocator.ffprobePath
-    let ffmpegPath  = ToolLocator.ffmpegPath
 
     let videoExtensions: Set<String> = [
         "mov", "mp4", "m4v", "avi", "mkv", "mxf", "mts", "m2ts", "ts", "mpg", "mpeg",
@@ -239,14 +238,9 @@ final class VideoScanModel: ObservableObject {
         return s
     }
 
-    private var scanTask: Task<Void, Never>?
     var combineTask: Task<Void, Never>?
     var ramDisk = RAMDisk()
     nonisolated private let metadataCache = MetadataCache()
-
-    /// Cooperative pause gate for scan tasks
-    let pauseGate = PauseGate()
-    @Published var isPaused: Bool = false
 
     /// Cooperative pause gate for combine tasks
     let combinePauseGate = PauseGate()
@@ -1088,7 +1082,6 @@ final class VideoScanModel: ObservableObject {
     // MARK: - Logging (delegates to DashboardState)
 
     func log(_ msg: String) { dashboard.log(msg) }
-    func clearConsole() { dashboard.clearConsole() }
 
     func clearResults() {
         records = []
@@ -1264,48 +1257,6 @@ final class VideoScanModel: ObservableObject {
         if record.tapeName.isEmpty && !clip.tapeName.isEmpty {
             record.tapeName = clip.tapeName
         }
-    }
-
-    func startScan(roots: [String]) {
-        records = []
-        outputCSVPath = ""
-        isScanning = true
-        dashboard.resetForScan()
-
-        scanTask = Task {
-            await runParallelScan(roots: roots)
-        }
-    }
-
-    func stopScan() {
-        scanTask?.cancel()
-        scanTask = nil
-        Task {
-            await pauseGate.resume()  // release any waiters before cancel
-            await ramDisk.unmount()
-        }
-        log("--- Scan stopped by user ---")
-        isScanning = false
-        isPaused = false
-        dashboard.scanPhase = .idle
-    }
-
-    func pauseScan() {
-        guard isScanning, !isPaused else { return }
-        Task { await pauseGate.pause() }
-        isPaused = true
-        log("--- Scan paused ---")
-    }
-
-    func resumeScan() {
-        guard isScanning, isPaused else { return }
-        Task { await pauseGate.resume() }
-        isPaused = false
-        log("--- Scan resumed ---")
-    }
-
-    func togglePause() {
-        if isPaused { resumeScan() } else { pauseScan() }
     }
 
     // MARK: - Scan Target Management
@@ -1883,244 +1834,6 @@ final class VideoScanModel: ObservableObject {
     /// Set from perfSettings at scan start so nonisolated code can read it.
     nonisolated(unsafe) private var prefetchBytes: Int = 50 * 1024 * 1024
 
-    /// Scan multiple volumes/folders in parallel, merge all results
-    func runParallelScan(roots: [String]) async {
-        // Sync performance settings for nonisolated code
-        prefetchBytes = perfSettings.prefetchMB * 1024 * 1024
-
-        guard FileManager.default.fileExists(atPath: ffprobePath) else {
-            log("ERROR: ffprobe not found at \(ffprobePath)\nInstall with: brew install ffmpeg")
-            isScanning = false
-            return
-        }
-
-        let cacheCount = metadataCache.count
-        log("Scanning \(roots.count) location\(roots.count == 1 ? "" : "s") in parallel...")
-        log("  Metadata cache: \(cacheCount) entries (unchanged files skip ffprobe)\n")
-        for r in roots { log("  • \(r)") }
-        log("")
-
-        // Mount RAM disk for network file prefetching — size adapts to available memory
-        let hasNetworkRoot = roots.contains { CombineVerifier.isNetworkPath($0) }
-        let ramMountPoint = await mountScanRAMDiskIfNeeded(hasNetwork: hasNetworkRoot)
-
-        // Per-root streaming walk + interleaved probe (producer-consumer).
-        //
-        // Each root gets its own walker Task and its own prober pool. Probes
-        // begin as soon as the walker yields the first URL, so SMB content
-        // reads start within seconds and keep the remote session warm while
-        // the rest of the tree is enumerated. This replaces the old two-phase
-        // "walk everything, then probe everything" scheme that let long
-        // network walks idle out the session before probing could begin.
-        dashboard.scanPhase = .probing
-        dashboard.volumeProgress = roots.map { root in
-            VolumeProgress(rootPath: root, volumeName: URL(fileURLWithPath: root).lastPathComponent)
-        }
-        dashboard.startThroughputTimer()
-
-        var allRecords: [VideoRecord] = []
-
-        // Capture settings on main actor before entering task group
-        let probesLimit = perfSettings.probesPerVolume
-        let abortAfter = 50
-        let skipHashingCaptured = scanOptions.skipChecksums
-        let skipDirsCaptured = skipDirsSnapshot()
-        let skipBundleExtsCaptured = skipBundleExtensionsSnapshot()
-        let skipSmallFilesCaptured = scanOptions.skipSmallFiles
-
-        await withTaskGroup(of: [VideoRecord].self) { rootGroup in
-            for root in roots {
-                rootGroup.addTask { [self] in
-                    await scanOneRootParallel(
-                        root: root,
-                        ramMountPoint: ramMountPoint,
-                        probesLimit: probesLimit,
-                        abortAfter: abortAfter,
-                        skipHashing: skipHashingCaptured,
-                        skipDirs: skipDirsCaptured,
-                        skipBundleExts: skipBundleExtsCaptured,
-                        skipSmallFiles: skipSmallFilesCaptured
-                    )
-                }
-            }
-            for await rootRecords in rootGroup {
-                allRecords.append(contentsOf: rootRecords)
-            }
-        }
-
-        dashboard.stopThroughputTimer()
-
-        // Unmount RAM disk
-        await ramDisk.unmount()
-
-        if Task.isCancelled { dashboard.scanPhase = .idle; isScanning = false; return }
-
-        // ── Phase 3: Write CSV ──
-        dashboard.scanPhase = .writingCSV
-
-        let rootLabel = roots.count == 1 ? roots[0] : "MultiVolume"
-        let csvPath = writeCSV(records: allRecords, root: rootLabel)
-        records = allRecords
-        saveCatalogDebounced()
-        outputCSVPath = csvPath ?? ""
-        if let p = csvPath { log("CSV saved to:\n\(p)") }
-
-        logParallelScanSummary(roots: roots, records: allRecords)
-        dashboard.scanPhase = .complete
-        isScanning = false
-    }
-
-    /// Per-root body invoked from `runParallelScan`'s outer task group.
-    /// Streams directory entries and drains a probe group, aborting if too
-    /// many consecutive files become inaccessible.
-    private func scanOneRootParallel(
-        root: String,
-        ramMountPoint: String?,
-        probesLimit: Int,
-        abortAfter: Int,
-        skipHashing: Bool,
-        skipDirs: Set<String>,
-        skipBundleExts: Set<String>,
-        skipSmallFiles: Bool
-    ) async -> [VideoRecord] {
-        let volName = URL(fileURLWithPath: root).lastPathComponent
-        let rootIsNetwork = CombineVerifier.isNetworkPath(root)
-        let sem = AsyncSemaphore(limit: probesLimit)
-        var rootRecords: [VideoRecord] = []
-        var discoveredCount = 0
-        var consecutiveNotAccessible = 0
-
-        let stream = walkDirectoryStream(
-            root: root,
-            skipDirs: skipDirs,
-            skipBundleExtensions: skipBundleExts,
-            skipSmallFiles: skipSmallFiles
-        ) { [weak self] currentDir in
-            Task { @MainActor in
-                guard let self else { return }
-                self.dashboard.scanCurrentVolume = volName
-                self.dashboard.scanCurrentFile = "📂 " + currentDir.lastPathComponent
-            }
-        }
-
-        await withTaskGroup(of: VideoRecord.self) { probeGroup in
-            for await url in stream {
-                if Task.isCancelled { break }
-                discoveredCount += 1
-                let currentDiscovered = discoveredCount
-                await MainActor.run {
-                    let ds = self.dashboard
-                    ds.scanTotal += 1
-                    if let idx = ds.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
-                        ds.volumeProgress[idx].totalFiles = currentDiscovered
-                    }
-                }
-                probeGroup.addTask {
-                    await self.pauseGate.waitIfPaused()
-                    do {
-                        return try await sem.withPermit {
-                            await self.probeAndRecord(
-                                url: url,
-                                volName: volName,
-                                root: root,
-                                rootIsNetwork: rootIsNetwork,
-                                ramMountPoint: ramMountPoint,
-                                skipHashing: skipHashing,
-                                useTimeout: false,
-                                echoFilename: true
-                            )
-                        }
-                    } catch {
-                        return self.cancelledProbeRecord(url: url)
-                    }
-                }
-            }
-
-            // Walker finished for this root.
-            let totalFiles = discoveredCount
-            await MainActor.run {
-                self.log("  Found \(totalFiles) video files on \(volName)")
-                if let idx = self.dashboard.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
-                    self.dashboard.volumeProgress[idx].isWalking = false
-                }
-            }
-
-            for await rec in probeGroup {
-                rootRecords.append(rec)
-                let shouldAbort = Self.updateInaccessibleCounter(
-                    rec: rec,
-                    consecutive: &consecutiveNotAccessible,
-                    abortAfter: abortAfter
-                )
-                if shouldAbort {
-                    await MainActor.run {
-                        self.log("  ⛔ \(abortAfter) consecutive files inaccessible on \(volName) — volume likely unmounted. Aborting remaining probes.")
-                    }
-                    probeGroup.cancelAll()
-                    break
-                }
-            }
-        }
-        return rootRecords
-    }
-
-    /// Reset or increment the consecutive-not-accessible counter based on a
-    /// probe result. Returns true if the caller should abort.
-    nonisolated private static func updateInaccessibleCounter(
-        rec: VideoRecord,
-        consecutive: inout Int,
-        abortAfter: Int
-    ) -> Bool {
-        if rec.streamTypeRaw == StreamType.ffprobeFailed.rawValue,
-           rec.isPlayable == "File not found" {
-            consecutive += 1
-            return consecutive >= abortAfter
-        }
-        consecutive = 0
-        return false
-    }
-
-    /// Final banner for `runParallelScan`.
-    private func logParallelScanSummary(roots: [String], records: [VideoRecord]) {
-        let va = records.filter { $0.streamTypeRaw == StreamType.videoAndAudio.rawValue }.count
-        let vo = records.filter { $0.streamTypeRaw == StreamType.videoOnly.rawValue }.count
-        let ao = records.filter { $0.streamTypeRaw == StreamType.audioOnly.rawValue }.count
-        let ff = records.filter { $0.isPlayable.contains("ffprobe") }.count
-        log("""
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Scan Complete
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Locations:      \(roots.count)
-  Total:          \(records.count)
-  Video+Audio:    \(va)
-  Video only:     \(vo)
-  Audio only:     \(ao)
-  ffprobe failed: \(ff)
-  Cache hits:     \(dashboard.scanCacheHits)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-""")
-    }
-
-    /// Walk a single directory tree and return all video file URLs. Caller
-    /// (on main actor) passes pre-snapshotted skip sets so this method can
-    /// stay nonisolated.
-    nonisolated func walkDirectory(
-        root: String,
-        skipDirs: Set<String>,
-        skipBundleExtensions: Set<String>,
-        skipSmallFiles: Bool,
-        onProgress: (@Sendable (_ currentDir: URL, _ filesFoundSoFar: Int, _ lastFile: URL?) -> Void)? = nil
-    ) async -> [URL] {
-        await FilesystemWalker.walkDirectory(
-            root: root,
-            videoExtensions: videoExtensions,
-            skipDirs: skipDirs,
-            skipBundleExtensions: skipBundleExtensions,
-            skipSmallFiles: skipSmallFiles,
-            onProgress: onProgress
-        )
-    }
 
     /// Walk a directory tree and yield video file URLs as they are discovered
     /// via an `AsyncStream<URL>`. The walker runs on a detached task so FileManager
@@ -2677,12 +2390,6 @@ final class VideoScanModel: ObservableObject {
 
     nonisolated func runFFProbe(url: URL) async -> (output: FFProbeOutput?, stderr: String) {
         await CombineVerifier.runFFProbe(url: url, ffprobePath: ffprobePath)
-    }
-
-    // MARK: - CSV
-
-    func writeCSV(records: [VideoRecord], root: String) -> String? {
-        CatalogCSVWriter.write(records: records, root: root)
     }
 
     // MARK: - Thumbnail Preview

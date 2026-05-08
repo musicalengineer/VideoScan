@@ -22,7 +22,6 @@ struct VolumeCompareResult {
     let missingBytes: Int64
 
     var missingHumanSize: String { humanSize(missingBytes) }
-    var totalHumanSize: String { humanSize(totalSourceBytes) }
 }
 
 // MARK: - Comparison Engine
