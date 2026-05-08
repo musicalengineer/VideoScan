@@ -7,7 +7,7 @@ that have caused VideoScan regressions.
 Suggested layout:
 
 ```text
-tests/fixtures/external/
+VideoScan/VideoScanTests/Fixtures/External/
   manifest.json
   avchd/
     kitty.MTS
@@ -24,13 +24,13 @@ your local files.
 Run the external fixture tests with:
 
 ```bash
-scripts/run_external_media_regressions.sh
+VideoScan/scripts/run_external_media_regressions.sh
 ```
 
 or point at another local corpus:
 
 ```bash
-scripts/run_external_media_regressions.sh --media-root /path/to/VideoScanTestMedia
+VideoScan/scripts/run_external_media_regressions.sh --media-root /path/to/VideoScanTestMedia
 ```
 
 The tests assert semantic media contracts such as stream type, codecs,

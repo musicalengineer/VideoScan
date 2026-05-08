@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-MEDIA_ROOT="$ROOT/tests/fixtures/external"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+MEDIA_ROOT="$ROOT/VideoScan/VideoScanTests/Fixtures/External"
 MANIFEST=""
 VERBOSE=0
 ROOT_CONFIG="/tmp/videoscan_external_media_root"
@@ -11,7 +11,7 @@ XCODEBUILD_LOG="/tmp/videoscan_external_media_xcodebuild.log"
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/run_external_media_regressions.sh [options]
+Usage: VideoScan/scripts/run_external_media_regressions.sh [options]
 
 Options:
   --media-root PATH     Directory containing manifest.json and local media.
@@ -20,9 +20,9 @@ Options:
   --help                Show this help.
 
 Examples:
-  scripts/run_external_media_regressions.sh
-  scripts/run_external_media_regressions.sh --media-root /Users/rickb/VideoScanTestMedia
-  scripts/run_external_media_regressions.sh --manifest /tmp/manifest.json
+  VideoScan/scripts/run_external_media_regressions.sh
+  VideoScan/scripts/run_external_media_regressions.sh --media-root /Users/rickb/VideoScanTestMedia
+  VideoScan/scripts/run_external_media_regressions.sh --manifest /tmp/manifest.json
 USAGE
 }
 
