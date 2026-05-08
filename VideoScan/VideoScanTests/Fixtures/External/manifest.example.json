@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "avchd-kitty-mts",
+      "category": "regression",
+      "path": "avchd/kitty.MTS",
+      "description": "Example AVCHD/MTS camcorder clip.",
+      "expected": {
+        "streamType": "Video+Audio",
+        "videoCodec": "h264",
+        "audioCodec": "ac3",
+        "resolution": "1920x1080",
+        "minDuration": 1.0,
+        "isPlayable": "Yes"
+      }
+    },
+    {
+      "id": "damaged-truncated-mov",
+      "category": "regression",
+      "path": "damaged/truncated.mov",
+      "description": "Example damaged file that should be classified, not hang.",
+      "expected": {
+        "streamType": "ffprobe failed",
+        "isPlayableContains": "Damaged"
+      }
+    }
+  ]
+}
