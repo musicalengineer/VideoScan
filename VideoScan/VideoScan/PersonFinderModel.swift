@@ -876,6 +876,7 @@ final class PersonFinderModel: ObservableObject {
             var cachedResults: [pfVideoResult] = []
             var hits = 0
             for path in videoFiles {
+                guard !Task.isCancelled else { return }
                 guard let key = PersonFinderCache.makeKey(
                     videoPath: path, personName: personName,
                     engine: engine, threshold: threshold,
@@ -888,6 +889,7 @@ final class PersonFinderModel: ObservableObject {
             }
 
             guard hits > 0 else { return }
+            guard !Task.isCancelled else { return }
             osLog.info("Cache restore: \(hits)/\(videoFiles.count) cached, \(cachedResults.count) with hits for \(personName, privacy: .public)")
 
             let outputDir = Self.resolveOutputDir(jobSettings)
@@ -909,7 +911,9 @@ final class PersonFinderModel: ObservableObject {
             let totalPresence = validResults.map(\.totalPresenceSecs).reduce(0, +)
             let totalSegments = validResults.reduce(0) { $0 + $1.segments.count }
 
+            guard !Task.isCancelled else { return }
             await MainActor.run {
+                guard job.status.isIdle else { return }
                 job.finalizeResults(clipResults)
                 job.recognitionResults = validResults
                 job.recognitionOutputDir = outputDir
