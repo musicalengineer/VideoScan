@@ -27,14 +27,6 @@ extension VideoScanModel {
         combineAllPairsInternal(pairs: pairs, outputFolder: outputFolder, technique: technique, maxConcurrency: maxConcurrency)
     }
 
-    func combineAllPairs(outputFolder: URL, maxConcurrency: Int? = nil) {
-        let pairs = correlatedPairs
-        guard !pairs.isEmpty else {
-            log("No correlated pairs to combine.")
-            return
-        }
-        combineAllPairsInternal(pairs: pairs, outputFolder: outputFolder, maxConcurrency: maxConcurrency)
-    }
 
     // MARK: - Combine helpers
 
