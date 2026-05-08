@@ -847,6 +847,10 @@ struct CatalogContent: View {
                     NSPasteboard.general.setString(rec.fullPath, forType: .string)
                 }
             }
+        } primaryAction: { ids in
+            // Double-click / Return on row(s) → open in QuickTime.
+            let recs = ids.compactMap { id in records.first { $0.id == id } }
+            MediaOpener.openInQuickTime(recs)
         }
         .onAppear { tableData = computeFiltered() }
         .onChange(of: records.count) { tableData = computeFiltered() }
@@ -1950,5 +1954,26 @@ struct StarRatingView: View {
                     }
             }
         }
+    }
+}
+
+// MARK: - Shared media open helpers
+
+enum MediaOpener {
+    /// Open one or more catalog records in QuickTime Player.
+    /// Silently skips records on offline volumes (the table's row context
+    /// menu shows a clearer "Reveal" option for those).
+    static func openInQuickTime(_ records: [VideoRecord]) {
+        let urls = records
+            .filter { VolumeReachability.isReachable(path: $0.fullPath) }
+            .map { URL(fileURLWithPath: $0.fullPath) }
+        guard !urls.isEmpty,
+              let qtURL = NSWorkspace.shared.urlForApplication(
+                withBundleIdentifier: "com.apple.QuickTimePlayerX"
+              )
+        else { return }
+        NSWorkspace.shared.open(urls,
+                                withApplicationAt: qtURL,
+                                configuration: NSWorkspace.OpenConfiguration())
     }
 }
