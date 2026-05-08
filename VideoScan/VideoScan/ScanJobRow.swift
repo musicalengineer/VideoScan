@@ -86,15 +86,14 @@ struct ScanJobRow: View {
             }
 
             if isIdle {
-                // Idle: show inline pickers right on the collapsed row
                 inlinePersonPicker
                 inlineVolumePicker
                 inlineEnginePicker
+            } else if !isExpanded && job.status.isDone {
+                collapsedDoneSummary
             } else if !isExpanded {
-                // Active/done: read-only summary text (hidden when expanded — shown in expandedDetail instead)
                 let prefix: String = {
                     switch job.status {
-                    case .done: return "Done:"
                     case .cancelled: return "Stopped:"
                     case .failed: return "Failed:"
                     case .scanning: return "Searching for"
@@ -130,27 +129,29 @@ struct ScanJobRow: View {
 
             Spacer()
 
-            // Compact stats on collapsed row
-            if job.videosTotal > 0 {
-                Text("\(job.videosWithHits)")
-                    .font(.system(.body, design: .monospaced).weight(.bold))
-                    .foregroundColor(.green)
-                Text("/")
-                    .font(.callout)
-                    .foregroundColor(.secondary)
-                Text("\(job.status.isCompleted ? job.videosTotal : job.videosScanned)")
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundColor(.secondary)
+            if !job.status.isDone {
+                if job.videosTotal > 0 {
+                    Text("\(job.videosWithHits)")
+                        .font(.system(.body, design: .monospaced).weight(.bold))
+                        .foregroundColor(.green)
+                    Text("/")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                    Text("\(job.status.isCompleted ? job.videosTotal : job.videosScanned)")
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+
+                if job.elapsedSecs > 0 {
+                    Text(formatElapsed(job.elapsedSecs))
+                        .font(.system(.callout, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
             }
 
-            if job.elapsedSecs > 0 {
-                Text(formatElapsed(job.elapsedSecs))
-                    .font(.system(.callout, design: .monospaced))
-                    .foregroundColor(.secondary)
+            if !job.status.isDone {
+                statusBadge
             }
-
-            // Status badge
-            statusBadge
 
             // Compact action buttons — only when collapsed to avoid duplication
             if !isExpanded {
@@ -188,6 +189,40 @@ struct ScanJobRow: View {
                     .controlSize(.regular)
                     .foregroundColor(.red)
                 }
+            }
+        }
+    }
+
+    // MARK: - Collapsed done summary
+
+    private var collapsedDoneSummary: some View {
+        HStack(spacing: 4) {
+            Text("Found")
+                .font(.title3.weight(.medium))
+                .foregroundStyle(.secondary)
+            Text(personName)
+                .font(.title3.weight(.bold))
+            Text("in")
+                .font(.title3.weight(.medium))
+                .foregroundStyle(.secondary)
+            Text("\(job.videosWithHits)")
+                .font(.title3.weight(.bold))
+                .foregroundColor(.green)
+            Text(job.videosWithHits == 1 ? "file" : "files")
+                .font(.title3.weight(.medium))
+                .foregroundStyle(.secondary)
+            Text("out of")
+                .font(.title3.weight(.medium))
+                .foregroundStyle(.secondary)
+            Text("\(job.videosTotal)")
+                .font(.title3.weight(.semibold))
+            if job.elapsedSecs > 1 {
+                Text("·")
+                    .font(.title3)
+                    .foregroundStyle(.tertiary)
+                Text(formatElapsed(job.elapsedSecs))
+                    .font(.callout)
+                    .foregroundStyle(.tertiary)
             }
         }
     }

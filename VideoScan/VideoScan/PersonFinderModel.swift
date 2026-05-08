@@ -29,6 +29,10 @@ let perfLog = Logger(
     subsystem: "Rick-Breen.VideoScan",
     category: "perf"
 )
+private let pfScanLog = Logger(
+    subsystem: "Rick-Breen.VideoScan",
+    category: "scan"
+)
 let signpostLog = OSSignposter(
     subsystem: "Rick-Breen.VideoScan",
     category: "perf"
@@ -750,6 +754,11 @@ final class ScanJob: ObservableObject, Identifiable {
         scanTask = nil; timerTask = nil; compilationTask = nil; taskStarted = nil
     }
 
+    func finalizeResults(_ filtered: [ClipResult]) {
+        results = filtered
+        videosWithHits = filtered.count
+    }
+
     fileprivate func startElapsedTimer() {
         taskStarted = Date()
         timerTask = Task { [weak self] in
@@ -901,14 +910,13 @@ final class PersonFinderModel: ObservableObject {
             let totalSegments = validResults.reduce(0) { $0 + $1.segments.count }
 
             await MainActor.run {
-                job.results = clipResults
+                job.finalizeResults(clipResults)
                 job.recognitionResults = validResults
                 job.recognitionOutputDir = outputDir
                 job.presenceSecs = totalPresence
                 job.clipsFound = totalSegments
                 job.videosTotal = videoFiles.count
                 job.videosScanned = hits
-                job.videosWithHits = clipResults.count
                 job.status = .done
                 job.stopElapsedTimer()
                 job.appendLog("Restored from cache: \(clipResults.count) video(s) with hits, \(totalSegments) segment(s)")
@@ -1864,11 +1872,15 @@ final class PersonFinderModel: ObservableObject {
                 job.appendLog("Stopped. Scanned \(job.videosScanned)/\(job.videosTotal) video(s), \(job.videosWithHits) with hits, \(totalSegments) segment(s).")
             } else {
                 job.videosScanned = job.videosTotal
+                job.finalizeResults(preliminaryResults)
                 job.status = .done
                 job.progress = 1.0
                 job.stopElapsedTimer()
+                let personLabel = job.assignedProfile?.name ?? "unknown"
+                let summary = "Found \(personLabel) in \(job.videosWithHits) file\(job.videosWithHits == 1 ? "" : "s") out of \(job.videosTotal). \(totalSegments) segment(s), \(pfFormatDuration(preliminaryPresence)) total presence. Elapsed: \(formatElapsed(job.elapsedSecs))"
                 job.appendLog("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                job.appendLog("Done. \(job.videosWithHits) video(s) with hits, \(totalSegments) segment(s), \(pfFormatDuration(preliminaryPresence)) total presence.")
+                job.appendLog(summary)
+                pfScanLog.info("\(summary, privacy: .public)")
                 if totalSegments > 0 {
                     job.appendLog("Use Create Composite Video to extract and compile clips.")
                 }
@@ -2281,6 +2293,7 @@ nonisolated func pfOrientedCGImage(from buffer: CVPixelBuffer,
 
 /// Bundle of reader + track metadata returned by `pfOpenVisionVideoReader`.
 private struct PFVisionReaderContext {
+    let asset: AVURLAsset
     let reader: AVAssetReader
     let trackOutput: AVAssetReaderTrackOutput
     let duration: Double
@@ -2342,6 +2355,7 @@ private func pfOpenVisionVideoReader(
     }
 
     return PFVisionReaderContext(
+        asset: asset,
         reader: reader,
         trackOutput: trackOutput,
         duration: duration,
@@ -2499,13 +2513,21 @@ private nonisolated func pfProcessVideo(
     var loggedMilestones = Set<Int>()
     var visionFrameTimes: [Double] = []
 
-    let prefetcher = FramePrefetcher(
-        reader: ctx.reader, trackOutput: ctx.trackOutput,
-        frameInterval: frameInterval
-    )
-    for await frame in prefetcher.frames() {
-        if Task.isCancelled { ctx.reader.cancelReading(); break }
-        prefetcher.releaseSlot()
+    let ext = (filePath as NSString).pathExtension.lowercased()
+    let useSeeker = ext == "mts" || ext == "m2ts" || ext == "ts"
+
+    let seekProvider: SeekingFrameProvider? = useSeeker
+        ? SeekingFrameProvider(asset: ctx.asset, duration: ctx.duration, frameInterval: frameInterval)
+        : nil
+    let prefetcher: FramePrefetcher? = useSeeker
+        ? nil
+        : FramePrefetcher(reader: ctx.reader, trackOutput: ctx.trackOutput, frameInterval: frameInterval)
+    if useSeeker { ctx.reader.cancelReading() }
+
+    let frameStream = seekProvider?.frames() ?? prefetcher!.frames()
+    for await frame in frameStream {
+        if Task.isCancelled { if !useSeeker { ctx.reader.cancelReading() }; break }
+        if let sp = seekProvider { sp.releaseSlot() } else { prefetcher!.releaseSlot() }
 
         let frameTime = frame.presentationTime
         var frameMatch = PFVisionFrameMatch()
