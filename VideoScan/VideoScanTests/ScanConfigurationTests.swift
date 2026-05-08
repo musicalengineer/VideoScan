@@ -318,5 +318,52 @@ struct ScanConfigurationTests {
 
         model.stopAll()
     }
+
+    // MARK: - videosWithHits consistency
+
+    // regression: videosWithHits must equal results.count when done,
+    // not the live counter which includes files filtered by minPresence.
+    // Exercises ScanJob.finalizeResults() which snaps the counter.
+    @Test func videosWithHitsMustMatchResultsCount() {
+        let job = ScanJob(searchPath: "/tmp")
+        job.videosTotal = 100
+        job.videosScanned = 100
+        // Simulate live scanning that found 50 videos with any match
+        job.videosWithHits = 50
+
+        // But only 20 passed filterByPresence and made it into results
+        let results = (0..<20).map {
+            ClipResult(
+                videoFilename: "file\($0).mov",
+                videoPath: "/tmp/file\($0).mov",
+                videoDuration: 60,
+                presenceSecs: 5,
+                segmentCount: 2,
+                bestDistance: 0.4,
+                clipFiles: [],
+                outputDir: "/tmp/out"
+            )
+        }
+
+        job.finalizeResults(results)
+
+        #expect(job.videosWithHits == 20,
+                "videosWithHits should match results.count (files that passed filters), got \(job.videosWithHits)")
+        #expect(job.videosWithHits == job.results.count,
+                "videosWithHits must always equal results.count when scan is complete")
+    }
+
+    @Test func videosWithHitsZeroWhenNoResults() {
+        let job = ScanJob(searchPath: "/tmp")
+        job.videosTotal = 50
+        job.videosScanned = 50
+        job.videosWithHits = 10
+
+        job.finalizeResults([])
+
+        #expect(job.videosWithHits == 0,
+                "videosWithHits should be 0 when no results, got \(job.videosWithHits)")
+        #expect(job.videosWithHits == job.results.count)
+    }
 }
 

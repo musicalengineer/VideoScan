@@ -11,6 +11,59 @@ FILE_COUNT="${VIDEOSCAN_PERF_FILE_COUNT:-12}"
 DURATION="${VIDEOSCAN_PERF_DURATION:-1.5}"
 VERBOSE="${VIDEOSCAN_PERF_VERBOSE:-0}"
 
+usage() {
+  cat <<'USAGE'
+Usage: scripts/run_generated_media_perf.sh [options]
+
+Options:
+  --verbose                 Show full xcodebuild output.
+  --file-count N            Generate N benchmark media files. Default: 12.
+  --duration SECONDS        Duration of each generated media file. Default: 1.5.
+  --help                    Show this help.
+
+Examples:
+  scripts/run_generated_media_perf.sh
+  scripts/run_generated_media_perf.sh --verbose
+  scripts/run_generated_media_perf.sh --file-count 100 --duration 2.0
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --verbose)
+      VERBOSE=1
+      shift
+      ;;
+    --file-count)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --file-count requires a value" >&2
+        usage >&2
+        exit 2
+      fi
+      FILE_COUNT="$2"
+      shift 2
+      ;;
+    --duration)
+      if [[ $# -lt 2 ]]; then
+        echo "error: --duration requires a value" >&2
+        usage >&2
+        exit 2
+      fi
+      DURATION="$2"
+      shift 2
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "error: unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
 cleanup() {
   rm -f "$MARKER" "$FILE_COUNT_CONFIG" "$DURATION_CONFIG"
 }
@@ -46,7 +99,7 @@ if [[ "$VERBOSE" == "1" ]]; then
   echo "Running xcodebuild with full verbose output..."
   "${cmd[@]}" 2>&1 | tee "$XCODEBUILD_LOG"
 else
-  echo "Running xcodebuild. Showing benchmark progress only; set VIDEOSCAN_PERF_VERBOSE=1 for full build output."
+  echo "Running xcodebuild. Showing benchmark progress only; pass --verbose for full build output."
   "${cmd[@]}" 2>&1 | tee "$XCODEBUILD_LOG" | awk '
     /Test .*started/ ||
     /Test .*passed/ ||
