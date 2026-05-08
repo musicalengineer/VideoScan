@@ -244,7 +244,9 @@ def collect_faces(root: Path, run_dir: Path, args) -> int:
         seen_videos = set(state.get("seen_videos", []))
         face_records = [FaceRecord(**r) for r in state.get("face_records", [])]
         if embeddings_path.exists():
-            data = np.load(embeddings_path)
+            # allow_pickle=False — embeddings.npz is a pure-numeric array; we
+            # never store Python objects. Defends against malicious .npz drop-in.
+            data = np.load(embeddings_path, allow_pickle=False)
             embeddings = list(data["embeddings"])
         print(f"[resume] {len(seen_videos)} videos already scanned, "
               f"{len(face_records)} faces collected")
@@ -318,7 +320,8 @@ def cluster_phase(run_dir: Path, args) -> None:
     if not embeddings_path.exists() or not progress_path.exists():
         sys.exit(f"No collected faces under {run_dir}. Run collection first.")
 
-    data = np.load(embeddings_path)
+    # See collect_phase: faces.npz is pure-numeric, never holds objects.
+    data = np.load(embeddings_path, allow_pickle=False)
     embeddings = data["embeddings"]
     with progress_path.open() as f:
         state = json.load(f)
