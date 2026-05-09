@@ -91,47 +91,48 @@ struct ScanJobRow: View {
                 inlineVolumePicker
                 inlineEnginePicker
             } else if !isExpanded {
-                // Active/done: read-only summary text (hidden when expanded — shown in expandedDetail instead)
-                let prefix: String = {
-                    switch job.status {
-                    case .done: return "Done:"
-                    case .cancelled: return "Stopped:"
-                    case .failed: return "Failed:"
-                    case .scanning: return "Searching for"
-                    case .paused: return "Paused:"
-                    default: return ""
-                    }
-                }()
-                Text(prefix)
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-                Text(personName)
-                    .font(.title3.weight(.semibold))
-                    .lineLimit(1)
-
-                if !volName.isEmpty {
-                    Text("on")
+                if isJobDone {
+                    summarySentence
+                } else {
+                    let prefix: String = {
+                        switch job.status {
+                        case .cancelled: return "Stopped:"
+                        case .failed: return "Failed:"
+                        case .scanning: return "Searching for"
+                        case .paused: return "Paused:"
+                        default: return ""
+                        }
+                    }()
+                    Text(prefix)
                         .font(.title3)
                         .foregroundStyle(.secondary)
-                    Text(volName)
-                        .font(.title3.weight(.medium))
+                    Text(personName)
+                        .font(.title3.weight(.semibold))
                         .lineLimit(1)
-                        .truncationMode(.middle)
+                    if !volName.isEmpty {
+                        Text("on")
+                            .font(.title3)
+                            .foregroundStyle(.secondary)
+                        Text(volName)
+                            .font(.title3.weight(.medium))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Text("using")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                    Text(engineName)
+                        .font(.title3.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-
-                Text("using")
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-                Text(engineName)
-                    .font(.title3.weight(.medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
             }
 
             Spacer()
 
-            // Compact stats on collapsed row
-            if job.videosTotal > 0 {
+            // Compact stats on collapsed row — suppressed for .done
+            // (the summary sentence already includes the counts).
+            if job.videosTotal > 0 && !isJobDone {
                 Text("\(job.videosWithHits)")
                     .font(.system(.body, design: .monospaced).weight(.bold))
                     .foregroundColor(.green)
@@ -143,7 +144,7 @@ struct ScanJobRow: View {
                     .foregroundColor(.secondary)
             }
 
-            if job.elapsedSecs > 0 {
+            if job.elapsedSecs > 0 && !isJobDone {
                 Text(formatElapsed(job.elapsedSecs))
                     .font(.system(.callout, design: .monospaced))
                     .foregroundColor(.secondary)
@@ -190,6 +191,147 @@ struct ScanJobRow: View {
                 }
             }
         }
+    }
+
+    // MARK: - Search-complete summary sentence
+    //
+    // "Search Complete: Found Donna in 5 files on Volume-Name. (Searched
+    // 24 total files. Elapsed time 0m 18s)"
+    //
+    // Or, when nothing matched:
+    //
+    // "Search Complete: Found no matches for Donna on Volume-Name. (Searched
+    // 24 total files. Elapsed time 0m 18s)"
+    //
+    // Used in BOTH the collapsed row (chevron right) and the expanded row
+    // (chevron down) when the job is genuinely .done. ScanJobStatus.isDone
+    // also returns true for .cancelled, which is NOT what we want for this
+    // sentence — `isJobDone` below is the precise gate.
+
+    /// True only for the truly-completed `.done` state.
+    private var isJobDone: Bool {
+        if case .done = job.status { return true }
+        return false
+    }
+
+    /// Plain-text version of the summary sentence — kept here so we log
+    /// the same string to OSLog that the UI shows. The agent reading
+    /// `log stream` sees what the user sees.
+    private var summaryText: String {
+        let hits = job.videosWithHits
+        let total = job.videosTotal
+        let elapsed = formatElapsed(job.elapsedSecs)
+        let onVol = volName.isEmpty ? "" : " on \(volName)"
+        let stats = "(Searched \(total) total file\(total == 1 ? "" : "s"). Elapsed time \(elapsed))"
+        if hits > 0 {
+            return "Search Complete: Found \(personName) in \(hits) file\(hits == 1 ? "" : "s")\(onVol). \(stats)"
+        } else {
+            return "Search Complete: Found no matches for \(personName)\(onVol). \(stats)"
+        }
+    }
+
+    @ViewBuilder
+    private var summarySentence: some View {
+        let hits = job.videosWithHits
+        let total = job.videosTotal
+        let elapsed = formatElapsed(job.elapsedSecs)
+
+        Text("Search Complete:")
+            .font(.title3.weight(.semibold))
+            .foregroundColor(.green)
+
+        if hits > 0 {
+            Text("Found")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+            Text(personName)
+                .font(.title3.weight(.semibold))
+                .lineLimit(1)
+            Text("in")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+            Text("\(hits) file\(hits == 1 ? "" : "s")")
+                .font(.title3.weight(.semibold))
+                .foregroundColor(.green)
+        } else {
+            Text("Found no matches for")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+            Text(personName)
+                .font(.title3.weight(.semibold))
+                .lineLimit(1)
+        }
+
+        if !volName.isEmpty {
+            Text("on")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+            Text(volName)
+                .font(.title3.weight(.medium))
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        Text(".")
+            .font(.title3)
+            .foregroundStyle(.secondary)
+
+        Text("(Searched \(total) total file\(total == 1 ? "" : "s"). Elapsed time \(elapsed))")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+    }
+
+    @ViewBuilder
+    private var expandedSummarySentence: some View {
+        let hits = job.videosWithHits
+        let total = job.videosTotal
+        let elapsed = formatElapsed(job.elapsedSecs)
+
+        Text("Search Complete:")
+            .font(.title2.weight(.semibold))
+            .foregroundColor(.green)
+
+        if hits > 0 {
+            Text("Found")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+            Text(personName)
+                .font(.title2.weight(.bold))
+                .lineLimit(1)
+            Text("in")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+            Text("\(hits) file\(hits == 1 ? "" : "s")")
+                .font(.title2.weight(.semibold))
+                .foregroundColor(.green)
+        } else {
+            Text("Found no matches for")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+            Text(personName)
+                .font(.title2.weight(.bold))
+                .lineLimit(1)
+        }
+
+        if !volName.isEmpty {
+            Text("on")
+                .font(.title2)
+                .foregroundStyle(.secondary)
+            Text(volName)
+                .font(.title2.weight(.medium))
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        Text(".")
+            .font(.title2)
+            .foregroundStyle(.secondary)
+
+        Text("(Searched \(total) total file\(total == 1 ? "" : "s"). Elapsed time \(elapsed))")
+            .font(.body)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.tail)
     }
 
     // MARK: - Inline pickers (collapsed row, idle state)
@@ -420,36 +562,39 @@ struct ScanJobRow: View {
                         SpinningRing(color: statusColor, size: 22)
                     }
 
-                    let prefix: String = {
-                        switch job.status {
-                        case .done: return "Done:"
-                        case .cancelled: return "Stopped:"
-                        case .failed: return "Failed:"
-                        case .scanning: return "Searching for"
-                        case .paused: return "Paused:"
-                        default: return ""
-                        }
-                    }()
-                    Text(prefix)
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                    Text(personName)
-                        .font(.title2.weight(.bold))
-                    if !volName.isEmpty {
-                        Text("on")
+                    if isJobDone {
+                        expandedSummarySentence
+                    } else {
+                        let prefix: String = {
+                            switch job.status {
+                            case .cancelled: return "Stopped:"
+                            case .failed: return "Failed:"
+                            case .scanning: return "Searching for"
+                            case .paused: return "Paused:"
+                            default: return ""
+                            }
+                        }()
+                        Text(prefix)
                             .font(.title2)
                             .foregroundStyle(.secondary)
-                        Text(volName)
+                        Text(personName)
+                            .font(.title2.weight(.bold))
+                        if !volName.isEmpty {
+                            Text("on")
+                                .font(.title2)
+                                .foregroundStyle(.secondary)
+                            Text(volName)
+                                .font(.title2.weight(.medium))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        Text("using")
+                            .font(.title2)
+                            .foregroundStyle(.secondary)
+                        Text(engineName)
                             .font(.title2.weight(.medium))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                            .foregroundStyle(.secondary)
                     }
-                    Text("using")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                    Text(engineName)
-                        .font(.title2.weight(.medium))
-                        .foregroundStyle(.secondary)
                 }
             }
 

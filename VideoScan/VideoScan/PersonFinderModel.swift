@@ -1867,7 +1867,27 @@ final class PersonFinderModel: ObservableObject {
                 job.status = .done
                 job.progress = 1.0
                 job.stopElapsedTimer()
+                // Same sentence the UI shows on the collapsed/expanded row
+                // (see ScanJobRow.summaryText) — mirrored to the OS log so
+                // an agent reading `log stream` sees what the user sees.
+                let hits = job.videosWithHits
+                let total = job.videosTotal
+                let elapsedMin = Int(job.elapsedSecs) / 60
+                let elapsedSec = Int(job.elapsedSecs) % 60
+                let elapsed = "\(elapsedMin)m \(elapsedSec)s"
+                let volumeName = VolumeReachability.volumeName(forPath: job.searchPath)
+                let onVol = volumeName.isEmpty ? "" : " on \(volumeName)"
+                let stats = "(Searched \(total) total file\(total == 1 ? "" : "s"). Elapsed time \(elapsed))"
+                let person = job.personLabel
+                let summary: String
+                if hits > 0 {
+                    summary = "Search Complete: Found \(person) in \(hits) file\(hits == 1 ? "" : "s")\(onVol). \(stats)"
+                } else {
+                    summary = "Search Complete: Found no matches for \(person)\(onVol). \(stats)"
+                }
+                osLog.info("\(summary, privacy: .public)")
                 job.appendLog("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                job.appendLog(summary)
                 job.appendLog("Done. \(job.videosWithHits) video(s) with hits, \(totalSegments) segment(s), \(pfFormatDuration(preliminaryPresence)) total presence.")
                 if totalSegments > 0 {
                     job.appendLog("Use Create Composite Video to extract and compile clips.")
