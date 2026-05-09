@@ -1471,6 +1471,11 @@ final class PersonFinderModel: ObservableObject {
             feeder = nil
         }
 
+        // Hoisted so each completed-video result can be turned into a
+        // ClipResult and appended to job.results live (see below).
+        let liveOutputDir = resolveOutputDir(settings)
+        let minPresence = settings.minPresenceSecs
+
         await withTaskGroup(of: (Int, pfVideoResult?).self) { group in
             var submitted = 0
             let scanConcurrency = await MemoryPressureMonitor.shared.recommendedConcurrency(
@@ -1499,12 +1504,37 @@ final class PersonFinderModel: ObservableObject {
             for await (idx, result) in group {
                 if Task.isCancelled { break }
                 orderedResults[idx] = result
+                // Build the per-video row up-front (outside MainActor.run) so
+                // the hop into MainActor stays a quick assignment. Same
+                // shape and presence gate as the post-loop batch publish in
+                // runScan, so a row appearing live is the same row that
+                // ends up in the final ordered list.
+                let liveRow: ClipResult? = {
+                    guard let r = result, !r.segments.isEmpty else { return nil }
+                    guard minPresence <= 0 || r.totalPresenceSecs >= minPresence else { return nil }
+                    return ClipResult(
+                        videoFilename: r.filename,
+                        videoPath: r.filePath,
+                        videoDuration: r.durationSeconds,
+                        presenceSecs: r.totalPresenceSecs,
+                        segmentCount: r.segments.count,
+                        bestDistance: r.segments.map(\.bestDistance).min() ?? 0,
+                        clipFiles: [],
+                        outputDir: liveOutputDir
+                    )
+                }()
                 await MainActor.run {
                     job.videosScanned += 1
                     job.progress = Double(job.videosScanned) / Double(job.videosTotal)
                     if let r = result, !r.segments.isEmpty {
                         job.videosWithHits += 1
                         dash?.lastMatchFlashAt = Date()
+                    }
+                    // Live-append: completion-order during the scan; the
+                    // post-loop batch publish at runScan replaces this with
+                    // the canonical idx-ordered list.
+                    if let row = liveRow {
+                        job.results.append(row)
                     }
                 }
                 if submitted < total {
