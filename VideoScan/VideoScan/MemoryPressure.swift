@@ -78,7 +78,10 @@ actor MemoryPressureMonitor {
         case .vision:
             return 3072
         case .arcface:
-            return 2048   // CoreML model ~200MB + Vision detection overhead
+            // The ArcFace model is shared and CoreML/ANE scheduling owns most
+            // transient memory. The previous 2 GB estimate collapsed scans to
+            // one worker on high-reserve systems despite tens of GB free.
+            return 768
         case .dlib:
             return 1024
         case .hybrid:
@@ -111,7 +114,7 @@ actor MemoryPressureMonitor {
     private func canStartWorker(requested: Int, engine: RecognitionEngine) -> Bool {
         let requested = max(1, requested)
         let available = availableMemory()
-        let reserve = lowMemoryThreshold + 2 * 1024 * 1024 * 1024
+        let reserve = lowMemoryThreshold + 1 * 1024 * 1024 * 1024
         let cap = hardCap(requested: requested, engine: engine)
         guard activeWorkers < cap else { return false }
         guard available > reserve else { return activeWorkers == 0 }
@@ -147,7 +150,7 @@ actor MemoryPressureMonitor {
     func recommendedConcurrency(requested: Int, engine: RecognitionEngine) -> Int {
         let requested = max(1, requested)
         let available = availableMemory()
-        let reserve = lowMemoryThreshold + 2 * 1024 * 1024 * 1024
+        let reserve = lowMemoryThreshold + 1 * 1024 * 1024 * 1024
         guard available > reserve else { return 1 }
 
         let usable = available - reserve

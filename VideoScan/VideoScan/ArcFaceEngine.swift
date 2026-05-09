@@ -216,6 +216,7 @@ nonisolated func arcfaceLoadReferenceEmbeddings(
 /// Same contract as pfProcessVideo — returns pfVideoResult.
 /// Bundle of reader + track metadata returned by `openArcFaceVideoReader`.
 private struct ArcFaceReaderContext {
+    let asset: AVURLAsset
     let reader: AVAssetReader
     let trackOutput: AVAssetReaderTrackOutput
     let duration: Double
@@ -278,6 +279,7 @@ private func openArcFaceVideoReader(
     }
 
     return ArcFaceReaderContext(
+        asset: asset,
         reader: reader,
         trackOutput: trackOutput,
         duration: duration,
@@ -441,11 +443,26 @@ nonisolated func pfProcessVideoWithArcFace(
     var loggedMilestones = Set<Int>()
     var visionFrameTimes: [Double] = []
 
-    let prefetcher = FramePrefetcher(
-        reader: ctx.reader, trackOutput: ctx.trackOutput,
-        frameInterval: frameInterval
-    )
-    for await frame in prefetcher.frames() {
+    let ext = (filePath as NSString).pathExtension.lowercased()
+    let useSeeker = ext == "mts" || ext == "m2ts" || ext == "ts"
+    let frameStream: AsyncStream<PrefetchedFrame>
+    let releaseFrameSlot: () -> Void
+    if useSeeker {
+        let seekProvider = SeekingFrameProvider(asset: ctx.asset, duration: ctx.duration, frameInterval: frameInterval)
+        ctx.reader.cancelReading()
+        await logFn("[\(index)/\(total)] \(filename) — using seek-optimized transport-stream reader")
+        frameStream = seekProvider.frames()
+        releaseFrameSlot = { seekProvider.releaseSlot() }
+    } else {
+        let prefetcher = FramePrefetcher(
+            reader: ctx.reader, trackOutput: ctx.trackOutput,
+            frameInterval: frameInterval
+        )
+        frameStream = prefetcher.frames()
+        releaseFrameSlot = { prefetcher.releaseSlot() }
+    }
+
+    for await frame in frameStream {
         if Task.isCancelled {
             // Don't call ctx.reader.cancelReading() — it races with the
             // prefetcher's in-flight copyNextSampleBuffer and crashes
@@ -455,7 +472,7 @@ nonisolated func pfProcessVideoWithArcFace(
             // for the same fix.)
             break
         }
-        prefetcher.releaseSlot()
+        releaseFrameSlot()
 
         let frameTime = frame.presentationTime
         var frameMatch = ArcFaceFrameMatch()
@@ -525,6 +542,10 @@ nonisolated func pfProcessVideoWithArcFace(
     let wallMs = (CFAbsoluteTimeGetCurrent() - wallStart) * 1000
     let summary = perf.summary(filename: filename, wallMs: wallMs)
     perfLog.notice("\(summary, privacy: .public)")
+    let wallSecs = wallMs / 1000.0
+    if wallSecs > max(120.0, ctx.duration * 2.0) {
+        await logFn("[perf] slow ArcFace file: \(filename) media=\(pfFormatDuration(ctx.duration)) wall=\(pfFormatDuration(wallSecs)) sampled=\(sampledSoFar) faces=\(totalFacesDetected)")
+    }
     signpostLog.endInterval("video", spVideo)
 
     if bestCosineEver > -1 { await distFn(1.0 - bestCosineEver) }
