@@ -1870,7 +1870,10 @@ final class PersonFinderModel: ObservableObject {
                 // Same sentence the UI shows on the collapsed/expanded row
                 // (see ScanJobRow.summaryText) — mirrored to the OS log so
                 // an agent reading `log stream` sees what the user sees.
-                let hits = job.videosWithHits
+                // hits = unique videos that matched (= job.results.count),
+                // not the running videosWithHits counter, which we've seen
+                // diverge under multi-segment / cache-restored conditions.
+                let hits = job.results.count
                 let total = job.videosTotal
                 let elapsedMin = Int(job.elapsedSecs) / 60
                 let elapsedSec = Int(job.elapsedSecs) % 60
