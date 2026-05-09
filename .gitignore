@@ -10,6 +10,7 @@ experiment
 # Xcode / Swift
 build/
 .deriveddata/
+.derivedData*/
 DerivedData/
 *.xcuserstate
 xcuserdata/
