@@ -125,9 +125,21 @@ TEST_COUNT="${TEST_COUNT:-0}"
 REGRESSION_COUNT=$(grep -rh '^\s*// regression:' VideoScan/VideoScanTests 2>/dev/null | wc -l | tr -d ' ')
 REGRESSION_COUNT="${REGRESSION_COUNT:-0}"
 
+# ---------- Open GitHub issues ----------
+# Count all open GitHub issues. If `gh` is not authenticated or unavailable,
+# keep the metric nullable so local/offline collection still works.
+OPEN_ISSUES="null"
+if command -v gh >/dev/null 2>&1; then
+    COUNT=$(gh issue list --state open --limit 1000 --json number --jq 'length' 2>/dev/null || true)
+    case "$COUNT" in
+        ''|*[!0-9]*) OPEN_ISSUES="null" ;;
+        *) OPEN_ISSUES="$COUNT" ;;
+    esac
+fi
+
 # ---------- Emit JSON row ----------
 # All numeric fields come from variables that are either a number or the
 # literal string "null" — both safely interpolate into JSON.
 cat <<JSON
-{"ts":"$TS","sha":"$SHORT_SHA","branch":"$BRANCH","coverage_overall_pct":$COV_OVERALL,"coverage_logic_pct":$COV_LOGIC,"logic_lines":$LOGIC_LINES,"logic_covered":$LOGIC_COVERED,"swiftlint_warnings":$SWIFTLINT_WARN,"swiftlint_errors":$SWIFTLINT_ERR,"periphery_findings":$PERIPHERY_FINDINGS,"total_swift_lines":$TOTAL_LINES,"files_over_1000":$FILES_OVER_1000,"worst_file":"$WORST_FILE","test_count":$TEST_COUNT,"regression_count":$REGRESSION_COUNT}
+{"ts":"$TS","sha":"$SHORT_SHA","branch":"$BRANCH","coverage_overall_pct":$COV_OVERALL,"coverage_logic_pct":$COV_LOGIC,"logic_lines":$LOGIC_LINES,"logic_covered":$LOGIC_COVERED,"swiftlint_warnings":$SWIFTLINT_WARN,"swiftlint_errors":$SWIFTLINT_ERR,"periphery_findings":$PERIPHERY_FINDINGS,"total_swift_lines":$TOTAL_LINES,"open_issues":$OPEN_ISSUES,"files_over_1000":$FILES_OVER_1000,"worst_file":"$WORST_FILE","test_count":$TEST_COUNT,"regression_count":$REGRESSION_COUNT}
 JSON
