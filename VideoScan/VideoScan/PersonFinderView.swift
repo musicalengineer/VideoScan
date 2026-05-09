@@ -825,6 +825,7 @@ struct PersonFinderView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
+                .keyboardShortcut("i", modifiers: .command)
             }
         }
         .padding(.horizontal, 12)
@@ -983,9 +984,10 @@ struct PersonFinderView: View {
                 }
 
                 if let diagnosis = info.diagnosis {
-                    Label(diagnosis, systemImage: "exclamationmark.triangle.fill")
+                    Label(diagnosis, systemImage: info.diagnosisIsWarning
+                          ? "exclamationmark.triangle" : "exclamationmark.triangle.fill")
                         .font(.system(size: 11))
-                        .foregroundColor(.red)
+                        .foregroundColor(info.diagnosisIsWarning ? .yellow : .red)
                 }
             }
         }
@@ -1470,6 +1472,7 @@ struct StreamInspectInfo: Identifiable {
     let hasVideo: Bool
     let hasAudio: Bool
     let diagnosis: String?
+    let diagnosisIsWarning: Bool
 
     struct StreamDetail {
         let icon: String
@@ -1488,7 +1491,8 @@ struct StreamInspectInfo: Identifiable {
             return StreamInspectInfo(
                 filename: filename, formatName: "Unknown", duration: "—",
                 fileSize: "—", bitrate: "—", streams: [], hasVideo: false,
-                hasAudio: false, diagnosis: diag.detail.isEmpty ? "ffprobe failed" : diag.detail
+                hasAudio: false, diagnosis: diag.detail.isEmpty ? "ffprobe failed" : diag.detail,
+                diagnosisIsWarning: false
             )
         }
 
@@ -1552,14 +1556,24 @@ struct StreamInspectInfo: Identifiable {
         let stderrDiag: String? = {
             let trimmed = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return nil }
+            if hasV || hasA {
+                let lower = trimmed.lowercased()
+                if lower.contains("corrupt") || lower.contains("invalid")
+                    || lower.contains("error") || lower.contains("mismatch") {
+                    return "May have some bad frames"
+                }
+                return nil
+            }
             let diag = ScanEngine.humanReadableDiagnosis(stderr: trimmed)
             return diag.detail.isEmpty ? nil : diag.detail
         }()
+        let diagIsWarning = stderrDiag != nil && (hasV || hasA)
 
         return StreamInspectInfo(
             filename: filename, formatName: fmt?.format_long_name ?? fmt?.format_name ?? "Unknown",
             duration: dur, fileSize: size, bitrate: br, streams: details,
-            hasVideo: hasV, hasAudio: hasA, diagnosis: stderrDiag
+            hasVideo: hasV, hasAudio: hasA, diagnosis: stderrDiag,
+            diagnosisIsWarning: diagIsWarning
         )
     }
 }
