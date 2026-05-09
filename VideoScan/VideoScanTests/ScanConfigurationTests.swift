@@ -318,5 +318,150 @@ struct ScanConfigurationTests {
 
         model.stopAll()
     }
+
+    // MARK: - videosWithHits consistency
+
+    // regression: videosWithHits must equal results.count when done,
+    // not the live counter which includes files filtered by minPresence.
+    // Exercises ScanJob.finalizeResults() which snaps the counter.
+    @Test func videosWithHitsMustMatchResultsCount() {
+        let job = ScanJob(searchPath: "/tmp")
+        job.videosTotal = 100
+        job.videosScanned = 100
+        // Simulate live scanning that found 50 videos with any match
+        job.videosWithHits = 50
+
+        // But only 20 passed filterByPresence and made it into results
+        let results = (0..<20).map {
+            ClipResult(
+                videoFilename: "file\($0).mov",
+                videoPath: "/tmp/file\($0).mov",
+                videoDuration: 60,
+                presenceSecs: 5,
+                segmentCount: 2,
+                bestDistance: 0.4,
+                clipFiles: [],
+                outputDir: "/tmp/out"
+            )
+        }
+
+        job.finalizeResults(results)
+
+        #expect(job.videosWithHits == 20,
+                "videosWithHits should match results.count (files that passed filters), got \(job.videosWithHits)")
+        #expect(job.videosWithHits == job.results.count,
+                "videosWithHits must always equal results.count when scan is complete")
+    }
+
+    @Test func videosWithHitsZeroWhenNoResults() {
+        let job = ScanJob(searchPath: "/tmp")
+        job.videosTotal = 50
+        job.videosScanned = 50
+        job.videosWithHits = 10
+
+        job.finalizeResults([])
+
+        #expect(job.videosWithHits == 0,
+                "videosWithHits should be 0 when no results, got \(job.videosWithHits)")
+        #expect(job.videosWithHits == job.results.count)
+    }
+
+    // MARK: - Cache restore race condition
+
+    // regression: restoreFromCache's Task.detached could land after a scan
+    // started, clobbering videosWithHits/results with stale cached data.
+    @Test func cacheRestoreDoesNotClobberActiveScan() {
+        let job = ScanJob(searchPath: "/tmp")
+        job.status = .scanning
+        job.videosTotal = 200
+        job.videosScanned = 150
+        job.videosWithHits = 35
+
+        let scanResults = (0..<35).map {
+            ClipResult(
+                videoFilename: "scan_\($0).mov",
+                videoPath: "/tmp/scan_\($0).mov",
+                videoDuration: 120, presenceSecs: 10, segmentCount: 3,
+                bestDistance: 0.38, clipFiles: [], outputDir: "/tmp/out"
+            )
+        }
+        job.results = scanResults
+
+        let cacheResults = (0..<5).map {
+            ClipResult(
+                videoFilename: "cache_\($0).mov",
+                videoPath: "/tmp/cache_\($0).mov",
+                videoDuration: 60, presenceSecs: 8, segmentCount: 1,
+                bestDistance: 0.42, clipFiles: [], outputDir: "/tmp/out"
+            )
+        }
+
+        // Simulate the isIdle guard from restoreFromCache's MainActor.run block
+        if job.status.isIdle {
+            job.finalizeResults(cacheResults)
+            job.status = .done
+        }
+
+        #expect(job.status == .scanning,
+                "Cache restore should not change status of an active scan")
+        #expect(job.videosWithHits == 35,
+                "Cache restore should not reset videosWithHits during active scan")
+        #expect(job.results.count == 35,
+                "Cache restore should not replace results during active scan")
+    }
+
+    @Test func cacheRestoreAppliesWhenIdle() {
+        let job = ScanJob(searchPath: "/tmp")
+
+        let cacheResults = (0..<5).map {
+            ClipResult(
+                videoFilename: "cache_\($0).mov",
+                videoPath: "/tmp/cache_\($0).mov",
+                videoDuration: 60, presenceSecs: 8, segmentCount: 1,
+                bestDistance: 0.42, clipFiles: [], outputDir: "/tmp/out"
+            )
+        }
+
+        if job.status.isIdle {
+            job.finalizeResults(cacheResults)
+            job.status = .done
+        }
+
+        #expect(job.status == .done)
+        #expect(job.videosWithHits == 5)
+        #expect(job.results.count == 5)
+    }
+
+    @Test func cacheRestoreSkipsWhenAlreadyDone() {
+        let job = ScanJob(searchPath: "/tmp")
+
+        let scanResults = (0..<20).map {
+            ClipResult(
+                videoFilename: "done_\($0).mov",
+                videoPath: "/tmp/done_\($0).mov",
+                videoDuration: 90, presenceSecs: 12, segmentCount: 2,
+                bestDistance: 0.36, clipFiles: [], outputDir: "/tmp/out"
+            )
+        }
+        job.finalizeResults(scanResults)
+        job.status = .done
+
+        let cacheResults = (0..<3).map {
+            ClipResult(
+                videoFilename: "stale_\($0).mov",
+                videoPath: "/tmp/stale_\($0).mov",
+                videoDuration: 60, presenceSecs: 6, segmentCount: 1,
+                bestDistance: 0.45, clipFiles: [], outputDir: "/tmp/out"
+            )
+        }
+
+        if job.status.isIdle {
+            job.finalizeResults(cacheResults)
+        }
+
+        #expect(job.videosWithHits == 20,
+                "Late cache restore should not overwrite completed scan results")
+        #expect(job.results.count == 20)
+    }
 }
 

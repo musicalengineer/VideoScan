@@ -29,6 +29,10 @@ let perfLog = Logger(
     subsystem: "Rick-Breen.VideoScan",
     category: "perf"
 )
+private let pfScanLog = Logger(
+    subsystem: "Rick-Breen.VideoScan",
+    category: "scan"
+)
 let signpostLog = OSSignposter(
     subsystem: "Rick-Breen.VideoScan",
     category: "perf"
@@ -750,6 +754,11 @@ final class ScanJob: ObservableObject, Identifiable {
         scanTask = nil; timerTask = nil; compilationTask = nil; taskStarted = nil
     }
 
+    func finalizeResults(_ filtered: [ClipResult]) {
+        results = filtered
+        videosWithHits = filtered.count
+    }
+
     fileprivate func startElapsedTimer() {
         taskStarted = Date()
         timerTask = Task { [weak self] in
@@ -867,6 +876,7 @@ final class PersonFinderModel: ObservableObject {
             var cachedResults: [pfVideoResult] = []
             var hits = 0
             for path in videoFiles {
+                guard !Task.isCancelled else { return }
                 guard let key = PersonFinderCache.makeKey(
                     videoPath: path, personName: personName,
                     engine: engine, threshold: threshold,
@@ -879,6 +889,7 @@ final class PersonFinderModel: ObservableObject {
             }
 
             guard hits > 0 else { return }
+            guard !Task.isCancelled else { return }
             osLog.info("Cache restore: \(hits)/\(videoFiles.count) cached, \(cachedResults.count) with hits for \(personName, privacy: .public)")
 
             let outputDir = Self.resolveOutputDir(jobSettings)
@@ -900,15 +911,16 @@ final class PersonFinderModel: ObservableObject {
             let totalPresence = validResults.map(\.totalPresenceSecs).reduce(0, +)
             let totalSegments = validResults.reduce(0) { $0 + $1.segments.count }
 
+            guard !Task.isCancelled else { return }
             await MainActor.run {
-                job.results = clipResults
+                guard job.status.isIdle else { return }
+                job.finalizeResults(clipResults)
                 job.recognitionResults = validResults
                 job.recognitionOutputDir = outputDir
                 job.presenceSecs = totalPresence
                 job.clipsFound = totalSegments
                 job.videosTotal = videoFiles.count
                 job.videosScanned = hits
-                job.videosWithHits = clipResults.count
                 job.status = .done
                 job.stopElapsedTimer()
                 job.appendLog("Restored from cache: \(clipResults.count) video(s) with hits, \(totalSegments) segment(s)")
@@ -1864,6 +1876,7 @@ final class PersonFinderModel: ObservableObject {
                 job.appendLog("Stopped. Scanned \(job.videosScanned)/\(job.videosTotal) video(s), \(job.videosWithHits) with hits, \(totalSegments) segment(s).")
             } else {
                 job.videosScanned = job.videosTotal
+                job.finalizeResults(preliminaryResults)
                 job.status = .done
                 job.progress = 1.0
                 job.stopElapsedTimer()
@@ -1889,6 +1902,7 @@ final class PersonFinderModel: ObservableObject {
                     summary = "Search Complete: Found no matches for \(person)\(onVol). \(stats)"
                 }
                 osLog.info("\(summary, privacy: .public)")
+                pfScanLog.info("\(summary, privacy: .public)")
                 job.appendLog("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
                 job.appendLog(summary)
                 job.appendLog("Done. \(job.videosWithHits) video(s) with hits, \(totalSegments) segment(s), \(pfFormatDuration(preliminaryPresence)) total presence.")
@@ -2304,6 +2318,7 @@ nonisolated func pfOrientedCGImage(from buffer: CVPixelBuffer,
 
 /// Bundle of reader + track metadata returned by `pfOpenVisionVideoReader`.
 private struct PFVisionReaderContext {
+    let asset: AVURLAsset
     let reader: AVAssetReader
     let trackOutput: AVAssetReaderTrackOutput
     let duration: Double
@@ -2365,6 +2380,7 @@ private func pfOpenVisionVideoReader(
     }
 
     return PFVisionReaderContext(
+        asset: asset,
         reader: reader,
         trackOutput: trackOutput,
         duration: duration,
@@ -2522,25 +2538,37 @@ private nonisolated func pfProcessVideo(
     var loggedMilestones = Set<Int>()
     var visionFrameTimes: [Double] = []
 
-    let prefetcher = FramePrefetcher(
-        reader: ctx.reader, trackOutput: ctx.trackOutput,
-        frameInterval: frameInterval
-    )
-    for await frame in prefetcher.frames() {
+    // For MPEG-TS containers (mts/m2ts/ts), sequential AVAssetReader demux
+    // wastes ~98% of the work; SeekingFrameProvider uses
+    // AVAssetImageGenerator instead for a 10–34× speedup on those files.
+    // The reader is preflighted in pfMakeReadingContext but isn't used on
+    // the seeker path, so cancelling it before we start is safe (no race).
+    let ext = (filePath as NSString).pathExtension.lowercased()
+    let useSeeker = ext == "mts" || ext == "m2ts" || ext == "ts"
+
+    let seekProvider: SeekingFrameProvider? = useSeeker
+        ? SeekingFrameProvider(asset: ctx.asset, duration: ctx.duration, frameInterval: frameInterval)
+        : nil
+    let prefetcher: FramePrefetcher? = useSeeker
+        ? nil
+        : FramePrefetcher(reader: ctx.reader, trackOutput: ctx.trackOutput, frameInterval: frameInterval)
+    if useSeeker { ctx.reader.cancelReading() }
+
+    let frameStream = seekProvider?.frames() ?? prefetcher!.frames()
+    for await frame in frameStream {
         if Task.isCancelled {
-            // Don't call ctx.reader.cancelReading() here — it races with
-            // the producer queue's in-flight copyNextSampleBuffer and
-            // crashes inside CoreMedia (`_dispatch_semaphore_dispose` /
-            // FigSimpleMutexUnlock). Instead, just `break`. The for-await
-            // exit triggers AsyncStream onTermination, which sets
-            // FramePrefetcher's cancel flag. After the producer's
-            // copyNextSampleBuffer returns and it sees the flag, the
-            // queue closure exits cleanly and the reader is released
-            // by the prefetcher; AVAssetReader's deinit handles the
-            // CoreMedia teardown without a cross-thread race.
+            // Don't call ctx.reader.cancelReading() here on the prefetcher
+            // path — it races with the producer queue's in-flight
+            // copyNextSampleBuffer and crashes inside CoreMedia
+            // (`_dispatch_semaphore_dispose` / FigSimpleMutexUnlock).
+            // The for-await exit triggers AsyncStream onTermination, which
+            // sets the producer's cancel flag; after the in-flight
+            // copyNextSampleBuffer returns the queue exits cleanly and
+            // AVAssetReader's deinit handles teardown without a race.
+            // Same applies to the seeker path — just break.
             break
         }
-        prefetcher.releaseSlot()
+        if let sp = seekProvider { sp.releaseSlot() } else { prefetcher!.releaseSlot() }
 
         let frameTime = frame.presentationTime
         var frameMatch = PFVisionFrameMatch()

@@ -86,7 +86,6 @@ struct ScanJobRow: View {
             }
 
             if isIdle {
-                // Idle: show inline pickers right on the collapsed row
                 inlinePersonPicker
                 inlineVolumePicker
                 inlineEnginePicker
@@ -150,8 +149,9 @@ struct ScanJobRow: View {
                     .foregroundColor(.secondary)
             }
 
-            // Status badge
-            statusBadge
+            if !isJobDone {
+                statusBadge
+            }
 
             // Compact action buttons — only when collapsed to avoid duplication
             if !isExpanded {
