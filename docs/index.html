@@ -401,14 +401,16 @@ async function loadData() {
   cardsEl.appendChild(card("Logic Coverage",
     last.coverage_logic_pct != null ? last.coverage_logic_pct.toFixed(1) + "%" : "\u2014",
     prev.coverage_logic_pct, last.coverage_logic_pct, false, "var(--good)"));
+  cardsEl.appendChild(card("Swift LOC",
+    last.total_swift_lines?.toLocaleString(), prev.total_swift_lines, last.total_swift_lines, false, "var(--muted)"));
+  cardsEl.appendChild(card("Open Issues",
+    last.open_issues, prev.open_issues, last.open_issues, true, "var(--bad)"));
   cardsEl.appendChild(card("Lint Warnings",
     last.swiftlint_warnings, prev.swiftlint_warnings, last.swiftlint_warnings, true, "var(--warn)"));
   cardsEl.appendChild(card("Lint Errors",
     last.swiftlint_errors, prev.swiftlint_errors, last.swiftlint_errors, true, "var(--bad)"));
   cardsEl.appendChild(card("Unused Code",
     last.periphery_findings, prev.periphery_findings, last.periphery_findings, true, "var(--accent)"));
-  cardsEl.appendChild(card("Swift LOC",
-    last.total_swift_lines?.toLocaleString(), prev.total_swift_lines, last.total_swift_lines, false, "var(--muted)"));
   cardsEl.appendChild(card("Tests",
     last.test_count, prev.test_count, last.test_count, false, "var(--good)"));
   cardsEl.appendChild(card("Regression Tests",
