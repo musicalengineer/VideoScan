@@ -232,7 +232,10 @@ struct ScanJobRow: View {
 
     @ViewBuilder
     private var summarySentence: some View {
-        let hits = job.videosWithHits
+        // job.results.count = number of unique videos that matched.
+        // job.videosWithHits is a running counter that's noisier; the
+        // results array is the authoritative "files containing the person."
+        let hits = job.results.count
         let total = job.videosTotal
         let elapsed = formatElapsed(job.elapsedSecs)
 
@@ -284,7 +287,7 @@ struct ScanJobRow: View {
 
     @ViewBuilder
     private var expandedSummarySentence: some View {
-        let hits = job.videosWithHits
+        let hits = job.results.count
         let total = job.videosTotal
         let elapsed = formatElapsed(job.elapsedSecs)
 
