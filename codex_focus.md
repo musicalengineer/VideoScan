@@ -84,6 +84,57 @@ ssh ricksmacbookpro.local 'cd ~/Developer/VideoScan && ./mlx-env/bin/python -m u
 - Result bundle path is printed near the end of the log under
   `.derivedData-mbp-gui-full/Logs/Test/*.xcresult`
 
+## Crash And Log Monitoring
+
+When the user reports a crash or asks to monitor app behavior, check VideoScan
+crash reports and logs first. Agents cannot see the UI state the user is
+driving, so logs are part of the debugging interface.
+
+Crash reports:
+
+```bash
+ls -lt ~/Library/Logs/DiagnosticReports/VideoScan*.ips 2>/dev/null | head
+sed -n '1,220p' ~/Library/Logs/DiagnosticReports/<latest VideoScan crash>.ips
+```
+
+Persistent app logs:
+
+```bash
+ls -lt ~/Library/Logs/VideoScan
+tail -200 ~/Library/Logs/VideoScan/catalog.log
+tail -200 ~/Library/Logs/VideoScan/facedetect_<person>.log
+```
+
+Unified logs:
+
+```bash
+/usr/bin/log stream --process VideoScan \
+  --predicate 'subsystem == "Rick-Breen.VideoScan" OR process == "VideoScan"' \
+  --style compact --info --debug
+
+/usr/bin/log show --last 30m \
+  --predicate 'subsystem == "Rick-Breen.VideoScan" OR process == "VideoScan"' \
+  --style compact --info --debug
+```
+
+Crash-handling rule:
+
+- If a new VideoScan crash appears and the cause is small and clear, fix it in
+  a narrowly themed commit with a regression or smoke test when practical.
+- If the cause is not immediately safe to fix, file a GitHub issue with the
+  crash path, exception, likely subsystem, and acceptance criteria, then tell
+  the user it is queued.
+- During interactive bug hunts, run `log stream` while the user pushes the app
+  around, then correlate timestamps with persistent logs and crash reports.
+
+Known crash issue:
+
+- GH #81 tracks `VideoScan-2026-05-08-203107.ips`, an `EXC_BAD_ACCESS` in
+  ImageIO/AppleJPEGReadPlugin while SwiftUI/AppKit rendered an `NSImage`.
+  Likely area: user-selected/imported photo thumbnails in Family Tree or People
+  editing paths. Prefer eager decode/copy into stable bitmap representations
+  and graceful handling of corrupt/unsupported images.
+
 ## Last Known MBP Result
 
 On 2026-05-08, main at `0578b87` built and ran through the GUI-launched path.
