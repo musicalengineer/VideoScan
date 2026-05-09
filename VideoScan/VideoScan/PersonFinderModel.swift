@@ -2527,7 +2527,19 @@ private nonisolated func pfProcessVideo(
         frameInterval: frameInterval
     )
     for await frame in prefetcher.frames() {
-        if Task.isCancelled { ctx.reader.cancelReading(); break }
+        if Task.isCancelled {
+            // Don't call ctx.reader.cancelReading() here — it races with
+            // the producer queue's in-flight copyNextSampleBuffer and
+            // crashes inside CoreMedia (`_dispatch_semaphore_dispose` /
+            // FigSimpleMutexUnlock). Instead, just `break`. The for-await
+            // exit triggers AsyncStream onTermination, which sets
+            // FramePrefetcher's cancel flag. After the producer's
+            // copyNextSampleBuffer returns and it sees the flag, the
+            // queue closure exits cleanly and the reader is released
+            // by the prefetcher; AVAssetReader's deinit handles the
+            // CoreMedia teardown without a cross-thread race.
+            break
+        }
         prefetcher.releaseSlot()
 
         let frameTime = frame.presentationTime
@@ -2576,7 +2588,11 @@ private nonisolated func pfProcessVideo(
 
         if sampledSoFar % 5 == 0 {
             await pauseGate.waitIfPaused()
-            if Task.isCancelled { ctx.reader.cancelReading(); break }
+            // See top of this for-await: don't call cancelReading() from
+            // the consumer side — it races with the prefetcher's in-flight
+            // copyNextSampleBuffer. Just break; the AsyncStream onTermination
+            // path handles the reader teardown safely.
+            if Task.isCancelled { break }
         }
 
         if visionFrameTimes.count >= 10 {

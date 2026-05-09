@@ -145,6 +145,53 @@ struct FramePrefetcherTests {
         #expect(count < 125, "Should not have consumed all 125 frames (5s × 25fps)")
     }
 
+    // regression: Stop-during-search crashed in `_dispatch_semaphore_dispose.cold.1`
+    // when the consumer abandoned mid-stream and frames were left buffered
+    // inside AsyncStream. The semaphore deinitialised with counter < initial.
+    // This test reproduces the pattern: yield several frames, abandon
+    // iteration *without* calling releaseSlot() on the unread frames,
+    // let the prefetcher go out of scope. The fix must signal the slot
+    // debt on stream termination so dispose succeeds.
+    @Test("Abandoned mid-stream consumer does not crash on dispose")
+    func abandonedMidStreamDisposesCleanly() async throws {
+        let (path, reader, output, fps) = try makeVideoAndReader(
+            container: "mov", duration: 5.0, frameRate: 25
+        )
+        defer { TestMediaGenerator.cleanup(path) }
+
+        // Tight scope: prefetcher exists only inside this block. When it
+        // exits, ARC frees the prefetcher and DispatchSemaphore.dispose
+        // runs — must not crash even with frames still in flight.
+        do {
+            let prefetcher = FramePrefetcher(
+                reader: reader, trackOutput: output,
+                frameInterval: 1.0 / fps,
+                bufferCapacity: 4
+            )
+
+            var count = 0
+            let task = Task { () -> Int in
+                for await _ in prefetcher.frames() {
+                    count += 1
+                    // Deliberately do NOT call releaseSlot() — simulate
+                    // the consumer being cancelled before it can return
+                    // the slot. Producer keeps yielding into the buffer
+                    // until full, then blocks.
+                    if count >= 2 { break }
+                }
+                return count
+            }
+            _ = await task.value
+            // Prefetcher and reader fall out of scope here.
+        }
+
+        // Give the producer queue a beat to fully unwind onTermination
+        // (drain owed slots + signal to wake) before the test ends.
+        try await Task.sleep(for: .milliseconds(100))
+        // Reaching this line without crashing is the assertion.
+        #expect(true)
+    }
+
     @Test("Decode time is plausible")
     func decodeTimePlausible() async throws {
         let (path, reader, output, fps) = try makeVideoAndReader(container: "mov", duration: 1.0)

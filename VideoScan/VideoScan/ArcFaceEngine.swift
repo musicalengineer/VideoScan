@@ -446,7 +446,15 @@ nonisolated func pfProcessVideoWithArcFace(
         frameInterval: frameInterval
     )
     for await frame in prefetcher.frames() {
-        if Task.isCancelled { ctx.reader.cancelReading(); break }
+        if Task.isCancelled {
+            // Don't call ctx.reader.cancelReading() — it races with the
+            // prefetcher's in-flight copyNextSampleBuffer and crashes
+            // inside CoreMedia. Break instead; AsyncStream onTermination
+            // signals the producer to exit, then the reader is released
+            // cleanly via deinit. (See PersonFinderModel.pfProcessVideo
+            // for the same fix.)
+            break
+        }
         prefetcher.releaseSlot()
 
         let frameTime = frame.presentationTime
@@ -497,7 +505,7 @@ nonisolated func pfProcessVideoWithArcFace(
 
         if sampledSoFar % 5 == 0 {
             await pauseGate.waitIfPaused()
-            if Task.isCancelled { ctx.reader.cancelReading(); break }
+            if Task.isCancelled { break }
         }
 
         if visionFrameTimes.count >= 10 {
