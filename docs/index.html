@@ -253,8 +253,9 @@
 // Two streams: per-CI history and nightly static analysis. Both live on
 // the orphan `metrics` branch.
 const RAW_BASE = "https://raw.githubusercontent.com/musicalengineer/VideoScan/metrics/metrics";
-const HISTORY_URL = `${RAW_BASE}/history.jsonl`;
-const NIGHTLY_URL = `${RAW_BASE}/static_analysis.jsonl`;
+const CACHE_BUSTER = `t=${Date.now()}`;
+const HISTORY_URL = `${RAW_BASE}/history.jsonl?${CACHE_BUSTER}`;
+const NIGHTLY_URL = `${RAW_BASE}/static_analysis.jsonl?${CACHE_BUSTER}`;
 const HISTORY_LOCAL = `./history.jsonl?t=${Date.now()}`;
 const NIGHTLY_LOCAL = `./static_analysis.jsonl?t=${Date.now()}`;
 
