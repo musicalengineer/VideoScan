@@ -65,14 +65,14 @@ struct FFProbeIntegrationTests {
 
     // MARK: - Video + Audio
 
-    @Test func probeMP4VideoAudio() async {
+    @Test func probeMP4VideoAudio() async throws {
         let model = VideoScanModel()
         let url = URL(fileURLWithPath: fixturePath("test_video_audio.mp4"))
-        let (output, stderr) = await model.runFFProbe(url: url)
-        #expect(output != nil, "ffprobe should parse MP4: \(stderr)")
+        let (maybeOutput, stderr) = await model.runFFProbe(url: url)
+        let output = try #require(maybeOutput, "ffprobe should parse MP4: \(stderr)")
 
         let rec = VideoRecord()
-        ScanEngine.extractMetadata(probe: output!, into: rec)
+        ScanEngine.extractMetadata(probe: output, into: rec)
         #expect(rec.streamType == .videoAndAudio)
         #expect(rec.videoCodec == "h264")
         #expect(!rec.resolution.isEmpty)
@@ -80,39 +80,39 @@ struct FFProbeIntegrationTests {
         #expect(!rec.audioCodec.isEmpty)
     }
 
-    @Test func probeMOVVideoAudio() async {
+    @Test func probeMOVVideoAudio() async throws {
         let model = VideoScanModel()
         let url = URL(fileURLWithPath: fixturePath("test_video_audio.mov"))
-        let (output, stderr) = await model.runFFProbe(url: url)
-        #expect(output != nil, "ffprobe should parse MOV: \(stderr)")
+        let (maybeOutput, stderr) = await model.runFFProbe(url: url)
+        let output = try #require(maybeOutput, "ffprobe should parse MOV: \(stderr)")
 
         let rec = VideoRecord()
-        ScanEngine.extractMetadata(probe: output!, into: rec)
+        ScanEngine.extractMetadata(probe: output, into: rec)
         #expect(rec.streamType == .videoAndAudio)
         #expect(rec.videoCodec == "h264")
         #expect(rec.durationSeconds > 4.0)
     }
 
-    @Test func probeMKVVideoAudio() async {
+    @Test func probeMKVVideoAudio() async throws {
         let model = VideoScanModel()
         let url = URL(fileURLWithPath: fixturePath("test_video_audio.mkv"))
-        let (output, stderr) = await model.runFFProbe(url: url)
-        #expect(output != nil, "ffprobe should parse MKV: \(stderr)")
+        let (maybeOutput, stderr) = await model.runFFProbe(url: url)
+        let output = try #require(maybeOutput, "ffprobe should parse MKV: \(stderr)")
 
         let rec = VideoRecord()
-        ScanEngine.extractMetadata(probe: output!, into: rec)
+        ScanEngine.extractMetadata(probe: output, into: rec)
         #expect(rec.streamType == .videoAndAudio)
         #expect(rec.videoCodec == "h264")
     }
 
-    @Test func probeMXFVideoAudio() async {
+    @Test func probeMXFVideoAudio() async throws {
         let model = VideoScanModel()
         let url = URL(fileURLWithPath: fixturePath("test_video_audio.mxf"))
-        let (output, stderr) = await model.runFFProbe(url: url)
-        #expect(output != nil, "ffprobe should parse MXF: \(stderr)")
+        let (maybeOutput, stderr) = await model.runFFProbe(url: url)
+        let output = try #require(maybeOutput, "ffprobe should parse MXF: \(stderr)")
 
         let rec = VideoRecord()
-        ScanEngine.extractMetadata(probe: output!, into: rec)
+        ScanEngine.extractMetadata(probe: output, into: rec)
         #expect(rec.streamType == .videoAndAudio)
         #expect(rec.videoCodec == "mpeg2video")
         #expect(rec.durationSeconds > 4.0)
@@ -121,27 +121,27 @@ struct FFProbeIntegrationTests {
 
     // MARK: - Video Only
 
-    @Test func probeMP4VideoOnly() async {
+    @Test func probeMP4VideoOnly() async throws {
         let model = VideoScanModel()
         let url = URL(fileURLWithPath: fixturePath("test_video_only.mp4"))
-        let (output, stderr) = await model.runFFProbe(url: url)
-        #expect(output != nil, "ffprobe should parse video-only MP4: \(stderr)")
+        let (maybeOutput, stderr) = await model.runFFProbe(url: url)
+        let output = try #require(maybeOutput, "ffprobe should parse video-only MP4: \(stderr)")
 
         let rec = VideoRecord()
-        ScanEngine.extractMetadata(probe: output!, into: rec)
+        ScanEngine.extractMetadata(probe: output, into: rec)
         #expect(rec.streamType == .videoOnly)
         #expect(rec.videoCodec == "h264")
         #expect(rec.audioCodec.isEmpty)
     }
 
-    @Test func probeMXFVideoOnly() async {
+    @Test func probeMXFVideoOnly() async throws {
         let model = VideoScanModel()
         let url = URL(fileURLWithPath: fixturePath("test_video_only.mxf"))
-        let (output, stderr) = await model.runFFProbe(url: url)
-        #expect(output != nil, "ffprobe should parse video-only MXF: \(stderr)")
+        let (maybeOutput, stderr) = await model.runFFProbe(url: url)
+        let output = try #require(maybeOutput, "ffprobe should parse video-only MXF: \(stderr)")
 
         let rec = VideoRecord()
-        ScanEngine.extractMetadata(probe: output!, into: rec)
+        ScanEngine.extractMetadata(probe: output, into: rec)
         #expect(rec.streamType == .videoOnly)
         #expect(rec.videoCodec == "mpeg2video")
         #expect(rec.audioCodec.isEmpty)
@@ -149,27 +149,27 @@ struct FFProbeIntegrationTests {
 
     // MARK: - Audio Only
 
-    @Test func probeM4AAudioOnly() async {
+    @Test func probeM4AAudioOnly() async throws {
         let model = VideoScanModel()
         let url = URL(fileURLWithPath: fixturePath("test_audio_only.m4a"))
-        let (output, stderr) = await model.runFFProbe(url: url)
-        #expect(output != nil, "ffprobe should parse M4A: \(stderr)")
+        let (maybeOutput, stderr) = await model.runFFProbe(url: url)
+        let output = try #require(maybeOutput, "ffprobe should parse M4A: \(stderr)")
 
         let rec = VideoRecord()
-        ScanEngine.extractMetadata(probe: output!, into: rec)
+        ScanEngine.extractMetadata(probe: output, into: rec)
         #expect(rec.streamType == .audioOnly)
         #expect(rec.audioCodec == "aac")
         #expect(rec.videoCodec.isEmpty)
     }
 
-    @Test func probeWAVAudioOnly() async {
+    @Test func probeWAVAudioOnly() async throws {
         let model = VideoScanModel()
         let url = URL(fileURLWithPath: fixturePath("test_audio_only.wav"))
-        let (output, stderr) = await model.runFFProbe(url: url)
-        #expect(output != nil, "ffprobe should parse WAV: \(stderr)")
+        let (maybeOutput, stderr) = await model.runFFProbe(url: url)
+        let output = try #require(maybeOutput, "ffprobe should parse WAV: \(stderr)")
 
         let rec = VideoRecord()
-        ScanEngine.extractMetadata(probe: output!, into: rec)
+        ScanEngine.extractMetadata(probe: output, into: rec)
         #expect(rec.streamType == .audioOnly)
         #expect(!rec.audioCodec.isEmpty)
         #expect(rec.videoCodec.isEmpty)
@@ -177,34 +177,34 @@ struct FFProbeIntegrationTests {
 
     // MARK: - Real Avid MXF files (skipped if not present)
 
-    @Test func probeAvidMXFVideoOnly() async {
+    @Test func probeAvidMXFVideoOnly() async throws {
         let path = fixturePath("video-only-test-1.mxf")
         guard FileManager.default.fileExists(atPath: path) else { return }
 
         let model = VideoScanModel()
         let url = URL(fileURLWithPath: path)
-        let (output, stderr) = await model.runFFProbe(url: url)
-        #expect(output != nil, "ffprobe should parse Avid video MXF: \(stderr)")
+        let (maybeOutput, stderr) = await model.runFFProbe(url: url)
+        let output = try #require(maybeOutput, "ffprobe should parse Avid video MXF: \(stderr)")
 
         let rec = VideoRecord()
-        ScanEngine.extractMetadata(probe: output!, into: rec)
+        ScanEngine.extractMetadata(probe: output, into: rec)
         #expect(rec.streamType == .videoOnly)
         #expect(!rec.videoCodec.isEmpty)
         #expect(rec.audioCodec.isEmpty)
         #expect(rec.durationSeconds > 0)
     }
 
-    @Test func probeAvidMXFAudioOnly() async {
+    @Test func probeAvidMXFAudioOnly() async throws {
         let path = fixturePath("audio-only-test-1.mxf")
         guard FileManager.default.fileExists(atPath: path) else { return }
 
         let model = VideoScanModel()
         let url = URL(fileURLWithPath: path)
-        let (output, stderr) = await model.runFFProbe(url: url)
-        #expect(output != nil, "ffprobe should parse Avid audio MXF: \(stderr)")
+        let (maybeOutput, stderr) = await model.runFFProbe(url: url)
+        let output = try #require(maybeOutput, "ffprobe should parse Avid audio MXF: \(stderr)")
 
         let rec = VideoRecord()
-        ScanEngine.extractMetadata(probe: output!, into: rec)
+        ScanEngine.extractMetadata(probe: output, into: rec)
         #expect(rec.streamType == .audioOnly)
         #expect(!rec.audioCodec.isEmpty)
         #expect(rec.videoCodec.isEmpty)
