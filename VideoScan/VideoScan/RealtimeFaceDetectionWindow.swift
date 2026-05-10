@@ -103,7 +103,6 @@ struct RealtimeFaceDetectionContent: View {
                     job: job,
                     jobs: jobs,
                     selectedJobID: $selectedJobID,
-                    fallbackEngineTitle: model.settings.recognitionEngine.title,
                     fallbackPersonName: model.settings.personName
                 )
             } else {
@@ -140,16 +139,10 @@ private struct ActiveJobFaceDetectView: View {
     @ObservedObject var job: ScanJob
     let jobs: [ScanJob]
     @Binding var selectedJobID: UUID?
-    let fallbackEngineTitle: String
     let fallbackPersonName: String
 
     private var personName: String { job.assignedProfile?.name ?? fallbackPersonName }
-    private var engineTitle: String {
-        if let eng = job.assignedProfile?.engine, let re = RecognitionEngine(rawValue: eng) {
-            return re.title
-        }
-        return fallbackEngineTitle
-    }
+    private var engineTitle: String { job.effectiveEngine.title }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -157,13 +150,16 @@ private struct ActiveJobFaceDetectView: View {
             ZStack {
                 Color.black
 
-                if job.status == .done {
+                if job.status.isTerminal {
                     VStack(spacing: 14) {
-                        Image(systemName: "checkmark.circle")
+                        Image(systemName: job.status == .done ? "checkmark.circle" :
+                              job.status == .cancelled ? "stop.circle" : "exclamationmark.triangle")
                             .font(.system(size: 56))
-                            .foregroundStyle(.green)
+                            .foregroundStyle(job.status == .done ? .green :
+                                             job.status == .cancelled ? .orange : .red)
 
-                        Text("Search Complete")
+                        Text(job.status == .done ? "Search Complete" :
+                             job.status == .cancelled ? "Search Stopped" : "Search Failed")
                             .font(.system(size: 24, weight: .semibold))
                             .foregroundStyle(.white)
                         if !personName.isEmpty {

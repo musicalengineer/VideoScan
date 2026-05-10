@@ -482,6 +482,8 @@ struct ScanJobRow: View {
 
             Toggle("Primary face only", isOn: model.settingsBinding.requirePrimary)
             Toggle("Skip background faces", isOn: model.settingsBinding.largestFaceOnly)
+            Toggle("Skip media app bundles", isOn: model.settingsBinding.skipBundles)
+                .help("When on, skips FCP, iMovie, Photos libraries and project bundles. Turn off to search every possible media file.")
 
             Divider()
 

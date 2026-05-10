@@ -15,6 +15,25 @@ final class PersonFinderCache {
 
     static let shared = PersonFinderCache()
 
+    private var hitCount = 0
+    private var missCount = 0
+
+    func resetStats() {
+        lock.lock(); defer { lock.unlock() }
+        hitCount = 0
+        missCount = 0
+    }
+
+    func logSummary() {
+        lock.lock()
+        let h = hitCount, m = missCount
+        lock.unlock()
+        let total = h + m
+        guard total > 0 else { return }
+        let pct = String(format: "%.1f", Double(h) / Double(total) * 100)
+        cacheLog.notice("Cache summary: \(h) hits, \(m) misses (\(pct)% hit rate)")
+    }
+
     private static var dbPath: String {
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
@@ -86,7 +105,7 @@ final class PersonFinderCache {
               let modDate = attrs[.modificationDate] as? Date else {
             return nil
         }
-        let refHash = stableHash(refFilenames)
+        let refHash = cachedRefHash(refFilenames)
         cacheLog.debug("makeKey: refHash=\(refHash, privacy: .public) refs=\(refFilenames.count) person=\(personName, privacy: .public) engine=\(engine.rawValue, privacy: .public)")
         return CacheKey(
             videoPath: videoPath,
@@ -99,11 +118,62 @@ final class PersonFinderCache {
         )
     }
 
-    private static func stableHash(_ filenames: [String]) -> String {
-        let joined = filenames.sorted().joined(separator: "|")
-        let utf8 = Array(joined.utf8)
+    private static var refHashCache: [String: String] = [:]
+    private static let refHashLock = NSLock()
+
+    static func cachedRefHash(_ refFilenames: [String]) -> String {
+        let fm = FileManager.default
+        let cacheKey = refFilenames.sorted().map { path -> String in
+            if let attrs = try? fm.attributesOfItem(atPath: path),
+               let sz = attrs[.size] as? Int64,
+               let mod = attrs[.modificationDate] as? Date {
+                return "\(path)\t\(sz)\t\(mod.timeIntervalSince1970)"
+            }
+            return path
+        }.joined(separator: "\n")
+
+        refHashLock.lock()
+        if let cached = refHashCache[cacheKey] {
+            refHashLock.unlock()
+            return cached
+        }
+        refHashLock.unlock()
+        let result = stableHash(refFilenames)
+        refHashLock.lock()
+        refHashCache[cacheKey] = result
+        refHashLock.unlock()
+        return result
+    }
+
+    private static func stableHash(_ refs: [String]) -> String {
+        let tokens = refs.map(referenceHashToken).sorted()
+        let joined = tokens.joined(separator: "|")
+        return fnv1a(Array(joined.utf8))
+    }
+
+    private static func referenceHashToken(_ ref: String) -> String {
+        var isDir: ObjCBool = false
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: ref, isDirectory: &isDir), !isDir.boolValue,
+              let data = try? Data(contentsOf: URL(fileURLWithPath: ref)) else {
+            return "name:\(ref)"
+        }
+
+        let h = data.withUnsafeBytes { buf -> UInt64 in
+            var h: UInt64 = 0xcbf29ce484222325
+            for byte in buf {
+                h ^= UInt64(byte)
+                h &*= 0x100000001b3
+            }
+            return h
+        }
+        let filename = (ref as NSString).lastPathComponent
+        return "file:\(filename):\(data.count):\(String(format: "%016llx", h))"
+    }
+
+    private static func fnv1a(_ bytes: [UInt8]) -> String {
         var h: UInt64 = 0xcbf29ce484222325
-        for byte in utf8 {
+        for byte in bytes {
             h ^= UInt64(byte)
             h &*= 0x100000001b3
         }
@@ -134,7 +204,8 @@ final class PersonFinderCache {
         bind(stmt, 7, key.refHash)
 
         guard sqlite3_step(stmt) == SQLITE_ROW else {
-            cacheLog.notice("MISS: \((key.videoPath as NSString).lastPathComponent, privacy: .public) refHash=\(key.refHash, privacy: .public)")
+            missCount += 1
+            cacheLog.debug("MISS: \((key.videoPath as NSString).lastPathComponent, privacy: .public) refHash=\(key.refHash, privacy: .public)")
             return nil
         }
 
@@ -144,8 +215,9 @@ final class PersonFinderCache {
         let segJson = col(stmt, 3)
 
         let segments = decodeSegments(segJson)
+        hitCount += 1
         let filename = (key.videoPath as NSString).lastPathComponent
-        cacheLog.notice("HIT: \(filename, privacy: .public) hits=\(totalHits)")
+        cacheLog.debug("HIT: \(filename, privacy: .public) hits=\(totalHits)")
         return pfVideoResult(
             filename: filename,
             filePath: key.videoPath,

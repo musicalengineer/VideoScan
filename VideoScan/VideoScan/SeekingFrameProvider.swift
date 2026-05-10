@@ -20,7 +20,7 @@ final class SeekingFrameProvider: @unchecked Sendable {
         asset: AVURLAsset,
         duration: Double,
         frameInterval: Double,
-        bufferCapacity: Int = 4
+        bufferCapacity: Int = 16
     ) {
         self.asset = asset
         self.duration = duration
