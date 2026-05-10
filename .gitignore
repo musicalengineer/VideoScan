@@ -29,7 +29,8 @@ d.txt
 DonnaFaceDetectionTest.png
 
 # Claude Code
-.claude/
+.claude/settings.local.json
+.claude/worktrees/
 
 # ML models (too large for git, downloaded separately)
 models/
