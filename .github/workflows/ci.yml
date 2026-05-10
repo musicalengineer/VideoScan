@@ -27,7 +27,7 @@ jobs:
           persist-credentials: true
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
 
       - name: Show environment
         run: |
@@ -117,7 +117,6 @@ jobs:
           fi
 
       - name: Run Unit Tests (Release — optimizer smoke test)
-        if: false  # Temporarily disabled while debugging CI test host hang
         run: |
           set -o pipefail
           xcodebuild test \
