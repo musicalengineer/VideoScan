@@ -180,6 +180,8 @@ struct PersonFinderView: View {
     @State private var justSavedProfileID: String?
     /// Alert message shown when user tries to edit/switch during a scan.
     @State private var scanLockMessage: String?
+    /// Profile ID currently being dragged for reordering.
+    @State private var draggingProfileID: String?
     /// Drag-resizable height for the People gallery row. Default leans large
     /// so the family portraits read as the centerpiece — Rick wants the app
     /// to feel like it's about people first when he shows it off.
@@ -286,15 +288,34 @@ struct PersonFinderView: View {
                                     model.referenceLoadFailures.removeAll()
                                     Task { await model.loadReference() }
                                 }
+                                .draggable(profile.id) {
+                                    PersonCard(profile: profile,
+                                               isActive: false,
+                                               imageSize: personImageSize * 0.8,
+                                               cardWidth: personCardWidth * 0.8,
+                                               nameFontSize: personNameFontSize)
+                                        .opacity(0.8)
+                                }
+                                .dropDestination(for: String.self) { items, _ in
+                                    guard let fromID = items.first else { return false }
+                                    model.reorderProfiles(fromID: fromID, toID: profile.id)
+                                    draggingProfileID = nil
+                                    return true
+                                } isTargeted: { targeted in
+                                    if targeted { draggingProfileID = profile.id }
+                                }
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(Color.accentColor, lineWidth: 2)
+                                        .opacity(draggingProfileID == profile.id ? 1 : 0)
+                                        .animation(.easeInOut(duration: 0.15), value: draggingProfileID)
+                                )
                                 .contextMenu {
                                     Button("Search for \(profile.name)\u{2026}") {
                                         addJobForPerson(profile)
                                     }
                                     Divider()
                                     Button("Show \(profile.name) in Family Tree") {
-                                        // Drop a hint that the Family Tree
-                                        // tab can pick up on appear, then
-                                        // switch to that tab.
                                         ftHighlight = profile.name
                                         selectedTab = 4
                                     }

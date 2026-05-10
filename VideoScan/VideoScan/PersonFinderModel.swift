@@ -364,6 +364,8 @@ struct POIProfile: Codable, Identifiable, Equatable {
     var coverCropOffsetY: Double = 0
     /// Cover photo crop: zoom scale (1.0 = fill, >1 = zoomed in).
     var coverCropScale: Double = 1.0
+    /// Manual sort position in the People gallery (lower = further left).
+    var sortOrder: Int = Int.max
 
     // MARK: Codable — tolerate missing keys from older JSON files
 
@@ -372,7 +374,8 @@ struct POIProfile: Codable, Identifiable, Equatable {
          visionThreshold: Float = 0.52, arcfaceThreshold: Float = 0.40,
          minFaceConfidence: Float = 0.55, largestFaceOnly: Bool = false,
          coverImageFilename: String? = nil, notes: String = "", aliases: [String] = [],
-         coverCropOffsetX: Double = 0, coverCropOffsetY: Double = 0, coverCropScale: Double = 1.0) {
+         coverCropOffsetX: Double = 0, coverCropOffsetY: Double = 0, coverCropScale: Double = 1.0,
+         sortOrder: Int = Int.max) {
         self.name = name
         self.referencePath = referencePath
         self.rejectedFiles = rejectedFiles
@@ -387,6 +390,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
         self.coverCropOffsetX = coverCropOffsetX
         self.coverCropOffsetY = coverCropOffsetY
         self.coverCropScale = coverCropScale
+        self.sortOrder = sortOrder
     }
 
     init(from decoder: Decoder) throws {
@@ -405,6 +409,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
         coverCropOffsetX  = try c.decodeIfPresent(Double.self, forKey: .coverCropOffsetX) ?? 0
         coverCropOffsetY  = try c.decodeIfPresent(Double.self, forKey: .coverCropOffsetY) ?? 0
         coverCropScale    = try c.decodeIfPresent(Double.self, forKey: .coverCropScale) ?? 1.0
+        sortOrder         = try c.decodeIfPresent(Int.self, forKey: .sortOrder) ?? Int.max
     }
 
     // MARK: File-based persistence
@@ -453,7 +458,10 @@ struct POIProfile: Codable, Identifiable, Equatable {
             // Heal referencePath on read — the folder location is authoritative.
             p.referencePath = folder.path
             return p
-        }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        }.sorted {
+            if $0.sortOrder != $1.sortOrder { return $0.sortOrder < $1.sortOrder }
+            return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
     }
 
     /// Resolve the cover image to an NSImage by looking in the reference folder.
@@ -1402,6 +1410,19 @@ final class PersonFinderModel: ObservableObject {
     func deletePOI(_ profile: POIProfile) {
         try? POIProfile.delete(name: profile.name)
         savedProfiles = POIProfile.listAll()
+    }
+
+    func reorderProfiles(fromID: String, toID: String) {
+        guard fromID != toID,
+              let fromIdx = savedProfiles.firstIndex(where: { $0.id == fromID }),
+              let toIdx = savedProfiles.firstIndex(where: { $0.id == toID })
+        else { return }
+        let moving = savedProfiles.remove(at: fromIdx)
+        savedProfiles.insert(moving, at: toIdx)
+        for i in savedProfiles.indices {
+            savedProfiles[i].sortOrder = i
+            try? savedProfiles[i].save()
+        }
     }
 
     // MARK: Core scan (nonisolated — runs on cooperative thread pool, NOT on MainActor)
