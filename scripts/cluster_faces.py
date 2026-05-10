@@ -13,8 +13,9 @@ A 1,000-frame cluster is one person to label, not 1,000 frames.
 
 Pipeline:
   1. Walk videos under <root>
-  2. Per video: ffprobe duration, ffmpeg sample N frames, MTCNN detect
-     each frame, FaceNet embed each face (uses MPS on Apple Silicon)
+  2. Per video: ffprobe duration, single ffmpeg call extracts all sample
+     frames at once, MTCNN detect each frame, FaceNet embed each face
+     (uses MPS on Apple Silicon)
   3. Save every face crop + its 512-D embedding + metadata
   4. After collection: HDBSCAN on the full embedding pool
   5. Group thumbnails by cluster, write 4x4 montage per cluster
@@ -43,10 +44,12 @@ import argparse
 import csv
 import json
 import os
+import struct
 import subprocess
 import sys
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from typing import Optional
@@ -73,6 +76,9 @@ SKIP_DIR_PATTERNS = {
     ".Spotlight-V100", ".Trashes", ".DocumentRevisions-V100",
     ".fseventsd", "System Volume Information", "$RECYCLE.BIN",
     ".TemporaryItems", "node_modules", ".git", "venv", ".venv",
+    ".npm", ".yarn", "bower_components", ".next", ".nuxt",
+    ".angular", ".webpack", "vendor", ".vscode", ".idea",
+    ".eclipse", "xcuserdata",
 }
 
 
@@ -135,31 +141,63 @@ def ffprobe_duration(path: Path) -> Optional[float]:
 
 def extract_frames(path: Path, duration: float, interval_s: float,
                    max_frames: int, tmpdir: Path) -> list[tuple[float, Path]]:
-    """Return [(timestamp, jpg_path), ...] for sampled frames."""
+    """Extract all sample frames in a single ffmpeg call.
+
+    Uses select filter with exact PTS comparisons to output frames at the
+    desired timestamps. One process open, one sequential read through the
+    file — eliminates repeated seeks on slow USB drives.
+    """
     usable = max(1.0, duration - 4.0)
     n = min(max_frames, max(4, int(usable / interval_s)))
     starts = [2.0 + (i + 0.5) * usable / n for i in range(n)]
 
-    frames: list[tuple[float, Path]] = []
+    # Build a select expression: output a frame when PTS crosses each target
+    # timestamp. We use gte(t,X) chained with + (logical OR in ffmpeg select).
+    # To avoid re-selecting the same frame, each condition checks
+    # gte(t,start)*lt(t,start+gap/2) except the last which is just gte.
+    gap = starts[1] - starts[0] if len(starts) > 1 else 1.0
+    half = gap / 2.0
+    parts = []
     for i, ts in enumerate(starts):
-        out = tmpdir / f"f_{i:05d}.jpg"
-        cmd = [
-            "ffmpeg", "-y", "-v", "error",
-            "-ss", f"{ts:.2f}",
-            "-i", str(path),
-            "-frames:v", "1",
-            "-vf", "scale='min(640,iw)':'-2'",
-            "-q:v", "4",
-            "-an",
-            str(out)
-        ]
-        try:
-            subprocess.run(cmd, timeout=15, capture_output=True)
-        except Exception:
-            continue
+        if i < len(starts) - 1:
+            parts.append(f"gte(t\\,{ts:.3f})*lt(t\\,{ts + half:.3f})")
+        else:
+            parts.append(f"gte(t\\,{ts:.3f})*lt(t\\,{ts + half:.3f})")
+    select_expr = "+".join(parts)
+
+    cmd = [
+        "ffmpeg", "-y", "-v", "error",
+        "-i", str(path),
+        "-vf", f"select='{select_expr}',scale='min(640\\,iw)':-2",
+        "-vsync", "vfr",
+        "-q:v", "4",
+        "-an",
+        str(tmpdir / "f_%05d.jpg")
+    ]
+    try:
+        subprocess.run(cmd, timeout=max(60, int(duration * 0.5)),
+                       capture_output=True)
+    except subprocess.TimeoutExpired:
+        pass
+    except Exception:
+        return []
+
+    frames: list[tuple[float, Path]] = []
+    for i in range(len(starts)):
+        out = tmpdir / f"f_{i+1:05d}.jpg"
         if out.exists() and out.stat().st_size > 0:
-            frames.append((ts, out))
+            frames.append((starts[min(i, len(starts) - 1)], out))
     return frames
+
+
+def _batch_embed_faces(faces: list[np.ndarray]) -> np.ndarray:
+    """Embed multiple face crops in one forward pass through FaceNet."""
+    batch = np.stack(faces, axis=0)
+    tensor = _torch.from_numpy(batch).permute(0, 3, 1, 2).to(_device)
+    with _torch.no_grad():
+        embeddings = _resnet(tensor).cpu().numpy()
+    norms = np.linalg.norm(embeddings, axis=1, keepdims=True) + 1e-9
+    return embeddings / norms
 
 
 # --- Face detect + embed ---------------------------------------------------
@@ -173,11 +211,11 @@ class FaceRecord:
     detect_score: float
 
 
-def detect_and_embed(img_path: Path) -> list[tuple[FaceRecord, np.ndarray, Image.Image]]:
-    """Run MTCNN+FaceNet on one frame.
+def detect_faces(img_path: Path) -> list[tuple[FaceRecord, np.ndarray, Image.Image]]:
+    """Run MTCNN on one frame, crop and prepare faces for batch embedding.
 
-    Returns [(face_record_partial, embedding, face_crop_image), ...].
-    face_id and frame_time_s on the FaceRecord get filled in by caller.
+    Returns [(face_record_partial, preprocessed_array, face_crop_image), ...].
+    The preprocessed_array is ready for FaceNet (normalized, float32, HxWxC).
     """
     try:
         img = Image.open(img_path)
@@ -203,10 +241,6 @@ def detect_and_embed(img_path: Path) -> list[tuple[FaceRecord, np.ndarray, Image
         face = img.crop((fx1, fy1, fx2, fy2)).resize((160, 160), Image.BILINEAR)
         arr = np.asarray(face, dtype=np.float32)
         arr = (arr - 127.5) / 128.0
-        tensor = _torch.from_numpy(arr).permute(2, 0, 1).unsqueeze(0).to(_device)
-        with _torch.no_grad():
-            e = _resnet(tensor).cpu().numpy()[0]
-        e = e / (np.linalg.norm(e) + 1e-9)
 
         rec = FaceRecord(
             face_id=-1,
@@ -215,11 +249,17 @@ def detect_and_embed(img_path: Path) -> list[tuple[FaceRecord, np.ndarray, Image
             bbox=(float(x1), float(y1), float(x2), float(y2)),
             detect_score=float(prob) if prob is not None else 0.0
         )
-        out.append((rec, e, face))
+        out.append((rec, arr, face))
     return out
 
 
 # --- Collection phase ------------------------------------------------------
+
+def _prefetch_video(vpath: Path, dur: float, target_interval: float,
+                    max_frames: int, tmpdir: Path):
+    """Extract frames from one video (runs in I/O thread)."""
+    return extract_frames(vpath, dur, target_interval, max_frames, tmpdir)
+
 
 def collect_faces(root: Path, run_dir: Path, args) -> int:
     """Walk videos under root, save face crops + embeddings.
@@ -244,8 +284,6 @@ def collect_faces(root: Path, run_dir: Path, args) -> int:
         seen_videos = set(state.get("seen_videos", []))
         face_records = [FaceRecord(**r) for r in state.get("face_records", [])]
         if embeddings_path.exists():
-            # allow_pickle=False — embeddings.npz is a pure-numeric array; we
-            # never store Python objects. Defends against malicious .npz drop-in.
             data = np.load(embeddings_path, allow_pickle=False)
             embeddings = list(data["embeddings"])
         print(f"[resume] {len(seen_videos)} videos already scanned, "
@@ -257,12 +295,16 @@ def collect_faces(root: Path, run_dir: Path, args) -> int:
     log.write(f"\n=== run {time.strftime('%Y-%m-%d %H:%M:%S')} ===\n")
 
     videos = list(iter_videos(root))
-    print(f"[scan] {len(videos)} videos under {root}")
+    remaining = [v for v in videos if str(v) not in seen_videos]
+    print(f"[scan] {len(videos)} videos under {root} "
+          f"({len(remaining)} remaining, {len(seen_videos)} already done)")
 
-    for vi, vpath in enumerate(videos):
-        if str(vpath) in seen_videos:
-            continue
+    save_interval = 10
+    since_save = 0
+    t_start = time.monotonic()
 
+    for vi, vpath in enumerate(remaining):
+        t_video = time.monotonic()
         dur = ffprobe_duration(vpath)
         if dur is None or dur < 5 or dur > 14400:
             log.write(f"SKIP\t{vpath}\tduration={dur}\n")
@@ -276,38 +318,70 @@ def collect_faces(root: Path, run_dir: Path, args) -> int:
             tmpdir = Path(td)
             frames = extract_frames(vpath, dur, target_interval,
                                      args.max_frames, tmpdir)
+
+            # Detect faces in all frames, collecting crops for batch embedding
+            pending_faces = []  # (FaceRecord, preprocessed_arr, crop_img, timestamp)
             for ts, fp in frames:
-                results = detect_and_embed(fp)
-                for rec, emb, crop in results:
-                    rec.face_id = next_face_id
+                results = detect_faces(fp)
+                for rec, arr, crop in results:
                     rec.video_path = str(vpath)
                     rec.frame_time_s = ts
+                    pending_faces.append((rec, arr, crop))
+
+            # Batch embed all faces from this video in one forward pass
+            if pending_faces:
+                arrs = [pf[1] for pf in pending_faces]
+                batch_embeddings = _batch_embed_faces(arrs)
+
+                for i, (rec, _, crop) in enumerate(pending_faces):
+                    rec.face_id = next_face_id
                     crop.save(thumbs_dir / f"face_{next_face_id:06d}.jpg",
                               "JPEG", quality=85)
                     face_records.append(rec)
-                    embeddings.append(emb)
+                    embeddings.append(batch_embeddings[i])
                     next_face_id += 1
                     n_added += 1
 
         seen_videos.add(str(vpath))
-        log.write(f"OK\t{vpath}\tduration={dur:.1f}\tfaces={n_added}\n")
+        elapsed_video = time.monotonic() - t_video
+        elapsed_total = time.monotonic() - t_start
+        log.write(f"OK\t{vpath}\tduration={dur:.1f}\tfaces={n_added}"
+                  f"\ttime={elapsed_video:.1f}s\n")
         log.flush()
-        print(f"[{vi+1}/{len(videos)}] {vpath.name}: {n_added} faces "
-              f"(total {len(face_records)})")
 
-        # Persist progress every video
-        with progress_path.open("w") as f:
-            json.dump({
-                "seen_videos": sorted(seen_videos),
-                "face_records": [asdict(r) for r in face_records]
-            }, f)
-        if embeddings:
-            np.savez_compressed(embeddings_path,
-                                 embeddings=np.stack(embeddings))
+        pct = (vi + 1) / len(remaining) * 100
+        rate = (vi + 1) / elapsed_total * 60 if elapsed_total > 0 else 0
+        print(f"[{vi+1}/{len(remaining)} {pct:.0f}%] {vpath.name}: "
+              f"{n_added} faces in {elapsed_video:.1f}s "
+              f"(total {len(face_records)}, {rate:.0f} vid/min)")
 
+        since_save += 1
+        if since_save >= save_interval:
+            _save_progress(progress_path, embeddings_path, seen_videos,
+                          face_records, embeddings)
+            since_save = 0
+
+    # Final save
+    _save_progress(progress_path, embeddings_path, seen_videos,
+                  face_records, embeddings)
     log.close()
-    print(f"[scan-done] {len(face_records)} faces from {len(seen_videos)} videos")
+    elapsed = time.monotonic() - t_start
+    print(f"[scan-done] {len(face_records)} faces from {len(seen_videos)} "
+          f"videos in {elapsed:.0f}s")
     return len(face_records)
+
+
+def _save_progress(progress_path, embeddings_path, seen_videos,
+                   face_records, embeddings):
+    """Persist progress to disk."""
+    with progress_path.open("w") as f:
+        json.dump({
+            "seen_videos": sorted(seen_videos),
+            "face_records": [asdict(r) for r in face_records]
+        }, f)
+    if embeddings:
+        np.savez_compressed(embeddings_path,
+                             embeddings=np.stack(embeddings))
 
 
 # --- Cluster phase ---------------------------------------------------------
