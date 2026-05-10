@@ -2,9 +2,12 @@ import SwiftUI
 
 // When launched as a test host, skip the full SwiftUI app to avoid
 // crashes on headless CI runners that have no display server.
-if NSClassFromString("XCTestCase") != nil {
-    // Minimal run loop for the test host — keep the process alive
-    // so XCTest can bootstrap and run tests inside this host app.
+// XCTESTCONFIGURATION_TEMP_DIR is set by Xcode's test runner for
+// both XCTest and Swift Testing frameworks.
+let isTestHost = ProcessInfo.processInfo.environment["XCTESTCONFIGURATION_TEMP_DIR"] != nil
+    || NSClassFromString("XCTestCase") != nil
+
+if isTestHost {
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
     app.run()
