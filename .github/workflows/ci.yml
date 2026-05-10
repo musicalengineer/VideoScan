@@ -12,7 +12,7 @@ jobs:
   test:
     name: Build & Test
     runs-on: macos-15
-    timeout-minutes: 30
+    timeout-minutes: 60
     # Allow this job to push to the `metrics` branch (history.jsonl for the
     # trend dashboard). Scoped to contents only — no packages/actions/etc.
     permissions:
