@@ -32,7 +32,7 @@ final class FramePrefetcher: @unchecked Sendable {
         reader: AVAssetReader,
         trackOutput: AVAssetReaderTrackOutput,
         frameInterval: Double,
-        bufferCapacity: Int = 4
+        bufferCapacity: Int = 16
     ) {
         self.reader = reader
         self.trackOutput = trackOutput

@@ -226,6 +226,14 @@ struct PersonFinderCacheTests {
         try body(path)
     }
 
+    private func withTempDirectory(_ body: (URL) throws -> Void) rethrows {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pf_cache_refs_\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: url) }
+        try body(url)
+    }
+
     @Test("stableHash is order-independent for sorted filenames")
     func stableHashDeterministic() {
         withTempFile { tmpPath in
@@ -264,6 +272,49 @@ struct PersonFinderCacheTests {
             )?.refHash
 
             #expect(hashSmall != hashBig, "Different ref photo set must produce different hash")
+        }
+    }
+
+    @Test("Changing reference photo contents with the same filename invalidates cache")
+    func refHashChangesWhenReferenceFileContentsChange() throws {
+        try withTempFile { videoPath in
+            try withTempDirectory { refDir in
+                let refURL = refDir.appendingPathComponent("donna.jpg")
+                let firstBytes = Data("reference-image-A-0001".utf8)
+                let replacementBytes = Data("reference-image-B-0001".utf8)
+                #expect(firstBytes.count == replacementBytes.count)
+
+                try firstBytes.write(to: refURL)
+                try FileManager.default.setAttributes(
+                    [.modificationDate: Date(timeIntervalSince1970: 2_000)],
+                    ofItemAtPath: refURL.path
+                )
+
+                let firstKey = PersonFinderCache.makeKey(
+                    videoPath: videoPath, personName: "donna", engine: .arcface,
+                    threshold: 0.4, refFilenames: [refURL.path]
+                )
+                #expect(firstKey != nil)
+                guard let firstKey else { return }
+
+                let cache = makeTempCache()
+                cache.store(key: firstKey, result: sampleResult(hits: 1))
+
+                try replacementBytes.write(to: refURL)
+                try FileManager.default.setAttributes(
+                    [.modificationDate: Date(timeIntervalSince1970: 3_000)],
+                    ofItemAtPath: refURL.path
+                )
+                let secondKey = PersonFinderCache.makeKey(
+                    videoPath: videoPath, personName: "donna", engine: .arcface,
+                    threshold: 0.4, refFilenames: [refURL.path]
+                )
+                #expect(secondKey != nil)
+                guard let secondKey else { return }
+
+                #expect(firstKey.refHash != secondKey.refHash)
+                #expect(cache.lookup(key: secondKey) == nil)
+            }
         }
     }
 }

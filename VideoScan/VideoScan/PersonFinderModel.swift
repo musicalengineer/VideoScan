@@ -172,7 +172,7 @@ struct PersonFinderSettings: Equatable {
     var minPresenceSecs: Double = 5.0
     var requirePrimary: Bool = false
     var concurrency: Int = 8
-    var skipBundles: Bool = true        // skip .fcpbundle, .imovielibrary, etc.
+    var skipBundles: Bool = false       // when true, skip .fcpbundle, .imovielibrary, etc.
     var skipCatalogBadFiles: Bool = true // skip audio-only, no-streams, ffprobe-failed from catalog
     var largestFaceOnly: Bool = false   // use only the largest detected face per reference photo
     var previewRate: Int = 5            // show preview every N sampled frames (1 = every frame)
@@ -821,6 +821,12 @@ final class PersonFinderModel: ObservableObject {
         Task { await MemoryPressureMonitor.shared.setFloorGB(floorGB) }
     }
 
+    private static func referenceCacheIdentifiers(referencePath: String, filenames: [String]) -> [String] {
+        guard !referencePath.isEmpty else { return filenames }
+        let baseURL = URL(fileURLWithPath: referencePath)
+        return filenames.map { baseURL.appendingPathComponent($0).path }
+    }
+
     // MARK: Job management
 
     func addJob(path: String = "") {
@@ -862,8 +868,11 @@ final class PersonFinderModel: ObservableObject {
         let personName = profile.name
         let engine = job.effectiveEngine
         let threshold = engine == .arcface ? profile.arcfaceThreshold : profile.visionThreshold
-        let refFilenames = job.assignedFaces.map(\.sourceFilename)
-        guard !refFilenames.isEmpty else { return }
+        let refIdentifiers = Self.referenceCacheIdentifiers(
+            referencePath: profile.referencePath,
+            filenames: job.assignedFaces.map(\.sourceFilename)
+        )
+        guard !refIdentifiers.isEmpty else { return }
 
         let searchPath = job.searchPath
         let jobSettings = self.settings
@@ -880,7 +889,7 @@ final class PersonFinderModel: ObservableObject {
                 guard let key = PersonFinderCache.makeKey(
                     videoPath: path, personName: personName,
                     engine: engine, threshold: threshold,
-                    refFilenames: refFilenames
+                    refFilenames: refIdentifiers
                 ), let result = PersonFinderCache.shared.lookup(key: key) else { continue }
                 hits += 1
                 if !result.segments.isEmpty {
@@ -1019,6 +1028,10 @@ final class PersonFinderModel: ObservableObject {
 
         let prints = jobSettings.recognitionEngine == .vision ? faces.map(\.featurePrint) : []
         let refFilenames = faces.map(\.sourceFilename)
+        let refCacheIdentifiers = Self.referenceCacheIdentifiers(
+            referencePath: jobSettings.referencePath,
+            filenames: refFilenames
+        )
 
         // Diagnostic log — after reset so these survive in the console
         job.appendLog("Build: \(BuildInfo.summary)")
@@ -1045,7 +1058,7 @@ final class PersonFinderModel: ObservableObject {
                 dash?.visionActive = settings.recognitionEngine == .vision || settings.recognitionEngine == .arcface
                 dash?.activeEngineLabel = settings.recognitionEngine == .arcface ? "ArcFace / CoreML + ANE" : "Vision / ANE"
             }
-            await PersonFinderModel.runScan(job: job, prints: prints, settings: settings, refFilenames: refFilenames, dashboard: dash)
+            await PersonFinderModel.runScan(job: job, prints: prints, settings: settings, refFilenames: refCacheIdentifiers, dashboard: dash)
             await MainActor.run {
                 dash?.visionActive = false; dash?.visionFPS = 0; dash?.visionMsPerFrame = 0
                 // Clear scanningPersonName when no jobs are still scanning
@@ -1837,6 +1850,7 @@ final class PersonFinderModel: ObservableObject {
     ) async {
         let path = await job.searchPath
         await job.appendLog("Scanning: \(path)")
+        PersonFinderCache.shared.resetStats()
 
         guard let videoFiles = await discoverVideos(job: job, settings: settings) else { return }
 
@@ -1892,6 +1906,7 @@ final class PersonFinderModel: ObservableObject {
             job.presenceSecs = preliminaryPresence
         }
         let totalSegments = validResults.reduce(0) { $0 + $1.segments.count }
+        PersonFinderCache.shared.logSummary()
         osLog.notice("Scan complete: \(preliminaryResults.count) video(s) with hits, \(totalSegments) segment(s), \(pfFormatDuration(preliminaryPresence), privacy: .public) presence — ready for compilation")
 
         // Store recognition data for on-demand compilation later
@@ -2201,8 +2216,11 @@ nonisolated func pfFindVideoFiles(at searchPath: String, skipBundles: Bool) -> [
         ".DocumentRevisions-V100", ".PKInstallSandboxManager-SystemSoftware",
         ".MobileBackups", ".vol", ".hotfiles.btree",
         "System", "Library", "usr", "bin", "sbin", "private", "cores", "dev",
-        "node_modules", ".git", ".svn", ".hg", "DerivedData", "__pycache__",
-        ".Trash", "Caches", "Logs", "DiagnosticReports"
+        "node_modules", ".npm", ".yarn", "bower_components",
+        ".git", ".svn", ".hg", "DerivedData", "__pycache__",
+        ".Trash", "Caches", "Logs", "DiagnosticReports",
+        ".next", ".nuxt", ".angular", ".webpack", "vendor",
+        ".vscode", ".idea", ".eclipse", "xcuserdata"
     ]
     let pfBundleExtensions: Set<String> = [
         "fcpbundle", "imovielibrary", "photoslibrary", "aplibrary", "dvdmedia",
@@ -2221,7 +2239,10 @@ nonisolated func pfFindVideoFiles(at searchPath: String, skipBundles: Bool) -> [
     guard fm.fileExists(atPath: searchPath, isDirectory: &isDir) else { return [] }
     if !isDir.boolValue {
         let ext = (searchPath as NSString).pathExtension.lowercased()
-        return (pfVideoExtensions.contains(ext) || ext == "ts") ? [searchPath] : []
+        if ext == "ts" {
+            return pfLikelyTransportStream(path: searchPath, relativePath: searchPath) ? [searchPath] : []
+        }
+        return pfVideoExtensions.contains(ext) ? [searchPath] : []
     }
     var files: [String] = []
     guard let e = fm.enumerator(atPath: searchPath) else { return [] }
@@ -2242,11 +2263,9 @@ nonisolated func pfFindVideoFiles(at searchPath: String, skipBundles: Bool) -> [
         }
         let ext = (el as NSString).pathExtension.lowercased()
         if pfVideoExtensions.contains(ext) || ext == "ts" {
-            // Skip TypeScript files masquerading as .ts video
             if ext == "ts" {
-                let name = (el as NSString).lastPathComponent
-                if name.hasSuffix(".d.ts") || name.hasSuffix(".spec.ts") ||
-                   el.contains("node_modules") { continue }
+                let fullPath = (searchPath.hasSuffix("/") ? searchPath : searchPath + "/") + el
+                if !pfLikelyTransportStream(path: fullPath, relativePath: el) { continue }
             }
             let base = searchPath.hasSuffix("/") ? searchPath : searchPath + "/"
             files.append(base + el)
@@ -2258,6 +2277,27 @@ nonisolated func pfFindVideoFiles(at searchPath: String, skipBundles: Bool) -> [
         if seen.insert(key).inserted { deduped.append(path) }
     }
     return deduped
+}
+
+private func pfLikelyTransportStream(path: String, relativePath: String) -> Bool {
+    let name = (path as NSString).lastPathComponent
+    if name.hasSuffix(".d.ts") || name.hasSuffix(".spec.ts") ||
+       name.hasSuffix(".test.ts") || name.hasSuffix(".config.ts") {
+        return false
+    }
+    let devTreeMarkers: Set<String> = [
+        "node_modules", ".npm", "src", "dist", "build", ".next",
+        "packages", "components", "lib", "__tests__", "test",
+        "scripts", ".vscode", ".idea", "vendor", "bower_components"
+    ]
+    let parts = relativePath.components(separatedBy: "/")
+    if parts.contains(where: { devTreeMarkers.contains($0) }) { return false }
+    let fm = FileManager.default
+    if let attrs = try? fm.attributesOfItem(atPath: path),
+       let size = attrs[.size] as? Int64, size < 512_000 {
+        return false
+    }
+    return true
 }
 
 // MARK: - Face detection utilities
