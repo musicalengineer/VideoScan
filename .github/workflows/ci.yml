@@ -89,7 +89,7 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "PERIPHERY_OUTPUT=$(pwd)/periphery-raw.txt" >> $GITHUB_ENV
 
-      - name: Run Unit Tests
+      - name: Run Unit Tests (Debug)
         run: |
           xcodebuild test \
             -project VideoScan/VideoScan.xcodeproj \
@@ -108,6 +108,26 @@ jobs:
           if grep -q "Testing failed" xcodebuild-test.log; then
             echo "::error::Tests failed — see log above"
             grep -B5 "Testing failed" xcodebuild-test.log
+            exit 1
+          fi
+
+      - name: Run Unit Tests (Release — optimizer smoke test)
+        run: |
+          xcodebuild test \
+            -project VideoScan/VideoScan.xcodeproj \
+            -scheme VideoScan \
+            -configuration Release \
+            -destination 'platform=macOS' \
+            -only-testing:VideoScanTests \
+            -resultBundlePath TestResults-Release.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            ENABLE_TESTABILITY=YES \
+            MACOSX_DEPLOYMENT_TARGET=15.0 \
+            2>&1 | tee xcodebuild-test-release.log
+          grep -E "Test case|passed|failed|error:|BUILD|Testing failed" xcodebuild-test-release.log || true
+          if grep -q "Testing failed" xcodebuild-test-release.log; then
+            echo "::error::Release tests failed — optimizer may have broken something"
+            grep -B5 "Testing failed" xcodebuild-test-release.log
             exit 1
           fi
 
@@ -141,6 +161,14 @@ jobs:
         with:
           name: test-results
           path: TestResults.xcresult
+          retention-days: 14
+
+      - name: Upload Release Test Results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-release
+          path: TestResults-Release.xcresult
           retention-days: 14
 
       # ---------------------------------------------------------------
