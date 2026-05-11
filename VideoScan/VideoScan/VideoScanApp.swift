@@ -8,6 +8,18 @@
 import SwiftUI
 import AppKit
 
+// MARK: - App Lifecycle Log
+//
+// Persistent file at ~/Library/Logs/VideoScan/videoscan.log — accumulates
+// across launches so you can read "started X, quit Y, started Z" history
+// by `tail` or Console.app. Distinct from per-scan PersistentLog instances
+// (which truncate per job) and from the macOS unified log (`log show`).
+let appLog: PersistentLog = {
+    let log = PersistentLog(name: "videoscan")
+    log.start(append: true)
+    return log
+}()
+
 // MARK: - App Delegate (RAM disk lifecycle)
 
 /// We use an NSApplicationDelegate solely so we can:
@@ -26,10 +38,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !Self.isRunningTests else { return }
-        NSLog("VideoScan: app started at %@ — %@ (pid %d)",
-              ISO8601DateFormatter().string(from: Date()),
-              BuildInfo.summary,
-              ProcessInfo.processInfo.processIdentifier)
+        let startLine = "app started — \(BuildInfo.summary) (pid \(ProcessInfo.processInfo.processIdentifier))"
+        NSLog("VideoScan: %@", startLine)
+        appLog.write(startLine)
         let detached = RAMDisk.cleanupStaleMounts()
         if !detached.isEmpty {
             NSLog("VideoScan: reaped %d orphaned RAM disk(s) from previous run: %@",
@@ -45,9 +56,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        NSLog("VideoScan: app quitting at %@ — %@",
-              ISO8601DateFormatter().string(from: Date()),
-              BuildInfo.summary)
+        let quitLine = "app quitting — \(BuildInfo.summary)"
+        NSLog("VideoScan: %@", quitLine)
+        appLog.write(quitLine)
         // Flush the catalog snapshot first so the user's records survive
         // an offline-volume relaunch.
         MainActor.assumeIsolated {

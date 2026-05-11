@@ -28,15 +28,26 @@ final class PersistentLog: @unchecked Sendable {
         self.url = Self.logDir.appendingPathComponent("\(name).log")
     }
 
-    /// Open the log file, overwriting any previous content.
+    /// Open the log file.
+    /// - Parameter append: if false (default), overwrites previous content (per-job logs).
+    ///   If true, opens in append mode so launches accumulate (used by `videoscan.log`).
     /// Writes a header with timestamp and app version.
-    func start() {
+    func start(append: Bool = false) {
         lock.lock()
         defer { lock.unlock() }
 
-        // Create or truncate the file
-        FileManager.default.createFile(atPath: url.path, contents: nil)
-        handle = try? FileHandle(forWritingTo: url)
+        if append {
+            // Create the file if it doesn't exist; otherwise open at EOF.
+            if !FileManager.default.fileExists(atPath: url.path) {
+                FileManager.default.createFile(atPath: url.path, contents: nil)
+            }
+            handle = try? FileHandle(forWritingTo: url)
+            _ = try? handle?.seekToEnd()
+        } else {
+            // Create or truncate the file
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+            handle = try? FileHandle(forWritingTo: url)
+        }
 
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyy-MM-dd HH:mm:ss"
