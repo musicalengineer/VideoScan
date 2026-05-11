@@ -4,13 +4,19 @@ import SwiftUI
 let isTestHost = ProcessInfo.processInfo.environment["XCTESTCONFIGURATION_TEMP_DIR"] != nil
 
 if isTestHost {
-    // Swift Testing's runner injects @Test functions into this process; we
-    // just need the host alive. Do NOT call NSApplication.run() — it blocks
-    // forever on headless CI (no window server, no Aqua bootstrap), which
-    // was the real cause of the 30-min CI timeouts. dispatchMain() is what
-    // Apple's own `xctest` binary uses for command-line test hosting:
-    // drains the main queue, never returns, doesn't touch AppKit.
-    dispatchMain()
+    // Drive the main CFRunLoop so XCTest's XCTWaiter (which polls
+    // CFRunLoopGetMain() with RunLoop.main.run(until:)) can deliver
+    // test plan / configuration events. dispatchMain() is NOT sufficient:
+    // it drains the dispatch main queue but leaves CFRunLoopGetMain()
+    // empty, so XCTWaiter sleeps in 100ms increments. CI logs showed
+    // "Current run loop empty; sleeping the thread for 0.100s" ~20 times
+    // per test (~2s per test, 1300 tests, 30-min timeout).
+    //
+    // NSApplication.run() also drives the CFRunLoop but additionally
+    // blocks on a window-server handshake that hangs forever on headless
+    // runners (no Aqua bootstrap, no display server). RunLoop.main.run()
+    // gives us the run loop without the AppKit dependency.
+    RunLoop.main.run()
 } else {
     VideoScanApp.main()
 }
