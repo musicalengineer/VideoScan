@@ -12,7 +12,13 @@ jobs:
   test:
     name: Build & Test
     runs-on: macos-15
-    timeout-minutes: 30
+    # Tests run at ~2s each on virtual-M1 CI (vs ~7ms on local Mac Studio)
+    # due to a known Xcode 26.x bug on GH-hosted runners — see
+    # actions/runner-images#13096 (open, unfixed). Suite needs ~43 min per
+    # config (Debug + Release) at observed pace. 90 min gives headroom for
+    # the surrounding steps. Band-aid until root cause diagnosed via local
+    # repro on the MBP test runner.
+    timeout-minutes: 90
     # Allow this job to push to the `metrics` branch (history.jsonl for the
     # trend dashboard). Scoped to contents only — no packages/actions/etc.
     permissions:
