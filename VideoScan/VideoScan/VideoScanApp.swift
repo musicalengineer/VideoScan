@@ -103,7 +103,15 @@ enum BuildInfo {
         return "unknown"
     }()
 
-    static let summary: String = "v\(version) · \(gitBranch) · \(buildDate)"
+    static let buildMode: String = {
+        #if DEBUG
+        return "debug"
+        #else
+        return "release"
+        #endif
+    }()
+
+    static let summary: String = "v\(version) (\(buildMode)) · \(gitBranch) · \(buildDate)"
 }
 
 struct VideoScanApp: App {
