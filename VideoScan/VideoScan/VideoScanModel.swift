@@ -1614,6 +1614,7 @@ final class VideoScanModel: ObservableObject {
         target.filesScanned = completedCount
         if discoveredCount == 0 {
             log("  No video files found on \(volName).")
+            appLog.write("Completed catalog scan of volume \(volName): no video files found")
             if rootIsNetwork { await ramDisk.unmount() }
             target.status = .complete
             target.lastScannedDate = Date()
@@ -1625,12 +1626,14 @@ final class VideoScanModel: ObservableObject {
         if Task.isCancelled {
             target.status = .stopped
             target.stopElapsedTimer()
+            appLog.write("Cancelled catalog scan of volume \(volName) at \(completedCount)/\(discoveredCount) file(s)")
             updateGlobalScanState()
             return
         }
         records.append(contentsOf: targetRecords)
         saveCatalogDebounced()
         logTargetScanSummary(volName: volName, records: targetRecords)
+        appLog.write("Completed catalog scan of volume \(volName): \(completedCount) file(s) scanned, \(targetRecords.count) catalogued")
         target.status = .complete
         target.lastScannedDate = Date()
         if target.phase == .noCatalog { target.phase = .cataloged }
@@ -1683,6 +1686,10 @@ final class VideoScanModel: ObservableObject {
     private func runScanForTarget(_ target: CatalogScanTarget) async {
         let root = target.searchPath
         let volName = URL(fileURLWithPath: root).lastPathComponent
+
+        // High-level narration to videoscan.log — per-target per-file detail
+        // continues to go to the catalog log.
+        appLog.write("Starting catalog scan of volume \(volName) (path: \(root))")
 
         guard FileManager.default.fileExists(atPath: ffprobePath) else {
             log("ERROR: ffprobe not found at \(ffprobePath)\nInstall with: brew install ffmpeg")
