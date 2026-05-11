@@ -168,7 +168,10 @@ struct ScanConfigurationTests {
         guard FileManager.default.fileExists(atPath: photosDir) else { return }
 
         let model = PersonFinderModel()
-        let job = ScanJob(searchPath: "/tmp/nonexistent_scan_path")
+        // Path must be reachable (mounted) — runJob bails fast on offline
+        // volumes since 97342c8. /tmp is always reachable; the scan task
+        // started below is stopped before it finds any videos there.
+        let job = ScanJob(searchPath: "/tmp")
         model.jobs.append(job)
 
         let profile = POIProfile(name: "TestPerson", referencePath: photosDir,
@@ -200,7 +203,8 @@ struct ScanConfigurationTests {
         guard FileManager.default.fileExists(atPath: photosDir) else { return }
 
         let model = PersonFinderModel()
-        let job = ScanJob(searchPath: "/tmp/nonexistent")
+        // Path must be reachable — see startJobLogsCorrectEngine note.
+        let job = ScanJob(searchPath: "/tmp")
         model.jobs.append(job)
 
         let profile = POIProfile(name: "Test", referencePath: photosDir,
@@ -225,7 +229,8 @@ struct ScanConfigurationTests {
         guard FileManager.default.fileExists(atPath: photosDir) else { return }
 
         let model = PersonFinderModel()
-        let job = ScanJob(searchPath: "/tmp/nonexistent")
+        // Path must be reachable — see startJobLogsCorrectEngine note.
+        let job = ScanJob(searchPath: "/tmp")
         model.jobs.append(job)
 
         let profile = POIProfile(name: "Test", referencePath: photosDir,
@@ -254,7 +259,8 @@ struct ScanConfigurationTests {
         guard FileManager.default.fileExists(atPath: photosDir) else { return }
 
         let model = PersonFinderModel()
-        let job = ScanJob(searchPath: "/tmp/nonexistent")
+        // Path must be reachable — see startJobLogsCorrectEngine note.
+        let job = ScanJob(searchPath: "/tmp")
         model.jobs.append(job)
 
         model.settings.referencePath = photosDir
@@ -284,7 +290,8 @@ struct ScanConfigurationTests {
 
         let model = PersonFinderModel()
 
-        let jobRejected = ScanJob(searchPath: "/tmp/nonexistent")
+        // Paths must be reachable — see startJobLogsCorrectEngine note.
+        let jobRejected = ScanJob(searchPath: "/tmp")
         model.jobs.append(jobRejected)
         jobRejected.assignedProfile = POIProfile(
             name: "Donna", referencePath: photosDir,
@@ -293,7 +300,7 @@ struct ScanConfigurationTests {
         await model.loadFacesForJob(jobRejected)
         let rejectedCount = jobRejected.assignedFaces.count
 
-        let jobAll = ScanJob(searchPath: "/tmp/nonexistent2")
+        let jobAll = ScanJob(searchPath: "/tmp")
         model.jobs.append(jobAll)
         jobAll.assignedProfile = POIProfile(
             name: "Donna", referencePath: photosDir,
