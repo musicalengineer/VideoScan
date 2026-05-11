@@ -113,6 +113,11 @@ final class IdentifyFamilyModel: ObservableObject {
         startElapsedTimer()
         phase = .scanning
 
+        // High-level narration to videoscan.log — per-step detail goes to the
+        // run's consoleLines and the underlying Python script's stdout.
+        let volumeName = folder.lastPathComponent
+        appLog.write("Finding people's faces (clusters) in all videos on \(volumeName)")
+
         launch(folder: folder, runName: effectiveName)
     }
 
@@ -121,6 +126,7 @@ final class IdentifyFamilyModel: ObservableObject {
         process = nil
         stopElapsedTimer()
         phase = .idle
+        appLog.write("Cancelled identify run (\(runName))")
     }
 
     private func startElapsedTimer() {
@@ -286,6 +292,8 @@ final class IdentifyFamilyModel: ObservableObject {
         // [scan-done] N faces from M videos
         if line.hasPrefix("[scan-done]") {
             phase = .clustering
+            let runName = runDir?.lastPathComponent ?? "(unknown)"
+            appLog.write("Clustering faces (run: \(runName), \(totalFaces) faces from \(processedVideos) video(s))")
         }
 
         // [done] cluster_summary.csv at <path>
@@ -377,6 +385,7 @@ final class IdentifyFamilyModel: ObservableObject {
         let noise = parsed.first(where: { $0.id == -1 })?.faceCount ?? 0
         lastLoadDiagnostic = "CSV \(text.count)B, \(dataRows) data row(s), parsed \(parsed.count) (rejected \(rejectedRows)). Real clusters: \(real). Noise faces: \(noise)."
         log.info("Loaded \(real) real clusters + \(noise) noise from \(summaryURL.path, privacy: .public) (parsed=\(parsed.count) rejected=\(rejectedRows))")
+        appLog.write("Identify ready for review (run: \(runDir.lastPathComponent), \(real) cluster(s), \(noise) noise face(s))")
         phase = .reviewing
     }
 
@@ -538,6 +547,7 @@ final class IdentifyFamilyModel: ObservableObject {
 
         let summary = "Promoted: \(created) new POI, \(merged) merged, \(copiedFaces) faces copied."
         log.info("\(summary, privacy: .public)")
+        appLog.write("Promoted clusters from run \(runName): \(created) new POI, \(merged) merged, \(copiedFaces) face(s) copied")
         return summary
     }
 
