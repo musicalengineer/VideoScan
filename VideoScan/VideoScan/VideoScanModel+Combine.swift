@@ -24,6 +24,9 @@ extension VideoScanModel {
             log("No pairs selected to combine.")
             return
         }
+        // High-level narration to videoscan.log — per-pair detail goes to
+        // the dashboard log via the existing `log(...)` calls below.
+        appLog.write("Combining \(pairs.count) pair(s) using \(technique.rawValue) → \(outputFolder.lastPathComponent)")
         combineAllPairsInternal(pairs: pairs, outputFolder: outputFolder, technique: technique, maxConcurrency: maxConcurrency)
     }
 
@@ -399,6 +402,8 @@ extension VideoScanModel {
           Failed:    \(dashboard.combineFailed)
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         """)
+        // Match the "Combining N pair(s)…" line emitted in combineSelectedPairs.
+        appLog.write("Completed combine: \(dashboard.combineSucceeded) succeeded, \(dashboard.combineSkipped) skipped, \(dashboard.combineFailed) failed")
         isCombining = false
         dashboard.combineCurrentFile = ""
     }

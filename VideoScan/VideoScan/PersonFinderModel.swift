@@ -765,6 +765,11 @@ final class ScanJob: ObservableObject, Identifiable {
     func finalizeResults(_ filtered: [ClipResult]) {
         results = filtered
         videosWithHits = filtered.count
+        // High-level narration to videoscan.log — match the "Searching for X…"
+        // line emitted in startJobAfterLoad.
+        let personName = assignedProfile?.name ?? "(global)"
+        let elapsed = taskStarted.map { Int(Date().timeIntervalSince($0)) } ?? 0
+        appLog.write("Completed search for \(personName): \(filtered.count) video(s) with hits in \(elapsed)s")
     }
 
     fileprivate func startElapsedTimer() {
@@ -961,6 +966,18 @@ final class PersonFinderModel: ObservableObject {
 
     private func startJobAfterLoad(_ job: ScanJob) {
         guard !job.status.isActive else { return }
+
+        // High-level narration to videoscan.log — per-job verbose detail
+        // continues to go to the job's PersistentLog.
+        let personName: String
+        if let profile = job.assignedProfile {
+            personName = profile.name
+        } else if let name = scanningPersonName, !name.isEmpty {
+            personName = name
+        } else {
+            personName = "(global)"
+        }
+        appLog.write("Searching for \(personName)… (path: \(job.searchPath))")
 
         // Build per-job settings: overlay assigned profile if present
         settings.save()
