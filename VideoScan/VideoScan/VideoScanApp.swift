@@ -26,14 +26,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !Self.isRunningTests else { return }
-        #if DEBUG
-        let buildMode = "Debug"
-        #else
-        let buildMode = "Release"
-        #endif
-        NSLog("VideoScan: app started at %@ (%@ build, pid %d)",
+        NSLog("VideoScan: app started at %@ — %@ (pid %d)",
               ISO8601DateFormatter().string(from: Date()),
-              buildMode,
+              BuildInfo.summary,
               ProcessInfo.processInfo.processIdentifier)
         let detached = RAMDisk.cleanupStaleMounts()
         if !detached.isEmpty {
@@ -50,7 +45,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        NSLog("VideoScan: app quitting at %@", ISO8601DateFormatter().string(from: Date()))
+        NSLog("VideoScan: app quitting at %@ — %@",
+              ISO8601DateFormatter().string(from: Date()),
+              BuildInfo.summary)
         // Flush the catalog snapshot first so the user's records survive
         // an offline-volume relaunch.
         MainActor.assumeIsolated {
