@@ -33,7 +33,13 @@ jobs:
           persist-credentials: true
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+        # Pinned to 16.4 deliberately, NOT bleeding-edge 26.x. Xcode 26.x has a
+        # known severe slowdown (~2s/test) for Swift Testing on virtualized M1
+        # GitHub-hosted runners — see actions/runner-images#13096. MeetingBar
+        # (the only macOS SwiftUI app we found running unit tests on GH-hosted
+        # CI cleanly) pins Xcode 16.2 for the same reason: 55ms/test instead
+        # of 2s/test on the SAME macos-15-arm64 image.
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
 
       - name: Show environment
         run: |
@@ -98,6 +104,28 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "PERIPHERY_OUTPUT=$(pwd)/periphery-raw.txt" >> $GITHUB_ENV
 
+      - name: Schedule diagnostic sample capture
+        run: |
+          # Forensic stack trace from the running test host. Fires 5 min into
+          # the test step; samples for 30s; uploads regardless of pass/fail.
+          # Helps pinpoint where each test is parked during the ~2s/test
+          # slowness on virtual-M1 runners (see actions/runner-images#13096).
+          (
+            sleep 300
+            PID=$(pgrep -fx 'xctest' | head -1 || pgrep -f VideoScan.app/Contents/MacOS/VideoScan | head -1)
+            if [ -n "$PID" ]; then
+              echo "Capturing sample of PID $PID..."
+              sample "$PID" 30 -file /tmp/xctest-sample.txt 2>&1 || echo "(sample failed)"
+              echo "::group::Sample summary"
+              head -50 /tmp/xctest-sample.txt 2>/dev/null || echo "(no sample file)"
+              echo "::endgroup::"
+            else
+              echo "No xctest process found at 5-min mark"
+              ps auxww | head -30 > /tmp/xctest-sample.txt
+            fi
+          ) &
+          echo "Sample scheduler started (PID $!)"
+
       - name: Run Unit Tests (Debug)
         run: |
           set -o pipefail
@@ -112,13 +140,27 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
             2>&1 | tee xcodebuild-test.log || XCODEBUILD_EXIT=$?
-          # Check xcresult for the authoritative pass/fail count
+          # Check xcresult for the authoritative pass/fail count.
+          # IMPORTANT: an empty SUMMARY (e.g. when xcresult is malformed or
+          # missing) used to silently default to 0/0 and skip the failure
+          # check entirely — that's how 570 failures were reported as
+          # "success" pre-May-10. Now we treat empty/zero-total as a
+          # failure tripwire.
           SUMMARY=$(xcrun xcresulttool get test-results summary --path TestResults.xcresult --compact 2>/dev/null) || true
           FAILED=$(echo "$SUMMARY" | jq -r '.failedTests // 0')
           PASSED=$(echo "$SUMMARY" | jq -r '.passedTests // 0')
-          echo "Debug tests: $PASSED passed, $FAILED failed"
-          if [ "${XCODEBUILD_EXIT:-0}" -ne 0 ] || [ "$FAILED" -gt 0 ]; then
-            echo "::error::Debug tests: $PASSED passed, $FAILED failed (exit code ${XCODEBUILD_EXIT:-0})"
+          TOTAL=$((PASSED + FAILED))
+          echo "Debug tests: $PASSED passed, $FAILED failed (xcodebuild exit ${XCODEBUILD_EXIT:-0})"
+          if [ "${XCODEBUILD_EXIT:-0}" -ne 0 ]; then
+            echo "::error::xcodebuild test exited non-zero: ${XCODEBUILD_EXIT}"
+            exit 1
+          fi
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::error::Debug tests failed: $FAILED of $TOTAL"
+            exit 1
+          fi
+          if [ "$TOTAL" -lt 100 ]; then
+            echo "::error::Suspiciously low test count ($TOTAL). Expected ~1300. Treating as partial run / failure."
             exit 1
           fi
 
@@ -136,12 +178,22 @@ jobs:
             ENABLE_TESTABILITY=YES \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
             2>&1 | tee xcodebuild-test-release.log || XCODEBUILD_EXIT=$?
+          # Same hardened check as Debug — see comment above.
           SUMMARY=$(xcrun xcresulttool get test-results summary --path TestResults-Release.xcresult --compact 2>/dev/null) || true
           FAILED=$(echo "$SUMMARY" | jq -r '.failedTests // 0')
           PASSED=$(echo "$SUMMARY" | jq -r '.passedTests // 0')
-          echo "Release tests: $PASSED passed, $FAILED failed"
-          if [ "${XCODEBUILD_EXIT:-0}" -ne 0 ] || [ "$FAILED" -gt 0 ]; then
-            echo "::error::Release tests: $PASSED passed, $FAILED failed (exit code ${XCODEBUILD_EXIT:-0})"
+          TOTAL=$((PASSED + FAILED))
+          echo "Release tests: $PASSED passed, $FAILED failed (xcodebuild exit ${XCODEBUILD_EXIT:-0})"
+          if [ "${XCODEBUILD_EXIT:-0}" -ne 0 ]; then
+            echo "::error::xcodebuild test (Release) exited non-zero: ${XCODEBUILD_EXIT}"
+            exit 1
+          fi
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::error::Release tests failed: $FAILED of $TOTAL"
+            exit 1
+          fi
+          if [ "$TOTAL" -lt 100 ]; then
+            echo "::error::Suspiciously low Release test count ($TOTAL). Treating as partial run / failure."
             exit 1
           fi
 
@@ -184,6 +236,15 @@ jobs:
           name: test-results-release
           path: TestResults-Release.xcresult
           retention-days: 14
+
+      - name: Upload diagnostic sample
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostic-sample
+          path: /tmp/xctest-sample.txt
+          retention-days: 14
+          if-no-files-found: warn
 
       # ---------------------------------------------------------------
       # Collect code-quality metrics and append to the `metrics` branch.
