@@ -765,11 +765,12 @@ final class ScanJob: ObservableObject, Identifiable {
     func finalizeResults(_ filtered: [ClipResult]) {
         results = filtered
         videosWithHits = filtered.count
-        // High-level narration to videoscan.log — match the "Searching for X…"
+        // High-level narration to videoscan.log — matches the "Starting search…"
         // line emitted in startJobAfterLoad.
         let personName = assignedProfile?.name ?? "(global)"
+        let volumeName = URL(fileURLWithPath: searchPath).lastPathComponent
         let elapsed = taskStarted.map { Int(Date().timeIntervalSince($0)) } ?? 0
-        appLog.write("Completed search for \(personName): \(filtered.count) video(s) with hits in \(elapsed)s")
+        appLog.write("Finished search for \(personName) on \(volumeName): \(filtered.count) video(s) with hits in \(elapsed)s")
     }
 
     fileprivate func startElapsedTimer() {
@@ -967,8 +968,7 @@ final class PersonFinderModel: ObservableObject {
     private func startJobAfterLoad(_ job: ScanJob) {
         guard !job.status.isActive else { return }
 
-        // High-level narration to videoscan.log — per-job verbose detail
-        // continues to go to the job's PersistentLog.
+        // Resolve person name for narration
         let personName: String
         if let profile = job.assignedProfile {
             personName = profile.name
@@ -977,7 +977,6 @@ final class PersonFinderModel: ObservableObject {
         } else {
             personName = "(global)"
         }
-        appLog.write("Searching for \(personName)… (path: \(job.searchPath))")
 
         // Build per-job settings: overlay assigned profile if present
         settings.save()
@@ -989,6 +988,12 @@ final class PersonFinderModel: ObservableObject {
         if let engineOverride = job.assignedEngine {
             jobSettings.recognitionEngine = engineOverride
         }
+
+        // High-level narration to videoscan.log — emitted once volume + engine
+        // are known. Per-job verbose detail continues to go to the job's
+        // PersistentLog.
+        let volumeName = URL(fileURLWithPath: job.searchPath).lastPathComponent
+        appLog.write("Starting search for \(personName) on \(volumeName) using \(jobSettings.recognitionEngine.rawValue)")
 
         // Pick reference faces: job-specific or global
         let faces = job.assignedProfile != nil ? job.assignedFaces : self.referenceFaces
@@ -1103,6 +1108,9 @@ final class PersonFinderModel: ObservableObject {
             job.status = .cancelled
             job.currentFile = ""
             osLog.info("Job stopped: \(job.searchPath, privacy: .public) — was \(prev.label, privacy: .public), scanned \(job.videosScanned)/\(job.videosTotal)")
+            let personName = job.assignedProfile?.name ?? "(global)"
+            let volumeName = URL(fileURLWithPath: job.searchPath).lastPathComponent
+            appLog.write("Stopped search for \(personName) on \(volumeName) (scanned \(job.videosScanned)/\(job.videosTotal))")
         }
     }
 
@@ -1111,6 +1119,9 @@ final class PersonFinderModel: ObservableObject {
         Task { await job.pauseGate.pause() }
         job.status = .paused
         osLog.info("Job paused: \(job.searchPath, privacy: .public)")
+        let personName = job.assignedProfile?.name ?? "(global)"
+        let volumeName = URL(fileURLWithPath: job.searchPath).lastPathComponent
+        appLog.write("Paused search for \(personName) on \(volumeName)")
     }
 
     func resumeJob(_ job: ScanJob) {
@@ -1118,6 +1129,9 @@ final class PersonFinderModel: ObservableObject {
         Task { await job.pauseGate.resume() }
         job.status = .scanning
         osLog.info("Job resumed: \(job.searchPath, privacy: .public)")
+        let personName = job.assignedProfile?.name ?? "(global)"
+        let volumeName = URL(fileURLWithPath: job.searchPath).lastPathComponent
+        appLog.write("Resumed search for \(personName) on \(volumeName)")
     }
 
     func togglePauseJob(_ job: ScanJob) {
