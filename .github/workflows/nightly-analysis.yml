@@ -1,8 +1,8 @@
 name: Nightly Static Analysis
 
 # Runs every night at 01:00 EDT (05:00 UTC) and is also manually
-# triggerable from the Actions tab. Dial is turned to 11 — every
-# tool runs at maximum strictness because we have all night.
+# triggerable from the Actions tab. GH-hosted runners are useful here
+# for static/build-derived signal, not for unit-test execution.
 #
 # Jobs (run in parallel):
 #   strict-concurrency  — Swift compiler with -strict-concurrency=complete,
@@ -10,8 +10,8 @@ name: Nightly Static Analysis
 #                         compile-time perf warnings.
 #   codeql              — GitHub CodeQL with security-and-quality
 #                         (the broadest standard suite).
-#   thread-sanitizer    — Full unit test suite under TSan instrumentation
-#                         (catches actual races at runtime, not just static).
+#   thread-sanitizer    — Disabled on GH-hosted runners. Run TSan on local
+#                         Mac hardware / self-hosted macOS instead.
 #   lint-strict         — SwiftLint --strict + Periphery without retain-public.
 #   aggregate           — Collects every count and appends one row to
 #                         metrics/static_analysis.jsonl on the metrics branch.
@@ -225,7 +225,8 @@ jobs:
 
   # -------------------------------------------------------------------
   thread-sanitizer:
-    name: Thread Sanitizer (full unit test run)
+    name: Thread Sanitizer (Mac/self-hosted only)
+    if: false
     runs-on: macos-15
     timeout-minutes: 60
     outputs:
@@ -240,6 +241,7 @@ jobs:
 
       - name: Run unit tests under TSan
         run: |
+          echo "TSan is disabled on GH-hosted macOS runners. Run on local/self-hosted Mac hardware."
           # This is a *reporting* job — we want to capture TSan output
           # even when tests fail. Tests can fail under instrumentation
           # because TSan exposes real races, slows execution enough to
@@ -498,7 +500,7 @@ jobs:
             echo "|---|---:|"
             echo "| Swift strict concurrency (max) | ${CONCURRENCY_WARNINGS:-?} |"
             echo "| CodeQL (security-and-quality) | ${CODEQL_FINDINGS:-?} |"
-            echo "| Thread Sanitizer (test run) | ${TSAN_ISSUES:-?} |"
+            echo "| Thread Sanitizer | Mac/self-hosted only |"
             echo "| SwiftLint --strict | ${SWIFTLINT_STRICT:-?} |"
             echo "| Periphery aggressive | ${PERIPHERY_AGGRESSIVE:-?} |"
             echo ""
