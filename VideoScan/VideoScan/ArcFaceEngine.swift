@@ -12,17 +12,47 @@ import os
 
 // MARK: - ArcFace CoreML Model Singleton
 
-/// Lazily loads the w600k_r50 CoreML model from ~/dev/VideoScan/models/.
-/// Thread-safe via actor isolation.
+/// Resolves the compiled w600k_r50 CoreML model URL on first call (caching the
+/// expensive compilation step), then constructs a FRESH MLModel instance on
+/// every subsequent `getModel()` call.
+///
+/// Why a fresh instance each time: CoreML's MLE5 engine is NOT safe to share
+/// across concurrent inference calls. A single `MLModel` instance with two
+/// worker threads calling `prediction(from:)` simultaneously can throw
+/// `MLE5BindEmptyMemoryObjectToPort` (the output port binding races). Apple's
+/// docs document that distinct MLModel instances ARE safe across threads.
+///
+/// The expensive bit is the .mlpackage → .mlmodelc compilation, which we cache
+/// in ~/dev/VideoScan/models/ on disk. Constructing an MLModel from an existing
+/// .mlmodelc is fast (~10-50ms), so per-job loads are cheap.
+///
+/// Thread-safe via actor isolation. See memory note
+/// `project_arcface_concurrency_bug.md` for the bug history.
 actor ArcFaceModelLoader {
     static let shared = ArcFaceModelLoader()
 
-    private var model: MLModel?
-    private var loadError: String?
+    /// Cached URL of the compiled .mlmodelc — resolved on first successful
+    /// load and reused across all subsequent getModel() calls.
+    private var compiledURL: URL?
 
-    /// Returns the loaded model, or nil with an error message.
+    /// Returns a freshly-constructed MLModel, or nil with an error message.
+    /// Safe to call from multiple jobs concurrently — each gets its own instance,
+    /// which avoids the MLE5BindEmptyMemoryObjectToPort race seen when worker
+    /// threads inferred against a single shared MLModel.
     func getModel() -> (MLModel?, String?) {
-        if let model { return (model, nil) }
+        if let url = compiledURL {
+            // Fast path: URL already resolved — just rebuild the MLModel.
+            let config = MLModelConfiguration()
+            config.computeUnits = .all
+            do {
+                let loaded = try MLModel(contentsOf: url, configuration: config)
+                return (loaded, nil)
+            } catch {
+                // Cached URL no longer valid (file moved/deleted) — fall through
+                // to re-resolve below.
+                compiledURL = nil
+            }
+        }
 
         let modelsDir = NSHomeDirectory() + "/dev/VideoScan/models"
         let compiledPath = modelsDir + "/w600k_r50.mlmodelc"
@@ -32,10 +62,11 @@ actor ArcFaceModelLoader {
         // 1. Try pre-compiled .mlmodelc first (fastest)
         if fm.fileExists(atPath: compiledPath) {
             do {
+                let url = URL(fileURLWithPath: compiledPath)
                 let config = MLModelConfiguration()
                 config.computeUnits = .all
-                let loaded = try MLModel(contentsOf: URL(fileURLWithPath: compiledPath), configuration: config)
-                self.model = loaded
+                let loaded = try MLModel(contentsOf: url, configuration: config)
+                self.compiledURL = url
                 return (loaded, nil)
             } catch {
                 // Fall through to try compiling from .mlpackage
@@ -45,18 +76,18 @@ actor ArcFaceModelLoader {
         // 2. Compile .mlpackage → .mlmodelc at runtime
         if fm.fileExists(atPath: packagePath) {
             do {
-                let compiledURL = try MLModel.compileModel(at: URL(fileURLWithPath: packagePath))
+                let compiledTempURL = try MLModel.compileModel(at: URL(fileURLWithPath: packagePath))
                 // Move compiled model to our models/ directory for next time
                 let destURL = URL(fileURLWithPath: compiledPath)
                 if fm.fileExists(atPath: compiledPath) {
                     try? fm.removeItem(at: destURL)
                 }
-                try fm.moveItem(at: compiledURL, to: destURL)
+                try fm.moveItem(at: compiledTempURL, to: destURL)
 
                 let config = MLModelConfiguration()
                 config.computeUnits = .all
                 let loaded = try MLModel(contentsOf: destURL, configuration: config)
-                self.model = loaded
+                self.compiledURL = destURL
                 return (loaded, nil)
             } catch {
                 return (nil, "Failed to compile ArcFace model: \(error.localizedDescription)")
@@ -66,10 +97,11 @@ actor ArcFaceModelLoader {
         // 3. Also check app bundle
         if let bundlePath = Bundle.main.path(forResource: "w600k_r50", ofType: "mlmodelc") {
             do {
+                let url = URL(fileURLWithPath: bundlePath)
                 let config = MLModelConfiguration()
                 config.computeUnits = .all
-                let loaded = try MLModel(contentsOf: URL(fileURLWithPath: bundlePath), configuration: config)
-                self.model = loaded
+                let loaded = try MLModel(contentsOf: url, configuration: config)
+                self.compiledURL = url
                 return (loaded, nil)
             } catch {
                 return (nil, "Failed to load bundled ArcFace model: \(error.localizedDescription)")
@@ -79,7 +111,7 @@ actor ArcFaceModelLoader {
         return (nil, "ArcFace model not found. Place w600k_r50.mlpackage in ~/dev/VideoScan/models/ and restart.")
     }
 
-    func reset() { model = nil }
+    func reset() { compiledURL = nil }
 }
 
 // MARK: - Embedding Extraction
