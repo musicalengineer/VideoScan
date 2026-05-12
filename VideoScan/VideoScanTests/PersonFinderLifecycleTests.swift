@@ -157,9 +157,21 @@ struct PersonFinderLifecycleTests {
         model.settings.recognitionScript = ""
 
         model.startJob(job)
-        // Wait for loadFacesForJob (which will return empty since /tmp/refs
-        // has no images) + the follow-up startJobAfterLoad.
-        try? await Task.sleep(for: .milliseconds(500))
+        // Poll for the bail to land — loadFacesForJob + startJobAfterLoad are
+        // both async hops. Fixed-sleep raced under contention (failed in full
+        // suite, passed solo). Bail is signalled by either a non-idle status
+        // (.failed for offline) or one of the dlib pre-flight log lines.
+        let bailedAsExpected: () -> Bool = {
+            if job.status != .idle && job.status != .scanning { return true }
+            let log = job.consoleLines.joined(separator: "\n")
+            return log.contains("Set Python path") ||
+                   log.contains("Set reference photos path") ||
+                   log.contains("offline")
+        }
+        let deadline = Date().addingTimeInterval(5.0)
+        while !bailedAsExpected() && Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(25))
+        }
 
         // Status should NOT be .scanning. It can be .idle (loadFacesForJob
         // restored idle then dlib-bail returned without setting status) or
