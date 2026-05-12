@@ -104,7 +104,23 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "PERIPHERY_OUTPUT=$(pwd)/periphery-raw.txt" >> $GITHUB_ENV
 
+      # ─────────────────────────────────────────────────────────────────
+      # TEST EXECUTION DISABLED on GH-hosted runners (2026-05-11)
+      #
+      # Reason: Xcode 26.x + virtualized macos-15 runners exhibit a ~285x
+      # slowdown per test (~2s each vs ~7ms local), causing every run to
+      # hit the workflow timeout. See actions/runner-images#13096 (open,
+      # unfixed) and docs/development_practices.md § CI & Test Infrastructure.
+      #
+      # Tests now run on local Mac Studio + MBP (manually until M5 arrives
+      # 2026-05-14 and we set up a self-hosted runner on the M1 Max).
+      #
+      # To re-enable: flip `if: false` → `if: true` on the three steps below
+      # AND switch `runs-on: macos-15` to `runs-on: [self-hosted, macOS]`.
+      # ─────────────────────────────────────────────────────────────────
+
       - name: Schedule diagnostic sample capture
+        if: false
         run: |
           # Forensic stack trace from the running test host. Fires 5 min into
           # the test step; samples for 30s; uploads regardless of pass/fail.
@@ -127,6 +143,7 @@ jobs:
           echo "Sample scheduler started (PID $!)"
 
       - name: Run Unit Tests (Debug)
+        if: false   # disabled — see comment above the diagnostic sample step
         run: |
           set -o pipefail
           xcodebuild test \
@@ -165,6 +182,7 @@ jobs:
           fi
 
       - name: Run Unit Tests (Release — optimizer smoke test)
+        if: false   # disabled — see comment above the diagnostic sample step
         run: |
           set -o pipefail
           xcodebuild test \
