@@ -158,6 +158,15 @@
     margin-bottom: 12px;
   }
   canvas { width: 100% !important; height: 240px !important; }
+  .chart-note {
+    min-height: 240px;
+    display: flex;
+    align-items: center;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  .hidden { display: none; }
 
   /* Section heading (between the per-push and nightly blocks) */
   .section-heading {
@@ -217,7 +226,13 @@
 
 <!-- Trend charts -->
 <div class="charts">
-  <div class="chart-box"><h2>Logic-Only Coverage %</h2><canvas id="chart-coverage"></canvas></div>
+  <div class="chart-box">
+    <h2>Logic-Only Coverage %</h2>
+    <canvas id="chart-coverage"></canvas>
+    <div id="chart-coverage-note" class="chart-note hidden">
+      Coverage is unavailable from GitHub-hosted CI because unit tests are disabled there. Push metrics from a Mac/self-hosted test run to restore this chart.
+    </div>
+  </div>
   <div class="chart-box"><h2>SwiftLint Warnings + Errors</h2><canvas id="chart-swiftlint"></canvas></div>
   <div class="chart-box"><h2>Periphery — Unused Code</h2><canvas id="chart-periphery"></canvas></div>
   <div class="chart-box"><h2>Total Swift Lines of Code</h2><canvas id="chart-loc"></canvas></div>
@@ -399,8 +414,9 @@ async function loadData() {
 
   // ---- Per-push cards ----
   const cardsEl = document.getElementById("cards");
+  const hasCoverage = rows.some(r => r.coverage_logic_pct != null);
   cardsEl.appendChild(card("Logic Coverage",
-    last.coverage_logic_pct != null ? last.coverage_logic_pct.toFixed(1) + "%" : "\u2014",
+    last.coverage_logic_pct != null ? last.coverage_logic_pct.toFixed(1) + "%" : "Mac only",
     prev.coverage_logic_pct, last.coverage_logic_pct, false, "var(--good)"));
   cardsEl.appendChild(card("Swift LOC",
     last.total_swift_lines?.toLocaleString(), prev.total_swift_lines, last.total_swift_lines, false, "var(--muted)"));
@@ -454,7 +470,14 @@ async function loadData() {
     pointBorderColor: color,
   });
 
-  drawLine("chart-coverage", labels, [{ label: "coverage %", data: col("coverage_logic_pct"), ...lineStyle("#3fb950") }]);
+  const coverageCanvas = document.getElementById("chart-coverage");
+  const coverageNote = document.getElementById("chart-coverage-note");
+  if (hasCoverage) {
+    drawLine("chart-coverage", labels, [{ label: "coverage %", data: col("coverage_logic_pct"), ...lineStyle("#3fb950") }]);
+  } else {
+    coverageCanvas.classList.add("hidden");
+    coverageNote.classList.remove("hidden");
+  }
   drawLine("chart-swiftlint", labels, [
     { label: "warnings", data: col("swiftlint_warnings"), ...lineStyle("#d29922") },
     { label: "errors", data: col("swiftlint_errors"), ...lineStyle("#f85149") },
