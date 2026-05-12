@@ -1542,8 +1542,10 @@ struct StreamInspectInfo: Identifiable {
             switch stream.codec_type {
             case "video":
                 hasV = true
-                let res = (stream.width != nil && stream.height != nil)
-                    ? "\(stream.width!)×\(stream.height!)" : ""
+                let res: String = {
+                    if let w = stream.width, let h = stream.height { return "\(w)×\(h)" }
+                    return ""
+                }()
                 let fps: String = {
                     guard let r = stream.r_frame_rate, let slash = r.firstIndex(of: "/"),
                           let num = Double(r[r.startIndex..<slash]),
