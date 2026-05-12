@@ -1,7 +1,7 @@
 # Development Practices — VideoScan
 
-**Last updated:** 2026-05-04
-**Scope:** the development rhythm, testing strategy, and the unit-test reference for VideoScan. Branching/agent-coordination specifics live in [`features_and_branches.md`](features_and_branches.md); logging convention is in the same file.
+**Last updated:** 2026-05-12
+**Scope:** the development rhythm, testing strategy, and the unit-test reference for VideoScan. Branching/agent-coordination specifics live in [`features_and_branches.md`](features_and_branches.md); machine/service ownership lives in [`compute-assignments.md`](compute-assignments.md); logging convention is in the branching file.
 
 This document replaces the prior `unit_tests.md`.
 
@@ -13,7 +13,7 @@ This document replaces the prior `unit_tests.md`.
 - **Rapid Dev mode** (Rick says "RD"): build-only, no auto tests, fast iteration. Run the suite at end-of-day or start-of-day as a clean-slate bookend.
 - **Regression discipline**: every fixed bug gets a test that has been *seen to fail* on the broken code. No exceptions.
 - **Coverage as a tool, not a goal**: drive coverage on the logic-critical modules; ignore the headline number.
-- **Concurrency is the recurring bug class**: run Thread Sanitizer on CI and stress-test the major mutable structures.
+- **Concurrency is the recurring bug class**: run Thread Sanitizer on real Mac hardware / self-hosted CI and stress-test the major mutable structures.
 
 ---
 
@@ -109,7 +109,7 @@ So the question to ask isn't *"what's our coverage number?"* — it's *"what cla
 
 | Bug class | Recent example | What catches it |
 |---|---|---|
-| Concurrency race | Copy Metadata exclusivity abort | **Thread Sanitizer (TSan)** in CI; stress tests with concurrent reads/writes |
+| Concurrency race | Copy Metadata exclusivity abort | **Thread Sanitizer (TSan)** on local/self-hosted Mac hardware; stress tests with concurrent reads/writes |
 | Format parsing | CRLF in cluster_summary.csv (silent 0-row parse) | **Real-input fixture tests** — feed the parser actual files from the wild |
 | Silent failure | PersonFinder stuck 13h, no logs | **Logging convention** + observability, not test coverage |
 | State machine | "Stuck in extraction," "no results visible during compile" | **Scenario tests** that walk the full lifecycle and assert invariants at each transition |
@@ -146,11 +146,11 @@ This unlocks tests we can't currently write at meaningful scale:
 
 Cost: ~half a day to build, returns multi-day savings every time someone writes a test.
 
-#### 2. Thread Sanitizer (TSan) on the test scheme *(~1 hour to wire)*
+#### 2. Thread Sanitizer (TSan) on the test scheme *(wired, Mac/self-hosted only)*
 
-Apple's TSan catches data races at runtime. Enable it as a build option on the test scheme — every CI run does both a normal test and a TSan test. Catches races like the Copy Metadata bug *without* needing to deterministically provoke them.
+Apple's TSan catches data races at runtime. Run it as a build option on the test scheme from local Mac hardware or a self-hosted Mac runner. Catches races like the Copy Metadata bug *without* needing to deterministically provoke them.
 
-Cost: ~1 hour to wire. Tests run 3–5× slower under TSan; only on CI, so no developer impact.
+Tests run 3–5× slower under TSan. That is acceptable on a self-hosted Mac runner, but not on GH-hosted macOS while Swift Testing is affected by the runner slowdown.
 
 #### 3. Concurrency stress tests for mutable shared-state structures
 
@@ -195,7 +195,7 @@ Views stay low (UI testing is a separate exercise). The CI metrics dashboard alr
 
 These run on schedule, alert on regression, cost zero human attention:
 
-- **TSan on every CI run** (already free if step 2 above is wired).
+- **TSan on the self-hosted Mac runner** once available.
 - **Nightly stress job**: runs concurrency tests at higher iteration counts (hours instead of seconds).
 - **Weekly soak job**: loads a synthetic 50K-record catalog and exercises save/load/correlate cycles continuously for hours, watching memory + crash counts.
 
@@ -237,16 +237,18 @@ CI runs automatically on every push to `main` and on pull requests. Manually tri
 
 Each run shows:
 - Build status (pass/fail)
-- Test results with pass/fail per test case
-- Code coverage summary (in the step summary)
-- Downloadable `TestResults.xcresult` artifact (retained 14 days)
+- SwiftLint report
+- Periphery report
+- Metrics push for repository health data
+
+GitHub-hosted CI no longer reports authoritative unit-test, TSan, or coverage results. Those come from local Mac hardware / the self-hosted runner.
 
 ### CI Environment
 
 | Item | Value |
 |------|-------|
 | Runner | `macos-15` |
-| Xcode | 16 (`/Applications/Xcode_16.app`) |
+| Xcode | 16.4 (`/Applications/Xcode_16.4.app`) |
 | Local Xcode | 26.4 (Tahoe) |
 | Deployment target override | `MACOSX_DEPLOYMENT_TARGET=15.0` |
 | Code signing | Disabled (`CODE_SIGNING_ALLOWED=NO`) |
@@ -341,7 +343,7 @@ The raw coverage-% is noisy on this project (filename-based filter excludes `Vie
 
 1. **Regression test count** — `grep "// regression:"` returns the number of bugs locked out by a test that was seen to fail. Every entry has a story.
 2. **Core-logic coverage** — hand-curated include-list (VideoScanModel, PersonFinderModel, ScanEngine, CatalogStore, Correlator, DuplicateDetector, CombineEngine, etc.). Denominator is "stuff that matters," so the number is honest.
-3. **TSan clean-runs** — count of consecutive CI runs with no race reports. Drops to zero on regressions.
+3. **TSan clean-runs** — count of consecutive self-hosted Mac runs with no race reports. Drops to zero on regressions.
 4. **SwiftLint warnings** — direct signal of complexity / file size / force unwraps.
 5. **Periphery findings** — dead code count.
 6. **Overall xccov coverage** — keep it on the chart, but don't steer by it.
@@ -352,7 +354,7 @@ The raw coverage-% is noisy on this project (filename-based filter excludes `Vie
 
 After a long debugging session (2026-05-11) we established that **GitHub-hosted runners are not suitable for VideoScan's unit tests**. The root cause is a known, unfixed bug in Apple's tooling: Xcode 26.x on virtualized macOS runners runs Swift Testing tests at ~2 seconds each (vs ~7 ms locally on bare-metal Apple Silicon). See [actions/runner-images#13096](https://github.com/actions/runner-images/issues/13096). Of 30+ macOS SwiftUI app projects surveyed on GitHub, exactly one (MeetingBar) runs unit tests cleanly on GH-hosted runners — and only by pinning Xcode 16.2 with XCTest (not Swift Testing). This is a real industry gap, not a project-specific failure.
 
-Going forward, work is split by where it runs best.
+Going forward, work is split by where it runs best. The concise assignment table lives in [`compute-assignments.md`](compute-assignments.md).
 
 ### What GitHub hosts (cloud) is for
 
@@ -396,6 +398,7 @@ The plan for self-hosted runners: install `actions-runner` from GitHub on the M1
 | **Periphery** | Dead code detection | Wired in CI (non-blocking) |
 | **xcrun xccov** | Line/function coverage from xcresult | Used by metrics dashboard |
 | **Swift Testing's own assertions + `// regression:` markers** | Bug-pinned regression tests | 100+ entries, grep'able |
+| **CodeQL** | GitHub code scanning for security-and-quality findings | Wired in nightly static analysis |
 
 ### What we considered but don't currently use
 
@@ -403,7 +406,7 @@ The plan for self-hosted runners: install `actions-runner` from GitHub on the M1
 |---|---|
 | **LDRA** | Industry-leading safety-critical analyzer with data injection / structural coverage to 85%+. License is 5-figure enterprise. Overkill for a personal project. |
 | **Coverity Scan** | Free for open-source projects (Synopsys). Worth enrolling if VideoScan ever goes public. Strong nullability and resource-leak detection. |
-| **CodeQL** | Free on GitHub for both public and private repos. Runs on Linux; supports Swift since 2024. Worth adding as a GH-hosted security workflow. Low effort. |
+| **CodeQL** | Now wired in nightly static analysis. Keep it on GH; triage findings in Security → Code Scanning. |
 | **Apple's libFuzzer / fuzz testing** | Swift Testing supports fuzz traits. Worth exploring for parser code (e.g., AVB binary parser) once core stability is in place. |
 | **Mutation testing (Mull / Stryker)** | No mature Swift implementation as of 2026. Track for future. |
 
