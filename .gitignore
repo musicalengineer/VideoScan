@@ -35,9 +35,9 @@ DonnaFaceDetectionTest.png
 # ML models (too large for git, downloaded separately)
 models/
 
-# Test media — allow small generated fixtures, block large real media
+# Test media — allow small generated fixtures, block private real media
 # The pre-commit hook also rejects any staged file > 75 MB
-tests/fixtures/videos/*-test-*.mxf
+tests/fixtures/videos/*
 !tests/fixtures/videos/test_*
 
 # Local-only external media corpus. Keep the documentation and example
