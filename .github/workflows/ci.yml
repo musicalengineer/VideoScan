@@ -18,7 +18,7 @@ jobs:
     # config (Debug + Release) at observed pace. 90 min gives headroom for
     # the surrounding steps. Band-aid until root cause diagnosed via local
     # repro on the MBP test runner.
-    timeout-minutes: 90
+    timeout-minutes: 30
     # Allow this job to push to the `metrics` branch (history.jsonl for the
     # trend dashboard). Scoped to contents only — no packages/actions/etc.
     permissions:
@@ -142,17 +142,22 @@ jobs:
           ) &
           echo "Sample scheduler started (PID $!)"
 
-      - name: Run Unit Tests (Debug)
-        if: false   # disabled — see comment above the diagnostic sample step
+      - name: Run Unit Tests (Debug)  # EXPERIMENT: 1-test scaling probe
+        # Re-enabled with -only-testing narrowed to ONE fast bail-path test
+        # (~1ms locally, no fixtures, no I/O). Goal: measure per-test latency
+        # under Xcode 16.4 + macos-15 virt-M1 to see if a minimal-test run
+        # completes inside 30 min, vs the full suite that timed out at 90.
+        if: true
         run: |
           set -o pipefail
-          xcodebuild test \
+          echo "EXPERIMENT: running 1 test to measure GH-runner per-test latency"
+          time xcodebuild test \
             -project VideoScan/VideoScan.xcodeproj \
             -scheme VideoScan \
             -configuration Debug \
             -destination 'platform=macOS' \
-            -only-testing:VideoScanTests \
-            -enableCodeCoverage YES \
+            -only-testing:VideoScanTests/PersonFinderEngineDispatchTests/dlibBailsWhenPythonPathEmpty \
+            -enableCodeCoverage NO \
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
@@ -176,8 +181,8 @@ jobs:
             echo "::error::Debug tests failed: $FAILED of $TOTAL"
             exit 1
           fi
-          if [ "$TOTAL" -lt 100 ]; then
-            echo "::error::Suspiciously low test count ($TOTAL). Expected ~1300. Treating as partial run / failure."
+          if [ "$TOTAL" -lt 1 ]; then
+            echo "::error::Test count $TOTAL — experiment expected at least 1."
             exit 1
           fi
 
