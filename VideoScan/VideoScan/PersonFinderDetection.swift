@@ -410,15 +410,22 @@ nonisolated func pfProcessVideo(
     let ext = (filePath as NSString).pathExtension.lowercased()
     let useSeeker = ext == "mts" || ext == "m2ts" || ext == "ts"
 
-    let seekProvider: SeekingFrameProvider? = useSeeker
-        ? SeekingFrameProvider(asset: ctx.asset, duration: ctx.duration, frameInterval: frameInterval)
-        : nil
-    let prefetcher: FramePrefetcher? = useSeeker
-        ? nil
-        : FramePrefetcher(reader: ctx.reader, trackOutput: ctx.trackOutput, frameInterval: frameInterval)
-    if useSeeker { ctx.reader.cancelReading() }
+    // Bind exactly one source so the rest of the loop never has to ask
+    // "which provider is live?" — eliminates the prefetcher!/seekProvider!
+    // pairs that swiftlint flagged as force unwraps.
+    let frameStream: AsyncStream<PrefetchedFrame>
+    let releaseSlot: () -> Void
+    if useSeeker {
+        let sp = SeekingFrameProvider(asset: ctx.asset, duration: ctx.duration, frameInterval: frameInterval)
+        ctx.reader.cancelReading()
+        frameStream = sp.frames()
+        releaseSlot = { sp.releaseSlot() }
+    } else {
+        let pf = FramePrefetcher(reader: ctx.reader, trackOutput: ctx.trackOutput, frameInterval: frameInterval)
+        frameStream = pf.frames()
+        releaseSlot = { pf.releaseSlot() }
+    }
 
-    let frameStream = seekProvider?.frames() ?? prefetcher!.frames()
     for await frame in frameStream {
         if Task.isCancelled {
             // Don't call ctx.reader.cancelReading() here on the prefetcher
@@ -432,7 +439,7 @@ nonisolated func pfProcessVideo(
             // Same applies to the seeker path — just break.
             break
         }
-        if let sp = seekProvider { sp.releaseSlot() } else { prefetcher!.releaseSlot() }
+        releaseSlot()
 
         let frameTime = frame.presentationTime
         var frameMatch = PFVisionFrameMatch()

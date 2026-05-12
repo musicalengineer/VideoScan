@@ -638,7 +638,7 @@ private struct FamilySearchMatch: Identifiable {
 }
 
 private enum FamilyTreeDemoData {
-    static let rootID = UUID(uuidString: "56C8C137-A07E-439B-9A98-A9909295D59B")!
+    static let rootID = UUID(uuidString: "56C8C137-A07E-439B-9A98-A9909295D59B") ?? UUID()
 
     static let people: [FamilyTreePerson] = [
         person("A5D82A12-1D18-4081-8EEA-26E395E56A2F", "George Breen", "1898-1995", "G2S4-WS4", 0, 2, "review", "person.fill", .cyan, CGPoint(x: 280, y: 100), "No confirmed face yet", "No archive clips linked", "FamilySearch-only ancestor"),
@@ -690,7 +690,7 @@ private enum FamilyTreeDemoData {
         _ reviewState: String
     ) -> FamilyTreePerson {
         FamilyTreePerson(
-            id: UUID(uuidString: id)!,
+            id: UUID(uuidString: id) ?? UUID(),
             name: name,
             years: years,
             familySearchID: familySearchID,

@@ -158,18 +158,18 @@ struct PersonFinderLifecycleTests {
 
         model.startJob(job)
         // Poll for the bail to land — loadFacesForJob + startJobAfterLoad are
-        // both async hops. Fixed-sleep raced under contention (failed in full
-        // suite, passed solo). Bail is signalled by either a non-idle status
-        // (.failed for offline) or one of the dlib pre-flight log lines.
-        let bailedAsExpected: () -> Bool = {
-            if job.status != .idle && job.status != .scanning { return true }
+        // both async hops, and loadFacesForJob transitions through .loading.
+        // Fixed-sleep raced under contention (failed in full suite, passed
+        // solo). Poll only on the same conditions the assertions check, so we
+        // never short-circuit on a transient (.loading) state with empty log.
+        let bailLogged: () -> Bool = {
             let log = job.consoleLines.joined(separator: "\n")
             return log.contains("Set Python path") ||
                    log.contains("Set reference photos path") ||
                    log.contains("offline")
         }
         let deadline = Date().addingTimeInterval(5.0)
-        while !bailedAsExpected() && Date() < deadline {
+        while !bailLogged() && Date() < deadline {
             try? await Task.sleep(for: .milliseconds(25))
         }
 
