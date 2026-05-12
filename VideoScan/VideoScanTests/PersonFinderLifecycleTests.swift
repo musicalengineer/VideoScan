@@ -168,9 +168,14 @@ struct PersonFinderLifecycleTests {
                    log.contains("Set reference photos path") ||
                    log.contains("offline")
         }
-        let deadline = Date().addingTimeInterval(5.0)
+        // 30s deadline — full suite running in parallel with codex stress
+        // worktree on the same machine pushed the previous 5s deadline past
+        // its budget (16s observed). Bail conditions are deterministic; this
+        // poll completes in ms when the system is unloaded, and only wears
+        // the long deadline in the rare contention case.
+        let deadline = Date().addingTimeInterval(30.0)
         while !bailLogged() && Date() < deadline {
-            try? await Task.sleep(for: .milliseconds(25))
+            try? await Task.sleep(for: .milliseconds(50))
         }
 
         // Status should NOT be .scanning. It can be .idle (loadFacesForJob
