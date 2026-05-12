@@ -17,6 +17,21 @@ GitHub is the repo and coordination system. Real test execution belongs on real 
 | GitHub-hosted Actions | Repository checks, pull request visibility, CodeQL, strict-concurrency build warnings, SwiftLint/Periphery reports, metrics publishing | Unit tests, TSan, coverage, UI tests, performance results |
 | GitHub web | Issues, project board, PR review, releases, code scanning alerts, Pages dashboard | Source of truth for test pass/fail while GH-hosted macOS runners remain affected |
 
+## Agent Work Lanes
+
+Claude's hardening work owns app behavior, Swift model refactors, tests, QA review, and performance findings.
+
+Codex's `codex/ci-infra` worktree owns CI and repo plumbing:
+
+- `.github/workflows/`
+- `docs/`
+- `scripts/ci_*`
+- `scripts/collect_metrics.sh`
+- `docs/index.html` metrics dashboard plumbing
+- GitHub issue / PR metadata via `gh`
+
+Codex should avoid production Swift and Swift test files in this lane unless Rick explicitly redirects the work.
+
 ## Current Rule
 
 If a job runs `xcodebuild test`, needs AppKit behavior, produces coverage from an `.xcresult`, or relies on Thread Sanitizer, run it on local hardware or the self-hosted MBP runner.
@@ -48,4 +63,3 @@ Not useful on GH-hosted runners:
 - Any unit-test-derived pass/fail or coverage number.
 
 TSan should come back only when the workflow runs on `[self-hosted, macOS]` or when GitHub-hosted macOS test execution is proven reliable again.
-
