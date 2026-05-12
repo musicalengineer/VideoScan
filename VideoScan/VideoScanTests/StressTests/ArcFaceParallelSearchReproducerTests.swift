@@ -130,7 +130,7 @@ struct ArcFaceParallelSearchReproducerTests {
 
     private static func stressProfile(from profile: POIProfile) -> POIProfile {
         let runID = stringSetting("VIDEOSCAN_ARCFACE_REPRO_RUN_ID") ?? "manual"
-        POIProfile(
+        return POIProfile(
             name: "\(profile.name)-arcface-repro-\(runID)-\(UUID().uuidString.prefix(8))",
             referencePath: profile.referencePath,
             rejectedFiles: profile.rejectedFiles,
