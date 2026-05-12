@@ -36,6 +36,100 @@ struct ToolLocatorTests {
 
         #expect(ToolLocator.firstExecutable(in: [path]) == nil)
     }
+
+    // MARK: - resolve(): env-var overrides + fallback (issue #60)
+    // Tests the env-var override behavior added in 2026-05-11 so users can
+    // point at non-standard tool installs without editing source.
+
+    // regression: env override wins when set AND executable
+    @Test func resolveEnvOverrideWinsWhenExecutable() {
+        let resolved = ToolLocator.resolve(
+            envVar: "VS_FFMPEG_PATH",
+            candidates: ["/nonexistent/ffmpeg"],
+            environment: ["VS_FFMPEG_PATH": "/bin/ls"],   // universally exec
+            fallback: "/dev/null"
+        )
+        #expect(resolved == "/bin/ls")
+    }
+
+    // regression: env override must NOT win if the path isn't executable
+    @Test func resolveEnvOverrideIgnoredWhenNotExecutable() {
+        let resolved = ToolLocator.resolve(
+            envVar: "VS_FFMPEG_PATH",
+            candidates: ["/bin/ls"],
+            environment: ["VS_FFMPEG_PATH": "/this/path/does/not/exist"],
+            fallback: "/dev/null"
+        )
+        #expect(resolved == "/bin/ls",
+            "Non-existent env override must fall through to candidates")
+    }
+
+    @Test func resolveEnvOverrideIgnoredWhenEmpty() {
+        let resolved = ToolLocator.resolve(
+            envVar: "VS_FFMPEG_PATH",
+            candidates: ["/bin/ls"],
+            environment: ["VS_FFMPEG_PATH": ""],
+            fallback: "/dev/null"
+        )
+        #expect(resolved == "/bin/ls")
+    }
+
+    @Test func resolveCandidateUsedWhenEnvVarAbsent() {
+        let resolved = ToolLocator.resolve(
+            envVar: "VS_FFMPEG_PATH",
+            candidates: ["/bin/ls"],
+            environment: [:],
+            fallback: "/dev/null"
+        )
+        #expect(resolved == "/bin/ls")
+    }
+
+    @Test func resolveSkipsNonExecutableAndPicksNext() {
+        let resolved = ToolLocator.resolve(
+            envVar: "VS_FFMPEG_PATH",
+            candidates: [
+                "/nonexistent/one",
+                "/nonexistent/two",
+                "/bin/ls",
+                "/usr/bin/env"
+            ],
+            environment: [:],
+            fallback: "/dev/null"
+        )
+        #expect(resolved == "/bin/ls")
+    }
+
+    @Test func resolveFallbackUsedWhenNothingExecutable() {
+        let resolved = ToolLocator.resolve(
+            envVar: "VS_FFMPEG_PATH",
+            candidates: ["/nope/a", "/nope/b"],
+            environment: [:],
+            fallback: "/some/default/ffmpeg"
+        )
+        #expect(resolved == "/some/default/ffmpeg",
+            "When neither env override nor any candidate is executable, fallback wins")
+    }
+
+    @Test func resolveEmptyFallbackSurfacesEmpty() {
+        let resolved = ToolLocator.resolve(
+            envVar: "VS_PYTHON_PATH",
+            candidates: ["/nope/python3"],
+            environment: [:],
+            fallback: ""
+        )
+        #expect(resolved == "",
+            "pythonPath callers gate on empty-string; fallback must surface empty when intentional")
+    }
+
+    // Sanity: production accessors return strings (non-empty for ffmpeg/ffprobe
+    // because they fall back to a candidate; pythonPath may be empty if no
+    // Python is installed — that's a contract callers depend on).
+    @Test func productionAccessorsHaveStableSemantics() {
+        #expect(!ToolLocator.ffmpegPath.isEmpty)
+        #expect(!ToolLocator.ffprobePath.isEmpty)
+        #expect(!ToolLocator.python312Path.isEmpty)
+        // pythonPath may be "" — don't assert non-empty.
+    }
 }
 
 // MARK: - StreamType Tests

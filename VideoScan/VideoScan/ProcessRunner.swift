@@ -1,6 +1,25 @@
 import Foundation
 
+/// Resolves filesystem paths for external command-line tools (ffmpeg, ffprobe,
+/// Python) that VideoScan shells out to. Single source of truth so hard-coded
+/// candidate lists don't spread through the codebase.
+///
+/// Resolution order for each tool:
+///   1. Environment variable override (e.g. `VS_FFMPEG_PATH`) — wins if set
+///      AND the path is executable. Lets users point at a non-standard
+///      install (Nix, manual build, etc.) without recompiling.
+///   2. First executable candidate from the built-in list.
+///   3. Fallback string (preserves prior behavior — callers see a "command
+///      not found" error rather than an empty-string crash).
+///
+/// Tested in `ToolLocatorTests`.
 enum ToolLocator {
+    // MARK: - Env-var override names (public for tests + docs)
+    static let ffmpegEnvVar = "VS_FFMPEG_PATH"
+    static let ffprobeEnvVar = "VS_FFPROBE_PATH"
+    static let pythonEnvVar = "VS_PYTHON_PATH"
+    static let python312EnvVar = "VS_PYTHON312_PATH"
+
     static let ffmpegCandidates = [
         "/opt/homebrew/bin/ffmpeg",
         "/usr/local/bin/ffmpeg",
@@ -32,20 +51,43 @@ enum ToolLocator {
         candidates.first { fileManager.isExecutableFile(atPath: $0) }
     }
 
+    /// Resolve a tool path: env-var override (if set & executable) wins,
+    /// otherwise first executable candidate, otherwise the supplied fallback.
+    /// Exposed for tests; production accessors below use a default environment.
+    static func resolve(
+        envVar: String,
+        candidates: [String],
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default,
+        fallback: String
+    ) -> String {
+        if let override = environment[envVar],
+           !override.isEmpty,
+           fileManager.isExecutableFile(atPath: override) {
+            return override
+        }
+        if let found = firstExecutable(in: candidates, fileManager: fileManager) {
+            return found
+        }
+        return fallback
+    }
+
     static var ffmpegPath: String {
-        firstExecutable(in: ffmpegCandidates) ?? ffmpegCandidates[0]
+        resolve(envVar: ffmpegEnvVar, candidates: ffmpegCandidates, fallback: ffmpegCandidates[0])
     }
 
     static var ffprobePath: String {
-        firstExecutable(in: ffprobeCandidates) ?? ffprobeCandidates[0]
+        resolve(envVar: ffprobeEnvVar, candidates: ffprobeCandidates, fallback: ffprobeCandidates[0])
     }
 
+    /// pythonPath returns "" if nothing resolves — callers gate on this
+    /// (rather than failing when the binary doesn't exist).
     static var pythonPath: String {
-        firstExecutable(in: pythonCandidates) ?? ""
+        resolve(envVar: pythonEnvVar, candidates: pythonCandidates, fallback: "")
     }
 
     static var python312Path: String {
-        firstExecutable(in: python312Candidates) ?? python312Candidates[0]
+        resolve(envVar: python312EnvVar, candidates: python312Candidates, fallback: python312Candidates[0])
     }
 }
 
