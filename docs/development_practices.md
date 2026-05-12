@@ -348,6 +348,71 @@ The raw coverage-% is noisy on this project (filename-based filter excludes `Vie
 
 ---
 
+## CI & Test Infrastructure — Where Things Run
+
+After a long debugging session (2026-05-11) we established that **GitHub-hosted runners are not suitable for VideoScan's unit tests**. The root cause is a known, unfixed bug in Apple's tooling: Xcode 26.x on virtualized macOS runners runs Swift Testing tests at ~2 seconds each (vs ~7 ms locally on bare-metal Apple Silicon). See [actions/runner-images#13096](https://github.com/actions/runner-images/issues/13096). Of 30+ macOS SwiftUI app projects surveyed on GitHub, exactly one (MeetingBar) runs unit tests cleanly on GH-hosted runners — and only by pinning Xcode 16.2 with XCTest (not Swift Testing). This is a real industry gap, not a project-specific failure.
+
+Going forward, work is split by where it runs best.
+
+### What GitHub hosts (cloud) is for
+
+**Keep on GH-hosted runners** (free, integrated, fast for non-Mac work):
+
+| Responsibility | Tool |
+|---|---|
+| Code repository, branches, releases | git on github.com |
+| Issue tracker & project board | GitHub Issues / Projects |
+| Pull request review | GitHub PR UI |
+| Dependency security advisories | Dependabot (automatic) |
+| Metrics dashboard hosting | GitHub Pages (`docs/index.html`) |
+| Markdown / YAML lint | Optional Linux runner — trivial |
+| SwiftLint (if desired as fail-fast PR gate) | Linux binary in a quick job |
+| Project discoverability | The network effect of being on GH |
+
+Anything that runs on a Linux container in under 60 seconds is fine on GH. Anything that needs `xcodebuild`, Xcode SDKs, AppKit, or our specific macOS version is not.
+
+### What runs locally / self-hosted (Mac)
+
+**These belong on a real Apple Silicon machine** — Mac Studio (primary dev) and the M1 Max MBP (dedicated runner after the M5 arrives 2026-05-14):
+
+| Responsibility | Tool / Command |
+|---|---|
+| Unit + regression tests (the *real* suite) | `xcodebuild test -scheme VideoScan ...` |
+| Code coverage | `xcrun xccov view` against test xcresult |
+| Performance regression tests | `xcodebuild` + dedicated perf scenarios |
+| Periphery — unused code analysis | `periphery scan` (Swift-aware) |
+| SwiftLint with the project config | `swiftlint lint` (works on Mac, exact ruleset) |
+| Build (Debug + Release) | `xcodebuild build -configuration Debug/Release` |
+| DocC generation | If/when added — needs Xcode SDK |
+| App signing / notarization | Apple tooling, Mac-only |
+
+The plan for self-hosted runners: install `actions-runner` from GitHub on the M1 Max MBP, register with the repo, label it `[self-hosted, macOS, M1-Max]`. Then the CI workflow uses `runs-on: [self-hosted, macOS]` instead of `runs-on: macos-15`. Tests run in 30 seconds on real hardware, no virtualized-M1 bug, full Console.app / Activity Monitor visibility when debugging.
+
+### Static analysis & coverage we already use
+
+| Tool | Purpose | Status |
+|---|---|---|
+| **SwiftLint** | Style, complexity, force-unwrap detection | Wired via pre-commit + CI (warn-only) |
+| **Periphery** | Dead code detection | Wired in CI (non-blocking) |
+| **xcrun xccov** | Line/function coverage from xcresult | Used by metrics dashboard |
+| **Swift Testing's own assertions + `// regression:` markers** | Bug-pinned regression tests | 100+ entries, grep'able |
+
+### What we considered but don't currently use
+
+| Tool | Why not (yet) |
+|---|---|
+| **LDRA** | Industry-leading safety-critical analyzer with data injection / structural coverage to 85%+. License is 5-figure enterprise. Overkill for a personal project. |
+| **Coverity Scan** | Free for open-source projects (Synopsys). Worth enrolling if VideoScan ever goes public. Strong nullability and resource-leak detection. |
+| **CodeQL** | Free on GitHub for both public and private repos. Runs on Linux; supports Swift since 2024. Worth adding as a GH-hosted security workflow. Low effort. |
+| **Apple's libFuzzer / fuzz testing** | Swift Testing supports fuzz traits. Worth exploring for parser code (e.g., AVB binary parser) once core stability is in place. |
+| **Mutation testing (Mull / Stryker)** | No mature Swift implementation as of 2026. Track for future. |
+
+### The "GH gets repo, Mac gets compute" rule
+
+When deciding where a new check or test should live, ask: *does it need Xcode SDKs, AppKit, or our exact macOS environment?* If yes → self-hosted Mac. If no → GH-hosted Linux is fine and free.
+
+---
+
 ## Cross-references
 
 - Branching, agent coordination, logging conventions: [`features_and_branches.md`](features_and_branches.md).
