@@ -4,10 +4,13 @@
 // On launch we print a startup banner to stderr so the terminal that ran
 // `swift run TestDriver` shows a marker — useful when correlating UI events
 // with terminal output.
+//
+// Entry point: main.swift checks for --cli; if present it runs the CLI
+// runner and exits, otherwise it calls TestDriverApp.main() to launch
+// the SwiftUI window.
 
 import SwiftUI
 
-@main
 struct TestDriverApp: App {
     init() {
         TermLog.log("app", "TestDriver launched — pid=\(ProcessInfo.processInfo.processIdentifier)")
