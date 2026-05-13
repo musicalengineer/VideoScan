@@ -36,6 +36,13 @@ enum CLI {
         print("  host:    \(opts.host.rawValue)")
         print("  tests:   \(entries.count)")
         print("  groups:  \(Set(entries.map(\.group.rawValue)).sorted().joined(separator: ", "))")
+        // Snapshot what we're about to test — same info the UI banner shows.
+        let repo = await RepoInspector.inspect(host: opts.host)
+        print("  repo:    \(repo.oneLine)")
+        print("  path:    \(repo.projectDir)")
+        if !repo.commitSubject.isEmpty, repo.commitSubject != "—" {
+            print("  subject: \(repo.commitSubject)")
+        }
         print(String(repeating: "─", count: 70))
 
         var counts = (passed: 0, failed: 0, unclear: 0, skipped: 0)
@@ -79,9 +86,19 @@ enum CLI {
 
         let total = Date().timeIntervalSince(started)
         print("")
-        print(String(repeating: "─", count: 70))
-        print(String(format: "Done in %.1fs — %d passed, %d failed, %d unclear, %d skipped",
-                     total, counts.passed, counts.failed, counts.unclear, counts.skipped))
+        print(String(repeating: "═", count: 70))
+        let banner: String = {
+            if counts.failed > 0  { return "✗ FAILED" }
+            if counts.unclear > 0 { return "⚠ UNCLEAR" }
+            if counts.passed > 0  { return "✓ PASSED" }
+            return "— EMPTY"
+        }()
+        print(String(format: "%@   %d passed   %d failed   %d unclear   %d skipped   (%.1fs)",
+                     banner, counts.passed, counts.failed, counts.unclear, counts.skipped, total))
+        print("Host:   \(opts.host.rawValue)")
+        print("Repo:   \(repo.oneLine)")
+        print("Date:   \(ISO8601DateFormatter().string(from: started))")
+        print(String(repeating: "═", count: 70))
 
         if counts.failed > 0 { return 1 }
         if counts.unclear > 0 { return 2 }

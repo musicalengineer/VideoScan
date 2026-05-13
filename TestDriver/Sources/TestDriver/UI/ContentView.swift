@@ -23,7 +23,12 @@ final class TestDriverModel: ObservableObject {
     @Published var totalToRun: Int = 0
     @Published var completedCount: Int = 0
     @Published var briefMode: Bool = false
-    @Published var host: TestHost = .macStudio
+    @Published var host: TestHost = .macStudio {
+        didSet { Task { await refreshRepoInfo() } }
+    }
+    @Published var repoInfo: RepoInfo = .empty
+    @Published var lastRunSummary: RunSummary? = nil
+    @Published var availableBranches: [String] = []
 
     private var runTask: Task<Void, Never>?
 
@@ -35,6 +40,20 @@ final class TestDriverModel: ObservableObject {
         for entry in TestRegistry.shared.all() {
             status[entry.id] = .notRun
             logs[entry.id] = ""
+        }
+        // Kick off initial repo inspection — non-blocking; UI shows "—" until done.
+        Task { await refreshRepoInfo() }
+    }
+
+    func refreshRepoInfo() async {
+        let h = host
+        TermLog.log("model", "refreshRepoInfo host=\(h.rawValue)")
+        let info = await RepoInspector.inspect(host: h)
+        let branches = await RepoInspector.listBranches(host: h)
+        await MainActor.run {
+            self.repoInfo = info
+            self.availableBranches = branches
+            TermLog.log("model", "repo: \(info.oneLine)")
         }
     }
 
@@ -87,6 +106,9 @@ final class TestDriverModel: ObservableObject {
         totalToRun = toRun.count
         completedCount = 0
         progressFraction = 0
+        lastRunSummary = nil
+        let runStarted = Date()
+        let runRepo = repoInfo
         for entry in toRun {
             status[entry.id] = .notRun
             logs[entry.id] = ""
@@ -140,6 +162,11 @@ final class TestDriverModel: ObservableObject {
                 if unclear > 0 { parts.append("\(unclear) unclear") }
                 if skipped > 0 { parts.append("\(skipped) skipped") }
                 self.summaryText = "Done — " + parts.joined(separator: ", ")
+                self.lastRunSummary = RunSummary(
+                    passed: passed, failed: failed, unclear: unclear, skipped: skipped,
+                    elapsedSeconds: Date().timeIntervalSince(runStarted),
+                    host: selectedHost, repo: runRepo, startedAt: runStarted
+                )
                 TermLog.log("model", "run complete: \(self.summaryText)")
                 self.runTask = nil
             }
@@ -173,6 +200,21 @@ final class TestDriverModel: ObservableObject {
     }
 }
 
+/// Final-result snapshot for the post-run banner.
+struct RunSummary {
+    var passed: Int
+    var failed: Int
+    var unclear: Int
+    var skipped: Int
+    var elapsedSeconds: Double
+    var host: TestHost
+    var repo: RepoInfo
+    var startedAt: Date
+
+    var total: Int { passed + failed + unclear + skipped }
+    var allPassed: Bool { failed == 0 && unclear == 0 && total > 0 }
+}
+
 final class LineBuffer: @unchecked Sendable {
     private var lines: [String] = []
     private let lock = NSLock()
@@ -196,6 +238,12 @@ struct ContentView: View {
     var body: some View {
         HSplitView {
             VStack(alignment: .leading, spacing: 0) {
+                repoBanner
+                Divider()
+                if let summary = model.lastRunSummary {
+                    resultBanner(summary)
+                    Divider()
+                }
                 toolbar
                 Divider()
                 progressBar
@@ -242,6 +290,137 @@ struct ContentView: View {
             return stored
         }
         return model.liveLog
+    }
+
+    // MARK: - Repo / result banners
+
+    /// Always-on top banner: shows what version of VideoScan is about to be
+    /// tested on the currently selected host. Refresh button re-runs the
+    /// inspector (use after manual git checkout).
+    private var repoBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "swift")
+                .foregroundStyle(.orange)
+                .font(.title3)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    Text("Testing").font(.caption).foregroundStyle(.secondary)
+                    Text(model.host.rawValue).font(.caption).bold()
+                    Text("·").foregroundStyle(.secondary)
+                    Text(model.repoInfo.projectDir)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                }
+                Text(model.repoInfo.oneLine)
+                    .font(.system(.body, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Spacer()
+            if model.repoInfo.dirty {
+                Text("UNCOMMITTED")
+                    .font(.caption2).bold()
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(Color.orange.opacity(0.25))
+                    .foregroundStyle(.orange)
+                    .cornerRadius(4)
+            }
+            Button {
+                Task { await model.refreshRepoInfo() }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .buttonStyle(.borderless)
+            .help("Re-inspect repo (use after switching branches manually)")
+
+            Menu {
+                ForEach(model.availableBranches, id: \.self) { branch in
+                    Text(branch == model.repoInfo.branch
+                         ? "✓ \(branch)" : branch)
+                }
+                Divider()
+                Text("Branch switching is read-only — checkout from terminal.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } label: {
+                Image(systemName: "list.bullet")
+            }
+            .menuStyle(.borderlessButton)
+            .frame(width: 30)
+            .help("Available branches on this host (informational; doesn't switch)")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(Color(NSColor.controlBackgroundColor))
+    }
+
+    /// Big legible end-of-run banner. Stays at top until the next run starts.
+    /// Color: green if all passed, red if any failed, yellow if any unclear,
+    /// gray-on-skipped-only.
+    private func resultBanner(_ s: RunSummary) -> some View {
+        let bg: Color = {
+            if s.failed > 0  { return Color.red.opacity(0.18) }
+            if s.unclear > 0 { return Color.yellow.opacity(0.22) }
+            if s.allPassed   { return Color.green.opacity(0.18) }
+            return Color.gray.opacity(0.15)
+        }()
+        let symbol: String = {
+            if s.failed > 0  { return "✗" }
+            if s.unclear > 0 { return "⚠" }
+            if s.allPassed   { return "✓" }
+            return "—"
+        }()
+        let symbolColor: Color = {
+            if s.failed > 0  { return .red }
+            if s.unclear > 0 { return .yellow }
+            if s.allPassed   { return .green }
+            return .secondary
+        }()
+        let dateFmt: DateFormatter = {
+            let f = DateFormatter()
+            f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+            return f
+        }()
+
+        return HStack(alignment: .top, spacing: 14) {
+            Text(symbol)
+                .font(.system(size: 44, weight: .bold))
+                .foregroundStyle(symbolColor)
+                .frame(width: 56)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 14) {
+                    Text("\(s.passed) passed")
+                        .foregroundStyle(.green).bold()
+                    Text("\(s.failed) failed")
+                        .foregroundStyle(s.failed > 0 ? .red : .secondary).bold()
+                    Text("\(s.unclear) unclear")
+                        .foregroundStyle(s.unclear > 0 ? .yellow : .secondary).bold()
+                    Text("\(s.skipped) skipped")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Text(String(format: "%.1f s", s.elapsedSeconds))
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                .font(.title2)
+                Text("\(s.host.rawValue)  ·  \(s.repo.branch) @ \(s.repo.commit)\(s.repo.dirty ? " (dirty)" : "")  ·  v\(s.repo.appVersion)  ·  \(dateFmt.string(from: s.startedAt))")
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
+            Button {
+                model.lastRunSummary = nil
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .help("Dismiss summary")
+        }
+        .padding(12)
+        .background(bg)
     }
 
     // MARK: - Toolbar
