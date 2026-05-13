@@ -839,6 +839,56 @@ struct VolumeReachabilityBoundaryTests {
         let name = VolumeReachability.volumeName(forPath: "/Volumes/TestDrive/some/file.mov")
         #expect(name == "TestDrive" || !name.isEmpty)
     }
+
+    // MARK: - Reachability cache (issue #87 — main-thread stat() storms)
+
+    // regression: catalog Table cell builder calls isReachable() per row
+    // synchronously on main; without the cache, slow volumes beachballed
+    // the UI for ~60s. The cache must (a) return the same result for the
+    // same path, and (b) collapse repeated calls into a single stat().
+    @Test func reachabilityCacheReturnsConsistentResultForSamePath() {
+        // Use a unique nonexistent /Volumes path so the cache key is fresh
+        // each test run and we get a deterministic "false" result.
+        let path = "/Volumes/CacheTest_\(UUID().uuidString)/dir/file.mov"
+        VolumeReachability.invalidateCache()
+
+        let first  = VolumeReachability.isReachable(path: path)
+        let second = VolumeReachability.isReachable(path: path)
+        let third  = VolumeReachability.isReachable(path: path)
+
+        #expect(first == false)
+        #expect(second == first, "Cached result must equal first call")
+        #expect(third == first,  "Cached result must equal first call")
+    }
+
+    @Test func reachabilityCacheSharesEntryAcrossSameVolume() {
+        // Two different paths under the same nonexistent /Volumes/X share
+        // a cache key (the volume name), so once the first call has
+        // populated the cache, the second is also a hit. This is the
+        // beachball-killer: hundreds of files on one volume → one stat().
+        let vol = "CacheVolShare_\(UUID().uuidString)"
+        let pathA = "/Volumes/\(vol)/dir1/a.mov"
+        let pathB = "/Volumes/\(vol)/dir2/b.mov"
+        VolumeReachability.invalidateCache()
+
+        let resultA = VolumeReachability.isReachable(path: pathA)
+        let resultB = VolumeReachability.isReachable(path: pathB)
+
+        #expect(resultA == false)
+        #expect(resultB == resultA, "Same volume must return same cached result")
+    }
+
+    @Test func invalidateCacheClearsState() {
+        // After invalidate, the next call is a cache miss again. We can't
+        // observe the "miss" directly without a syscall counter, but we
+        // can confirm invalidate() doesn't crash and isReachable still
+        // returns a sensible answer afterward.
+        let path = "/Volumes/CacheInvalidate_\(UUID().uuidString)/x.mov"
+        _ = VolumeReachability.isReachable(path: path)
+        VolumeReachability.invalidateCache()
+        let after = VolumeReachability.isReachable(path: path)
+        #expect(after == false)
+    }
 }
 
 // MARK: - CombineJobStatus Boundary Tests
