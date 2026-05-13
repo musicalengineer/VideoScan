@@ -23,6 +23,9 @@ final class TestDriverModel: ObservableObject {
     @Published var totalToRun: Int = 0
     @Published var completedCount: Int = 0
     @Published var briefMode: Bool = false
+    @Published var coverageEnabled: Bool = false
+    @Published var coverageIncludeAll: Bool = false
+    @Published var lastCoveragePercent: Double? = nil
     @Published var host: TestHost = .macStudio {
         didSet { Task { await refreshRepoInfo() } }
     }
@@ -103,7 +106,11 @@ final class TestDriverModel: ObservableObject {
             TermLog.log("ui", "runSelected called with empty selection")
             return
         }
-        TermLog.log("ui", "runSelected: \(toRun.count) tests on host=\(host.rawValue)")
+        TermLog.log("ui", "runSelected: \(toRun.count) tests on host=\(host.rawValue) coverage=\(coverageEnabled)/\(coverageIncludeAll)")
+        // Plumb the coverage toggles into the run path. Read here so a
+        // mid-flight toggle change doesn't apply to a half-finished run.
+        VideoScanTests.coverageContext = (enabled: coverageEnabled,
+                                          includeAll: coverageIncludeAll)
         summaryText = "Running \(toRun.count) test(s) on \(host.rawValue)..."
         totalToRun = toRun.count
         completedCount = 0
@@ -118,7 +125,15 @@ final class TestDriverModel: ObservableObject {
         let selectedHost = host
         runTask = Task { [weak self] in
             guard let self else { return }
-            var passed = 0, failed = 0, unclear = 0, skipped = 0
+            var methodsPassed = 0
+            var methodsFailed = 0
+            var entriesSkipped = 0
+            var coveredLinesTotal = 0
+            var executableLinesTotal = 0
+            // Without xccov's raw line counts at the call site we instead
+            // average per-entry percentages weighted by 1; if multiple
+            // coverage-collecting entries run we average their percents.
+            var coverageSamples: [Double] = []
             for entry in toRun {
                 if Task.isCancelled {
                     TermLog.log("model", "runSelected cancelled before \(entry.name)")
@@ -138,13 +153,46 @@ final class TestDriverModel: ObservableObject {
                     }
                     logBuffer.append(line)
                 }
+                // Roll-up rule: if the entry returned methodCounts, use those.
+                // Otherwise count one-for-the-entry-itself: pass=1/0, fail=0/1.
                 let symbol: String
                 switch result.status {
-                case .passed:  passed += 1;  symbol = "✓ pass"
-                case .failed:  failed += 1;  symbol = "✗ fail"
-                case .unclear: unclear += 1; symbol = "⚠ unclear"
-                case .skipped: skipped += 1; symbol = "↷ skip"
-                default:                     symbol = "?"
+                case .passed:
+                    if let mc = result.methodCounts {
+                        methodsPassed += mc.passed
+                        methodsFailed += mc.failed
+                    } else {
+                        methodsPassed += 1
+                    }
+                    symbol = "✓ pass"
+                case .failed:
+                    if let mc = result.methodCounts {
+                        methodsPassed += mc.passed
+                        methodsFailed += mc.failed
+                        // If the entry came back failed but had zero method
+                        // failures recorded (e.g. infrastructure error before
+                        // any test ran), still count one failure so the entry
+                        // doesn't vanish from the totals.
+                        if mc.passed == 0 && mc.failed == 0 {
+                            methodsFailed += 1
+                        }
+                    } else {
+                        methodsFailed += 1
+                    }
+                    symbol = "✗ fail"
+                case .skipped:
+                    entriesSkipped += 1
+                    symbol = "↷ skip"
+                default:
+                    symbol = "?"
+                }
+                if let cov = result.coveragePercent {
+                    coverageSamples.append(cov)
+                    // Crude weighted average: re-derive line counts from
+                    // the percentage. Not exact (xccov only gives us %),
+                    // but consistent across reports.
+                    coveredLinesTotal += Int(cov * 1000)
+                    executableLinesTotal += 100000
                 }
                 TermLog.log("test", "\(symbol) \(entry.id)")
                 await MainActor.run {
@@ -158,16 +206,28 @@ final class TestDriverModel: ObservableObject {
             }
             await MainActor.run {
                 self.currentlyRunning = nil
+                let total = methodsPassed + methodsFailed
+                let entriesTotal = toRun.count
                 var parts: [String] = []
-                if passed  > 0 { parts.append("\(passed) passed") }
-                if failed  > 0 { parts.append("\(failed) failed") }
-                if unclear > 0 { parts.append("\(unclear) unclear") }
-                if skipped > 0 { parts.append("\(skipped) skipped") }
+                parts.append("\(total) executed")
+                parts.append("\(methodsPassed) passed")
+                parts.append("\(methodsFailed) failed")
+                if entriesSkipped > 0 { parts.append("\(entriesSkipped) skipped") }
                 self.summaryText = "Done — " + parts.joined(separator: ", ")
+                let coveragePct: Double? = coverageSamples.isEmpty
+                    ? nil
+                    : coverageSamples.reduce(0, +) / Double(coverageSamples.count)
+                self.lastCoveragePercent = coveragePct
                 let summary = RunSummary(
-                    passed: passed, failed: failed, unclear: unclear, skipped: skipped,
+                    methodsPassed: methodsPassed,
+                    methodsFailed: methodsFailed,
+                    entriesSkipped: entriesSkipped,
+                    entriesTotal: entriesTotal,
                     elapsedSeconds: Date().timeIntervalSince(runStarted),
-                    host: selectedHost, repo: runRepo, startedAt: runStarted
+                    host: selectedHost,
+                    repo: runRepo,
+                    startedAt: runStarted,
+                    coveragePercent: coveragePct
                 )
                 self.lastRunSummary = summary
                 TermLog.log("model", "run complete: \(self.summaryText)")
@@ -222,19 +282,23 @@ final class TestDriverModel: ObservableObject {
     }
 }
 
-/// Final-result snapshot for the post-run banner.
+/// Final-result snapshot for the post-run banner. The numbers represent
+/// XCTest *method* counts (rolled up from xcodebuild) for xcodebuild
+/// entries, and one-per-entry for non-xcodebuild entries. That keeps the
+/// banner's "Executed N" consistent with what the underlying tests report.
 struct RunSummary {
-    var passed: Int
-    var failed: Int
-    var unclear: Int
-    var skipped: Int
+    var methodsPassed: Int
+    var methodsFailed: Int
+    var entriesSkipped: Int
+    var entriesTotal: Int
     var elapsedSeconds: Double
     var host: TestHost
     var repo: RepoInfo
     var startedAt: Date
+    var coveragePercent: Double?
 
-    var total: Int { passed + failed + unclear + skipped }
-    var allPassed: Bool { failed == 0 && unclear == 0 && total > 0 }
+    var total: Int { methodsPassed + methodsFailed }
+    var allPassed: Bool { methodsFailed == 0 && total > 0 }
 }
 
 final class LineBuffer: @unchecked Sendable {
@@ -247,6 +311,38 @@ final class LineBuffer: @unchecked Sendable {
     func snapshot() -> String {
         lock.lock(); defer { lock.unlock() }
         return lines.joined(separator: "\n")
+    }
+}
+
+// MARK: - Font helper (+2pt across the UI, Live Log excluded)
+
+/// Replaces SwiftUI's default `.font(.headline)` etc. with sizes 2 points
+/// larger across the board. The Live Log mono font is intentionally NOT
+/// routed through here — that view stays at the system body size so a
+/// wall of xcodebuild output doesn't blow up the readable area.
+private extension Font {
+    static func td(_ base: Font.TextStyle,
+                   weight: Font.Weight? = nil,
+                   design: Font.Design = .default) -> Font {
+        let size: CGFloat = {
+            switch base {
+            case .largeTitle:  return 36
+            case .title:       return 30
+            case .title2:      return 24
+            case .title3:      return 22
+            case .headline:    return 19
+            case .body:        return 17
+            case .callout:     return 15
+            case .subheadline: return 15
+            case .footnote:    return 14
+            case .caption:     return 13
+            case .caption2:    return 12
+            @unknown default:  return 17
+            }
+        }()
+        var font = Font.system(size: size, design: design)
+        if let w = weight { font = font.weight(w) }
+        return font
     }
 }
 
@@ -280,11 +376,11 @@ struct ContentView: View {
                 Divider()
                 summaryBar
             }
-            .frame(minWidth: 360, idealWidth: 600)
+            .frame(minWidth: 360, idealWidth: 700)
 
             VStack(alignment: .leading, spacing: 0) {
                 Text(inspectedID.flatMap(TestRegistry.shared.entry(id:))?.name ?? "Live log")
-                    .font(.headline)
+                    .font(.td(.headline))
                     .padding(8)
                 Divider()
                 if model.briefMode && model.totalToRun > 0 {
@@ -299,12 +395,13 @@ struct ContentView: View {
                     }
                 }
             }
-            .frame(minWidth: 280, idealWidth: 480)
+            .frame(minWidth: 280, idealWidth: 560)
         }
         // Window can shrink to here; user can drag larger freely.
-        // Lowered from 980x640 because the toolbar got crowded enough to
-        // hide chevrons at the old minimum.
-        .frame(minWidth: 700, minHeight: 420)
+        // idealWidth/idealHeight matter on first launch so the window opens
+        // at a comfortable size; min* lets the user squeeze it down later.
+        .frame(minWidth: 720, idealWidth: 1280,
+               minHeight: 460, idealHeight: 820)
     }
 
     private var displayedLog: String {
@@ -323,14 +420,14 @@ struct ContentView: View {
         HStack(spacing: 10) {
             Image(systemName: "swift")
                 .foregroundStyle(.orange)
-                .font(.title3)
+                .font(.td(.title3))
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
-                    Text("Testing").font(.caption).foregroundStyle(.secondary)
-                    Text(model.host.rawValue).font(.caption).bold()
+                    Text("Testing").font(.td(.caption)).foregroundStyle(.secondary)
+                    Text(model.host.rawValue).font(.td(.caption)).bold()
                     Text("·").foregroundStyle(.secondary)
                     Text(model.repoInfo.projectDir)
-                        .font(.caption)
+                        .font(.td(.caption))
                         .foregroundStyle(.secondary)
                         .lineLimit(1).truncationMode(.middle)
                 }
@@ -340,9 +437,22 @@ struct ContentView: View {
                     .truncationMode(.tail)
             }
             Spacer()
+            Button {
+                let visibleIDs = model.hierarchy.flatMap { $0.1.flatMap { $0.1.map(\.id) } }
+                model.selected = Set(visibleIDs)
+                TermLog.log("ui", "Run All: \(visibleIDs.count) visible tests")
+                model.runSelected()
+            } label: {
+                Label("Run All", systemImage: "play.circle.fill")
+                    .font(.td(.body, weight: .semibold))
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(model.currentlyRunning != nil)
+            .help("Run every visible test on the selected host")
+
             if model.repoInfo.dirty {
                 Text("UNCOMMITTED")
-                    .font(.caption2).bold()
+                    .font(.td(.caption2)).bold()
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(Color.orange.opacity(0.25))
                     .foregroundStyle(.orange)
@@ -363,7 +473,7 @@ struct ContentView: View {
                 }
                 Divider()
                 Text("Branch switching is read-only — checkout from terminal.")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.td(.caption)).foregroundStyle(.secondary)
             } label: {
                 Image(systemName: "list.bullet")
             }
@@ -384,39 +494,36 @@ struct ContentView: View {
         switch outcome {
         case .published(_, let sha):
             Label("metrics published to origin/metrics @ \(sha)", systemImage: "chart.bar.fill")
-                .font(.caption)
+                .font(.td(.caption))
                 .foregroundStyle(.green)
         case .skipped(let reason):
             Label("metrics skipped — \(reason)", systemImage: "chart.bar")
-                .font(.caption)
+                .font(.td(.caption))
                 .foregroundStyle(.secondary)
         case .failed(let message):
             Label("metrics push FAILED — \(message)", systemImage: "exclamationmark.triangle.fill")
-                .font(.caption)
+                .font(.td(.caption))
                 .foregroundStyle(.orange)
         }
     }
 
     /// Big legible end-of-run banner. Stays at top until the next run starts.
-    /// Color: green if all passed, red if any failed, yellow if any unclear,
-    /// gray-on-skipped-only.
+    /// Three large stat numbers (Executed / Passed / Failed) replace the
+    /// older pass/fail/unclear/skipped four-up — one consistent count.
     private func resultBanner(_ s: RunSummary) -> some View {
         let bg: Color = {
-            if s.failed > 0  { return Color.red.opacity(0.18) }
-            if s.unclear > 0 { return Color.yellow.opacity(0.22) }
-            if s.allPassed   { return Color.green.opacity(0.18) }
+            if s.methodsFailed > 0  { return Color.red.opacity(0.18) }
+            if s.allPassed          { return Color.green.opacity(0.18) }
             return Color.gray.opacity(0.15)
         }()
         let symbol: String = {
-            if s.failed > 0  { return "✗" }
-            if s.unclear > 0 { return "⚠" }
-            if s.allPassed   { return "✓" }
+            if s.methodsFailed > 0  { return "✗" }
+            if s.allPassed          { return "✓" }
             return "—"
         }()
         let symbolColor: Color = {
-            if s.failed > 0  { return .red }
-            if s.unclear > 0 { return .yellow }
-            if s.allPassed   { return .green }
+            if s.methodsFailed > 0  { return .red }
+            if s.allPassed          { return .green }
             return .secondary
         }()
         let dateFmt: DateFormatter = {
@@ -427,25 +534,35 @@ struct ContentView: View {
 
         return HStack(alignment: .top, spacing: 14) {
             Text(symbol)
-                .font(.system(size: 44, weight: .bold))
+                .font(.system(size: 60, weight: .bold))
                 .foregroundStyle(symbolColor)
-                .frame(width: 56)
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 14) {
-                    Text("\(s.passed) passed")
-                        .foregroundStyle(.green).bold()
-                    Text("\(s.failed) failed")
-                        .foregroundStyle(s.failed > 0 ? .red : .secondary).bold()
-                    Text("\(s.unclear) unclear")
-                        .foregroundStyle(s.unclear > 0 ? .yellow : .secondary).bold()
-                    Text("\(s.skipped) skipped")
-                        .foregroundStyle(.secondary)
+                .frame(width: 76)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .lastTextBaseline, spacing: 22) {
+                    bigStat(number: s.total, label: "executed", color: .primary)
+                    bigStat(number: s.methodsPassed, label: "passed", color: .green)
+                    bigStat(number: s.methodsFailed,
+                            label: "failed",
+                            color: s.methodsFailed > 0 ? .red : .secondary)
+                    if s.entriesSkipped > 0 {
+                        Text("·  \(s.entriesSkipped) skipped")
+                            .font(.td(.callout))
+                            .foregroundStyle(.secondary)
+                    }
                     Spacer()
                     Text(String(format: "%.1f s", s.elapsedSeconds))
                         .font(.system(.body, design: .monospaced))
                         .foregroundStyle(.secondary)
                 }
-                .font(.title2)
+                if let cov = s.coveragePercent {
+                    HStack(spacing: 6) {
+                        Image(systemName: "chart.bar.doc.horizontal")
+                            .foregroundStyle(Color.accentColor)
+                        Text(String(format: "Coverage: %.1f%%", cov))
+                            .font(.td(.headline))
+                            .foregroundStyle(Color.accentColor)
+                    }
+                }
                 Text("\(s.host.rawValue)  ·  \(s.repo.branch) @ \(s.repo.commit)\(s.repo.dirty ? " (dirty)" : "")  ·  v\(s.repo.appVersion)  ·  \(dateFmt.string(from: s.startedAt))")
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(.secondary)
@@ -471,9 +588,22 @@ struct ContentView: View {
         .background(bg)
     }
 
+    /// One of the three big stat numbers in the result banner — bold
+    /// number on top, small uppercase label beneath, both colored.
+    private func bigStat(number: Int, label: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("\(number)")
+                .font(.system(size: 28, weight: .bold, design: .default).monospacedDigit())
+                .foregroundStyle(color)
+            Text(label)
+                .font(.td(.caption))
+                .foregroundStyle(color.opacity(0.85))
+        }
+    }
+
     // MARK: - Toolbar
 
-    /// Three rows. Vertical stacking guarantees nothing gets squeezed
+    /// Four rows now. Vertical stacking guarantees nothing gets squeezed
     /// off-screen at narrow widths — a regression V2 introduced when we
     /// stuffed everything onto one HStack.
     private var toolbar: some View {
@@ -508,9 +638,10 @@ struct ContentView: View {
                 }
                 .help("Print full state to stderr (terminal that launched TestDriver)")
             }
+            .font(.td(.body))
 
             HStack(spacing: 12) {
-                Text("Run on").font(.caption).foregroundStyle(.secondary)
+                Text("Run on").font(.td(.caption)).foregroundStyle(.secondary)
                 Picker("", selection: $model.host) {
                     ForEach(TestHost.allCases) { h in
                         Text(h.isImplemented ? h.rawValue : "\(h.rawValue) — not wired")
@@ -524,14 +655,14 @@ struct ContentView: View {
 
                 Toggle("Brief", isOn: $model.briefMode)
                     .toggleStyle(.checkbox)
-                    .font(.caption)
+                    .font(.td(.caption))
                 Toggle("Stress", isOn: $model.allowStress)
                     .onChange(of: model.allowStress) { _, _ in model.rebuildHierarchy() }
                     .toggleStyle(.checkbox)
-                    .font(.caption)
+                    .font(.td(.caption))
                 Toggle("Publish", isOn: $model.autoPublishMetrics)
                     .toggleStyle(.checkbox)
-                    .font(.caption)
+                    .font(.td(.caption))
                     .help("Push run metrics to origin/metrics when on clean main matching origin")
             }
 
@@ -539,6 +670,29 @@ struct ContentView: View {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Filter tests by name or module…", text: $filterText)
                     .textFieldStyle(.roundedBorder)
+                    .font(.td(.body))
+            }
+
+            // Coverage toggles. When the report toggle is off, "Include All"
+            // disables — there's nothing to include. The first toggle drives
+            // -enableCodeCoverage; the second extends collection from the
+            // two unit-suite entries to the regression entries as well.
+            HStack(spacing: 14) {
+                Toggle("Generate Coverage Report", isOn: $model.coverageEnabled)
+                    .toggleStyle(.checkbox)
+                    .font(.td(.caption))
+                    .help("Pass -enableCodeCoverage YES to xcodebuild and parse xccov for the banner/metrics")
+                Toggle("Include All Tests for Coverage", isOn: $model.coverageIncludeAll)
+                    .toggleStyle(.checkbox)
+                    .font(.td(.caption))
+                    .disabled(!model.coverageEnabled)
+                    .help("Also collect coverage on regression suites (slower, more representative)")
+                Spacer()
+                if let cov = model.lastCoveragePercent {
+                    Text(String(format: "Last coverage: %.1f%%", cov))
+                        .font(.td(.caption))
+                        .foregroundStyle(Color.accentColor)
+                }
             }
         }
         .padding(8)
@@ -553,13 +707,13 @@ struct ContentView: View {
                     ProgressView(value: model.progressFraction)
                     HStack {
                         Text("\(model.completedCount) of \(model.totalToRun)")
-                            .font(.caption)
+                            .font(.td(.caption))
                             .foregroundStyle(.secondary)
                         Spacer()
                         if let runningID = model.currentlyRunning,
                            let entry = TestRegistry.shared.entry(id: runningID) {
                             Text("⌛ \(entry.name)")
-                                .font(.caption)
+                                .font(.td(.caption))
                                 .foregroundStyle(.orange)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
@@ -575,11 +729,11 @@ struct ContentView: View {
     private var summaryBar: some View {
         HStack {
             Text(model.summaryText.isEmpty ? "Idle" : model.summaryText)
-                .font(.callout)
+                .font(.td(.callout))
                 .foregroundStyle(.secondary)
             Spacer()
             Text("\(TestRegistry.shared.all().count) tests registered")
-                .font(.caption)
+                .font(.td(.caption))
                 .foregroundStyle(.tertiary)
         }
         .padding(8)
@@ -625,14 +779,18 @@ struct ContentView: View {
                     EmptyView()    // Content rendered below; this disclosure is just the chevron + label
                 } label: {
                     HStack(spacing: 4) {
-                        Text(group.rawValue).font(.headline)
-                        Text("(\(total))").foregroundStyle(.secondary).font(.subheadline)
+                        Text(group.rawValue)
+                            .font(.td(.headline))
+                            .foregroundStyle(group.color)
+                        Text("(\(total))")
+                            .foregroundStyle(.secondary)
+                            .font(.td(.subheadline))
                     }
                 }
                 Spacer()
                 Button("Select") { model.selectAll(in: group) }
                     .buttonStyle(.borderless)
-                    .font(.caption)
+                    .font(.td(.caption))
             }
             if expandedGroups.contains(group) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -667,14 +825,14 @@ struct ContentView: View {
                         EmptyView()
                     } label: {
                         HStack(spacing: 4) {
-                            Text(label).font(.system(.body, design: .default).weight(.medium))
-                            Text("(\(visible.count))").foregroundStyle(.secondary).font(.caption)
+                            Text(label).font(.td(.body, weight: .medium))
+                            Text("(\(visible.count))").foregroundStyle(.secondary).font(.td(.caption))
                         }
                     }
                     Spacer()
                     Button("Select") { model.selectAll(in: group, module: module) }
                         .buttonStyle(.borderless)
-                        .font(.caption)
+                        .font(.td(.caption))
                 }
                 if isExpanded {
                     VStack(alignment: .leading, spacing: 2) {
@@ -707,6 +865,13 @@ struct ContentView: View {
         let isSelected = model.selected.contains(entry.id)
         let st = model.status[entry.id] ?? .notRun
         return HStack(spacing: 8) {
+            // 3pt colored bar pinned to the leading edge — quick visual
+            // shorthand for which group this row belongs to (Unit=blue,
+            // Regression=purple, Diagnostic=yellow, etc.).
+            RoundedRectangle(cornerRadius: 1.5)
+                .fill(entry.group.color)
+                .frame(width: 3, height: 28)
+
             Image(systemName: isSelected ? "checkmark.square.fill" : "square")
                 .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
                 .font(.system(size: 16))
@@ -720,8 +885,8 @@ struct ContentView: View {
                 .foregroundStyle(statusColor(st))
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(entry.name).font(.system(.body))
-                Text(entry.description).font(.caption).foregroundStyle(.secondary)
+                Text(entry.name).font(.td(.body))
+                Text(entry.description).font(.td(.caption)).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
@@ -731,7 +896,7 @@ struct ContentView: View {
 
             Button("Run") { model.runOne(entry.id) }
                 .buttonStyle(.borderless)
-                .font(.caption)
+                .font(.td(.caption))
                 .disabled(model.currentlyRunning != nil)
         }
         .padding(.vertical, 2)
@@ -743,18 +908,14 @@ struct ContentView: View {
         switch st {
         case .passed(let dur):
             Text(String(format: "%.1fs", dur))
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.td(.caption)).foregroundStyle(.secondary)
                 .frame(width: 56, alignment: .trailing)
         case .failed(_, let dur):
             Text(String(format: "%.1fs", dur))
-                .font(.caption).foregroundStyle(.red)
-                .frame(width: 56, alignment: .trailing)
-        case .unclear(_, let dur):
-            Text(String(format: "%.1fs", dur))
-                .font(.caption).foregroundStyle(.yellow)
+                .font(.td(.caption)).foregroundStyle(.red)
                 .frame(width: 56, alignment: .trailing)
         default:
-            Text(" ").font(.caption).frame(width: 56, alignment: .trailing)
+            Text(" ").font(.td(.caption)).frame(width: 56, alignment: .trailing)
         }
     }
 
@@ -764,7 +925,6 @@ struct ContentView: View {
         case .running: return .orange
         case .passed:  return .green
         case .failed:  return .red
-        case .unclear: return .yellow
         case .skipped: return Color(white: 0.6)
         }
     }
@@ -775,7 +935,6 @@ struct ContentView: View {
         case .running: return "running"
         case .passed:  return "passed"
         case .failed:  return "failed"
-        case .unclear: return "unclear"
         case .skipped: return "skipped"
         }
     }

@@ -27,6 +27,7 @@ enum MBPRemote {
     static func runXcodebuildTest(
         configuration: String,
         onlyTesting: String,
+        coverage: Bool,
         log: @escaping @Sendable (String) -> Void,
         timeoutSeconds: TimeInterval
     ) async -> SubprocessResult {
@@ -47,6 +48,10 @@ enum MBPRemote {
         ]
         if configuration == "Release" {
             xcArgs.append("ENABLE_TESTABILITY=YES")
+        }
+        if coverage {
+            xcArgs.append("-enableCodeCoverage YES")
+            xcArgs.append("-resultBundlePath /tmp/td-mbp-coverage.xcresult")
         }
         let xcCmd = xcArgs.joined(separator: " ")
 

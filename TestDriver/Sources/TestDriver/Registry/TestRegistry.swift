@@ -7,6 +7,7 @@
 // independent of any one app's build setup.
 
 import Foundation
+import SwiftUI
 
 /// Coarse grouping shown as the top-level outline rows.
 enum TestGroup: String, CaseIterable, Identifiable, Hashable, Codable {
@@ -24,6 +25,21 @@ enum TestGroup: String, CaseIterable, Identifiable, Hashable, Codable {
     /// Hidden behind a "I know what I'm doing" toggle in the UI.
     var requiresOptIn: Bool {
         self == .stress
+    }
+
+    /// Accent color used in the outline rows + group headers. Distinct
+    /// per-group so the eye can pick out which category a row belongs to
+    /// at a glance.
+    var color: Color {
+        switch self {
+        case .smoke:       return Color(red: 0.31, green: 0.81, blue: 0.69)  // teal #4ec9b0
+        case .unit:        return Color(red: 0.35, green: 0.65, blue: 1.0)   // blue #58a6ff
+        case .regression:  return Color(red: 0.74, green: 0.55, blue: 1.0)   // purple #bc8cff
+        case .integration: return Color(red: 1.0,  green: 0.65, blue: 0.34)  // orange #ffa657
+        case .stress:      return Color(red: 0.97, green: 0.32, blue: 0.29)  // red #f85149
+        case .performance: return Color(red: 0.25, green: 0.73, blue: 0.31)  // green #3fb950
+        case .diagnostic:  return Color(red: 0.82, green: 0.60, blue: 0.13)  // yellow #d29922
+        }
     }
 }
 
@@ -47,13 +63,13 @@ enum TestHost: String, CaseIterable, Identifiable, Codable, Hashable {
     var isImplemented: Bool { true }
 }
 
-/// Outcome of a single test run.
+/// Outcome of a single test run. `.unclear` was folded into `.failed`
+/// (with a descriptive message) — one number for "didn't pass" beats two.
 enum TestStatus: Equatable {
     case notRun
     case running
     case passed(durationSeconds: Double)
     case failed(message: String, durationSeconds: Double)
-    case unclear(message: String, durationSeconds: Double)   // harness error, timeout, infrastructure flake
     case skipped(reason: String)
 
     var symbol: String {
@@ -62,7 +78,6 @@ enum TestStatus: Equatable {
         case .running: return "⌛"
         case .passed:  return "✓"
         case .failed:  return "✗"
-        case .unclear: return "⚠"
         case .skipped: return "↷"
         }
     }
@@ -76,18 +91,39 @@ struct TestResult {
     let status: TestStatus
     /// Full log text (stdout/stderr) the user can expand to inspect.
     let log: String
+    /// When a test is itself an xcodebuild suite, this is the number of
+    /// underlying XCTest methods that passed/failed. The banner adds these
+    /// up rather than counting one-per-entry, so "8 entries" reading
+    /// "20 methods passed" doesn't look like a contradiction.
+    let methodCounts: (passed: Int, failed: Int)?
+    /// Logic coverage percentage extracted from xcresult, when this entry
+    /// was run with `-enableCodeCoverage YES`.
+    let coveragePercent: Double?
 
-    static func passed(_ duration: Double, log: String = "") -> TestResult {
-        TestResult(status: .passed(durationSeconds: duration), log: log)
+    static func passed(_ duration: Double,
+                       log: String = "",
+                       methodCounts: (passed: Int, failed: Int)? = nil,
+                       coveragePercent: Double? = nil) -> TestResult {
+        TestResult(status: .passed(durationSeconds: duration),
+                   log: log,
+                   methodCounts: methodCounts,
+                   coveragePercent: coveragePercent)
     }
-    static func failed(_ message: String, duration: Double, log: String = "") -> TestResult {
-        TestResult(status: .failed(message: message, durationSeconds: duration), log: log)
-    }
-    static func unclear(_ message: String, duration: Double, log: String = "") -> TestResult {
-        TestResult(status: .unclear(message: message, durationSeconds: duration), log: log)
+    static func failed(_ message: String,
+                       duration: Double,
+                       log: String = "",
+                       methodCounts: (passed: Int, failed: Int)? = nil,
+                       coveragePercent: Double? = nil) -> TestResult {
+        TestResult(status: .failed(message: message, durationSeconds: duration),
+                   log: log,
+                   methodCounts: methodCounts,
+                   coveragePercent: coveragePercent)
     }
     static func skipped(_ reason: String, log: String = "") -> TestResult {
-        TestResult(status: .skipped(reason: reason), log: log)
+        TestResult(status: .skipped(reason: reason),
+                   log: log,
+                   methodCounts: nil,
+                   coveragePercent: nil)
     }
 }
 
@@ -100,6 +136,10 @@ struct TestEntry: Identifiable {
     let module: String?
     let name: String
     let description: String
+    /// True when this entry runs an xcodebuild test suite (i.e. supplies
+    /// xcresult that `xccov` can read). Coverage toggles only apply to
+    /// entries with `supportsCoverage = true`.
+    let supportsCoverage: Bool
     /// Async runner. Receives a logger closure for streaming output and
     /// the host the user selected.
     let run: (_ host: TestHost, _ logLine: @escaping @Sendable (String) -> Void) async -> TestResult
@@ -108,6 +148,7 @@ struct TestEntry: Identifiable {
          module: String? = nil,
          name: String,
          description: String,
+         supportsCoverage: Bool = false,
          run: @escaping (_ host: TestHost, _ logLine: @escaping @Sendable (String) -> Void) async -> TestResult) {
         let modulePart = module ?? "_"
         self.id = "\(group.rawValue)/\(modulePart)/\(name)"
@@ -115,6 +156,7 @@ struct TestEntry: Identifiable {
         self.module = module
         self.name = name
         self.description = description
+        self.supportsCoverage = supportsCoverage
         self.run = run
     }
 }

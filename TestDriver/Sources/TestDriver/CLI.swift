@@ -10,9 +10,12 @@
 //   TestDriver --cli --include-stress      # include the opt-in stress group
 //   TestDriver --cli --list                # just print the registry
 //   TestDriver --cli --filter=arcface      # substring match on id
+//   TestDriver --cli --coverage            # add -enableCodeCoverage to xcodebuild
+//   TestDriver --cli --coverage-all        # implies --coverage + include regression
 //
-// Exit code: 0 if all selected passed, 1 if any failed, 2 if any unclear,
-// 3 if a harness/CLI error occurred.
+// Exit code: 0 if all selected passed, 1 if any failed, 3 if a harness/CLI
+// error occurred. (`.unclear` is gone — formerly-unclear cases now report
+// as failed with an explanatory message.)
 
 import Foundation
 
@@ -21,6 +24,10 @@ enum CLI {
     static func run(arguments: [String]) async -> Int32 {
         VideoScanTests.registerAll()
         let opts = parse(arguments)
+
+        // Wire the CLI's coverage flags into the same context the UI uses.
+        VideoScanTests.coverageContext = (enabled: opts.coverage,
+                                          includeAll: opts.coverageAll)
 
         if opts.listOnly {
             return printRegistry(opts)
@@ -36,6 +43,9 @@ enum CLI {
         print("  host:    \(opts.host.rawValue)")
         print("  tests:   \(entries.count)")
         print("  groups:  \(Set(entries.map(\.group.rawValue)).sorted().joined(separator: ", "))")
+        if opts.coverage {
+            print("  coverage: ON\(opts.coverageAll ? " (include all)" : " (unit only)")")
+        }
         // Snapshot what we're about to test — same info the UI banner shows.
         let repo = await RepoInspector.inspect(host: opts.host)
         print("  repo:    \(repo.oneLine)")
@@ -45,7 +55,10 @@ enum CLI {
         }
         print(String(repeating: "─", count: 70))
 
-        var counts = (passed: 0, failed: 0, unclear: 0, skipped: 0)
+        var methodsPassed = 0
+        var methodsFailed = 0
+        var entriesSkipped = 0
+        var coverageSamples: [Double] = []
         let started = Date()
         for (idx, entry) in entries.enumerated() {
             let prefix = "[\(idx + 1)/\(entries.count)]"
@@ -58,33 +71,45 @@ enum CLI {
             let dur = Date().timeIntervalSince(testStart)
             switch result.status {
             case .passed:
-                counts.passed += 1
-                // The test's result.log often contains an internal count
-                // ("N tests passed"). Show it on one line for visibility
-                // even in non-verbose mode.
+                if let mc = result.methodCounts {
+                    methodsPassed += mc.passed
+                    methodsFailed += mc.failed
+                } else {
+                    methodsPassed += 1
+                }
                 let detail = result.log.split(separator: "\n")
                     .first(where: { $0.contains("tests passed") || $0.contains("passed") })
                     .map { " — \($0)" } ?? ""
                 print(String(format: "    ✓ pass  (%.2fs)%@", dur, detail))
             case .failed(let msg, _):
-                counts.failed += 1
+                if let mc = result.methodCounts {
+                    methodsPassed += mc.passed
+                    methodsFailed += mc.failed
+                    if mc.passed == 0 && mc.failed == 0 { methodsFailed += 1 }
+                } else {
+                    methodsFailed += 1
+                }
                 print(String(format: "    ✗ FAIL  (%.2fs) — %@", dur, msg))
                 if !opts.verbose, !result.log.isEmpty {
                     let tail = result.log.split(separator: "\n").suffix(20).joined(separator: "\n")
                     print("    │ \(tail.replacingOccurrences(of: "\n", with: "\n    │ "))")
                 }
-            case .unclear(let msg, _):
-                counts.unclear += 1
-                print(String(format: "    ⚠ unclear  (%.2fs) — %@", dur, msg))
             case .skipped(let reason):
-                counts.skipped += 1
+                entriesSkipped += 1
                 print("    ↷ skipped — \(reason)")
             default:
                 break
             }
+            if let cov = result.coveragePercent {
+                coverageSamples.append(cov)
+                print(String(format: "    │ coverage: %.2f%%", cov))
+            }
         }
 
         let total = Date().timeIntervalSince(started)
+        let coveragePct: Double? = coverageSamples.isEmpty
+            ? nil
+            : coverageSamples.reduce(0, +) / Double(coverageSamples.count)
 
         // Build a RunSummary so MetricsPublisher's gates apply identically
         // to the UI path. opts.publish defaults to true; --no-publish
@@ -92,10 +117,15 @@ enum CLI {
         // synced, so a pollute-attempt from a feature branch is silently
         // skipped even if --publish is on.
         let summary = RunSummary(
-            passed: counts.passed, failed: counts.failed,
-            unclear: counts.unclear, skipped: counts.skipped,
+            methodsPassed: methodsPassed,
+            methodsFailed: methodsFailed,
+            entriesSkipped: entriesSkipped,
+            entriesTotal: entries.count,
             elapsedSeconds: total,
-            host: opts.host, repo: repo, startedAt: started
+            host: opts.host,
+            repo: repo,
+            startedAt: started,
+            coveragePercent: coveragePct
         )
         var publishLine = ""
         if opts.publish {
@@ -112,21 +142,22 @@ enum CLI {
         print("")
         print(String(repeating: "═", count: 70))
         let banner: String = {
-            if counts.failed > 0  { return "✗ FAILED" }
-            if counts.unclear > 0 { return "⚠ UNCLEAR" }
-            if counts.passed > 0  { return "✓ PASSED" }
+            if methodsFailed > 0 { return "✗ FAILED" }
+            if methodsPassed > 0 { return "✓ PASSED" }
             return "— EMPTY"
         }()
-        print(String(format: "%@   %d passed   %d failed   %d unclear   %d skipped   (%.1fs)",
-                     banner, counts.passed, counts.failed, counts.unclear, counts.skipped, total))
+        print(String(format: "%@   %d executed   %d passed   %d failed   %d skipped   (%.1fs)",
+                     banner, summary.total, methodsPassed, methodsFailed, entriesSkipped, total))
+        if let cov = coveragePct {
+            print(String(format: "Coverage: %.2f%%", cov))
+        }
         print("Host:   \(opts.host.rawValue)")
         print("Repo:   \(repo.oneLine)")
         print("Date:   \(ISO8601DateFormatter().string(from: started))")
         print(publishLine)
         print(String(repeating: "═", count: 70))
 
-        if counts.failed > 0 { return 1 }
-        if counts.unclear > 0 { return 2 }
+        if methodsFailed > 0 { return 1 }
         return 0
     }
 
@@ -140,6 +171,8 @@ enum CLI {
         var listOnly: Bool = false
         var verbose: Bool = false
         var publish: Bool = true   // pushes metrics under hard gates; --no-publish to disable
+        var coverage: Bool = false
+        var coverageAll: Bool = false
     }
 
     static func parse(_ arguments: [String]) -> Options {
@@ -149,6 +182,8 @@ enum CLI {
             if arg == "--verbose" || arg == "-v" { opts.verbose = true; continue }
             if arg == "--include-stress" { opts.includeStress = true; continue }
             if arg == "--no-publish" { opts.publish = false; continue }
+            if arg == "--coverage" { opts.coverage = true; continue }
+            if arg == "--coverage-all" { opts.coverage = true; opts.coverageAll = true; continue }
             if arg.hasPrefix("--group=") {
                 let raw = String(arg.dropFirst("--group=".count))
                 opts.group = TestGroup.allCases.first { $0.rawValue.lowercased() == raw.lowercased() }

@@ -54,7 +54,7 @@ enum MetricsPublisher {
             return .skipped(reason: "no tests ran")
         }
 
-        TermLog.log("metrics", "publishing run: \(summary.passed)p/\(summary.failed)f/\(summary.unclear)u/\(summary.skipped)s on \(summary.host.rawValue)")
+        TermLog.log("metrics", "publishing run: \(summary.methodsPassed)p/\(summary.methodsFailed)f/\(summary.entriesSkipped)s on \(summary.host.rawValue)")
 
         // Build the JSONL row.
         let row = makeRow(summary: summary)
@@ -88,7 +88,7 @@ enum MetricsPublisher {
             return .failed(message: "git add failed: \(add.stderr.suffix(200))")
         }
 
-        let commitMsg = "testdriver: run on \(summary.host.rawValue) — \(summary.passed)p/\(summary.failed)f/\(summary.unclear)u/\(summary.skipped)s"
+        let commitMsg = "testdriver: run on \(summary.host.rawValue) — \(summary.methodsPassed)p/\(summary.methodsFailed)f/\(summary.entriesSkipped)s"
         let commit = await git(["commit", "-m", commitMsg], in: metricsWorktree)
         guard commit.didSucceed else {
             // No changes? Treat as skipped so we don't error-spam.
@@ -137,12 +137,14 @@ enum MetricsPublisher {
         add("commit_date", summary.repo.commitDate)
         add("app_version", summary.repo.appVersion)
         add("dirty",       summary.repo.dirty)
-        add("passed",      summary.passed)
-        add("failed",      summary.failed)
-        add("unclear",     summary.unclear)
-        add("skipped",     summary.skipped)
+        add("passed",      summary.methodsPassed)
+        add("failed",      summary.methodsFailed)
+        add("skipped",     summary.entriesSkipped)
         add("total",       summary.total)
         add("elapsed_s",   summary.elapsedSeconds)
+        if let cov = summary.coveragePercent {
+            add("coverage_logic_pct", cov)
+        }
 
         let body = fields.map { "\"\($0.0)\":\($0.1)" }.joined(separator: ",")
         return "{" + body + "}"
