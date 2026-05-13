@@ -1,37 +1,37 @@
 // VideoScanTests.swift
 //
 // Initial set of tests TestDriver runs against VideoScan. All black-box —
-// they invoke external tools, read prefs, sample the running process,
-// scan crash logs. No linkage to VideoScan's Swift module.
+// invokes external tools, reads prefs, samples the running process,
+// scans crash logs. No linkage to VideoScan's Swift module.
 //
-// Add new tests by appending to `VideoScanTests.all` below.
+// Add new tests by appending to `registerAll`.
 
 import Foundation
 
 enum VideoScanTests {
 
-    /// Bundle ID of the VideoScan app, used for defaults reads and
-    /// crash-log filtering.
     static let bundleID = "Rick-Breen.VideoScan"
-
-    /// Path to the running app binary (Xcode-built debug/release).
     static let runningProcessName = "VideoScan.app/Contents/MacOS/VideoScan"
-
-    /// Project directory — used for xcodebuild test invocations.
     static let projectDir = NSHomeDirectory() + "/dev/VideoScan"
 
     /// Register every test in this file with the global registry.
     static func registerAll() {
         TestRegistry.shared.register([
+            // Smoke
             smokeAppBinaryExists,
             smokeArcFaceModelPresent,
             smokeReachabilityCachePresent,
+            // Diagnostic
             diagnosticDefaultsPollutionCheck,
             diagnosticRecentCrashScan,
             diagnosticMainThreadStuckSyscalls,
+            // Unit (XCTest suite via xcodebuild)
             unitFullSuiteDebug,
+            unitFullSuiteRelease,
+            // Regression (focused XCTest runs)
             regressionArcFaceCacheTests,
-            regressionPersonFinderEngineDispatch
+            regressionPersonFinderEngineDispatch,
+            regressionVolumeReachabilityCache
         ])
     }
 
@@ -40,9 +40,10 @@ enum VideoScanTests {
     static var smokeAppBinaryExists: TestEntry {
         TestEntry(
             group: .smoke,
+            module: "Build artifacts",
             name: "VideoScan binary built and present",
             description: "Locate the most recent Xcode-built VideoScan.app binary"
-        ) { log in
+        ) { _, log in
             let started = Date()
             log("Searching ~/Library/Developer/Xcode/DerivedData for VideoScan.app...")
             let result = await Subprocess.run("/usr/bin/find", [
@@ -50,15 +51,14 @@ enum VideoScanTests {
                 "-name", "VideoScan.app",
                 "-type", "d",
                 "-maxdepth", "8"
-            ], timeoutSeconds: 30)
+            ], timeoutSeconds: 30,
+               stdoutLine: { line in log(line) })
             let lines = result.stdout.split(separator: "\n").filter { !$0.isEmpty }
-            log("Found \(lines.count) VideoScan.app instance(s)")
-            for ln in lines.prefix(5) { log("  \(ln)") }
             let elapsed = Date().timeIntervalSince(started)
+            log("Found \(lines.count) VideoScan.app instance(s)")
             if lines.isEmpty {
                 return .failed("No VideoScan.app found in DerivedData — build the app from Xcode first",
-                               duration: elapsed,
-                               log: result.stdout + result.stderr)
+                               duration: elapsed)
             }
             return .passed(elapsed, log: result.stdout)
         }
@@ -67,9 +67,10 @@ enum VideoScanTests {
     static var smokeArcFaceModelPresent: TestEntry {
         TestEntry(
             group: .smoke,
+            module: "Assets",
             name: "ArcFace CoreML model present",
             description: "w600k_r50.mlmodelc or .mlpackage exists in expected location"
-        ) { log in
+        ) { _, log in
             let started = Date()
             let modelsDir = NSHomeDirectory() + "/dev/VideoScan/models"
             let compiled = modelsDir + "/w600k_r50.mlmodelc"
@@ -89,9 +90,10 @@ enum VideoScanTests {
     static var smokeReachabilityCachePresent: TestEntry {
         TestEntry(
             group: .smoke,
-            name: "VolumeReachability cache code present (issue #87 fix landed)",
-            description: "Source file mentions invalidateCache, indicating the per-volume TTL fix is in place"
-        ) { log in
+            module: "Source-level invariants",
+            name: "VolumeReachability cache code present",
+            description: "Source mentions invalidateCache/cacheTTL/cacheLock — issue #87 fix landed"
+        ) { _, log in
             let started = Date()
             let path = projectDir + "/VideoScan/VideoScan/VolumeReachability.swift"
             log("Reading \(path)")
@@ -111,30 +113,27 @@ enum VideoScanTests {
 
     // MARK: - Diagnostic
 
-    /// Detects pref-pollution like the codex incident (pf_previewRate=25).
-    /// Reads the unsandboxed defaults plist and reports any pf_ key with a
-    /// known-suspicious value. Easy to extend.
     static var diagnosticDefaultsPollutionCheck: TestEntry {
         TestEntry(
             group: .diagnostic,
+            module: "Pref pollution",
             name: "Defaults pollution check",
             description: "Inspects pf_ keys in Rick-Breen.VideoScan defaults for stress-test residue"
-        ) { log in
+        ) { _, log in
             let started = Date()
             let plist = NSHomeDirectory() + "/Library/Preferences/\(bundleID).plist"
             log("Reading \(plist)")
-            let result = await Subprocess.run("/usr/bin/defaults", ["read", plist], timeoutSeconds: 5)
+            let result = await Subprocess.run("/usr/bin/defaults", ["read", plist],
+                                              timeoutSeconds: 5)
             let elapsed = Date().timeIntervalSince(started)
             if !result.didSucceed {
                 return .skipped("No defaults plist found at \(plist)",
                                 log: result.stderr)
             }
-
-            // Suspicious values that suggest stress-test pollution.
             let suspicious: [(String, String, String)] = [
                 ("pf_previewRate", "25", "Codex stress harness sets 25; default is 5"),
-                ("pf_frameStep", "1",  "frameStep=1 means every frame sampled (5× normal load)"),
-                ("pf_concurrency", "32", "concurrency=32 is the stress-test value; default is 4")
+                ("pf_frameStep",   "1",  "frameStep=1 means every frame sampled (5x normal load)"),
+                ("pf_concurrency", "32", "concurrency=32 is the stress value; default is 4")
             ]
             var hits: [String] = []
             for (key, val, why) in suspicious {
@@ -154,14 +153,13 @@ enum VideoScanTests {
         }
     }
 
-    /// Scans ~/Library/Logs/DiagnosticReports/ for VideoScan crash reports
-    /// in the last 24 hours.
     static var diagnosticRecentCrashScan: TestEntry {
         TestEntry(
             group: .diagnostic,
+            module: "Crash reports",
             name: "Recent VideoScan crash logs",
-            description: "Scans ~/Library/Logs/DiagnosticReports for VideoScan-*.ips files in last 24h"
-        ) { log in
+            description: "Scans ~/Library/Logs/DiagnosticReports for VideoScan-*.ips in last 24h"
+        ) { _, log in
             let started = Date()
             let dir = NSHomeDirectory() + "/Library/Logs/DiagnosticReports"
             let result = await Subprocess.run("/usr/bin/find", [
@@ -182,14 +180,13 @@ enum VideoScanTests {
         }
     }
 
-    /// Samples the running VideoScan process for 3 seconds and looks for
-    /// the main thread stuck in a syscall (the issue #87 signature).
     static var diagnosticMainThreadStuckSyscalls: TestEntry {
         TestEntry(
             group: .diagnostic,
+            module: "Liveness",
             name: "Main thread stuck in syscall (issue #87 signature)",
-            description: "Samples running VideoScan for 3s; flags if main is 100% in stat() / read() / select()"
-        ) { log in
+            description: "Samples running VideoScan for 3s; flags if main is in stat()/read()/select()"
+        ) { _, log in
             let started = Date()
             let pgrep = await Subprocess.run("/usr/bin/pgrep", ["-f", runningProcessName])
             let pidStr = pgrep.stdout.split(separator: "\n").first.map(String.init) ?? ""
@@ -199,8 +196,6 @@ enum VideoScanTests {
             log("Sampling PID \(pid) for 3 seconds...")
             let sample = await Subprocess.run("/usr/bin/sample", [String(pid), "3"], timeoutSeconds: 15)
             let elapsed = Date().timeIntervalSince(started)
-            // Look for the issue #87 signature: main-thread frames whose
-            // top is a blocking syscall.
             let stuckSignatures = ["stat ", "__select", "psynch_cvwait", "fileExists"]
             let mainBlock = sample.stdout
                 .components(separatedBy: "\n")
@@ -222,75 +217,169 @@ enum VideoScanTests {
     static var unitFullSuiteDebug: TestEntry {
         TestEntry(
             group: .unit,
+            module: "VideoScanTests (Debug)",
             name: "Full XCTest suite (Debug)",
-            description: "Runs xcodebuild test against VideoScanTests on this machine"
-        ) { log in
-            let started = Date()
-            let dd = NSTemporaryDirectory() + "testdriver-dd"
-            log("Building + running tests, derivedDataPath=\(dd)")
-            log("(this may take several minutes)")
-            let xcodebuild = "/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild"
-            let result = await Subprocess.run(xcodebuild, [
-                "test",
-                "-project", projectDir + "/VideoScan/VideoScan.xcodeproj",
-                "-scheme", "VideoScan",
-                "-destination", "platform=macOS",
-                "-derivedDataPath", dd,
-                "-only-testing:VideoScanTests"
-            ], timeoutSeconds: 1800)
-            let elapsed = Date().timeIntervalSince(started)
-            let passed = result.stdout.components(separatedBy: " passed on ").count - 1
-            let failed = result.stdout.components(separatedBy: " failed on ").count - 1
-            log("Passed: \(passed), Failed: \(failed)")
-            if !result.didSucceed || failed > 0 {
-                let tail = result.stdout.split(separator: "\n").suffix(40).joined(separator: "\n")
-                return .failed("Suite failed: \(failed) failed of \(passed + failed)",
-                               duration: elapsed, log: String(tail))
-            }
-            return .passed(elapsed, log: "All \(passed) tests passed")
+            description: "Runs xcodebuild test against VideoScanTests, Debug config"
+        ) { host, log in
+            await runXcodebuildTest(
+                host: host,
+                configuration: "Debug",
+                onlyTesting: "VideoScanTests",
+                log: log,
+                timeoutSeconds: 1800
+            )
         }
     }
+
+    static var unitFullSuiteRelease: TestEntry {
+        TestEntry(
+            group: .unit,
+            module: "VideoScanTests (Release)",
+            name: "Full XCTest suite (Release optimizer smoke)",
+            description: "Same suite under Release optimization — catches optimizer-only bugs"
+        ) { host, log in
+            await runXcodebuildTest(
+                host: host,
+                configuration: "Release",
+                onlyTesting: "VideoScanTests",
+                log: log,
+                timeoutSeconds: 1800
+            )
+        }
+    }
+
+    // MARK: - Regression
 
     static var regressionArcFaceCacheTests: TestEntry {
         TestEntry(
             group: .regression,
-            name: "ArcFace reference cache tests",
-            description: "Runs the two cache-invariant tests (PersonFinderEngineDispatchTests)"
-        ) { log in
-            await runOnly(testing: "VideoScanTests/PersonFinderEngineDispatchTests", log: log)
+            module: "ArcFace",
+            name: "ArcFace reference embedding cache",
+            description: "PersonFinderEngineDispatchTests — pins the 2026-05-12 crash fix"
+        ) { host, log in
+            await runXcodebuildTest(
+                host: host,
+                configuration: "Debug",
+                onlyTesting: "VideoScanTests/PersonFinderEngineDispatchTests",
+                log: log,
+                timeoutSeconds: 600
+            )
         }
     }
 
     static var regressionPersonFinderEngineDispatch: TestEntry {
         TestEntry(
             group: .regression,
-            name: "PersonFinder engine dispatch bail paths",
-            description: "Runs the dispatch coverage tests (force-unwrap, cancel, missing python)"
-        ) { log in
-            await runOnly(testing: "VideoScanTests/PersonFinderEngineDispatchTests", log: log)
+            module: "Person Finder",
+            name: "Engine dispatch bail paths",
+            description: "Force-unwrap restructure + cancel + missing-python coverage"
+        ) { host, log in
+            await runXcodebuildTest(
+                host: host,
+                configuration: "Debug",
+                onlyTesting: "VideoScanTests/PersonFinderEngineDispatchTests",
+                log: log,
+                timeoutSeconds: 600
+            )
         }
     }
 
-    private static func runOnly(testing target: String, log: @escaping (String) -> Void) async -> TestResult {
+    static var regressionVolumeReachabilityCache: TestEntry {
+        TestEntry(
+            group: .regression,
+            module: "Catalog",
+            name: "VolumeReachability cache (issue #87)",
+            description: "Pins the per-volume TTL cache contract that fixed the beachball"
+        ) { host, log in
+            await runXcodebuildTest(
+                host: host,
+                configuration: "Debug",
+                onlyTesting: "VideoScanTests/VolumeReachabilityBoundaryTests",
+                log: log,
+                timeoutSeconds: 600
+            )
+        }
+    }
+
+    // MARK: - xcodebuild helper
+
+    /// Runs xcodebuild test on the chosen host. For now only `.macStudio`
+    /// (local) is implemented; `.mbp` returns .unclear with a stub message
+    /// so the user sees what's missing.
+    private static func runXcodebuildTest(
+        host: TestHost,
+        configuration: String,
+        onlyTesting: String,
+        log: @escaping @Sendable (String) -> Void,
+        timeoutSeconds: TimeInterval
+    ) async -> TestResult {
         let started = Date()
-        let dd = NSTemporaryDirectory() + "testdriver-dd"
-        log("xcodebuild test -only-testing:\(target)")
+
+        guard host.isImplemented else {
+            return .unclear("Host \(host.rawValue) not yet wired up — for now use Mac Studio (local)",
+                            duration: 0)
+        }
+
+        // Unique derived data path per run to avoid colliding with any
+        // VideoScan instance Rick has open + with concurrent TestDriver runs.
+        let dd = NSTemporaryDirectory() + "testdriver-dd-\(UUID().uuidString.prefix(8))"
+        log("Running xcodebuild test")
+        log("  scheme: VideoScan")
+        log("  configuration: \(configuration)")
+        log("  only-testing: \(onlyTesting)")
+        log("  derivedDataPath: \(dd)")
+        log("(this may take several minutes — output streamed below)")
+
         let xcodebuild = "/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild"
-        let result = await Subprocess.run(xcodebuild, [
-            "test",
-            "-project", projectDir + "/VideoScan/VideoScan.xcodeproj",
-            "-scheme", "VideoScan",
-            "-destination", "platform=macOS",
-            "-derivedDataPath", dd,
-            "-only-testing:\(target)"
-        ], timeoutSeconds: 600)
+        let result = await Subprocess.run(
+            xcodebuild,
+            [
+                "test",
+                "-project", projectDir + "/VideoScan/VideoScan.xcodeproj",
+                "-scheme", "VideoScan",
+                "-configuration", configuration,
+                "-destination", "platform=macOS",
+                "-derivedDataPath", dd,
+                "-only-testing:\(onlyTesting)"
+            ],
+            timeoutSeconds: timeoutSeconds,
+            // Only stream lines that look meaningful — xcodebuild emits
+            // many tens of thousands of build-system lines that would
+            // flood the UI. We surface test-case events, errors, and the
+            // final summary.
+            stdoutLine: { line in
+                if line.contains("Test Case") ||
+                   line.contains("Test Suite") ||
+                   line.contains("TEST SUCCEEDED") ||
+                   line.contains("TEST FAILED") ||
+                   line.contains("error:") ||
+                   line.contains("warning:") && line.contains("VideoScan") {
+                    log(line)
+                }
+            },
+            stderrLine: nil
+        )
         let elapsed = Date().timeIntervalSince(started)
+
+        if result.timedOut {
+            return .unclear("Timed out after \(Int(timeoutSeconds))s",
+                            duration: elapsed,
+                            log: String(result.stdout.suffix(2000)))
+        }
+
         let passed = result.stdout.components(separatedBy: " passed on ").count - 1
         let failed = result.stdout.components(separatedBy: " failed on ").count - 1
-        if !result.didSucceed || failed > 0 {
-            let tail = result.stdout.split(separator: "\n").suffix(20).joined(separator: "\n")
-            return .failed("\(failed) failed of \(passed + failed)",
-                           duration: elapsed, log: String(tail))
+        log("--- summary ---")
+        log("Passed: \(passed), Failed: \(failed), xcodebuild exit: \(result.exitCode)")
+
+        if result.exitCode != 0 || failed > 0 {
+            let tail = String(result.stdout.split(separator: "\n").suffix(40).joined(separator: "\n"))
+            return .failed("\(failed) failed of \(passed + failed)", duration: elapsed, log: tail)
+        }
+        if passed == 0 {
+            return .unclear("0 tests executed — Swift Testing discovery may have skipped silently",
+                            duration: elapsed,
+                            log: String(result.stdout.suffix(1000)))
         }
         return .passed(elapsed, log: "\(passed) tests passed")
     }
