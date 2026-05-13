@@ -9,6 +9,25 @@ import CoreImage
 import CoreGraphics
 import AVFoundation
 import os
+import os.lock
+
+// MARK: - Global serialization lock for MLModel.prediction(from:)
+//
+// Apple's docs say distinct MLModel instances are safe across threads.
+// In practice — confirmed by crash 2026-05-12 19:16 with full stack
+// `arcfaceEmbedding → MLModel.predictionFromFeatures → MLE5BindEmptyMemoryObjectToPort`
+// — heavy concurrent inference still trips MLE5 even when each call uses
+// its own MLModel.
+//
+// This lock serializes ALL `model.prediction(from:)` calls in our app.
+// Cost: predictions execute sequentially instead of in parallel. The
+// reference-embedding cache in ScanJob (computed once per job) reduces
+// total prediction count by ~100×, so the serialization cost should be
+// minor in practice.
+//
+// If a future Apple SDK fixes MLE5 concurrency, this can be replaced
+// with a no-op or removed.
+nonisolated(unsafe) let arcfacePredictionLock = OSAllocatedUnfairLock()
 
 // MARK: - ArcFace CoreML Model Singleton
 
@@ -154,10 +173,14 @@ nonisolated func arcfaceEmbedding(from faceImage: CGImage, model: MLModel) -> [F
     }
     CVPixelBufferUnlockBaseAddress(pb, [])
 
-    // Run CoreML prediction
+    // Run CoreML prediction. The lock guards against MLE5BindEmptyMemoryObjectToPort
+    // crashes seen under heavy concurrent inference even with per-call MLModel
+    // instances (see comment on `arcfacePredictionLock` declaration).
     do {
         let input = try MLDictionaryFeatureProvider(dictionary: ["faceImage": pb])
-        let output = try model.prediction(from: input)
+        let output: MLFeatureProvider = try arcfacePredictionLock.withLock {
+            try model.prediction(from: input)
+        }
 
         // The output tensor name from the converted model
         // Try common output names

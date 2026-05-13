@@ -168,4 +168,48 @@ struct PersonFinderEngineDispatchTests {
         let result = await task.value
         #expect(result == nil, "Cancelled task should return nil from dlib dispatch")
     }
+
+    // MARK: - ArcFace reference embedding cache (crash 2026-05-12 19:16)
+    //
+    // Stack: arcfaceLoadReferenceEmbeddings → arcfaceEmbedding →
+    // MLE5BindEmptyMemoryObjectToPort → SIGABRT, hit during multi-job
+    // scan with concurrency=32, frameStep=1. Root cause: references
+    // were re-embedded for every video, multiplying concurrent MLE5
+    // load enough to trip the engine race even with per-call MLModel
+    // instances. Fix: cache embeddings on ScanJob, populated lazily by
+    // pfRunArcFaceEngine, invalidated by loadFacesForJob on a fresh
+    // reference-photo load.
+    //
+    // These tests pin the cache shape and the invalidation contract.
+    // They don't exercise the prediction call itself (CoreML state is
+    // expensive and unreliable in unit tests) — that's by design. The
+    // invalidation rule is the part most likely to drift in a refactor.
+
+    @Test func newScanJobHasEmptyArcFaceEmbeddingCache() {
+        let job = ScanJob(searchPath: "/tmp")
+        #expect(job.assignedArcFaceEmbeddings.isEmpty,
+                "Default cache must be empty so pfRunArcFaceEngine takes the compute path on first video")
+    }
+
+    @Test func loadFacesForJobInvalidatesArcFaceEmbeddingCache() async {
+        // Reproduces the worst case: a job has cached embeddings from
+        // a previous profile, then the user assigns a different person
+        // and starts a new scan. loadFacesForJob is the choke point —
+        // it must clear the cache or the new scan reuses stale embeddings
+        // and matches the wrong person.
+        let model = PersonFinderModel()
+        let job = ScanJob(searchPath: "/tmp")
+        job.assignedProfile = POIProfile(
+            name: "TestPerson",
+            referencePath: "/tmp/nonexistent_refs_\(UUID().uuidString)",
+            engine: RecognitionEngine.arcface.rawValue
+        )
+        job.assignedArcFaceEmbeddings = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
+        #expect(!job.assignedArcFaceEmbeddings.isEmpty, "precondition: cache populated")
+
+        await model.loadFacesForJob(job)
+
+        #expect(job.assignedArcFaceEmbeddings.isEmpty,
+                "loadFacesForJob must invalidate the cache; otherwise a person-swap reuses prior embeddings")
+    }
 }

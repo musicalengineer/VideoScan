@@ -51,6 +51,14 @@ final class ScanJob: ObservableObject, Identifiable {
     /// Per-job person assignment — nil means use global person.
     @Published var assignedProfile: POIProfile?
     var assignedFaces: [ReferenceFace] = []
+    /// ArcFace reference embeddings, computed once per job and reused
+    /// across every video. Empty until the first scan video populates it.
+    /// Why caching: `pfRunArcFaceEngine` previously called
+    /// `arcfaceLoadReferenceEmbeddings` per VIDEO — wasted work AND
+    /// multiplied concurrent MLModel.prediction() calls by N-references
+    /// per video, which hit the MLE5BindEmptyMemoryObjectToPort race
+    /// even with per-call MLModel instances.
+    var assignedArcFaceEmbeddings: [[Float]] = []
     var personLabel: String { assignedProfile?.name ?? "" }
 
     /// Per-job engine override — nil means use profile's engine or global default.
