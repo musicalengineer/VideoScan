@@ -384,6 +384,23 @@ struct CatalogView: View {
                 Text("Delete catalog records for this volume?")
             }
         }
+        .alert(
+            model.missingDependency?.alertTitle ?? "Missing Dependency",
+            isPresented: Binding(
+                get: { model.missingDependency != nil },
+                set: { if !$0 { model.missingDependency = nil } }
+            ),
+            presenting: model.missingDependency
+        ) { dep in
+            Button("Copy Install Command") {
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.setString(dep.installHint, forType: .string)
+            }
+            Button("OK", role: .cancel) { }
+        } message: { dep in
+            Text(dep.alertMessage)
+        }
     }
 
     // MARK: - Find A/V Pair (on-demand single-file pair search)

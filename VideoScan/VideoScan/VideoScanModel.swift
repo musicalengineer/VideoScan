@@ -185,6 +185,12 @@ final class VideoScanModel: ObservableObject {
     /// instead of trying to load a thumbnail.
     @Published var previewOfflineVolumeName: String?
 
+    /// Set by an operation that can't proceed because an external tool
+    /// is missing (e.g. ffmpeg not installed). The view binds an alert to
+    /// this; clearing it dismisses the dialog. Prevents the silent-no-op
+    /// failure mode where Scan just sits there because every probe fails.
+    @Published var missingDependency: MissingDependency?
+
     /// Force SwiftUI to recompute volumeTableRows when target properties
     /// (phase, reachability, etc.) change. Reassigning the array triggers
     /// @Published even though the contents are the same references —
@@ -1401,6 +1407,11 @@ final class VideoScanModel: ObservableObject {
 
     func startTarget(_ target: CatalogScanTarget) {
         guard !target.searchPath.isEmpty else { return }
+        if let missing = DependencyChecker.checkScan() {
+            missingDependency = missing
+            log("--- Scan blocked: \(missing.displayName) not installed (\(missing.installHint)) ---")
+            return
+        }
         // Clear any existing catalog records for this volume so a rescan
         // doesn't create duplicates. The cache is kept (probes are reused).
         records.removeAll { $0.fullPath.hasPrefix(target.searchPath) }
@@ -1462,6 +1473,14 @@ final class VideoScanModel: ObservableObject {
     }
 
     func startAllTargets() {
+        // Check deps once up-front rather than repeating per-target —
+        // otherwise startTarget would set missingDependency for each
+        // volume, which is the same dialog over and over.
+        if let missing = DependencyChecker.checkScan() {
+            missingDependency = missing
+            log("--- Scan blocked: \(missing.displayName) not installed (\(missing.installHint)) ---")
+            return
+        }
         for target in scanTargets where target.status.isIdle || target.status == .stopped {
             guard !target.searchPath.contains("VideoScan_Temp") else { continue }
             guard target.isReachable else { continue }
