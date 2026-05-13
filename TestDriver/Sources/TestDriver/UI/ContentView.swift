@@ -2,6 +2,10 @@
 //
 // TestDriver UI — Group ▸ Module ▸ Test outline with counts, status
 // badges, host picker, progress bar, brief / detailed view modes.
+//
+// Every meaningful UI event is mirrored to stderr via TermLog so the
+// shell that launched `swift run TestDriver` shows a live timeline —
+// useful when the SwiftUI window is wedged or off-screen.
 
 import SwiftUI
 
@@ -24,7 +28,9 @@ final class TestDriverModel: ObservableObject {
     private var runTask: Task<Void, Never>?
 
     init() {
+        TermLog.log("model", "TestDriverModel init")
         VideoScanTests.registerAll()
+        TermLog.log("model", "registered \(TestRegistry.shared.all().count) tests")
         rebuildHierarchy()
         for entry in TestRegistry.shared.all() {
             status[entry.id] = .notRun
@@ -39,33 +45,44 @@ final class TestDriverModel: ObservableObject {
         } else {
             hierarchy = full.filter { !$0.0.requiresOptIn }
         }
+        let visibleCount = hierarchy.flatMap { $0.1.flatMap { $0.1 } }.count
+        TermLog.log("model", "hierarchy rebuilt: \(visibleCount) visible tests, allowStress=\(allowStress)")
     }
 
     func toggle(_ id: String) {
         if selected.contains(id) { selected.remove(id) } else { selected.insert(id) }
+        TermLog.log("ui", "toggle \(id) → \(selected.contains(id) ? "ON" : "OFF") (selected=\(selected.count))")
     }
 
     func selectAll(in group: TestGroup) {
-        for entry in TestRegistry.shared.all() where entry.group == group {
-            selected.insert(entry.id)
-        }
+        let ids = TestRegistry.shared.all().filter { $0.group == group }.map(\.id)
+        selected.formUnion(ids)
+        TermLog.log("ui", "select group \(group.rawValue): +\(ids.count) (selected=\(selected.count))")
     }
 
     func selectAll(in group: TestGroup, module: String?) {
-        for entry in TestRegistry.shared.all() where entry.group == group && entry.module == module {
-            selected.insert(entry.id)
-        }
+        let ids = TestRegistry.shared.all().filter { $0.group == group && $0.module == module }.map(\.id)
+        selected.formUnion(ids)
+        TermLog.log("ui", "select module \(group.rawValue)/\(module ?? "_"): +\(ids.count) (selected=\(selected.count))")
     }
 
-    func clearAll() { selected.removeAll() }
+    func clearAll() {
+        TermLog.log("ui", "clear all selection (was \(selected.count))")
+        selected.removeAll()
+    }
 
     func runSelected() {
-        guard runTask == nil else { return }
+        guard runTask == nil else {
+            TermLog.log("ui", "runSelected ignored — already running")
+            return
+        }
         let toRun = TestRegistry.shared.all().filter { selected.contains($0.id) }
         guard !toRun.isEmpty else {
             summaryText = "Nothing selected."
+            TermLog.log("ui", "runSelected called with empty selection")
             return
         }
+        TermLog.log("ui", "runSelected: \(toRun.count) tests on host=\(host.rawValue)")
         summaryText = "Running \(toRun.count) test(s) on \(host.rawValue)..."
         totalToRun = toRun.count
         completedCount = 0
@@ -79,7 +96,11 @@ final class TestDriverModel: ObservableObject {
             guard let self else { return }
             var passed = 0, failed = 0, unclear = 0, skipped = 0
             for entry in toRun {
-                if Task.isCancelled { break }
+                if Task.isCancelled {
+                    TermLog.log("model", "runSelected cancelled before \(entry.name)")
+                    break
+                }
+                TermLog.log("test", "▶ \(entry.id)")
                 await MainActor.run {
                     self.currentlyRunning = entry.id
                     self.status[entry.id] = .running
@@ -87,23 +108,26 @@ final class TestDriverModel: ObservableObject {
                 }
                 let logBuffer = LineBuffer()
                 let result = await entry.run(selectedHost) { line in
+                    TermLog.log("subproc", line)
                     Task { @MainActor in
                         self.liveLog += line + "\n"
                     }
                     logBuffer.append(line)
                 }
+                let symbol: String
+                switch result.status {
+                case .passed:  passed += 1;  symbol = "✓ pass"
+                case .failed:  failed += 1;  symbol = "✗ fail"
+                case .unclear: unclear += 1; symbol = "⚠ unclear"
+                case .skipped: skipped += 1; symbol = "↷ skip"
+                default:                     symbol = "?"
+                }
+                TermLog.log("test", "\(symbol) \(entry.id)")
                 await MainActor.run {
                     self.status[entry.id] = result.status
                     let merged = logBuffer.snapshot() +
                                  (result.log.isEmpty ? "" : "\n--- result.log ---\n" + result.log)
                     self.logs[entry.id] = merged
-                    switch result.status {
-                    case .passed:  passed += 1
-                    case .failed:  failed += 1
-                    case .unclear: unclear += 1
-                    case .skipped: skipped += 1
-                    default: break
-                    }
                     self.completedCount += 1
                     self.progressFraction = Double(self.completedCount) / Double(self.totalToRun)
                 }
@@ -116,16 +140,36 @@ final class TestDriverModel: ObservableObject {
                 if unclear > 0 { parts.append("\(unclear) unclear") }
                 if skipped > 0 { parts.append("\(skipped) skipped") }
                 self.summaryText = "Done — " + parts.joined(separator: ", ")
+                TermLog.log("model", "run complete: \(self.summaryText)")
                 self.runTask = nil
             }
         }
     }
 
-    func cancel() { runTask?.cancel() }
+    func cancel() {
+        TermLog.log("ui", "cancel pressed")
+        runTask?.cancel()
+    }
 
     func runOne(_ id: String) {
+        TermLog.log("ui", "runOne \(id)")
         selected = [id]
         runSelected()
+    }
+
+    /// Prints the entire current state to stderr — handy when the UI is
+    /// wedged and Rick wants to know what TestDriver thinks is happening.
+    func dumpState() {
+        TermLog.log("debug", "=== state dump ===")
+        TermLog.log("debug", "host=\(host.rawValue)")
+        TermLog.log("debug", "selected=\(selected.count)")
+        TermLog.log("debug", "currentlyRunning=\(currentlyRunning ?? "—")")
+        TermLog.log("debug", "completed=\(completedCount)/\(totalToRun)")
+        for entry in TestRegistry.shared.all() {
+            let s = status[entry.id] ?? .notRun
+            TermLog.log("debug", "  \(s.symbol) \(entry.id)")
+        }
+        TermLog.log("debug", "=== end state dump ===")
     }
 }
 
@@ -166,16 +210,15 @@ struct ContentView: View {
                 Divider()
                 summaryBar
             }
-            .frame(minWidth: 520)
+            .frame(minWidth: 360, idealWidth: 600)
 
             VStack(alignment: .leading, spacing: 0) {
                 Text(inspectedID.flatMap(TestRegistry.shared.entry(id:))?.name ?? "Live log")
                     .font(.headline)
                     .padding(8)
                 Divider()
-                if model.briefMode && model.currentlyRunning != nil {
-                    briefProgressGrid
-                        .padding(8)
+                if model.briefMode && model.totalToRun > 0 {
+                    briefProgressGrid.padding(8)
                 } else {
                     ScrollView {
                         Text(displayedLog)
@@ -186,9 +229,12 @@ struct ContentView: View {
                     }
                 }
             }
-            .frame(minWidth: 380)
+            .frame(minWidth: 280, idealWidth: 480)
         }
-        .frame(minWidth: 980, minHeight: 640)
+        // Window can shrink to here; user can drag larger freely.
+        // Lowered from 980x640 because the toolbar got crowded enough to
+        // hide chevrons at the old minimum.
+        .frame(minWidth: 700, minHeight: 420)
     }
 
     private var displayedLog: String {
@@ -198,10 +244,17 @@ struct ContentView: View {
         return model.liveLog
     }
 
+    // MARK: - Toolbar
+
+    /// Three rows. Vertical stacking guarantees nothing gets squeezed
+    /// off-screen at narrow widths — a regression V2 introduced when we
+    /// stuffed everything onto one HStack.
     private var toolbar: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 12) {
-                Button(action: { model.runSelected() }) {
+                Button {
+                    model.runSelected()
+                } label: {
                     Label("Run Selected", systemImage: "play.fill")
                 }
                 .keyboardShortcut(.return, modifiers: [.command])
@@ -212,32 +265,45 @@ struct ContentView: View {
 
                 Divider().frame(height: 18)
 
-                Button("Select All") {
+                Button("Select Visible") {
                     let visibleIDs = model.hierarchy.flatMap { $0.1.flatMap { $0.1.map(\.id) } }
                     model.selected = Set(visibleIDs)
+                    TermLog.log("ui", "select all visible: \(visibleIDs.count)")
                 }
                 Button("Clear") { model.clearAll() }
 
                 Spacer()
 
-                Picker("Host", selection: $model.host) {
+                Button {
+                    model.dumpState()
+                } label: {
+                    Label("Dump", systemImage: "doc.text.magnifyingglass")
+                }
+                .help("Print full state to stderr (terminal that launched TestDriver)")
+            }
+
+            HStack(spacing: 12) {
+                Text("Run on").font(.caption).foregroundStyle(.secondary)
+                Picker("", selection: $model.host) {
                     ForEach(TestHost.allCases) { h in
                         Text(h.isImplemented ? h.rawValue : "\(h.rawValue) — not wired")
                             .tag(h)
                     }
                 }
-                .frame(width: 240)
-                .pickerStyle(.menu)
+                .labelsHidden()
+                .frame(maxWidth: 260)
+
+                Spacer()
 
                 Toggle("Brief", isOn: $model.briefMode)
                     .toggleStyle(.checkbox)
                     .font(.caption)
-
                 Toggle("Stress", isOn: $model.allowStress)
                     .onChange(of: model.allowStress) { _, _ in model.rebuildHierarchy() }
                     .toggleStyle(.checkbox)
                     .font(.caption)
             }
+
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Filter tests by name or module…", text: $filterText)
@@ -246,6 +312,8 @@ struct ContentView: View {
         }
         .padding(8)
     }
+
+    // MARK: - Progress / summary
 
     private var progressBar: some View {
         Group {
@@ -304,16 +372,38 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - Outline
+
+    /// Group section. Header row: chevron + name + count + Select button.
+    /// We deliberately do NOT put the "Select group" button INSIDE the
+    /// DisclosureGroup label — in V2 that stole the tap area and the
+    /// chevron stopped responding. Instead we render a thin row above
+    /// the disclosure with our own controls.
     private func groupSection(group: TestGroup, modules: [(String?, [TestEntry])]) -> some View {
         let total = modules.reduce(0) { $0 + $1.1.count }
-        return DisclosureGroup(
-            isExpanded: Binding(
-                get: { expandedGroups.contains(group) },
-                set: { isOpen in
-                    if isOpen { expandedGroups.insert(group) } else { expandedGroups.remove(group) }
+        return VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                DisclosureGroup(
+                    isExpanded: Binding(
+                        get: { expandedGroups.contains(group) },
+                        set: { isOpen in
+                            if isOpen { expandedGroups.insert(group) } else { expandedGroups.remove(group) }
+                        }
+                    )
+                ) {
+                    EmptyView()    // Content rendered below; this disclosure is just the chevron + label
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(group.rawValue).font(.headline)
+                        Text("(\(total))").foregroundStyle(.secondary).font(.subheadline)
+                    }
                 }
-            ),
-            content: {
+                Spacer()
+                Button("Select") { model.selectAll(in: group) }
+                    .buttonStyle(.borderless)
+                    .font(.caption)
+            }
+            if expandedGroups.contains(group) {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(modules, id: \.0) { module, entries in
                         moduleSection(group: group, module: module, entries: entries)
@@ -321,20 +411,8 @@ struct ContentView: View {
                 }
                 .padding(.leading, 22)
                 .padding(.top, 4)
-            },
-            label: {
-                HStack {
-                    Text(group.rawValue).font(.headline)
-                    Text("(\(total))")
-                        .foregroundStyle(.secondary)
-                        .font(.subheadline)
-                    Spacer()
-                    Button("Select group") { model.selectAll(in: group) }
-                        .buttonStyle(.borderless)
-                        .font(.caption)
-                }
             }
-        )
+        }
         .padding(.vertical, 2)
     }
 
@@ -342,44 +420,43 @@ struct ContentView: View {
         let visible = entries.filter { matchesFilter($0) }
         let moduleKey = "\(group.rawValue)/\(module ?? "_")"
         let label = module ?? "(no module)"
-        return Group {
-            if visible.isEmpty {
-                EmptyView()
-            } else {
-                DisclosureGroup(
-                    isExpanded: Binding(
-                        get: { expandedModules.contains(moduleKey) || !filterText.isEmpty },
-                        set: { isOpen in
-                            if isOpen { expandedModules.insert(moduleKey) } else { expandedModules.remove(moduleKey) }
-                        }
-                    ),
-                    content: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            ForEach(visible) { entry in
-                                rowFor(entry)
+        let isExpanded = expandedModules.contains(moduleKey) || !filterText.isEmpty
+
+        return VStack(alignment: .leading, spacing: 0) {
+            if !visible.isEmpty {
+                HStack(spacing: 6) {
+                    DisclosureGroup(
+                        isExpanded: Binding(
+                            get: { isExpanded },
+                            set: { isOpen in
+                                if isOpen { expandedModules.insert(moduleKey) } else { expandedModules.remove(moduleKey) }
                             }
-                        }
-                        .padding(.leading, 22)
-                        .padding(.top, 2)
-                    },
-                    label: {
-                        HStack {
+                        )
+                    ) {
+                        EmptyView()
+                    } label: {
+                        HStack(spacing: 4) {
                             Text(label).font(.system(.body, design: .default).weight(.medium))
-                            Text("(\(visible.count))")
-                                .foregroundStyle(.secondary)
-                                .font(.caption)
-                            Spacer()
-                            Button("Select module") {
-                                model.selectAll(in: group, module: module)
-                            }
-                            .buttonStyle(.borderless)
-                            .font(.caption)
+                            Text("(\(visible.count))").foregroundStyle(.secondary).font(.caption)
                         }
                     }
-                )
-                .padding(.vertical, 1)
+                    Spacer()
+                    Button("Select") { model.selectAll(in: group, module: module) }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                }
+                if isExpanded {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(visible) { entry in
+                            rowFor(entry)
+                        }
+                    }
+                    .padding(.leading, 22)
+                    .padding(.top, 2)
+                }
             }
         }
+        .padding(.vertical, 1)
     }
 
     private func matchesFilter(_ entry: TestEntry) -> Bool {
@@ -390,16 +467,21 @@ struct ContentView: View {
             || entry.description.lowercased().contains(f)
     }
 
+    /// Per-test row. We use an explicit Image-as-checkbox rather than a
+    /// Toggle, because Toggle inside a row that ALSO has tap recognizers
+    /// caused a hit-test conflict in V2 — taps on the box went to the
+    /// row tap gesture and never toggled. An Image with its own onTapGesture
+    /// is unambiguous.
     private func rowFor(_ entry: TestEntry) -> some View {
         let isSelected = model.selected.contains(entry.id)
         let st = model.status[entry.id] ?? .notRun
         return HStack(spacing: 8) {
-            Toggle("", isOn: Binding(
-                get: { isSelected },
-                set: { _ in model.toggle(entry.id) }
-            ))
-            .toggleStyle(.checkbox)
-            .labelsHidden()
+            Image(systemName: isSelected ? "checkmark.square.fill" : "square")
+                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                .font(.system(size: 16))
+                .frame(width: 22, height: 22)
+                .contentShape(Rectangle())
+                .onTapGesture { model.toggle(entry.id) }
 
             Text(st.symbol)
                 .font(.system(.body, design: .monospaced))
@@ -411,6 +493,8 @@ struct ContentView: View {
                 Text(entry.description).font(.caption).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .onTapGesture { inspectedID = entry.id }
 
             durationLabel(st)
 
@@ -419,8 +503,6 @@ struct ContentView: View {
                 .font(.caption)
                 .disabled(model.currentlyRunning != nil)
         }
-        .contentShape(Rectangle())
-        .onTapGesture { inspectedID = entry.id }
         .padding(.vertical, 2)
         .background(inspectedID == entry.id ? Color.accentColor.opacity(0.10) : Color.clear)
     }
@@ -430,23 +512,18 @@ struct ContentView: View {
         switch st {
         case .passed(let dur):
             Text(String(format: "%.1fs", dur))
-                .font(.caption)
-                .foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(.secondary)
                 .frame(width: 56, alignment: .trailing)
         case .failed(_, let dur):
             Text(String(format: "%.1fs", dur))
-                .font(.caption)
-                .foregroundStyle(.red)
+                .font(.caption).foregroundStyle(.red)
                 .frame(width: 56, alignment: .trailing)
         case .unclear(_, let dur):
             Text(String(format: "%.1fs", dur))
-                .font(.caption)
-                .foregroundStyle(.yellow)
+                .font(.caption).foregroundStyle(.yellow)
                 .frame(width: 56, alignment: .trailing)
         default:
-            Text(" ")
-                .font(.caption)
-                .frame(width: 56, alignment: .trailing)
+            Text(" ").font(.caption).frame(width: 56, alignment: .trailing)
         }
     }
 
