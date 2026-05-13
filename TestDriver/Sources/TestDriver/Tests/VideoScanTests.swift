@@ -330,18 +330,30 @@ enum VideoScanTests {
         log("  derivedDataPath: \(dd)")
         log("(this may take several minutes — output streamed below)")
 
+        // Release config doesn't build with `-enable-testing` by default,
+        // so `@testable import VideoScan` in the test target fails to link.
+        // ENABLE_TESTABILITY=YES forces the flag for this build invocation
+        // without changing project settings. The CI workflow has the same
+        // setting in ci.yml line ~196. xcodebuild exit 65 with 0/0 tests
+        // and "incompatible module" in the log is the symptom.
+        var args = [
+            "test",
+            "-project", projectDir + "/VideoScan/VideoScan.xcodeproj",
+            "-scheme", "VideoScan",
+            "-configuration", configuration,
+            "-destination", "platform=macOS",
+            "-derivedDataPath", dd,
+            "-only-testing:\(onlyTesting)",
+            "CODE_SIGNING_ALLOWED=NO"
+        ]
+        if configuration == "Release" {
+            args.append("ENABLE_TESTABILITY=YES")
+        }
+
         let xcodebuild = "/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild"
         let result = await Subprocess.run(
             xcodebuild,
-            [
-                "test",
-                "-project", projectDir + "/VideoScan/VideoScan.xcodeproj",
-                "-scheme", "VideoScan",
-                "-configuration", configuration,
-                "-destination", "platform=macOS",
-                "-derivedDataPath", dd,
-                "-only-testing:\(onlyTesting)"
-            ],
+            args,
             timeoutSeconds: timeoutSeconds,
             // Only stream lines that look meaningful — xcodebuild emits
             // many tens of thousands of build-system lines that would
@@ -373,8 +385,22 @@ enum VideoScanTests {
         log("Passed: \(passed), Failed: \(failed), xcodebuild exit: \(result.exitCode)")
 
         if result.exitCode != 0 || failed > 0 {
+            // Known exit-65 with 0 passes pattern: testability flag missing.
+            // Surface a specific actionable message instead of a generic
+            // "tests failed".
             let tail = String(result.stdout.split(separator: "\n").suffix(40).joined(separator: "\n"))
-            return .failed("\(failed) failed of \(passed + failed)", duration: elapsed, log: tail)
+            if result.exitCode == 65, passed == 0,
+               result.stdout.contains("module built without '-enable-testing'") ||
+               result.stdout.contains("Unable to resolve Swift module dependency") {
+                return .unclear(
+                    "Build was not built with -enable-testing (Release defaults to off). " +
+                    "TestDriver passes ENABLE_TESTABILITY=YES for Release, but project settings " +
+                    "may also need SWIFT_OPTIMIZATION_LEVEL=-Onone for the test target.",
+                    duration: elapsed,
+                    log: tail)
+            }
+            return .failed("\(failed) failed of \(passed + failed) (xcodebuild exit \(result.exitCode))",
+                           duration: elapsed, log: tail)
         }
         if passed == 0 {
             return .unclear("0 tests executed — Swift Testing discovery may have skipped silently",
