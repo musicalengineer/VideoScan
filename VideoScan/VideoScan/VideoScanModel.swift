@@ -342,6 +342,10 @@ final class VideoScanModel: ObservableObject {
             let volumeURL = note.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL
             Task { @MainActor in
                 guard let self else { return }
+                // Mount changes invalidate the per-volume reachability cache
+                // — without this, the catalog table would keep returning
+                // stale "offline" for the new mount until the 5s TTL expires.
+                VolumeReachability.invalidateCache()
                 self.refreshTargetReachability()
                 // Auto-add newly mounted volume as a scan target (skip RAM disk)
                 if let url = volumeURL {
@@ -369,6 +373,9 @@ final class VideoScanModel: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
+                // Same cache invalidation as the mount handler — a yanked
+                // drive needs to flip to offline immediately, not after TTL.
+                VolumeReachability.invalidateCache()
                 self?.refreshTargetReachability()
                 self?.notifyTargetsChanged()
             }
