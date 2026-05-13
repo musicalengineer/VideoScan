@@ -315,9 +315,22 @@ enum VideoScanTests {
     ) async -> TestResult {
         let started = Date()
 
-        guard host.isImplemented else {
-            return .unclear("Host \(host.rawValue) not yet wired up — for now use Mac Studio (local)",
-                            duration: 0)
+        // MBP path: SSH + launchctl submit. Remote handles its own
+        // derivedDataPath under /tmp on the MBP. Same SubprocessResult
+        // shape comes back, so the parsing/summary code below is shared.
+        if host == .mbp {
+            log("Running xcodebuild test on \(host.rawValue)")
+            log("  scheme: VideoScan")
+            log("  configuration: \(configuration)")
+            log("  only-testing: \(onlyTesting)")
+            let result = await MBPRemote.runXcodebuildTest(
+                configuration: configuration,
+                onlyTesting: onlyTesting,
+                log: log,
+                timeoutSeconds: timeoutSeconds
+            )
+            return summarize(result: result, log: log,
+                             elapsed: Date().timeIntervalSince(started))
         }
 
         // Unique derived data path per run to avoid colliding with any
@@ -351,7 +364,7 @@ enum VideoScanTests {
         }
 
         let xcodebuild = "/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild"
-        let result = await Subprocess.run(
+        let localResult = await Subprocess.run(
             xcodebuild,
             args,
             timeoutSeconds: timeoutSeconds,
@@ -371,10 +384,19 @@ enum VideoScanTests {
             },
             stderrLine: nil
         )
-        let elapsed = Date().timeIntervalSince(started)
+        return summarize(result: localResult, log: log,
+                         elapsed: Date().timeIntervalSince(started))
+    }
 
+    /// Convert a SubprocessResult from xcodebuild test (local OR remote)
+    /// into a TestResult. Same pass/fail/unclear logic for both paths.
+    private static func summarize(
+        result: SubprocessResult,
+        log: @escaping @Sendable (String) -> Void,
+        elapsed: Double
+    ) -> TestResult {
         if result.timedOut {
-            return .unclear("Timed out after \(Int(timeoutSeconds))s",
+            return .unclear("Timed out (\(Int(elapsed))s)",
                             duration: elapsed,
                             log: String(result.stdout.suffix(2000)))
         }
@@ -385,19 +407,24 @@ enum VideoScanTests {
         log("Passed: \(passed), Failed: \(failed), xcodebuild exit: \(result.exitCode)")
 
         if result.exitCode != 0 || failed > 0 {
-            // Known exit-65 with 0 passes pattern: testability flag missing.
-            // Surface a specific actionable message instead of a generic
-            // "tests failed".
             let tail = String(result.stdout.split(separator: "\n").suffix(40).joined(separator: "\n"))
+            // Known exit-65 with 0 passes pattern: testability flag missing.
             if result.exitCode == 65, passed == 0,
                result.stdout.contains("module built without '-enable-testing'") ||
                result.stdout.contains("Unable to resolve Swift module dependency") {
                 return .unclear(
                     "Build was not built with -enable-testing (Release defaults to off). " +
-                    "TestDriver passes ENABLE_TESTABILITY=YES for Release, but project settings " +
-                    "may also need SWIFT_OPTIMIZATION_LEVEL=-Onone for the test target.",
+                    "TestDriver passes ENABLE_TESTABILITY=YES for Release.",
                     duration: elapsed,
                     log: tail)
+            }
+            // SSH-specific: connection failure shows up as exit 255.
+            if result.exitCode == 255 {
+                return .unclear(
+                    "SSH connection failed (exit 255). Check that the MBP is awake, " +
+                    "logged in, and reachable at ricksmacbookpro.local.",
+                    duration: elapsed,
+                    log: result.stderr.isEmpty ? tail : result.stderr)
             }
             return .failed("\(failed) failed of \(passed + failed) (xcodebuild exit \(result.exitCode))",
                            duration: elapsed, log: tail)

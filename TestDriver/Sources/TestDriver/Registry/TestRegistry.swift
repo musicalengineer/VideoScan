@@ -42,8 +42,9 @@ enum TestHost: String, CaseIterable, Identifiable, Codable, Hashable {
         case .mbp:       return "ricksmacbookpro.local"
         }
     }
-    /// Currently only local Mac Studio is wired up.
-    var isImplemented: Bool { self == .macStudio }
+    /// Both hosts are wired up: local Mac Studio runs xcodebuild directly;
+    /// MBP runs it via SSH + launchctl submit (see MBPRemote.swift).
+    var isImplemented: Bool { true }
 }
 
 /// Outcome of a single test run.
