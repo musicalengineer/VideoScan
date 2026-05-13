@@ -85,6 +85,30 @@ enum CLI {
         }
 
         let total = Date().timeIntervalSince(started)
+
+        // Build a RunSummary so MetricsPublisher's gates apply identically
+        // to the UI path. opts.publish defaults to true; --no-publish
+        // disables. The publisher itself still gates on main + clean +
+        // synced, so a pollute-attempt from a feature branch is silently
+        // skipped even if --publish is on.
+        let summary = RunSummary(
+            passed: counts.passed, failed: counts.failed,
+            unclear: counts.unclear, skipped: counts.skipped,
+            elapsedSeconds: total,
+            host: opts.host, repo: repo, startedAt: started
+        )
+        var publishLine = ""
+        if opts.publish {
+            let outcome = await MetricsPublisher.publish(summary: summary)
+            switch outcome {
+            case .published(_, let sha): publishLine = "📊 metrics published to origin/metrics @ \(sha)"
+            case .skipped(let reason):   publishLine = "📊 metrics skipped — \(reason)"
+            case .failed(let msg):       publishLine = "📊 metrics push FAILED — \(msg)"
+            }
+        } else {
+            publishLine = "📊 metrics push disabled (--no-publish)"
+        }
+
         print("")
         print(String(repeating: "═", count: 70))
         let banner: String = {
@@ -98,6 +122,7 @@ enum CLI {
         print("Host:   \(opts.host.rawValue)")
         print("Repo:   \(repo.oneLine)")
         print("Date:   \(ISO8601DateFormatter().string(from: started))")
+        print(publishLine)
         print(String(repeating: "═", count: 70))
 
         if counts.failed > 0 { return 1 }
@@ -114,6 +139,7 @@ enum CLI {
         var includeStress: Bool = false
         var listOnly: Bool = false
         var verbose: Bool = false
+        var publish: Bool = true   // pushes metrics under hard gates; --no-publish to disable
     }
 
     static func parse(_ arguments: [String]) -> Options {
@@ -122,6 +148,7 @@ enum CLI {
             if arg == "--list" { opts.listOnly = true; continue }
             if arg == "--verbose" || arg == "-v" { opts.verbose = true; continue }
             if arg == "--include-stress" { opts.includeStress = true; continue }
+            if arg == "--no-publish" { opts.publish = false; continue }
             if arg.hasPrefix("--group=") {
                 let raw = String(arg.dropFirst("--group=".count))
                 opts.group = TestGroup.allCases.first { $0.rawValue.lowercased() == raw.lowercased() }

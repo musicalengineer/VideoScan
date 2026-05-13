@@ -29,6 +29,8 @@ final class TestDriverModel: ObservableObject {
     @Published var repoInfo: RepoInfo = .empty
     @Published var lastRunSummary: RunSummary? = nil
     @Published var availableBranches: [String] = []
+    @Published var lastPublishOutcome: PublishOutcome? = nil
+    @Published var autoPublishMetrics: Bool = true
 
     private var runTask: Task<Void, Never>?
 
@@ -162,13 +164,33 @@ final class TestDriverModel: ObservableObject {
                 if unclear > 0 { parts.append("\(unclear) unclear") }
                 if skipped > 0 { parts.append("\(skipped) skipped") }
                 self.summaryText = "Done — " + parts.joined(separator: ", ")
-                self.lastRunSummary = RunSummary(
+                let summary = RunSummary(
                     passed: passed, failed: failed, unclear: unclear, skipped: skipped,
                     elapsedSeconds: Date().timeIntervalSince(runStarted),
                     host: selectedHost, repo: runRepo, startedAt: runStarted
                 )
+                self.lastRunSummary = summary
                 TermLog.log("model", "run complete: \(self.summaryText)")
                 self.runTask = nil
+
+                // Publish metrics (gated on branch/dirty/ahead inside).
+                // Fire-and-forget: failure can't block the UI showing results.
+                if self.autoPublishMetrics {
+                    Task { [weak self] in
+                        let outcome = await MetricsPublisher.publish(summary: summary)
+                        await MainActor.run {
+                            self?.lastPublishOutcome = outcome
+                            switch outcome {
+                            case .published(_, let sha):
+                                TermLog.log("metrics", "✓ published @ \(sha)")
+                            case .skipped(let reason):
+                                TermLog.log("metrics", "↷ skipped: \(reason)")
+                            case .failed(let msg):
+                                TermLog.log("metrics", "✗ failed: \(msg)")
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -354,6 +376,27 @@ struct ContentView: View {
         .background(Color(NSColor.controlBackgroundColor))
     }
 
+    /// One-line status under the result banner showing whether metrics
+    /// published. Pre-approved push to origin/metrics under hard gates;
+    /// any non-main / dirty / non-synced state shows a clear "skipped" line.
+    @ViewBuilder
+    private func publishOutcomeLine(_ outcome: PublishOutcome) -> some View {
+        switch outcome {
+        case .published(_, let sha):
+            Label("metrics published to origin/metrics @ \(sha)", systemImage: "chart.bar.fill")
+                .font(.caption)
+                .foregroundStyle(.green)
+        case .skipped(let reason):
+            Label("metrics skipped — \(reason)", systemImage: "chart.bar")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .failed(let message):
+            Label("metrics push FAILED — \(message)", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        }
+    }
+
     /// Big legible end-of-run banner. Stays at top until the next run starts.
     /// Color: green if all passed, red if any failed, yellow if any unclear,
     /// gray-on-skipped-only.
@@ -408,6 +451,11 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                // Publish outcome under the run banner. Only renders once
+                // the async publish actually completed.
+                if let outcome = model.lastPublishOutcome {
+                    publishOutcomeLine(outcome)
+                }
             }
             Spacer()
             Button {
@@ -481,6 +529,10 @@ struct ContentView: View {
                     .onChange(of: model.allowStress) { _, _ in model.rebuildHierarchy() }
                     .toggleStyle(.checkbox)
                     .font(.caption)
+                Toggle("Publish", isOn: $model.autoPublishMetrics)
+                    .toggleStyle(.checkbox)
+                    .font(.caption)
+                    .help("Push run metrics to origin/metrics when on clean main matching origin")
             }
 
             HStack {
