@@ -121,6 +121,7 @@
             "Bash(git worktree add:*)",
             "Bash(git worktree remove:*)",
             "Bash(git worktree prune:*)",
+            "Bash(git -C:*)",
             "Bash(git push:*)",
             "Bash(open:*)",
             "Bash(defaults read:*)",
