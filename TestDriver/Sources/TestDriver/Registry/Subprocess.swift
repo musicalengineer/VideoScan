@@ -105,9 +105,11 @@ enum Subprocess {
             }
         }
 
+        TermLog.log("subproc", "launch: \(executable) \(arguments.joined(separator: " "))")
         do {
             try proc.run()
         } catch {
+            TermLog.log("subproc", "launch FAILED: \(error.localizedDescription)")
             return SubprocessResult(
                 exitCode: -1,
                 stdout: "",
@@ -116,6 +118,7 @@ enum Subprocess {
                 timedOut: false
             )
         }
+        TermLog.log("subproc", "launched pid=\(proc.processIdentifier)")
 
         // Timeout watcher. `nonisolated(unsafe)` flag is a simple Bool we
         // flip from a detached task; the read is non-racing because we
@@ -150,9 +153,11 @@ enum Subprocess {
 
         let finalOut = outBuf.flush(lineHandler: stdoutLine)
         let finalErr = errBuf.flush(lineHandler: stderrLine)
+        let exit = didTimeout ? Int32(-1) : proc.terminationStatus
+        TermLog.log("subproc", "exit=\(exit) timedOut=\(didTimeout) duration=\(String(format: "%.1f", Date().timeIntervalSince(started)))s")
 
         return SubprocessResult(
-            exitCode: didTimeout ? -1 : proc.terminationStatus,
+            exitCode: exit,
             stdout: finalOut,
             stderr: finalErr,
             durationSeconds: Date().timeIntervalSince(started),
