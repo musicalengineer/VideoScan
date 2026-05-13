@@ -156,14 +156,36 @@ func pfRunArcFaceEngine(
         await logFn("[arcface] Model load failed: \(err ?? "unknown")")
         return nil
     }
-    let (refEmbeddings, refErr) = arcfaceLoadReferenceEmbeddings(
-        from: settings.referencePath,
-        largestFaceOnly: settings.largestFaceOnly,
-        model: mlModel
-    )
-    if let refErr {
-        await logFn("[arcface] Reference loading failed: \(refErr)")
-        return nil
+
+    // Reference embeddings: compute ONCE per job, then reuse for every
+    // subsequent video. Previously this ran for every video, which:
+    //  - wasted N-references × predictions of work per video
+    //  - multiplied concurrent MLE5 inference load enough to trip
+    //    MLE5BindEmptyMemoryObjectToPort under multi-job scans even
+    //    with per-call MLModel instances (crash 2026-05-12 19:16).
+    //
+    // Race note: if multiple videos in this job arrive at the cache
+    // miss at the same time, they each compute a copy. That's fine —
+    // each uses its own MLModel, the work is bounded to one job's
+    // worth, and the last writer wins on the cache field. No
+    // correctness issue, just minor wasted work the first scan.
+    let cached = await MainActor.run { job.assignedArcFaceEmbeddings }
+    let refEmbeddings: [[Float]]
+    if !cached.isEmpty {
+        refEmbeddings = cached
+    } else {
+        let (computed, refErr) = arcfaceLoadReferenceEmbeddings(
+            from: settings.referencePath,
+            largestFaceOnly: settings.largestFaceOnly,
+            model: mlModel
+        )
+        if let refErr {
+            await logFn("[arcface] Reference loading failed: \(refErr)")
+            return nil
+        }
+        refEmbeddings = computed
+        await MainActor.run { job.assignedArcFaceEmbeddings = computed }
+        await logFn("[arcface] Cached \(computed.count) reference embedding(s) for this job")
     }
     return await pfProcessVideoWithArcFace(
         filePath: filePath, referenceEmbeddings: refEmbeddings,

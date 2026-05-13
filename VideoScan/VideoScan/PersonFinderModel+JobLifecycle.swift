@@ -65,6 +65,10 @@ extension PersonFinderModel {
         }.value
         let rejected = Set(profile.rejectedFiles)
         job.assignedFaces = rejected.isEmpty ? faces : faces.filter { !rejected.contains($0.sourceFilename) }
+        // Loading a fresh reference set invalidates any previously-cached
+        // ArcFace embeddings — they were computed from the prior photos.
+        // pfRunArcFaceEngine will rebuild the cache on the next scan.
+        job.assignedArcFaceEmbeddings = []
         job.status = .idle
 
         if !job.searchPath.isEmpty && !job.assignedFaces.isEmpty {
