@@ -11,3 +11,4 @@
 {"ts":"2026-05-11T09:21:26Z","sha":"31c33322","run_kind":"nightly","concurrency_warnings":142,"codeql_findings":0,"tsan_issues":0,"swiftlint_strict":41,"periphery_aggressive":0}
 {"ts":"2026-05-12T08:38:55Z","sha":"115f9cf1","run_kind":"nightly","concurrency_warnings":135,"codeql_findings":0,"tsan_issues":0,"swiftlint_strict":39,"periphery_aggressive":0}
 {"ts":"2026-05-12T16:28:10Z","sha":"115f9cf1","run_kind":"nightly","concurrency_warnings":136,"codeql_findings":0,"tsan_issues":0,"swiftlint_strict":39,"periphery_aggressive":0}
+{"ts":"2026-05-13T08:06:53Z","sha":"d4352d03","run_kind":"nightly","concurrency_warnings":115,"codeql_findings":0,"tsan_issues":null,"swiftlint_strict":34,"periphery_aggressive":0}
