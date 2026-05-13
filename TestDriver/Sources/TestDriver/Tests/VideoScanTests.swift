@@ -14,6 +14,13 @@ enum VideoScanTests {
     static let runningProcessName = "VideoScan.app/Contents/MacOS/VideoScan"
     static let projectDir = NSHomeDirectory() + "/dev/VideoScan"
 
+    /// Process-wide coverage request. Set by the UI/CLI from the
+    /// `coverageEnabled` / `coverageIncludeAll` model toggles before each
+    /// run loop. Read at the start of `runXcodebuildTest` so individual
+    /// test closures don't need new parameters. Defaults to off, so a
+    /// stray test invocation behaves exactly as before.
+    nonisolated(unsafe) static var coverageContext: (enabled: Bool, includeAll: Bool) = (false, false)
+
     /// Register every test in this file with the global registry.
     static func registerAll() {
         TestRegistry.shared.register([
@@ -219,12 +226,14 @@ enum VideoScanTests {
             group: .unit,
             module: "VideoScanTests (Debug)",
             name: "Full XCTest suite (Debug)",
-            description: "Runs xcodebuild test against VideoScanTests, Debug config"
+            description: "Runs xcodebuild test against VideoScanTests, Debug config",
+            supportsCoverage: true
         ) { host, log in
             await runXcodebuildTest(
                 host: host,
                 configuration: "Debug",
                 onlyTesting: "VideoScanTests",
+                entrySupportsCoverage: true,
                 log: log,
                 timeoutSeconds: 1800
             )
@@ -236,12 +245,14 @@ enum VideoScanTests {
             group: .unit,
             module: "VideoScanTests (Release)",
             name: "Full XCTest suite (Release optimizer smoke)",
-            description: "Same suite under Release optimization — catches optimizer-only bugs"
+            description: "Same suite under Release optimization — catches optimizer-only bugs",
+            supportsCoverage: true
         ) { host, log in
             await runXcodebuildTest(
                 host: host,
                 configuration: "Release",
                 onlyTesting: "VideoScanTests",
+                entrySupportsCoverage: true,
                 log: log,
                 timeoutSeconds: 1800
             )
@@ -255,12 +266,14 @@ enum VideoScanTests {
             group: .regression,
             module: "ArcFace",
             name: "ArcFace reference embedding cache",
-            description: "PersonFinderEngineDispatchTests — pins the 2026-05-12 crash fix"
+            description: "PersonFinderEngineDispatchTests — pins the 2026-05-12 crash fix",
+            supportsCoverage: true
         ) { host, log in
             await runXcodebuildTest(
                 host: host,
                 configuration: "Debug",
                 onlyTesting: "VideoScanTests/PersonFinderEngineDispatchTests",
+                entrySupportsCoverage: true,
                 log: log,
                 timeoutSeconds: 600
             )
@@ -272,12 +285,14 @@ enum VideoScanTests {
             group: .regression,
             module: "Person Finder",
             name: "Engine dispatch bail paths",
-            description: "Force-unwrap restructure + cancel + missing-python coverage"
+            description: "Force-unwrap restructure + cancel + missing-python coverage",
+            supportsCoverage: true
         ) { host, log in
             await runXcodebuildTest(
                 host: host,
                 configuration: "Debug",
                 onlyTesting: "VideoScanTests/PersonFinderEngineDispatchTests",
+                entrySupportsCoverage: true,
                 log: log,
                 timeoutSeconds: 600
             )
@@ -289,12 +304,14 @@ enum VideoScanTests {
             group: .regression,
             module: "Catalog",
             name: "VolumeReachability cache (issue #87)",
-            description: "Pins the per-volume TTL cache contract that fixed the beachball"
+            description: "Pins the per-volume TTL cache contract that fixed the beachball",
+            supportsCoverage: true
         ) { host, log in
             await runXcodebuildTest(
                 host: host,
                 configuration: "Debug",
                 onlyTesting: "VideoScanTests/VolumeReachabilityBoundaryTests",
+                entrySupportsCoverage: true,
                 log: log,
                 timeoutSeconds: 600
             )
@@ -303,17 +320,34 @@ enum VideoScanTests {
 
     // MARK: - xcodebuild helper
 
-    /// Runs xcodebuild test on the chosen host. For now only `.macStudio`
-    /// (local) is implemented; `.mbp` returns .unclear with a stub message
-    /// so the user sees what's missing.
+    /// Runs xcodebuild test on the chosen host. Reads `coverageContext` to
+    /// decide whether to pass `-enableCodeCoverage YES` and capture an
+    /// xcresult for `xccov` parsing.
     private static func runXcodebuildTest(
         host: TestHost,
         configuration: String,
         onlyTesting: String,
+        entrySupportsCoverage: Bool,
         log: @escaping @Sendable (String) -> Void,
         timeoutSeconds: TimeInterval
     ) async -> TestResult {
         let started = Date()
+        // Compute whether THIS entry should collect coverage. Unit entries
+        // always count when coverage is on; regression entries only when
+        // the "Include All" toggle is set (they're useful for delta-style
+        // coverage runs).
+        let ctx = coverageContext
+        let collectCoverage: Bool = {
+            guard ctx.enabled, entrySupportsCoverage else { return false }
+            // Both unit + regression entries flip this flag in registerAll.
+            // includeAll==true means "let regression entries contribute";
+            // includeAll==false means "only the two unit-suite entries".
+            if ctx.includeAll { return true }
+            // Detect unit vs. regression by inspecting the onlyTesting string:
+            // unit runs target the whole "VideoScanTests" bundle; regression
+            // runs scope to "VideoScanTests/SomeClass".
+            return !onlyTesting.contains("/")
+        }()
 
         // MBP path: SSH + launchctl submit. Remote handles its own
         // derivedDataPath under /tmp on the MBP. Same SubprocessResult
@@ -323,24 +357,30 @@ enum VideoScanTests {
             log("  scheme: VideoScan")
             log("  configuration: \(configuration)")
             log("  only-testing: \(onlyTesting)")
+            if collectCoverage { log("  coverage: ON (remote)") }
             let result = await MBPRemote.runXcodebuildTest(
                 configuration: configuration,
                 onlyTesting: onlyTesting,
+                coverage: collectCoverage,
                 log: log,
                 timeoutSeconds: timeoutSeconds
             )
-            return summarize(result: result, log: log,
-                             elapsed: Date().timeIntervalSince(started))
+            return summarize(result: result,
+                             log: log,
+                             elapsed: Date().timeIntervalSince(started),
+                             xcresultPath: nil)
         }
 
         // Unique derived data path per run to avoid colliding with any
         // VideoScan instance Rick has open + with concurrent TestDriver runs.
         let dd = NSTemporaryDirectory() + "testdriver-dd-\(UUID().uuidString.prefix(8))"
+        let xcresultPath = dd + "/Coverage.xcresult"
         log("Running xcodebuild test")
         log("  scheme: VideoScan")
         log("  configuration: \(configuration)")
         log("  only-testing: \(onlyTesting)")
         log("  derivedDataPath: \(dd)")
+        if collectCoverage { log("  coverage: ON -> \(xcresultPath)") }
         log("(this may take several minutes — output streamed below)")
 
         // Release config doesn't build with `-enable-testing` by default,
@@ -361,6 +401,12 @@ enum VideoScanTests {
         ]
         if configuration == "Release" {
             args.append("ENABLE_TESTABILITY=YES")
+        }
+        if collectCoverage {
+            args.append("-enableCodeCoverage")
+            args.append("YES")
+            args.append("-resultBundlePath")
+            args.append(xcresultPath)
         }
 
         let xcodebuild = "/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild"
@@ -384,27 +430,41 @@ enum VideoScanTests {
             },
             stderrLine: nil
         )
-        return summarize(result: localResult, log: log,
-                         elapsed: Date().timeIntervalSince(started))
+        return summarize(result: localResult,
+                         log: log,
+                         elapsed: Date().timeIntervalSince(started),
+                         xcresultPath: collectCoverage ? xcresultPath : nil)
     }
 
     /// Convert a SubprocessResult from xcodebuild test (local OR remote)
-    /// into a TestResult. Same pass/fail/unclear logic for both paths.
+    /// into a TestResult. Counts of underlying XCTest methods flow into
+    /// `methodCounts` so the banner can sum them.
     private static func summarize(
         result: SubprocessResult,
         log: @escaping @Sendable (String) -> Void,
-        elapsed: Double
+        elapsed: Double,
+        xcresultPath: String?
     ) -> TestResult {
-        if result.timedOut {
-            return .unclear("Timed out (\(Int(elapsed))s)",
-                            duration: elapsed,
-                            log: String(result.stdout.suffix(2000)))
-        }
-
         let passed = result.stdout.components(separatedBy: " passed on ").count - 1
         let failed = result.stdout.components(separatedBy: " failed on ").count - 1
+        let counts = (passed: passed, failed: failed)
+
+        if result.timedOut {
+            log("--- summary --- TIMED OUT")
+            return .failed("Timed out (\(Int(elapsed))s)",
+                           duration: elapsed,
+                           log: String(result.stdout.suffix(2000)),
+                           methodCounts: counts)
+        }
+
         log("--- summary ---")
         log("Passed: \(passed), Failed: \(failed), xcodebuild exit: \(result.exitCode)")
+
+        // Pull coverage if we have an xcresult and the run produced output.
+        let coverage = xcresultPath.flatMap { extractCoveragePercent(xcresultPath: $0, log: log) }
+        if let cov = coverage {
+            log(String(format: "Coverage (logic): %.2f%%", cov))
+        }
 
         if result.exitCode != 0 || failed > 0 {
             let tail = String(result.stdout.split(separator: "\n").suffix(40).joined(separator: "\n"))
@@ -412,28 +472,80 @@ enum VideoScanTests {
             if result.exitCode == 65, passed == 0,
                result.stdout.contains("module built without '-enable-testing'") ||
                result.stdout.contains("Unable to resolve Swift module dependency") {
-                return .unclear(
+                return .failed(
                     "Build was not built with -enable-testing (Release defaults to off). " +
                     "TestDriver passes ENABLE_TESTABILITY=YES for Release.",
                     duration: elapsed,
-                    log: tail)
+                    log: tail,
+                    methodCounts: counts,
+                    coveragePercent: coverage)
             }
             // SSH-specific: connection failure shows up as exit 255.
             if result.exitCode == 255 {
-                return .unclear(
+                return .failed(
                     "SSH connection failed (exit 255). Check that the MBP is awake, " +
                     "logged in, and reachable at ricksmacbookpro.local.",
                     duration: elapsed,
-                    log: result.stderr.isEmpty ? tail : result.stderr)
+                    log: result.stderr.isEmpty ? tail : result.stderr,
+                    methodCounts: counts,
+                    coveragePercent: coverage)
             }
             return .failed("\(failed) failed of \(passed + failed) (xcodebuild exit \(result.exitCode))",
-                           duration: elapsed, log: tail)
+                           duration: elapsed,
+                           log: tail,
+                           methodCounts: counts,
+                           coveragePercent: coverage)
         }
         if passed == 0 {
-            return .unclear("0 tests executed — Swift Testing discovery may have skipped silently",
-                            duration: elapsed,
-                            log: String(result.stdout.suffix(1000)))
+            return .failed("0 tests executed — Swift Testing discovery may have skipped silently",
+                           duration: elapsed,
+                           log: String(result.stdout.suffix(1000)),
+                           methodCounts: counts,
+                           coveragePercent: coverage)
         }
-        return .passed(elapsed, log: "\(passed) tests passed")
+        return .passed(elapsed,
+                       log: "\(passed) tests passed",
+                       methodCounts: counts,
+                       coveragePercent: coverage)
+    }
+
+    /// Invoke `xcrun xccov view --report --json <xcresult>` and aggregate
+    /// `executableLines` / `coveredLines` across non-UI-test targets.
+    /// Returns nil if anything goes wrong — coverage is best-effort.
+    private static func extractCoveragePercent(xcresultPath: String,
+                                               log: @escaping @Sendable (String) -> Void) -> Double? {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun")
+        proc.arguments = ["xccov", "view", "--report", "--json", xcresultPath]
+        let outPipe = Pipe()
+        proc.standardOutput = outPipe
+        proc.standardError = Pipe()
+        do {
+            try proc.run()
+        } catch {
+            log("xccov launch failed: \(error.localizedDescription)")
+            return nil
+        }
+        let data = outPipe.fileHandleForReading.readDataToEndOfFile()
+        proc.waitUntilExit()
+        guard proc.terminationStatus == 0,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let targets = json["targets"] as? [[String: Any]] else {
+            log("xccov produced no parseable report")
+            return nil
+        }
+        var totalExecutable = 0
+        var totalCovered = 0
+        for target in targets {
+            let name = (target["name"] as? String) ?? ""
+            // Skip UI test targets — they don't represent code under test.
+            if name.hasSuffix("UITests") || name.contains("UITests.xctest") { continue }
+            let executable = (target["executableLines"] as? Int) ?? 0
+            let covered = (target["coveredLines"] as? Int) ?? 0
+            totalExecutable += executable
+            totalCovered += covered
+        }
+        guard totalExecutable > 0 else { return nil }
+        return (Double(totalCovered) / Double(totalExecutable)) * 100.0
     }
 }

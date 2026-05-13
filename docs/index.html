@@ -241,6 +241,19 @@
   <div class="chart-box"><h2>Regression Tests Locked-In</h2><canvas id="chart-regressions"></canvas></div>
 </div>
 
+<!-- ============ TESTDRIVER (LOCAL RUNS) SECTION ============ -->
+<h3 class="section-heading">Local Test Runs (TestDriver)</h3>
+
+<!-- TestDriver cards -->
+<div class="cards" id="td-cards"></div>
+
+<!-- TestDriver trend charts -->
+<div class="charts">
+  <div class="chart-box"><h2>TestDriver &mdash; Test Pass/Fail Trend</h2><canvas id="chart-td-pass-fail"></canvas></div>
+  <div class="chart-box"><h2>TestDriver &mdash; Coverage %</h2><canvas id="chart-td-coverage"></canvas></div>
+  <div class="chart-box"><h2>TestDriver &mdash; Duration (s)</h2><canvas id="chart-td-duration"></canvas></div>
+</div>
+
 <!-- ============ NIGHTLY STATIC ANALYSIS SECTION ============ -->
 <h3 class="section-heading">Nightly Static Analysis (full strictness, run at 01:00 EDT)</h3>
 
@@ -271,8 +284,10 @@ const RAW_BASE = "https://raw.githubusercontent.com/musicalengineer/VideoScan/me
 const CACHE_BUSTER = `t=${Date.now()}`;
 const HISTORY_URL = `${RAW_BASE}/history.jsonl?${CACHE_BUSTER}`;
 const NIGHTLY_URL = `${RAW_BASE}/static_analysis.jsonl?${CACHE_BUSTER}`;
+const TESTDRIVER_URL = `${RAW_BASE}/testdriver.jsonl?${CACHE_BUSTER}`;
 const HISTORY_LOCAL = `./history.jsonl?t=${Date.now()}`;
 const NIGHTLY_LOCAL = `./static_analysis.jsonl?t=${Date.now()}`;
+const TESTDRIVER_LOCAL = `./testdriver.jsonl?t=${Date.now()}`;
 
 const $status = document.getElementById("status");
 function fail(msg) { $status.classList.add("error"); $status.textContent = msg; }
@@ -487,6 +502,61 @@ async function loadData() {
   drawLine("chart-fat-files", labels, [{ label: "files > 1000", data: col("files_over_1000"), ...lineStyle("#f85149") }]);
   drawLine("chart-tests", labels, [{ label: "test count", data: col("test_count"), ...lineStyle("#3fb950") }]);
   drawLine("chart-regressions", labels, [{ label: "regression markers", data: col("regression_count"), ...lineStyle("#bc8cff") }]);
+
+  // ---- TestDriver (local runs) ----
+  const tdText = await fetchText(TESTDRIVER_URL, TESTDRIVER_LOCAL);
+  const tdRows = tdText ? parseJsonl(tdText) : [];
+  tdRows.sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
+  const tdLast = tdRows.length ? tdRows[tdRows.length - 1] : {};
+  const tdPrev = tdRows.length > 1 ? tdRows[tdRows.length - 2] : {};
+
+  const tdCardsEl = document.getElementById("td-cards");
+  if (tdRows.length) {
+    const lastDate = tdLast.ts ? new Date(tdLast.ts).toLocaleDateString("en-US", {
+      month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"
+    }) : "—";
+    const lastWho = `${lastDate} — ${tdLast.host || ""}`;
+    const avgDur = tdRows.reduce((acc, r) => acc + (parseFloat(r.elapsed_s) || 0), 0) / tdRows.length;
+    tdCardsEl.appendChild(card("Last Run", lastWho, null, null, false, "var(--accent)"));
+    tdCardsEl.appendChild(card("Passed (latest)",
+      tdLast.passed, tdPrev.passed, tdLast.passed, false, "var(--good)"));
+    tdCardsEl.appendChild(card("Failed (latest)",
+      tdLast.failed, tdPrev.failed, tdLast.failed, true, "var(--bad)"));
+    tdCardsEl.appendChild(card("Coverage %",
+      tdLast.coverage_logic_pct != null ? tdLast.coverage_logic_pct.toFixed(1) + "%" : "—",
+      tdPrev.coverage_logic_pct, tdLast.coverage_logic_pct, false, "var(--purple)"));
+    tdCardsEl.appendChild(card("Avg Duration",
+      avgDur.toFixed(1) + " s", null, null, false, "var(--muted)"));
+
+    const tdLabels = dateLabels(tdRows);
+    const tdCol = key => tdRows.map(r => r[key]);
+    drawLine("chart-td-pass-fail", tdLabels, [
+      { label: "passed", data: tdCol("passed"), ...lineStyle("#3fb950") },
+      { label: "failed", data: tdCol("failed"), ...lineStyle("#f85149") },
+    ]);
+    if (tdRows.some(r => r.coverage_logic_pct != null)) {
+      drawLine("chart-td-coverage", tdLabels,
+        [{ label: "coverage %", data: tdCol("coverage_logic_pct"), ...lineStyle("#bc8cff") }]);
+    } else {
+      const cv = document.getElementById("chart-td-coverage");
+      if (cv) {
+        cv.classList.add("hidden");
+        const box = cv.parentElement;
+        const note = document.createElement("div");
+        note.className = "chart-note";
+        note.textContent = "Coverage not collected for any TestDriver run yet. Toggle “Generate Coverage Report” in TestDriver and re-run.";
+        box.appendChild(note);
+      }
+    }
+    drawLine("chart-td-duration", tdLabels,
+      [{ label: "elapsed (s)", data: tdCol("elapsed_s"), ...lineStyle("#58a6ff") }]);
+  } else {
+    tdCardsEl.innerHTML = `<div class="card" style="grid-column: 1 / -1;">
+      <div class="indicator" style="background: var(--muted)"></div>
+      <div class="label">No TestDriver runs published yet</div>
+      <div class="value" style="font-size: 14px;">Run on Mac Studio with <code>Publish</code> enabled (clean main, in sync with origin).</div>
+    </div>`;
+  }
 
   // ---- Nightly charts ----
   if (nightlyRows.length) {
