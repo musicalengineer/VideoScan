@@ -53,8 +53,12 @@ jobs:
           # (was 2.21.2; tap installs are 3.x+). 3.x has new findings
           # categories that 2.x silently misses.
           brew install swiftlint || true
-          brew install peripheryapp/periphery/periphery 2>/dev/null \
-            || brew upgrade peripheryapp/periphery/periphery
+          # Force latest Periphery — runner image preinstalls 2.21.2,
+          # which predates the --exclude-tests CLI flag we use below.
+          # `brew install` no-ops on pre-installed packages so the old
+          # `install || upgrade` chain never bumped the version.
+          brew install peripheryapp/periphery/periphery || true
+          brew upgrade peripheryapp/periphery/periphery || true
           brew install ffmpeg || true
           echo "Periphery: $(periphery version)"
           ffmpeg -version | head -1
