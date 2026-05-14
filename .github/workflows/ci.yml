@@ -142,12 +142,14 @@ jobs:
           ) &
           echo "Sample scheduler started (PID $!)"
 
-      - name: Run Unit Tests (Debug)  # EXPERIMENT: 1-test scaling probe
-        # Re-enabled with -only-testing narrowed to ONE fast bail-path test
-        # (~1ms locally, no fixtures, no I/O). Goal: measure per-test latency
-        # under Xcode 16.4 + macos-15 virt-M1 to see if a minimal-test run
-        # completes inside 30 min, vs the full suite that timed out at 90.
-        if: true
+      - name: Run Unit Tests (Debug)  # DISABLED — virt-M1 ghost-skip
+        # Was a 1-test scaling probe; xcodebuild exits 0 with 0/0 tests on
+        # the virtualized M1 runner (Swift Testing discovery fails silently),
+        # which trips the count-tripwire and fails every push. Real test
+        # authority lives in TestDriver on Rick's Mac hardware (see
+        # memory/feedback_GH_CI_Dead_for_unit_tests). Re-enable only when a
+        # self-hosted MBP runner is wired up.
+        if: false
         run: |
           set -o pipefail
           echo "EXPERIMENT: running 1 test to measure GH-runner per-test latency"
