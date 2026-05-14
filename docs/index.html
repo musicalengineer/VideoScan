@@ -218,31 +218,11 @@
 
 <div id="status">Loading metrics&hellip;</div>
 
-<!-- ============ PER-PUSH SECTION ============ -->
-<h3 class="section-heading">Per-Push (every CI run)</h3>
-
-<!-- Summary cards -->
-<div class="cards" id="cards"></div>
-
-<!-- Trend charts -->
-<div class="charts">
-  <div class="chart-box">
-    <h2>Logic-Only Coverage %</h2>
-    <canvas id="chart-coverage"></canvas>
-    <div id="chart-coverage-note" class="chart-note hidden">
-      Coverage is unavailable from GitHub-hosted CI because unit tests are disabled there. Push metrics from a Mac/self-hosted test run to restore this chart.
-    </div>
-  </div>
-  <div class="chart-box"><h2>SwiftLint Warnings + Errors</h2><canvas id="chart-swiftlint"></canvas></div>
-  <div class="chart-box"><h2>Periphery — Unused Code</h2><canvas id="chart-periphery"></canvas></div>
-  <div class="chart-box"><h2>Total Swift Lines of Code</h2><canvas id="chart-loc"></canvas></div>
-  <div class="chart-box"><h2>Files Over 1,000 Lines</h2><canvas id="chart-fat-files"></canvas></div>
-  <div class="chart-box"><h2>Test Count</h2><canvas id="chart-tests"></canvas></div>
-  <div class="chart-box"><h2>Regression Tests Locked-In</h2><canvas id="chart-regressions"></canvas></div>
-</div>
-
 <!-- ============ TESTDRIVER (LOCAL RUNS) SECTION ============ -->
-<h3 class="section-heading">Local Test Runs (TestDriver)</h3>
+<!-- Real test runs (XCTest + Swift Testing) on Rick's Mac hardware via
+     TestDriver. This is the only place real coverage and pass/fail counts
+     show up; GitHub-hosted CI skips unit tests entirely. -->
+<h3 class="section-heading">Local Test Runs &mdash; TestDriver on Mac hardware</h3>
 
 <!-- TestDriver cards -->
 <div class="cards" id="td-cards"></div>
@@ -267,6 +247,32 @@
   <div class="chart-box"><h2>Thread Sanitizer Race Reports (Mac/self-hosted)</h2><canvas id="chart-tsan"></canvas></div>
   <div class="chart-box"><h2>SwiftLint --strict</h2><canvas id="chart-swiftlint-strict"></canvas></div>
   <div class="chart-box"><h2>Periphery (no --retain-public)</h2><canvas id="chart-periphery-strict"></canvas></div>
+</div>
+
+<!-- ============ PER-PUSH SECTION ============ -->
+<!-- Demoted to the bottom: GitHub-hosted CI on every push to main.
+     Coverage is always 0% here because real unit tests don't run on
+     virtualized M1 runners; useful for lint/LOC/fat-file trends only. -->
+<h3 class="section-heading">Per-Push CI &mdash; GitHub Actions (lint &amp; LOC trends; no unit tests)</h3>
+
+<!-- Summary cards -->
+<div class="cards" id="cards"></div>
+
+<!-- Trend charts -->
+<div class="charts">
+  <div class="chart-box">
+    <h2>Logic-Only Coverage %</h2>
+    <canvas id="chart-coverage"></canvas>
+    <div id="chart-coverage-note" class="chart-note hidden">
+      Coverage is unavailable from GitHub-hosted CI because unit tests are disabled there. See the Local Test Runs section above for real coverage from Mac hardware.
+    </div>
+  </div>
+  <div class="chart-box"><h2>SwiftLint Warnings + Errors</h2><canvas id="chart-swiftlint"></canvas></div>
+  <div class="chart-box"><h2>Periphery — Unused Code</h2><canvas id="chart-periphery"></canvas></div>
+  <div class="chart-box"><h2>Total Swift Lines of Code</h2><canvas id="chart-loc"></canvas></div>
+  <div class="chart-box"><h2>Files Over 1,000 Lines</h2><canvas id="chart-fat-files"></canvas></div>
+  <div class="chart-box"><h2>Test Count</h2><canvas id="chart-tests"></canvas></div>
+  <div class="chart-box"><h2>Regression Tests Locked-In</h2><canvas id="chart-regressions"></canvas></div>
 </div>
 
 <div class="footer">
