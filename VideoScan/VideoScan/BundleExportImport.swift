@@ -17,6 +17,31 @@
 // "Machine-portable" means we deliberately drop fields that mean different
 // things on different machines: pythonPath, recognitionScript, referencePath
 // (re-derived from POI folder layout on import), outputDir.
+//
+// IMPORT SAFETY (post May-2026 incident):
+//   The previous version of installPOIs did a naive
+//       removeItem(dest); copyItem(src, dest)
+//   loop. When the bundle lived on iCloud Drive, iCloud-evicted reference
+//   photos enumerated fine but copyItem produced an empty destination with no
+//   thrown error — 5 of Rick's 13 POIs were destroyed on M5 import. The
+//   importer now:
+//     A. Materializes (downloads) iCloud-evicted POI contents before copying
+//     B. Wraps each POI in try/catch so one failure doesn't kill the run
+//     C. Copies to a sibling temp dir, validates, then atomically swaps;
+//        the displaced original is moved to ~/dev/VideoScan/.trash/ rather
+//        than rm -rf'd, per project policy
+//     D. Validates profile.json decodes after copy before swapping in
+//   Plus conflict resolution: when bundle and local both have a POI of the
+//   same name, the side with MORE reference photos wins (with mtime tiebreak),
+//   so a stale/empty bundle entry can never silently overwrite richer local
+//   data.
+//
+// EXPORT SAFETY:
+//   POI folders frequently contain symlinks pointing at Mac-Studio-only paths
+//   (e.g. ~/dev/VideoScan/output/cluster_faces/...). copyItem preserves the
+//   symlink, which is dead on every other machine. The exporter now resolves
+//   symlinks and copies the target's bytes; unreachable targets are logged
+//   and reported in the export result.
 
 import Foundation
 import AppKit
@@ -155,6 +180,8 @@ enum BundleError: LocalizedError {
     case manifestMissing
     case manifestVersionUnsupported(Int)
     case decode(String)
+    case iCloudDownloadTimeout(String)
+    case validationFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -166,9 +193,19 @@ enum BundleError: LocalizedError {
             return "Bundle was made with a newer VideoScan format (v\(v)). Update VideoScan and try again."
         case .decode(let msg):
             return "Failed to read bundle: \(msg)"
+        case .iCloudDownloadTimeout(let path):
+            return "Timed out waiting for iCloud to download: \(path)"
+        case .validationFailed(let msg):
+            return "Validation failed: \(msg)"
         }
     }
 }
+
+// MARK: - Image-extension whitelist (shared by exporter, importer, ref counter)
+
+private let referencePhotoExts: Set<String> = [
+    "jpg", "jpeg", "png", "heic", "heif", "tiff", "tif", "bmp"
+]
 
 // MARK: - Exporter
 
@@ -177,6 +214,11 @@ enum BundleExporter {
     struct Summary {
         var path: URL
         var manifest: BundleManifest
+        /// Files we tried to bundle but couldn't (typically symlinks whose
+        /// target is unreachable on this machine). Each entry is
+        /// (relative path inside POI, reason). Surfaced in the post-export
+        /// alert so Rick knows the bundle is missing a few photos.
+        var exportWarnings: [(path: String, reason: String)]
     }
 
     /// Write a complete bundle. `bundleURL` should end in `.videoscanbundle`.
@@ -227,21 +269,27 @@ enum BundleExporter {
         try encoder.encode(settingsSnapshot)
             .write(to: bundleURL.appendingPathComponent("settings.json"), options: .atomic)
 
-        // 4. People — copy each POI folder verbatim. profile.json + photos
-        //    travel together; referencePath in the JSON gets re-derived on
-        //    the destination machine, so we don't have to rewrite it here.
+        // 4. People — copy each POI folder verbatim, BUT resolve symlinks at
+        //    copy time. profile.json + photos travel together; referencePath
+        //    in the JSON gets re-derived on the destination machine, so we
+        //    don't have to rewrite it here.
         let peopleDir = bundleURL.appendingPathComponent("people", isDirectory: true)
         try fm.createDirectory(at: peopleDir, withIntermediateDirectories: true)
         var photoCount = 0
         var photoBytes: Int64 = 0
-        let imageExts: Set<String> = ["jpg", "jpeg", "png", "heic", "heif", "tiff", "tif", "bmp"]
+        var warnings: [(String, String)] = []
         let poiFolders = POIStorage.allPOIFolders()
         for src in poiFolders {
             let dest = peopleDir.appendingPathComponent(src.lastPathComponent, isDirectory: true)
-            try fm.copyItem(at: src, to: dest)
-            // Tally photo size for the manifest sizes block.
-            if let kids = try? fm.contentsOfDirectory(at: dest, includingPropertiesForKeys: [.fileSizeKey]) {
-                for k in kids where imageExts.contains(k.pathExtension.lowercased()) {
+            let perPOIWarnings = try copyResolvingSymlinks(from: src, to: dest)
+            for w in perPOIWarnings {
+                warnings.append(("\(src.lastPathComponent)/\(w.relPath)", w.reason))
+            }
+            // Tally photo size for the manifest sizes block (recursive walk).
+            if let it = fm.enumerator(at: dest,
+                                      includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) {
+                for case let k as URL in it {
+                    guard referencePhotoExts.contains(k.pathExtension.lowercased()) else { continue }
                     photoCount += 1
                     if let v = try? k.resourceValues(forKeys: [.fileSizeKey]),
                        let s = v.fileSize {
@@ -271,7 +319,7 @@ enum BundleExporter {
         try encoder.encode(manifest)
             .write(to: bundleURL.appendingPathComponent("manifest.json"), options: .atomic)
 
-        return Summary(path: bundleURL, manifest: manifest)
+        return Summary(path: bundleURL, manifest: manifest, exportWarnings: warnings)
     }
 
     /// Recursively sum file sizes under `url`. Used for the manifest size
@@ -291,6 +339,93 @@ enum BundleExporter {
         }
         return total
     }
+
+    /// Recursively copy `src` to `dest`, but dereference any symlinks
+    /// encountered. Plain `copyItem(at:to:)` preserves symlinks, which is
+    /// useless when the bundle is going to another Mac that doesn't have the
+    /// symlink target. We walk the tree ourselves and copy file contents.
+    ///
+    /// Returns warnings for entries we couldn't materialize (dangling
+    /// symlinks, unreadable files). The export still succeeds — Rick gets a
+    /// list of what was skipped in the post-export alert.
+    ///
+    /// Memory: copies file-by-file via FileManager.copyItem (which streams
+    /// internally — no whole-file buffering in Swift land). Worst case is
+    /// one file's transfer buffer at a time. Safe for any size POI folder.
+    ///
+    /// Swift's `URL.resolvingSymlinksInPath()` ≈ C's `realpath()`.
+    private static func copyResolvingSymlinks(from src: URL,
+                                              to dest: URL) throws
+        -> [(relPath: String, reason: String)]
+    {
+        let fm = FileManager.default
+        var warnings: [(String, String)] = []
+
+        try fm.createDirectory(at: dest, withIntermediateDirectories: true)
+
+        // Walk src non-recursively first, then recurse into subdirs we create.
+        guard let entries = try? fm.contentsOfDirectory(
+            at: src,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+            options: []
+        ) else {
+            return warnings
+        }
+
+        for entry in entries {
+            let name = entry.lastPathComponent
+            let outURL = dest.appendingPathComponent(name)
+
+            // Use destinationOfSymbolicLink to check rather than resourceValues
+            // because resourceValues follows the link transparently on macOS.
+            let attrs = try? fm.attributesOfItem(atPath: entry.path)
+            let typeRaw = attrs?[.type] as? FileAttributeType
+            let isSymlink = (typeRaw == .typeSymbolicLink)
+
+            if isSymlink {
+                // Resolve the link target and copy the underlying file/dir.
+                let resolved = entry.resolvingSymlinksInPath()
+                guard fm.fileExists(atPath: resolved.path) else {
+                    warnings.append((name, "dangling symlink → \(resolved.path)"))
+                    continue
+                }
+                let resolvedAttrs = try? fm.attributesOfItem(atPath: resolved.path)
+                let resolvedIsDir = (resolvedAttrs?[.type] as? FileAttributeType) == .typeDirectory
+                do {
+                    if resolvedIsDir {
+                        // Recurse into the resolved directory to also dereference
+                        // any inner symlinks. Rare but possible.
+                        let sub = try copyResolvingSymlinks(from: resolved, to: outURL)
+                        for s in sub {
+                            warnings.append(("\(name)/\(s.relPath)", s.reason))
+                        }
+                    } else {
+                        try fm.copyItem(at: resolved, to: outURL)
+                    }
+                } catch {
+                    warnings.append((name, "copy of symlink target failed: \(error.localizedDescription)"))
+                }
+                continue
+            }
+
+            // Regular file or directory.
+            let isDir = (try? entry.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+            do {
+                if isDir {
+                    let sub = try copyResolvingSymlinks(from: entry, to: outURL)
+                    for s in sub {
+                        warnings.append(("\(name)/\(s.relPath)", s.reason))
+                    }
+                } else {
+                    try fm.copyItem(at: entry, to: outURL)
+                }
+            } catch {
+                warnings.append((name, "copy failed: \(error.localizedDescription)"))
+            }
+        }
+
+        return warnings
+    }
 }
 
 // MARK: - Importer
@@ -303,7 +438,14 @@ enum BundleImporter {
         var volumes: VolumesSnapshot
         var settings: SettingsSnapshot
         var poiFoldersInBundle: [URL]
+        /// Manifest export timestamp — falls back to manifest.exportedAt when
+        /// per-file mtimes aren't available (e.g. all-iCloud-evicted source).
+        var bundleExportedAt: Date
     }
+
+    /// Per-POI conflict-resolution timeout for iCloud materialization.
+    /// 60s per POI is generous; the typical POI is a few MB of HEIC photos.
+    static let iCloudMaterializeTimeoutSeconds: TimeInterval = 60
 
     /// Read and decode a bundle directory. Returns the parsed payload — the
     /// caller (VideoScanModel) is responsible for merging into live state.
@@ -362,7 +504,8 @@ enum BundleImporter {
                        catalog: catalog,
                        volumes: volumes,
                        settings: settings,
-                       poiFoldersInBundle: poiFolders)
+                       poiFoldersInBundle: poiFolders,
+                       bundleExportedAt: manifest.exportedAt)
     }
 
     private static func decode<T: Decodable>(_ decoder: JSONDecoder,
@@ -376,23 +519,367 @@ enum BundleImporter {
         }
     }
 
+    // MARK: - Result types
+
+    /// Per-POI installation outcome from `installPOIs`. The caller folds
+    /// these into a user-facing alert and an audit log line.
+    struct POIInstallResult {
+        /// Names that were copied into POIStorage.storeDir (bundle won).
+        var installed: [String]
+        /// Names where the local copy was preferred (kept untouched).
+        var skipped: [(name: String, reason: String)]
+        /// Names that errored during materialize/copy/validate.
+        var failed: [(name: String, reason: String)]
+        /// Per-POI decisions, in bundle-iteration order, suitable for an
+        /// audit log line. One string per POI.
+        var auditLines: [String]
+    }
+
+    // MARK: - Public entry point
+
     /// Copy the bundle's POI folders into ~/Library/Application Support/
-    /// VideoScan/POI/, overwriting any same-named folder. Returns the
-    /// number of POIs installed.
-    @discardableResult
-    static func installPOIs(from poiFoldersInBundle: [URL]) throws -> Int {
+    /// VideoScan/POI/, applying iCloud-aware safe-swap and richer-wins
+    /// conflict resolution. The previous implementation destroyed local POIs
+    /// when bundle sources were iCloud-evicted — see file-header comment.
+    ///
+    /// This is `async` because iCloud materialization is a polling wait that
+    /// MUST NOT block the main actor. Callers `await` it from a Task.
+    static func installPOIs(from poiFoldersInBundle: [URL],
+                            bundleExportedAt: Date) async -> POIInstallResult {
         let fm = FileManager.default
-        var installed = 0
+        var installed: [String] = []
+        var skipped: [(String, String)] = []
+        var failed: [(String, String)] = []
+        var auditLines: [String] = []
+
         for src in poiFoldersInBundle {
-            let dest = POIStorage.storeDir.appendingPathComponent(src.lastPathComponent,
+            let folderName = src.lastPathComponent
+            let dest = POIStorage.storeDir.appendingPathComponent(folderName,
                                                                   isDirectory: true)
-            if fm.fileExists(atPath: dest.path) {
-                try fm.removeItem(at: dest)
+
+            // -- Part 1.A: materialize iCloud-evicted contents --
+            //
+            // Only relevant if the bundle was opened from iCloud Drive. Local
+            // paths skip this step entirely (cheap check).
+            do {
+                try await materializeIfUbiquitous(at: src)
+            } catch {
+                let reason = "iCloud materialize failed: \(error.localizedDescription)"
+                failed.append((folderName, reason))
+                auditLines.append("[import] POI \(folderName): FAILED — \(reason)")
+                continue
             }
-            try fm.copyItem(at: src, to: dest)
-            installed += 1
+
+            // -- Part 2: conflict resolution --
+            let bundleRefCount = countReferencePhotos(under: src)
+            let localRefCount = fm.fileExists(atPath: dest.path)
+                ? countReferencePhotos(under: dest)
+                : 0
+            let bundleMtime = effectiveMTime(of: src, fallback: bundleExportedAt)
+            let localMtime: Date? = fm.fileExists(atPath: dest.path)
+                ? effectiveMTime(of: dest, fallback: nil)
+                : nil
+
+            let decision = decideWinner(
+                bundleRefCount: bundleRefCount,
+                localRefCount: localRefCount,
+                bundleMtime: bundleMtime,
+                localMtime: localMtime,
+                localExists: fm.fileExists(atPath: dest.path)
+            )
+
+            let auditPrefix = "[import] POI \(folderName): " +
+                "bundle=(\(bundleRefCount) photos, \(formatMTime(bundleMtime))) " +
+                "local=(\(localRefCount) photos, \(formatMTime(localMtime)))"
+
+            switch decision {
+            case .preferLocal(let reason):
+                skipped.append((folderName, reason))
+                auditLines.append("\(auditPrefix) → chose LOCAL (\(reason))")
+                continue
+            case .preferBundle(let reason):
+                auditLines.append("\(auditPrefix) → chose BUNDLE (\(reason))")
+            }
+
+            // -- Part 1.C: copy-then-rename with .trash/ safe-swap + 1.D validate --
+            do {
+                try safeInstallPOI(src: src, dest: dest, folderName: folderName)
+                installed.append(folderName)
+            } catch {
+                failed.append((folderName, error.localizedDescription))
+                auditLines.append("[import]   ↳ install failed: \(error.localizedDescription)")
+            }
         }
-        return installed
+
+        return POIInstallResult(installed: installed,
+                                skipped: skipped,
+                                failed: failed,
+                                auditLines: auditLines)
+    }
+
+    // MARK: - Part 1.A: iCloud materialization
+
+    /// If `dir` lives on iCloud Drive, recursively start downloads on any
+    /// non-current files and poll until they reach `.current` or we hit the
+    /// per-POI timeout. No-op for local files.
+    ///
+    /// We do this per-POI rather than for the whole bundle so memory and
+    /// time stay bounded — only one POI's worth of files are in-flight at
+    /// any moment. Worst-case in-memory footprint: a URL list for one POI
+    /// (typically <100 entries).
+    private static func materializeIfUbiquitous(at dir: URL) async throws {
+        let fm = FileManager.default
+        guard fm.isUbiquitousItem(at: dir) else { return }
+
+        // Enumerate every file in the POI dir, kick off downloads on
+        // anything not-current.
+        guard let it = fm.enumerator(
+            at: dir,
+            includingPropertiesForKeys: [.isRegularFileKey, .ubiquitousItemDownloadingStatusKey],
+            options: []
+        ) else { return }
+
+        var pending: [URL] = []
+        for case let url as URL in it {
+            guard
+                let vals = try? url.resourceValues(forKeys: [
+                    .isRegularFileKey,
+                    .ubiquitousItemDownloadingStatusKey
+                ]),
+                vals.isRegularFile == true
+            else { continue }
+
+            if vals.ubiquitousItemDownloadingStatus != .current {
+                // Try to start the download — even on a current file this is
+                // a cheap no-op.
+                try? fm.startDownloadingUbiquitousItem(at: url)
+                pending.append(url)
+            }
+        }
+        if pending.isEmpty { return }
+
+        // Poll until every pending file reaches .current, or we exceed the
+        // timeout. The poll interval is short enough to feel responsive but
+        // not so tight that we burn CPU.
+        let deadline = Date().addingTimeInterval(iCloudMaterializeTimeoutSeconds)
+        while Date() < deadline {
+            var stillPending: [URL] = []
+            for url in pending {
+                let status = (try? url.resourceValues(
+                    forKeys: [.ubiquitousItemDownloadingStatusKey]
+                ).ubiquitousItemDownloadingStatus) ?? .notDownloaded
+                if status != .current { stillPending.append(url) }
+            }
+            if stillPending.isEmpty { return }
+            pending = stillPending
+
+            // `Task.sleep` is the async equivalent of usleep — releases the
+            // thread back to the executor instead of blocking.
+            try await Task.sleep(nanoseconds: 250_000_000) // 0.25s
+        }
+
+        // Timed out — surface the first still-pending path so the caller
+        // logs something useful.
+        if let stuck = pending.first {
+            throw BundleError.iCloudDownloadTimeout(stuck.path)
+        }
+    }
+
+    // MARK: - Part 1.C & 1.D: safe-swap install
+
+    /// Copy `src` to a sibling temp dir, validate, then atomically swap into
+    /// `dest`. The displaced original is moved to ~/dev/VideoScan/.trash/
+    /// rather than rm -rf'd so Rick can recover.
+    ///
+    /// On any failure between copy and swap, the temp dir is removed and
+    /// `dest` is left untouched. This is what was missing before — the old
+    /// path destroyed `dest` first and then a no-op copy left an empty hole.
+    private static func safeInstallPOI(src: URL, dest: URL, folderName: String) throws {
+        let fm = FileManager.default
+        let temp = dest.deletingLastPathComponent()
+            .appendingPathComponent("\(folderName).import-\(UUID().uuidString)",
+                                    isDirectory: true)
+
+        // Copy.
+        do {
+            try fm.copyItem(at: src, to: temp)
+        } catch {
+            // Make sure we don't leave a half-copied temp around.
+            try? fm.removeItem(at: temp)
+            throw error
+        }
+
+        // Validate.
+        do {
+            try validatePOIDir(temp)
+        } catch {
+            try? fm.removeItem(at: temp)
+            throw error
+        }
+
+        // Swap. Move-aside (NOT rm -rf) any existing dest, then move temp into place.
+        if fm.fileExists(atPath: dest.path) {
+            let trashURL = trashTarget(forPOI: folderName)
+            try fm.createDirectory(at: trashURL.deletingLastPathComponent(),
+                                   withIntermediateDirectories: true)
+            do {
+                try fm.moveItem(at: dest, to: trashURL)
+            } catch {
+                // If we can't move the existing dest aside, ABORT — don't
+                // proceed to wipe it. Leave temp around so a human can
+                // inspect it.
+                throw BundleError.validationFailed(
+                    "could not move existing POI aside to \(trashURL.path): \(error.localizedDescription)"
+                )
+            }
+        }
+        do {
+            try fm.moveItem(at: temp, to: dest)
+        } catch {
+            // Catastrophic but recoverable: temp still exists at its sibling
+            // path; the prior dest is in .trash/. Surface both paths in the
+            // error so Rick can recover by hand if needed.
+            throw BundleError.validationFailed(
+                "swap-in failed; temp left at \(temp.path): \(error.localizedDescription)"
+            )
+        }
+    }
+
+    /// Validate a freshly-copied POI directory before swapping it into place.
+    /// Requires profile.json to exist, be non-empty, and decode as POIProfile.
+    /// Reference photo count is NOT required (>= 0 is fine) — the structure
+    /// just needs to be intact.
+    private static func validatePOIDir(_ dir: URL) throws {
+        let fm = FileManager.default
+        let profileURL = dir.appendingPathComponent("profile.json")
+        guard fm.fileExists(atPath: profileURL.path) else {
+            throw BundleError.validationFailed("profile.json missing after copy")
+        }
+        let data: Data
+        do {
+            data = try Data(contentsOf: profileURL)
+        } catch {
+            throw BundleError.validationFailed("profile.json unreadable: \(error.localizedDescription)")
+        }
+        guard !data.isEmpty else {
+            throw BundleError.validationFailed("profile.json is empty (likely iCloud-evicted)")
+        }
+        do {
+            _ = try JSONDecoder().decode(POIProfile.self, from: data)
+        } catch {
+            throw BundleError.validationFailed("profile.json failed to decode: \(error.localizedDescription)")
+        }
+        // Reference photo count >= 0 is implicit; we don't require any photos.
+    }
+
+    /// Build a unique target inside the project-local .trash/ for the
+    /// displaced POI dir. Format: ~/dev/VideoScan/.trash/POI-<name>-<isoTimestamp>/
+    private static func trashTarget(forPOI folderName: String) -> URL {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let stamp = isoStamp(Date())
+        return home
+            .appendingPathComponent("dev/VideoScan/.trash", isDirectory: true)
+            .appendingPathComponent("POI-\(folderName)-\(stamp)", isDirectory: true)
+    }
+
+    // MARK: - Part 2: conflict resolution
+
+    fileprivate enum Decision {
+        case preferLocal(reason: String)
+        case preferBundle(reason: String)
+    }
+
+    /// Pure decision function — easy to unit-test independently.
+    fileprivate static func decideWinner(bundleRefCount: Int,
+                                         localRefCount: Int,
+                                         bundleMtime: Date?,
+                                         localMtime: Date?,
+                                         localExists: Bool) -> Decision {
+        // Fast path: nothing local → bundle always wins.
+        if !localExists {
+            return .preferBundle(reason: "no local copy")
+        }
+
+        // Photo-count comparison is the primary signal because "newer" via
+        // mtime is too easy to spoof by an accidental touch / iCloud sync
+        // metadata change. More data wins.
+        if bundleRefCount > localRefCount {
+            return .preferBundle(reason: "more reference photos (\(bundleRefCount) > \(localRefCount))")
+        }
+        if localRefCount > bundleRefCount {
+            return .preferLocal(reason: "local has more reference photos (\(localRefCount) > \(bundleRefCount))")
+        }
+
+        // Tie on count — mtime decides, with bundle winning a true tie.
+        let bm = bundleMtime ?? .distantPast
+        let lm = localMtime ?? .distantPast
+        if bm > lm {
+            return .preferBundle(reason: "equal photo count, bundle is newer")
+        }
+        if lm > bm {
+            return .preferLocal(reason: "equal photo count, local is newer")
+        }
+        return .preferBundle(reason: "equal photo count and mtime; bundle wins by default")
+    }
+
+    /// Recursively count reference photos under `dir`. Used by conflict
+    /// resolution and as a smoke-test for "did the iCloud download actually
+    /// produce real files."
+    private static func countReferencePhotos(under dir: URL) -> Int {
+        let fm = FileManager.default
+        guard let it = fm.enumerator(
+            at: dir,
+            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey]
+        ) else { return 0 }
+        var count = 0
+        for case let url as URL in it {
+            guard referencePhotoExts.contains(url.pathExtension.lowercased()) else { continue }
+            // Require non-zero size — an iCloud placeholder is technically a
+            // file but it's a 0-byte stub.
+            let vals = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+            if vals?.isRegularFile == true, (vals?.fileSize ?? 0) > 0 {
+                count += 1
+            }
+        }
+        return count
+    }
+
+    /// Pick the most-recent mtime under `dir`. We use the max of mtimes
+    /// across the whole subtree — that captures "this POI was last
+    /// meaningfully touched at T" better than the folder's own mtime, which
+    /// is just last-directory-mutation.
+    ///
+    /// Returns `fallback` if the directory exists but no usable mtimes can
+    /// be read. Returns nil only if `fallback` is also nil.
+    private static func effectiveMTime(of dir: URL, fallback: Date?) -> Date? {
+        let fm = FileManager.default
+        guard let it = fm.enumerator(
+            at: dir,
+            includingPropertiesForKeys: [.contentModificationDateKey]
+        ) else { return fallback }
+        var best: Date? = nil
+        for case let url as URL in it {
+            if let d = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                .contentModificationDate {
+                if best == nil || d > best! { best = d }
+            }
+        }
+        return best ?? fallback
+    }
+
+    private static func formatMTime(_ d: Date?) -> String {
+        guard let d else { return "n/a" }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f.string(from: d)
+    }
+
+    private static func isoStamp(_ d: Date) -> String {
+        let f = DateFormatter()
+        // Filename-safe: ISO-ish but no colons (which trip the Finder).
+        f.dateFormat = "yyyyMMdd-HHmmss"
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        return f.string(from: d)
     }
 }
 
