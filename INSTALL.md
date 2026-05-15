@@ -17,11 +17,10 @@ cd ~/dev/VideoScan
 # 3. Brew dependencies
 brew bundle --file=Brewfile
 
-# 4. Python venv
-python3.13 -m venv venv
+# 4. Python venv (uv replaces pip — brewed python ships no pip)
+uv venv --python python3.12 venv
 source venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 
 # 5. Open in Xcode and run
 open VideoScan/VideoScan.xcodeproj
@@ -98,7 +97,7 @@ What this installs:
 
 **Required runtime**
 - `ffmpeg` — provides both `ffmpeg` and `ffprobe`, used for media probing, mux/demux, and clip extraction
-- `python@3.13` — interpreter for the Python scripts
+- `python@3.12` — interpreter for the Python scripts (3.13 currently lacks wheels for torch 2.2 / facenet-pytorch)
 - `cmake` — needed to build `dlib` from source on first venv install
 
 **Recommended dev tools**
@@ -121,12 +120,13 @@ Edit the Brewfile to taste; comment out anything you don't want.
 
 VideoScan's Python scripts (face detection, clustering, catalog generation) live under `scripts/` and expect a venv at `~/dev/VideoScan/venv`.
 
+We use [`uv`](https://github.com/astral-sh/uv) instead of `pip` — Homebrew's `python@3.12` ships without a usable system `pip`, and `uv` is also dramatically faster at resolving and installing.
+
 ```bash
 cd ~/dev/VideoScan
-python3.13 -m venv venv
+uv venv --python python3.12 venv
 source venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 ```
 
 **Heads up — first install is slow.**
