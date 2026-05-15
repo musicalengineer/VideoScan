@@ -7,6 +7,11 @@
 #   torch          — large download (~200 MB)
 #   opencv-python  — ~100 MB
 
+# ---- Build / packaging shim ----
+# face_recognition_models (installed from git, see INSTALL.md) imports pkg_resources,
+# which setuptools 81+ no longer ships. Pin until that package modernizes.
+setuptools<81
+
 # ---- Catalog / spreadsheet ----
 openpyxl
 
@@ -14,6 +19,7 @@ openpyxl
 dlib
 face-recognition
 facenet-pytorch
+# face_recognition_models is not on PyPI — install separately from git, see INSTALL.md
 
 # ---- ML runtimes ----
 coremltools
