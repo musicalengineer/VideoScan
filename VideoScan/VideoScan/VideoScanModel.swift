@@ -802,6 +802,29 @@ final class VideoScanModel: ObservableObject {
                 "\(m.counts.records) records, \(m.counts.volumes) volumes, " +
                 "\(m.counts.people) people, \(m.counts.referencePhotos) photos, " +
                 "\(BundleSize.human(m.sizes.totalBytes)).")
+            // Surface export warnings (typically dangling symlinks) so Rick
+            // knows the bundle is missing a few photos. Logged individually
+            // for the audit trail; summarized in the alert.
+            for w in summary.exportWarnings {
+                log("Export warning: \(w.path) — \(w.reason)")
+            }
+            let warningsBlurb: String
+            if summary.exportWarnings.isEmpty {
+                warningsBlurb = ""
+            } else {
+                let preview = summary.exportWarnings.prefix(5)
+                    .map { "  – \($0.path): \($0.reason)" }
+                    .joined(separator: "\n")
+                let more = summary.exportWarnings.count > 5
+                    ? "\n  – …and \(summary.exportWarnings.count - 5) more (see log)"
+                    : ""
+                warningsBlurb = """
+
+
+                Warnings (\(summary.exportWarnings.count)):
+                \(preview)\(more)
+                """
+            }
             let alert = NSAlert()
             alert.messageText = "Exported Everything"
             alert.informativeText = """
@@ -810,7 +833,7 @@ final class VideoScanModel: ObservableObject {
             • \(m.counts.records) catalog record(s)
             • \(m.counts.volumes) volume(s)
             • \(m.counts.people) person profile(s) with \(m.counts.referencePhotos) reference photo(s)
-            • Total size: \(BundleSize.human(m.sizes.totalBytes)) (photos: \(BundleSize.human(m.sizes.referencePhotoBytes)))
+            • Total size: \(BundleSize.human(m.sizes.totalBytes)) (photos: \(BundleSize.human(m.sizes.referencePhotoBytes)))\(warningsBlurb)
             """
             alert.addButton(withTitle: "OK")
             alert.runModal()
@@ -822,6 +845,10 @@ final class VideoScanModel: ObservableObject {
 
     /// UI entry point: show an open panel, parse the bundle, ask for
     /// confirmation, then merge into live state.
+    ///
+    /// POI install is `async` (iCloud materialization polls in the
+    /// background). The open/confirm panels and the final alert run on the
+    /// main actor; the polling loop is `await`ed off the main thread.
     func importBundleViaPanel() {
         let panel = NSOpenPanel()
         panel.title = "Import Everything"
@@ -831,52 +858,82 @@ final class VideoScanModel: ObservableObject {
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
+        let payload: BundleImporter.Payload
         do {
-            let payload = try BundleImporter.read(from: url)
-            // Confirmation dialog — bundles can be sizeable and this
-            // overwrites POI folders, so make the user opt in deliberately.
-            let confirm = NSAlert()
-            confirm.messageText = "Import Everything from this Bundle?"
-            confirm.informativeText = """
-            From: \(payload.manifest.exportedFromHost) on \(Self.shortDate(payload.manifest.exportedAt))
-            App: v\(payload.manifest.appVersion) build \(payload.manifest.appBuild)
-
-            • \(payload.manifest.counts.records) catalog record(s)
-            • \(payload.manifest.counts.volumes) volume(s) of metadata
-            • \(payload.manifest.counts.people) person profile(s) (\(payload.manifest.counts.referencePhotos) photo(s))
-
-            Catalog records merge by content identity (no duplicates). \
-            Volume metadata for matching paths is overwritten. \
-            Person profiles with the same name are overwritten. \
-            Reference photos are copied into your local POI folder.
-            """
-            confirm.addButton(withTitle: "Import")
-            confirm.addButton(withTitle: "Cancel")
-            guard confirm.runModal() == .alertFirstButtonReturn else {
-                log("Bundle import canceled.")
-                return
-            }
-
-            let result = applyBundlePayload(payload)
-            log("Imported bundle from \(payload.manifest.exportedFromHost): " +
-                "\(result.recordsAdded) new records, \(result.recordsSkipped) duplicates skipped, " +
-                "\(result.volumesUpdated) volume(s) updated, \(result.volumesAdded) added, " +
-                "\(result.peopleInstalled) person profile(s) installed.")
-            let done = NSAlert()
-            done.messageText = "Bundle Imported"
-            done.informativeText = """
-            From \(payload.manifest.exportedFromHost):
-            • \(result.recordsAdded) new catalog record(s) (skipped \(result.recordsSkipped) already here)
-            • \(result.volumesUpdated) volume(s) updated, \(result.volumesAdded) new volume(s) added
-            • \(result.peopleInstalled) person profile(s) installed
-
-            Person Finder settings will take effect after relaunching VideoScan.
-            """
-            done.addButton(withTitle: "OK")
-            done.runModal()
+            payload = try BundleImporter.read(from: url)
         } catch {
             log("Bundle import failed: \(error.localizedDescription)")
             Self.showErrorAlert(title: "Import Failed", message: error.localizedDescription)
+            return
+        }
+
+        // Confirmation dialog — bundles can be sizeable and this overwrites
+        // POI folders, so make the user opt in deliberately.
+        let confirm = NSAlert()
+        confirm.messageText = "Import Everything from this Bundle?"
+        confirm.informativeText = """
+        From: \(payload.manifest.exportedFromHost) on \(Self.shortDate(payload.manifest.exportedAt))
+        App: v\(payload.manifest.appVersion) build \(payload.manifest.appBuild)
+
+        • \(payload.manifest.counts.records) catalog record(s)
+        • \(payload.manifest.counts.volumes) volume(s) of metadata
+        • \(payload.manifest.counts.people) person profile(s) (\(payload.manifest.counts.referencePhotos) photo(s))
+
+        Catalog records merge by content identity (no duplicates). \
+        Volume metadata for matching paths is overwritten. \
+        For each person, the version with MORE reference photos wins \
+        (ties broken by newest first). Replaced POI folders are moved \
+        to ~/dev/VideoScan/.trash/ for recovery.
+        """
+        confirm.addButton(withTitle: "Import")
+        confirm.addButton(withTitle: "Cancel")
+        guard confirm.runModal() == .alertFirstButtonReturn else {
+            log("Bundle import canceled.")
+            return
+        }
+
+        // Hand off to async — POI install does iCloud polling that must not
+        // block the main actor. The Task is @MainActor-isolated so we can
+        // mutate model state safely; awaits inside hop to background work.
+        // Swift's `Task { @MainActor in … }` ≈ "post this to the UI thread".
+        Task { @MainActor in
+            let result = await applyBundlePayload(payload, bundleURL: url)
+            self.log("Imported bundle from \(payload.manifest.exportedFromHost): " +
+                "\(result.recordsAdded) new records, \(result.recordsSkipped) duplicates skipped, " +
+                "\(result.volumesUpdated) volume(s) updated, \(result.volumesAdded) added, " +
+                "\(result.peopleInstalled.count) person profile(s) installed, " +
+                "\(result.peopleSkipped.count) skipped, \(result.peopleFailed.count) failed.")
+
+            // Build the user-visible alert body with all three POI buckets,
+            // plus the audit log path.
+            let installedLine = Self.formatPOIBucket(label: "Installed",
+                                                     count: result.peopleInstalled.count,
+                                                     names: result.peopleInstalled)
+            let skippedLine = Self.formatPOIBucket(label: "Skipped (local copy preferred)",
+                                                   count: result.peopleSkipped.count,
+                                                   names: result.peopleSkipped.map { $0.name })
+            let failedLine = Self.formatPOIFailures(result.peopleFailed)
+            var body = """
+            Imported from \(url.lastPathComponent).
+
+            • \(result.recordsAdded) new catalog record(s) (skipped \(result.recordsSkipped) already here)
+            • \(result.volumesUpdated) volume(s) updated, \(result.volumesAdded) new volume(s) added
+            • \(installedLine)
+            • \(skippedLine)
+            """
+            if !failedLine.isEmpty {
+                body += "\n• \(failedLine)"
+            }
+            if let auditURL = result.auditLogURL {
+                body += "\n\nAudit log: \(auditURL.path)"
+            }
+            body += "\n\nPerson Finder settings will take effect after relaunching VideoScan."
+
+            let done = NSAlert()
+            done.messageText = "Bundle Imported"
+            done.informativeText = body
+            done.addButton(withTitle: "OK")
+            done.runModal()
         }
     }
 
@@ -885,14 +942,27 @@ final class VideoScanModel: ObservableObject {
         var recordsSkipped: Int
         var volumesUpdated: Int
         var volumesAdded: Int
-        var peopleInstalled: Int
+        /// POI folder names that won and were installed.
+        var peopleInstalled: [String]
+        /// POI folder names where the local copy was preferred (reason).
+        var peopleSkipped: [(name: String, reason: String)]
+        /// POI folder names that errored during materialize/copy/validate.
+        var peopleFailed: [(name: String, reason: String)]
+        /// Path to the per-import audit log under ~/Library/Logs/VideoScan/.
+        /// nil only if writing the log itself failed.
+        var auditLogURL: URL?
+
+        /// Back-compat shim: callers / tests that asked for `peopleInstalled`
+        /// as an Int can use this. The new structured form is preferred.
+        var peopleInstalledCount: Int { peopleInstalled.count }
     }
 
-    /// Merge a parsed bundle payload into live model state. Pure function
-    /// over the model — separated from `importBundleViaPanel` so tests
-    /// could call it directly.
+    /// Merge a parsed bundle payload into live model state. Async because
+    /// POI install does iCloud-aware polling. Separated from
+    /// `importBundleViaPanel` so tests can call it directly.
     @discardableResult
-    func applyBundlePayload(_ payload: BundleImporter.Payload) -> BundleImportResult {
+    func applyBundlePayload(_ payload: BundleImporter.Payload,
+                            bundleURL: URL) async -> BundleImportResult {
         // Catalog — seed identity set from existing records, dedup on insert.
         var seen = Set<String>()
         for rec in records {
@@ -943,14 +1013,22 @@ final class VideoScanModel: ObservableObject {
         payload.settings.apply(to: &current)
         current.save()
 
-        // POIs — copy folders into POIStorage.storeDir, overwriting any
-        // same-named folder. Failures here are logged but don't roll back
-        // the catalog/volumes/settings work above.
-        var installed = 0
-        do {
-            installed = try BundleImporter.installPOIs(from: payload.poiFoldersInBundle)
-        } catch {
-            log("POI install warning: \(error.localizedDescription)")
+        // POIs — safe install with iCloud materialization, validation, and
+        // conflict resolution. Failures here are logged but don't roll back
+        // the catalog/volumes/settings work above. See
+        // `BundleImporter.installPOIs` for the gory details.
+        let poiResult = await BundleImporter.installPOIs(
+            from: payload.poiFoldersInBundle,
+            bundleExportedAt: payload.bundleExportedAt
+        )
+
+        // Write per-import audit log so Rick can review every POI decision.
+        let auditURL = Self.writeImportAuditLog(bundleURL: bundleURL,
+                                                 payload: payload,
+                                                 poiResult: poiResult)
+        // Mirror the audit summary into the dashboard log too.
+        for line in poiResult.auditLines {
+            log(line)
         }
 
         saveCatalogNow()
@@ -959,8 +1037,99 @@ final class VideoScanModel: ObservableObject {
             recordsSkipped: skipped,
             volumesUpdated: updated,
             volumesAdded: addedVolumes,
-            peopleInstalled: installed
+            peopleInstalled: poiResult.installed,
+            peopleSkipped: poiResult.skipped,
+            peopleFailed: poiResult.failed,
+            auditLogURL: auditURL
         )
+    }
+
+    // MARK: - Bundle import: formatting helpers
+
+    /// Render an "Installed: 8 (donna, timmy, ...)" style bucket. Truncates
+    /// long lists with an ellipsis so the alert stays readable.
+    private static func formatPOIBucket(label: String,
+                                        count: Int,
+                                        names: [String]) -> String {
+        if count == 0 { return "\(label): 0" }
+        let shown = names.prefix(8).joined(separator: ", ")
+        if names.count > 8 {
+            return "\(label): \(count) (\(shown), …)"
+        }
+        return "\(label): \(count) (\(shown))"
+    }
+
+    /// Render the failed bucket with reasons inline — Rick needs the "why"
+    /// to know whether to retry or investigate.
+    private static func formatPOIFailures(_ failures: [(name: String, reason: String)]) -> String {
+        guard !failures.isEmpty else { return "" }
+        let shown = failures.prefix(5)
+            .map { "\($0.name): \($0.reason)" }
+            .joined(separator: "; ")
+        if failures.count > 5 {
+            return "Failed: \(failures.count) (\(shown); …see audit log)"
+        }
+        return "Failed: \(failures.count) (\(shown))"
+    }
+
+    /// Write a one-shot per-import audit log under
+    /// `~/Library/Logs/VideoScan/import-<ISO8601-date>.log`. Returns the URL
+    /// (or nil if writing failed — never throws to the caller).
+    ///
+    /// The audit log captures every POI decision verbatim plus a summary
+    /// header — Rick wants to be able to answer "why didn't 'matt' come
+    /// across?" weeks later. Format matches `PersistentLog` loosely but is
+    /// written all-at-once (the import is short enough that crash-resilient
+    /// streaming isn't worth the complexity).
+    private static func writeImportAuditLog(bundleURL: URL,
+                                            payload: BundleImporter.Payload,
+                                            poiResult: BundleImporter.POIInstallResult) -> URL? {
+        let stampFmt = DateFormatter()
+        stampFmt.dateFormat = "yyyyMMdd-HHmmss"
+        stampFmt.timeZone = TimeZone(secondsFromGMT: 0)
+        let stamp = stampFmt.string(from: Date())
+        let url = PersistentLog.logDir.appendingPathComponent("import-\(stamp).log")
+
+        var body = """
+        VideoScan import audit log
+        ─────────────────────────────────────────────
+        Started:        \(ISO8601DateFormatter().string(from: Date()))
+        Bundle path:    \(bundleURL.path)
+        Bundle host:    \(payload.manifest.exportedFromHost)
+        Bundle date:    \(ISO8601DateFormatter().string(from: payload.manifest.exportedAt))
+        Bundle app:     v\(payload.manifest.appVersion) build \(payload.manifest.appBuild)
+        Counts:         \(payload.manifest.counts.records) records, \
+        \(payload.manifest.counts.volumes) volumes, \
+        \(payload.manifest.counts.people) people, \
+        \(payload.manifest.counts.referencePhotos) photos
+        ─────────────────────────────────────────────
+        POI decisions:
+
+        """
+        for line in poiResult.auditLines {
+            body += line + "\n"
+        }
+        body += """
+
+        ─────────────────────────────────────────────
+        Summary:
+          installed: \(poiResult.installed.count) — \(poiResult.installed.joined(separator: ", "))
+          skipped:   \(poiResult.skipped.count) — \(poiResult.skipped.map { "\($0.name) (\($0.reason))" }.joined(separator: "; "))
+          failed:    \(poiResult.failed.count) — \(poiResult.failed.map { "\($0.name): \($0.reason)" }.joined(separator: "; "))
+        ─────────────────────────────────────────────
+        """
+
+        do {
+            try FileManager.default.createDirectory(at: PersistentLog.logDir,
+                                                    withIntermediateDirectories: true)
+            try body.write(to: url, atomically: true, encoding: .utf8)
+            return url
+        } catch {
+            // Best-effort: log to dashboard via NSLog so we don't lose this
+            // failure. Returning nil tells the alert to omit the audit line.
+            NSLog("VideoScan: failed to write import audit log at \(url.path): \(error)")
+            return nil
+        }
     }
 
     private func applyVolumeSnapshot(_ s: VolumeMetadataSnapshot, to t: CatalogScanTarget) {
