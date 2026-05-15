@@ -89,6 +89,80 @@ enum POIStorage {
         }
     }
 
+    // MARK: - Safe trash (NEVER rm -rf, per project policy)
+
+    /// Root for "soft-deleted" POI folders. Lives inside the working tree so
+    /// `git status` makes it findable, but the path is .gitignore'd via the
+    /// leading dot. Mirrors the trashTarget used by the bundle importer.
+    static var trashDir: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("dev/VideoScan/.trash", isDirectory: true)
+    }
+
+    /// Filename-safe UTC timestamp (no colons — Finder dislikes them).
+    /// Format: yyyyMMdd-HHmmss (e.g. `20260515-184213`).
+    static func trashTimestamp(_ now: Date = Date()) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyyMMdd-HHmmss"
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        return f.string(from: now)
+    }
+
+    /// Move a POI folder into the project-local .trash/ rather than deleting
+    /// it outright. Project policy (MANAGER.md) forbids `rm`-style POI
+    /// deletion — the user can always recover from .trash/ for as long as
+    /// they have disk space, and an explicit `rm -rf ~/dev/VideoScan/.trash`
+    /// is the only way data ever physically goes away.
+    ///
+    /// Returns the destination URL inside .trash on success, or nil if the
+    /// source didn't exist or the move failed. The caller is responsible for
+    /// logging / surfacing the failure to the user.
+    ///
+    /// Test override: pass `storeOverride` / `trashOverride` to redirect
+    /// both ends to a sandbox. Production callers pass nil for both.
+    @discardableResult
+    static func trashPOIFolder(
+        named name: String,
+        now: Date = Date(),
+        storeOverride: URL? = nil,
+        trashOverride: URL? = nil
+    ) -> URL? {
+        let fm = FileManager.default
+        let folderName = sanitize(name)
+        let src = (storeOverride ?? storeDir)
+            .appendingPathComponent(folderName, isDirectory: true)
+        guard fm.fileExists(atPath: src.path) else { return nil }
+
+        let trashRoot = trashOverride ?? trashDir
+        let stamp = trashTimestamp(now)
+        let dest = trashRoot.appendingPathComponent("POI-\(folderName)-\(stamp)",
+                                                    isDirectory: true)
+
+        // Ensure trash root exists (creates intermediate `dev/VideoScan/.trash`).
+        do {
+            try fm.createDirectory(at: trashRoot, withIntermediateDirectories: true)
+        } catch {
+            return nil
+        }
+
+        // If the destination already exists (sub-second collision in a test
+        // loop), append a uniquifier rather than overwrite.
+        var finalDest = dest
+        if fm.fileExists(atPath: finalDest.path) {
+            finalDest = trashRoot.appendingPathComponent(
+                "POI-\(folderName)-\(stamp)-\(UUID().uuidString.prefix(8))",
+                isDirectory: true
+            )
+        }
+
+        do {
+            try fm.moveItem(at: src, to: finalDest)
+            return finalDest
+        } catch {
+            return nil
+        }
+    }
+
     // MARK: - Migration
 
     /// Legacy locations the app created before issue #35. Both under the

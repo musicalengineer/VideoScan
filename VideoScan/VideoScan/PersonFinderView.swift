@@ -340,9 +340,10 @@ struct PersonFinderView: View {
                                         }
                                     }
                                     Divider()
-                                    Button("Delete \(profile.name)", role: .destructive) {
+                                    Button("Delete \(profile.name)\u{2026}", role: .destructive) {
                                         confirmDeleteProfile = profile
                                     }
+                                    .keyboardShortcut(.delete, modifiers: .command)
                                 }
                         }
                     }
@@ -374,19 +375,26 @@ struct PersonFinderView: View {
         .padding(.top, 10)
         .padding(.bottom, model.savedProfiles.isEmpty ? 10 : 0)
         .background(Color(NSColor.windowBackgroundColor))
-        .alert("Delete Person", isPresented: Binding(
+        .alert("Delete '\(confirmDeleteProfile?.name ?? "")' and all reference photos?",
+               isPresented: Binding(
             get: { confirmDeleteProfile != nil },
             set: { if !$0 { confirmDeleteProfile = nil } }
         )) {
             Button("Cancel", role: .cancel) { confirmDeleteProfile = nil }
             Button("Delete", role: .destructive) {
                 if let p = confirmDeleteProfile {
-                    model.deletePOI(p)
+                    let name = p.name
+                    Task { @MainActor in
+                        let ok = await model.deletePOI(named: name)
+                        if !ok {
+                            scanLockMessage = "Could not move '\(name)' into .trash/. Check ~/dev/VideoScan/.trash/ permissions."
+                        }
+                    }
                     confirmDeleteProfile = nil
                 }
             }
         } message: {
-            Text("Delete \(confirmDeleteProfile?.name ?? "")? This removes the saved profile but not the reference photos.")
+            Text("Data is moved to ~/dev/VideoScan/.trash/POI-\(POIStorage.sanitize(confirmDeleteProfile?.name ?? ""))-<UTC>/ and is recoverable until you empty the trash manually. Nothing is permanently deleted.")
         }
         .alert("Scan in Progress", isPresented: Binding(
             get: { scanLockMessage != nil },

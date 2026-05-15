@@ -219,6 +219,20 @@ enum BundleExporter {
         /// (relative path inside POI, reason). Surfaced in the post-export
         /// alert so Rick knows the bundle is missing a few photos.
         var exportWarnings: [(path: String, reason: String)]
+
+        /// Reason string used by the export-time profile.json validator.
+        /// Stable substring — the post-export alert checks for it to decide
+        /// whether to lead with the loud "re-export recommended" banner.
+        static let missingProfileJSONReason =
+            "profile.json missing after export — POI not safely importable"
+
+        /// Count of POIs whose profile.json failed the export-time validator.
+        /// Drives the warning banner in the post-export alert.
+        var missingProfileJSONCount: Int {
+            exportWarnings.filter {
+                $0.reason.contains(Self.missingProfileJSONReason)
+            }.count
+        }
     }
 
     /// Write a complete bundle. `bundleURL` should end in `.videoscanbundle`.
@@ -285,6 +299,18 @@ enum BundleExporter {
             for w in perPOIWarnings {
                 warnings.append(("\(src.lastPathComponent)/\(w.relPath)", w.reason))
             }
+
+            // Validate that profile.json made it into `dest`. This catches the
+            // failure mode behind the 2026-05-15 MS→M5 incident, where the
+            // old exporter shipped POI folders containing only photos. The
+            // importer caught it then, but only after a half-broken bundle
+            // had already been moved between machines; this pass catches it
+            // at export time so Rick can re-export immediately. Per spec we
+            // DO NOT fail the export or delete the partial folder.
+            if let reason = profileJSONValidationReason(dest: dest) {
+                warnings.append(("\(src.lastPathComponent)/profile.json", reason))
+            }
+
             // Tally photo size for the manifest sizes block (recursive walk).
             if let it = fm.enumerator(at: dest,
                                       includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) {
@@ -320,6 +346,30 @@ enum BundleExporter {
             .write(to: bundleURL.appendingPathComponent("manifest.json"), options: .atomic)
 
         return Summary(path: bundleURL, manifest: manifest, exportWarnings: warnings)
+    }
+
+    /// Inspect the just-copied POI directory and return a warning reason if
+    /// profile.json is missing, empty, unreadable, or fails to decode as a
+    /// `POIProfile`. Returns nil when the POI is safely importable.
+    ///
+    /// This is the export-time mirror of `BundleImporter.validatePOIDir`.
+    /// We deliberately catch the same failure modes at export so a broken
+    /// bundle never crosses machine boundaries undetected — the 2026-05-15
+    /// incident burned three POIs because the breakage was only visible on
+    /// the receiving Mac.
+    static func profileJSONValidationReason(dest: URL) -> String? {
+        let fm = FileManager.default
+        let profileURL = dest.appendingPathComponent("profile.json")
+        guard fm.fileExists(atPath: profileURL.path) else {
+            return Summary.missingProfileJSONReason
+        }
+        guard let data = try? Data(contentsOf: profileURL), !data.isEmpty else {
+            return Summary.missingProfileJSONReason + " (file empty)"
+        }
+        guard (try? JSONDecoder().decode(POIProfile.self, from: data)) != nil else {
+            return Summary.missingProfileJSONReason + " (file did not decode)"
+        }
+        return nil
     }
 
     /// Recursively sum file sizes under `url`. Used for the manifest size

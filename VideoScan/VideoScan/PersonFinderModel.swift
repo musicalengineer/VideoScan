@@ -363,9 +363,61 @@ final class PersonFinderModel: ObservableObject {
         }
     }
 
-    func deletePOI(_ profile: POIProfile) {
-        try? POIProfile.delete(name: profile.name)
+    /// Move a POI's folder (profile.json + reference photos) into the
+    /// project-local .trash/. Any in-progress scan job for this person is
+    /// stopped first so its background Task doesn't trip over a vanishing
+    /// reference folder mid-scan. Returns true on success.
+    ///
+    /// Per project policy this never `rm -rf`s — the data lands in
+    /// `~/dev/VideoScan/.trash/POI-<name>-<UTC>/` and the user can recover
+    /// by moving it back into `storeDir`.
+    @discardableResult
+    func deletePOI(named name: String) async -> Bool {
+        // Swift's `lowercased()` ≈ C's tolower() on the whole string.
+        let target = name.lowercased()
+
+        // 1. Cancel any in-flight scan job targeting this person, so its
+        //    background Task can't observe a half-vanished folder. We only
+        //    stop active jobs; idle/done ones are left untouched.
+        for job in jobs where job.assignedProfile?.name.lowercased() == target {
+            if job.status.isActive {
+                stopJob(job)
+            }
+        }
+
+        // 2. Move folder to .trash/. Logs to osLog on failure so the agent
+        //    watching the remote stream can see why.
+        guard let dest = POIStorage.trashPOIFolder(named: name) else {
+            osLog.error("deletePOI: failed to move POI \(name, privacy: .public) to .trash/")
+            return false
+        }
+        osLog.info("deletePOI: moved \(name, privacy: .public) → \(dest.path, privacy: .public)")
+
+        // 3. Refresh in-memory gallery. Clear active selection / loaded
+        //    reference faces if this was the person being inspected, so the
+        //    UI doesn't keep showing photos for a person who's now gone.
         savedProfiles = POIProfile.listAll()
+        if settings.personName.lowercased() == target {
+            referenceFaces = []
+            referenceSources = []
+            referenceLoadFailures = []
+            settings.referencePath = ""
+            settings.rejectedReferenceFiles = []
+            settings.save()
+        }
+        if selectedPersonForNewJobs?.name.lowercased() == target {
+            selectedPersonForNewJobs = nil
+        }
+        return true
+    }
+
+    /// Legacy synchronous shim. Existing call sites use the profile form;
+    /// keep them working while the async form is the canonical API. Fire-
+    /// and-forget Task — UI updates flow through @Published savedProfiles.
+    func deletePOI(_ profile: POIProfile) {
+        Task { @MainActor in
+            _ = await deletePOI(named: profile.name)
+        }
     }
 
     func reorderProfiles(fromID: String, toID: String) {
