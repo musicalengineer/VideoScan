@@ -11,7 +11,7 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 VENV="$REPO_ROOT/venv"
-PY_VERSION="3.13"
+PY_VERSION="3.12"
 PYTHON="python${PY_VERSION}"
 
 # ---- Pretty output (color only when stdout is a tty) ----
@@ -85,7 +85,7 @@ check_brew_formula() {
     fi
 }
 
-for f in ffmpeg python@3.13 cmake gh swiftlint periphery pre-commit jq; do
+for f in ffmpeg python@3.12 uv cmake gh swiftlint periphery pre-commit jq; do
     check_brew_formula "$f"
 done
 
@@ -117,34 +117,33 @@ done
 section "Python virtual environment"
 # ---------------------------------------------------------------------------
 
-if ! command -v "$PYTHON" >/dev/null 2>&1; then
+if ! command -v uv >/dev/null 2>&1; then
+    say_failed "uv" "not on PATH after brew install — re-open terminal and retry"
+elif ! command -v "$PYTHON" >/dev/null 2>&1; then
     say_failed "$PYTHON" "not on PATH after brew install — re-open terminal and retry"
 else
     if [[ -x "$VENV/bin/python" ]]; then
         venv_ver=$("$VENV/bin/python" --version 2>&1 | awk '{print $2}')
         say_satisfied "venv at $VENV (Python $venv_ver)"
     else
-        echo "  ${DIM}→ creating venv at $VENV...${RESET}"
-        if "$PYTHON" -m venv "$VENV" >/dev/null 2>&1; then
+        echo "  ${DIM}→ creating venv at $VENV with uv...${RESET}"
+        if uv venv --python "$PYTHON" "$VENV" >/dev/null 2>&1; then
             venv_ver=$("$VENV/bin/python" --version 2>&1 | awk '{print $2}')
             say_installed "venv at $VENV (Python $venv_ver)"
         else
-            say_failed "venv" "$PYTHON -m venv failed"
+            say_failed "venv" "uv venv --python $PYTHON $VENV failed"
         fi
     fi
 
-    if [[ -x "$VENV/bin/pip" ]]; then
-        # Upgrade pip silently if behind.
-        "$VENV/bin/pip" install --quiet --upgrade pip >/dev/null 2>&1 || true
-
+    if [[ -x "$VENV/bin/python" ]]; then
         if [[ -f "$REPO_ROOT/requirements.txt" ]]; then
             req_count=$(grep -cE '^[A-Za-z]' "$REPO_ROOT/requirements.txt")
             echo "  ${DIM}→ verifying $req_count Python packages against requirements.txt...${RESET}"
 
             # Capture pre-install freeze, install, capture post-install freeze, diff.
-            before=$("$VENV/bin/pip" freeze 2>/dev/null | sort)
-            if "$VENV/bin/pip" install --quiet -r "$REPO_ROOT/requirements.txt" >/dev/null 2>&1; then
-                after=$("$VENV/bin/pip" freeze 2>/dev/null | sort)
+            before=$(VIRTUAL_ENV="$VENV" uv pip freeze 2>/dev/null | sort)
+            if VIRTUAL_ENV="$VENV" uv pip install --quiet -r "$REPO_ROOT/requirements.txt" >/dev/null 2>&1; then
+                after=$(VIRTUAL_ENV="$VENV" uv pip freeze 2>/dev/null | sort)
                 new_pkgs=$(comm -13 <(echo "$before") <(echo "$after") | wc -l | tr -d ' ')
                 if [[ "$new_pkgs" == "0" ]]; then
                     say_satisfied "all $req_count Python packages already installed"
@@ -152,7 +151,7 @@ else
                     say_installed "$new_pkgs Python package(s) (of $req_count total)"
                 fi
             else
-                say_failed "Python packages" "pip install -r requirements.txt failed (run it directly to see errors)"
+                say_failed "Python packages" "uv pip install -r requirements.txt failed (run it directly to see errors)"
             fi
         else
             say_skipped "Python packages" "requirements.txt not found at repo root"

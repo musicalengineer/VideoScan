@@ -4,7 +4,9 @@
 
 # ---- Runtime dependencies (required to run VideoScan) ----
 brew "ffmpeg"        # ffmpeg + ffprobe — media probing, mux/demux, clip extraction
-brew "python@3.13"   # interpreter for VideoScan.py, face_recognize.py, find_person.py
+brew "python@3.12"   # interpreter for VideoScan.py, face_recognize.py, find_person.py
+                     # (3.13 lacks wheels for torch 2.2 / facenet-pytorch — keep 3.12 until upstream catches up)
+brew "uv"            # fast venv + package manager (replaces pip; brewed python ships no pip)
 brew "cmake"         # required to build dlib from source on first venv install
 
 # ---- Developer tooling (recommended) ----

@@ -1,71 +1,43 @@
-# VideoScan — Python dependencies
-# Captured from venv on 2026-05-14 (Python 3.13, macOS arm64).
-# Install:  pip install -r requirements.txt
+# VideoScan — Python top-level dependencies.
+# uv resolves transitive deps to a consistent set on install; no need to pin
+# every transitive package the way a `pip freeze` snapshot would.
 #
 # Heavy/native deps that take time on first install:
 #   dlib           — compiles from source via CMake (~5–10 min on M-series)
 #   torch          — large download (~200 MB)
 #   opencv-python  — ~100 MB
-#
-# Top-level deps VideoScan actually imports (rest are transitive):
-#   openpyxl, dlib, face-recognition, facenet-pytorch, coremltools,
-#   onnx, onnx2torch, opencv-python, torch, torchvision, hdbscan,
-#   scikit-learn, pyaaf2, pyavb, matplotlib, seaborn, pandas, tqdm, lizard
 
-attrs==26.1.0
-cattrs==26.1.0
-certifi==2026.4.22
-charset-normalizer==3.4.7
-click==8.3.2
-contourpy==1.3.3
-coremltools==9.0
-cycler==0.12.1
-dlib==20.0.1
-et_xmlfile==2.0.0
-face-recognition==1.3.0
-face_recognition_models==0.3.0
-facenet-pytorch==2.6.0
-filelock==3.28.0
-fonttools==4.62.1
-fsspec==2026.3.0
-hdbscan==0.8.42
-idna==3.13
-Jinja2==3.1.6
-joblib==1.5.3
-kiwisolver==1.5.0
-lizard==1.21.6
-MarkupSafe==3.0.3
-matplotlib==3.10.9
-ml_dtypes==0.5.4
-mpmath==1.3.0
-networkx==3.6.1
-numpy==1.26.4
-onnx==1.21.0
-onnx2torch==1.5.15
-opencv-python==4.13.0.92
-openpyxl==3.1.5
-packaging==26.1
-pandas==3.0.2
-pathspec==1.0.4
-pillow==10.2.0
-protobuf==7.34.1
-pyaaf2==1.7.1
-pyaml==26.2.1
-pyavb==1.4.0
-Pygments==2.20.0
-pyparsing==3.3.2
-python-dateutil==2.9.0.post0
-PyYAML==6.0.3
-requests==2.33.1
-scikit-learn==1.8.0
-scipy==1.17.1
-seaborn==0.13.2
-setuptools==81.0.0
-six==1.17.0
-sympy==1.14.0
-threadpoolctl==3.6.0
-torch==2.2.2
-torchvision==0.17.2
-tqdm==4.67.3
-typing_extensions==4.15.0
-urllib3==2.6.3
+# ---- Catalog / spreadsheet ----
+openpyxl
+
+# ---- Face detection / recognition ----
+dlib
+face-recognition
+facenet-pytorch
+
+# ---- ML runtimes ----
+coremltools
+onnx
+onnx2torch
+torch
+torchvision
+
+# ---- Image / video ----
+opencv-python
+
+# ---- Clustering & ML ----
+hdbscan
+scikit-learn
+
+# ---- Avid bin / AAF parsing ----
+pyaaf2
+pyavb
+
+# ---- Plotting / analysis ----
+matplotlib
+seaborn
+pandas
+
+# ---- Utilities ----
+tqdm
+lizard
