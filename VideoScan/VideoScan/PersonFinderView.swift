@@ -200,8 +200,70 @@ struct PersonFinderView: View {
         min(max(11 + (personImageSize - 64) * 0.07, 11), 20)
     }
 
+    /// Inline undo affordance for the most recent POI delete. Stays visible
+    /// until the user clicks Undo / dismisses with the × / a new delete
+    /// supersedes it / app relaunch (session-scope state). No auto-dismiss
+    /// timer — Rick wants to take his time.
+    @ViewBuilder
+    private var undoBanner: some View {
+        if let snap = model.lastDeletedPOI {
+            HStack(spacing: 10) {
+                Image(systemName: "trash.slash")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.orange)
+                if let err = model.lastUndoError {
+                    Text(err)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.red)
+                } else {
+                    Text("Deleted '\(snap.name)'.")
+                        .font(.system(size: 12))
+                        .foregroundColor(.primary)
+                }
+                Button("Undo") {
+                    Task { @MainActor in
+                        _ = await model.undoLastDelete()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .keyboardShortcut("z", modifiers: .command)
+
+                Spacer()
+
+                Button {
+                    model.dismissUndoBanner()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(Color.secondary, Color.secondary.opacity(0.2))
+                }
+                .buttonStyle(.plain)
+                .help("Dismiss — the POI stays in ~/dev/VideoScan/.trash/ for manual recovery")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.orange.opacity(0.12))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.orange.opacity(0.35), lineWidth: 1)
+            )
+            .transition(.opacity.combined(with: .move(edge: .top)))
+        }
+    }
+
     var peopleGallery: some View {
         VStack(alignment: .leading, spacing: 6) {
+            // Inline undo banner — armed by deletePOI, dismissed by undo /
+            // dismiss / superseded by next delete / app relaunch. No timers.
+            // Sits ABOVE the header so it never reflows the grid below
+            // (the VStack just gets one more row).
+            undoBanner
+
             HStack {
                 Image(systemName: "person.2.fill")
                     .font(.title3)

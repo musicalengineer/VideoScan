@@ -363,6 +363,31 @@ final class PersonFinderModel: ObservableObject {
         }
     }
 
+    // MARK: - Undo state for the most recent delete
+    //
+    // Session-scope only — not persisted. If Rick wants to recover later
+    // he can grep ~/dev/VideoScan/.trash/ manually. Only ONE undo target
+    // at a time: deleting B clobbers any pending undo for A (A stays in
+    // .trash/ but is no longer one-tap recoverable).
+
+    /// Snapshot of the most recent delete. The banner shows
+    /// `"Deleted '<name>'. Undo"`; undo moves trashURL back into storeDir.
+    /// Swift's `struct` ≈ C `struct` — value type, cheap to copy.
+    struct LastDeletedPOI: Equatable {
+        let name: String        // original (unsanitized) name for display
+        let trashURL: URL       // exact destination returned by trashPOIFolder
+        let timestamp: Date     // when the delete happened, for diagnostics
+    }
+
+    /// The banner observes this. nil = no banner shown.
+    @Published var lastDeletedPOI: LastDeletedPOI?
+
+    /// Non-destructive error from the most recent undo attempt (e.g. the
+    /// user re-created the person and we refuse to overwrite). The banner
+    /// surfaces this in place of the default "Deleted '<name>'." message
+    /// until the user dismisses.
+    @Published var lastUndoError: String?
+
     /// Move a POI's folder (profile.json + reference photos) into the
     /// project-local .trash/. Any in-progress scan job for this person is
     /// stopped first so its background Task doesn't trip over a vanishing
@@ -370,7 +395,8 @@ final class PersonFinderModel: ObservableObject {
     ///
     /// Per project policy this never `rm -rf`s — the data lands in
     /// `~/dev/VideoScan/.trash/POI-<name>-<UTC>/` and the user can recover
-    /// by moving it back into `storeDir`.
+    /// either via the inline undo banner (session-scope) or by moving the
+    /// folder back into `storeDir` manually.
     @discardableResult
     func deletePOI(named name: String) async -> Bool {
         // Swift's `lowercased()` ≈ C's tolower() on the whole string.
@@ -408,7 +434,59 @@ final class PersonFinderModel: ObservableObject {
         if selectedPersonForNewJobs?.name.lowercased() == target {
             selectedPersonForNewJobs = nil
         }
+
+        // 4. Arm the undo banner. Supersedes any previous pending undo
+        //    by design — only one undo target at a time. The previous
+        //    target's folder stays in .trash/ but is no longer one-tap
+        //    recoverable (matches the spec; manual recovery still works).
+        lastDeletedPOI = LastDeletedPOI(name: name, trashURL: dest, timestamp: Date())
+        lastUndoError = nil
         return true
+    }
+
+    /// Restore the most recently deleted POI. Returns true on success.
+    /// Refuses to overwrite a re-created folder — surfaces an error message
+    /// in `lastUndoError` instead. Clears `lastDeletedPOI` on success or
+    /// when the trash entry vanished (nothing to undo); leaves it set on a
+    /// recoverable error so the user can retry after resolving the conflict.
+    @discardableResult
+    func undoLastDelete() async -> Bool {
+        guard let snap = lastDeletedPOI else { return false }
+        let result = POIStorage.restorePOIFolder(from: snap.trashURL, named: snap.name)
+        switch result {
+        case .restored(let dest):
+            osLog.info("undoLastDelete: restored \(snap.name, privacy: .public) ← \(dest.path, privacy: .public)")
+            savedProfiles = POIProfile.listAll()
+            lastDeletedPOI = nil
+            lastUndoError = nil
+            return true
+        case .destinationExists:
+            // Non-destructive abort. Leave snap in place so the banner
+            // stays up (user can dismiss it manually after they resolve
+            // the conflict, e.g. by renaming the new one).
+            osLog.error("undoLastDelete: refused — '\(snap.name, privacy: .public)' already exists in storeDir")
+            lastUndoError = "Can't undo — '\(snap.name)' was re-created"
+            return false
+        case .sourceMissing:
+            // The trash entry vanished (user emptied .trash/ manually).
+            // Nothing to undo — drop the banner.
+            osLog.error("undoLastDelete: trash entry missing for \(snap.name, privacy: .public)")
+            lastDeletedPOI = nil
+            lastUndoError = nil
+            return false
+        case .ioError:
+            osLog.error("undoLastDelete: IO error restoring \(snap.name, privacy: .public)")
+            lastUndoError = "Can't undo — file system error moving '\(snap.name)' back"
+            return false
+        }
+    }
+
+    /// Dismiss the undo banner without restoring. The trashed folder
+    /// stays in `.trash/` — it's only the one-tap undo affordance that
+    /// goes away.
+    func dismissUndoBanner() {
+        lastDeletedPOI = nil
+        lastUndoError = nil
     }
 
     /// Legacy synchronous shim. Existing call sites use the profile form;
