@@ -127,11 +127,13 @@ cd ~/dev/VideoScan
 uv venv --python python3.12 venv
 source venv/bin/activate
 uv pip install -r requirements.txt
+# face_recognition_models lives on GitHub, not PyPI — install it separately:
+uv pip install "git+https://github.com/ageitgey/face_recognition_models"
 ```
 
 **Heads up — first install is slow.**
 
-- `dlib` compiles from source via CMake. Expect 5–10 minutes on Apple Silicon. If it fails, ensure `cmake` is installed (`brew install cmake`) and the Xcode Command Line Tools are present.
+- `dlib` compiles from source via CMake. Expect 5–10 minutes on Apple Silicon. If it fails, ensure `cmake`, `libpng`, and `jpeg` are installed via Homebrew (the Brewfile installs all three). The vendored libpng in dlib's source tree does not build on the macOS 26 SDK (it `#include`s the removed `<fp.h>` from its ARM/NEON path); the system libpng installed by brew works.
 - `torch` is a large download (~200 MB).
 - `opencv-python` is ~100 MB.
 

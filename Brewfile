@@ -8,6 +8,8 @@ brew "python@3.12"   # interpreter for VideoScan.py, face_recognize.py, find_per
                      # (3.13 lacks wheels for torch 2.2 / facenet-pytorch — keep 3.12 until upstream catches up)
 brew "uv"            # fast venv + package manager (replaces pip; brewed python ships no pip)
 brew "cmake"         # required to build dlib from source on first venv install
+brew "libpng"        # macOS 26+ SDK removed <fp.h>; dlib's vendored libpng/arm fails. System libpng works.
+brew "jpeg"          # same reason as libpng — needed so dlib's CMake picks system libs over the broken vendored copy
 
 # ---- Developer tooling (recommended) ----
 brew "gh"            # GitHub CLI — issues, PRs, project board
