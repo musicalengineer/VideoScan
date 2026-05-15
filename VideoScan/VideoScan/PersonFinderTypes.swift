@@ -415,10 +415,23 @@ struct POIProfile: Codable, Identifiable, Equatable {
         return profile
     }
 
+    /// Soft-delete the POI by moving its folder into ~/dev/VideoScan/.trash/.
+    /// Project policy forbids unconditional removeItem on POI data — see
+    /// POIStorage.trashPOIFolder for the rationale.
+    ///
+    /// Returns silently when the folder doesn't exist (idempotent). Throws
+    /// only when the folder exists but the move-to-trash fails (e.g.
+    /// permission denied on .trash/).
     static func delete(name: String) throws {
         let folder = POIStorage.folder(for: name)
-        if FileManager.default.fileExists(atPath: folder.path) {
-            try FileManager.default.removeItem(at: folder)
+        guard FileManager.default.fileExists(atPath: folder.path) else { return }
+        if POIStorage.trashPOIFolder(named: name) == nil {
+            throw NSError(
+                domain: "POIProfile",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey:
+                    "Could not move \(folder.path) into .trash/"]
+            )
         }
     }
 

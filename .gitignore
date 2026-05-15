@@ -71,3 +71,8 @@ docs/history.jsonl
 # Personal / scratch files that end up in the repo root
 /ricksnotes.txt
 /recover_timmy.mov
+
+# Safety-swap destination for the .videoscanbundle importer and the
+# "Delete person" UI. Contains real archived POI data the user may
+# want to recover. Never commit.
+/.trash/

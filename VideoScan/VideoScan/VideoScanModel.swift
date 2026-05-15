@@ -825,10 +825,23 @@ final class VideoScanModel: ObservableObject {
                 \(preview)\(more)
                 """
             }
+            // Loud banner when ANY POI shipped without a valid profile.json —
+            // that means the bundle is not safely importable on another Mac
+            // (which is the bug that motivated this validator). Surfaced
+            // ABOVE the normal counts so Rick can't miss it.
+            let missingProfileBanner: String
+            let missing = summary.missingProfileJSONCount
+            if missing > 0 {
+                let plural = missing == 1 ? "" : "s"
+                missingProfileBanner =
+                    "\u{26A0}\u{FE0F} \(missing) POI\(plural) shipped without profile.json — re-export recommended\n\n"
+            } else {
+                missingProfileBanner = ""
+            }
             let alert = NSAlert()
             alert.messageText = "Exported Everything"
             alert.informativeText = """
-            Saved \(url.lastPathComponent)
+            \(missingProfileBanner)Saved \(url.lastPathComponent)
 
             • \(m.counts.records) catalog record(s)
             • \(m.counts.volumes) volume(s)
