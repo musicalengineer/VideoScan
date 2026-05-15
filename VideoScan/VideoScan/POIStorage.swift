@@ -163,6 +163,63 @@ enum POIStorage {
         }
     }
 
+    // MARK: - Undo (move back out of .trash/)
+
+    /// Outcome of an undo attempt. Distinguishes the "can't overwrite an
+    /// existing POI" case from generic IO failure so the UI can show a
+    /// specific message ("'<name>' was re-created") instead of a generic
+    /// error.
+    enum RestoreResult: Equatable {
+        case restored(URL)              // success — folder now lives at this URL
+        case sourceMissing              // trash folder no longer exists
+        case destinationExists          // a POI with this name was re-created
+        case ioError                    // moveItem threw for some other reason
+    }
+
+    /// Inverse of `trashPOIFolder`: moves a trashed POI folder back into
+    /// `storeDir/<sanitized-name>/`. Refuses to overwrite an existing POI
+    /// folder — if the user re-created the person between delete and undo,
+    /// the caller must surface that to the user (non-destructive abort).
+    ///
+    /// Test override: pass `storeOverride` to redirect the destination
+    /// into a sandbox. Production callers pass nil.
+    ///
+    /// Why this lives in POIStorage (not PersonFinderModel): the same
+    /// safety rules apply (project policy forbids `rm` on POI data, and
+    /// the sanitize() convention has to match deletePOI). Keeping the
+    /// inverse next to the forward op makes both easier to audit.
+    static func restorePOIFolder(
+        from trashURL: URL,
+        named name: String,
+        storeOverride: URL? = nil
+    ) -> RestoreResult {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: trashURL.path) else { return .sourceMissing }
+
+        let folderName = sanitize(name)
+        let dest = (storeOverride ?? storeDir)
+            .appendingPathComponent(folderName, isDirectory: true)
+
+        // Refuse to clobber. The user may have re-created the person while
+        // the undo banner was still up — overwriting would silently destroy
+        // their new work. Hand the situation back to the caller.
+        if fm.fileExists(atPath: dest.path) {
+            return .destinationExists
+        }
+
+        // Ensure parent exists (storeDir's getter already does this for
+        // the production path, but storeOverride sandboxes may not).
+        let parent = dest.deletingLastPathComponent()
+        try? fm.createDirectory(at: parent, withIntermediateDirectories: true)
+
+        do {
+            try fm.moveItem(at: trashURL, to: dest)
+            return .restored(dest)
+        } catch {
+            return .ioError
+        }
+    }
+
     // MARK: - Migration
 
     /// Legacy locations the app created before issue #35. Both under the
