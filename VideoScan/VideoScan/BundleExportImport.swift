@@ -324,7 +324,8 @@ enum BundleExporter {
 
     /// Recursively sum file sizes under `url`. Used for the manifest size
     /// block; precise enough for the post-export "size on disk" alert.
-    private static func directorySize(_ url: URL) -> Int64 {
+    /// fileprivate so the importer's legacy-manifest synthesizer can reuse it.
+    fileprivate static func directorySize(_ url: URL) -> Int64 {
         let fm = FileManager.default
         var total: Int64 = 0
         guard let it = fm.enumerator(at: url,
@@ -450,25 +451,31 @@ enum BundleImporter {
     /// Read and decode a bundle directory. Returns the parsed payload — the
     /// caller (VideoScanModel) is responsible for merging into live state.
     /// Throws if the bundle is malformed or from a newer format version.
+    ///
+    /// Tolerates bundles without `manifest.json` (legacy or partial exports
+    /// where the manifest write was interrupted): a placeholder manifest is
+    /// synthesized so the rest of the import flow works. A bundle without
+    /// `catalog.json` is still considered malformed and rejects below.
     static func read(from bundleURL: URL) throws -> Payload {
         let fm = FileManager.default
-        let manifestURL = bundleURL.appendingPathComponent("manifest.json")
-        guard fm.fileExists(atPath: manifestURL.path) else {
-            throw BundleError.manifestMissing
-        }
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
 
+        let manifestURL = bundleURL.appendingPathComponent("manifest.json")
         let manifest: BundleManifest
-        do {
-            let data = try Data(contentsOf: manifestURL)
-            manifest = try decoder.decode(BundleManifest.self, from: data)
-        } catch {
-            throw BundleError.decode("manifest.json — \(error.localizedDescription)")
-        }
-        guard manifest.bundleVersion <= BundleManifest.currentVersion else {
-            throw BundleError.manifestVersionUnsupported(manifest.bundleVersion)
+        if fm.fileExists(atPath: manifestURL.path) {
+            do {
+                let data = try Data(contentsOf: manifestURL)
+                manifest = try decoder.decode(BundleManifest.self, from: data)
+            } catch {
+                throw BundleError.decode("manifest.json — \(error.localizedDescription)")
+            }
+            guard manifest.bundleVersion <= BundleManifest.currentVersion else {
+                throw BundleError.manifestVersionUnsupported(manifest.bundleVersion)
+            }
+        } else {
+            manifest = synthesizeLegacyManifest(bundleURL: bundleURL, fm: fm)
         }
 
         let catalog: CatalogSnapshot = try decode(decoder, at: bundleURL.appendingPathComponent("catalog.json"),
@@ -517,6 +524,54 @@ enum BundleImporter {
         } catch {
             throw BundleError.decode("\(label) — \(error.localizedDescription)")
         }
+    }
+
+    /// Build a placeholder `BundleManifest` for a bundle that lacks one. Used
+    /// for legacy bundles produced before the manifest was added, and for
+    /// bundles whose export was interrupted before the final manifest write.
+    /// Fields are populated from filesystem inspection so the rest of the
+    /// import flow has reasonable values (counts/sizes drive the success
+    /// alert; `exportedAt` is the mtime tiebreaker on the bundle side).
+    private static func synthesizeLegacyManifest(bundleURL: URL,
+                                                 fm: FileManager) -> BundleManifest {
+        let peopleDir = bundleURL.appendingPathComponent("people", isDirectory: true)
+        var peopleCount = 0
+        var refPhotoCount = 0
+        var refPhotoBytes: Int64 = 0
+        if let kids = try? fm.contentsOfDirectory(at: peopleDir,
+                                                  includingPropertiesForKeys: [.isDirectoryKey]) {
+            for kid in kids where (try? kid.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                peopleCount += 1
+                if let enumerator = fm.enumerator(at: kid,
+                                                  includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey]) {
+                    for case let url as URL in enumerator {
+                        let rv = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+                        guard rv?.isRegularFile == true else { continue }
+                        if url.lastPathComponent == "profile.json" { continue }
+                        refPhotoCount += 1
+                        refPhotoBytes += Int64(rv?.fileSize ?? 0)
+                    }
+                }
+            }
+        }
+
+        let totalBytes = BundleExporter.directorySize(bundleURL)
+        let bundleMtime = (try? bundleURL.resourceValues(forKeys: [.contentModificationDateKey]))?
+            .contentModificationDate ?? Date()
+
+        return BundleManifest(
+            bundleVersion: 0,
+            exportedAt: bundleMtime,
+            exportedFromHost: "unknown (legacy bundle, no manifest)",
+            appVersion: "legacy",
+            appBuild: "legacy",
+            counts: BundleManifest.Counts(records: 0,
+                                          volumes: 0,
+                                          people: peopleCount,
+                                          referencePhotos: refPhotoCount),
+            sizes: BundleManifest.Sizes(totalBytes: totalBytes,
+                                        referencePhotoBytes: refPhotoBytes)
+        )
     }
 
     // MARK: - Result types
