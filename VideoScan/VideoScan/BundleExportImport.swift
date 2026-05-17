@@ -237,8 +237,15 @@ enum BundleExporter {
 
     /// Write a complete bundle. `bundleURL` should end in `.videoscanbundle`.
     /// Overwrites any existing bundle at the same path.
+    ///
+    /// Purge policy: removed-from-catalog records are LOCAL-ONLY. They are
+    /// stripped from the bundled catalog.json (and the manifest's record
+    /// count) so a bundle moved to another Mac mirrors the user's curated
+    /// view, not their personal trash bin. The caller can compute the
+    /// excluded count from `records.count - summary.manifest.counts.records`
+    /// and log it for discoverability.
     @MainActor
-    static func writeBundle(records: [VideoRecord],
+    static func writeBundle(records inputRecords: [VideoRecord],
                             scanTargets: [CatalogScanTarget],
                             to bundleURL: URL) throws -> Summary {
         guard bundleURL.pathExtension == "videoscanbundle" else {
@@ -253,6 +260,12 @@ enum BundleExporter {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
+
+        // Global-inert filter applied before serialization — purged records
+        // never cross the bundle boundary. Single filter site keeps the
+        // record-count math in the manifest consistent with what's actually
+        // encoded in catalog.json.
+        let records = pfActiveRecords(inputRecords)
 
         // 1. Catalog — same shape as the standalone catalog export so a
         //    catalog.json pulled out of a bundle could be imported via the

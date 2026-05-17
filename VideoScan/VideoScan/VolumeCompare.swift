@@ -612,7 +612,10 @@ struct VolumeCompareSheet: View {
         let nameKey = "\(rec.filename.lowercased())|\(rec.sizeBytes)"
 
         var found: Set<String> = []
-        for other in model.records {
+        // Global-inert: purged records are not considered when searching for
+        // alternate-volume copies. A "removed from catalog" record shouldn't
+        // light up as a backup of a live record.
+        for other in pfActiveRecords(model.records) {
             if other.fullPath == rec.fullPath { continue }
             let otherHash = (!other.partialMD5.isEmpty && other.sizeBytes > 0)
                 ? "\(other.partialMD5)|\(other.sizeBytes)" : nil
@@ -806,8 +809,14 @@ struct VolumeCompareSheet: View {
         isComparing = true
         defer { isComparing = false }
 
+        // Global-inert: purged records are excluded from the Compare pool.
+        // A removed record shouldn't be checked for backups, nor counted as
+        // a backup of something else. Filter once at the entry point so the
+        // src/dst pairing below never sees them.
+        let activeRecords = pfActiveRecords(model.records)
+
         // Source records: union of everything under any selected source path.
-        let srcRecords = model.records.filter { rec in
+        let srcRecords = activeRecords.filter { rec in
             selectedSources.contains { src in rec.fullPath.hasPrefix(src) }
         }
 
@@ -815,12 +824,12 @@ struct VolumeCompareSheet: View {
         let dstRecords: [VideoRecord]
         let destLabel: String
         if selectedDests.isEmpty {
-            dstRecords = model.records.filter { rec in
+            dstRecords = activeRecords.filter { rec in
                 !selectedSources.contains { src in rec.fullPath.hasPrefix(src) }
             }
             destLabel = "any volume outside the source set"
         } else {
-            dstRecords = model.records.filter { rec in
+            dstRecords = activeRecords.filter { rec in
                 selectedDests.contains { dst in rec.fullPath.hasPrefix(dst) }
             }
             let sortedDests = selectedDests.sorted()

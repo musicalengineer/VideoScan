@@ -42,6 +42,9 @@ struct CatalogToolbar<Dashboard: View>: View {
     let avidBinFiles: Int
     @Binding var showPairsOnly: Bool
     @Binding var viewFilters: Set<CatalogViewFilter>
+    /// When on, purged rows render alongside active rows (italic + orange).
+    /// Persisted in @AppStorage("catalogShowRemoved") by the parent.
+    @Binding var showRemoved: Bool
     @ViewBuilder let dashboardContent: () -> Dashboard
 
     private var canCombine: Bool {
@@ -248,6 +251,22 @@ struct CatalogToolbar<Dashboard: View>: View {
             .frame(width: 70)
             .help("Filter catalog results")
 
+            // Show-removed toggle — composes with online/View filters above.
+            // Purged rows render italic + orange in the table when on.
+            // Persisted in @AppStorage by CatalogView.
+            Toggle(isOn: $showRemoved) {
+                Label("Show removed", systemImage: showRemoved
+                      ? "eye.trianglebadge.exclamationmark"
+                      : "eye.slash")
+                    .labelStyle(.titleAndIcon)
+                    .foregroundColor(showRemoved ? .orange : .secondary)
+            }
+            .toggleStyle(.button)
+            .controlSize(.small)
+            .help(showRemoved
+                  ? "Removed (purged) records are visible — italic + orange. Click to hide."
+                  : "Click to show removed records alongside active ones.")
+
             Spacer()
 
             Button {
@@ -281,6 +300,10 @@ struct CatalogContent: View {
     let filterTargetPaths: Set<String>
     let showPairsOnly: Bool
     let viewFilters: Set<CatalogViewFilter>
+    /// When true, purged rows are included in the table (rendered italic +
+    /// orange, with a restricted context menu). When false (default), purged
+    /// rows are hidden — they remain in catalog.json for recoverability.
+    let showRemoved: Bool
     /// When non-empty, show only these specific records (overrides all other filters).
     /// Used by Archive tab's "Show in Catalog" / "Show Pair in Catalog".
     var filterByIDs: Set<UUID> = []
@@ -366,11 +389,19 @@ struct CatalogContent: View {
     }
 
     private func computeFiltered() -> [VideoRecord] {
-        // ID filter overrides everything — used by Archive "Show in Catalog"
+        // Explicit-IDs ask always wins, including over Show-Removed. The
+        // filterByIDs path is driven by user navigation ("Show in Catalog",
+        // "Show Pair in Catalog") — they asked for those specific records,
+        // so surface them whether or not the row happens to be purged or
+        // the Show-Removed toggle is on.
         if !filterByIDs.isEmpty {
             return records.filter { filterByIDs.contains($0.id) }
         }
-        var out = records
+        // Default: hide soft-deleted (purged) records. Composes with all the
+        // filters below — purge filter applied FIRST so each downstream filter
+        // sees a smaller input. Toggling Show Removed is a pure inclusion (it
+        // adds purged rows back; it doesn't change online/View semantics).
+        var out = pfApplyPurgeFilter(records, showRemoved: showRemoved)
         if !filterTargetPaths.isEmpty {
             let prefixes = Array(filterTargetPaths)
             out = out.filter { rec in
@@ -429,6 +460,10 @@ struct CatalogContent: View {
                     if !filterByIDs.isEmpty {
                         pairFilterBanner
                     }
+                    // Inline undo affordance for the most recent purge. Sits
+                    // above the table so it never reflows the grid below —
+                    // the VStack just gets one more row when armed.
+                    purgeUndoBanner
                     catalogTable
                 }
                     .frame(minHeight: 250)
@@ -572,29 +607,126 @@ struct CatalogContent: View {
         }
     }
 
+    // MARK: - Purge Undo Banner
+    //
+    // Inline undo affordance for the most recent "Remove from Catalog"
+    // action. Mirrors the POI undo banner exactly — same orange palette,
+    // same layout, same dismissal rules (Undo / × / superseded by next
+    // purge / app relaunch). No auto-dismiss timer; Rick wants to take
+    // his time.
+    @ViewBuilder
+    private var purgeUndoBanner: some View {
+        if let batch = model.lastPurgedBatch {
+            HStack(spacing: 10) {
+                Image(systemName: "trash.slash")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.orange)
+                if let err = model.lastPurgeUndoError {
+                    Text(err)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.red)
+                } else {
+                    let n = batch.ids.count
+                    Text("Removed \(n) item\(n == 1 ? "" : "s").")
+                        .font(.system(size: 12))
+                        .foregroundColor(.primary)
+                }
+                Button("Undo") {
+                    _ = model.undoLastPurge()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .keyboardShortcut("z", modifiers: .command)
+
+                Spacer()
+
+                Button {
+                    model.dismissPurgeUndoBanner()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(Color.secondary, Color.secondary.opacity(0.2))
+                }
+                .buttonStyle(.plain)
+                .help("Dismiss — purged records stay hidden until you flip Show Removed and right-click → Restore")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.orange.opacity(0.12))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.orange.opacity(0.35), lineWidth: 1)
+            )
+            .padding(.horizontal, 12)
+            .padding(.top, 6)
+            .transition(.opacity.combined(with: .move(edge: .top)))
+        }
+    }
+
+    /// Right-click menu shown when one or more purged rows is selected.
+    /// Per spec, this is intentionally minimal: Restore + Reveal in Finder.
+    /// Everything else (Combine, Correlate, Tag, Notes, ...) is suppressed —
+    /// purged records are inert until restored.
+    @ViewBuilder
+    private func purgedRowContextMenu(rec: VideoRecord, selectedRecs: [VideoRecord]) -> some View {
+        let purgedSelection = selectedRecs.filter { $0.isPurged }
+        Button {
+            for r in purgedSelection {
+                _ = model.restoreRecord(id: r.id)
+            }
+        } label: {
+            Label(purgedSelection.count > 1
+                  ? "Restore \(purgedSelection.count) to Catalog"
+                  : "Restore to Catalog",
+                  systemImage: "arrow.uturn.backward.circle")
+        }
+        if VolumeReachability.isReachable(path: rec.fullPath) {
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.selectFile(rec.fullPath, inFileViewerRootedAtPath: "")
+            }
+        }
+    }
+
     // MARK: - Results Table
 
     private var catalogTable: some View {
         Table(tableData, selection: $selectedIDs, sortOrder: $sortOrder) {
             TableColumn("Filename", value: \.filename) { rec in
                 let offline = !VolumeReachability.isReachable(path: rec.fullPath)
+                let purged = rec.isPurged
                 HStack(spacing: 4) {
-                    if showPairsOnly && rec.pairedWith != nil {
+                    if purged {
+                        // Trash-slash icon makes the "removed" state obvious
+                        // at a glance — even if the user's row colors are
+                        // partially overridden by a high-contrast theme.
+                        Image(systemName: "trash.slash")
+                            .font(.system(size: 10))
+                            .foregroundColor(.orange)
+                    } else if showPairsOnly && rec.pairedWith != nil {
                         Image(systemName: rec.streamType == .videoOnly ? "film" : "waveform")
                             .font(.system(size: 10))
                             .foregroundColor(rec.streamType == .videoOnly ? .blue : .green)
                     }
                     Text(rec.filename)
                         .font(.system(.body, design: .monospaced))
-                        .italic(offline)
-                        .foregroundColor(offline ? .secondary
-                            : (showPairsOnly && rec.pairedWith != nil
-                               ? (rec.streamType == .videoOnly ? .blue : .green)
-                               : rec.filenameColor))
+                        // Italic when offline OR purged — both signal "not the
+                        // active default state". Purge color (orange) wins over
+                        // both offline-secondary and pair-blue/green when set.
+                        .italic(offline || purged)
+                        .foregroundColor(purged ? .orange
+                            : (offline ? .secondary
+                                : (showPairsOnly && rec.pairedWith != nil
+                                   ? (rec.streamType == .videoOnly ? .blue : .green)
+                                   : rec.filenameColor)))
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 2)
-                .help(offline ? "\(rec.directory) (offline)" : rec.directory)
+                .help(purged ? "\(rec.directory) (removed from catalog)"
+                      : (offline ? "\(rec.directory) (offline)" : rec.directory))
             }
             .width(min: 180, ideal: 260)
 
@@ -694,157 +826,218 @@ struct CatalogContent: View {
         }
         .contextMenu(forSelectionType: UUID.self) { ids in
             let selectedRecs = ids.compactMap { id in records.first { $0.id == id } }
+            // Mixed-selection split. Each predicate is computed once so the
+            // Restore / Remove menu items use the same record set their
+            // actions operate on (label counts == operated-on counts).
+            // Swift's `.filter` ≈ C++ std::copy_if into a new vector.
+            let activeRecs = selectedRecs.filter { !$0.isPurged }
+            let purgedRecs = selectedRecs.filter { $0.isPurged }
             if let id = ids.first,
                let rec = records.first(where: { $0.id == id }) {
-                Button(VolumeReachability.isReachable(path: rec.fullPath)
-                       ? "Reveal in Finder"
-                       : "Reveal in Finder (offline)") {
-                    if VolumeReachability.isReachable(path: rec.fullPath) {
-                        NSWorkspace.shared.selectFile(rec.fullPath, inFileViewerRootedAtPath: "")
+                // Pure-purged selection: minimal menu (Restore + Reveal).
+                // Mixed selection: show the full active menu PLUS a Restore
+                // item for the purged subset; row-targeted active actions
+                // (Combine, Rename, Tag, etc.) are gated on
+                // `purgedRecs.isEmpty` so a multi-select that pulled in any
+                // purged row doesn't silently apply destructive ops to it.
+                // Spec: "active-only row actions must be gated on
+                // purgedRecs.isEmpty".
+                if !activeRecs.isEmpty || rec.isPurged {
+                    if rec.isPurged && activeRecs.isEmpty {
+                        purgedRowContextMenu(rec: rec, selectedRecs: selectedRecs)
                     } else {
-                        let alert = NSAlert()
-                        alert.messageText = "File Offline"
-                        alert.informativeText = "The volume containing this file is not mounted.\n\n\(rec.fullPath)"
-                        alert.alertStyle = .informational
-                        alert.addButton(withTitle: "OK")
-                        alert.runModal()
-                    }
-                }
-                Button("Open in QuickTime Player") {
-                    if let qtURL = NSWorkspace.shared.urlForApplication(
-                        withBundleIdentifier: "com.apple.QuickTimePlayerX"
-                    ) {
-                        NSWorkspace.shared.open(
-                            [URL(fileURLWithPath: rec.fullPath)],
-                            withApplicationAt: qtURL,
-                            configuration: NSWorkspace.OpenConfiguration()
-                        )
-                    }
-                }
-
-                Divider()
-
-                Button("Rename…") {
-                    renameTarget = rec
-                    renameText = (rec.filename as NSString).deletingPathExtension
-                    showRenameSheet = true
-                }
-
-                Divider()
-
-                Menu("Tag") {
-                    Button {
-                        for r in selectedRecs { r.mediaDisposition = .important }
-                        model.saveCatalogDebounced()
-                    } label: {
-                        Label("Important", systemImage: "star.fill")
-                    }
-                    Button {
-                        for r in selectedRecs { r.mediaDisposition = .recoverable }
-                        model.saveCatalogDebounced()
-                    } label: {
-                        Label("Recoverable", systemImage: "wrench.and.screwdriver.fill")
-                    }
-
-                    Divider()
-
-                    Button {
-                        for r in selectedRecs { r.mediaDisposition = .suspectedJunk }
-                        model.saveCatalogDebounced()
-                    } label: {
-                        Label("Suspected Junk", systemImage: "exclamationmark.triangle")
-                    }
-                    Button {
-                        for r in selectedRecs { r.mediaDisposition = .confirmedJunk }
-                        model.saveCatalogDebounced()
-                    } label: {
-                        Label("Junk", systemImage: "xmark.circle.fill")
-                    }
-
-                    Divider()
-
-                    Button {
-                        for r in selectedRecs { r.mediaDisposition = .unreviewed }
-                        model.saveCatalogDebounced()
-                    } label: {
-                        Label("Clear Tag", systemImage: "arrow.counterclockwise")
-                    }
-                }
-
-                Button("Notes\u{2026}") {
-                    notesTarget = rec
-                    notesText = rec.notes
-                    showNotesSheet = true
-                }
-
-                // Show duplicate group matches
-                let groupMatches = records.filter {
-                    $0.id != rec.id && $0.duplicateGroupID != nil && $0.duplicateGroupID == rec.duplicateGroupID
-                }
-                if !groupMatches.isEmpty {
-                    let onlineMatches = groupMatches.filter {
-                        VolumeReachability.isReachable(path: $0.fullPath)
-                    }
-
-                    if !onlineMatches.isEmpty {
-                        let byVolume = Dictionary(grouping: onlineMatches) {
-                            VolumeReachability.volumeName(forPath: $0.fullPath)
+                        // Active or mixed selection — show the full menu,
+                        // gating active-row actions on purgedRecs.isEmpty.
+                        let pureActive = purgedRecs.isEmpty
+                        Button(VolumeReachability.isReachable(path: rec.fullPath)
+                               ? "Reveal in Finder"
+                               : "Reveal in Finder (offline)") {
+                            if VolumeReachability.isReachable(path: rec.fullPath) {
+                                NSWorkspace.shared.selectFile(rec.fullPath, inFileViewerRootedAtPath: "")
+                            } else {
+                                let alert = NSAlert()
+                                alert.messageText = "File Offline"
+                                alert.informativeText = "The volume containing this file is not mounted.\n\n\(rec.fullPath)"
+                                alert.alertStyle = .informational
+                                alert.addButton(withTitle: "OK")
+                                alert.runModal()
+                            }
                         }
-                        Menu("Find Online Copy (\(onlineMatches.count))") {
-                            ForEach(byVolume.keys.sorted(), id: \.self) { vol in
-                                if let files = byVolume[vol] {
-                                    Section(vol) {
-                                        ForEach(files) { match in
-                                            Button(match.filename) {
-                                                NSWorkspace.shared.selectFile(
-                                                    match.fullPath,
-                                                    inFileViewerRootedAtPath: ""
-                                                )
+                        Button("Open in QuickTime Player") {
+                            if let qtURL = NSWorkspace.shared.urlForApplication(
+                                withBundleIdentifier: "com.apple.QuickTimePlayerX"
+                            ) {
+                                NSWorkspace.shared.open(
+                                    [URL(fileURLWithPath: rec.fullPath)],
+                                    withApplicationAt: qtURL,
+                                    configuration: NSWorkspace.OpenConfiguration()
+                                )
+                            }
+                        }
+
+                        if pureActive {
+                            Divider()
+
+                            Button("Rename…") {
+                                renameTarget = rec
+                                renameText = (rec.filename as NSString).deletingPathExtension
+                                showRenameSheet = true
+                            }
+
+                            Divider()
+
+                            Menu("Tag") {
+                                Button {
+                                    for r in selectedRecs { r.mediaDisposition = .important }
+                                    model.saveCatalogDebounced()
+                                } label: {
+                                    Label("Important", systemImage: "star.fill")
+                                }
+                                Button {
+                                    for r in selectedRecs { r.mediaDisposition = .recoverable }
+                                    model.saveCatalogDebounced()
+                                } label: {
+                                    Label("Recoverable", systemImage: "wrench.and.screwdriver.fill")
+                                }
+
+                                Divider()
+
+                                Button {
+                                    for r in selectedRecs { r.mediaDisposition = .suspectedJunk }
+                                    model.saveCatalogDebounced()
+                                } label: {
+                                    Label("Suspected Junk", systemImage: "exclamationmark.triangle")
+                                }
+                                Button {
+                                    for r in selectedRecs { r.mediaDisposition = .confirmedJunk }
+                                    model.saveCatalogDebounced()
+                                } label: {
+                                    Label("Junk", systemImage: "xmark.circle.fill")
+                                }
+
+                                Divider()
+
+                                Button {
+                                    for r in selectedRecs { r.mediaDisposition = .unreviewed }
+                                    model.saveCatalogDebounced()
+                                } label: {
+                                    Label("Clear Tag", systemImage: "arrow.counterclockwise")
+                                }
+                            }
+
+                            Button("Notes\u{2026}") {
+                                notesTarget = rec
+                                notesText = rec.notes
+                                showNotesSheet = true
+                            }
+
+                            // Show duplicate group matches
+                            let groupMatches = records.filter {
+                                $0.id != rec.id && $0.duplicateGroupID != nil && $0.duplicateGroupID == rec.duplicateGroupID
+                            }
+                            if !groupMatches.isEmpty {
+                                let onlineMatches = groupMatches.filter {
+                                    VolumeReachability.isReachable(path: $0.fullPath)
+                                }
+
+                                if !onlineMatches.isEmpty {
+                                    let byVolume = Dictionary(grouping: onlineMatches) {
+                                        VolumeReachability.volumeName(forPath: $0.fullPath)
+                                    }
+                                    Menu("Find Online Copy (\(onlineMatches.count))") {
+                                        ForEach(byVolume.keys.sorted(), id: \.self) { vol in
+                                            if let files = byVolume[vol] {
+                                                Section(vol) {
+                                                    ForEach(files) { match in
+                                                        Button(match.filename) {
+                                                            NSWorkspace.shared.selectFile(
+                                                                match.fullPath,
+                                                                inFileViewerRootedAtPath: ""
+                                                            )
+                                                        }
+                                                    }
+                                                }
                                             }
                                         }
                                     }
                                 }
-                            }
-                        }
-                    }
 
-                    Menu("All Matches (\(groupMatches.count))") {
-                        ForEach(groupMatches) { dup in
-                            let online = VolumeReachability.isReachable(path: dup.fullPath)
+                                Menu("All Matches (\(groupMatches.count))") {
+                                    ForEach(groupMatches) { dup in
+                                        let online = VolumeReachability.isReachable(path: dup.fullPath)
+                                        Button {
+                                            selectedIDs = [dup.id]
+                                            onSelect(dup.id)
+                                        } label: {
+                                            let vol = VolumeReachability.volumeName(forPath: dup.fullPath)
+                                            Text("\(dup.filename) — \(vol)\(online ? "" : " (offline)")")
+                                        }
+                                    }
+                                }
+                            }
+
+                            if rec.streamType.needsCorrelation {
+                                Divider()
+                                Button("Find A/V Pair") {
+                                    onFindAVPair?(rec)
+                                }
+                                .help("Show this file's best matching pair in the catalog, including any online duplicates of either side.")
+                            }
+                            if let partner = rec.pairedWith {
+                                Button("Combine This Pair…") {
+                                    let video = rec.streamType == .videoOnly ? rec : partner
+                                    let audio = rec.streamType == .audioOnly ? rec : partner
+                                    onCombinePair?(video, audio)
+                                }
+                            }
+                            Divider()
                             Button {
-                                selectedIDs = [dup.id]
-                                onSelect(dup.id)
+                                onShowInArchive?(rec)
                             } label: {
-                                let vol = VolumeReachability.volumeName(forPath: dup.fullPath)
-                                Text("\(dup.filename) — \(vol)\(online ? "" : " (offline)")")
+                                Label("Show in Archive", systemImage: "archivebox")
                             }
+                            Button("Copy Path") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(rec.fullPath, forType: .string)
+                            }
+                        } // end pureActive
+
+                        Divider()
+
+                        // Remove from Catalog — visible when the selection
+                        // contains at least one active row. The label and the
+                        // action both operate on `activeRecs` exclusively, so
+                        // a mixed selection's purged rows are never
+                        // double-stamped and the count in the label matches
+                        // the count actually mutated.
+                        if !activeRecs.isEmpty {
+                            Button(role: .destructive) {
+                                let targetIDs = Set(activeRecs.map { $0.id })
+                                _ = model.purgeRecords(ids: targetIDs)
+                            } label: {
+                                Label(activeRecs.count > 1
+                                      ? "Remove \(activeRecs.count) from Catalog"
+                                      : "Remove from Catalog",
+                                      systemImage: "trash.slash")
+                            }
+                            .help("Hide these records from the default view. The files on disk are not deleted; toggle Show Removed in the toolbar to recover.")
+                        }
+
+                        // Restore to Catalog — visible when the selection
+                        // contains at least one purged row. Symmetric with
+                        // Remove: label count == operated-on count.
+                        if !purgedRecs.isEmpty {
+                            Button {
+                                for r in purgedRecs { _ = model.restoreRecord(id: r.id) }
+                            } label: {
+                                Label(purgedRecs.count > 1
+                                      ? "Restore \(purgedRecs.count) to Catalog"
+                                      : "Restore to Catalog",
+                                      systemImage: "arrow.uturn.backward.circle")
+                            }
+                            .help("Clear the removed marker on the selected rows.")
                         }
                     }
-                }
-
-                if rec.streamType.needsCorrelation {
-                    Divider()
-                    Button("Find A/V Pair") {
-                        onFindAVPair?(rec)
-                    }
-                    .help("Show this file's best matching pair in the catalog, including any online duplicates of either side.")
-                }
-                if let partner = rec.pairedWith {
-                    Button("Combine This Pair…") {
-                        let video = rec.streamType == .videoOnly ? rec : partner
-                        let audio = rec.streamType == .audioOnly ? rec : partner
-                        onCombinePair?(video, audio)
-                    }
-                }
-                Divider()
-                Button {
-                    onShowInArchive?(rec)
-                } label: {
-                    Label("Show in Archive", systemImage: "archivebox")
-                }
-                Button("Copy Path") {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(rec.fullPath, forType: .string)
                 }
             }
         } primaryAction: { ids in
@@ -859,6 +1052,10 @@ struct CatalogContent: View {
         .onChange(of: showPairsOnly) { tableData = computeFiltered() }
         .onChange(of: filterByIDs) { tableData = computeFiltered() }
         .onChange(of: viewFilters) { tableData = computeFiltered() }
+        .onChange(of: showRemoved) { tableData = computeFiltered() }
+        // Re-compute when purge state flips on any record (purge, undo, restore).
+        // We key off lastPurgedBatch so mutations from the model are observed.
+        .onChange(of: model.lastPurgedBatch) { tableData = computeFiltered() }
     }
 
     // MARK: - Preview / Player
