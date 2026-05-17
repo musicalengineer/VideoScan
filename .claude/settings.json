@@ -235,19 +235,10 @@
             "Write(/Users/rickb/Library/Application Support/VideoScan/**)",
             "Edit(/Users/rickb/Library/Application Support/VideoScan/**)",
             "Edit",
-            "Write"
+            "Write",
+            "Bash(git push:*)"
         ],
         "deny": [
-            "Bash(git push)",
-            "Bash(git push origin main)",
-            "Bash(git push origin main:*)",
-            "Bash(git push origin HEAD)",
-            "Bash(git push origin HEAD:main)",
-            "Bash(git push origin HEAD:main:*)",
-            "Bash(git push origin main:main)",
-            "Bash(git push origin main:main:*)",
-            "Bash(git push -u origin main)",
-            "Bash(git push -u origin main:*)",
             "Bash(git push --force origin main)",
             "Bash(git push --force origin main:*)",
             "Bash(git push --force origin HEAD:main)",
