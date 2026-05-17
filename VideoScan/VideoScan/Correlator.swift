@@ -23,9 +23,14 @@ enum Correlator {
     /// Returns a summary string for console logging.
     @discardableResult
     static func correlate(
-        records: [VideoRecord],
+        records inputRecords: [VideoRecord],
         selectedIDs: Set<UUID>? = nil
     ) -> String {
+        // Global-inert: purged records do not exist as far as correlation is
+        // concerned. Filter at the entry point so the rest of this function
+        // (and any future scoring logic) never sees a removed-from-catalog
+        // record. Restored records re-enter naturally on the next correlate.
+        let records = pfActiveRecords(inputRecords)
         let scope: [VideoRecord]
         if let ids = selectedIDs, !ids.isEmpty {
             scope = records.filter { ids.contains($0.id) }
@@ -154,11 +159,15 @@ enum Correlator {
     }
 
     /// Extract all correlated pairs from a record array (video first in tuple).
+    /// Purged records are skipped — a pair where either side has been removed
+    /// from the catalog is not surfaced as a correlated pair.
     static func correlatedPairs(from records: [VideoRecord]) -> [(video: VideoRecord, audio: VideoRecord)] {
         var seen = Set<UUID>()
         var pairs: [(VideoRecord, VideoRecord)] = []
         for rec in records {
             guard let partner = rec.pairedWith, !seen.contains(rec.id) else { continue }
+            // Global-inert filter: skip pairs where either record is purged.
+            if rec.isPurged || partner.isPurged { continue }
             seen.insert(rec.id)
             seen.insert(partner.id)
             let v = rec.streamType == .videoOnly ? rec : partner

@@ -48,7 +48,10 @@ struct TriageView: View {
     @State private var showAnalysisSummary = false
 
     private var triageRecords: [VideoRecord] {
-        model.records.filter { $0.lifecycleStage != .archived }
+        // Global-inert filter: purged records are out of scope for triage —
+        // a removed-from-catalog file shouldn't show up as something to
+        // review. Restoring puts it back in scope automatically.
+        pfActiveRecords(model.records).filter { $0.lifecycleStage != .archived }
     }
 
     private var filteredRecords: [VideoRecord] {

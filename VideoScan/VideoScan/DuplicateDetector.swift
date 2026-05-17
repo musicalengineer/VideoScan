@@ -22,7 +22,11 @@ enum DuplicateDetector {
         let reasons: [String]
     }
 
-    static func analyze(records: [VideoRecord]) -> DuplicateAnalysisSummary {
+    static func analyze(records inputRecords: [VideoRecord]) -> DuplicateAnalysisSummary {
+        // Global-inert: purged records do not participate in duplicate
+        // detection (a removed-from-catalog file shouldn't pull a live record
+        // into a duplicate group). Filter at the entry point.
+        let records = pfActiveRecords(inputRecords)
         clear(records: records)
 
         let candidates = records.filter(isDuplicateCandidate)

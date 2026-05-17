@@ -148,6 +148,10 @@ struct CatalogView: View {
     // Volume pane height is now managed by NSSplitView (VerticalSplitView)
     @State private var showPairsOnly = false
     @State private var catalogViewFilters: Set<CatalogViewFilter> = []
+    /// Whether purged ("removed from catalog") rows are included in the table.
+    /// Persisted across launches like other catalog UI prefs.
+    /// Default OFF — purged rows hidden until the user opts in.
+    @AppStorage("catalogShowRemoved") private var showRemoved: Bool = false
     @State private var combinePairItem: CombinePairItem?
     /// Set of scan-target searchPaths whose records the user wants to see in
     /// the catalog table. Derived from `selectedVolumeIDs` so that selecting
@@ -236,6 +240,7 @@ struct CatalogView: View {
                 avidBinFiles: model.avidBinResults.count,
                 showPairsOnly: $showPairsOnly,
                 viewFilters: $catalogViewFilters,
+                showRemoved: $showRemoved,
                 dashboardContent: {
                     if model.isScanning || model.isCombining {
                         CompactDashboard(
@@ -266,6 +271,7 @@ struct CatalogView: View {
                 filterTargetPaths: filterTargetPaths,
                 showPairsOnly: showPairsOnly,
                 viewFilters: catalogViewFilters,
+                showRemoved: showRemoved,
                 filterByIDs: filterByIDs,
                 focusMatchScore: focusMatchScore,
                 previewImage: model.previewImage,

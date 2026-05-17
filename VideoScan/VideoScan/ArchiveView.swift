@@ -531,8 +531,10 @@ struct ArchiveView: View {
     // MARK: - Filtering
 
     /// Base pool: only files explicitly promoted to the vault.
+    /// Global-inert filter: purged (removed-from-catalog) records are
+    /// excluded — they're hidden from every consumer until restored.
     private var keeperRecords: [VideoRecord] {
-        model.records.filter { $0.lifecycleStage == .archived }
+        pfActiveRecords(model.records).filter { $0.lifecycleStage == .archived }
     }
 
     private var filteredRecords: [VideoRecord] {

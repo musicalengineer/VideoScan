@@ -164,6 +164,24 @@ class VideoRecord: Identifiable, Codable {
     /// machine's exported catalog so the UI can show "from <host>".
     var sourceHost: String = ""
 
+    /// Soft-delete marker. `nil` = active (visible in default catalog view);
+    /// non-nil = "removed from catalog" — the file on disk is untouched but
+    /// the row is hidden unless the user toggles "Show removed".
+    ///
+    /// Restore is just `purgedAt = nil`. There is no hard-delete path on the
+    /// catalog — the trash never auto-empties (matches POI soft-delete UX).
+    ///
+    /// Codable note: encoded only when non-nil and decoded via decodeIfPresent
+    /// so pre-feature catalog.json files (where the key is absent) come back
+    /// as active records, not as decode failures.
+    /// Swift's `Date?` ≈ C++ `std::optional<Date>` — nil/empty means "no value".
+    var purgedAt: Date?
+
+    /// Convenience: true when this record has been soft-removed from the
+    /// catalog. Used by UI filtering + styling. `// guard let` ≈ C++ early
+    /// return after a null check.
+    var isPurged: Bool { purgedAt != nil }
+
     /// Provenance captured at scan time: which machine ran the scan, what
     /// kind of volume the file lived on (local/smb/nfs/afp), the volume's
     /// stable UUID if available, and the remote server name for network
@@ -274,6 +292,7 @@ class VideoRecord: Identifiable, Codable {
         case starRating, detectedPeople, combinedFromPairID
         case sourceHost
         case scanContext
+        case purgedAt
     }
 
     required init(from decoder: Decoder) throws {
@@ -339,6 +358,10 @@ class VideoRecord: Identifiable, Codable {
         detectedPeople              = try c.decodeIfPresent([String].self, forKey: .detectedPeople) ?? []
         combinedFromPairID          = try c.decodeIfPresent(UUID.self, forKey: .combinedFromPairID)
         scanContext                 = try c.decodeIfPresent(ScanContext.self, forKey: .scanContext) ?? ScanContext()
+        // decodeIfPresent so legacy catalog.json files (no purgedAt key) round-
+        // trip cleanly as active records rather than throwing. Regression
+        // covered by CatalogPurgeTests.testDecodingLegacyCatalogJsonYieldsNilPurgedAt.
+        purgedAt                    = try c.decodeIfPresent(Date.self, forKey: .purgedAt)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -418,6 +441,10 @@ class VideoRecord: Identifiable, Codable {
         if scanContext.isPopulated || scanContext.scannedAt != nil {
             try c.encode(scanContext, forKey: .scanContext)
         }
+        // Only write purgedAt when present — keeps catalog.json deltas minimal
+        // for the (vast majority) of records that are never purged, and means
+        // un-purging a record makes its JSON byte-identical to before purge.
+        try c.encodeIfPresent(purgedAt, forKey: .purgedAt)
     }
 
     var rowColor: Color {

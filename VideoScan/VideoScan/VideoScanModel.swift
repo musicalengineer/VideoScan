@@ -483,6 +483,10 @@ final class VideoScanModel: ObservableObject {
         let before = records.count
         records.removeAll { $0.fullPath.hasPrefix(path) }
         let removed = before - records.count
+        // If any of the banner-tracked rows lived on this volume, the
+        // banner's Undo would now skip them — drop the banner to avoid the
+        // partial-restore confusion.
+        clearPurgeUndoState()
         clearCacheForTarget(target)
         persistScanDates()
         saveCatalogNow()
@@ -491,10 +495,16 @@ final class VideoScanModel: ObservableObject {
     }
 
     /// Export volume info as CSV via a save panel.
+    ///
+    /// Purge policy: removed-from-catalog records are LOCAL-ONLY and never
+    /// surface in the exported per-volume stats. Volume counts reflect what
+    /// the user actually keeps in the catalog, not the trash bin.
     func exportVolumeInfo() {
+        let activeRecords = pfActiveRecords(records)
+        let excluded = records.count - activeRecords.count
         // Gather per-volume stats
         var volumePaths = Set<String>()
-        for rec in records {
+        for rec in activeRecords {
             let path = rec.fullPath
             if path.hasPrefix("/Volumes/") {
                 let parts = path.split(separator: "/", maxSplits: 3)
@@ -509,7 +519,7 @@ final class VideoScanModel: ObservableObject {
         var csv = "Volume,Status,Files,Video+Audio,Video Only,Audio Only,Errors,Media Size,Codecs,Containers,Last Scanned\n"
 
         for vol in volumePaths.sorted() {
-            let volRecords = records.filter { $0.fullPath.hasPrefix(vol) }
+            let volRecords = activeRecords.filter { $0.fullPath.hasPrefix(vol) }
             let name = VolumeReachability.volumeName(forPath: vol)
             let target = scanTargets.first { $0.searchPath == vol }
             let status = target?.isReachable == true ? "Connected" : "Offline"
@@ -544,7 +554,11 @@ final class VideoScanModel: ObservableObject {
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             try csv.write(to: url, atomically: true, encoding: .utf8)
-            log("Exported volume info to \(url.lastPathComponent)")
+            if excluded > 0 {
+                log("Exported volume info to \(url.lastPathComponent) (\(excluded) removed records excluded)")
+            } else {
+                log("Exported volume info to \(url.lastPathComponent)")
+            }
         } catch {
             log("Export failed: \(error.localizedDescription)")
         }
@@ -572,11 +586,18 @@ final class VideoScanModel: ObservableObject {
 
     /// Write the current `records` array to `url` as a v2 snapshot tagged
     /// with the current machine's name. Throws on write failure.
+    ///
+    /// Purge policy: removed-from-catalog records are LOCAL-ONLY. They are
+    /// stripped from every export path so a catalog moved to another Mac
+    /// looks like the user's curated view, not their personal trash bin.
+    /// Restoring is a per-machine action — exports never carry purge state.
     func exportCatalog(to url: URL) throws {
+        let activeRecords = pfActiveRecords(records)
+        let excluded = records.count - activeRecords.count
         let snapshot = CatalogSnapshot(
             version: CatalogSnapshot.currentVersion,
             savedAt: Date(),
-            records: records,
+            records: activeRecords,
             savedFromHost: CatalogHost.currentName
         )
         let encoder = JSONEncoder()
@@ -584,6 +605,11 @@ final class VideoScanModel: ObservableObject {
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(snapshot)
         try data.write(to: url, options: .atomic)
+        if excluded > 0 {
+            log("Exported \(activeRecords.count) records (\(excluded) removed records excluded)")
+        } else {
+            log("Exported \(activeRecords.count) records")
+        }
     }
 
     /// Decode a catalog snapshot at `url` and merge its records into the
@@ -798,10 +824,22 @@ final class VideoScanModel: ObservableObject {
                                                          scanTargets: scanTargets,
                                                          to: url)
             let m = summary.manifest
-            log("Exported bundle to \(url.lastPathComponent) — " +
-                "\(m.counts.records) records, \(m.counts.volumes) volumes, " +
-                "\(m.counts.people) people, \(m.counts.referencePhotos) photos, " +
-                "\(BundleSize.human(m.sizes.totalBytes)).")
+            // BundleExporter.writeBundle strips purged records before encoding.
+            // Surface the excluded count so the local-only purge state is
+            // discoverable in the log (matches CSV export logging).
+            let excluded = records.count - m.counts.records
+            if excluded > 0 {
+                log("Exported bundle to \(url.lastPathComponent) — " +
+                    "\(m.counts.records) records (\(excluded) removed records excluded), " +
+                    "\(m.counts.volumes) volumes, " +
+                    "\(m.counts.people) people, \(m.counts.referencePhotos) photos, " +
+                    "\(BundleSize.human(m.sizes.totalBytes)).")
+            } else {
+                log("Exported bundle to \(url.lastPathComponent) — " +
+                    "\(m.counts.records) records, \(m.counts.volumes) volumes, " +
+                    "\(m.counts.people) people, \(m.counts.referencePhotos) photos, " +
+                    "\(BundleSize.human(m.sizes.totalBytes)).")
+            }
             // Surface export warnings (typically dangling symlinks) so Rick
             // knows the bundle is missing a few photos. Logged individually
             // for the audit trail; summarized in the alert.
@@ -1171,6 +1209,9 @@ final class VideoScanModel: ObservableObject {
         }
         let count = records.count
         records.removeAll()
+        // Records the banner was tracking are gone — drop it so the user
+        // doesn't see a now-meaningless "Undo" affordance after a wipe.
+        clearPurgeUndoState()
         persistScanDates()
         saveCatalogNow()
         notifyTargetsChanged()
@@ -1187,6 +1228,138 @@ final class VideoScanModel: ObservableObject {
     /// snapshot is on disk before the process exits.
     func saveCatalogNow() {
         catalogStore.saveNow(records: records)
+    }
+
+    // MARK: - Soft-delete (Remove from Catalog)
+    //
+    // Mirrors the POI delete pattern (see PersonFinderModel.deletePOI +
+    // POIStorage.trashPOIFolder). Differences from POI:
+    //  - The "trash" is the catalog itself: setting purgedAt=Date() hides
+    //    the row from the default view; files on disk are untouched.
+    //  - Undo restores the *batch* (right-click on a multi-select), not
+    //    just a single record — Rick wants one Cmd-Z to walk back the
+    //    whole "Remove from Catalog" action.
+    //  - There is no on-disk .trash/ folder to clean up — recovery is
+    //    free, the purged rows live in catalog.json forever until the
+    //    user explicitly restores them.
+    //
+    // Session-scope undo: app relaunch drops the banner state, exactly
+    // like the POI banner. Only ONE undo target at a time — a second
+    // purge supersedes the first (the first batch stays purged but is no
+    // longer one-tap recoverable; the user can still flip "Show removed"
+    // and right-click → Restore).
+
+    /// Snapshot of the most recent purge. Holds the affected record IDs so
+    /// undo can flip them back. Includes the timestamp written into each
+    /// record's purgedAt for diagnostics.
+    struct LastPurgedBatch: Equatable {
+        let ids: [UUID]         // records whose purgedAt we set
+        let timestamp: Date     // value we wrote into purgedAt
+    }
+
+    /// The banner observes this. nil = no banner shown.
+    @Published var lastPurgedBatch: LastPurgedBatch?
+
+    /// Surface for undo errors (e.g. all target records have been deleted
+    /// from the catalog between purge and undo). Banner shows this in
+    /// place of the default "Removed N items." message.
+    @Published var lastPurgeUndoError: String?
+
+    /// Mark the given record IDs as purged. Sets `purgedAt = now` on every
+    /// match, persists, and arms the undo banner with the affected IDs.
+    /// Returns the count actually mutated (records already purged are not
+    /// double-stamped, and bogus IDs are silently ignored).
+    @discardableResult
+    func purgeRecords(ids: Set<UUID>) -> Int {
+        guard !ids.isEmpty else { return 0 }
+        let now = Date()
+        var changed: [UUID] = []
+        for rec in records where ids.contains(rec.id) && rec.purgedAt == nil {
+            rec.purgedAt = now
+            changed.append(rec.id)
+        }
+        guard !changed.isEmpty else { return 0 }
+        saveCatalogDebounced()
+        // Arm the undo banner. Supersedes any previous batch (matches POI
+        // single-target undo semantics). The previous batch stays purged
+        // and can still be recovered via Show Removed → right-click → Restore.
+        lastPurgedBatch = LastPurgedBatch(ids: changed, timestamp: now)
+        lastPurgeUndoError = nil
+        return changed.count
+    }
+
+    /// Clear `purgedAt` on a single record. Used by the right-click menu
+    /// on a purged row when "Show removed" is on. Returns true on success.
+    @discardableResult
+    func restoreRecord(id: UUID) -> Bool {
+        guard let rec = records.first(where: { $0.id == id }),
+              rec.purgedAt != nil else { return false }
+        rec.purgedAt = nil
+        saveCatalogDebounced()
+        // If the user manually restores a record from the most recent
+        // purge batch, drop it from the undo set so the banner's "Undo"
+        // doesn't no-op or surface a confusing partial restore later.
+        if var snap = lastPurgedBatch {
+            snap = LastPurgedBatch(
+                ids: snap.ids.filter { $0 != id },
+                timestamp: snap.timestamp
+            )
+            if snap.ids.isEmpty {
+                lastPurgedBatch = nil
+                lastPurgeUndoError = nil
+            } else {
+                lastPurgedBatch = snap
+            }
+        }
+        return true
+    }
+
+    /// Restore the most recently purged batch. Returns true if at least
+    /// one record was un-purged. Drops the banner on success or when the
+    /// batch has nothing left to restore (all records already deleted /
+    /// already restored manually).
+    @discardableResult
+    func undoLastPurge() -> Bool {
+        guard let snap = lastPurgedBatch else { return false }
+        var restored = 0
+        for id in snap.ids {
+            if let rec = records.first(where: { $0.id == id }),
+               rec.purgedAt != nil {
+                rec.purgedAt = nil
+                restored += 1
+            }
+        }
+        if restored == 0 {
+            // Everything in the batch is gone (e.g. user deleted the
+            // catalog or restored records manually). Drop the banner —
+            // nothing to undo.
+            lastPurgedBatch = nil
+            lastPurgeUndoError = nil
+            return false
+        }
+        saveCatalogDebounced()
+        lastPurgedBatch = nil
+        lastPurgeUndoError = nil
+        return true
+    }
+
+    /// Dismiss the undo banner without restoring. The purged records
+    /// stay hidden in the default view — only the one-tap undo affordance
+    /// goes away. They remain recoverable via "Show removed" → right-click
+    /// → Restore.
+    func dismissPurgeUndoBanner() {
+        lastPurgedBatch = nil
+        lastPurgeUndoError = nil
+    }
+
+    /// Drop the undo banner state. Called by catalog-wide mutations that
+    /// reseed `records` wholesale (deleteAllCatalog, deleteCatalogForTarget,
+    /// clearResults) — once the target rows are gone, the banner's "Undo"
+    /// would no-op anyway, and leaving the banner armed would mislead the
+    /// user into thinking their delete is reversible. Cheap idempotent reset.
+    private func clearPurgeUndoState() {
+        lastPurgedBatch = nil
+        lastPurgeUndoError = nil
     }
 
     private func restoreScanTargets() {
@@ -1280,6 +1453,9 @@ final class VideoScanModel: ObservableObject {
 
     func clearResults() {
         records = []
+        // Wholesale reseed of records — same reasoning as deleteAllCatalog:
+        // the banner has nothing left to undo, so drop it.
+        clearPurgeUndoState()
         outputCSVPath = ""
         previewImage = nil
         previewFilename = ""

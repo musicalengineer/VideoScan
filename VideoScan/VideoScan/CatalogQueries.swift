@@ -226,3 +226,41 @@ nonisolated func pfTriageBandCounts(
     }
     return counts
 }
+
+// MARK: - Soft-delete (purge) filter
+//
+// Mirrors the POI soft-delete UX: removed records stay in catalog.json (so
+// the user can always recover) but are hidden from the default table view.
+// The default is "hide purged" — the user opts into seeing them via the
+// "Show removed" toolbar toggle. Compose with the existing online / view
+// filters in CatalogContent.computeFiltered(): each filter narrows the
+// previous result independently.
+//
+// Pure functions so the same logic drives the table filter, batch ops, and
+// the unit tests in CatalogPurgeTests.
+
+/// Return records whose `purgedAt` is nil — the default catalog view.
+nonisolated func pfActiveRecords(_ records: [VideoRecord]) -> [VideoRecord] {
+    records.filter { !$0.isPurged }
+}
+
+/// Return records whose `purgedAt` is non-nil — the "Show removed" view.
+nonisolated func pfPurgedRecords(_ records: [VideoRecord]) -> [VideoRecord] {
+    records.filter { $0.isPurged }
+}
+
+/// Apply the soft-delete filter. When `showRemoved` is false (the default
+/// user state) purged rows are hidden; when true, all records pass through
+/// and the caller is responsible for any extra purged-row styling.
+///
+/// This is independent of the online/offline reachability filter so the
+/// two compose: e.g. user can see (online + active), (offline + active),
+/// (online + purged when showRemoved is on), or (offline + purged when
+/// showRemoved is on).
+nonisolated func pfApplyPurgeFilter(
+    _ records: [VideoRecord],
+    showRemoved: Bool
+) -> [VideoRecord] {
+    if showRemoved { return records }
+    return pfActiveRecords(records)
+}
