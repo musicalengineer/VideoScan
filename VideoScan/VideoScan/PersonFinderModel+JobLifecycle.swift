@@ -430,6 +430,31 @@ extension PersonFinderModel {
         let toProcess = total - cachedCount
         await job.appendLog("Cache: \(cachedCount)/\(total) cached, \(toProcess) to process")
 
+        // Cache-miss diagnostic: if NONE of the videos are cached, sample the
+        // first file and explain why we couldn't reuse prior scans. Logged to
+        // the per-job face_detect log only — the main app log already has the
+        // headline "Search for X on Y" line.
+        if cachedCount == 0 && total > 0 {
+            let samplePath = videoFiles[0]
+            let fm = FileManager.default
+            if let attrs = try? fm.attributesOfItem(atPath: samplePath),
+               let size = attrs[.size] as? Int64,
+               let mod = attrs[.modificationDate] as? Date {
+                let rows = PersonFinderCache.shared.cachedRowsForVideo(
+                    videoPath: samplePath, fileSize: size, modDate: mod
+                )
+                let currentRefHash = PersonFinderCache.cachedRefHash(refFilenames)
+                let why = PersonFinderCache.cacheMissDiagnostic(
+                    currentPersonName: settings.personName,
+                    currentEngine: settings.recognitionEngine.rawValue,
+                    currentThreshold: cacheThreshold,
+                    currentRefHash: currentRefHash,
+                    cachedRows: rows
+                )
+                await job.appendLog("Cache miss diagnosis (sample: \((samplePath as NSString).lastPathComponent)): \(why)")
+            }
+        }
+
         // Start serialized disk feeder for slow volumes (external HDD/USB/SMB).
         // One thread reads sequentially at full bandwidth; workers wait for warm pages.
         let feeder: DiskFeeder?
@@ -749,7 +774,15 @@ extension PersonFinderModel {
         dashboard: DashboardState?
     ) async {
         let path = await job.searchPath
-        await job.appendLog("Scanning: \(path)")
+        let scanThreshold = settings.recognitionEngine == .arcface
+            ? settings.arcfaceThreshold : settings.threshold
+        let scanRefHash = PersonFinderCache.cachedRefHash(refFilenames)
+        let personLabel = settings.personName.isEmpty ? "(global)" : settings.personName
+        // Main app log: the headline the user wants to skim — who, where, on what.
+        osLog.notice("Search for \(personLabel, privacy: .public) on \(path, privacy: .public) — engine=\(settings.recognitionEngine.rawValue, privacy: .public)")
+        // Per-job face_detect log: full cache-key details, for cache-miss diagnosis.
+        await job.appendLog("Search for \(personLabel) on \(path)")
+        await job.appendLog("  engine=\(settings.recognitionEngine.rawValue) threshold=\(scanThreshold) refs=\(refFilenames.count) refHash=\(scanRefHash)")
         PersonFinderCache.shared.resetStats()
 
         guard let videoFiles = await discoverVideos(job: job, settings: settings) else { return }
