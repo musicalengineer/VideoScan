@@ -4,6 +4,9 @@
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
+import os.log
+
+private let pfViewLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "personfinder.view")
 
 // MARK: - Main View
 
@@ -735,6 +738,10 @@ struct PersonFinderView: View {
             }
             .contextMenu(forSelectionType: UUID.self) { ids in
                 resultContextMenu(ids: ids)
+            } primaryAction: { ids in
+                guard let id = ids.first,
+                      let rec = resultTableData.first(where: { $0.id == id }) else { return }
+                playInQuickTime(rec)
             }
             .frame(minHeight: 120)
             .popover(isPresented: $inspectorShown, arrowEdge: .trailing) {
@@ -841,9 +848,9 @@ struct PersonFinderView: View {
         HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(rec.videoFilename)
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .font(.system(size: 15, weight: .semibold, design: .monospaced))
                 Text(rec.videoPath)
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -851,63 +858,57 @@ struct PersonFinderView: View {
 
             Spacer()
 
-            HStack(spacing: 12) {
-                VStack(spacing: 1) {
+            HStack(spacing: 14) {
+                VStack(spacing: 2) {
                     Text("Duration")
-                        .font(.system(size: 10))
+                        .font(.system(size: 13))
                         .foregroundColor(.secondary)
                     Text(pfFormatDuration(rec.videoDuration))
-                        .font(.system(size: 13, weight: .medium, design: .monospaced))
+                        .font(.system(size: 16, weight: .medium, design: .monospaced))
                 }
-                VStack(spacing: 1) {
+                VStack(spacing: 2) {
                     Text("Presence")
-                        .font(.system(size: 10))
+                        .font(.system(size: 13))
                         .foregroundColor(.secondary)
                     Text(pfFormatDuration(rec.presenceSecs))
-                        .font(.system(size: 13, weight: .medium, design: .monospaced))
+                        .font(.system(size: 16, weight: .medium, design: .monospaced))
                         .foregroundColor(.green)
                 }
-                VStack(spacing: 1) {
+                VStack(spacing: 2) {
                     Text("Clips")
-                        .font(.system(size: 10))
+                        .font(.system(size: 13))
                         .foregroundColor(.secondary)
                     Text("\(rec.segmentCount)")
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 16, weight: .medium))
                 }
-                VStack(spacing: 1) {
+                VStack(spacing: 2) {
                     Text("Best Match")
-                        .font(.system(size: 10))
+                        .font(.system(size: 13))
                         .foregroundColor(.secondary)
                     Text(String(format: "%.3f", rec.bestDistance))
-                        .font(.system(size: 13, weight: .medium, design: .monospaced))
+                        .font(.system(size: 16, weight: .medium, design: .monospaced))
                         .foregroundColor(rec.bestDistance < 0.5 ? .green : rec.bestDistance < 0.65 ? .yellow : .orange)
                 }
             }
 
-            HStack(spacing: 6) {
+            HStack(spacing: 8) {
                 Button {
                     NSWorkspace.shared.selectFile(rec.videoPath, inFileViewerRootedAtPath: "")
                 } label: {
                     Label("Reveal", systemImage: "folder")
                 }
                 .buttonStyle(.bordered)
-                .controlSize(.small)
+                .controlSize(.regular)
+                .tint(.blue)
 
                 Button {
-                    if let qtURL = NSWorkspace.shared.urlForApplication(
-                        withBundleIdentifier: "com.apple.QuickTimePlayerX"
-                    ) {
-                        NSWorkspace.shared.open(
-                            [URL(fileURLWithPath: rec.videoPath)],
-                            withApplicationAt: qtURL,
-                            configuration: NSWorkspace.OpenConfiguration()
-                        )
-                    }
+                    playInQuickTime(rec)
                 } label: {
                     Label("Play", systemImage: "play.fill")
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .tint(.blue)
 
                 Button {
                     openInspector(for: rec)
@@ -915,13 +916,31 @@ struct PersonFinderView: View {
                     Label("Inspect", systemImage: "info.circle")
                 }
                 .buttonStyle(.bordered)
-                .controlSize(.small)
+                .controlSize(.regular)
+                .tint(.blue)
                 .keyboardShortcut("i", modifiers: .command)
             }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Color(NSColor.controlBackgroundColor))
+    }
+
+    /// Launches QuickTime Player for the given result. Used by the Play
+    /// button, the context menu, and the table-row double-click action.
+    private func playInQuickTime(_ rec: ClipResult) {
+        guard let qtURL = NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: "com.apple.QuickTimePlayerX"
+        ) else {
+            pfViewLog.error("QuickTime Player not found on this machine")
+            return
+        }
+        pfViewLog.info("Open in QuickTime: \(rec.videoPath, privacy: .public)")
+        NSWorkspace.shared.open(
+            [URL(fileURLWithPath: rec.videoPath)],
+            withApplicationAt: qtURL,
+            configuration: NSWorkspace.OpenConfiguration()
+        )
     }
 
     // Console pane removed from main window — use the Console toolbar
@@ -937,15 +956,7 @@ struct PersonFinderView: View {
                 NSWorkspace.shared.selectFile(rec.videoPath, inFileViewerRootedAtPath: "")
             }
             Button("Open in QuickTime Player") {
-                if let qtURL = NSWorkspace.shared.urlForApplication(
-                    withBundleIdentifier: "com.apple.QuickTimePlayerX"
-                ) {
-                    NSWorkspace.shared.open(
-                        [URL(fileURLWithPath: rec.videoPath)],
-                        withApplicationAt: qtURL,
-                        configuration: NSWorkspace.OpenConfiguration()
-                    )
-                }
+                playInQuickTime(rec)
             }
             if !rec.clipFiles.isEmpty {
                 Button("Reveal Clips in Finder") {
