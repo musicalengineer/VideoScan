@@ -45,7 +45,7 @@ let signpostLog = OSSignposter(
 // Task fields and timer methods are internal so PersonFinderModel+JobLifecycle.swift can manage task lifecycle from across files.
 @MainActor
 final class ScanJob: ObservableObject, Identifiable {
-    let id = UUID()
+    let id: UUID
     @Published var searchPath: String
 
     /// Per-job person assignment — nil means use global person.
@@ -118,7 +118,10 @@ final class ScanJob: ObservableObject, Identifiable {
     /// Persistent log file for this scan job — crash-safe, immediate writes.
     nonisolated(unsafe) var persistentLog: PersistentLog?
 
-    init(searchPath: String) { self.searchPath = searchPath }
+    init(searchPath: String, id: UUID = UUID()) {
+        self.id = id
+        self.searchPath = searchPath
+    }
 
     func appendLog(_ line: String) {
         persistentLog?.write(line)
@@ -214,6 +217,10 @@ final class PersonFinderModel: ObservableObject {
     init() {
         let floorGB = ScanPerformanceSettings.restored().memoryFloorGB
         Task { await MemoryPressureMonitor.shared.setFloorGB(floorGB) }
+        // Restore previously-completed searches so the user doesn't lose
+        // context across app launches (issue #89). Results table rehydrates
+        // in the background from the existing PersonFinderCache.
+        restoreSessionFromDisk()
     }
 
     // MARK: Job management & core scan pipeline

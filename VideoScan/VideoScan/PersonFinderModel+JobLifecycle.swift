@@ -38,7 +38,7 @@ private let pfScanLog = Logger(
 
 extension PersonFinderModel {
 
-    private static func referenceCacheIdentifiers(referencePath: String, filenames: [String]) -> [String] {
+    private nonisolated static func referenceCacheIdentifiers(referencePath: String, filenames: [String]) -> [String] {
         guard !referencePath.isEmpty else { return filenames }
         let baseURL = URL(fileURLWithPath: referencePath)
         return filenames.map { baseURL.appendingPathComponent($0).path }
@@ -887,7 +887,146 @@ extension PersonFinderModel {
                 if totalSegments > 0 {
                     job.appendLog("Use Create Composite Video to extract and compile clips.")
                 }
+
+                // Persist a tiny descriptor so this completed search reappears
+                // in the jobs list after app restart (issue #89). The cache
+                // already holds the result rows; the descriptor is just a
+                // bookmark pointing at them. Save off the MainActor so the UI
+                // doesn't stall on file I/O.
+                let descriptor = Self.makeDescriptor(from: job, settings: settings)
+                let cap = ScanJobsStorage.defaultLimit
+                Task.detached(priority: .utility) {
+                    do {
+                        try ScanJobsStorage.save(descriptor)
+                        let evicted = ScanJobsStorage.enforceLimit(keep: cap)
+                        if evicted > 0 {
+                            osLog.notice("Session history: kept newest \(cap), evicted \(evicted) older search descriptor(s)")
+                        }
+                    } catch {
+                        osLog.error("Failed to persist scan-job descriptor: \(error.localizedDescription, privacy: .public)")
+                    }
+                }
             }
         }
+    }
+
+    // MARK: - Session restore (issue #89, part 2)
+
+    /// Build the on-disk descriptor for a finished job. Called from runScan
+    /// at the .done transition and from any future "force re-save" path.
+    /// Pure data extraction — no I/O — so it's straight-line testable.
+    static func makeDescriptor(
+        from job: ScanJob,
+        settings: PersonFinderSettings
+    ) -> PersistedJobDescriptor {
+        let personName = job.assignedProfile?.name
+            ?? (settings.personName.isEmpty ? "(global)" : settings.personName)
+        let folderName = job.assignedProfile.map { POIStorage.sanitize($0.name) }
+        let engine = job.effectiveEngine
+        let threshold = engine == .arcface ? settings.arcfaceThreshold : settings.threshold
+        let referencePath = job.assignedProfile?.referencePath ?? settings.referencePath
+        let referenceFilenames = job.assignedFaces.map(\.sourceFilename)
+        return PersistedJobDescriptor(
+            id: job.id,
+            personName: personName,
+            profileFolderName: folderName,
+            searchPath: job.searchPath,
+            engine: engine.rawValue,
+            threshold: threshold,
+            referencePath: referencePath,
+            referenceFilenames: referenceFilenames,
+            completedAt: Date(),
+            videosScanned: job.videosScanned,
+            videosTotal: job.videosTotal,
+            videosWithHits: job.videosWithHits,
+            clipsFound: job.clipsFound,
+            presenceSecs: job.presenceSecs,
+            elapsedSecs: job.elapsedSecs
+        )
+    }
+
+    /// Restore completed jobs from disk at app launch. Each descriptor turns
+    /// into a ScanJob in .done state with summary stats from the descriptor;
+    /// per-video result rows rehydrate in the background from the existing
+    /// PersonFinderCache via `rehydrateResultsFromCache`.
+    @MainActor
+    func restoreSessionFromDisk() {
+        let descriptors = ScanJobsStorage.listAll()
+        guard !descriptors.isEmpty else { return }
+        osLog.info("Session restore: \(descriptors.count) prior search(es) found on disk")
+
+        for descriptor in descriptors {
+            let job = ScanJob(searchPath: descriptor.searchPath, id: descriptor.id)
+            job.videosScanned = descriptor.videosScanned
+            job.videosTotal = descriptor.videosTotal
+            job.videosWithHits = descriptor.videosWithHits
+            job.clipsFound = descriptor.clipsFound
+            job.presenceSecs = descriptor.presenceSecs
+            job.elapsedSecs = descriptor.elapsedSecs
+            job.status = .done
+            job.progress = 1.0
+
+            // Reattach the POI profile if it still exists. If the profile was
+            // deleted since the search ran, the job still shows up with the
+            // person's name from the descriptor — just no profile object to
+            // open in the editor.
+            if let folderName = descriptor.profileFolderName,
+               let profile = try? POIProfile.load(name: folderName) {
+                job.assignedProfile = profile
+            }
+
+            jobs.append(job)
+
+            // Background rehydration — populate results from the SQLite cache.
+            Task.detached(priority: .utility) {
+                await Self.rehydrateResultsFromCache(job: job, descriptor: descriptor)
+            }
+        }
+    }
+
+    /// Walk the descriptor's searchPath and ask the cache for any prior
+    /// result rows matching the descriptor's search params. Populates
+    /// `job.results` with whatever the cache returns. Skips silently if the
+    /// volume isn't reachable (Rick's "(offline)" case is handled in the UI
+    /// layer by inspecting job.results.isEmpty alongside searchPath
+    /// reachability — this method just doesn't crash).
+    private nonisolated static func rehydrateResultsFromCache(
+        job: ScanJob,
+        descriptor: PersistedJobDescriptor
+    ) async {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: descriptor.searchPath) else { return }
+
+        let refIdentifiers = referenceCacheIdentifiers(
+            referencePath: descriptor.referencePath,
+            filenames: descriptor.referenceFilenames
+        )
+        guard !refIdentifiers.isEmpty else { return }
+
+        let engine = RecognitionEngine(rawValue: descriptor.engine) ?? .vision
+        let videoFiles = pfFindVideoFiles(at: descriptor.searchPath, skipBundles: false)
+        guard !videoFiles.isEmpty else { return }
+
+        var cachedRows: [ClipResult] = []
+        for path in videoFiles {
+            guard let key = PersonFinderCache.makeKey(
+                videoPath: path, personName: descriptor.personName,
+                engine: engine, threshold: descriptor.threshold,
+                refFilenames: refIdentifiers
+            ), let result = PersonFinderCache.shared.lookup(key: key),
+                  !result.segments.isEmpty else { continue }
+            cachedRows.append(ClipResult(
+                videoFilename: result.filename,
+                videoPath: result.filePath,
+                videoDuration: result.durationSeconds,
+                presenceSecs: result.totalPresenceSecs,
+                segmentCount: result.segments.count,
+                bestDistance: result.segments.map(\.bestDistance).min() ?? 0,
+                clipFiles: [],
+                outputDir: ""
+            ))
+        }
+        guard !cachedRows.isEmpty else { return }
+        await MainActor.run { job.results = cachedRows }
     }
 }
