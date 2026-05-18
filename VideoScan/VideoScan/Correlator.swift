@@ -140,22 +140,8 @@ enum Correlator {
 
     // MARK: - Helpers
 
-    /// Normalize filename by stripping V/A prefix (Avid MXF convention).
-    /// Only strips when followed by hex digits (e.g., V01A23BC.mxf → _01A23BC.mxf).
     static func filenameCorrelationKey(_ filename: String) -> String {
-        var parts = filename.split(separator: ".", omittingEmptySubsequences: false)
-            .map(String.init)
-        for i in parts.indices {
-            let p = parts[i]
-            if p.count > 1,
-               let first = p.first,
-               first == "V" || first == "A" || first == "v" || first == "a",
-               p.dropFirst().allSatisfy({ $0.isHexDigit }) {
-                parts[i] = "_" + p.dropFirst()
-                break
-            }
-        }
-        return parts.joined(separator: ".")
+        CorrelationScorer.filenameCorrelationKey(filename)
     }
 
     /// Extract all correlated pairs from a record array (video first in tuple).

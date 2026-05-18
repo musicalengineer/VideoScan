@@ -18,20 +18,36 @@ enum CorrelationScorer {
 
     // MARK: - Filename Key
 
-    /// Normalize filename by stripping V/A prefix (Avid MXF convention).
-    /// Only strips when followed by hex digits (e.g., V01A23BC.mxf -> _01A23BC.mxf)
     static func filenameCorrelationKey(_ filename: String) -> String {
-        var parts = filename.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
+        let stem = filename.hasSuffix("/") ? filename : (filename as NSString).deletingPathExtension
+        var parts = stem.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
+
+        // Avid OMFI tape-name — {TapeName}{V|A}{trackNum}.{clipID}.{umidSuffix}
+        // e.g. NewTape9V01.4B9C1586.8D8520 → NewTape9.4B9C1586
+        // Checked first: more specific than the bare V/A-hex pattern below.
+        if parts.count >= 2 {
+            let p = parts[0]
+            if let range = p.range(of: #"[VAva]\d{1,2}$"#, options: .regularExpression) {
+                let tapeName = String(p[p.startIndex..<range.lowerBound])
+                let clipID = parts[1]
+                if !tapeName.isEmpty && clipID.count >= 4 && clipID.allSatisfy({ $0.isHexDigit }) {
+                    return tapeName + "." + clipID
+                }
+            }
+        }
+
+        // Bare V/A + all-hex segment (e.g. 00000.V14BB2CE9D.mxf → 00000._14BB2CE9D)
         for i in parts.indices {
             let p = parts[i]
             if p.count > 1,
                let first = p.first,
-               first == "V" || first == "A" || first == "v" || first == "a",
+               (first == "V" || first == "A" || first == "v" || first == "a"),
                p.dropFirst().allSatisfy({ $0.isHexDigit }) {
                 parts[i] = "_" + p.dropFirst()
-                break
+                return parts.joined(separator: ".")
             }
         }
+
         return parts.joined(separator: ".")
     }
 
