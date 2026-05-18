@@ -234,6 +234,58 @@ struct ScanJobsStorageTests {
         #expect(loaded.count == 1)
     }
 
+    // MARK: - makeDescriptor extraction (lifecycle helper)
+
+    @Test("makeDescriptor uses arcfaceThreshold when engine is .arcface")
+    @MainActor
+    func makeDescriptorArcFaceThreshold() {
+        let job = ScanJob(searchPath: "/Volumes/T")
+        job.assignedEngine = .arcface
+        var settings = PersonFinderSettings.restored()
+        settings.recognitionEngine = .arcface
+        settings.threshold = 0.55
+        settings.arcfaceThreshold = 0.42
+        settings.personName = "Donna"
+        let d = PersonFinderModel.makeDescriptor(from: job, settings: settings)
+        #expect(abs(d.threshold - 0.42) < 1e-6, "ArcFace job must pick arcfaceThreshold, not the Vision threshold")
+        #expect(d.engine == RecognitionEngine.arcface.rawValue)
+    }
+
+    @Test("makeDescriptor uses vision threshold when engine is not arcface")
+    @MainActor
+    func makeDescriptorVisionThreshold() {
+        let job = ScanJob(searchPath: "/Volumes/T")
+        job.assignedEngine = .vision
+        var settings = PersonFinderSettings.restored()
+        settings.recognitionEngine = .vision
+        settings.threshold = 0.55
+        settings.arcfaceThreshold = 0.42
+        settings.personName = "Donna"
+        let d = PersonFinderModel.makeDescriptor(from: job, settings: settings)
+        #expect(abs(d.threshold - 0.55) < 1e-6, "Vision job must pick the vision threshold, not arcfaceThreshold")
+    }
+
+    @Test("makeDescriptor falls back to '(global)' when no profile and settings.personName empty")
+    @MainActor
+    func makeDescriptorGlobalFallback() {
+        let job = ScanJob(searchPath: "/Volumes/T")
+        var settings = PersonFinderSettings.restored()
+        settings.personName = ""
+        let d = PersonFinderModel.makeDescriptor(from: job, settings: settings)
+        #expect(d.personName == "(global)")
+        #expect(d.profileFolderName == nil)
+    }
+
+    @Test("makeDescriptor preserves job.id so re-save replaces in place")
+    @MainActor
+    func makeDescriptorPreservesJobID() {
+        let fixedID = UUID()
+        let job = ScanJob(searchPath: "/Volumes/T", id: fixedID)
+        let settings = PersonFinderSettings.restored()
+        let d = PersonFinderModel.makeDescriptor(from: job, settings: settings)
+        #expect(d.id == fixedID, "Descriptor id must equal job.id so re-save updates in place")
+    }
+
     // MARK: - Filename format
 
     @Test("Filename has sortable timestamp prefix and UUID")
