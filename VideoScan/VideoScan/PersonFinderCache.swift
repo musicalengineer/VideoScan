@@ -256,6 +256,93 @@ final class PersonFinderCache {
         sqlite3_step(stmt)
     }
 
+    // MARK: - Cache-miss diagnostics
+
+    /// Summary of a cached row, excluding the heavy result payload. Used to
+    /// answer "why did the cache miss for this video on the current search?"
+    /// by surfacing the keys that DO exist.
+    struct CachedRowSummary: Equatable {
+        let personName: String
+        let engine: String
+        let threshold: Float
+        let refHash: String
+        let cachedAt: Date
+    }
+
+    /// Returns all cached rows for the given video file (matched on path +
+    /// size + modDate), regardless of search parameters. If the array is
+    /// empty, the file has never been cached. If non-empty, each entry shows
+    /// the search params under which the file WAS cached — letting us
+    /// diff against the current search to explain a miss.
+    func cachedRowsForVideo(videoPath: String, fileSize: Int64, modDate: Date) -> [CachedRowSummary] {
+        lock.lock(); defer { lock.unlock() }
+        guard let db = db else { return [] }
+        let sql = """
+            SELECT person_name, engine, threshold, ref_hash, cached_at
+            FROM pf_cache
+            WHERE video_path = ? AND file_size = ? AND mod_date = ?
+        """
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        defer { sqlite3_finalize(stmt) }
+        bind(stmt, 1, videoPath)
+        sqlite3_bind_int64(stmt, 2, fileSize)
+        sqlite3_bind_double(stmt, 3, modDate.timeIntervalSince1970)
+
+        var rows: [CachedRowSummary] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            rows.append(CachedRowSummary(
+                personName: col(stmt, 0),
+                engine: col(stmt, 1),
+                threshold: Float(sqlite3_column_double(stmt, 2)),
+                refHash: col(stmt, 3),
+                cachedAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 4))
+            ))
+        }
+        return rows
+    }
+
+    /// Builds a human-readable explanation of why the cache missed for the
+    /// current search params, given any rows that exist for the sample
+    /// video. Pure function — no I/O — so it's the unit-testable surface.
+    static func cacheMissDiagnostic(
+        currentPersonName: String,
+        currentEngine: String,
+        currentThreshold: Float,
+        currentRefHash: String,
+        cachedRows: [CachedRowSummary]
+    ) -> String {
+        guard !cachedRows.isEmpty else {
+            return "no prior cache rows for these files — first scan of this volume"
+        }
+        let lcPerson = currentPersonName.lowercased()
+        // Look for any row that matches everything EXCEPT one field — that
+        // field is the most likely cause of the miss.
+        for row in cachedRows {
+            let personMatches = row.personName == lcPerson
+            let engineMatches = row.engine == currentEngine
+            let thresholdMatches = abs(row.threshold - currentThreshold) < 1e-6
+            let refMatches = row.refHash == currentRefHash
+            switch (personMatches, engineMatches, thresholdMatches, refMatches) {
+            case (true, true, true, false):
+                return "reference photos changed (cached refHash=\(row.refHash), current=\(currentRefHash))"
+            case (true, true, false, true):
+                return "threshold differs (cached=\(row.threshold), current=\(currentThreshold))"
+            case (true, false, true, true):
+                return "engine differs (cached=\(row.engine), current=\(currentEngine))"
+            case (false, true, true, true):
+                return "person name differs (cached=\(row.personName), current=\(lcPerson))"
+            default:
+                continue
+            }
+        }
+        // No single-field mismatch found — multiple fields differ. Summarize
+        // what's stored so the user can see what was last scanned.
+        let firstRow = cachedRows[0]
+        let extra = cachedRows.count > 1 ? " (+\(cachedRows.count - 1) other row(s))" : ""
+        return "multiple key fields differ; latest cached row had person=\(firstRow.personName), engine=\(firstRow.engine), threshold=\(firstRow.threshold), refHash=\(firstRow.refHash)\(extra)"
+    }
+
     // MARK: - Maintenance
 
     func clearAll() {

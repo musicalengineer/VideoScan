@@ -275,6 +275,190 @@ struct PersonFinderCacheTests {
         }
     }
 
+    // MARK: - Cache-miss diagnostics
+
+    @Test("cachedRowsForVideo returns empty when nothing stored for the file")
+    func diagnoseRowsEmpty() {
+        let cache = makeTempCache()
+        let rows = cache.cachedRowsForVideo(
+            videoPath: "/Volumes/TestDrive/never_cached.MTS",
+            fileSize: 12345,
+            modDate: Date(timeIntervalSince1970: 1_000_000)
+        )
+        #expect(rows.isEmpty)
+    }
+
+    @Test("cachedRowsForVideo returns the stored key components")
+    func diagnoseRowsReturnsStoredMetadata() {
+        let cache = makeTempCache()
+        let mod = Date(timeIntervalSince1970: 1_260_000_000)
+        let storeKey = makeKey(
+            videoPath: "/Volumes/T/clip.MTS",
+            fileSize: 999, modDate: mod,
+            personName: "donna",
+            engine: "ArcFace (CoreML)",
+            threshold: 0.4,
+            refHash: "abc123"
+        )
+        cache.store(key: storeKey, result: sampleResult(hits: 1))
+
+        let rows = cache.cachedRowsForVideo(
+            videoPath: "/Volumes/T/clip.MTS", fileSize: 999, modDate: mod
+        )
+        #expect(rows.count == 1)
+        #expect(rows[0].personName == "donna")
+        #expect(rows[0].engine == "ArcFace (CoreML)")
+        #expect(abs(rows[0].threshold - 0.4) < 1e-6)
+        #expect(rows[0].refHash == "abc123")
+    }
+
+    @Test("cachedRowsForVideo returns multiple rows when same file cached under different params")
+    func diagnoseRowsMultipleParamSets() {
+        let cache = makeTempCache()
+        let mod = Date(timeIntervalSince1970: 1_260_000_000)
+        cache.store(
+            key: makeKey(videoPath: "/x/c.MTS", fileSize: 1, modDate: mod, refHash: "h1"),
+            result: sampleResult()
+        )
+        cache.store(
+            key: makeKey(videoPath: "/x/c.MTS", fileSize: 1, modDate: mod, refHash: "h2"),
+            result: sampleResult()
+        )
+        let rows = cache.cachedRowsForVideo(
+            videoPath: "/x/c.MTS", fileSize: 1, modDate: mod
+        )
+        #expect(rows.count == 2)
+        let hashes = Set(rows.map(\.refHash))
+        #expect(hashes == ["h1", "h2"])
+    }
+
+    @Test("cachedRowsForVideo does not bleed across video paths")
+    func diagnoseRowsScopedToVideo() {
+        let cache = makeTempCache()
+        let mod = Date(timeIntervalSince1970: 1_260_000_000)
+        cache.store(
+            key: makeKey(videoPath: "/x/a.MTS", fileSize: 1, modDate: mod),
+            result: sampleResult()
+        )
+        cache.store(
+            key: makeKey(videoPath: "/x/b.MTS", fileSize: 1, modDate: mod),
+            result: sampleResult()
+        )
+        let rows = cache.cachedRowsForVideo(
+            videoPath: "/x/a.MTS", fileSize: 1, modDate: mod
+        )
+        #expect(rows.count == 1)
+    }
+
+    // MARK: - cacheMissDiagnostic (pure function)
+
+    private func summary(
+        person: String = "donna",
+        engine: String = "ArcFace (CoreML)",
+        threshold: Float = 0.4,
+        refHash: String = "ref-A"
+    ) -> PersonFinderCache.CachedRowSummary {
+        PersonFinderCache.CachedRowSummary(
+            personName: person,
+            engine: engine,
+            threshold: threshold,
+            refHash: refHash,
+            cachedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+    }
+
+    @Test("Diagnostic with no rows says first scan")
+    func diagnosticEmpty() {
+        let msg = PersonFinderCache.cacheMissDiagnostic(
+            currentPersonName: "donna",
+            currentEngine: "ArcFace (CoreML)",
+            currentThreshold: 0.4,
+            currentRefHash: "ref-A",
+            cachedRows: []
+        )
+        #expect(msg.contains("first scan"))
+    }
+
+    @Test("Diagnostic flags refHash change when only ref differs")
+    func diagnosticRefHashChanged() {
+        let msg = PersonFinderCache.cacheMissDiagnostic(
+            currentPersonName: "donna",
+            currentEngine: "ArcFace (CoreML)",
+            currentThreshold: 0.4,
+            currentRefHash: "ref-B",
+            cachedRows: [summary(refHash: "ref-A")]
+        )
+        #expect(msg.contains("reference photos changed"))
+        #expect(msg.contains("ref-A"))
+        #expect(msg.contains("ref-B"))
+    }
+
+    @Test("Diagnostic flags engine change when only engine differs")
+    func diagnosticEngineChanged() {
+        let msg = PersonFinderCache.cacheMissDiagnostic(
+            currentPersonName: "donna",
+            currentEngine: "Vision (fast)",
+            currentThreshold: 0.4,
+            currentRefHash: "ref-A",
+            cachedRows: [summary(engine: "ArcFace (CoreML)")]
+        )
+        #expect(msg.contains("engine differs"))
+        #expect(msg.contains("ArcFace"))
+        #expect(msg.contains("Vision"))
+    }
+
+    @Test("Diagnostic flags threshold change when only threshold differs")
+    func diagnosticThresholdChanged() {
+        let msg = PersonFinderCache.cacheMissDiagnostic(
+            currentPersonName: "donna",
+            currentEngine: "ArcFace (CoreML)",
+            currentThreshold: 0.5,
+            currentRefHash: "ref-A",
+            cachedRows: [summary(threshold: 0.4)]
+        )
+        #expect(msg.contains("threshold differs"))
+    }
+
+    @Test("Diagnostic flags person-name change when only person differs")
+    func diagnosticPersonChanged() {
+        let msg = PersonFinderCache.cacheMissDiagnostic(
+            currentPersonName: "rick",
+            currentEngine: "ArcFace (CoreML)",
+            currentThreshold: 0.4,
+            currentRefHash: "ref-A",
+            cachedRows: [summary(person: "donna")]
+        )
+        #expect(msg.contains("person name differs"))
+    }
+
+    @Test("Diagnostic falls back to multi-field summary when multiple keys differ")
+    func diagnosticMultipleDiffs() {
+        let msg = PersonFinderCache.cacheMissDiagnostic(
+            currentPersonName: "rick",
+            currentEngine: "Vision (fast)",
+            currentThreshold: 0.5,
+            currentRefHash: "ref-B",
+            cachedRows: [summary(person: "donna", engine: "ArcFace (CoreML)", threshold: 0.4, refHash: "ref-A")]
+        )
+        #expect(msg.contains("multiple key fields differ"))
+        #expect(msg.contains("donna"))
+    }
+
+    @Test("Diagnostic compares personName case-insensitively to match cache convention")
+    func diagnosticPersonCaseInsensitive() {
+        // Cache stores person_name lowercased; the diagnostic should not
+        // falsely flag "Donna" vs cached "donna" as a person-name mismatch.
+        let msg = PersonFinderCache.cacheMissDiagnostic(
+            currentPersonName: "Donna",
+            currentEngine: "ArcFace (CoreML)",
+            currentThreshold: 0.4,
+            currentRefHash: "ref-B",
+            cachedRows: [summary(person: "donna", refHash: "ref-A")]
+        )
+        // Only refHash differs — diagnostic should say so, not "person differs".
+        #expect(msg.contains("reference photos changed"))
+    }
+
     @Test("Changing reference photo contents with the same filename invalidates cache")
     func refHashChangesWhenReferenceFileContentsChange() throws {
         try withTempFile { videoPath in
