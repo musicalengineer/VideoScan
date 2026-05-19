@@ -82,8 +82,9 @@ jobs:
       # GH-hosted virt-M1 runners run ~2s/test (vs 7ms local). At ~400
       # tests that's ~13 min execution. 20 min timeout gives headroom.
       #
-      # Binary search iteration 7 (2026-05-19): 55 suites.
-      # 50 = pass (566 tests), 60 = hang. Adding 5 suspect suites.
+      # 50 suites / 566 tests — proven ceiling on GH virt-M1 runner.
+      # 55+ hangs the parallel test runner between dispatch batches.
+      # Binary search 2026-05-19: 1,20,40,50=pass; 55,60,75=hang.
       - name: Unit tests — pure-logic suites
         timeout-minutes: 20
         run: |
@@ -146,11 +147,6 @@ jobs:
             -only-testing:VideoScanTests/CatalogNavigationTests \
             -only-testing:VideoScanTests/CatalogImportExportTests \
             -only-testing:VideoScanTests/ScanContextTests \
-            -only-testing:VideoScanTests/PersonScanPrefilterTests \
-            -only-testing:VideoScanTests/PersonFinderEngineDispatchTests \
-            -only-testing:VideoScanTests/POIStorageTests \
-            -only-testing:VideoScanTests/POIDeletionTests \
-            -only-testing:VideoScanTests/POIUndoDeleteTests \
             -enableCodeCoverage NO \
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
