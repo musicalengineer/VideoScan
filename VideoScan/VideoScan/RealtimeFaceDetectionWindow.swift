@@ -82,7 +82,13 @@ struct RealtimeFaceDetectionContent: View {
     private var jobs: [ScanJob] { model.jobs }
 
     /// Resolve which job to display. Honor the user's explicit pick always.
-    /// Otherwise auto-pick a scanning job.
+    /// Otherwise auto-pick the most live-relevant job: scanning > other active >
+    /// any non-terminal. Completed/cancelled/failed jobs are intentionally NOT
+    /// auto-picked — the RTFD window is for watching active work, and Rick
+    /// confirmed 2026-05-18 he wants done jobs out of this view entirely.
+    /// If selectedJobID points at a terminal job (e.g. it just finished while
+    /// the window was open), we still honor that pick so the user gets a
+    /// final "Search Complete" panel until they close or pick another job.
     private var activeJob: ScanJob? {
         if let sel = selectedJobID,
            let j = jobs.first(where: { $0.id == sel }) {
@@ -90,7 +96,7 @@ struct RealtimeFaceDetectionContent: View {
         }
         return jobs.first(where: { $0.status == .scanning })
             ?? jobs.first(where: { $0.status.isActive })
-            ?? jobs.first
+            ?? jobs.first(where: { !$0.status.isTerminal })
     }
 
     var body: some View {
@@ -279,14 +285,20 @@ private struct ActiveJobFaceDetectView: View {
                 .background(Color(NSColor.controlBackgroundColor))
             }
 
-            // Bottom status bar
+            // Bottom status bar — picker filtered to live (non-terminal) jobs
+            // only. Completed scans don't belong in a "watch in realtime"
+            // chooser (issue raised by Rick 2026-05-18). The currently-shown
+            // job is always included even if it just transitioned to terminal,
+            // so the user sees a stable "Search Complete" frame instead of
+            // having the picker yank it out from under them.
+            let pickerJobs: [ScanJob] = jobs.filter { !$0.status.isTerminal || $0.id == job.id }
             HStack(spacing: 12) {
-                if jobs.count > 1 {
+                if pickerJobs.count > 1 {
                     Picker("Job", selection: Binding(
                         get: { selectedJobID ?? job.id },
                         set: { selectedJobID = $0 }
                     )) {
-                        ForEach(jobs) { j in
+                        ForEach(pickerJobs) { j in
                             let vol = (j.searchPath as NSString).lastPathComponent
                             let person = j.assignedProfile?.name
                             let status = j.status == .done ? " [Done]" :
@@ -338,14 +350,22 @@ private struct ActiveJobFaceDetectView: View {
             .padding(.vertical, 10)
             .background(Color(NSColor.windowBackgroundColor))
         }
-        // When the displayed job goes inactive, nudge the parent to re-evaluate
-        // its computed activeJob (e.g. another job is now scanning).
-        .onChange(of: job.status) { _, newStatus in
-            if !newStatus.isActive {
-                if let next = jobs.first(where: { $0.status == .scanning })
-                    ?? jobs.first(where: { $0.status.isActive }) {
-                    selectedJobID = next.id
-                }
+        // When the displayed job *transitions* from active to inactive (a
+        // scan just finished while we were watching), nudge the parent to
+        // re-evaluate activeJob so another scanning job auto-promotes.
+        //
+        // The `oldStatus.isActive` guard is essential: SwiftUI fires this
+        // .onChange when the underlying @ObservedObject SWAPS (e.g. the user
+        // picks a different job from the dropdown), and without the guard
+        // we'd interpret "user selected a terminal job" as "current job just
+        // finished" and kick selectedJobID back to a still-scanning job —
+        // making the picker selection effectively un-clickable for terminal
+        // jobs. Issue surfaced by Rick 2026-05-18.
+        .onChange(of: job.status) { oldStatus, newStatus in
+            guard oldStatus.isActive && !newStatus.isActive else { return }
+            if let next = jobs.first(where: { $0.status == .scanning })
+                ?? jobs.first(where: { $0.status.isActive }) {
+                selectedJobID = next.id
             }
         }
     }
