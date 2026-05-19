@@ -82,9 +82,8 @@ jobs:
       # GH-hosted virt-M1 runners run ~2s/test (vs 7ms local). At ~400
       # tests that's ~13 min execution. 20 min timeout gives headroom.
       #
-      # Binary search iteration 3 (2026-05-19): 20 suites only.
-      # 75 suites hung the test planner for 20 min. Halving to find the
-      # sweet spot where xcodebuild can plan and execute within budget.
+      # Binary search iteration 4 (2026-05-19): 40 suites.
+      # 20 suites = 214 tests in 16s. Doubling to find ceiling.
       - name: Unit tests — pure-logic suites
         timeout-minutes: 20
         run: |
@@ -116,6 +115,27 @@ jobs:
             -only-testing:VideoScanTests/DuplicateConfidenceTests \
             -only-testing:VideoScanTests/ScanPhaseTests \
             -only-testing:VideoScanTests/DiscoveredVolumeTests \
+            -only-testing:VideoScanTests/DashboardBoundaryTests \
+            -only-testing:VideoScanTests/DashboardCombineCounterTests \
+            -only-testing:VideoScanTests/VolumeRootTests \
+            -only-testing:VideoScanTests/VideoRecordSnapshotTests \
+            -only-testing:VideoScanTests/CatalogTargetStatusTests \
+            -only-testing:VideoScanTests/CatalogScanTargetStatusExtendedTests \
+            -only-testing:VideoScanTests/ScanPerformanceSettingsTests \
+            -only-testing:VideoScanTests/CombinePairItemTests \
+            -only-testing:VideoScanTests/CombineJobStatusTests \
+            -only-testing:VideoScanTests/CombineJobStatusBoundaryTests \
+            -only-testing:VideoScanTests/RecognitionEngineTests \
+            -only-testing:VideoScanTests/LifecycleStageTests \
+            -only-testing:VideoScanTests/DetectedPeopleTests \
+            -only-testing:VideoScanTests/ArchiveHealthTests \
+            -only-testing:VideoScanTests/UniversalSearchTokenTests \
+            -only-testing:VideoScanTests/UniversalSearchYearExtractionTests \
+            -only-testing:VideoScanTests/UniversalSearchMatchingTests \
+            -only-testing:VideoScanTests/TriageDispositionTests \
+            -only-testing:VideoScanTests/TriageQueueTests \
+            -only-testing:VideoScanTests/DispositionTests \
+            -only-testing:VideoScanTests/DispositionThresholdTests \
             -enableCodeCoverage NO \
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
