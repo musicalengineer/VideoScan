@@ -8,12 +8,12 @@ import Testing
 
     @Test func stripsVideoPrefixFromAvidMXF() {
         let result = CorrelationScorer.filenameCorrelationKey("V01A23BC.mxf")
-        #expect(result == "_01A23BC.mxf")
+        #expect(result == "_01A23BC")
     }
 
     @Test func stripsAudioPrefixFromAvidMXF() {
         let result = CorrelationScorer.filenameCorrelationKey("A01A23BC.mxf")
-        #expect(result == "_01A23BC.mxf")
+        #expect(result == "_01A23BC")
     }
 
     @Test func matchingVideoAndAudioProduceSameKey() {
@@ -24,12 +24,12 @@ import Testing
 
     @Test func lowercasePrefixAlsoStripped() {
         let result = CorrelationScorer.filenameCorrelationKey("v01a23bc.mxf")
-        #expect(result == "_01a23bc.mxf")
+        #expect(result == "_01a23bc")
     }
 
     @Test func nonHexSuffixNotStripped() {
         let result = CorrelationScorer.filenameCorrelationKey("Video.mov")
-        #expect(result == "Video.mov")
+        #expect(result == "Video")
     }
 
     @Test func emptyStringReturnsEmpty() {
@@ -43,7 +43,7 @@ import Testing
 
     @Test func multiDotFilename() {
         let result = CorrelationScorer.filenameCorrelationKey("00001.V14D1BBD3F.mxf")
-        #expect(result == "00001._14D1BBD3F.mxf")
+        #expect(result == "00001._14D1BBD3F")
     }
 }
 
