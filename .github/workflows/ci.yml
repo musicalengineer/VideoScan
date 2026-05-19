@@ -147,6 +147,7 @@ jobs:
             -only-testing:VideoScanTests/CatalogNavigationTests \
             -only-testing:VideoScanTests/CatalogImportExportTests \
             -only-testing:VideoScanTests/ScanContextTests \
+            -only-testing:VideoScanTests/LogVerificationTests \
             -only-testing:VideoScanTests/CICanaryTests \
             -enableCodeCoverage NO \
             -resultBundlePath TestResults.xcresult \
