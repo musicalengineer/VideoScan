@@ -902,13 +902,17 @@ extension PersonFinderModel {
                 let elapsed = "\(elapsedMin)m \(elapsedSec)s"
                 let volumeName = VolumeReachability.volumeName(forPath: job.searchPath)
                 let onVol = volumeName.isEmpty ? "" : " on \(volumeName)"
+                // rawValue gives the friendly form ("Vision (fast)" /
+                // "ArcFace (CoreML)") — .title is all-caps badge style.
+                let engineName = job.effectiveEngine.rawValue
+                let usingEngine = " using \(engineName)"
                 let stats = "(Searched \(total) total file\(total == 1 ? "" : "s"). Elapsed time \(elapsed))"
                 let person = job.personLabel
                 let summary: String
                 if hits > 0 {
-                    summary = "Search Complete: Found \(person) in \(hits) file\(hits == 1 ? "" : "s")\(onVol). \(stats)"
+                    summary = "Search Complete: Found \(person) in \(hits) file\(hits == 1 ? "" : "s")\(onVol)\(usingEngine). \(stats)"
                 } else {
-                    summary = "Search Complete: Found no matches for \(person)\(onVol). \(stats)"
+                    summary = "Search Complete: Found no matches for \(person)\(onVol)\(usingEngine). \(stats)"
                 }
                 osLog.info("\(summary, privacy: .public)")
                 pfScanLog.info("\(summary, privacy: .public)")
