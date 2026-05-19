@@ -313,6 +313,7 @@ extension PersonFinderModel {
         job.stopElapsedTimer()
         if prev.isActive {
             job.status = .cancelled
+            job.completedAt = Date()
             job.currentFile = ""
             osLog.info("Job stopped: \(job.searchPath, privacy: .public) — was \(prev.label, privacy: .public), scanned \(job.videosScanned)/\(job.videosTotal)")
             let personName = job.assignedProfile?.name ?? "(global)"
@@ -329,6 +330,7 @@ extension PersonFinderModel {
         guard job.status == .scanning else { return }
         Task { await job.pauseGate.pause() }
         job.status = .paused
+        job.completedAt = Date()
         osLog.info("Job paused: \(job.searchPath, privacy: .public)")
         let personName = job.assignedProfile?.name ?? "(global)"
         let volumeName = URL(fileURLWithPath: job.searchPath).lastPathComponent
@@ -887,6 +889,7 @@ extension PersonFinderModel {
                 job.videosScanned = job.videosTotal
                 job.finalizeResults(preliminaryResults)
                 job.status = .done
+                job.completedAt = Date()
                 job.progress = 1.0
                 job.stopElapsedTimer()
                 // Same sentence the UI shows on the collapsed/expanded row
@@ -986,6 +989,7 @@ extension PersonFinderModel {
             job.presenceSecs = descriptor.presenceSecs
             job.elapsedSecs = descriptor.elapsedSecs
             job.status = .done
+            job.completedAt = descriptor.completedAt
             job.progress = 1.0
 
             // Reattach the POI profile if it still exists. If the profile was

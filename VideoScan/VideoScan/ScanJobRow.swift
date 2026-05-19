@@ -32,6 +32,16 @@ struct ScanJobRow: View {
     private var volName: String { (job.searchPath as NSString).lastPathComponent }
     private var engineName: String { job.effectiveEngine.rawValue }
 
+    /// True only when the job's volume path is unreachable (e.g. external
+    /// drive unmounted) AND we're rendering a row that already had its
+    /// search complete. Live scans never see this — they'd be erroring
+    /// out a different way. Cached at the VolumeReachability layer (60s
+    /// TTL) so per-row redraws aren't expensive.
+    private var isVolumeOffline: Bool {
+        guard job.status.isTerminal, !job.searchPath.isEmpty else { return false }
+        return !VolumeReachability.isReachable(path: job.searchPath)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Always visible: collapsed summary row
@@ -239,9 +249,15 @@ struct ScanJobRow: View {
         let total = job.videosTotal
         let elapsed = formatElapsed(job.elapsedSecs)
 
-        Text("Search Complete:")
-            .font(.title3.weight(.semibold))
-            .foregroundColor(.green)
+        if job.wasInterrupted {
+            Text("Search Interrupted:")
+                .font(.title3.weight(.semibold))
+                .foregroundColor(.yellow)
+        } else {
+            Text("Search Complete:")
+                .font(.title3.weight(.semibold))
+                .foregroundColor(.green)
+        }
 
         if hits > 0 {
             Text("Found")
@@ -269,10 +285,19 @@ struct ScanJobRow: View {
             Text("on")
                 .font(.title3)
                 .foregroundStyle(.secondary)
+            // Volume name italicizes + yellows when the drive isn't mounted.
+            // Rick wanted "(offline)" tucked in parens so it's clearly state
+            // info, not part of the volume's actual name.
             Text(volName)
-                .font(.title3.weight(.medium))
+                .font(isVolumeOffline ? .title3.weight(.medium).italic() : .title3.weight(.medium))
+                .foregroundColor(isVolumeOffline ? .yellow : .primary)
                 .lineLimit(1)
                 .truncationMode(.middle)
+            if isVolumeOffline {
+                Text("(offline)")
+                    .font(.title3.italic())
+                    .foregroundColor(.yellow)
+            }
         }
         Text(".")
             .font(.title3)
@@ -291,9 +316,15 @@ struct ScanJobRow: View {
         let total = job.videosTotal
         let elapsed = formatElapsed(job.elapsedSecs)
 
-        Text("Search Complete:")
-            .font(.title2.weight(.semibold))
-            .foregroundColor(.green)
+        if job.wasInterrupted {
+            Text("Search Interrupted:")
+                .font(.title2.weight(.semibold))
+                .foregroundColor(.yellow)
+        } else {
+            Text("Search Complete:")
+                .font(.title2.weight(.semibold))
+                .foregroundColor(.green)
+        }
 
         if hits > 0 {
             Text("Found")
@@ -322,9 +353,15 @@ struct ScanJobRow: View {
                 .font(.title2)
                 .foregroundStyle(.secondary)
             Text(volName)
-                .font(.title2.weight(.medium))
+                .font(isVolumeOffline ? .title2.weight(.medium).italic() : .title2.weight(.medium))
+                .foregroundColor(isVolumeOffline ? .yellow : .primary)
                 .lineLimit(1)
                 .truncationMode(.middle)
+            if isVolumeOffline {
+                Text("(offline)")
+                    .font(.title2.italic())
+                    .foregroundColor(.yellow)
+            }
         }
         Text(".")
             .font(.title2)
