@@ -276,6 +276,35 @@ struct ScanJobsStorageTests {
         #expect(d.profileFolderName == nil)
     }
 
+    @Test("makeDescriptor preserves partial-scan stats (paused/cancelled mid-flight)")
+    @MainActor
+    func makeDescriptorPartialStats() throws {
+        // Simulates a paused-mid-scan job: videosScanned < videosTotal.
+        // The descriptor must preserve this gap so the restored row shows
+        // partial progress and the next Start click resumes (cache fills
+        // in the already-done videos near-instantly).
+        let job = ScanJob(searchPath: "/Volumes/T")
+        job.videosScanned = 47
+        job.videosTotal = 120
+        job.videosWithHits = 12
+        job.clipsFound = 34
+        job.presenceSecs = 180.5
+        let settings = PersonFinderSettings.restored()
+        let d = PersonFinderModel.makeDescriptor(from: job, settings: settings)
+        #expect(d.videosScanned == 47)
+        #expect(d.videosTotal == 120)
+        #expect(d.videosWithHits == 12)
+        #expect(d.clipsFound == 34)
+        #expect(abs(d.presenceSecs - 180.5) < 1e-6)
+
+        // Round-trip through disk to confirm partial stats survive JSON.
+        let dir = makeSandbox()
+        try ScanJobsStorage.save(d, directory: dir)
+        let loaded = ScanJobsStorage.listAll(in: dir)
+        #expect(loaded.first?.videosScanned == 47)
+        #expect(loaded.first?.videosTotal == 120)
+    }
+
     @Test("makeDescriptor preserves job.id so re-save replaces in place")
     @MainActor
     func makeDescriptorPreservesJobID() {
