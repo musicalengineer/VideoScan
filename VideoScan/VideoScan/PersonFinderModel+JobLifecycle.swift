@@ -318,6 +318,10 @@ extension PersonFinderModel {
             let personName = job.assignedProfile?.name ?? "(global)"
             let volumeName = URL(fileURLWithPath: job.searchPath).lastPathComponent
             appLog.write("Stopped search for \(personName) on \(volumeName) (scanned \(job.videosScanned)/\(job.videosTotal))")
+            // Persist so the partially-scanned search reappears on next launch.
+            // Resume is free: the cache short-circuits already-processed videos
+            // when the user re-runs from the restored row.
+            Self.persistDescriptor(for: job, settings: settings)
         }
     }
 
@@ -329,6 +333,33 @@ extension PersonFinderModel {
         let personName = job.assignedProfile?.name ?? "(global)"
         let volumeName = URL(fileURLWithPath: job.searchPath).lastPathComponent
         appLog.write("Paused search for \(personName) on \(volumeName)")
+        // Same rationale as stopJob — a paused search the user comes back to
+        // tomorrow should reappear in the jobs list, not vanish.
+        Self.persistDescriptor(for: job, settings: settings)
+    }
+
+    /// Save a tiny descriptor of the current job state so it survives app
+    /// restart (issue #89). Called on any worth-bookmarking transition:
+    /// .done, .paused, .cancelled. Idempotent — re-saving for the same
+    /// job.id overwrites in place (no duplicates). Dispatched off MainActor
+    /// so a slow disk doesn't stall the UI.
+    ///
+    /// Static + settings-by-value so the runScan path (nonisolated static)
+    /// can call it without holding a reference to the model.
+    static func persistDescriptor(for job: ScanJob, settings: PersonFinderSettings) {
+        let descriptor = makeDescriptor(from: job, settings: settings)
+        let cap = ScanJobsStorage.defaultLimit
+        Task.detached(priority: .utility) {
+            do {
+                try ScanJobsStorage.save(descriptor)
+                let evicted = ScanJobsStorage.enforceLimit(keep: cap)
+                if evicted > 0 {
+                    osLog.notice("Session history: kept newest \(cap), evicted \(evicted) older search descriptor(s)")
+                }
+            } catch {
+                osLog.error("Failed to persist scan-job descriptor: \(error.localizedDescription, privacy: .public)")
+            }
+        }
     }
 
     func resumeJob(_ job: ScanJob) {
@@ -888,24 +919,11 @@ extension PersonFinderModel {
                     job.appendLog("Use Create Composite Video to extract and compile clips.")
                 }
 
-                // Persist a tiny descriptor so this completed search reappears
-                // in the jobs list after app restart (issue #89). The cache
-                // already holds the result rows; the descriptor is just a
-                // bookmark pointing at them. Save off the MainActor so the UI
-                // doesn't stall on file I/O.
-                let descriptor = Self.makeDescriptor(from: job, settings: settings)
-                let cap = ScanJobsStorage.defaultLimit
-                Task.detached(priority: .utility) {
-                    do {
-                        try ScanJobsStorage.save(descriptor)
-                        let evicted = ScanJobsStorage.enforceLimit(keep: cap)
-                        if evicted > 0 {
-                            osLog.notice("Session history: kept newest \(cap), evicted \(evicted) older search descriptor(s)")
-                        }
-                    } catch {
-                        osLog.error("Failed to persist scan-job descriptor: \(error.localizedDescription, privacy: .public)")
-                    }
-                }
+                // Persist a descriptor so this completed search reappears in
+                // the jobs list after app restart. Same helper used by pause
+                // and stop, so all three "worth bookmarking" transitions go
+                // through one code path.
+                Self.persistDescriptor(for: job, settings: settings)
             }
         }
     }
