@@ -232,11 +232,13 @@ struct ScanJobRow: View {
         let total = job.videosTotal
         let elapsed = formatElapsed(job.elapsedSecs)
         let onVol = volName.isEmpty ? "" : " on \(volName)"
+        let usingEngine = " using \(engineName)"
         let stats = "(Searched \(total) total file\(total == 1 ? "" : "s"). Elapsed time \(elapsed))"
+        let header = job.wasInterrupted ? "Search Interrupted" : "Search Complete"
         if hits > 0 {
-            return "Search Complete: Found \(personName) in \(hits) file\(hits == 1 ? "" : "s")\(onVol). \(stats)"
+            return "\(header): Found \(personName) in \(hits) file\(hits == 1 ? "" : "s")\(onVol)\(usingEngine). \(stats)"
         } else {
-            return "Search Complete: Found no matches for \(personName)\(onVol). \(stats)"
+            return "\(header): Found no matches for \(personName)\(onVol)\(usingEngine). \(stats)"
         }
     }
 
@@ -299,6 +301,13 @@ struct ScanJobRow: View {
                     .foregroundColor(.yellow)
             }
         }
+        Text("using")
+            .font(.title3)
+            .foregroundStyle(.secondary)
+        Text(engineName)
+            .font(.title3.weight(.medium))
+            .foregroundColor(.accentColor)
+            .lineLimit(1)
         Text(".")
             .font(.title3)
             .foregroundStyle(.secondary)
@@ -363,6 +372,13 @@ struct ScanJobRow: View {
                     .foregroundColor(.yellow)
             }
         }
+        Text("using")
+            .font(.title2)
+            .foregroundStyle(.secondary)
+        Text(engineName)
+            .font(.title2.weight(.medium))
+            .foregroundColor(.accentColor)
+            .lineLimit(1)
         Text(".")
             .font(.title2)
             .foregroundStyle(.secondary)
