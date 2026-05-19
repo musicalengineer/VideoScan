@@ -108,6 +108,43 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "PERIPHERY_OUTPUT=$(pwd)/periphery-raw.txt" >> $GITHUB_ENV
 
+      - name: Smoke test — single unit test probe
+        # 2026-05-19: re-test whether GH-hosted macos-15 + Xcode 16.4 can
+        # run a Swift Testing test at all. One pure-logic test, 10min timeout.
+        # If this passes, we know the runner works and can measure latency.
+        timeout-minutes: 10
+        run: |
+          echo "## Smoke Test Probe" >> $GITHUB_STEP_SUMMARY
+          START=$(date +%s)
+          xcodebuild test \
+            -project VideoScan/VideoScan.xcodeproj \
+            -scheme VideoScan \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -only-testing:VideoScanTests/FilenameCorrelationKeyTests/stripsVideoPrefixFromAvidMXF \
+            -enableCodeCoverage NO \
+            -resultBundlePath SmokeTest.xcresult \
+            CODE_SIGNING_ALLOWED=NO \
+            MACOSX_DEPLOYMENT_TARGET=15.0 \
+            2>&1 | tee smoke-test.log || SMOKE_EXIT=$?
+          END=$(date +%s)
+          ELAPSED=$((END - START))
+          echo "" >> $GITHUB_STEP_SUMMARY
+          PASSED=$(grep -c "passed" smoke-test.log || true)
+          FAILED=$(grep -c "failed" smoke-test.log || true)
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Wall time | ${ELAPSED}s |" >> $GITHUB_STEP_SUMMARY
+          echo "| Exit code | ${SMOKE_EXIT:-0} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Lines with 'passed' | $PASSED |" >> $GITHUB_STEP_SUMMARY
+          echo "| Lines with 'failed' | $FAILED |" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -E "Test case|passed|failed|error:" smoke-test.log >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          if [ "${SMOKE_EXIT:-0}" -ne 0 ]; then
+            echo "::warning::Smoke test exited ${SMOKE_EXIT} — see summary"
+          fi
+
       # ─────────────────────────────────────────────────────────────────
       # TEST EXECUTION DISABLED on GH-hosted runners (2026-05-11)
       #
