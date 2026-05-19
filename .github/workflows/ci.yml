@@ -108,41 +108,124 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "PERIPHERY_OUTPUT=$(pwd)/periphery-raw.txt" >> $GITHUB_ENV
 
-      - name: Smoke test — single unit test probe
-        # 2026-05-19: re-test whether GH-hosted macos-15 + Xcode 16.4 can
-        # run a Swift Testing test at all. One pure-logic test, 10min timeout.
-        # If this passes, we know the runner works and can measure latency.
-        timeout-minutes: 10
+      - name: Unit tests — pure-logic suites (binary search step 1)
+        # 2026-05-19: ~400 tests across pure-logic suites. No ffmpeg, no media
+        # fixtures, no framework setup. If these pass, the runner is solid and
+        # failures live in the heavier suites.
+        timeout-minutes: 15
         run: |
-          echo "## Smoke Test Probe" >> $GITHUB_STEP_SUMMARY
+          echo "## Unit Tests — Pure-Logic Suites" >> $GITHUB_STEP_SUMMARY
           START=$(date +%s)
           xcodebuild test \
             -project VideoScan/VideoScan.xcodeproj \
             -scheme VideoScan \
             -configuration Debug \
             -destination 'platform=macOS' \
-            -only-testing:VideoScanTests/FilenameCorrelationKeyTests/stripsVideoPrefixFromAvidMXF \
+            -only-testing:VideoScanTests/FilenameCorrelationKeyTests \
+            -only-testing:VideoScanTests/CorrelatorTests \
+            -only-testing:VideoScanTests/AvidClipIDTests \
+            -only-testing:VideoScanTests/ScoreCorrelatePairTests \
+            -only-testing:VideoScanTests/BuildAudioPoolsTests \
+            -only-testing:VideoScanTests/ResolveScopeTests \
+            -only-testing:VideoScanTests/AssignCandidatesTests \
+            -only-testing:VideoScanTests/FormattingDelegateTests \
+            -only-testing:VideoScanTests/FormattingTests \
+            -only-testing:VideoScanTests/FormattingBoundaryTests \
+            -only-testing:VideoScanTests/FormattingExtendedTests \
+            -only-testing:VideoScanTests/FileHasherTests \
+            -only-testing:VideoScanTests/DashboardBoundaryTests \
+            -only-testing:VideoScanTests/DashboardCombineCounterTests \
+            -only-testing:VideoScanTests/VolumeRootTests \
+            -only-testing:VideoScanTests/StreamTypeTests \
+            -only-testing:VideoScanTests/StreamTypeBoundaryTests \
+            -only-testing:VideoScanTests/VideoRecordTests \
+            -only-testing:VideoScanTests/VideoRecordBoundaryTests \
+            -only-testing:VideoScanTests/VideoRecordSnapshotTests \
+            -only-testing:VideoScanTests/PairConfidenceTests \
+            -only-testing:VideoScanTests/DuplicateConfidenceTests \
+            -only-testing:VideoScanTests/CatalogTargetStatusTests \
+            -only-testing:VideoScanTests/CatalogScanTargetStatusExtendedTests \
+            -only-testing:VideoScanTests/ScanPhaseTests \
+            -only-testing:VideoScanTests/ScanPerformanceSettingsTests \
+            -only-testing:VideoScanTests/DiscoveredVolumeTests \
+            -only-testing:VideoScanTests/CombinePairItemTests \
+            -only-testing:VideoScanTests/CombineJobStatusTests \
+            -only-testing:VideoScanTests/CombineJobStatusBoundaryTests \
+            -only-testing:VideoScanTests/RecognitionEngineTests \
+            -only-testing:VideoScanTests/LifecycleStageTests \
+            -only-testing:VideoScanTests/DetectedPeopleTests \
+            -only-testing:VideoScanTests/ArchiveHealthTests \
+            -only-testing:VideoScanTests/UniversalSearchTokenTests \
+            -only-testing:VideoScanTests/UniversalSearchYearExtractionTests \
+            -only-testing:VideoScanTests/UniversalSearchMatchingTests \
+            -only-testing:VideoScanTests/TriageDispositionTests \
+            -only-testing:VideoScanTests/TriageQueueTests \
+            -only-testing:VideoScanTests/DispositionTests \
+            -only-testing:VideoScanTests/DispositionThresholdTests \
+            -only-testing:VideoScanTests/TransitionRuleTests \
+            -only-testing:VideoScanTests/TestTempRuleTests \
+            -only-testing:VideoScanTests/CatalogPurgeTests \
+            -only-testing:VideoScanTests/CatalogPurgeUndoStateTests \
+            -only-testing:VideoScanTests/CatalogPurgeGapTests \
+            -only-testing:VideoScanTests/CatalogSkipSetTests \
+            -only-testing:VideoScanTests/CatalogFilterBoundaryTests \
+            -only-testing:VideoScanTests/CatalogNavigationTests \
+            -only-testing:VideoScanTests/CatalogImportExportTests \
+            -only-testing:VideoScanTests/ScanContextTests \
+            -only-testing:VideoScanTests/PersonScanPrefilterTests \
+            -only-testing:VideoScanTests/PersonFinderEngineDispatchTests \
+            -only-testing:VideoScanTests/POIStorageTests \
+            -only-testing:VideoScanTests/POIDeletionTests \
+            -only-testing:VideoScanTests/POIUndoDeleteTests \
+            -only-testing:VideoScanTests/AsyncSemaphoreTests \
+            -only-testing:VideoScanTests/PauseGateTests \
+            -only-testing:VideoScanTests/MxfBinaryHelperTests \
+            -only-testing:VideoScanTests/MxfCodecIdentificationTests \
+            -only-testing:VideoScanTests/MxfPixelLayoutTests \
+            -only-testing:VideoScanTests/MxfMetadataTests \
+            -only-testing:VideoScanTests/AvbParserTests \
+            -only-testing:VideoScanTests/AvbParserBoundaryTests \
+            -only-testing:VideoScanTests/AvbDataModelTests \
+            -only-testing:VideoScanTests/BundleImportLegacyManifestTests \
+            -only-testing:VideoScanTests/BundleExportProfileValidatorTests \
+            -only-testing:VideoScanTests/ExternalMediaManifestDecodingTests \
+            -only-testing:VideoScanTests/DuplicateDetectorBoundaryTests \
+            -only-testing:VideoScanTests/CombineEngineBoundaryTests \
+            -only-testing:VideoScanTests/VolumeReachabilityBoundaryTests \
+            -only-testing:VideoScanTests/OnlineSubstituteTests \
+            -only-testing:VideoScanTests/OnlineSubstituteBoundaryTests \
+            -only-testing:VideoScanTests/CodecCompatibilityTests \
+            -only-testing:VideoScanTests/CodecCompatibilityBoundaryTests \
+            -only-testing:VideoScanTests/DiskFeederTests \
+            -only-testing:VideoScanTests/MemoryPressureFunctionTests \
+            -only-testing:VideoScanTests/PersonFinderCacheTests \
+            -only-testing:VideoScanTests/CopyMetadataCrashTests \
             -enableCodeCoverage NO \
-            -resultBundlePath SmokeTest.xcresult \
+            -resultBundlePath PureLogicTests.xcresult \
             CODE_SIGNING_ALLOWED=NO \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
-            2>&1 | tee smoke-test.log || SMOKE_EXIT=$?
+            2>&1 | tee pure-logic-tests.log || TEST_EXIT=$?
           END=$(date +%s)
           ELAPSED=$((END - START))
+          PASSED=$(grep -c "Test case.*passed" pure-logic-tests.log || true)
+          FAILED=$(grep -c "Test case.*failed" pure-logic-tests.log || true)
           echo "" >> $GITHUB_STEP_SUMMARY
-          PASSED=$(grep -c "passed" smoke-test.log || true)
-          FAILED=$(grep -c "failed" smoke-test.log || true)
           echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| Wall time | ${ELAPSED}s |" >> $GITHUB_STEP_SUMMARY
-          echo "| Exit code | ${SMOKE_EXIT:-0} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Lines with 'passed' | $PASSED |" >> $GITHUB_STEP_SUMMARY
-          echo "| Lines with 'failed' | $FAILED |" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          grep -E "Test case|passed|failed|error:" smoke-test.log >> $GITHUB_STEP_SUMMARY || true
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          if [ "${SMOKE_EXIT:-0}" -ne 0 ]; then
-            echo "::warning::Smoke test exited ${SMOKE_EXIT} — see summary"
+          echo "| Exit code | ${TEST_EXIT:-0} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tests passed | $PASSED |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tests failed | $FAILED |" >> $GITHUB_STEP_SUMMARY
+          if [ "$FAILED" -gt 0 ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Failures" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep "Test case.*failed" pure-logic-tests.log >> $GITHUB_STEP_SUMMARY || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ "${TEST_EXIT:-0}" -ne 0 ]; then
+            echo "::error::Pure-logic tests exited ${TEST_EXIT}"
+            exit 1
           fi
 
       # ─────────────────────────────────────────────────────────────────
