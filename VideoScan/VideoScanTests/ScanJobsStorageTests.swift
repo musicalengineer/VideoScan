@@ -383,6 +383,73 @@ struct ScanJobsStorageTests {
         #expect(terminal.last?.searchPath == "/undated")
     }
 
+    // MARK: - makeJob (restore-from-descriptor regression coverage)
+
+    @Test("makeJob restores assignedEngine from descriptor — effectiveEngine matches what actually ran")
+    @MainActor
+    func makeJobRestoresEngineArcFace() {
+        // Descriptor stores engine as RecognitionEngine.rawValue, so the
+        // string is the human-readable form, not the case name.
+        let d = sampleDescriptor(engine: RecognitionEngine.arcface.rawValue)
+        let job = PersonFinderModel.makeJob(from: d)
+        // Without explicit assignedEngine restore, effectiveEngine would
+        // fall through to the (nil) profile.engine and then to .vision,
+        // silently showing the wrong algorithm in the summary. This test
+        // is the regression guard for that bug.
+        #expect(job.effectiveEngine == .arcface)
+        #expect(job.assignedEngine == .arcface)
+    }
+
+    @Test("makeJob restores assignedEngine for vision too")
+    @MainActor
+    func makeJobRestoresEngineVision() {
+        let d = sampleDescriptor(engine: RecognitionEngine.vision.rawValue)
+        let job = PersonFinderModel.makeJob(from: d)
+        #expect(job.effectiveEngine == .vision)
+        #expect(job.assignedEngine == .vision)
+    }
+
+    @Test("makeJob preserves the descriptor's id so re-save updates in place")
+    @MainActor
+    func makeJobPreservesID() {
+        let fixedID = UUID()
+        let d = sampleDescriptor(id: fixedID)
+        let job = PersonFinderModel.makeJob(from: d)
+        #expect(job.id == fixedID)
+    }
+
+    @Test("makeJob sets status to .done and copies summary stats")
+    @MainActor
+    func makeJobCopiesSummaryStats() {
+        let d = sampleDescriptor(videosWithHits: 17)
+        let job = PersonFinderModel.makeJob(from: d)
+        #expect(job.status == .done)
+        #expect(job.videosWithHits == 17)
+        #expect(job.videosScanned == d.videosScanned)
+        #expect(job.videosTotal == d.videosTotal)
+        #expect(job.completedAt == d.completedAt)
+        #expect(abs(job.elapsedSecs - d.elapsedSecs) < 1e-6)
+    }
+
+    @Test("makeJob preserves partial-scan stats — wasInterrupted reads true")
+    @MainActor
+    func makeJobInterruptedRoundTrip() {
+        // Simulates restore of a paused-then-quit search.
+        var d = sampleDescriptor()
+        d = PersistedJobDescriptor(
+            id: d.id, personName: d.personName,
+            profileFolderName: d.profileFolderName, searchPath: d.searchPath,
+            engine: d.engine, threshold: d.threshold,
+            referencePath: d.referencePath, referenceFilenames: d.referenceFilenames,
+            completedAt: d.completedAt,
+            videosScanned: 50, videosTotal: 120,
+            videosWithHits: d.videosWithHits, clipsFound: d.clipsFound,
+            presenceSecs: d.presenceSecs, elapsedSecs: d.elapsedSecs
+        )
+        let job = PersonFinderModel.makeJob(from: d)
+        #expect(job.wasInterrupted == true)
+    }
+
     // MARK: - wasInterrupted
 
     @Test("wasInterrupted is false when scan is active")

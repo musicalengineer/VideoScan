@@ -30,7 +30,10 @@ struct ScanJobRow: View {
 
     private var personName: String { job.assignedProfile?.name ?? "—" }
     private var volName: String { (job.searchPath as NSString).lastPathComponent }
-    private var engineName: String { job.effectiveEngine.rawValue }
+    /// Prose form for inline use ("using algorithm: ArcFace") — friendly
+    /// mixed case, no parenthetical descriptor. See displayName on
+    /// RecognitionEngine.
+    private var engineName: String { job.effectiveEngine.displayName }
 
     /// True only when the job's volume path is unreachable (e.g. external
     /// drive unmounted) AND we're rendering a row that already had its
@@ -232,7 +235,7 @@ struct ScanJobRow: View {
         let total = job.videosTotal
         let elapsed = formatElapsed(job.elapsedSecs)
         let onVol = volName.isEmpty ? "" : " on \(volName)"
-        let usingEngine = " using \(engineName)"
+        let usingEngine = " using algorithm: \(engineName)"
         let stats = "(Searched \(total) total file\(total == 1 ? "" : "s"). Elapsed time \(elapsed))"
         let header = job.wasInterrupted ? "Search Interrupted" : "Search Complete"
         if hits > 0 {
@@ -301,7 +304,7 @@ struct ScanJobRow: View {
                     .foregroundColor(.yellow)
             }
         }
-        Text("using")
+        Text("using algorithm:")
             .font(.title3)
             .foregroundStyle(.secondary)
         Text(engineName)
@@ -372,7 +375,7 @@ struct ScanJobRow: View {
                     .foregroundColor(.yellow)
             }
         }
-        Text("using")
+        Text("using algorithm:")
             .font(.title2)
             .foregroundStyle(.secondary)
         Text(engineName)

@@ -84,6 +84,19 @@ enum RecognitionEngine: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Prose-friendly mixed-case name without the parenthetical descriptor —
+    /// "Vision" / "ArcFace" / "dlib" / "Hybrid". Used inline in summary
+    /// sentences ("using algorithm: ArcFace") where the parenthetical from
+    /// rawValue would create double-paren awkwardness or just noise.
+    var displayName: String {
+        switch self {
+        case .vision:  return "Vision"
+        case .arcface: return "ArcFace"
+        case .dlib:    return "dlib"
+        case .hybrid:  return "Hybrid"
+        }
+    }
+
     /// Short label for compact UI / chip overlays.
     var shortLabel: String {
         switch self {
