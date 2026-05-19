@@ -905,10 +905,11 @@ extension PersonFinderModel {
                 let elapsed = "\(elapsedMin)m \(elapsedSec)s"
                 let volumeName = VolumeReachability.volumeName(forPath: job.searchPath)
                 let onVol = volumeName.isEmpty ? "" : " on \(volumeName)"
-                // rawValue gives the friendly form ("Vision (fast)" /
-                // "ArcFace (CoreML)") — .title is all-caps badge style.
-                let engineName = job.effectiveEngine.rawValue
-                let usingEngine = " using \(engineName)"
+                // displayName drops the parenthetical descriptor — just
+                // "Vision" / "ArcFace" / "dlib" / "Hybrid". Matches the UI
+                // summary in ScanJobRow.summaryText so log and screen agree.
+                let engineName = job.effectiveEngine.displayName
+                let usingEngine = " using algorithm: \(engineName)"
                 let stats = "(Searched \(total) total file\(total == 1 ? "" : "s"). Elapsed time \(elapsed))"
                 let person = job.personLabel
                 let summary: String
@@ -981,21 +982,13 @@ extension PersonFinderModel {
         osLog.info("Session restore: \(descriptors.count) prior search(es) found on disk")
 
         for descriptor in descriptors {
-            let job = ScanJob(searchPath: descriptor.searchPath, id: descriptor.id)
-            job.videosScanned = descriptor.videosScanned
-            job.videosTotal = descriptor.videosTotal
-            job.videosWithHits = descriptor.videosWithHits
-            job.clipsFound = descriptor.clipsFound
-            job.presenceSecs = descriptor.presenceSecs
-            job.elapsedSecs = descriptor.elapsedSecs
-            job.status = .done
-            job.completedAt = descriptor.completedAt
-            job.progress = 1.0
+            let job = Self.makeJob(from: descriptor)
 
             // Reattach the POI profile if it still exists. If the profile was
             // deleted since the search ran, the job still shows up with the
             // person's name from the descriptor — just no profile object to
-            // open in the editor.
+            // open in the editor. This is the one I/O step that lives outside
+            // makeJob so the pure constructor stays testable.
             if let folderName = descriptor.profileFolderName,
                let profile = try? POIProfile.load(name: folderName) {
                 job.assignedProfile = profile
@@ -1008,6 +1001,35 @@ extension PersonFinderModel {
                 await Self.rehydrateResultsFromCache(job: job, descriptor: descriptor)
             }
         }
+    }
+
+    /// Pure constructor: build an in-memory ScanJob from a persisted
+    /// descriptor. No filesystem I/O — the caller does any POI profile
+    /// reattachment separately. Extracted from restoreSessionFromDisk so
+    /// the data-shape part of restore is unit-testable without spinning
+    /// up the whole model + filesystem.
+    @MainActor
+    static func makeJob(from descriptor: PersistedJobDescriptor) -> ScanJob {
+        let job = ScanJob(searchPath: descriptor.searchPath, id: descriptor.id)
+        job.videosScanned = descriptor.videosScanned
+        job.videosTotal = descriptor.videosTotal
+        job.videosWithHits = descriptor.videosWithHits
+        job.clipsFound = descriptor.clipsFound
+        job.presenceSecs = descriptor.presenceSecs
+        job.elapsedSecs = descriptor.elapsedSecs
+        job.status = .done
+        job.completedAt = descriptor.completedAt
+        job.progress = 1.0
+        // Restore the engine that actually ran. The descriptor knows (it was
+        // recorded at completion); the live ScanJob doesn't infer this
+        // correctly via fall-through to profile.engine — the profile's
+        // default may differ from the engine the user picked for that
+        // specific search. Without this, restored rows show the wrong
+        // algorithm in the summary.
+        if let engine = RecognitionEngine(rawValue: descriptor.engine) {
+            job.assignedEngine = engine
+        }
+        return job
     }
 
     /// Walk the descriptor's searchPath and ask the cache for any prior
