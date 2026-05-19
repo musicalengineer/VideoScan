@@ -315,6 +315,126 @@ struct ScanJobsStorageTests {
         #expect(d.id == fixedID, "Descriptor id must equal job.id so re-save updates in place")
     }
 
+    // MARK: - Jobs list partition (active vs history)
+
+    @Test("splitJobs returns empty active+terminal for empty input")
+    @MainActor
+    func splitJobsEmpty() {
+        let (active, terminal) = PersonFinderView.splitJobs([])
+        #expect(active.isEmpty)
+        #expect(terminal.isEmpty)
+    }
+
+    @Test("splitJobs treats idle/scanning/paused as active, done/cancelled as terminal")
+    @MainActor
+    func splitJobsCategorization() {
+        let idle = ScanJob(searchPath: "/a")
+        idle.status = .idle
+        let scanning = ScanJob(searchPath: "/b")
+        scanning.status = .scanning
+        let paused = ScanJob(searchPath: "/c")
+        paused.status = .paused
+        let done = ScanJob(searchPath: "/d")
+        done.status = .done
+        let cancelled = ScanJob(searchPath: "/e")
+        cancelled.status = .cancelled
+
+        let (active, terminal) = PersonFinderView.splitJobs([idle, scanning, paused, done, cancelled])
+        let activePaths = Set(active.map(\.searchPath))
+        let terminalPaths = Set(terminal.map(\.searchPath))
+        // Paused intentionally stays with active — Rick treats it as
+        // work-in-flight in the UI, not as historical.
+        #expect(activePaths == ["/a", "/b", "/c"])
+        #expect(terminalPaths == ["/d", "/e"])
+    }
+
+    @Test("splitJobs sorts terminal jobs newest-first by completedAt")
+    @MainActor
+    func splitJobsTerminalSort() {
+        let older = ScanJob(searchPath: "/older")
+        older.status = .done
+        older.completedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        let newer = ScanJob(searchPath: "/newer")
+        newer.status = .done
+        newer.completedAt = Date(timeIntervalSince1970: 1_800_000_000)
+
+        let middle = ScanJob(searchPath: "/middle")
+        middle.status = .done
+        middle.completedAt = Date(timeIntervalSince1970: 1_750_000_000)
+
+        let (_, terminal) = PersonFinderView.splitJobs([older, newer, middle])
+        #expect(terminal.map(\.searchPath) == ["/newer", "/middle", "/older"])
+    }
+
+    @Test("splitJobs puts jobs with nil completedAt at the bottom of history")
+    @MainActor
+    func splitJobsNilCompletedAt() {
+        let withDate = ScanJob(searchPath: "/dated")
+        withDate.status = .done
+        withDate.completedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+        let noDate = ScanJob(searchPath: "/undated")
+        noDate.status = .done
+        // completedAt left nil
+
+        let (_, terminal) = PersonFinderView.splitJobs([noDate, withDate])
+        #expect(terminal.first?.searchPath == "/dated")
+        #expect(terminal.last?.searchPath == "/undated")
+    }
+
+    // MARK: - wasInterrupted
+
+    @Test("wasInterrupted is false when scan is active")
+    @MainActor
+    func interruptedFalseWhenActive() {
+        let job = ScanJob(searchPath: "/x")
+        job.status = .scanning
+        job.videosScanned = 50
+        job.videosTotal = 100
+        #expect(job.wasInterrupted == false)
+    }
+
+    @Test("wasInterrupted is false when scan completed fully")
+    @MainActor
+    func interruptedFalseWhenComplete() {
+        let job = ScanJob(searchPath: "/x")
+        job.status = .done
+        job.videosScanned = 100
+        job.videosTotal = 100
+        #expect(job.wasInterrupted == false)
+    }
+
+    @Test("wasInterrupted is true for a done job that didn't reach the total (resumed/restored)")
+    @MainActor
+    func interruptedTrueForPartialDone() {
+        let job = ScanJob(searchPath: "/x")
+        job.status = .done
+        job.videosScanned = 50
+        job.videosTotal = 100
+        #expect(job.wasInterrupted == true)
+    }
+
+    @Test("wasInterrupted is true for cancelled with partial progress")
+    @MainActor
+    func interruptedTrueForPartialCancelled() {
+        let job = ScanJob(searchPath: "/x")
+        job.status = .cancelled
+        job.videosScanned = 25
+        job.videosTotal = 100
+        #expect(job.wasInterrupted == true)
+    }
+
+    @Test("wasInterrupted is false when videosTotal is 0 (no work was attempted)")
+    @MainActor
+    func interruptedFalseWhenTotalZero() {
+        let job = ScanJob(searchPath: "/x")
+        job.status = .cancelled
+        job.videosScanned = 0
+        job.videosTotal = 0
+        #expect(job.wasInterrupted == false)
+    }
+
     // MARK: - Filename format
 
     @Test("Filename has sortable timestamp prefix and UUID")

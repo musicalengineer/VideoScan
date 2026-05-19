@@ -83,6 +83,18 @@ final class ScanJob: ObservableObject, Identifiable {
     @Published var compiledVideoPaths: [CompiledOutput] = []
     @Published var elapsedSecs: Double = 0.0
 
+    /// Wall-clock time the job last transitioned to a terminal state
+    /// (.done, .paused, .cancelled). Used to sort done rows newest-first
+    /// in the jobs list. nil while the job is still active or fresh-idle.
+    @Published var completedAt: Date?
+
+    /// True when a terminal job didn't scan everything in its search path —
+    /// e.g. user paused and quit, or stopped mid-scan. Drives the UI's
+    /// "Search Interrupted" yellow label vs the green "Search Complete".
+    var wasInterrupted: Bool {
+        status.isTerminal && videosTotal > 0 && videosScanned < videosTotal
+    }
+
     // Compilation state (separate from scan lifecycle)
     @Published var compilationStatus: CompilationStatus = .idle
     @Published var compilationProgress: Double = 0.0
