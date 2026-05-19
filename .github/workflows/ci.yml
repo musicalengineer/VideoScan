@@ -147,6 +147,7 @@ jobs:
             -only-testing:VideoScanTests/CatalogNavigationTests \
             -only-testing:VideoScanTests/CatalogImportExportTests \
             -only-testing:VideoScanTests/ScanContextTests \
+            -only-testing:VideoScanTests/CICanaryTests \
             -enableCodeCoverage NO \
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
@@ -154,29 +155,61 @@ jobs:
             2>&1 | tee test-output.log || TEST_EXIT=$?
           END=$(date +%s)
           ELAPSED=$((END - START))
-          PASSED=$(grep -c "Test case.*passed" test-output.log || true)
-          FAILED=$(grep -c "Test case.*failed" test-output.log || true)
-          # Per-test latency (first 5 + last 5 for sampling)
+          PASSED=$(grep -c "passed on" test-output.log || true)
+          FAILED=$(grep -c "failed on" test-output.log || true)
+          SUITES_STARTED=$(grep -c "Test suite .* started" test-output.log || true)
+
+          # ── Canary verification ──
+          # CICanaryTests/mustFail MUST appear as failed.
+          # CICanaryTests/mustPass MUST appear as passed.
+          # If either is missing or wrong, tests are ghost-passing.
+          CANARY_FAIL=$(grep -c "CICanaryTests/mustFail.*failed on" test-output.log || true)
+          CANARY_PASS=$(grep -c "CICanaryTests/mustPass.*passed on" test-output.log || true)
+          GHOST=0
+          if [ "$CANARY_FAIL" -eq 0 ]; then
+            echo "::error::GHOST-PASS DETECTED: CICanaryTests/mustFail did not appear as failed"
+            GHOST=1
+          fi
+          if [ "$CANARY_PASS" -eq 0 ]; then
+            echo "::error::GHOST-PASS DETECTED: CICanaryTests/mustPass did not appear as passed"
+            GHOST=1
+          fi
+          if [ "$SUITES_STARTED" -lt 40 ]; then
+            echo "::error::GHOST-PASS DETECTED: only $SUITES_STARTED suites started (expected 45+)"
+            GHOST=1
+          fi
+
+          # Subtract the expected canary failure from counts
+          REAL_FAILED=$((FAILED - CANARY_FAIL))
+
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| Wall time | ${ELAPSED}s |" >> $GITHUB_STEP_SUMMARY
           echo "| Tests passed | $PASSED |" >> $GITHUB_STEP_SUMMARY
-          echo "| Tests failed | $FAILED |" >> $GITHUB_STEP_SUMMARY
+          echo "| Real failures | $REAL_FAILED |" >> $GITHUB_STEP_SUMMARY
+          echo "| Canary fail detected | $CANARY_FAIL |" >> $GITHUB_STEP_SUMMARY
+          echo "| Canary pass detected | $CANARY_PASS |" >> $GITHUB_STEP_SUMMARY
+          echo "| Suites started | $SUITES_STARTED |" >> $GITHUB_STEP_SUMMARY
           if [ "$PASSED" -gt 0 ]; then
             RATE=$(echo "scale=2; $ELAPSED / ($PASSED + $FAILED)" | bc 2>/dev/null || echo "?")
             echo "| Avg sec/test | ${RATE} |" >> $GITHUB_STEP_SUMMARY
           fi
-          echo "| Exit code | ${TEST_EXIT:-0} |" >> $GITHUB_STEP_SUMMARY
-          if [ "$FAILED" -gt 0 ]; then
+
+          if [ "$GHOST" -ne 0 ]; then
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "### Failures" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            grep "Test case.*failed" test-output.log >> $GITHUB_STEP_SUMMARY || true
-            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "### GHOST-PASS FAILURE" >> $GITHUB_STEP_SUMMARY
+            echo "Tests are not executing properly. See errors above." >> $GITHUB_STEP_SUMMARY
+            exit 1
           fi
-          if [ "${TEST_EXIT:-0}" -ne 0 ]; then
-            echo "::error::Unit tests exited ${TEST_EXIT}"
+
+          if [ "$REAL_FAILED" -gt 0 ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Real Failures (excluding canary)" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep "failed on" test-output.log | grep -v "CICanaryTests/mustFail" >> $GITHUB_STEP_SUMMARY || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "::error::$REAL_FAILED real test failure(s)"
             exit 1
           fi
 
