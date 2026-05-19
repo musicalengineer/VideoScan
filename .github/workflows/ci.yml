@@ -82,8 +82,9 @@ jobs:
       # GH-hosted virt-M1 runners run ~2s/test (vs 7ms local). At ~400
       # tests that's ~13 min execution. 20 min timeout gives headroom.
       #
-      # Binary search iteration 2 (2026-05-19): pure-logic suites only.
-      # If this passes, we add medium-weight suites next push.
+      # Binary search iteration 3 (2026-05-19): 20 suites only.
+      # 75 suites hung the test planner for 20 min. Halving to find the
+      # sweet spot where xcodebuild can plan and execute within budget.
       - name: Unit tests — pure-logic suites
         timeout-minutes: 20
         run: |
@@ -107,73 +108,14 @@ jobs:
             -only-testing:VideoScanTests/FormattingBoundaryTests \
             -only-testing:VideoScanTests/FormattingExtendedTests \
             -only-testing:VideoScanTests/FileHasherTests \
-            -only-testing:VideoScanTests/DashboardBoundaryTests \
-            -only-testing:VideoScanTests/DashboardCombineCounterTests \
-            -only-testing:VideoScanTests/VolumeRootTests \
             -only-testing:VideoScanTests/StreamTypeTests \
             -only-testing:VideoScanTests/StreamTypeBoundaryTests \
             -only-testing:VideoScanTests/VideoRecordTests \
             -only-testing:VideoScanTests/VideoRecordBoundaryTests \
-            -only-testing:VideoScanTests/VideoRecordSnapshotTests \
             -only-testing:VideoScanTests/PairConfidenceTests \
             -only-testing:VideoScanTests/DuplicateConfidenceTests \
-            -only-testing:VideoScanTests/CatalogTargetStatusTests \
-            -only-testing:VideoScanTests/CatalogScanTargetStatusExtendedTests \
             -only-testing:VideoScanTests/ScanPhaseTests \
-            -only-testing:VideoScanTests/ScanPerformanceSettingsTests \
             -only-testing:VideoScanTests/DiscoveredVolumeTests \
-            -only-testing:VideoScanTests/CombinePairItemTests \
-            -only-testing:VideoScanTests/CombineJobStatusTests \
-            -only-testing:VideoScanTests/CombineJobStatusBoundaryTests \
-            -only-testing:VideoScanTests/RecognitionEngineTests \
-            -only-testing:VideoScanTests/LifecycleStageTests \
-            -only-testing:VideoScanTests/DetectedPeopleTests \
-            -only-testing:VideoScanTests/ArchiveHealthTests \
-            -only-testing:VideoScanTests/UniversalSearchTokenTests \
-            -only-testing:VideoScanTests/UniversalSearchYearExtractionTests \
-            -only-testing:VideoScanTests/UniversalSearchMatchingTests \
-            -only-testing:VideoScanTests/TriageDispositionTests \
-            -only-testing:VideoScanTests/TriageQueueTests \
-            -only-testing:VideoScanTests/DispositionTests \
-            -only-testing:VideoScanTests/DispositionThresholdTests \
-            -only-testing:VideoScanTests/TransitionRuleTests \
-            -only-testing:VideoScanTests/TestTempRuleTests \
-            -only-testing:VideoScanTests/CatalogPurgeTests \
-            -only-testing:VideoScanTests/CatalogPurgeUndoStateTests \
-            -only-testing:VideoScanTests/CatalogPurgeGapTests \
-            -only-testing:VideoScanTests/CatalogSkipSetTests \
-            -only-testing:VideoScanTests/CatalogFilterBoundaryTests \
-            -only-testing:VideoScanTests/CatalogNavigationTests \
-            -only-testing:VideoScanTests/CatalogImportExportTests \
-            -only-testing:VideoScanTests/ScanContextTests \
-            -only-testing:VideoScanTests/PersonScanPrefilterTests \
-            -only-testing:VideoScanTests/PersonFinderEngineDispatchTests \
-            -only-testing:VideoScanTests/POIStorageTests \
-            -only-testing:VideoScanTests/POIDeletionTests \
-            -only-testing:VideoScanTests/POIUndoDeleteTests \
-            -only-testing:VideoScanTests/AsyncSemaphoreTests \
-            -only-testing:VideoScanTests/PauseGateTests \
-            -only-testing:VideoScanTests/MxfBinaryHelperTests \
-            -only-testing:VideoScanTests/MxfCodecIdentificationTests \
-            -only-testing:VideoScanTests/MxfPixelLayoutTests \
-            -only-testing:VideoScanTests/MxfMetadataTests \
-            -only-testing:VideoScanTests/AvbParserTests \
-            -only-testing:VideoScanTests/AvbParserBoundaryTests \
-            -only-testing:VideoScanTests/AvbDataModelTests \
-            -only-testing:VideoScanTests/BundleImportLegacyManifestTests \
-            -only-testing:VideoScanTests/BundleExportProfileValidatorTests \
-            -only-testing:VideoScanTests/ExternalMediaManifestDecodingTests \
-            -only-testing:VideoScanTests/DuplicateDetectorBoundaryTests \
-            -only-testing:VideoScanTests/CombineEngineBoundaryTests \
-            -only-testing:VideoScanTests/VolumeReachabilityBoundaryTests \
-            -only-testing:VideoScanTests/OnlineSubstituteTests \
-            -only-testing:VideoScanTests/OnlineSubstituteBoundaryTests \
-            -only-testing:VideoScanTests/CodecCompatibilityTests \
-            -only-testing:VideoScanTests/CodecCompatibilityBoundaryTests \
-            -only-testing:VideoScanTests/DiskFeederTests \
-            -only-testing:VideoScanTests/MemoryPressureFunctionTests \
-            -only-testing:VideoScanTests/PersonFinderCacheTests \
-            -only-testing:VideoScanTests/CopyMetadataCrashTests \
             -enableCodeCoverage NO \
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
