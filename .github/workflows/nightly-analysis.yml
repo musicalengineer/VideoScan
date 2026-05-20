@@ -334,12 +334,9 @@ jobs:
 
       - name: Install tools
         run: |
-          # Force latest Periphery — the runner image caches 2.21.2;
-          # 3.x finds findings the older version misses (the previous
-          # nightly reported "No unused code detected" because of this).
           brew install swiftlint || true
-          brew install peripheryapp/periphery/periphery 2>/dev/null \
-            || brew upgrade peripheryapp/periphery/periphery
+          # Use the homebrew-core formula (3.x), not the cask (stuck at 2.21.2).
+          brew install periphery || true
           echo "Periphery: $(periphery version)"
           echo "SwiftLint: $(swiftlint version)"
 
