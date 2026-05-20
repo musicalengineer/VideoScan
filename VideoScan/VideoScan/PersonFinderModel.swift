@@ -232,7 +232,29 @@ final class PersonFinderModel: ObservableObject {
         // Restore previously-completed searches so the user doesn't lose
         // context across app launches (issue #89). Results table rehydrates
         // in the background from the existing PersonFinderCache.
-        restoreSessionFromDisk()
+        //
+        // Skip under tests: any test in the same process that exercises the
+        // production save() path leaves descriptors in the test temp dir,
+        // and subsequent `PersonFinderModel()` calls would pick them up as
+        // stray jobs. Tests that specifically need to verify the restore
+        // flow can call `restoreSessionFromDisk()` explicitly.
+        if !Self.isRunningTests {
+            restoreSessionFromDisk()
+        }
+    }
+
+    /// True when this process is a unit-test host. Mirrors the multi-signal
+    /// detection in `CatalogStore.isRunningTests` and `ScanJobsStorage`.
+    private static var isRunningTests: Bool {
+        if NSClassFromString("XCTestCase") != nil { return true }
+        let env = ProcessInfo.processInfo.environment
+        if env["XCTestConfigurationFilePath"] != nil { return true }
+        if env["XCTestBundlePath"] != nil { return true }
+        if env["SWIFT_TESTING_ENABLED"] != nil { return true }
+        if Bundle.allBundles.contains(where: { $0.bundlePath.hasSuffix(".xctest") }) {
+            return true
+        }
+        return false
     }
 
     // MARK: Job management & core scan pipeline
