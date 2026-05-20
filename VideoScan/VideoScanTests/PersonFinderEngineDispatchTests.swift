@@ -31,9 +31,21 @@ actor LogSink {
 @MainActor
 struct PersonFinderEngineDispatchTests {
 
+    // dlib bail-path tests hang on the 7 GB virtualized-M1 GitHub runner:
+    // pfProcessVideoWithDlib enters a memory-pressure pauseGate that waits
+    // for >4 GB free, which never happens on the constrained VM, so the
+    // test sits forever instead of reaching the path-validation guard
+    // it's trying to cover. Tests still run locally where they finish
+    // in ~1 ms each. Re-enable when we move CI to a self-hosted runner
+    // (M1 MBP planned) or refactor pfProcessVideoWithDlib to short-circuit
+    // input validation before the memory check.
+    private static let dlibTestsHangOnCI: Bool =
+        ProcessInfo.processInfo.environment["CI"] != nil
+
     // MARK: - dlib bail: Python path empty / non-executable
 
-    @Test func dlibBailsWhenPythonPathEmpty() async {
+    @Test(.disabled(if: Self.dlibTestsHangOnCI, "Hangs on GH virt-M1 (see comment above)"))
+    func dlibBailsWhenPythonPathEmpty() async {
         let sink = LogSink()
         var settings = PersonFinderSettings()
         settings.pythonPath = ""
@@ -57,7 +69,8 @@ struct PersonFinderEngineDispatchTests {
                 "Should log Python not-found bail; got: \(log)")
     }
 
-    @Test func dlibBailsWhenPythonPathNonExecutable() async {
+    @Test(.disabled(if: Self.dlibTestsHangOnCI, "Hangs on GH virt-M1 (see comment above)"))
+    func dlibBailsWhenPythonPathNonExecutable() async {
         // Point pythonPath at a real-but-not-executable file (this source
         // file itself), so isExecutableFile returns false.
         let sink = LogSink()
@@ -82,7 +95,8 @@ struct PersonFinderEngineDispatchTests {
                 "Non-executable pythonPath should hit the same bail")
     }
 
-    @Test func dlibBailsWhenRecognitionScriptMissing() async {
+    @Test(.disabled(if: Self.dlibTestsHangOnCI, "Hangs on GH virt-M1 (see comment above)"))
+    func dlibBailsWhenRecognitionScriptMissing() async {
         // Use the system /bin/sh as a real executable, then point
         // recognitionScript at a path that doesn't exist. This passes
         // the python guard and falls through to the script-existence guard.
@@ -111,7 +125,8 @@ struct PersonFinderEngineDispatchTests {
 
     // MARK: - dlib pre-flight log lines (diagnostics surface)
 
-    @Test func dlibLogsPythonAndScriptPathsBeforeBailing() async {
+    @Test(.disabled(if: Self.dlibTestsHangOnCI, "Hangs on GH virt-M1 (see comment above)"))
+    func dlibLogsPythonAndScriptPathsBeforeBailing() async {
         // The production code writes "  dlib: python=..." and
         // "  dlib: script=..." before the existence checks. These lines
         // are the first thing Rick sees when a scan misbehaves; they
@@ -143,7 +158,8 @@ struct PersonFinderEngineDispatchTests {
 
     // MARK: - dlib respects pre-cancellation
 
-    @Test func dlibReturnsEarlyWhenTaskAlreadyCancelled() async {
+    @Test(.disabled(if: Self.dlibTestsHangOnCI, "Hangs on GH virt-M1 (see comment above)"))
+    func dlibReturnsEarlyWhenTaskAlreadyCancelled() async {
         // pfProcessVideoWithDlib calls Task.isCancelled right after
         // pauseGate.waitIfPaused(). A pre-cancelled Task should return
         // nil before any subprocess work or even the path-check guards.
