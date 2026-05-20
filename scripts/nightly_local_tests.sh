@@ -60,6 +60,7 @@ xcodebuild build-for-testing \
     -configuration Debug \
     -destination 'platform=macOS' \
     -derivedDataPath /tmp/nightly-dd \
+    -enableCodeCoverage YES \
     CODE_SIGNING_ALLOWED=NO \
     -quiet 2>&1 | tail -5
 
@@ -104,6 +105,8 @@ fi
 # ── Coverage ────────────────────────────────────────────────────────
 COV_LOGIC="null"
 if [ -d /tmp/nightly-results.xcresult ]; then
+    log "xcresult exists, extracting coverage..."
+    xcrun xccov view --report --only-targets /tmp/nightly-results.xcresult 2>&1 | head -5 | while read -r line; do log "  xccov: $line"; done
     LOGIC_NUMS=$(xcrun xccov view --report --files-for-target VideoScan.app /tmp/nightly-results.xcresult 2>/dev/null \
         | awk '
             NF < 3 { next }
