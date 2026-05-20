@@ -82,13 +82,15 @@ jobs:
       # GH-hosted virt-M1 runners run ~2s/test (vs 7ms local). At ~400
       # tests that's ~13 min execution. 20 min timeout gives headroom.
       #
-      # PROBE 2026-05-19: 4.6's binary search proved 50=pass, 55=hang
-      # (parallel runner deadlock between worker batches), 60+=planner
-      # hangs before any test runs. Hypothesis: -parallel-testing-enabled
-      # NO will kill the multi-worker pool and let us cross the 55 wall.
-      # Pushing to 60 suites simultaneously to probe both walls.
-      # If 60 suites all execute, the flag is the fix for the 55-class
-      # hang; remaining planner-class hang at higher counts → test plan.
+      # PROBE 2026-05-19 (iter 2): Previous attempt with
+      # -parallel-testing-enabled NO produced 0-suite ghost-pass — the
+      # flag is incompatible with Swift Testing on Xcode 16.4 (it forces
+      # the legacy XCTest single-process runner, which finds no @Test
+      # functions). Switching to .xctestplan approach (NetNewsWire
+      # pattern). The plan VideoScan-CI.xctestplan declares
+      # parallelizable=false at the test-target level, which controls
+      # xcodebuild's multi-process worker pool without breaking Swift
+      # Testing's own discovery. Goal: get 60 suites running sequentially.
       # See docs/gh-testing-19-may.md for prior binary-search findings.
       - name: Unit tests — pure-logic suites
         timeout-minutes: 20
@@ -98,70 +100,10 @@ jobs:
           xcodebuild test-without-building \
             -project VideoScan/VideoScan.xcodeproj \
             -scheme VideoScan \
+            -testPlan VideoScan-CI \
             -configuration Debug \
             -destination 'platform=macOS' \
             -derivedDataPath DerivedData \
-            -parallel-testing-enabled NO \
-            -only-testing:VideoScanTests/FilenameCorrelationKeyTests \
-            -only-testing:VideoScanTests/CorrelatorTests \
-            -only-testing:VideoScanTests/AvidClipIDTests \
-            -only-testing:VideoScanTests/ScoreCorrelatePairTests \
-            -only-testing:VideoScanTests/BuildAudioPoolsTests \
-            -only-testing:VideoScanTests/ResolveScopeTests \
-            -only-testing:VideoScanTests/AssignCandidatesTests \
-            -only-testing:VideoScanTests/FormattingDelegateTests \
-            -only-testing:VideoScanTests/FormattingTests \
-            -only-testing:VideoScanTests/FormattingBoundaryTests \
-            -only-testing:VideoScanTests/FormattingExtendedTests \
-            -only-testing:VideoScanTests/FileHasherTests \
-            -only-testing:VideoScanTests/StreamTypeTests \
-            -only-testing:VideoScanTests/StreamTypeBoundaryTests \
-            -only-testing:VideoScanTests/VideoRecordTests \
-            -only-testing:VideoScanTests/VideoRecordBoundaryTests \
-            -only-testing:VideoScanTests/PairConfidenceTests \
-            -only-testing:VideoScanTests/DuplicateConfidenceTests \
-            -only-testing:VideoScanTests/ScanPhaseTests \
-            -only-testing:VideoScanTests/DiscoveredVolumeTests \
-            -only-testing:VideoScanTests/DashboardBoundaryTests \
-            -only-testing:VideoScanTests/DashboardCombineCounterTests \
-            -only-testing:VideoScanTests/VolumeRootTests \
-            -only-testing:VideoScanTests/VideoRecordSnapshotTests \
-            -only-testing:VideoScanTests/CatalogTargetStatusTests \
-            -only-testing:VideoScanTests/CatalogScanTargetStatusExtendedTests \
-            -only-testing:VideoScanTests/ScanPerformanceSettingsTests \
-            -only-testing:VideoScanTests/CombinePairItemTests \
-            -only-testing:VideoScanTests/CombineJobStatusTests \
-            -only-testing:VideoScanTests/CombineJobStatusBoundaryTests \
-            -only-testing:VideoScanTests/RecognitionEngineTests \
-            -only-testing:VideoScanTests/LifecycleStageTests \
-            -only-testing:VideoScanTests/DetectedPeopleTests \
-            -only-testing:VideoScanTests/ArchiveHealthTests \
-            -only-testing:VideoScanTests/UniversalSearchTokenTests \
-            -only-testing:VideoScanTests/UniversalSearchYearExtractionTests \
-            -only-testing:VideoScanTests/UniversalSearchMatchingTests \
-            -only-testing:VideoScanTests/TriageDispositionTests \
-            -only-testing:VideoScanTests/TriageQueueTests \
-            -only-testing:VideoScanTests/DispositionTests \
-            -only-testing:VideoScanTests/DispositionThresholdTests \
-            -only-testing:VideoScanTests/TransitionRuleTests \
-            -only-testing:VideoScanTests/TestTempRuleTests \
-            -only-testing:VideoScanTests/CatalogPurgeTests \
-            -only-testing:VideoScanTests/CatalogPurgeUndoStateTests \
-            -only-testing:VideoScanTests/CatalogPurgeGapTests \
-            -only-testing:VideoScanTests/CatalogSkipSetTests \
-            -only-testing:VideoScanTests/CatalogFilterBoundaryTests \
-            -only-testing:VideoScanTests/CatalogNavigationTests \
-            -only-testing:VideoScanTests/CatalogImportExportTests \
-            -only-testing:VideoScanTests/ScanContextTests \
-            -only-testing:VideoScanTests/LogVerificationTests \
-            -only-testing:VideoScanTests/CICanaryTests \
-            -only-testing:VideoScanTests/MxfBinaryHelperTests \
-            -only-testing:VideoScanTests/MxfCodecIdentificationTests \
-            -only-testing:VideoScanTests/MxfPixelLayoutTests \
-            -only-testing:VideoScanTests/MxfMetadataTests \
-            -only-testing:VideoScanTests/AvbParserBoundaryTests \
-            -only-testing:VideoScanTests/VolumeReachabilityBoundaryTests \
-            -only-testing:VideoScanTests/DuplicateDetectorBoundaryTests \
             -enableCodeCoverage NO \
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \

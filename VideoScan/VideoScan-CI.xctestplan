@@ -1,0 +1,93 @@
+{
+  "configurations" : [
+    {
+      "id" : "124C4E3F-F129-4413-B209-05C908E23602",
+      "name" : "CI",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "codeCoverage" : false,
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:VideoScan.xcodeproj",
+      "identifier" : "0DC193272F676647006295E7",
+      "name" : "VideoScan"
+    },
+    "testExecutionOrdering" : "alphabetical"
+  },
+  "testTargets" : [
+    {
+      "parallelizable" : false,
+      "selectedTests" : [
+        "VideoScanTests/ArchiveHealthTests",
+        "VideoScanTests/AssignCandidatesTests",
+        "VideoScanTests/AvbParserBoundaryTests",
+        "VideoScanTests/AvidClipIDTests",
+        "VideoScanTests/BuildAudioPoolsTests",
+        "VideoScanTests/CICanaryTests",
+        "VideoScanTests/CatalogFilterBoundaryTests",
+        "VideoScanTests/CatalogImportExportTests",
+        "VideoScanTests/CatalogNavigationTests",
+        "VideoScanTests/CatalogPurgeGapTests",
+        "VideoScanTests/CatalogPurgeTests",
+        "VideoScanTests/CatalogPurgeUndoStateTests",
+        "VideoScanTests/CatalogScanTargetStatusExtendedTests",
+        "VideoScanTests/CatalogSkipSetTests",
+        "VideoScanTests/CatalogTargetStatusTests",
+        "VideoScanTests/CombineJobStatusBoundaryTests",
+        "VideoScanTests/CombineJobStatusTests",
+        "VideoScanTests/CombinePairItemTests",
+        "VideoScanTests/CorrelatorTests",
+        "VideoScanTests/DashboardBoundaryTests",
+        "VideoScanTests/DashboardCombineCounterTests",
+        "VideoScanTests/DetectedPeopleTests",
+        "VideoScanTests/DiscoveredVolumeTests",
+        "VideoScanTests/DispositionThresholdTests",
+        "VideoScanTests/DispositionTests",
+        "VideoScanTests/DuplicateConfidenceTests",
+        "VideoScanTests/DuplicateDetectorBoundaryTests",
+        "VideoScanTests/FileHasherTests",
+        "VideoScanTests/FilenameCorrelationKeyTests",
+        "VideoScanTests/FormattingBoundaryTests",
+        "VideoScanTests/FormattingDelegateTests",
+        "VideoScanTests/FormattingExtendedTests",
+        "VideoScanTests/FormattingTests",
+        "VideoScanTests/LifecycleStageTests",
+        "VideoScanTests/LogVerificationTests",
+        "VideoScanTests/MxfBinaryHelperTests",
+        "VideoScanTests/MxfCodecIdentificationTests",
+        "VideoScanTests/MxfMetadataTests",
+        "VideoScanTests/MxfPixelLayoutTests",
+        "VideoScanTests/PairConfidenceTests",
+        "VideoScanTests/RecognitionEngineTests",
+        "VideoScanTests/ResolveScopeTests",
+        "VideoScanTests/ScanContextTests",
+        "VideoScanTests/ScanPerformanceSettingsTests",
+        "VideoScanTests/ScanPhaseTests",
+        "VideoScanTests/ScoreCorrelatePairTests",
+        "VideoScanTests/StreamTypeBoundaryTests",
+        "VideoScanTests/StreamTypeTests",
+        "VideoScanTests/TestTempRuleTests",
+        "VideoScanTests/TransitionRuleTests",
+        "VideoScanTests/TriageDispositionTests",
+        "VideoScanTests/TriageQueueTests",
+        "VideoScanTests/UniversalSearchMatchingTests",
+        "VideoScanTests/UniversalSearchTokenTests",
+        "VideoScanTests/UniversalSearchYearExtractionTests",
+        "VideoScanTests/VideoRecordBoundaryTests",
+        "VideoScanTests/VideoRecordSnapshotTests",
+        "VideoScanTests/VideoRecordTests",
+        "VideoScanTests/VolumeReachabilityBoundaryTests",
+        "VideoScanTests/VolumeRootTests"
+      ],
+      "target" : {
+        "containerPath" : "container:VideoScan.xcodeproj",
+        "identifier" : "0DC193342F676648006295E7",
+        "name" : "VideoScanTests"
+      }
+    }
+  ],
+  "version" : 1
+}
