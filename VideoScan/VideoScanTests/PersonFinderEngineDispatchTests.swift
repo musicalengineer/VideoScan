@@ -39,8 +39,12 @@ struct PersonFinderEngineDispatchTests {
     // in ~1 ms each. Re-enable when we move CI to a self-hosted runner
     // (M1 MBP planned) or refactor pfProcessVideoWithDlib to short-circuit
     // input validation before the memory check.
+    // VS_VIRT_M1 is injected by VideoScan-CI.xctestplan's environmentVariableEntries.
+    // ProcessInfo's view of CI=true (set by GitHub Actions) doesn't survive
+    // the hop into xcodebuild's xctest child process, so we use a plan-scoped
+    // env var that we control directly.
     private static let dlibTestsHangOnCI: Bool =
-        ProcessInfo.processInfo.environment["CI"] != nil
+        ProcessInfo.processInfo.environment["VS_VIRT_M1"] != nil
 
     // MARK: - dlib bail: Python path empty / non-executable
 

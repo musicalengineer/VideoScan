@@ -8,6 +8,12 @@
   ],
   "defaultOptions": {
     "codeCoverage": false,
+    "environmentVariableEntries": [
+      {
+        "key": "VS_VIRT_M1",
+        "value": "1"
+      }
+    ],
     "targetForVariableExpansion": {
       "containerPath": "container:VideoScan.xcodeproj",
       "identifier": "0DC193272F676647006295E7",
