@@ -345,7 +345,15 @@
         "VolumeReachabilityBoundaryTests/reachabilityCacheSharesEntryAcrossSameVolume()",
         "VolumeReachabilityBoundaryTests/invalidateCacheClearsState()",
         "VolumeRootTests/volumePathExtraction()",
-        "VolumeRootTests/nonVolumePath()"
+        "VolumeRootTests/nonVolumePath()",
+        "IntegrationStressTests/concurrentSubsystemStorm()",
+        "IntegrationStressTests/catalogSearchStormStandalone()",
+        "IntegrationStressTests/ffprobeStormStandalone()",
+        "IntegrationStressTests/hashingStormStandalone()",
+        "IntegrationStressTests/visionDetectionStormStandalone()",
+        "IntegrationStressTests/arcfaceInferenceStormStandalone()",
+        "PipelineStressTests/catalogScanSimulation()",
+        "PipelineStressTests/duplicateDetectionUnderLoad()"
       ],
       "target": {
         "containerPath": "container:VideoScan.xcodeproj",
