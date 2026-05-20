@@ -53,12 +53,43 @@ enum ScanJobsStorage {
 
     // MARK: - Paths
 
+    /// True when this process is a unit-test host. Multi-signal because
+    /// Swift Testing doesn't necessarily link XCTest, so a single env-var
+    /// check isn't reliable. Mirrors `CatalogStore.isRunningTests`.
+    private static var isRunningTests: Bool {
+        if NSClassFromString("XCTestCase") != nil { return true }
+        let env = ProcessInfo.processInfo.environment
+        if env["XCTestConfigurationFilePath"] != nil { return true }
+        if env["XCTestBundlePath"] != nil { return true }
+        if env["SWIFT_TESTING_ENABLED"] != nil { return true }
+        if Bundle.allBundles.contains(where: { $0.bundlePath.hasSuffix(".xctest") }) {
+            return true
+        }
+        return false
+    }
+
     /// Root directory for descriptor JSON files. Created on first access.
-    /// Test override is via the explicit-directory variants below.
+    ///
+    /// Under tests, `storeDir` redirects to a per-process temp directory.
+    /// This prevents tests that go through the no-arg convenience wrappers
+    /// (e.g. `PersonFinderModel.init` → `restoreSessionFromDisk` →
+    /// `listAll()`) from picking up Rick's real persisted search history,
+    /// which would otherwise leak in as an off-by-one stray job. Tests
+    /// that want pinpointed isolation still use the explicit-directory
+    /// variants below.
     static var storeDir: URL {
-        let base = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first ?? URL(fileURLWithPath: NSHomeDirectory())
+        let base: URL
+        if isRunningTests {
+            base = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent(
+                    "VideoScanTests-\(ProcessInfo.processInfo.processIdentifier)",
+                    isDirectory: true
+                )
+        } else {
+            base = FileManager.default.urls(
+                for: .applicationSupportDirectory, in: .userDomainMask
+            ).first ?? URL(fileURLWithPath: NSHomeDirectory())
+        }
         let dir = base
             .appendingPathComponent("VideoScan", isDirectory: true)
             .appendingPathComponent("scan_jobs", isDirectory: true)
