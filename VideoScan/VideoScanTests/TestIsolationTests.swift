@@ -16,13 +16,16 @@ struct TestIsolationTests {
     // MARK: - storeDir redirection
 
     @Test("storeDir under test routes to per-PID sandbox, not Application Support")
-    func storeDirUnderTestRedirectsToSandbox() {
+    func storeDirUnderTestRedirectsToSandbox() throws {
         let dir = ScanJobsStorage.storeDir.path
 
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first!.path
-        #expect(!dir.hasPrefix(appSupport),
+        let appSupportURL = try #require(
+            FileManager.default.urls(
+                for: .applicationSupportDirectory, in: .userDomainMask
+            ).first,
+            "Application Support URL unavailable — macOS API contract violated"
+        )
+        #expect(!dir.hasPrefix(appSupportURL.path),
                 "storeDir leaked into Application Support: \(dir)")
 
         let pidMarker = "VideoScanTests-\(ProcessInfo.processInfo.processIdentifier)"
@@ -38,8 +41,13 @@ struct TestIsolationTests {
 
     @Test("save() through the no-arg wrapper leaves Application Support untouched")
     func productionSaveDoesNotPolluteApplicationSupport() throws {
-        let realScanJobs = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let appSupportURL = try #require(
+            FileManager.default.urls(
+                for: .applicationSupportDirectory, in: .userDomainMask
+            ).first,
+            "Application Support URL unavailable — macOS API contract violated"
+        )
+        let realScanJobs = appSupportURL
             .appendingPathComponent("VideoScan", isDirectory: true)
             .appendingPathComponent("scan_jobs", isDirectory: true)
 
