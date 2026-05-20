@@ -40,6 +40,31 @@ enum VideoScanTests {
             regressionPersonFinderEngineDispatch,
             regressionVolumeReachabilityCache
         ])
+
+        // Auto-discover @Suite declarations from VideoScanTests source files.
+        // Skip suites already covered by manual regression entries above.
+        SuiteDiscovery.registerDiscoveredSuites(excluding: [
+            "PersonFinderEngineDispatchTests",
+            "VolumeReachabilityBoundaryTests",
+            "ArcFaceModelLoaderTests"
+        ])
+    }
+
+    /// Public entry point for auto-discovered suites. Delegates to the
+    /// shared xcodebuild helper with Debug config.
+    static func runDiscoveredSuite(
+        suiteName: String,
+        host: TestHost,
+        log: @escaping @Sendable (String) -> Void
+    ) async -> TestResult {
+        await runXcodebuildTest(
+            host: host,
+            configuration: "Debug",
+            onlyTesting: "VideoScanTests/\(suiteName)",
+            entrySupportsCoverage: true,
+            log: log,
+            timeoutSeconds: 600
+        )
     }
 
     // MARK: - Smoke
