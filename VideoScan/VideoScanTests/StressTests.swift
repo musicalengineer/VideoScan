@@ -385,6 +385,6 @@ struct PipelineStressTests {
         // ffmpeg parameters — content differs because testsrc includes
         // a frame counter, so hashes will differ. That's fine — we're
         // testing that parallel hashing doesn't crash or produce corrupt output.
-        #expect(uniqueHashes.count > 0)
+        #expect(!uniqueHashes.isEmpty)
     }
 }
