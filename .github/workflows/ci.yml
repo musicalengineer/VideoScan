@@ -33,8 +33,8 @@ jobs:
       - name: Install SwiftLint, Periphery & FFmpeg
         run: |
           brew install swiftlint || true
-          brew install peripheryapp/periphery/periphery || true
-          brew upgrade peripheryapp/periphery/periphery || true
+          # Use the homebrew-core formula (3.x), not the cask (stuck at 2.21.2).
+          brew install periphery || true
           brew install ffmpeg || true
           echo "Periphery: $(periphery version)"
           ffmpeg -version | head -1
@@ -73,9 +73,11 @@ jobs:
         run: |
           echo "## Periphery — unused code" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          # Note: --exclude-tests was removed from periphery; cask resolves to 2.21.2.
-          # Test files appear in unused-code findings until we filter via .periphery.yml.
-          periphery scan 2>&1 | tee periphery-raw.txt | tee -a $GITHUB_STEP_SUMMARY || true
+          periphery scan \
+            --skip-build \
+            --index-store-path DerivedData/Index.noindex/DataStore \
+            --format xcode \
+            2>&1 | tee periphery-raw.txt | tee -a $GITHUB_STEP_SUMMARY || true
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "PERIPHERY_OUTPUT=$(pwd)/periphery-raw.txt" >> $GITHUB_ENV
 
@@ -106,7 +108,7 @@ jobs:
             -configuration Debug \
             -destination 'platform=macOS' \
             -derivedDataPath DerivedData \
-            -enableCodeCoverage NO \
+            -enableCodeCoverage YES \
             -resultBundlePath TestResults.xcresult \
             CODE_SIGNING_ALLOWED=NO \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
