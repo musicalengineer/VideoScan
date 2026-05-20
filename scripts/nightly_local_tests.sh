@@ -48,7 +48,7 @@ if [ "$AHEAD" -gt 0 ]; then
 fi
 
 COMMIT=$(git rev-parse --short HEAD)
-COMMIT_DATE=$(git log -1 --format=%Y-%m-%d)
+COMMIT_DATE=$(git log -1 --format=%cd --date=short)
 log "Commit: $COMMIT ($COMMIT_DATE)"
 
 # ── Build ───────────────────────────────────────────────────────────
@@ -71,6 +71,7 @@ BUILD_END=$(date +%s)
 log "Build done in $((BUILD_END - BUILD_START))s"
 
 # ── Test ────────────────────────────────────────────────────────────
+rm -rf /tmp/nightly-results.xcresult /tmp/nightly-test-output.log
 log "Running ALL tests with coverage..."
 TEST_START=$(date +%s)
 xcodebuild test-without-building \
