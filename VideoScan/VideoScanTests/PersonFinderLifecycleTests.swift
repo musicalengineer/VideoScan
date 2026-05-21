@@ -106,6 +106,42 @@ struct PersonFinderLifecycleTests {
         #expect(log.contains("offline"), "Console should mention offline; got: \(log)")
     }
 
+    // Regression: when a profile IS assigned, the previous offline guard
+    // sat downstream of `Task { await loadFacesForJob(...); startJobAfterLoad(...) }`,
+    // so the UI showed spinning/face-loading activity before failing with
+    // a confusing message. The user-visible bug Rick reported: "starts
+    // spinning saying something about indexes, then fails with no clear
+    // reason." Fix: hoist the reachability check into `startJob` so it
+    // fires BEFORE the async Task hop, regardless of profile state.
+    //
+    // This test pins the contract: after `startJob` returns, an offline
+    // volume must already be in .failed("…offline…"). If the offline
+    // guard ever drifts back below the Task hop, this fails because the
+    // detached Task hasn't run yet and `job.status` is still .idle.
+    @Test func startJobWithProfileFailsFastOnOfflineVolume() {
+        let model = PersonFinderModel()
+        let profile = POIProfile(
+            name: "Donna",
+            referencePath: "/tmp/_VS_Test_NonexistentRefs",
+            engine: RecognitionEngine.vision.rawValue
+        )
+        let job = ScanJob(searchPath: "/Volumes/_DefinitelyNotMounted_VS_Test")
+        job.assignedProfile = profile
+        model.jobs.append(job)
+
+        model.startJob(job)
+
+        // Synchronous expectation — no polling. If status isn't .failed
+        // here, the offline check is downstream of the Task hop.
+        if case .failed(let msg) = job.status {
+            #expect(msg.contains("offline"),
+                    "Expected offline message; got: \(msg)")
+        } else {
+            let msg = "Offline volume must fail BEFORE async face-loading Task; got \(job.status.label). If this fires, the reachability guard moved back into startJobAfterLoad."
+            Issue.record(Comment(rawValue: msg))
+        }
+    }
+
     // Refactor risk: startJob has TWO entry points — direct (faces already
     // loaded) and async (loads faces first, then calls startJobAfterLoad).
     // This test exercises the direct path with a noop bail (no faces).
