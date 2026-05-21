@@ -118,7 +118,7 @@ jobs:
           # Swift Testing emits ✔/✘/◇ markers; legacy XCTest emits "Test Case ..."
           # Count both so the canary is robust to either runner being used.
           PASSED=$(grep -cE '^(✔ Test |Test Case .*passed)' test-output.log || true)
-          FAILED=$(grep -cE '^(✘ Test .*failed after|Test Case .*failed)' test-output.log || true)
+          FAILED=$(grep -cE '^(✘ Test .*failed after|Test Case .*failed)' test-output.log | grep -cv 'Test run with' || true)
           SUITES_STARTED=$(grep -cE '^(◇ Suite |Test Suite .*started)' test-output.log || true)
 
           # ── Canary verification ──
@@ -170,7 +170,7 @@ jobs:
             echo "### Real Failures (excluding canary)" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
             grep -E '^(✘ Test .*failed after|Test Case .*failed)' test-output.log \
-              | grep -v 'mustFail()' >> $GITHUB_STEP_SUMMARY || true
+              | grep -v 'mustFail()\|Test run with' >> $GITHUB_STEP_SUMMARY || true
             echo '```' >> $GITHUB_STEP_SUMMARY
             echo "::error::$REAL_FAILED real test failure(s)"
             exit 1
