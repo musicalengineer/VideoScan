@@ -12,6 +12,10 @@
       {
         "key": "VS_VIRT_M1",
         "value": "1"
+      },
+      {
+        "key": "CI",
+        "value": "1"
       }
     ],
     "targetForVariableExpansion": {
