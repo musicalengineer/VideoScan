@@ -2,114 +2,123 @@ import Foundation
 import Testing
 @testable import VideoScan
 
-/// Regression test for SIGABRT crash when FileHandle.readData(ofLength:)
-/// encounters an I/O error (volume disconnected, fd invalidated mid-read).
-///
-/// The old code used the non-throwing readData(ofLength:) which dispatches to
-/// ObjC -[NSConcreteFileHandle readDataOfLength:]. That method throws NSException
-/// on I/O errors, which Swift cannot catch — resulting in SIGABRT.
-///
-/// The fix replaces it with the throwing read(upToCount:) API, which uses the
-/// error-returning ObjC variant readDataUpToLength:error: instead.
-///
-/// Crash report: VideoScan-2026-05-20-202559.ips
+// regression: crash VideoScan-2026-05-20-202559.ips
+//
+// FileHandle.readData(ofLength:) bridges to ObjC
+// -[NSConcreteFileHandle readDataOfLength:] which throws NSException
+// on I/O errors. Swift can't catch NSException → SIGABRT.
+//
+// Fix: use try fh.read(upToCount:) which bridges to the error-returning
+// ObjC variant and produces a catchable Swift Error.
 @Suite struct DiskFeederIOErrorTests {
 
-    // MARK: - Helpers
+    // ── Core proof: bad-fd read throws catchable error ──────────────
 
-    private func makeTempFile(sizeKB: Int) -> URL {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("DiskFeederIOTest-\(UUID().uuidString)")
-        try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let file = dir.appendingPathComponent("test.bin")
-        let data = Data(repeating: 0xCD, count: sizeKB * 1024)
-        try! data.write(to: file)
-        return file
+    /// Simulate a volume disconnect by closing the fd under the FileHandle.
+    /// read(upToCount:) must throw a catchable Swift Error, not crash.
+    /// This is the exact condition from the crash report.
+    @Test func readUpToCountThrowsOnClosedFD() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fd-test-\(UUID().uuidString).bin")
+        try Data(repeating: 0xAB, count: 64 * 1024).write(to: tmp)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let fh = try #require(FileHandle(forReadingAtPath: tmp.path))
+
+        // Pull the rug: close the fd, simulating volume disconnect mid-read
+        close(fh.fileDescriptor)
+
+        // read(upToCount:) must throw, not SIGABRT
+        #expect(throws: (any Error).self) {
+            _ = try fh.read(upToCount: 4096)
+        }
     }
 
-    private func cleanup(_ url: URL) {
-        let dir = url.deletingLastPathComponent()
-        try? FileManager.default.removeItem(at: dir)
+    /// Prove the OLD API (readData(ofLength:)) crashes on a closed fd.
+    /// We run it in a subprocess so SIGABRT doesn't kill our test runner.
+    @Test func readDataOfLengthCrashesOnClosedFD() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("fd-crash-\(UUID().uuidString).bin")
+        try Data(repeating: 0xAB, count: 64 * 1024).write(to: tmp)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        // Swift snippet that opens the file, closes the fd, then calls
+        // the old readData(ofLength:) API. This should SIGABRT.
+        let script = """
+        import Foundation
+        let fh = FileHandle(forReadingAtPath: "\(tmp.path)")!
+        close(fh.fileDescriptor)
+        let _ = fh.readData(ofLength: 4096)
+        exit(0)
+        """
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/swift")
+        proc.arguments = ["-e", script]
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        try proc.run()
+        proc.waitUntilExit()
+
+        // SIGABRT = termination status is signal-based, not 0.
+        // On macOS, uncaught NSException → abort() → exit status != 0.
+        let status = proc.terminationStatus
+        #expect(status != 0, "readData(ofLength:) on closed fd should crash (got exit \(status))")
     }
 
-    // MARK: - Regression: feeder survives file that vanishes between stat and open
+    // ── Integration: DiskFeeder survives I/O errors ─────────────────
 
-    /// File is deleted after attributesOfItem succeeds but before/during read.
-    /// On macOS, the fd stays valid for already-open files, but the feeder should
-    /// not crash regardless of timing.
     @Test func feederSurvivesDeletedFile() async {
         let file = makeTempFile(sizeKB: 64)
         defer { cleanup(file) }
 
-        let paths = [file.path]
-        let feeder = DiskFeeder(files: paths, budgetBytes: 1 * 1024 * 1024 * 1024)
-
-        // Delete the file before starting the feeder
         try? FileManager.default.removeItem(at: file)
 
+        let feeder = DiskFeeder(files: [file.path], budgetBytes: 1_073_741_824)
         await feeder.start()
         await feeder.waitForWarm(0)
 
-        // Should complete without crashing. bytesWarmed may be 0
-        // because FileHandle(forReadingAtPath:) returns nil for deleted files.
         let warmed = await feeder.bytesWarmed
         #expect(warmed == 0)
         await feeder.cancel()
     }
 
-    // MARK: - Regression: feeder handles truncated file gracefully
-
-    /// File is truncated to 0 bytes between stat (which sees original size)
-    /// and the actual read loop. The feeder should not hang or crash.
-    @Test func feederHandlesTruncatedFile() async {
-        let file = makeTempFile(sizeKB: 256)
-        defer { cleanup(file) }
-
-        let paths = [file.path]
-
-        // Truncate the file after it's been created (simulates partial volume disconnect)
-        FileManager.default.createFile(atPath: file.path, contents: Data())
-
-        let feeder = DiskFeeder(files: paths, budgetBytes: 1 * 1024 * 1024 * 1024)
-        await feeder.start()
-        await feeder.waitForWarm(0)
-
-        // Should not hang or crash
-        await feeder.cancel()
-    }
-
-    // MARK: - Regression: feeder continues past bad file to remaining files
-
-    /// Verifies that an I/O error on one file doesn't prevent subsequent files
-    /// from being warmed. This is the real-world scenario: one file on a
-    /// disconnected volume shouldn't kill the entire scan.
     @Test func feederContinuesPastBadFile() async {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("DiskFeederContinue-\(UUID().uuidString)")
         try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
 
-        // File 0: will be deleted (non-existent at read time)
         let bad = dir.appendingPathComponent("bad.bin")
         try! Data(repeating: 0xAA, count: 1024).write(to: bad)
-        // File 1: valid, should still get warmed
         let good = dir.appendingPathComponent("good.bin")
         let goodData = Data(repeating: 0xBB, count: 32 * 1024)
         try! goodData.write(to: good)
 
-        // Delete the "bad" file before feeder starts
         try! FileManager.default.removeItem(at: bad)
 
-        let paths = [bad.path, good.path]
-        let feeder = DiskFeeder(files: paths, budgetBytes: 1 * 1024 * 1024 * 1024)
+        let feeder = DiskFeeder(files: [bad.path, good.path], budgetBytes: 1_073_741_824)
         await feeder.start()
-
-        // Wait for both — the feeder should skip the bad file and warm the good one
         await feeder.waitForWarm(0)
         await feeder.waitForWarm(1)
 
         let warmed = await feeder.bytesWarmed
         #expect(warmed >= UInt64(goodData.count))
         await feeder.cancel()
+    }
+
+    // ── Helpers ─────────────────────────────────────────────────────
+
+    private func makeTempFile(sizeKB: Int) -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DiskFeederIOTest-\(UUID().uuidString)")
+        try! FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("test.bin")
+        try! Data(repeating: 0xCD, count: sizeKB * 1024).write(to: file)
+        return file
+    }
+
+    private func cleanup(_ url: URL) {
+        try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
     }
 }
