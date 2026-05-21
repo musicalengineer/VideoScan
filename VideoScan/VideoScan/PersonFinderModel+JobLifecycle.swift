@@ -80,6 +80,12 @@ extension PersonFinderModel {
         job.scanTask?.cancel()
         job.timerTask?.cancel()
         jobs.removeAll { $0.id == job.id }
+        // Also drop the on-disk descriptor so the search doesn't reappear
+        // on next launch. No-op for jobs that never reached save() (the
+        // descriptor file simply isn't there). Without this, deleting a
+        // completed search via the UI looked successful but the entry
+        // would resurrect on relaunch via restoreSessionFromDisk.
+        ScanJobsStorage.delete(id: job.id)
     }
 
     func restoreFromCache(job: ScanJob) {

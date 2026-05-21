@@ -76,6 +76,55 @@ struct PersonFinderLifecycleTests {
         #expect(model.jobs.map(\.searchPath) == ["/tmp/a", "/tmp/c"])
     }
 
+    // regression: removeJob historically only cleared the in-memory `jobs`
+    // array but left the on-disk descriptor behind, so deleted searches
+    // would silently reappear on the next app launch (Rick's M5 report,
+    // 2026-05-21). This test pins down that removeJob propagates the
+    // delete all the way to disk.
+    @Test func removeJobAlsoDeletesPersistedDescriptor() throws {
+        // Start from a known-clean storeDir. Under tests this resolves to
+        // a per-process temp dir (see ScanJobsStorage.storeDir), so
+        // clearing here doesn't touch Rick's real Application Support.
+        let dir = ScanJobsStorage.storeDir
+        try? FileManager.default.removeItem(at: dir)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        let descriptor = PersistedJobDescriptor(
+            id: UUID(),
+            personName: "TestPerson",
+            profileFolderName: nil,
+            searchPath: "/tmp/test_search",
+            engine: "vision",
+            threshold: 0.5,
+            referencePath: "/tmp/test_refs",
+            referenceFilenames: [],
+            completedAt: Date(),
+            videosScanned: 1,
+            videosTotal: 1,
+            videosWithHits: 0,
+            clipsFound: 0,
+            presenceSecs: 0,
+            elapsedSecs: 0
+        )
+        try ScanJobsStorage.save(descriptor)
+        #expect(ScanJobsStorage.listAll().count == 1)
+
+        // init() skips restore under tests; call it explicitly so we can
+        // see a job that originated from disk.
+        let model = PersonFinderModel()
+        model.restoreSessionFromDisk()
+        #expect(model.jobs.count == 1)
+
+        let job = model.jobs[0]
+        model.removeJob(job)
+
+        #expect(model.jobs.isEmpty)
+        #expect(
+            ScanJobsStorage.listAll().isEmpty,
+            "removeJob must delete the persisted descriptor; otherwise the search reappears on app relaunch"
+        )
+    }
+
     // MARK: - startJob: pre-flight bailouts (captures volume-offline guard
     //                  added in commit 97342c8)
 
