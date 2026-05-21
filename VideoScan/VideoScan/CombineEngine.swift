@@ -204,8 +204,8 @@ enum CombineEngine {
 
             while true {
                 try Task.checkCancellation()
-                let chunk = reader.readData(ofLength: bufferSize)
-                if chunk.isEmpty { break }
+                guard let chunk = try reader.read(upToCount: bufferSize),
+                      !chunk.isEmpty else { break }
                 try writer.write(contentsOf: chunk)
             }
         }.value

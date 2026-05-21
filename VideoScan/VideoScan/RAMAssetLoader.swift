@@ -137,22 +137,37 @@ actor DiskFeeder {
     /// so the disk gets full sequential bandwidth.
     private static func warmFile(path: String, fileSize: Int64) -> Int? {
         guard let fh = FileHandle(forReadingAtPath: path) else { return nil }
-        defer { fh.closeFile() }
+        defer { try? fh.close() }
 
         let fd = fh.fileDescriptor
         _ = fcntl(fd, F_RDAHEAD, 1)
 
         let chunkSize = 4 * 1024 * 1024  // 4MB chunks
         var bytesRead = 0
-        while bytesRead < Int(fileSize) {
+        var ioError = false
+        while bytesRead < Int(fileSize) && !ioError {
             if Task.isCancelled { break }
             autoreleasepool {
-                let chunk = fh.readData(ofLength: chunkSize)
-                bytesRead += chunk.count
-                if chunk.isEmpty { bytesRead = Int(fileSize) }
+                do {
+                    // Use the throwing API — the legacy readData(ofLength:) calls
+                    // through to ObjC -[NSConcreteFileHandle readDataOfLength:]
+                    // which throws NSException on I/O errors (disconnected volume,
+                    // bad fd, etc.). Swift cannot catch NSException; SIGABRT results.
+                    // read(upToCount:) uses the error-returning ObjC variant instead.
+                    guard let chunk = try fh.read(upToCount: chunkSize) else {
+                        bytesRead = Int(fileSize)  // EOF
+                        return
+                    }
+                    bytesRead += chunk.count
+                    if chunk.isEmpty { bytesRead = Int(fileSize) }
+                } catch {
+                    let filename = URL(fileURLWithPath: path).lastPathComponent
+                    ramLog.error("Feeder I/O error reading \(filename, privacy: .public) at offset \(bytesRead): \(error.localizedDescription, privacy: .public)")
+                    ioError = true
+                }
             }
         }
-        return bytesRead
+        return ioError ? nil : bytesRead
     }
 }
 
@@ -211,7 +226,7 @@ enum PageCacheWarmer {
         }
 
         guard let fh = FileHandle(forReadingAtPath: fileURL.path) else { return nil }
-        defer { fh.closeFile() }
+        defer { try? fh.close() }
 
         let fd = fh.fileDescriptor
         _ = fcntl(fd, F_RDAHEAD, 1)
@@ -219,11 +234,22 @@ enum PageCacheWarmer {
         let chunkSize = 4 * 1024 * 1024
         var bytesRead = 0
         while true {
+            var hitEOF = false
+            var hitError = false
             autoreleasepool {
-                let chunk = fh.readData(ofLength: chunkSize)
-                bytesRead += chunk.count
-                if chunk.isEmpty { return }
+                do {
+                    guard let chunk = try fh.read(upToCount: chunkSize) else {
+                        hitEOF = true
+                        return
+                    }
+                    bytesRead += chunk.count
+                    if chunk.isEmpty { hitEOF = true }
+                } catch {
+                    ramLog.error("PageCacheWarmer I/O error reading \(fileURL.lastPathComponent, privacy: .public) at offset \(bytesRead): \(error.localizedDescription, privacy: .public)")
+                    hitError = true
+                }
             }
+            if hitEOF || hitError { break }
             if bytesRead >= Int(fileSize) { break }
         }
 
