@@ -331,31 +331,8 @@ final class VideoScanModel: ObservableObject {
             // Persist the merged set so subsequent launches skip the backfill.
             catalogStore.scheduleSave(records: records)
         }
-        // Consistency check: if a target claims "Cataloged" but has zero
-        // records, the catalog was deleted or lost — reset to NO CATALOG.
-        for t in scanTargets where t.phase == .cataloged {
-            let hasRecords = records.contains { $0.fullPath.hasPrefix(t.searchPath) }
-            if !hasRecords {
-                t.phase = .noCatalog
-                t.lastScannedDate = nil
-            }
-        }
-        // Auto-repair: if a target shows noCatalog but we have records for
-        // it, a previous test run corrupted the persisted phase. Re-derive
-        // the phase from actual catalog data.
-        if !records.isEmpty {
-            var repaired = 0
-            for t in scanTargets where t.phase == .noCatalog && !t.searchPath.isEmpty {
-                if records.contains(where: { $0.fullPath.hasPrefix(t.searchPath) }) {
-                    t.phase = .cataloged
-                    repaired += 1
-                }
-            }
-            if repaired > 0 {
-                log("Repaired \(repaired) volume phase(s) — catalog data exists but phases were reset.")
-                persistScanDates()
-            }
-        }
+        enforcePhaseConsistency()
+        repairCorruptedPhases()
         installVolumeMountObservers()
         refreshTargetReachability()
     }
@@ -1426,6 +1403,40 @@ final class VideoScanModel: ObservableObject {
             savedCapacityKey: Self.savedCapacityKey,
             savedNotesKey: Self.savedNotesKey
         )
+    }
+
+    // MARK: - Phase Consistency
+
+    /// If a target claims "Cataloged" but has zero records, the catalog was
+    /// deleted or lost — reset to NO CATALOG so the UI doesn't lie.
+    func enforcePhaseConsistency() {
+        for t in scanTargets where t.phase == .cataloged {
+            let hasRecords = records.contains { $0.fullPath.hasPrefix(t.searchPath) }
+            if !hasRecords {
+                t.phase = .noCatalog
+                t.lastScannedDate = nil
+            }
+        }
+    }
+
+    /// If a target shows noCatalog but we have records for it, a previous
+    /// test run (or crash) corrupted the persisted phase. Re-derive the
+    /// phase from actual catalog data. Returns number of targets repaired.
+    @discardableResult
+    func repairCorruptedPhases() -> Int {
+        guard !records.isEmpty else { return 0 }
+        var repaired = 0
+        for t in scanTargets where t.phase == .noCatalog && !t.searchPath.isEmpty {
+            if records.contains(where: { $0.fullPath.hasPrefix(t.searchPath) }) {
+                t.phase = .cataloged
+                repaired += 1
+            }
+        }
+        if repaired > 0 {
+            log("Repaired \(repaired) volume phase(s) — catalog data exists but phases were reset.")
+            persistScanDates()
+        }
+        return repaired
     }
 
     /// Update a volume's lifecycle phase and persist.
