@@ -161,6 +161,20 @@ extension PersonFinderModel {
     func startJob(_ job: ScanJob) {
         guard !job.status.isActive else { return }
 
+        // Volume reachability — fail fast BEFORE the async loadFacesForJob
+        // Task hop. Otherwise the user sees spinning/face-loading activity
+        // and an eventual confusing error instead of an immediate "offline"
+        // diagnosis. startJobAfterLoad still re-checks as a belt-and-suspenders
+        // guard against the (rare) volume-goes-offline-mid-load race.
+        if !VolumeReachability.isReachable(path: job.searchPath) {
+            let volumeName = VolumeReachability.volumeName(forPath: job.searchPath)
+            let msg = "⚠ Volume \"\(volumeName)\" is offline. Mount it and try again."
+            job.appendLog(msg)
+            osLog.error("startJob bailed: volume offline (\(job.searchPath, privacy: .public))")
+            job.status = .failed("Volume \"\(volumeName)\" offline")
+            return
+        }
+
         // If job has an assigned profile but no faces loaded yet, load them first
         if job.assignedProfile != nil && job.assignedFaces.isEmpty {
             Task {
