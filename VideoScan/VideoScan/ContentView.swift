@@ -83,6 +83,15 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(minWidth: 900, minHeight: 600)
+        .onAppear {
+            // Bridge PersonFinder scan completions to catalog writeback:
+            // every "Donna found in /v/X.mov" produces a "Donna" tag on
+            // that VideoRecord's detectedPeople list. Weak ref on the
+            // catalog model so teardown is clean under test hosts.
+            personFinderModel.onScanComplete = { [weak model] person, matches in
+                model?.applyDetectedPeople(matches: matches, person: person)
+            }
+        }
     }
 }
 

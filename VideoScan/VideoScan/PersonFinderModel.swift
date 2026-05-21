@@ -215,6 +215,23 @@ final class PersonFinderModel: ObservableObject {
     }
     var referenceFaces: [ReferenceFace] = []
     var referenceSources: [String] = []     // display labels for each loaded source folder/file
+
+    /// Optional sink invoked at the end of every scan that produced presence
+    /// matches. The app wires this to VideoScanModel.applyDetectedPeople so
+    /// successful runs append the POI's name to each matched VideoRecord's
+    /// `detectedPeople` list — the catalog learns "Donna is in this file."
+    ///
+    /// `@MainActor` on the closure type: the writeback mutates catalog state
+    /// which is MainActor-bound, and the annotation makes the closure type
+    /// implicitly Sendable so it can be captured into a detached Task that
+    /// drives the cache-restore path without triggering Swift 6 isolation
+    /// errors.
+    ///
+    /// Closure form (not a delegate) keeps PersonFinderModel decoupled from
+    /// VideoScanModel — unit tests still construct PersonFinderModel() in
+    /// isolation without dragging in catalog wiring.
+    var onScanComplete: (@MainActor (_ personLabel: String, _ matches: [pfVideoResult]) -> Void)?
+
     /// Name of the person being actively scanned — set at scan start, cleared when all jobs finish.
     @Published var scanningPersonName: String?
     /// The person that will be assigned to newly created jobs.

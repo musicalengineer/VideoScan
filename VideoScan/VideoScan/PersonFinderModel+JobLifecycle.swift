@@ -103,6 +103,11 @@ extension PersonFinderModel {
 
         let searchPath = job.searchPath
         let jobSettings = self.settings
+        // Capture the catalog writeback closure on MainActor so the
+        // detached Task below can invoke it inside its own MainActor.run.
+        // The closure's `@MainActor` annotation makes its type Sendable
+        // across the actor hop.
+        let onComplete = self.onScanComplete
 
         job.scanTask = Task.detached(priority: .utility) {
             let skipBundles = jobSettings.skipBundles
@@ -160,6 +165,7 @@ extension PersonFinderModel {
                 job.status = .done
                 job.stopElapsedTimer()
                 job.appendLog("Restored from cache: \(clipResults.count) video(s) with hits, \(totalSegments) segment(s)")
+                onComplete?(job.personLabel, validResults)
             }
         }
     }
@@ -309,13 +315,16 @@ extension PersonFinderModel {
         }
         let settings = jobSettings
         let dash = self.dashboard
+        // Capture writeback on MainActor so the static nonisolated runScan
+        // can invoke it inside its own MainActor.run completion hop.
+        let onComplete = self.onScanComplete
         job.scanTask = Task { [weak self, weak job] in
             guard let job else { return }
             await MainActor.run {
                 dash?.visionActive = settings.recognitionEngine == .vision || settings.recognitionEngine == .arcface
                 dash?.activeEngineLabel = settings.recognitionEngine == .arcface ? "ArcFace / CoreML + ANE" : "Vision / ANE"
             }
-            await PersonFinderModel.runScan(job: job, prints: prints, settings: settings, refFilenames: refCacheIdentifiers, dashboard: dash)
+            await PersonFinderModel.runScan(job: job, prints: prints, settings: settings, refFilenames: refCacheIdentifiers, dashboard: dash, onComplete: onComplete)
             await MainActor.run {
                 dash?.visionActive = false; dash?.visionFPS = 0; dash?.visionMsPerFrame = 0
                 // Clear scanningPersonName when no jobs are still scanning
@@ -824,7 +833,8 @@ extension PersonFinderModel {
         prints: [VNFeaturePrintObservation],
         settings: PersonFinderSettings,
         refFilenames: [String],
-        dashboard: DashboardState?
+        dashboard: DashboardState?,
+        onComplete: (@MainActor (_ personLabel: String, _ matches: [pfVideoResult]) -> Void)?
     ) async {
         let path = await job.searchPath
         let scanThreshold = settings.recognitionEngine == .arcface
@@ -952,6 +962,11 @@ extension PersonFinderModel {
                 // and stop, so all three "worth bookmarking" transitions go
                 // through one code path.
                 Self.persistDescriptor(for: job, settings: settings)
+
+                // Catalog writeback: appends `personLabel` to every matched
+                // VideoRecord's `detectedPeople` list so the catalog learns
+                // "this POI is in this file." Wired by VideoScanApp.
+                onComplete?(person, validResults)
             }
         }
     }
