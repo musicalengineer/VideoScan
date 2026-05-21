@@ -6,6 +6,10 @@ import AVFoundation
 @Suite("FramePrefetcher")
 struct FramePrefetcherTests {
 
+    nonisolated static var isCI: Bool {
+        ProcessInfo.processInfo.environment["CI"] != nil
+    }
+
     private func makeVideoAndReader(
         container: String = "mp4",
         duration: Double = 2.0,
@@ -37,7 +41,8 @@ struct FramePrefetcherTests {
         return (path, reader, output, Double(track.nominalFrameRate))
     }
 
-    @Test("Yields frames from a generated MOV")
+    @Test("Yields frames from a generated MOV",
+          .disabled(if: isCI, "AVFoundation frame decoding unavailable on virtualized CI runner"))
     func yieldsFramesFromMOV() async throws {
         let (path, reader, output, fps) = try makeVideoAndReader(container: "mov", duration: 2.0)
         defer { TestMediaGenerator.cleanup(path) }
@@ -60,7 +65,8 @@ struct FramePrefetcherTests {
         #expect(reader.status == .completed || reader.status == .cancelled)
     }
 
-    @Test("Yields frames from a generated MPEG-TS")
+    @Test("Yields frames from a generated MPEG-TS",
+          .disabled(if: isCI, "AVFoundation frame decoding unavailable on virtualized CI runner"))
     func yieldsFramesFromTS() async throws {
         let (path, reader, output, fps) = try makeVideoAndReader(container: "ts", duration: 2.0)
         defer { TestMediaGenerator.cleanup(path) }
@@ -79,7 +85,8 @@ struct FramePrefetcherTests {
         #expect(count > 0, "Should yield frames from MPEG-TS container")
     }
 
-    @Test("Frame skipping respects frameInterval")
+    @Test("Frame skipping respects frameInterval",
+          .disabled(if: isCI, "AVFoundation frame decoding unavailable on virtualized CI runner"))
     func frameSkipping() async throws {
         let (path, reader, output, _) = try makeVideoAndReader(container: "mov", duration: 2.0, frameRate: 25)
         defer { TestMediaGenerator.cleanup(path) }
@@ -101,7 +108,8 @@ struct FramePrefetcherTests {
         #expect(count >= 1 && count <= 3, "With 1s interval on 2s video, expect 1-3 frames, got \(count)")
     }
 
-    @Test("Backpressure: producer blocks when buffer is full")
+    @Test("Backpressure: producer blocks when buffer is full",
+          .disabled(if: isCI, "AVFoundation frame decoding unavailable on virtualized CI runner"))
     func backpressure() async throws {
         let (path, reader, output, fps) = try makeVideoAndReader(container: "mov", duration: 3.0, frameRate: 25)
         defer { TestMediaGenerator.cleanup(path) }
@@ -122,7 +130,8 @@ struct FramePrefetcherTests {
         #expect(count == 10, "Should get exactly 10 frames before breaking")
     }
 
-    @Test("Cancellation stops the stream")
+    @Test("Cancellation stops the stream",
+          .disabled(if: isCI, "AVFoundation frame decoding unavailable on virtualized CI runner"))
     func cancellation() async throws {
         let (path, reader, output, fps) = try makeVideoAndReader(container: "mov", duration: 5.0, frameRate: 25)
         defer { TestMediaGenerator.cleanup(path) }
@@ -152,7 +161,8 @@ struct FramePrefetcherTests {
     // iteration *without* calling releaseSlot() on the unread frames,
     // let the prefetcher go out of scope. The fix must signal the slot
     // debt on stream termination so dispose succeeds.
-    @Test("Abandoned mid-stream consumer does not crash on dispose")
+    @Test("Abandoned mid-stream consumer does not crash on dispose",
+          .disabled(if: isCI, "AVFoundation frame decoding unavailable on virtualized CI runner"))
     func abandonedMidStreamDisposesCleanly() async throws {
         let (path, reader, output, fps) = try makeVideoAndReader(
             container: "mov", duration: 5.0, frameRate: 25
@@ -192,7 +202,8 @@ struct FramePrefetcherTests {
         #expect(true)
     }
 
-    @Test("Decode time is plausible")
+    @Test("Decode time is plausible",
+          .disabled(if: isCI, "AVFoundation frame decoding unavailable on virtualized CI runner"))
     func decodeTimePlausible() async throws {
         let (path, reader, output, fps) = try makeVideoAndReader(container: "mov", duration: 1.0)
         defer { TestMediaGenerator.cleanup(path) }

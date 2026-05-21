@@ -20,6 +20,10 @@ import CoreImage
 @Suite("Engine Smoke Tests")
 struct EngineSmokTests {
 
+    nonisolated static var isCI: Bool {
+        ProcessInfo.processInfo.environment["CI"] != nil
+    }
+
     static let fixturesDir: String = {
         let thisFile = #filePath
         let repoRoot = URL(fileURLWithPath: thisFile)
@@ -35,7 +39,8 @@ struct EngineSmokTests {
 
     // MARK: - Vision face detection on real video frames
 
-    @Test func visionDetectsFaceInVideoFrame() async throws {
+    @Test(.disabled(if: isCI, "AVFoundation frame decoding unavailable on virtualized CI runner"))
+    func visionDetectsFaceInVideoFrame() async throws {
         let url = URL(fileURLWithPath: Self.faceVideoPath)
         guard FileManager.default.fileExists(atPath: Self.faceVideoPath) else { return }
 
@@ -66,7 +71,8 @@ struct EngineSmokTests {
         #expect(facesFound > 0, "Vision should detect at least one face in rick_face_3s.mp4")
     }
 
-    @Test func visionDetectsNoFaceInGuitarVideo() async throws {
+    @Test(.disabled(if: isCI, "AVFoundation frame decoding unavailable on virtualized CI runner"))
+    func visionDetectsNoFaceInGuitarVideo() async throws {
         let url = URL(fileURLWithPath: Self.guitarVideoPath)
         guard FileManager.default.fileExists(atPath: Self.guitarVideoPath) else { return }
 
@@ -127,7 +133,8 @@ struct EngineSmokTests {
 
     // MARK: - Feature print matching (Vision face comparison)
 
-    @Test func featurePrintMatchesSamePerson() async throws {
+    @Test(.disabled(if: isCI, "AVFoundation frame decoding unavailable on virtualized CI runner"))
+    func featurePrintMatchesSamePerson() async throws {
         guard FileManager.default.fileExists(atPath: Self.faceVideoPath),
               FileManager.default.fileExists(atPath: Self.referencePhotoPath) else { return }
 
