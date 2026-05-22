@@ -92,6 +92,46 @@ extension PersonFinderModel {
         jobs.append(job)
     }
 
+    // MARK: - "Search for Family" (Step 3)
+    //
+    // Fans a search across every saved POI profile against a single target
+    // path. Each POI becomes its own ScanJob, running in parallel via the
+    // existing per-job Task.detached path — per the parallelize-aggressively
+    // design principle. Single right-click ⇒ N concurrent scans across all
+    // your family members.
+
+    /// Enqueue (but don't start) one ScanJob per saved POI profile that has
+    /// reference photos loaded. Profiles with empty `referencePath` are
+    /// skipped — they'd fail at startJob's pre-flight anyway. Returns the
+    /// newly-appended jobs so the UI can expand / focus them.
+    ///
+    /// Pure side effect on `jobs`. Split from `startFamilyScan(at:)` so
+    /// tests can verify the enqueue behavior without driving Task.detached
+    /// file I/O.
+    @discardableResult
+    func enqueueFamilyJobs(at path: String) -> [ScanJob] {
+        let viable = savedProfiles.filter { !$0.referencePath.isEmpty }
+        let newJobs: [ScanJob] = viable.map { profile in
+            let job = ScanJob(searchPath: path)
+            job.assignedProfile = profile
+            jobs.append(job)
+            return job
+        }
+        return newJobs
+    }
+
+    /// Fan-out entry point: enqueue + immediately start every Family scan.
+    /// Each job runs on its own detached Task so engines run in parallel.
+    /// Returns the new jobs (typically used by the UI to expand them).
+    @discardableResult
+    func startFamilyScan(at path: String) -> [ScanJob] {
+        let newJobs = enqueueFamilyJobs(at: path)
+        for job in newJobs {
+            startJob(job)
+        }
+        return newJobs
+    }
+
     /// Load reference faces for a specific job's assigned person.
     func loadFacesForJob(_ job: ScanJob) async {
         guard let profile = job.assignedProfile else { return }

@@ -417,6 +417,37 @@ struct PersonFinderView: View {
                                     .keyboardShortcut(.delete, modifiers: .command)
                                 }
                         }
+
+                        // Step 3: "Search for Family" — fan a scan across
+                        // every saved POI profile against a folder picked
+                        // via NSOpenPanel. One click, N parallel jobs.
+                        // Disabled until at least one profile has photos
+                        // loaded, otherwise enqueueFamilyJobs filters
+                        // them all out and the click would no-op silently.
+                        Button {
+                            browseForFamilyScanFolder()
+                        } label: {
+                            VStack(spacing: 6) {
+                                ZStack {
+                                    Circle()
+                                        .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [5, 3]))
+                                        .foregroundColor(.accentColor.opacity(0.6))
+                                        .frame(width: personImageSize, height: personImageSize)
+                                    Image(systemName: "person.2.crop.square.stack.fill")
+                                        .font(.system(size: personImageSize * 0.34, weight: .medium))
+                                        .foregroundColor(.accentColor)
+                                }
+                                Text("Search for Family")
+                                    .font(.system(size: personNameFontSize, weight: .medium))
+                                    .foregroundColor(.accentColor)
+                                    .lineLimit(1)
+                            }
+                            .frame(width: personCardWidth)
+                            .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(model.savedProfiles.allSatisfy { $0.referencePath.isEmpty })
+                        .help("Pick a folder or volume — every saved person will be scanned against it in parallel. Catalog rows for matched files get tagged with the detected name(s).")
                     }
                     .padding(.horizontal, 4)
                     .padding(.vertical, 4)
@@ -1241,6 +1272,30 @@ struct PersonFinderView: View {
         if let job = model.jobs.last {
             expandedJobIDs.insert(job.id)
             selectedJobID = job.id
+        }
+    }
+
+    /// Step 3 entry point. Ask for a folder, then fan a scan across every
+    /// saved POI profile against it. Each profile becomes its own ScanJob
+    /// running on its own detached Task — engines run in parallel.
+    /// Expands the first new job so the user sees activity immediately.
+    func browseForFamilyScanFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Pick a folder or volume — every saved person will be scanned in parallel"
+        panel.prompt = "Search for Family"
+        panel.begin { response in
+            if response == .OK, let url = panel.url {
+                Self.recordRecentPath(url.path)
+                let newJobs = model.startFamilyScan(at: url.path)
+                if let first = newJobs.first {
+                    expandedJobIDs.insert(first.id)
+                    selectedJobID = first.id
+                }
+            }
         }
     }
 
