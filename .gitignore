@@ -1,5 +1,6 @@
 # Python
 venv/
+venv-mlx/
 __pycache__/
 *.pyc
 *.pyo
