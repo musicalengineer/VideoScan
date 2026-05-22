@@ -104,8 +104,14 @@ final class CatalogStore {
     /// missing or unreadable — never throws into the caller, since a
     /// missing snapshot on first launch is normal.
     func load() -> [VideoRecord] {
-        if Self.isRunningTests { return [] }
-        guard FileManager.default.fileExists(atPath: fileURL.path) else { return [] }
+        if Self.isRunningTests {
+            NSLog("VideoScan: CatalogStore.load() skipped — test environment detected")
+            return []
+        }
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            NSLog("VideoScan: CatalogStore.load() — no catalog file at %@", fileURL.path)
+            return []
+        }
         do {
             let data = try Data(contentsOf: fileURL)
             let decoder = JSONDecoder()
