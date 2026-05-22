@@ -73,6 +73,7 @@ struct VideoRecordSnapshot: Sendable, Identifiable, Hashable {
     // MARK: catalog-derived signals
     let detectedPeople: [String]
     let suspectedPeople: [String]
+    let sceneCaptions: [SceneCaption]
     let junkScore: Int
 
     /// Computed for callers that want the strongly-typed enum.
@@ -120,6 +121,7 @@ extension VideoRecord {
             starRating: starRating,
             detectedPeople: detectedPeople,
             suspectedPeople: suspectedPeople,
+            sceneCaptions: sceneCaptions,
             junkScore: junkScore
         )
     }
