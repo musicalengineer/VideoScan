@@ -171,9 +171,19 @@ enum VolumeReachability {
 
     static func volumeName(forPath path: String) -> String {
         let comps = (path as NSString).pathComponents
+        // /Volumes/<X>/... → "X"
         if comps.count >= 3, comps[1] == "Volumes" {
             return comps[2]
         }
-        return (path as NSString).lastPathComponent
+        // /Users/<X>/... → "X" (home folder name)
+        if comps.count >= 3, comps[1] == "Users" {
+            return comps[2]
+        }
+        // Other paths: use the top-level directory as the label
+        // e.g. /private/tmp/x.mov → "private", /opt/media/x.mov → "opt"
+        if comps.count >= 3 {
+            return comps[1]
+        }
+        return (path as NSString).deletingLastPathComponent
     }
 }

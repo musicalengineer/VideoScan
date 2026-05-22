@@ -376,7 +376,7 @@ struct VolumeReachabilityTests {
 
     @Test func volumeNameFromLocalPath() {
         let name = VolumeReachability.volumeName(forPath: "/Users/rick/videos/clip.mov")
-        #expect(name == "clip.mov")
+        #expect(name == "rick")
     }
 }
 
