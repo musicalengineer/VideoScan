@@ -141,6 +141,17 @@ struct UniversalSearchMatchingTests {
         #expect(pfRecordMatchesQuery(r, query: "fred") == false)
     }
 
+    // Step 1b: suspectedPeople is searchable too — typing "donna" in the
+    // catalog search bar should find the file regardless of whether
+    // Donna was tagged with confirmed or suspected confidence.
+    @Test func suspectedPeopleMatch() {
+        let r = record()
+        r.suspectedPeople = ["Donna", "Tim"]
+        #expect(pfRecordMatchesQuery(r, query: "donna") == true)
+        #expect(pfRecordMatchesQuery(r, query: "tim") == true)
+        #expect(pfRecordMatchesQuery(r, query: "fred") == false)
+    }
+
     // regression: #66 — avidClipName is searchable
     @Test func avidClipNameMatch() {
         let r = record(avidClipName: "MyClip.V01.A01")
@@ -199,6 +210,62 @@ struct UniversalSearchMatchingTests {
         let donnaIn90s = pfRecordsMatchingQuery(recs, query: "donna 1990s")
         #expect(donnaIn90s.count == 1)
         #expect(donnaIn90s.first?.filename == "donna_1995.mov")
+    }
+}
+
+// MARK: - Family tagging predicate tests (Step 5)
+
+struct FamilyTaggingPredicateTests {
+
+    private func record(detected: [String] = [], suspected: [String] = []) -> VideoRecord {
+        let r = VideoRecord()
+        r.fullPath = "/v/clip.mov"
+        r.detectedPeople = detected
+        r.suspectedPeople = suspected
+        return r
+    }
+
+    @Test func hasAnyPersonTrueWhenConfirmed() {
+        #expect(pfRecordHasAnyPerson(record(detected: ["Donna"])))
+    }
+
+    @Test func hasAnyPersonTrueWhenSuspectedOnly() {
+        #expect(pfRecordHasAnyPerson(record(suspected: ["Donna"])))
+    }
+
+    @Test func hasAnyPersonTrueWhenBoth() {
+        #expect(pfRecordHasAnyPerson(record(detected: ["Donna"], suspected: ["Tim"])))
+    }
+
+    @Test func hasAnyPersonFalseWhenEmpty() {
+        #expect(!pfRecordHasAnyPerson(record()))
+    }
+
+    @Test func isUntaggedTrueWhenBothEmpty() {
+        #expect(pfRecordIsUntagged(record()))
+    }
+
+    @Test func isUntaggedFalseWhenConfirmed() {
+        #expect(!pfRecordIsUntagged(record(detected: ["Donna"])))
+    }
+
+    @Test func isUntaggedFalseWhenSuspected() {
+        #expect(!pfRecordIsUntagged(record(suspected: ["Donna"])))
+    }
+
+    @Test func isUntaggedAndHasAnyPersonAreInverses() {
+        // Filter design invariant: every record falls into exactly one
+        // of "Has Family" or "Untagged" — these two filters partition
+        // the catalog cleanly.
+        let cases = [
+            record(),
+            record(detected: ["Donna"]),
+            record(suspected: ["Tim"]),
+            record(detected: ["Donna"], suspected: ["Tim"])
+        ]
+        for r in cases {
+            #expect(pfRecordHasAnyPerson(r) != pfRecordIsUntagged(r))
+        }
     }
 }
 
