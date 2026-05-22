@@ -1,0 +1,17 @@
+# VideoScan — MLX experiment dependencies.
+#
+# These must live in their own venv (venv-mlx/), separate from the project's
+# main requirements.txt. mlx-vlm pulls in transformers>=5 which requires
+# numpy>=2 and pillow>=10.3, both of which break facenet-pytorch in the
+# shared venv. Keeping the two stacks apart is the whole point.
+#
+# Setup on a new machine:
+#   python3.12 -m venv venv-mlx
+#   venv-mlx/bin/pip install -r scripts/requirements-mlx.txt
+#
+# Then run:
+#   venv-mlx/bin/python scripts/vlm_caption.py <video> [--frames N]
+
+# ---- Apple MLX vision-language ----
+# Pulls mlx, mlx-lm, transformers, tokenizers, safetensors, pillow, etc.
+mlx-vlm
