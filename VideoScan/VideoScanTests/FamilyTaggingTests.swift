@@ -413,6 +413,72 @@ struct FamilyTaggingTests {
         #expect(snap.records[0].suspectedPeople.isEmpty)
     }
 
+    // MARK: - Step 3: enqueueFamilyJobs
+
+    private func profile(_ name: String, refPath: String = "/tmp/refs") -> POIProfile {
+        POIProfile(name: name, referencePath: refPath,
+                   engine: RecognitionEngine.vision.rawValue)
+    }
+
+    // One ScanJob per saved POI, all targeting the same path. The fan-out
+    // is the whole point of "Search for Family" — single user action
+    // produces N parallel scans (started by startFamilyScan on top of this).
+    @Test func enqueueFamilyJobsFansAcrossAllSavedProfiles() {
+        let model = PersonFinderModel()
+        model.savedProfiles = [
+            profile("Donna"),
+            profile("Tim"),
+            profile("Matt")
+        ]
+
+        let jobs = model.enqueueFamilyJobs(at: "/Volumes/MyBook")
+
+        #expect(jobs.count == 3)
+        #expect(jobs.map { $0.searchPath } == Array(repeating: "/Volumes/MyBook", count: 3))
+        #expect(Set(jobs.compactMap { $0.assignedProfile?.name }) == Set(["Donna", "Tim", "Matt"]))
+        // Same set ended up appended to the model's jobs array.
+        #expect(model.jobs.count == 3)
+    }
+
+    // Profiles without reference photos (empty referencePath) would fail
+    // startJob's pre-flight, so skip them up front.
+    @Test func enqueueFamilyJobsSkipsProfilesWithoutPhotos() {
+        let model = PersonFinderModel()
+        model.savedProfiles = [
+            profile("Donna", refPath: "/tmp/refs/donna"),
+            profile("Empty", refPath: "")
+        ]
+
+        let jobs = model.enqueueFamilyJobs(at: "/Volumes/MyBook")
+
+        #expect(jobs.count == 1)
+        #expect(jobs.first?.assignedProfile?.name == "Donna")
+    }
+
+    // No saved profiles → no jobs. UI button is disabled in this case but
+    // defense in depth: model call still no-ops cleanly.
+    @Test func enqueueFamilyJobsNoOpsWithNoProfiles() {
+        let model = PersonFinderModel()
+        model.savedProfiles = []
+
+        let jobs = model.enqueueFamilyJobs(at: "/Volumes/MyBook")
+
+        #expect(jobs.isEmpty)
+        #expect(model.jobs.isEmpty)
+    }
+
+    // Re-running against the same path appends a fresh batch — does not
+    // replace or dedup against prior jobs. Matches the existing
+    // per-profile addJob behavior: each invocation produces a new row.
+    @Test func enqueueFamilyJobsAppendsToExistingJobs() {
+        let model = PersonFinderModel()
+        model.savedProfiles = [profile("Donna"), profile("Tim")]
+        _ = model.enqueueFamilyJobs(at: "/Volumes/MyBook")
+        _ = model.enqueueFamilyJobs(at: "/Volumes/MyBook")
+
+        #expect(model.jobs.count == 4)
+    }
+
     // A v3 catalog.json round-trips both arrays through encode+decode.
     @Test func v3CatalogJsonRoundTripsBothArrays() throws {
         let r = VideoRecord()
