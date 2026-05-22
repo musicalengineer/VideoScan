@@ -1175,6 +1175,17 @@ struct CatalogView: View {
                 Label(hasResumable ? "Resume Scan" : (single ? "Scan / Update Catalog" : "Scan Selected"),
                       systemImage: hasResumable ? "arrow.clockwise" : "arrow.clockwise")
             }
+            if single {
+                Button(action: { model.verifyCatalog(for: first) }) {
+                    Label("Verify Catalog", systemImage: "checkmark.shield")
+                }
+                .disabled(!first.status.isIdle)
+            }
+            if targets.count > 1 || (single && model.records.contains(where: { $0.scanContext.volumeName.isEmpty })) {
+                Button(action: { model.backfillAllProvenance() }) {
+                    Label("Backfill All Volume Names", systemImage: "arrow.triangle.2.circlepath")
+                }
+            }
             Button(role: .destructive, action: {
                 if single {
                     deleteVolumeCatalogTarget = first

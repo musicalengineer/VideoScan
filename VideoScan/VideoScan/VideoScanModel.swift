@@ -2278,6 +2278,124 @@ final class VideoScanModel: ObservableObject {
         }
     }
 
+    // MARK: - Catalog Verification
+
+    /// Verify catalog records for a volume without running ffprobe.
+    /// Checks provenance, file existence, and size. Backfills missing
+    /// scanContext fields (volume name, host, mount type) when the volume
+    /// is online — no rescan needed for that.
+    func verifyCatalog(for target: CatalogScanTarget) {
+        let root = target.searchPath
+        let volName = URL(fileURLWithPath: root).lastPathComponent
+        let volumeRecords = records.filter { $0.fullPath.hasPrefix(root) }
+
+        guard !volumeRecords.isEmpty else {
+            log("No catalog records for \(volName) — nothing to verify")
+            return
+        }
+
+        var report = CatalogHealthReport(
+            volumePath: root,
+            volumeName: volName,
+            totalRecords: volumeRecords.count
+        )
+
+        guard VolumeReachability.isReachable(path: root) else {
+            report.volumeOffline = true
+            report.missingVolumeName = volumeRecords.filter { $0.scanContext.volumeName.isEmpty }.count
+            report.missingProvenance = volumeRecords.filter { !$0.scanContext.isPopulated }.count
+            log(report.summary)
+            return
+        }
+
+        log("Verifying \(volumeRecords.count) records on \(volName)…")
+        target.status = .scanning
+        target.filesFound = volumeRecords.count
+        target.filesScanned = 0
+        target.startElapsedTimer()
+
+        let fm = FileManager.default
+        var backfillCount = 0
+
+        for (i, rec) in volumeRecords.enumerated() {
+            let path = rec.fullPath
+            let url = URL(fileURLWithPath: path)
+
+            if !fm.fileExists(atPath: path) {
+                report.filesDeleted += 1
+            } else {
+                let attrs = try? fm.attributesOfItem(atPath: path)
+                let diskSize = (attrs?[.size] as? Int64) ?? 0
+
+                if rec.sizeBytes > 0 && diskSize > 0 && diskSize != rec.sizeBytes {
+                    report.sizeChanged += 1
+                } else {
+                    let needsBackfill = rec.scanContext.volumeName.isEmpty
+                        || !rec.scanContext.isPopulated
+                    if needsBackfill {
+                        rec.scanContext = ScanContext.capture(for: url)
+                        backfillCount += 1
+                    }
+                    report.healthy += 1
+                }
+            }
+
+            if (i + 1) % 500 == 0 || i == volumeRecords.count - 1 {
+                target.filesScanned = i + 1
+                log("  [\(volName)] verified \(i + 1)/\(volumeRecords.count)")
+            }
+        }
+
+        report.provenanceBackfilled = backfillCount
+        report.missingVolumeName = volumeRecords.filter { $0.scanContext.volumeName.isEmpty }.count
+        report.missingProvenance = volumeRecords.filter { !$0.scanContext.isPopulated }.count
+
+        if backfillCount > 0 {
+            saveCatalogDebounced()
+        }
+
+        target.stopElapsedTimer()
+        target.status = .complete
+        updateGlobalScanState()
+
+        log(report.summary)
+
+        if report.isHealthy || (report.issues == 0 && backfillCount > 0) {
+            appLog.write("Verified \(volName): \(volumeRecords.count) records healthy, \(backfillCount) backfilled")
+        } else {
+            appLog.write("Verified \(volName): \(report.issues) issue(s) found — \(report.recommendation)")
+        }
+    }
+
+    /// Backfill scanContext for all catalog records across all volumes.
+    /// Quick pass — no ffprobe, just stat + URL resource values per file.
+    func backfillAllProvenance() {
+        let needsBackfill = records.filter { $0.scanContext.volumeName.isEmpty }
+        guard !needsBackfill.isEmpty else {
+            log("All records already have volume names — nothing to backfill")
+            return
+        }
+        log("Backfilling provenance for \(needsBackfill.count) records…")
+
+        var backfilled = 0
+        var unreachable = 0
+        let fm = FileManager.default
+
+        for rec in needsBackfill {
+            let url = URL(fileURLWithPath: rec.fullPath)
+            guard fm.fileExists(atPath: rec.fullPath) else {
+                unreachable += 1
+                continue
+            }
+            rec.scanContext = ScanContext.capture(for: url)
+            backfilled += 1
+        }
+
+        if backfilled > 0 { saveCatalogDebounced() }
+        log("Backfilled \(backfilled) record(s), \(unreachable) offline/missing")
+        appLog.write("Provenance backfill: \(backfilled) updated, \(unreachable) unreachable")
+    }
+
     /// Streams `target.searchPath` and drains a probe group against it.
     /// Returns the collected records, total discovered, and total completed.
     private func runTargetProbeGroup(
