@@ -108,6 +108,8 @@ enum CatalogViewFilter: String, CaseIterable, Hashable {
     case videoAndAudioOnly = "Video+Audio Only"
     case unpairedOnly     = "Unpaired Only"
     case ratedOnly        = "Rated Only"
+    case hasFamily        = "Has Family"
+    case untaggedOnly     = "Untagged (junk candidate)"
 
     var icon: String {
         switch self {
@@ -115,6 +117,8 @@ enum CatalogViewFilter: String, CaseIterable, Hashable {
         case .videoAndAudioOnly: return "film"
         case .unpairedOnly:      return "exclamationmark.triangle"
         case .ratedOnly:         return "star.fill"
+        case .hasFamily:         return "person.2.fill"
+        case .untaggedOnly:      return "questionmark.folder"
         }
     }
 }
