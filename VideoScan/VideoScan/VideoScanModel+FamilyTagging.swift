@@ -29,34 +29,94 @@ extension VideoScanModel {
     /// Confirmed-tier only. Suspected-tier (score-based gray-zone tagging
     /// against a `suspectedPeople` sidecar) lands with the CatalogSnapshot
     /// v3 migration in a follow-up step.
+    /// Tier-aware writeback. Confirmed matches land in `detectedPeople`,
+    /// suspected (gray-zone) matches in `suspectedPeople`. Re-scans can
+    /// upgrade (suspected → confirmed) or downgrade (confirmed →
+    /// suspected) — the inverse list is cleaned so a name never lives
+    /// in both arrays simultaneously.
+    ///
+    /// Records present in neither `confirmed` nor `suspected` are left
+    /// alone: a re-scan that finds nothing is more likely a sampling
+    /// miss than evidence that an existing tag was wrong, so we don't
+    /// auto-erase.
+    ///
+    /// Returns the count of records whose tags changed (added, moved
+    /// between arrays, or removed from one array). Marks the catalog
+    /// dirty when non-zero so the change survives an app relaunch.
     @discardableResult
     func applyDetectedPeople(
-        matches: [pfVideoResult],
+        confirmed: [pfVideoResult],
+        suspected: [pfVideoResult],
         person: String
     ) -> Int {
         guard !person.isEmpty else { return 0 }
-        guard !matches.isEmpty else { return 0 }
+        if confirmed.isEmpty && suspected.isEmpty { return 0 }
 
         var byPath: [String: VideoRecord] = [:]
         byPath.reserveCapacity(records.count)
         for r in records { byPath[r.fullPath] = r }
 
-        var updated = 0
-        for match in matches where !match.segments.isEmpty {
+        var changed = 0
+
+        // Confirmed: ensure name is in detectedPeople, remove from
+        // suspectedPeople if present (upgrade path).
+        for match in confirmed where !match.segments.isEmpty {
             guard let record = byPath[match.filePath] else { continue }
-            let alreadyTagged = record.detectedPeople.contains {
+            var didChange = false
+            if let idx = record.suspectedPeople.firstIndex(where: {
+                $0.caseInsensitiveCompare(person) == .orderedSame
+            }) {
+                record.suspectedPeople.remove(at: idx)
+                didChange = true
+            }
+            let alreadyConfirmed = record.detectedPeople.contains {
                 $0.caseInsensitiveCompare(person) == .orderedSame
             }
-            if !alreadyTagged {
+            if !alreadyConfirmed {
                 record.detectedPeople.append(person)
-                updated += 1
+                didChange = true
             }
+            if didChange { changed += 1 }
         }
 
-        if updated > 0 {
+        // Suspected: ensure name is in suspectedPeople, remove from
+        // detectedPeople if present (downgrade path — Rick's "worst
+        // case scenario you can say 'suspected Donna is in here'").
+        for match in suspected where !match.segments.isEmpty {
+            guard let record = byPath[match.filePath] else { continue }
+            var didChange = false
+            if let idx = record.detectedPeople.firstIndex(where: {
+                $0.caseInsensitiveCompare(person) == .orderedSame
+            }) {
+                record.detectedPeople.remove(at: idx)
+                didChange = true
+            }
+            let alreadySuspected = record.suspectedPeople.contains {
+                $0.caseInsensitiveCompare(person) == .orderedSame
+            }
+            if !alreadySuspected {
+                record.suspectedPeople.append(person)
+                didChange = true
+            }
+            if didChange { changed += 1 }
+        }
+
+        if changed > 0 {
             objectWillChange.send()
             saveCatalogDebounced()
         }
-        return updated
+        return changed
+    }
+
+    /// Backward-compat / single-tier convenience: routes every match to
+    /// `detectedPeople` (confirmed). Used by call sites that don't have
+    /// engine-threshold context, and by the original test suite. Returns
+    /// the count of records updated.
+    @discardableResult
+    func applyDetectedPeople(
+        matches: [pfVideoResult],
+        person: String
+    ) -> Int {
+        applyDetectedPeople(confirmed: matches, suspected: [], person: person)
     }
 }

@@ -91,6 +91,7 @@ nonisolated func pfTokenMatches(_ token: SearchToken, _ rec: VideoRecord) -> Boo
         if rec.fullPath.lowercased().contains(n) { return true }
         if rec.directory.lowercased().contains(n) { return true }
         if rec.detectedPeople.contains(where: { $0.lowercased().contains(n) }) { return true }
+        if rec.suspectedPeople.contains(where: { $0.lowercased().contains(n) }) { return true }
         if rec.avidClipName.lowercased().contains(n) { return true }
         if rec.videoCodec.lowercased().contains(n) { return true }
         if rec.audioCodec.lowercased().contains(n) { return true }

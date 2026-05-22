@@ -114,11 +114,13 @@ nonisolated func pfPersonScanSkipPaths(
             break
         }
 
-        // Rule 2: detectedPeople already contains target (cache hit)
+        // Rule 2: detectedPeople OR suspectedPeople already contains target
+        // (cache hit from a prior scan — re-running a per-profile search
+        // would just confirm; multi-POI "Search for Family" callers should
+        // pass nil targetPersonName to bypass this rule and force re-verify).
         if let target, !target.isEmpty {
-            let already = rec.detectedPeople.contains { name in
-                name.lowercased() == target
-            }
+            let already = rec.detectedPeople.contains { $0.lowercased() == target }
+                || rec.suspectedPeople.contains { $0.lowercased() == target }
             if already { result.alreadyKnown.insert(rec.fullPath) }
         }
 

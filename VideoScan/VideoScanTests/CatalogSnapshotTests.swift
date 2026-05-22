@@ -106,12 +106,16 @@ struct VideoRecordSnapshotTests {
     }
 
     // regression: #66 — Catalog signals (detectedPeople, junkScore) carry
+    // Step 1b: suspectedPeople too, so cross-actor snapshots don't drop
+    // the borderline-confidence tier.
     @Test func copiesCatalogSignals() {
         let r = VideoRecord()
         r.detectedPeople = ["Donna", "Tim"]
+        r.suspectedPeople = ["Matt"]
         r.junkScore = 42
         let s = r.snapshot()
         #expect(s.detectedPeople == ["Donna", "Tim"])
+        #expect(s.suspectedPeople == ["Matt"])
         #expect(s.junkScore == 42)
     }
 

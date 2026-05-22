@@ -38,6 +38,44 @@ private let pfScanLog = Logger(
 
 extension PersonFinderModel {
 
+    // MARK: Confidence-tier split (Step 1b)
+    //
+    // Splits a presence-filtered result set into "confirmed" (strong-match)
+    // and "suspected" (borderline) buckets so the catalog writeback can
+    // route names to `detectedPeople` vs `suspectedPeople`. Lives here so
+    // PersonFinder owns the classification — it has the engine + threshold
+    // context — and the catalog stays a dumb sink.
+
+    /// How close to the threshold a match has to be to count as
+    /// "suspected" rather than "confirmed". A `bestDistance` of
+    /// `threshold - margin` is the cutoff: closer than that → confirmed.
+    nonisolated static let confidenceMargin: Float = 0.05
+
+    /// Partition `results` into (confirmed, suspected). All entries are
+    /// assumed to have passed the presence filter (i.e. bestDistance
+    /// already ≤ threshold). The strong-match cutoff is `threshold − margin`:
+    /// distances at or below it become confirmed; distances within the
+    /// margin of the threshold become suspected.
+    nonisolated static func splitByConfidence(
+        _ results: [pfVideoResult],
+        threshold: Float,
+        margin: Float = confidenceMargin
+    ) -> (confirmed: [pfVideoResult], suspected: [pfVideoResult]) {
+        var confirmed: [pfVideoResult] = []
+        var suspected: [pfVideoResult] = []
+        let strongCutoff = threshold - margin
+        for r in results {
+            let bestDist = r.segments.map(\.bestDistance).min()
+                ?? .greatestFiniteMagnitude
+            if bestDist <= strongCutoff {
+                confirmed.append(r)
+            } else {
+                suspected.append(r)
+            }
+        }
+        return (confirmed, suspected)
+    }
+
     private nonisolated static func referenceCacheIdentifiers(referencePath: String, filenames: [String]) -> [String] {
         guard !referencePath.isEmpty else { return filenames }
         let baseURL = URL(fileURLWithPath: referencePath)
@@ -165,7 +203,10 @@ extension PersonFinderModel {
                 job.status = .done
                 job.stopElapsedTimer()
                 job.appendLog("Restored from cache: \(clipResults.count) video(s) with hits, \(totalSegments) segment(s)")
-                onComplete?(job.personLabel, validResults)
+                let (confirmed, suspected) = Self.splitByConfidence(
+                    validResults, threshold: threshold
+                )
+                onComplete?(job.personLabel, confirmed, suspected)
             }
         }
     }
@@ -834,7 +875,13 @@ extension PersonFinderModel {
         settings: PersonFinderSettings,
         refFilenames: [String],
         dashboard: DashboardState?,
-        onComplete: (@MainActor (_ personLabel: String, _ matches: [pfVideoResult]) -> Void)?
+        onComplete: (
+            @MainActor (
+                _ personLabel: String,
+                _ confirmed: [pfVideoResult],
+                _ suspected: [pfVideoResult]
+            ) -> Void
+        )?
     ) async {
         let path = await job.searchPath
         let scanThreshold = settings.recognitionEngine == .arcface
@@ -963,10 +1010,14 @@ extension PersonFinderModel {
                 // through one code path.
                 Self.persistDescriptor(for: job, settings: settings)
 
-                // Catalog writeback: appends `personLabel` to every matched
-                // VideoRecord's `detectedPeople` list so the catalog learns
-                // "this POI is in this file." Wired by VideoScanApp.
-                onComplete?(person, validResults)
+                // Catalog writeback: splits matches by confidence tier, then
+                // appends `personLabel` to each matched VideoRecord's
+                // `detectedPeople` (confirmed) or `suspectedPeople`
+                // (borderline) list. Wired by VideoScanApp.
+                let (confirmed, suspected) = Self.splitByConfidence(
+                    validResults, threshold: scanThreshold
+                )
+                onComplete?(person, confirmed, suspected)
             }
         }
     }

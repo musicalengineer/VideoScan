@@ -157,6 +157,12 @@ class VideoRecord: Identifiable, Codable {
     var junkReasons: [String] = []
     var starRating: Int = 0                   // 0 = unrated, 1-3 stars
     var detectedPeople: [String] = []
+    /// Borderline matches — face recognition score fell in the gray zone
+    /// between strong-match and the threshold. Surfaced in the UI as
+    /// "suspected: <name>" so the user knows the call is less certain.
+    /// On re-scan, a strong hit moves the name from suspected → detected;
+    /// a still-borderline hit keeps it here; a miss leaves both alone.
+    var suspectedPeople: [String] = []
     var combinedFromPairID: UUID?             // links back to source pair group
 
     /// Hostname of the machine that originally cataloged this record.
@@ -289,7 +295,7 @@ class VideoRecord: Identifiable, Codable {
         case duplicateReasons, duplicateBestMatchFilename, duplicateGroupCount
         case lifecycleStage, mediaDisposition, archiveStage, masterLocation, backupDestinations
         case junkScore, junkReasons
-        case starRating, detectedPeople, combinedFromPairID
+        case starRating, detectedPeople, suspectedPeople, combinedFromPairID
         case sourceHost
         case scanContext
         case purgedAt
@@ -356,6 +362,10 @@ class VideoRecord: Identifiable, Codable {
         junkReasons                 = try c.decodeIfPresent([String].self, forKey: .junkReasons) ?? []
         starRating                  = try c.decodeIfPresent(Int.self, forKey: .starRating) ?? 0
         detectedPeople              = try c.decodeIfPresent([String].self, forKey: .detectedPeople) ?? []
+        // decodeIfPresent ?? [] handles the v2 → v3 catalog migration: v2
+        // catalog.json files have no `suspectedPeople` key, so old records
+        // come back with an empty array (no false suspicion).
+        suspectedPeople             = try c.decodeIfPresent([String].self, forKey: .suspectedPeople) ?? []
         combinedFromPairID          = try c.decodeIfPresent(UUID.self, forKey: .combinedFromPairID)
         scanContext                 = try c.decodeIfPresent(ScanContext.self, forKey: .scanContext) ?? ScanContext()
         // decodeIfPresent so legacy catalog.json files (no purgedAt key) round-
@@ -434,6 +444,9 @@ class VideoRecord: Identifiable, Codable {
         }
         if !detectedPeople.isEmpty {
             try c.encode(detectedPeople, forKey: .detectedPeople)
+        }
+        if !suspectedPeople.isEmpty {
+            try c.encode(suspectedPeople, forKey: .suspectedPeople)
         }
         if combinedFromPairID != nil {
             try c.encode(combinedFromPairID, forKey: .combinedFromPairID)
