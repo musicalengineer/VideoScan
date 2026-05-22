@@ -92,6 +92,11 @@ nonisolated func pfTokenMatches(_ token: SearchToken, _ rec: VideoRecord) -> Boo
         if rec.directory.lowercased().contains(n) { return true }
         if rec.detectedPeople.contains(where: { $0.lowercased().contains(n) }) { return true }
         if rec.suspectedPeople.contains(where: { $0.lowercased().contains(n) }) { return true }
+        // Scene captions search (v1 — linear substring across caption text).
+        // Composes with the people-tag matches above so "donna playing guitar"
+        // matches via Donna (detectedPeople) + "playing guitar" (sceneCaptions).
+        // For v2 at >10k records, see docs/scene_captions_plan.md FTS5 plan.
+        if rec.sceneCaptions.contains(where: { $0.text.lowercased().contains(n) }) { return true }
         if rec.avidClipName.lowercased().contains(n) { return true }
         if rec.videoCodec.lowercased().contains(n) { return true }
         if rec.audioCodec.lowercased().contains(n) { return true }
