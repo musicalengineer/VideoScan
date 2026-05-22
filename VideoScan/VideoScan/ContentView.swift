@@ -83,6 +83,21 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(minWidth: 900, minHeight: 600)
+        .onAppear {
+            // Bridge PersonFinder scan completions to catalog writeback:
+            // every "Donna found in /v/X.mov" produces a tag on that
+            // VideoRecord — confirmed matches go to `detectedPeople`,
+            // borderline matches to `suspectedPeople`. Weak ref on the
+            // catalog model so teardown is clean under test hosts.
+            personFinderModel.onScanComplete = {
+                [weak model] person, confirmed, suspected in
+                model?.applyDetectedPeople(
+                    confirmed: confirmed,
+                    suspected: suspected,
+                    person: person
+                )
+            }
+        }
     }
 }
 
@@ -93,6 +108,8 @@ enum CatalogViewFilter: String, CaseIterable, Hashable {
     case videoAndAudioOnly = "Video+Audio Only"
     case unpairedOnly     = "Unpaired Only"
     case ratedOnly        = "Rated Only"
+    case hasFamily        = "Has Family"
+    case untaggedOnly     = "Untagged (junk candidate)"
 
     var icon: String {
         switch self {
@@ -100,6 +117,8 @@ enum CatalogViewFilter: String, CaseIterable, Hashable {
         case .videoAndAudioOnly: return "film"
         case .unpairedOnly:      return "exclamationmark.triangle"
         case .ratedOnly:         return "star.fill"
+        case .hasFamily:         return "person.2.fill"
+        case .untaggedOnly:      return "questionmark.folder"
         }
     }
 }
