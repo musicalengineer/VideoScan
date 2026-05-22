@@ -152,6 +152,44 @@ struct UniversalSearchMatchingTests {
         #expect(pfRecordMatchesQuery(r, query: "fred") == false)
     }
 
+    // Step S5: caption text is searchable. "playing guitar" hits any
+    // caption containing that substring, regardless of timestamp.
+    @Test func sceneCaptionTextMatch() {
+        let r = record()
+        r.sceneCaptions = [
+            SceneCaption(timestamp: 0.0, text: "A man playing guitar in a kitchen"),
+            SceneCaption(timestamp: 12.5, text: "Two children laughing at a table")
+        ]
+        #expect(pfRecordMatchesQuery(r, query: "guitar") == true)
+        #expect(pfRecordMatchesQuery(r, query: "kitchen") == true)
+        #expect(pfRecordMatchesQuery(r, query: "laughing") == true)
+        #expect(pfRecordMatchesQuery(r, query: "skydiving") == false)
+    }
+
+    // Caption matches compose with people-tag matches under AND
+    // semantics. "donna playing guitar" requires both tokens to land
+    // somewhere on the record — one via detectedPeople, one via
+    // sceneCaptions. This is the headline behavior the captions
+    // feature exists to enable.
+    @Test func sceneCaptionAndPersonTagComposeAcrossQueries() {
+        let r = record(detectedPeople: ["Donna"])
+        r.sceneCaptions = [
+            SceneCaption(timestamp: 5.0, text: "Man playing guitar in living room")
+        ]
+        #expect(pfRecordMatchesQuery(r, query: "donna playing guitar") == true)
+        #expect(pfRecordMatchesQuery(r, query: "donna kitchen") == false)
+    }
+
+    // Caption match is case-insensitive, matching every other text field
+    // in pfTokenMatches.
+    @Test func sceneCaptionMatchIsCaseInsensitive() {
+        let r = record()
+        r.sceneCaptions = [SceneCaption(timestamp: 0, text: "A Dog on a Sofa")]
+        #expect(pfRecordMatchesQuery(r, query: "DOG") == true)
+        #expect(pfRecordMatchesQuery(r, query: "dog") == true)
+        #expect(pfRecordMatchesQuery(r, query: "Dog") == true)
+    }
+
     // regression: #66 — avidClipName is searchable
     @Test func avidClipNameMatch() {
         let r = record(avidClipName: "MyClip.V01.A01")
