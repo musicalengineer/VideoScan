@@ -219,12 +219,13 @@ class VideoRecord: Identifiable, Codable {
     /// Same idea for modification date.
     var dateModifiedSortKey: Date { dateModifiedRaw ?? .distantPast }
 
-    /// Human-readable volume name pulled from `fullPath`. For paths under
-    /// `/Volumes/<X>/…` this is `X`; for anything else it's the last path
-    /// component. Used as a sortable/displayable column in the results
-    /// table so the user can group-browse by volume.
+    /// Human-readable volume name. Prefers the name captured at scan time
+    /// (e.g. "Macintosh HD", "LaCieWorkspace") which works even when the
+    /// volume is offline. Falls back to path-component parsing for legacy
+    /// records scanned before this field existed.
     var volumeName: String {
-        VolumeReachability.volumeName(forPath: fullPath)
+        if !scanContext.volumeName.isEmpty { return scanContext.volumeName }
+        return VolumeReachability.volumeName(forPath: fullPath)
     }
 
     /// Filename tint color based on archival/disposition status.

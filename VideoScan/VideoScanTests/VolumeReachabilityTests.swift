@@ -1,10 +1,11 @@
 import Testing
+import Foundation
 @testable import VideoScan
 
 @Suite("VolumeReachability Extended")
 struct VolumeReachabilityExtendedTests {
 
-    // MARK: - volumeName(forPath:)
+    // MARK: - volumeName(forPath:) path-based fallback
 
     @Test func externalVolumePath() {
         let name = VolumeReachability.volumeName(forPath: "/Volumes/MyBook3Terabytes/Movies/clip.mov")
@@ -43,20 +44,17 @@ struct VolumeReachabilityExtendedTests {
 
     @Test func emptyPath() {
         let name = VolumeReachability.volumeName(forPath: "")
-        #expect(name == "")
+        #expect(name.isEmpty)
     }
 
-    // MARK: - cacheKey(forPath:) — via isReachable behavior
-
     @Test func volumesMountShareCacheKey() {
-        // Two files on same /Volumes mount should produce the same volume name
         let a = VolumeReachability.volumeName(forPath: "/Volumes/Seagate2TB/a.mov")
         let b = VolumeReachability.volumeName(forPath: "/Volumes/Seagate2TB/sub/b.mov")
         #expect(a == b)
         #expect(a == "Seagate2TB")
     }
 
-    // MARK: - isNetworkVolume / parseRemoteServer
+    // MARK: - parseRemoteServer
 
     @Test func smbServerParsing() {
         let server = VolumeReachability.parseRemoteServer(fsType: "smbfs", mntFromName: "//rickb@nas.local/share")
@@ -85,6 +83,98 @@ struct VolumeReachabilityExtendedTests {
 
     @Test func localFSReturnsEmptyServer() {
         let server = VolumeReachability.parseRemoteServer(fsType: "apfs", mntFromName: "/dev/disk1s1")
-        #expect(server == "")
+        #expect(server.isEmpty)
+    }
+}
+
+// MARK: - VideoRecord.volumeName with ScanContext
+
+@Suite("VideoRecord Volume Name")
+struct VideoRecordVolumeNameTests {
+
+    @Test func storedVolumeNameTakesPrecedence() {
+        let rec = VideoRecord()
+        rec.fullPath = "/Users/rickb/Movies/Timmy-1992-part2.m4v"
+        rec.scanContext.volumeName = "Macintosh HD"
+        #expect(rec.volumeName == "Macintosh HD")
+    }
+
+    @Test func fallsBackToPathParsingWhenNoStoredName() {
+        let rec = VideoRecord()
+        rec.fullPath = "/Volumes/LaCieWorkspace/clip.mov"
+        #expect(rec.scanContext.volumeName.isEmpty)
+        #expect(rec.volumeName == "LaCieWorkspace")
+    }
+
+    @Test func fallsBackForUserPathWithoutStoredName() {
+        let rec = VideoRecord()
+        rec.fullPath = "/Users/rickb/Movies/Timmy-1992-part2.m4v"
+        #expect(rec.volumeName == "rickb")
+    }
+
+    @Test func storedNameWorksForExternalVolume() {
+        let rec = VideoRecord()
+        rec.fullPath = "/Volumes/MyBook3Terabytes/family/clip.mov"
+        rec.scanContext.volumeName = "MyBook3Terabytes"
+        #expect(rec.volumeName == "MyBook3Terabytes")
+    }
+
+    @Test func storedNameOverridesPathParsing() {
+        let rec = VideoRecord()
+        rec.fullPath = "/Volumes/disk3s1/media/clip.mov"
+        rec.scanContext.volumeName = "Family Archive"
+        #expect(rec.volumeName == "Family Archive")
+    }
+}
+
+// MARK: - ScanContext capture
+
+@Suite("ScanContext Capture")
+struct ScanContextCaptureTests {
+
+    @Test func capturePopulatesVolumeName() {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("scanctx_test_\(UUID().uuidString).txt")
+        FileManager.default.createFile(atPath: tmp.path, contents: nil)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let ctx = ScanContext.capture(for: tmp)
+        #expect(!ctx.volumeName.isEmpty)
+        #expect(!ctx.scanHost.isEmpty)
+    }
+
+    @Test func captureVolumeNameMatchesResourceValues() {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("scanctx_cmp_\(UUID().uuidString).txt")
+        FileManager.default.createFile(atPath: tmp.path, contents: nil)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let expected = (try? tmp.resourceValues(forKeys: [.volumeNameKey]))?.volumeName ?? ""
+        let ctx = ScanContext.capture(for: tmp)
+        #expect(ctx.volumeName == expected)
+    }
+
+    @Test func roundTripThroughJSON() throws {
+        var ctx = ScanContext()
+        ctx.scanHost = "TestMac"
+        ctx.volumeName = "Macintosh HD"
+        ctx.volumeMountType = "apfs"
+
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(ctx)
+        let decoded = try JSONDecoder().decode(ScanContext.self, from: data)
+
+        #expect(decoded.volumeName == "Macintosh HD")
+        #expect(decoded.scanHost == "TestMac")
+        #expect(decoded.volumeMountType == "apfs")
+    }
+
+    @Test func legacyJSONWithoutVolumeNameDecodesCleanly() throws {
+        let json = """
+        {"scanHost":"OldMac","volumeUUID":"ABC-123","volumeMountType":"apfs"}
+        """
+        let decoded = try JSONDecoder().decode(ScanContext.self, from: Data(json.utf8))
+        #expect(decoded.volumeName.isEmpty)
+        #expect(decoded.scanHost == "OldMac")
     }
 }
