@@ -219,7 +219,8 @@ final class PersonFinderModel: ObservableObject {
     /// Optional sink invoked at the end of every scan that produced presence
     /// matches. The app wires this to VideoScanModel.applyDetectedPeople so
     /// successful runs append the POI's name to each matched VideoRecord's
-    /// `detectedPeople` list — the catalog learns "Donna is in this file."
+    /// `detectedPeople` (or `suspectedPeople`) list — the catalog learns
+    /// "Donna is in this file" with a confidence tier.
     ///
     /// `@MainActor` on the closure type: the writeback mutates catalog state
     /// which is MainActor-bound, and the annotation makes the closure type
@@ -227,10 +228,21 @@ final class PersonFinderModel: ObservableObject {
     /// drives the cache-restore path without triggering Swift 6 isolation
     /// errors.
     ///
+    /// Two match arrays carry the confidence tier split, done inside
+    /// PersonFinderModel (which knows the engine + threshold) before the
+    /// sink fires: confirmed = bestDistance ≤ threshold − margin, suspected
+    /// = within margin of threshold. Catalog routes them to the right field.
+    ///
     /// Closure form (not a delegate) keeps PersonFinderModel decoupled from
     /// VideoScanModel — unit tests still construct PersonFinderModel() in
     /// isolation without dragging in catalog wiring.
-    var onScanComplete: (@MainActor (_ personLabel: String, _ matches: [pfVideoResult]) -> Void)?
+    var onScanComplete: (
+        @MainActor (
+            _ personLabel: String,
+            _ confirmed: [pfVideoResult],
+            _ suspected: [pfVideoResult]
+        ) -> Void
+    )?
 
     /// Name of the person being actively scanned — set at scan start, cleared when all jobs finish.
     @Published var scanningPersonName: String?
