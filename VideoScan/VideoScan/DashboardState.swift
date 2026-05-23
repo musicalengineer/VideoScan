@@ -14,6 +14,7 @@ final class DashboardState: ObservableObject {
         if NSClassFromString("XCTestCase") == nil {
             startSystemMetrics()
         }
+        catalogLog.start(append: true)
     }
 
     // MARK: - Chip identity / match flash
