@@ -124,6 +124,28 @@ nonisolated func pfRecordsMatchingQuery(_ records: [VideoRecord], query: String)
     return records.filter { rec in tokens.allSatisfy { pfTokenMatches($0, rec) } }
 }
 
+// MARK: - Catalog search (filename + person tags)
+//
+// Powers the Catalog tab's search bar. Matches filenames (Finder-style
+// behavior the user expects) AND person tags on the record. Path,
+// directory, codec, notes, etc. are intentionally NOT searched here
+// — those live in the universal search (pfRecordMatchesQuery) which
+// is too broad for the always-on catalog search bar. Typing "matt"
+// should find files named *matt* and files tagged with Matt, not
+// every file in a "Matthew" directory.
+
+/// Case-insensitive substring match against filename + detectedPeople
+/// + suspectedPeople. Returns true on empty query so callers don't
+/// need their own short-circuit.
+nonisolated func pfRecordFilenameOrPersonMatch(_ rec: VideoRecord, query: String) -> Bool {
+    if query.isEmpty { return true }
+    let q = query.lowercased()
+    if rec.filename.lowercased().contains(q) { return true }
+    if rec.detectedPeople.contains(where: { $0.lowercased().contains(q) }) { return true }
+    if rec.suspectedPeople.contains(where: { $0.lowercased().contains(q) }) { return true }
+    return false
+}
+
 // MARK: - Family tagging predicates (Step 5)
 //
 // Pure helpers powering the catalog's "Has Family" / "Untagged" filters and

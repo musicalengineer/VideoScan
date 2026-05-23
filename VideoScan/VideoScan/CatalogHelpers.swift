@@ -409,11 +409,13 @@ struct CatalogContent: View {
             }
         }
         if !searchText.isEmpty {
-            // Filename-only search (Finder-like). Users searching "matt" expect
-            // files literally named *matt*, not files that happen to live in a
-            // "Matthew" directory or have "matte" appear in some codec note.
-            let q = searchText.lowercased()
-            out = out.filter { $0.filename.lowercased().contains(q) }
+            // Filename + person-tag search. Matches what the user typed against
+            // the file's name AND its detectedPeople / suspectedPeople tags so
+            // typing "donna" finds both files named *donna* and files tagged
+            // with Donna. Path, directory, codec, notes are intentionally NOT
+            // searched here (those live in universal search) — keeps the
+            // always-on search bar predictable per the Finder-like heuristic.
+            out = out.filter { pfRecordFilenameOrPersonMatch($0, query: searchText) }
         }
         if showPairsOnly {
             // Only show records that have a correlated partner
@@ -799,9 +801,10 @@ struct CatalogContent: View {
             // People column: confirmed names in blue, suspected (borderline)
             // names italic + secondary with a leading "?". Em-dash when both
             // arrays are empty — the "junk candidate" signal the user filters
-            // on with .untaggedOnly.
+            // on with .untaggedOnly. Sortable via peopleSortKey: confirmed
+            // alphabetical first, suspected after (~ prefix), untagged last.
             Group {
-                TableColumn("People") { rec in
+                TableColumn("People", value: \.peopleSortKey) { rec in
                     peopleColumnCell(for: rec)
                 }
                 .width(min: 90, ideal: 140)

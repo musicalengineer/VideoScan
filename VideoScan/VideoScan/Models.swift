@@ -239,6 +239,32 @@ class VideoRecord: Identifiable, Codable {
     // numeric/Date sort field while the cell content keeps showing the
     // human-friendly string.
 
+    /// Sort key for the catalog's People column. Confirmed names come
+    /// first (alphabetically), then suspected names with a "~" prefix
+    /// so they sort after letters in ASCII. Records with no tags at all
+    /// get the highest Unicode replacement char so they sort to the
+    /// bottom in ascending order — clicking the column header surfaces
+    /// "untagged → tagged" or "Donna → Tim → untagged" depending on
+    /// direction. Empty string would have sorted them to the top
+    /// instead, which is rarely what users want when the column reads
+    /// "People".
+    var peopleSortKey: String {
+        let confirmed = detectedPeople.sorted(by: { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending })
+            .joined(separator: ", ")
+        let suspected = suspectedPeople.sorted(by: { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending })
+            .joined(separator: ", ")
+        if confirmed.isEmpty && suspected.isEmpty {
+            return "\u{FFFD}"  // U+FFFD sorts after letters → untagged rows fall to the bottom ascending
+        }
+        if confirmed.isEmpty {
+            return "~" + suspected   // "~" sorts after letters → suspected-only after confirmed
+        }
+        if suspected.isEmpty {
+            return confirmed
+        }
+        return confirmed + " ~" + suspected
+    }
+
     /// Resolution sorted by total pixel count. Files with no resolution
     /// (audio-only, ffprobe failed) sort to the bottom.
     var pixelCount: Int {

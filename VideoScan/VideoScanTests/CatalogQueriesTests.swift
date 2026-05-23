@@ -251,6 +251,133 @@ struct UniversalSearchMatchingTests {
     }
 }
 
+// MARK: - Catalog search-bar tests (filename + person tags)
+
+struct CatalogSearchBarTests {
+
+    private func record(
+        filename: String = "clip.mov",
+        detectedPeople: [String] = [],
+        suspectedPeople: [String] = []
+    ) -> VideoRecord {
+        let r = VideoRecord()
+        r.filename = filename
+        r.fullPath = "/v/\(filename)"
+        r.detectedPeople = detectedPeople
+        r.suspectedPeople = suspectedPeople
+        return r
+    }
+
+    @Test func emptyQueryMatchesAll() {
+        #expect(pfRecordFilenameOrPersonMatch(record(), query: ""))
+    }
+
+    @Test func filenameSubstringMatch() {
+        let r = record(filename: "Donna_birthday.mov")
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "donna"))
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "DONNA"))
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "birthday"))
+        #expect(!pfRecordFilenameOrPersonMatch(r, query: "skydiving"))
+    }
+
+    // Typing "donna" finds files tagged Donna even when the filename
+    // (IMG_4521.MOV etc) has nothing to do with her — the headline UX
+    // benefit of person-aware catalog search.
+    @Test func detectedPersonTagMatch() {
+        let r = record(filename: "IMG_4521.MOV", detectedPeople: ["Donna"])
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "donna"))
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "DONNA"))
+        #expect(!pfRecordFilenameOrPersonMatch(r, query: "tim"))
+    }
+
+    @Test func suspectedPersonTagMatch() {
+        let r = record(filename: "IMG_4521.MOV", suspectedPeople: ["Donna"])
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "donna"))
+    }
+
+    @Test func filenameNoMatchButPersonMatch() {
+        let r = record(filename: "IMG_0001.mov", detectedPeople: ["Tim"])
+        #expect(!r.filename.lowercased().contains("tim"))
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "tim"))
+    }
+
+    @Test func noMatchReturnsFalse() {
+        let r = record(filename: "vacation.mov", detectedPeople: ["Donna"])
+        #expect(!pfRecordFilenameOrPersonMatch(r, query: "kayak"))
+    }
+
+    // Intentional non-match: path / directory are NOT searched here, so
+    // typing "Volumes" or a directory name doesn't match every file
+    // under that mount. Keeps the catalog search bar predictable per
+    // the Finder-like heuristic in the helper's doc comment.
+    @Test func pathAndDirectoryAreNotSearched() {
+        let r = VideoRecord()
+        r.filename = "thing.mov"
+        r.fullPath = "/Volumes/MyBook/family/Donna_compilation/thing.mov"
+        r.directory = "/Volumes/MyBook/family/Donna_compilation"
+        // "donna" appears in path/directory only — no filename / tag match.
+        #expect(!pfRecordFilenameOrPersonMatch(r, query: "donna"))
+        // "Volumes" should not match either.
+        #expect(!pfRecordFilenameOrPersonMatch(r, query: "volumes"))
+    }
+}
+
+// MARK: - peopleSortKey tests (sortable People column)
+
+struct PeopleSortKeyTests {
+
+    private func makeRecord(detected: [String] = [], suspected: [String] = []) -> VideoRecord {
+        let r = VideoRecord()
+        r.detectedPeople = detected
+        r.suspectedPeople = suspected
+        return r
+    }
+
+    @Test func confirmedNamesSortAlphabetically() {
+        let donna = makeRecord(detected: ["Donna"])
+        let tim = makeRecord(detected: ["Tim"])
+        #expect(donna.peopleSortKey < tim.peopleSortKey)
+    }
+
+    @Test func multipleConfirmedNamesJoinedInSortedOrder() {
+        let r = makeRecord(detected: ["Tim", "Donna", "Matt"])
+        #expect(r.peopleSortKey == "Donna, Matt, Tim")
+    }
+
+    // Untagged records sort AFTER tagged records ascending — U+FFFD
+    // sentinel is higher than any normal letter. Avoids the "empty
+    // string sorts to the top" surprise users hit with naive joins.
+    @Test func untaggedRecordSortsAfterTaggedAscending() {
+        let untagged = makeRecord()
+        let tagged = makeRecord(detected: ["Donna"])
+        #expect(tagged.peopleSortKey < untagged.peopleSortKey)
+    }
+
+    // Suspected-only sorts AFTER confirmed (because the suspected
+    // bucket is prefixed with "~", which is > letters in ASCII).
+    // Cohort order ascending: confirmed → suspected-only → untagged.
+    @Test func suspectedOnlySortsAfterConfirmed() {
+        let confirmedDonna = makeRecord(detected: ["Donna"])
+        let suspectedDonna = makeRecord(suspected: ["Donna"])
+        #expect(confirmedDonna.peopleSortKey < suspectedDonna.peopleSortKey)
+    }
+
+    @Test func mixedTiersConfirmedComesFirstInKey() {
+        let mixed = makeRecord(detected: ["Donna"], suspected: ["Tim"])
+        #expect(mixed.peopleSortKey == "Donna ~Tim")
+        let suspectedOnly = makeRecord(suspected: ["Tim"])
+        #expect(mixed.peopleSortKey < suspectedOnly.peopleSortKey)
+    }
+
+    // Tag insertion order shouldn't change the sort position — the key
+    // is derived from sorted membership, not raw array order.
+    @Test func sortKeyStableAcrossInsertionOrder() {
+        let a = makeRecord(detected: ["Donna", "Tim"])
+        let b = makeRecord(detected: ["Tim", "Donna"])
+        #expect(a.peopleSortKey == b.peopleSortKey)
+    }
+}
+
 // MARK: - Family tagging predicate tests (Step 5)
 
 struct FamilyTaggingPredicateTests {
