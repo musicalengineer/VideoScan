@@ -56,7 +56,11 @@ extension VideoScanModel {
         byPath.reserveCapacity(records.count)
         for r in records { byPath[r.fullPath] = r }
 
-        var changed = 0
+        // Track confirmed/suspected counts separately so the log line at
+        // the end can give the user a one-glance quality readout
+        // ("Donna: 10 confirmed, 2 suspected" vs "Donna: 12 suspected").
+        var confirmedChanged = 0
+        var suspectedChanged = 0
 
         // Confirmed: ensure name is in detectedPeople, remove from
         // suspectedPeople if present (upgrade path).
@@ -76,7 +80,7 @@ extension VideoScanModel {
                 record.detectedPeople.append(person)
                 didChange = true
             }
-            if didChange { changed += 1 }
+            if didChange { confirmedChanged += 1 }
         }
 
         // Suspected: ensure name is in suspectedPeople, remove from
@@ -98,12 +102,26 @@ extension VideoScanModel {
                 record.suspectedPeople.append(person)
                 didChange = true
             }
-            if didChange { changed += 1 }
+            if didChange { suspectedChanged += 1 }
         }
 
+        let changed = confirmedChanged + suspectedChanged
         if changed > 0 {
             objectWillChange.send()
             saveCatalogDebounced()
+            // Narrative log line — one per writeback, suppressed when
+            // nothing changed (no log spam on idempotent re-runs).
+            // Goes to videoscan.log so Rick can skim the catalog story
+            // without tailing the unified log.
+            let breakdown: String
+            if confirmedChanged > 0 && suspectedChanged > 0 {
+                breakdown = " (\(confirmedChanged) confirmed, \(suspectedChanged) suspected)"
+            } else if suspectedChanged > 0 {
+                breakdown = " (suspected)"
+            } else {
+                breakdown = ""
+            }
+            appLog.write("Catalog: tagged \(person) on \(changed) record(s)\(breakdown)")
         }
         return changed
     }
