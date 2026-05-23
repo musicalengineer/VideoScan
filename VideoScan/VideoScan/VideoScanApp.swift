@@ -14,10 +14,33 @@ import AppKit
 // across launches so you can read "started X, quit Y, started Z" history
 // by `tail` or Console.app. Distinct from per-scan PersistentLog instances
 // (which truncate per job) and from the macOS unified log (`log show`).
+//
+// Test-host short-circuit: skip start() under XCTest / Swift Testing
+// hosts so testbed runs don't bloat the user's real videoscan.log.
+// Other PersistentLog instances (per-job face_detect logs,
+// LogVerificationTests fixtures) are unaffected — only this one
+// global instance is gated. Cheap retrofit alternative to true
+// Logger DI: same outcome, zero call-site changes.
 let appLog: PersistentLog = {
     let log = PersistentLog(name: "videoscan")
-    log.start(append: true)
+    if !appLogIsRunningUnderTests {
+        log.start(append: true)
+    }
     return log
+}()
+
+/// Mirrors CatalogStore.isRunningTests so the gate on `appLog` is
+/// consistent with the codebase's other test-environment checks.
+private let appLogIsRunningUnderTests: Bool = {
+    if NSClassFromString("XCTestCase") != nil { return true }
+    let env = ProcessInfo.processInfo.environment
+    if env["XCTestConfigurationFilePath"] != nil { return true }
+    if env["XCTestBundlePath"] != nil { return true }
+    if env["SWIFT_TESTING_ENABLED"] != nil { return true }
+    if Bundle.allBundles.contains(where: { $0.bundlePath.hasSuffix(".xctest") }) {
+        return true
+    }
+    return false
 }()
 
 // MARK: - App Delegate (RAM disk lifecycle)
