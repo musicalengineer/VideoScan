@@ -396,28 +396,22 @@ struct MainWindowCapture<Content: View>: View {
 struct AboutView: View {
     var body: some View {
         VStack(spacing: 0) {
-            // Header
-            ZStack(alignment: .bottom) {
-                Image("AboutCollage")
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: .infinity)
-
-                // Title overlay
-                VStack(spacing: 4) {
-                    Text("VideoScan")
-                        .font(.largeTitle.bold())
-                        .foregroundColor(.white)
-                    Text("Find friends and family in all your home videos.")
-                        .font(.callout)
-                        .foregroundColor(.white.opacity(0.9))
-                }
-                .padding(.vertical, 10)
+            // Header collage — full image, nothing on top of the faces
+            Image("AboutCollage")
+                .resizable()
+                .aspectRatio(contentMode: .fit)
                 .frame(maxWidth: .infinity)
-                .background(.ultraThinMaterial.opacity(0.8))
+
+            // Title sits below the collage so both rows of family photos stay visible
+            VStack(spacing: 4) {
+                Text("VideoScan")
+                    .font(.largeTitle.bold())
+                Text("Find friends and family in all your home videos.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
             }
+            .padding(.vertical, 12)
             .frame(maxWidth: .infinity)
-            .clipped()
 
             // Body
             ScrollView {
@@ -428,7 +422,7 @@ struct AboutView: View {
 
                     AboutSection(icon: "externaldrive.connected.to.line.below", color: .green, title: "Finds videos on attached storage or network drives.") {}
 
-                    AboutSection(icon: "waveform.and.magnifyingglass", color: .purple, title: "Understands most video formats and helps you archive your memories.") {}
+                    AboutSection(icon: "waveform.and.magnifyingglass", color: .purple, title: "Understands nearly all video formats and helps archive your favorite memories for the long-term.") {}
 
                     Divider()
 
