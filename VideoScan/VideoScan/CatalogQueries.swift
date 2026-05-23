@@ -91,6 +91,7 @@ nonisolated func pfTokenMatches(_ token: SearchToken, _ rec: VideoRecord) -> Boo
         if rec.fullPath.lowercased().contains(n) { return true }
         if rec.directory.lowercased().contains(n) { return true }
         if rec.detectedPeople.contains(where: { $0.lowercased().contains(n) }) { return true }
+        if rec.suspectedPeople.contains(where: { $0.lowercased().contains(n) }) { return true }
         if rec.avidClipName.lowercased().contains(n) { return true }
         if rec.videoCodec.lowercased().contains(n) { return true }
         if rec.audioCodec.lowercased().contains(n) { return true }
@@ -116,6 +117,27 @@ nonisolated func pfRecordsMatchingQuery(_ records: [VideoRecord], query: String)
     let tokens = pfTokenizeSearchQuery(query)
     if tokens.isEmpty { return records }
     return records.filter { rec in tokens.allSatisfy { pfTokenMatches($0, rec) } }
+}
+
+// MARK: - Family tagging predicates (Step 5)
+//
+// Pure helpers powering the catalog's "Has Family" / "Untagged" filters and
+// the People column. The catalog table calls these directly so the same
+// rules drive screen and tests with no behavioural drift.
+
+/// True if `rec` has at least one detected OR suspected person tag.
+/// Drives the "Has Family" catalog filter — fastest way to surface
+/// keeper-candidate footage.
+nonisolated func pfRecordHasAnyPerson(_ rec: VideoRecord) -> Bool {
+    !rec.detectedPeople.isEmpty || !rec.suspectedPeople.isEmpty
+}
+
+/// True if `rec` has no person tags at all in either array. Drives the
+/// "Untagged (junk candidate)" filter — these are the rows where a
+/// family scan found nothing recognisable, so they're the highest-yield
+/// triage targets for deletion / archival.
+nonisolated func pfRecordIsUntagged(_ rec: VideoRecord) -> Bool {
+    rec.detectedPeople.isEmpty && rec.suspectedPeople.isEmpty
 }
 
 // MARK: - Triage disposition (issue #66, pattern 3)

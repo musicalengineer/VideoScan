@@ -449,6 +449,12 @@ struct CatalogContent: View {
         if viewFilters.contains(.ratedOnly) {
             out = out.filter { $0.starRating > 0 }
         }
+        if viewFilters.contains(.hasFamily) {
+            out = out.filter(pfRecordHasAnyPerson)
+        }
+        if viewFilters.contains(.untaggedOnly) {
+            out = out.filter(pfRecordIsUntagged)
+        }
         return out
     }
 
@@ -786,39 +792,33 @@ struct CatalogContent: View {
             }
             .width(min: 80, ideal: 100)
 
-            TableColumn("Tag") { rec in
-                HStack(spacing: 3) {
-                    Image(systemName: rec.mediaDisposition.icon)
-                        .foregroundColor(rec.mediaDisposition.color)
-                    if rec.mediaDisposition != .unreviewed {
-                        Text(rec.mediaDisposition.rawValue)
-                            .font(.system(size: 11))
-                            .foregroundColor(rec.mediaDisposition.color)
-                    }
-                    if !rec.notes.isEmpty {
-                        Image(systemName: "note.text")
-                            .font(.system(size: 9))
-                            .foregroundColor(.secondary)
-                    }
-                    if rec.archiveHealth != .notApplicable {
-                        Image(systemName: rec.archiveHealth.icon)
-                            .font(.system(size: 9))
-                            .foregroundColor(rec.archiveHealth.color)
-                    }
+            // Last three columns wrapped in Group to stay under the 10-child
+            // limit of Swift's @TableColumnBuilder. The People column (Step 5)
+            // is the 11th, so we group People + Tag + Duplicate.
+            //
+            // People column: confirmed names in blue, suspected (borderline)
+            // names italic + secondary with a leading "?". Em-dash when both
+            // arrays are empty — the "junk candidate" signal the user filters
+            // on with .untaggedOnly.
+            Group {
+                TableColumn("People") { rec in
+                    peopleColumnCell(for: rec)
                 }
-                .help(rec.notes.isEmpty
-                      ? rec.mediaDisposition.rawValue
-                      : "\(rec.mediaDisposition.rawValue) — \(rec.notes)")
-            }
-            .width(min: 70, ideal: 120)
+                .width(min: 90, ideal: 140)
 
-            TableColumn("Duplicate") { rec in
-                DuplicateDispositionCell(record: rec)
-                    .help(rec.duplicateDisposition == .none
-                          ? "Run Duplicates analysis to check for copies"
-                          : "Total copies across catalog. Color: green = Keep (best copy), orange = Review (check manually), red = Extra copy (safe to remove)")
+                TableColumn("Tag") { rec in
+                    tagColumnCell(for: rec)
+                }
+                .width(min: 70, ideal: 120)
+
+                TableColumn("Duplicate") { rec in
+                    DuplicateDispositionCell(record: rec)
+                        .help(rec.duplicateDisposition == .none
+                              ? "Run Duplicates analysis to check for copies"
+                              : "Total copies across catalog. Color: green = Keep (best copy), orange = Review (check manually), red = Extra copy (safe to remove)")
+                }
+                .width(min: 80, ideal: 95)
             }
-            .width(min: 80, ideal: 95)
         }
         .onChange(of: sortOrder) {
             onSort(sortOrder)
@@ -1208,6 +1208,76 @@ struct CatalogContent: View {
                 .frame(maxWidth: .infinity)
             }
         }
+    }
+
+    /// Extracted Tag-column cell. Moved out of the Table body to keep
+    /// the @TableColumnBuilder's type inference manageable — when the
+    /// People column pushed this Table from 10 → 11 columns, type-check
+    /// timed out on the larger expression.
+    @ViewBuilder
+    private func tagColumnCell(for rec: VideoRecord) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: rec.mediaDisposition.icon)
+                .foregroundColor(rec.mediaDisposition.color)
+            if rec.mediaDisposition != .unreviewed {
+                Text(rec.mediaDisposition.rawValue)
+                    .font(.system(size: 11))
+                    .foregroundColor(rec.mediaDisposition.color)
+            }
+            if !rec.notes.isEmpty {
+                Image(systemName: "note.text")
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondary)
+            }
+            if rec.archiveHealth != .notApplicable {
+                Image(systemName: rec.archiveHealth.icon)
+                    .font(.system(size: 9))
+                    .foregroundColor(rec.archiveHealth.color)
+            }
+        }
+        .help(rec.notes.isEmpty
+              ? rec.mediaDisposition.rawValue
+              : "\(rec.mediaDisposition.rawValue) — \(rec.notes)")
+    }
+
+    /// Render the family-tag column for one record. Confirmed names blue,
+    /// suspected names italic + secondary with a leading "?", joined by
+    /// " · ". Em-dash when both arrays are empty (junk-triage signal).
+    /// Tooltip lists names with tier annotations.
+    @ViewBuilder
+    private func peopleColumnCell(for rec: VideoRecord) -> some View {
+        if rec.detectedPeople.isEmpty && rec.suspectedPeople.isEmpty {
+            Text("—")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+                .help("No family detected — junk-triage candidate")
+        } else {
+            let confirmedText = Text(rec.detectedPeople.joined(separator: ", "))
+                .foregroundColor(.blue)
+            let suspectedJoined = rec.suspectedPeople
+                .map { "?\($0)" }
+                .joined(separator: ", ")
+            let suspectedText = Text(suspectedJoined)
+                .italic()
+                .foregroundColor(.secondary)
+            let separator = (!rec.detectedPeople.isEmpty
+                             && !rec.suspectedPeople.isEmpty) ? " · " : ""
+            (confirmedText + Text(separator) + suspectedText)
+                .font(.system(size: 12))
+                .lineLimit(1)
+                .help(peopleColumnHelp(for: rec))
+        }
+    }
+
+    private func peopleColumnHelp(for rec: VideoRecord) -> String {
+        var lines: [String] = []
+        if !rec.detectedPeople.isEmpty {
+            lines.append("Detected: \(rec.detectedPeople.joined(separator: ", "))")
+        }
+        if !rec.suspectedPeople.isEmpty {
+            lines.append("Suspected: \(rec.suspectedPeople.joined(separator: ", "))")
+        }
+        return lines.joined(separator: "\n")
     }
 
     private func streamTypeColor(_ st: StreamType) -> Color {
