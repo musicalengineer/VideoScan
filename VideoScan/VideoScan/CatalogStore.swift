@@ -19,8 +19,12 @@ import Foundation
 ///  - v3: VideoRecord gains `suspectedPeople: [String]` (borderline-confidence
 ///    face matches). Migration is additive — v2 catalog.json files load
 ///    unchanged via decodeIfPresent ?? [] on the record decoder.
+///  - v4: VideoRecord gains `sceneCaptions: [SceneCaption]`,
+///    `sceneCaptionModel: String?`, `sceneCaptionDate: Date?` for VLM-generated
+///    natural-language descriptions. Same additive Codable pattern as v3.
+///    See docs/scene_captions_plan.md.
 struct CatalogSnapshot: Codable {
-    static let currentVersion = 3
+    static let currentVersion = 4
 
     var version: Int = Self.currentVersion
     var savedAt: Date = Date()
