@@ -39,6 +39,15 @@ extension VideoScanModel {
         record.sceneCaptionDate = Date()
         objectWillChange.send()
         saveCatalogDebounced()
+        // Narrative log: one line per file captioned. Empty captions
+        // still logged (and explicitly noted) — "ran VLM, found
+        // nothing" is itself useful progress info that distinguishes
+        // from "never captioned".
+        let filename = (path as NSString).lastPathComponent
+        let summary = captions.isEmpty
+            ? "no captions"
+            : "\(captions.count) caption(s)"
+        appLog.write("Catalog: captioned \(filename) — \(summary) (\(model))")
         return true
     }
 
@@ -62,17 +71,27 @@ extension VideoScanModel {
 
         let now = Date()
         var updated = 0
+        var totalCaptions = 0
         for (path, captions) in batch {
             guard let record = byPath[path] else { continue }
             record.sceneCaptions = captions
             record.sceneCaptionModel = model
             record.sceneCaptionDate = now
             updated += 1
+            totalCaptions += captions.count
         }
 
         if updated > 0 {
             objectWillChange.send()
             saveCatalogDebounced()
+            // Batch narrative: one line per batch flush. Skipped is the
+            // count of paths in the batch that didn't match a catalog
+            // row (e.g. files captioned but not yet scanned in).
+            let skipped = batch.count - updated
+            let skippedSuffix = skipped > 0
+                ? ", \(skipped) skipped (uncataloged)"
+                : ""
+            appLog.write("Catalog: captioned \(updated) file(s) with \(totalCaptions) caption(s) (\(model))\(skippedSuffix)")
         }
         return updated
     }

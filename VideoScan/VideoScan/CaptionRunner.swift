@@ -107,6 +107,12 @@ struct MLXVLMCaptionRunner: CaptionRunner {
         videoPath: String,
         atTimestamps timestamps: [Double]
     ) async throws -> [SceneCaption] {
+        // Until S6 wires MLXVLM, every call lands here. Log so the
+        // stub-throws path is observable in videoscan.log (failure
+        // mode is "user sees 'engine not yet wired' in the log"
+        // rather than "captioning silently no-ops").
+        let filename = (videoPath as NSString).lastPathComponent
+        appLog.write("CaptionRunner(MLXVLM) stub for \(filename) (\(timestamps.count) frame(s)) — engine not yet wired (S6)")
         throw CaptionRunnerError.notImplemented(engine: "MLXVLM")
     }
 }
@@ -132,6 +138,8 @@ struct PythonSubprocessCaptionRunner: CaptionRunner {
         videoPath: String,
         atTimestamps timestamps: [Double]
     ) async throws -> [SceneCaption] {
+        let filename = (videoPath as NSString).lastPathComponent
+        appLog.write("CaptionRunner(Python) stub for \(filename) (\(timestamps.count) frame(s)) — engine not yet wired")
         throw CaptionRunnerError.notImplemented(engine: "PythonSubprocess")
     }
 }
