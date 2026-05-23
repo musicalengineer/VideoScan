@@ -10,9 +10,10 @@ struct PhaseConsistencyTests {
 
     @Test func catalogedTargetWithRecordsStaysCataloged() {
         let model = VideoScanModel()
+        model.scanTargets.removeAll()
         let target = CatalogScanTarget(searchPath: "/Volumes/TestVol")
         target.phase = .cataloged
-        model.scanTargets.append(target)
+        model.scanTargets = [target]
 
         let rec = VideoRecord()
         rec.fullPath = "/Volumes/TestVol/clip.mov"
@@ -24,10 +25,11 @@ struct PhaseConsistencyTests {
 
     @Test func catalogedTargetWithNoRecordsResetsToNoCatalog() {
         let model = VideoScanModel()
+        model.scanTargets.removeAll()
         let target = CatalogScanTarget(searchPath: "/Volumes/EmptyVol")
         target.phase = .cataloged
         target.lastScannedDate = Date()
-        model.scanTargets.append(target)
+        model.scanTargets = [target]
 
         model.enforcePhaseConsistency()
 
@@ -37,9 +39,10 @@ struct PhaseConsistencyTests {
 
     @Test func noCatalogTargetUntouchedByConsistencyCheck() {
         let model = VideoScanModel()
+        model.scanTargets.removeAll()
         let target = CatalogScanTarget(searchPath: "/Volumes/NeverScanned")
         target.phase = .noCatalog
-        model.scanTargets.append(target)
+        model.scanTargets = [target]
 
         model.enforcePhaseConsistency()
 
@@ -48,6 +51,7 @@ struct PhaseConsistencyTests {
 
     @Test func multipleTargetsMixedState() {
         let model = VideoScanModel()
+        model.scanTargets.removeAll()
         let hasData = CatalogScanTarget(searchPath: "/Volumes/HasData")
         hasData.phase = .cataloged
         let noData = CatalogScanTarget(searchPath: "/Volumes/NoData")
@@ -56,7 +60,7 @@ struct PhaseConsistencyTests {
         let rec = VideoRecord()
         rec.fullPath = "/Volumes/HasData/video.mxf"
 
-        model.scanTargets.append(contentsOf: [hasData, noData])
+        model.scanTargets = [hasData, noData]
         model.records.append(rec)
         model.enforcePhaseConsistency()
 
@@ -68,12 +72,13 @@ struct PhaseConsistencyTests {
 
     @Test func repairsNoCatalogWhenRecordsExist() {
         let model = VideoScanModel()
+        model.scanTargets.removeAll()
         let target = CatalogScanTarget(searchPath: "/Volumes/Corrupted")
         target.phase = .noCatalog
         let rec = VideoRecord()
         rec.fullPath = "/Volumes/Corrupted/family.mov"
 
-        model.scanTargets.append(target)
+        model.scanTargets = [target]
         model.records.append(rec)
 
         let repaired = model.repairCorruptedPhases()
@@ -84,10 +89,11 @@ struct PhaseConsistencyTests {
 
     @Test func doesNotRepairWhenNoRecords() {
         let model = VideoScanModel()
+        model.scanTargets.removeAll()
         let target = CatalogScanTarget(searchPath: "/Volumes/TrulyEmpty")
         target.phase = .noCatalog
 
-        model.scanTargets.append(target)
+        model.scanTargets = [target]
 
         let repaired = model.repairCorruptedPhases()
 
@@ -97,6 +103,7 @@ struct PhaseConsistencyTests {
 
     @Test func repairsMultipleCorruptedTargets() {
         let model = VideoScanModel()
+        model.scanTargets.removeAll()
         let vol1 = CatalogScanTarget(searchPath: "/Volumes/Vol1")
         vol1.phase = .noCatalog
         let vol2 = CatalogScanTarget(searchPath: "/Volumes/Vol2")
@@ -107,7 +114,7 @@ struct PhaseConsistencyTests {
         let rec1 = VideoRecord(); rec1.fullPath = "/Volumes/Vol1/a.mov"
         let rec2 = VideoRecord(); rec2.fullPath = "/Volumes/Vol2/b.mov"
 
-        model.scanTargets.append(contentsOf: [vol1, vol2, vol3])
+        model.scanTargets = [vol1, vol2, vol3]
         model.records.append(contentsOf: [rec1, rec2])
 
         let repaired = model.repairCorruptedPhases()
@@ -120,11 +127,12 @@ struct PhaseConsistencyTests {
 
     @Test func skipsEmptySearchPath() {
         let model = VideoScanModel()
+        model.scanTargets.removeAll()
         let target = CatalogScanTarget(searchPath: "")
         target.phase = .noCatalog
         let rec = VideoRecord(); rec.fullPath = "/Volumes/X/a.mov"
 
-        model.scanTargets.append(target)
+        model.scanTargets = [target]
         model.records.append(rec)
 
         let repaired = model.repairCorruptedPhases()
@@ -135,11 +143,12 @@ struct PhaseConsistencyTests {
 
     @Test func leavesAlreadyCatalogedTargetAlone() {
         let model = VideoScanModel()
+        model.scanTargets.removeAll()
         let target = CatalogScanTarget(searchPath: "/Volumes/Good")
         target.phase = .cataloged
         let rec = VideoRecord(); rec.fullPath = "/Volumes/Good/a.mov"
 
-        model.scanTargets.append(target)
+        model.scanTargets = [target]
         model.records.append(rec)
 
         let repaired = model.repairCorruptedPhases()
@@ -150,9 +159,10 @@ struct PhaseConsistencyTests {
 
     @Test func returnsZeroWhenRecordsArrayEmpty() {
         let model = VideoScanModel()
+        model.scanTargets.removeAll()
         let target = CatalogScanTarget(searchPath: "/Volumes/X")
         target.phase = .noCatalog
-        model.scanTargets.append(target)
+        model.scanTargets = [target]
 
         let repaired = model.repairCorruptedPhases()
 
