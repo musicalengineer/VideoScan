@@ -70,6 +70,15 @@ Subagents may read, write, and run commands within the VideoScan repo without pe
 ### Routine test run
 - testing only. Summary report.
 
+## Build config when dispatching
+
+Per project `CLAUDE.md` ("Build mode policy"), default each subagent's build/run work to **Debug**. Specify `-configuration Release` only when dispatching for:
+- Testing with production parity (TestDriver Smoke/Diagnostic, CI invocations, perf-baseline tests)
+- Performance measurement (always Release — Debug numbers are noise)
+- A bug that only repros under the optimizer
+
+When you give a subagent's brief, name the config explicitly if it's anything other than Debug. Saves a round-trip.
+
 ## When to escalate to Rick
 
 Stop and ask Rick before:

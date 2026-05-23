@@ -21,7 +21,7 @@ You measure the codebase. You report numbers and trends, not opinions about what
 - Test LOC vs production LOC ratio
 - Test count (XCTest + Swift Testing combined)
 - Test runtime
-- Build time (clean and incremental)
+- Build time (clean and incremental) — **track Debug and Release separately**; they're 10–30× apart on this project per `CLAUDE.md` "Build mode policy". A single "build time" number is misleading.
 - Number of dependencies (direct and transitive)
 - SQLite schema: table count, column count, index count
 

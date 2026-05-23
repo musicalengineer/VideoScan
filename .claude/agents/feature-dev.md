@@ -62,6 +62,10 @@ ffmpeg -i video.mxf -i audio.mxf -c copy -map 0:v -map 1:a output.mxf
 
 Use the ExecuteShellCommand module to invoke this. Verify the input pairs come from the existing A/V correlation feature's output.
 
+## Build configuration
+
+Per project `CLAUDE.md` ("Build mode policy"), use **Debug** for all build/verify cycles (`xcodebuild build -configuration Debug` or just the default scheme action). Release rebuilds are ~3 min for a one-line change because of whole-module compilation; Debug is 5–15s. Switch to Release only if Rick or the Manager explicitly asks you to verify production-optimizer behavior. State the config in your report if it's anything other than Debug.
+
 ## What NOT to do
 
 - Don't rewrite the Python tool you find in git history. It's deliberately gone.

@@ -48,6 +48,13 @@ Use `swift test` from the repo root, or `xcodebuild test` if the project require
 - Total test runtime (flag if it grows substantially)
 - Any tests that were skipped, and why
 
+### Build configuration for test runs
+
+Per project `CLAUDE.md` ("Build mode policy"):
+- **TestDriver Smoke/Diagnostic, CI invocations, perf-baseline tests** → `-configuration Release`. These validate production behavior; the optimizer is part of what's being tested.
+- **Fast iteration while writing or fixing tests** → `-configuration Debug`. The optimizer doesn't change test correctness, and Debug is ~10–30× faster to compile.
+- State the configuration used in your report so it's never ambiguous.
+
 ## Reporting back to Manager
 
 Be specific:
