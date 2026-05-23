@@ -245,6 +245,7 @@ final class VideoScanModel: ObservableObject {
     }
 
     var combineTask: Task<Void, Never>?
+    var backfillTask: Task<Void, Never>?
     var ramDisk = RAMDisk()
     nonisolated private let metadataCache = MetadataCache()
 
@@ -333,6 +334,7 @@ final class VideoScanModel: ObservableObject {
         }
         enforcePhaseConsistency()
         repairCorruptedPhases()
+        detectResumableTargets()
         installVolumeMountObservers()
         refreshTargetReachability()
     }
@@ -1811,6 +1813,8 @@ final class VideoScanModel: ObservableObject {
             log("--- Scan blocked: \(missing.displayName) not installed (\(missing.installHint)) ---")
             return
         }
+        // Clear any stale checkpoint — this is a fresh scan.
+        ScanCheckpointStorage.delete(for: target.searchPath)
         // Clear any existing catalog records for this volume so a rescan
         // doesn't create duplicates. The cache is kept (probes are reused).
         records.removeAll { $0.fullPath.hasPrefix(target.searchPath) }
@@ -2057,6 +2061,7 @@ final class VideoScanModel: ObservableObject {
         }
         records.append(contentsOf: targetRecords)
         saveCatalogDebounced()
+        ScanCheckpointStorage.delete(for: target.searchPath)
         logTargetScanSummary(volName: volName, records: targetRecords)
         appLog.write("Completed catalog scan of volume \(volName): \(completedCount) file(s) scanned, \(targetRecords.count) catalogued")
         target.status = .complete
@@ -2142,6 +2147,18 @@ final class VideoScanModel: ObservableObject {
         // appear right away instead of waiting for a long walk to finish.
         let ramMountPoint = await mountScanRAMDiskIfNeeded(hasNetwork: rootIsNetwork)
 
+        // Start keepalive for network volumes to prevent disk sleep and
+        // auto-pause/resume on transient network outages.
+        var keepalive: VolumeKeepalive?
+        if rootIsNetwork {
+            let ka = VolumeKeepalive(volumePath: root) { [weak self] msg in
+                Task { @MainActor in self?.log(msg) }
+            }
+            await ka.start(pauseGate: target.pauseGate)
+            keepalive = ka
+            log("  Volume keepalive started for \(volName) (stat every 30s)")
+        }
+
         // Streaming walk + interleaved probe — see runTargetProbeGroup.
         dashboard.scanPhase = .probing
         target.status = .scanning
@@ -2151,8 +2168,11 @@ final class VideoScanModel: ObservableObject {
             root: root,
             volName: volName,
             rootIsNetwork: rootIsNetwork,
-            ramMountPoint: ramMountPoint
+            ramMountPoint: ramMountPoint,
+            keepalive: keepalive
         )
+
+        if let ka = keepalive { await ka.stop() }
 
         await finalizeSingleTargetScan(
             target: target,
@@ -2164,6 +2184,352 @@ final class VideoScanModel: ObservableObject {
         )
     }
 
+    /// Resume a previously interrupted scan from its checkpoint.
+    func resumeTarget(_ target: CatalogScanTarget) {
+        guard !target.searchPath.isEmpty else { return }
+        guard let checkpoint = ScanCheckpointStorage.load(for: target.searchPath) else {
+            log("No checkpoint found for \(target.searchPath) — starting fresh scan")
+            startTarget(target)
+            return
+        }
+        if let missing = DependencyChecker.checkScan() {
+            missingDependency = missing
+            return
+        }
+
+        let staleHours = Int(Date().timeIntervalSince(checkpoint.startedAt) / 3600)
+        if staleHours > 24 {
+            log("  ⚠ Checkpoint is \(staleHours)h old — file list may be stale")
+        }
+
+        target.status = .scanning
+        target.filesFound = checkpoint.totalDiscovered
+        target.filesScanned = 0
+        target.startElapsedTimer()
+
+        let isFirstActive = !scanTargets.contains { $0.id != target.id && $0.status.isActive }
+        if isFirstActive {
+            dashboard.resetForScan()
+            dashboard.scanPhase = .probing
+            dashboard.startThroughputTimer()
+        }
+        isScanning = true
+
+        let root = target.searchPath
+        let volName = URL(fileURLWithPath: root).lastPathComponent
+        let existingPaths = Set(records.filter { $0.fullPath.hasPrefix(root) }.map(\.fullPath))
+        let remainingPaths = checkpoint.discoveredPaths.filter { !existingPaths.contains($0) }
+        log("Resuming scan of \(volName): \(remainingPaths.count) of \(checkpoint.totalDiscovered) files remaining")
+        appLog.write("Resuming catalog scan of volume \(volName) from checkpoint (\(remainingPaths.count) remaining)")
+
+        target.scanTask = Task {
+            let rootIsNetwork = CombineVerifier.isNetworkPath(root)
+            let ramMountPoint = await mountScanRAMDiskIfNeeded(hasNetwork: rootIsNetwork)
+
+            var keepalive: VolumeKeepalive?
+            if rootIsNetwork {
+                let ka = VolumeKeepalive(volumePath: root) { [weak self] msg in
+                    Task { @MainActor in self?.log(msg) }
+                }
+                await ka.start(pauseGate: target.pauseGate)
+                keepalive = ka
+            }
+
+            let result = await runResumedProbeGroup(
+                target: target,
+                filePaths: remainingPaths,
+                root: root,
+                volName: volName,
+                rootIsNetwork: rootIsNetwork,
+                ramMountPoint: ramMountPoint,
+                keepalive: keepalive,
+                skipChecksums: checkpoint.skipChecksums
+            )
+
+            if let ka = keepalive { await ka.stop() }
+
+            ScanCheckpointStorage.delete(for: root)
+
+            await finalizeSingleTargetScan(
+                target: target,
+                volName: volName,
+                targetRecords: result.records,
+                completedCount: result.completed,
+                discoveredCount: result.discovered,
+                rootIsNetwork: rootIsNetwork
+            )
+        }
+    }
+
+    /// Check for resumable scan checkpoints and mark matching targets.
+    func detectResumableTargets() {
+        let checkpoints = ScanCheckpointStorage.listAll()
+        for cp in checkpoints {
+            if let target = scanTargets.first(where: { $0.searchPath == cp.volumePath }),
+               target.status == .idle || target.status == .stopped {
+                let remaining = cp.discoveredPaths.count
+                    - records.filter({ $0.fullPath.hasPrefix(cp.volumePath) }).count
+                if remaining > 0 {
+                    target.status = .resumable
+                    log("  💾 Checkpoint found for \(URL(fileURLWithPath: cp.volumePath).lastPathComponent): \(remaining) files remaining")
+                } else {
+                    ScanCheckpointStorage.delete(for: cp.volumePath)
+                }
+            }
+        }
+    }
+
+    // MARK: - Catalog Verification
+
+    /// Verify catalog records for a volume without running ffprobe.
+    /// Checks provenance, file existence, and size. Backfills missing
+    /// scanContext fields (volume name, host, mount type) when the volume
+    /// is online — no rescan needed for that.
+    func verifyCatalog(for target: CatalogScanTarget) {
+        let root = target.searchPath
+        let volName = URL(fileURLWithPath: root).lastPathComponent
+        let volumeRecords = records.filter { $0.fullPath.hasPrefix(root) }
+
+        guard !volumeRecords.isEmpty else {
+            log("No catalog records for \(volName) — nothing to verify")
+            return
+        }
+
+        guard VolumeReachability.isReachable(path: root) else {
+            var report = CatalogHealthReport(
+                volumePath: root, volumeName: volName,
+                totalRecords: volumeRecords.count
+            )
+            report.volumeOffline = true
+            report.missingVolumeName = volumeRecords.filter { $0.scanContext.volumeName.isEmpty }.count
+            report.missingProvenance = volumeRecords.filter { !$0.scanContext.isPopulated }.count
+            log(report.summary)
+            return
+        }
+
+        log("""
+
+        ─────────────────────────────────────────────
+        Verifying catalog for \(volName)…
+        ─────────────────────────────────────────────
+          \(volumeRecords.count) records to check
+        """)
+        target.status = .scanning
+        target.filesFound = volumeRecords.count
+        target.filesScanned = 0
+        target.startElapsedTimer()
+
+        // Snapshot the record paths + sizes so the background task can
+        // do all the filesystem I/O without touching MainActor state.
+        struct RecordSnapshot {
+            let index: Int
+            let path: String
+            let url: URL
+            let sizeBytes: Int64
+            let needsBackfill: Bool
+        }
+        let snapshots = volumeRecords.enumerated().map { (i, rec) in
+            RecordSnapshot(
+                index: i,
+                path: rec.fullPath,
+                url: URL(fileURLWithPath: rec.fullPath),
+                sizeBytes: rec.sizeBytes,
+                needsBackfill: rec.scanContext.volumeName.isEmpty || !rec.scanContext.isPopulated
+            )
+        }
+        let totalCount = volumeRecords.count
+
+        target.scanTask = Task {
+            struct FileResult {
+                let index: Int
+                let exists: Bool
+                let sizeChanged: Bool
+                let needsBackfill: Bool
+                var capturedContext: ScanContext?
+            }
+
+            // Run all filesystem checks off the main thread.
+            let results: [FileResult] = await Task.detached(priority: .userInitiated) {
+                let fm = FileManager.default
+                return snapshots.map { snap in
+                    guard fm.fileExists(atPath: snap.path) else {
+                        return FileResult(index: snap.index, exists: false,
+                                          sizeChanged: false, needsBackfill: false)
+                    }
+                    let attrs = try? fm.attributesOfItem(atPath: snap.path)
+                    let diskSize = (attrs?[.size] as? Int64) ?? 0
+                    let changed = snap.sizeBytes > 0 && diskSize > 0 && diskSize != snap.sizeBytes
+                    var ctx: ScanContext?
+                    if !changed && snap.needsBackfill {
+                        ctx = ScanContext.capture(for: snap.url)
+                    }
+                    return FileResult(index: snap.index, exists: true,
+                                      sizeChanged: changed,
+                                      needsBackfill: snap.needsBackfill,
+                                      capturedContext: ctx)
+                }
+            }.value
+
+            // Apply results back on MainActor.
+            var report = CatalogHealthReport(
+                volumePath: root, volumeName: volName, totalRecords: totalCount
+            )
+            var backfillCount = 0
+            let milestones = Set([10, 25, 50, 75, 90])
+            var loggedMilestones: Set<Int> = []
+
+            for (i, result) in results.enumerated() {
+                if !result.exists {
+                    report.filesDeleted += 1
+                } else if result.sizeChanged {
+                    report.sizeChanged += 1
+                } else {
+                    if let ctx = result.capturedContext {
+                        volumeRecords[result.index].scanContext = ctx
+                        backfillCount += 1
+                    }
+                    report.healthy += 1
+                }
+
+                let done = i + 1
+                target.filesScanned = done
+                let pct = done * 100 / totalCount
+                if milestones.contains(pct) && !loggedMilestones.contains(pct) {
+                    loggedMilestones.insert(pct)
+                    self.log("  [\(volName)] \(done)/\(totalCount) (\(pct)%) — \(report.filesDeleted) deleted, \(backfillCount) backfilled")
+                }
+            }
+
+            let elapsed = target.elapsedSecs
+
+            report.provenanceBackfilled = backfillCount
+            report.missingVolumeName = volumeRecords.filter { $0.scanContext.volumeName.isEmpty }.count
+            report.missingProvenance = volumeRecords.filter { !$0.scanContext.isPopulated }.count
+
+            if backfillCount > 0 { self.saveCatalogDebounced() }
+
+            target.stopElapsedTimer()
+            target.status = .complete
+            self.updateGlobalScanState()
+
+            self.log(report.summary)
+            self.log("  Completed in \(String(format: "%.1f", elapsed))s")
+
+            if report.isHealthy || (report.issues == 0 && backfillCount > 0) {
+                appLog.write("Verified \(volName): \(totalCount) records healthy, \(backfillCount) backfilled (\(String(format: "%.1f", elapsed))s)")
+            } else {
+                appLog.write("Verified \(volName): \(report.issues) issue(s) found — \(report.recommendation)")
+            }
+        }
+    }
+
+    /// Backfill scanContext for all catalog records across all volumes.
+    /// Quick pass — no ffprobe, just stat + URL resource values per file.
+    func backfillAllProvenance() {
+        let needsBackfill = records.filter { $0.scanContext.volumeName.isEmpty }
+        guard !needsBackfill.isEmpty else {
+            log("All records already have volume names — nothing to backfill")
+            return
+        }
+
+        var byVolume: [String: [(index: Int, rec: VideoRecord)] ] = [:]
+        for (i, rec) in needsBackfill.enumerated() {
+            let vol = VolumeReachability.volumeName(forPath: rec.fullPath)
+            byVolume[vol, default: []].append((i, rec))
+        }
+
+        log("""
+
+        ─────────────────────────────────────────────
+        Backfilling volume names for \(needsBackfill.count) records
+        ─────────────────────────────────────────────
+          \(byVolume.count) volume(s) to process
+        """)
+
+        struct BackfillSnap {
+            let recIndex: Int
+            let path: String
+            let url: URL
+            let vol: String
+        }
+        var allSnaps: [BackfillSnap] = []
+        var volOrder: [(name: String, range: Range<Int>)] = []
+        for (vol, entries) in byVolume.sorted(by: { $0.value.count > $1.value.count }) {
+            let start = allSnaps.count
+            for (_, rec) in entries {
+                allSnaps.append(BackfillSnap(
+                    recIndex: records.firstIndex(where: { $0 === rec }) ?? 0,
+                    path: rec.fullPath,
+                    url: URL(fileURLWithPath: rec.fullPath),
+                    vol: vol
+                ))
+            }
+            volOrder.append((vol, start..<allSnaps.count))
+        }
+        let snapshots = allSnaps
+        let volumes = volOrder
+
+        backfillTask = Task {
+            struct BackfillResult {
+                let recIndex: Int
+                let reachable: Bool
+                var capturedContext: ScanContext?
+            }
+
+            let startTime = CFAbsoluteTimeGetCurrent()
+
+            let results: [BackfillResult] = await Task.detached(priority: .userInitiated) {
+                let fm = FileManager.default
+                return snapshots.map { snap in
+                    guard fm.fileExists(atPath: snap.path) else {
+                        return BackfillResult(recIndex: snap.recIndex, reachable: false)
+                    }
+                    let ctx = ScanContext.capture(for: snap.url)
+                    return BackfillResult(recIndex: snap.recIndex, reachable: true, capturedContext: ctx)
+                }
+            }.value
+
+            var backfilled = 0
+            var unreachable = 0
+
+            for vol in volumes {
+                var volBackfilled = 0
+                var volUnreachable = 0
+                for i in vol.range {
+                    let r = results[i]
+                    if r.reachable, let ctx = r.capturedContext {
+                        self.records[r.recIndex].scanContext = ctx
+                        volBackfilled += 1
+                        backfilled += 1
+                    } else if !r.reachable {
+                        volUnreachable += 1
+                        unreachable += 1
+                    }
+                }
+                if volUnreachable == vol.range.count {
+                    self.log("  [\(vol.name)] \(vol.range.count) records — offline/unreachable")
+                } else {
+                    self.log("  [\(vol.name)] \(volBackfilled)/\(vol.range.count) backfilled\(volUnreachable > 0 ? ", \(volUnreachable) unreachable" : "")")
+                }
+            }
+
+            let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+            if backfilled > 0 { self.saveCatalogDebounced() }
+
+            self.log("""
+
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+              Backfill Complete
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+              Updated:     \(backfilled)
+              Unreachable: \(unreachable)
+              Elapsed:     \(String(format: "%.1f", elapsed))s
+            ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+            """)
+            appLog.write("Provenance backfill: \(backfilled) updated, \(unreachable) unreachable (\(String(format: "%.1f", elapsed))s)")
+        }
+    }
+
     /// Streams `target.searchPath` and drains a probe group against it.
     /// Returns the collected records, total discovered, and total completed.
     private func runTargetProbeGroup(
@@ -2171,7 +2537,8 @@ final class VideoScanModel: ObservableObject {
         root: String,
         volName: String,
         rootIsNetwork: Bool,
-        ramMountPoint: String?
+        ramMountPoint: String?,
+        keepalive: VolumeKeepalive? = nil
     ) async -> (records: [VideoRecord], discovered: Int, completed: Int) {
         let probesLimit = perfSettings.probesPerVolume
         let sem = AsyncSemaphore(limit: probesLimit)
@@ -2182,7 +2549,8 @@ final class VideoScanModel: ObservableObject {
         var completedCount = 0
         var discoveredCount = 0
         var consecutiveNotAccessible = 0
-        let abortAfter = 50
+        let abortAfter = rootIsNetwork ? 100 : 50
+        var allDiscoveredPaths: [String] = []
 
         let stream = walkDirectoryStream(
             root: root,
@@ -2201,6 +2569,7 @@ final class VideoScanModel: ObservableObject {
             for await url in stream {
                 if Task.isCancelled { break }
                 discoveredCount += 1
+                allDiscoveredPaths.append(url.path)
                 let currentDiscovered = discoveredCount
                 await MainActor.run {
                     let ds = self.dashboard
@@ -2239,9 +2608,34 @@ final class VideoScanModel: ObservableObject {
             }
             log("  Found \(totalFiles) video files on \(volName)")
 
+            // Save checkpoint after walk completes so a crash during probing
+            // can resume without re-walking the entire directory tree.
+            if rootIsNetwork {
+                let checkpoint = ScanCheckpoint(
+                    volumePath: root,
+                    startedAt: Date(),
+                    discoveredPaths: allDiscoveredPaths,
+                    totalDiscovered: totalFiles,
+                    skipChecksums: skipHashingCaptured
+                )
+                ScanCheckpointStorage.save(checkpoint)
+                log("  💾 Checkpoint saved (\(totalFiles) files) — scan is resumable if interrupted")
+            }
+
             for await rec in probeGroup {
                 targetRecords.append(rec)
                 completedCount += 1
+
+                // If keepalive detected volume recovery, reset the consecutive
+                // failure counter so transient outages don't accumulate toward
+                // the abort threshold.
+                if let ka = keepalive {
+                    let volDown = await ka.volumeIsDown
+                    if !volDown && consecutiveNotAccessible > 0 && rec.streamTypeRaw != StreamType.ffprobeFailed.rawValue {
+                        consecutiveNotAccessible = 0
+                    }
+                }
+
                 let shouldAbort = processTargetProbeResult(
                     rec: rec,
                     volName: volName,
@@ -2260,6 +2654,91 @@ final class VideoScanModel: ObservableObject {
             }
         }
         return (targetRecords, discoveredCount, completedCount)
+    }
+
+    /// Probe a pre-discovered file list (from a checkpoint). Skips the walk
+    /// phase entirely — MetadataCache handles skipping already-probed files.
+    private func runResumedProbeGroup(
+        target: CatalogScanTarget,
+        filePaths: [String],
+        root: String,
+        volName: String,
+        rootIsNetwork: Bool,
+        ramMountPoint: String?,
+        keepalive: VolumeKeepalive?,
+        skipChecksums: Bool
+    ) async -> (records: [VideoRecord], discovered: Int, completed: Int) {
+        let probesLimit = perfSettings.probesPerVolume
+        let sem = AsyncSemaphore(limit: probesLimit)
+        var targetRecords: [VideoRecord] = []
+        let milestones = Set([10, 25, 50, 75, 90, 100])
+        var loggedMilestones: Set<Int> = []
+        var completedCount = 0
+        var consecutiveNotAccessible = 0
+        let abortAfter = rootIsNetwork ? 100 : 50
+        let totalFiles = filePaths.count
+
+        target.filesFound = totalFiles
+        dashboard.volumeProgress.append(
+            VolumeProgress(rootPath: root, volumeName: volName)
+        )
+
+        await withTaskGroup(of: VideoRecord.self) { probeGroup in
+            for path in filePaths {
+                if Task.isCancelled { break }
+                let url = URL(fileURLWithPath: path)
+                dashboard.scanTotal += 1
+
+                probeGroup.addTask { [self] in
+                    await target.pauseGate.waitIfPaused()
+                    do {
+                        return try await sem.withPermit {
+                            await self.probeAndRecord(
+                                url: url,
+                                volName: volName,
+                                root: root,
+                                rootIsNetwork: rootIsNetwork,
+                                ramMountPoint: ramMountPoint,
+                                skipHashing: skipChecksums,
+                                useTimeout: true,
+                                echoFilename: false
+                            )
+                        }
+                    } catch {
+                        return self.cancelledProbeRecord(url: url)
+                    }
+                }
+            }
+
+            for await rec in probeGroup {
+                targetRecords.append(rec)
+                completedCount += 1
+
+                if let ka = keepalive {
+                    let volDown = await ka.volumeIsDown
+                    if !volDown && consecutiveNotAccessible > 0 && rec.streamTypeRaw != StreamType.ffprobeFailed.rawValue {
+                        consecutiveNotAccessible = 0
+                    }
+                }
+
+                let shouldAbort = processTargetProbeResult(
+                    rec: rec,
+                    volName: volName,
+                    completedCount: completedCount,
+                    totalFiles: totalFiles,
+                    target: target,
+                    consecutiveNotAccessible: &consecutiveNotAccessible,
+                    loggedMilestones: &loggedMilestones,
+                    milestones: milestones,
+                    abortAfter: abortAfter
+                )
+                if shouldAbort {
+                    probeGroup.cancelAll()
+                    break
+                }
+            }
+        }
+        return (targetRecords, totalFiles, completedCount)
     }
 
     /// How many bytes to prefetch from network files to RAM disk for ffprobe.
@@ -2461,6 +2940,7 @@ final class VideoScanModel: ObservableObject {
     /// If prefetchToRAM is enabled and a RAM path is available, copy the
     /// file's header to the RAM disk and return the staged URL (plus a temp
     /// file for later cleanup). Falls back to the original URL on failure.
+    /// Retries up to 3 times with exponential backoff on network volumes.
     nonisolated private func prefetchIfNeeded(
         url: URL,
         fileSize: Int64,
@@ -2471,9 +2951,25 @@ final class VideoScanModel: ObservableObject {
         let prefetchStart = CFAbsoluteTimeGetCurrent()
         let tmpName = "\(UUID().uuidString)_\(url.lastPathComponent)"
         let tmpURL = URL(fileURLWithPath: rp).appendingPathComponent(tmpName)
-        guard prefetchHeader(from: url, to: tmpURL, bytes: prefetchBytes) else {
-            return (url, nil)
+
+        let backoffSeconds: [UInt64] = [1, 3, 9]
+        var succeeded = false
+
+        for attempt in 0...backoffSeconds.count {
+            if prefetchHeader(from: url, to: tmpURL, bytes: prefetchBytes) {
+                succeeded = true
+                break
+            }
+            if attempt < backoffSeconds.count {
+                if !VolumeReachability.isReachable(path: url.deletingLastPathComponent().path) {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: backoffSeconds[attempt] * 1_000_000_000)
+            }
         }
+
+        guard succeeded else { return (url, nil) }
+
         let elapsed = CFAbsoluteTimeGetCurrent() - prefetchStart
         let mbCopied = Double(min(prefetchBytes, Int(fileSize))) / (1024.0 * 1024.0)
         await MainActor.run { [elapsed, mbCopied] in

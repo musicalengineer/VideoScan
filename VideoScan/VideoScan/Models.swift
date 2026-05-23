@@ -882,20 +882,24 @@ enum CatalogTargetStatus: String {
     case complete    = "Complete"
     case stopped     = "Stopped"
     case error       = "Error"
+    case resumable   = "Resumable"
+    case waitingForVolume = "Waiting for Volume"
 
-    var isIdle: Bool { self == .idle }
-    var isActive: Bool { self == .scanning || self == .paused || self == .discovering }
+    var isIdle: Bool { self == .idle || self == .resumable }
+    var isActive: Bool { self == .scanning || self == .paused || self == .discovering || self == .waitingForVolume }
     var isPaused: Bool { self == .paused }
 
     var color: Color {
         switch self {
-        case .idle:        return .secondary.opacity(0.4)
-        case .discovering: return .yellow
-        case .scanning:    return .green
-        case .paused:      return .cyan       // was .yellow — collided with discovering
-        case .complete:    return .blue
-        case .stopped:     return .orange
-        case .error:       return .red
+        case .idle:              return .secondary.opacity(0.4)
+        case .discovering:       return .yellow
+        case .scanning:          return .green
+        case .paused:            return .cyan
+        case .complete:          return .blue
+        case .stopped:           return .orange
+        case .error:             return .red
+        case .resumable:         return .purple
+        case .waitingForVolume:  return .yellow.opacity(0.7)
         }
     }
 }

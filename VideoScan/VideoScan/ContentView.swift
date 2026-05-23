@@ -907,9 +907,15 @@ struct CatalogView: View {
                         .disabled(model.scanTargets.isEmpty)
 
                         ForEach(model.scanTargets.filter { $0.status.isIdle && $0.isReachable && !$0.searchPath.contains("VideoScan_Temp") }) { target in
-                            Button(action: { model.startTarget(target) }) {
+                            Button(action: {
+                                if target.status == .resumable {
+                                    model.resumeTarget(target)
+                                } else {
+                                    model.startTarget(target)
+                                }
+                            }) {
                                 Label(VolumeReachability.volumeName(forPath: target.searchPath),
-                                      systemImage: "play.fill")
+                                      systemImage: target.status == .resumable ? "arrow.clockwise" : "play.fill")
                             }
                         }
                     }
@@ -1123,6 +1129,14 @@ struct CatalogView: View {
                             }
                             .buttonStyle(.borderless)
                             .help("Stop Scanning")
+                        } else if t.status == .resumable {
+                            Button(action: { model.resumeTarget(t) }) {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 16))
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(!t.isReachable)
+                            .help(t.isReachable ? "Resume interrupted scan" : "Volume offline")
                         } else {
                             Button(action: { model.startTarget(t) }) {
                                 Image(systemName: "play.fill")
@@ -1169,10 +1183,27 @@ struct CatalogView: View {
             }
             Button(action: {
                 for t in targets where t.status.isIdle && t.isReachable {
-                    model.startTarget(t)
+                    if t.status == .resumable {
+                        model.resumeTarget(t)
+                    } else {
+                        model.startTarget(t)
+                    }
                 }
             }) {
-                Label(single ? "Scan / Update Catalog" : "Scan Selected", systemImage: "arrow.clockwise")
+                let hasResumable = targets.contains { $0.status == .resumable }
+                Label(hasResumable ? "Resume Scan" : (single ? "Scan / Update Catalog" : "Scan Selected"),
+                      systemImage: hasResumable ? "arrow.clockwise" : "arrow.clockwise")
+            }
+            if single {
+                Button(action: { model.verifyCatalog(for: first) }) {
+                    Label("Verify Catalog", systemImage: "checkmark.shield")
+                }
+                .disabled(!first.status.isIdle)
+            }
+            if targets.count > 1 || (single && model.records.contains(where: { $0.scanContext.volumeName.isEmpty })) {
+                Button(action: { model.backfillAllProvenance() }) {
+                    Label("Backfill All Volume Names", systemImage: "arrow.triangle.2.circlepath")
+                }
             }
             Button(role: .destructive, action: {
                 if single {
@@ -1257,12 +1288,14 @@ struct CatalogView: View {
 
     private func volumeNameColor(for row: VolumeRow) -> Color {
         switch row.status {
-        case .scanning, .discovering: return .green
-        case .paused:                 return .cyan
-        case .complete:               return .blue
-        case .error:                  return .red
-        case .stopped:                return .orange
-        case .idle:                   return .primary
+        case .scanning, .discovering:  return .green
+        case .paused:                  return .cyan
+        case .complete:                return .blue
+        case .error:                   return .red
+        case .stopped:                 return .orange
+        case .resumable:               return .purple
+        case .waitingForVolume:        return .yellow
+        case .idle:                    return .primary
         }
     }
 

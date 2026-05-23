@@ -229,10 +229,12 @@ struct CatalogTargetStatusTests {
         #expect(CatalogTargetStatus.scanning.isActive == true)
         #expect(CatalogTargetStatus.paused.isActive == true)
         #expect(CatalogTargetStatus.discovering.isActive == true)
+        #expect(CatalogTargetStatus.waitingForVolume.isActive == true)
         #expect(CatalogTargetStatus.idle.isActive == false)
         #expect(CatalogTargetStatus.complete.isActive == false)
         #expect(CatalogTargetStatus.stopped.isActive == false)
         #expect(CatalogTargetStatus.error.isActive == false)
+        #expect(CatalogTargetStatus.resumable.isActive == false)
     }
 
     @Test func isPaused() {
@@ -242,6 +244,7 @@ struct CatalogTargetStatusTests {
 
     @Test func isIdle() {
         #expect(CatalogTargetStatus.idle.isIdle == true)
+        #expect(CatalogTargetStatus.resumable.isIdle == true)
         #expect(CatalogTargetStatus.scanning.isIdle == false)
     }
 }
