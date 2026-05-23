@@ -2308,7 +2308,13 @@ final class VideoScanModel: ObservableObject {
             return
         }
 
-        log("Verifying \(volumeRecords.count) records on \(volName)…")
+        log("""
+
+        ─────────────────────────────────────────────
+        Verifying catalog for \(volName)…
+        ─────────────────────────────────────────────
+          \(volumeRecords.count) records to check
+        """)
         target.status = .scanning
         target.filesFound = volumeRecords.count
         target.filesScanned = 0
@@ -2316,6 +2322,9 @@ final class VideoScanModel: ObservableObject {
 
         let fm = FileManager.default
         var backfillCount = 0
+        let milestones = Set([10, 25, 50, 75, 90])
+        var loggedMilestones: Set<Int> = []
+        let startTime = CFAbsoluteTimeGetCurrent()
 
         for (i, rec) in volumeRecords.enumerated() {
             let path = rec.fullPath
@@ -2340,11 +2349,16 @@ final class VideoScanModel: ObservableObject {
                 }
             }
 
-            if (i + 1) % 500 == 0 || i == volumeRecords.count - 1 {
-                target.filesScanned = i + 1
-                log("  [\(volName)] verified \(i + 1)/\(volumeRecords.count)")
+            let done = i + 1
+            target.filesScanned = done
+            let pct = done * 100 / volumeRecords.count
+            if milestones.contains(pct) && !loggedMilestones.contains(pct) {
+                loggedMilestones.insert(pct)
+                log("  [\(volName)] \(done)/\(volumeRecords.count) (\(pct)%) — \(report.filesDeleted) deleted, \(backfillCount) backfilled")
             }
         }
+
+        let elapsed = CFAbsoluteTimeGetCurrent() - startTime
 
         report.provenanceBackfilled = backfillCount
         report.missingVolumeName = volumeRecords.filter { $0.scanContext.volumeName.isEmpty }.count
@@ -2359,9 +2373,10 @@ final class VideoScanModel: ObservableObject {
         updateGlobalScanState()
 
         log(report.summary)
+        log("  Completed in \(String(format: "%.1f", elapsed))s")
 
         if report.isHealthy || (report.issues == 0 && backfillCount > 0) {
-            appLog.write("Verified \(volName): \(volumeRecords.count) records healthy, \(backfillCount) backfilled")
+            appLog.write("Verified \(volName): \(volumeRecords.count) records healthy, \(backfillCount) backfilled (\(String(format: "%.1f", elapsed))s)")
         } else {
             appLog.write("Verified \(volName): \(report.issues) issue(s) found — \(report.recommendation)")
         }
@@ -2375,25 +2390,61 @@ final class VideoScanModel: ObservableObject {
             log("All records already have volume names — nothing to backfill")
             return
         }
-        log("Backfilling provenance for \(needsBackfill.count) records…")
 
+        // Group by volume for progress reporting
+        var byVolume: [String: [VideoRecord]] = [:]
+        for rec in needsBackfill {
+            let vol = VolumeReachability.volumeName(forPath: rec.fullPath)
+            byVolume[vol, default: []].append(rec)
+        }
+
+        log("""
+
+        ─────────────────────────────────────────────
+        Backfilling volume names for \(needsBackfill.count) records
+        ─────────────────────────────────────────────
+          \(byVolume.count) volume(s) to process
+        """)
+        let startTime = CFAbsoluteTimeGetCurrent()
         var backfilled = 0
         var unreachable = 0
         let fm = FileManager.default
 
-        for rec in needsBackfill {
-            let url = URL(fileURLWithPath: rec.fullPath)
-            guard fm.fileExists(atPath: rec.fullPath) else {
-                unreachable += 1
-                continue
+        for (vol, recs) in byVolume.sorted(by: { $0.value.count > $1.value.count }) {
+            var volBackfilled = 0
+            var volUnreachable = 0
+            for rec in recs {
+                let url = URL(fileURLWithPath: rec.fullPath)
+                guard fm.fileExists(atPath: rec.fullPath) else {
+                    volUnreachable += 1
+                    unreachable += 1
+                    continue
+                }
+                rec.scanContext = ScanContext.capture(for: url)
+                volBackfilled += 1
+                backfilled += 1
             }
-            rec.scanContext = ScanContext.capture(for: url)
-            backfilled += 1
+            if volUnreachable == recs.count {
+                log("  [\(vol)] \(recs.count) records — offline/unreachable")
+            } else {
+                log("  [\(vol)] \(volBackfilled)/\(recs.count) backfilled\(volUnreachable > 0 ? ", \(volUnreachable) unreachable" : "")")
+            }
         }
 
+        let elapsed = CFAbsoluteTimeGetCurrent() - startTime
         if backfilled > 0 { saveCatalogDebounced() }
-        log("Backfilled \(backfilled) record(s), \(unreachable) offline/missing")
-        appLog.write("Provenance backfill: \(backfilled) updated, \(unreachable) unreachable")
+
+        log("""
+
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          Backfill Complete
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          Updated:     \(backfilled)
+          Unreachable: \(unreachable)
+          Elapsed:     \(String(format: "%.1f", elapsed))s
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        """)
+        appLog.write("Provenance backfill: \(backfilled) updated, \(unreachable) unreachable (\(String(format: "%.1f", elapsed))s)")
     }
 
     /// Streams `target.searchPath` and drains a probe group against it.
