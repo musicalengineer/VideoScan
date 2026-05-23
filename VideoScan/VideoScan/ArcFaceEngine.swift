@@ -29,6 +29,23 @@ import os.lock
 // with a no-op or removed.
 nonisolated(unsafe) let arcfacePredictionLock = OSAllocatedUnfairLock()
 
+private let arcfaceLogger = Logger(subsystem: "Rick-Breen.VideoScan", category: "ArcFace")
+
+nonisolated(unsafe) private var arcfaceExceptionCount = 0
+private let arcfaceExceptionCountLock = OSAllocatedUnfairLock()
+
+// MARK: - ObjC Exception Catcher (Swift-visible wrapper)
+
+/// Runs `block` and catches any ObjC NSException. Returns the exception
+/// if one fired, nil on success. Bridging-header function `VSCatchObjCException`
+/// does the actual @try/@catch; this wrapper re-exports it so tests can
+/// reach it via `@testable import VideoScan`.
+func catchObjCException(_ block: () -> Void) -> NSException? {
+    var caught: NSException?
+    let ok = VSCatchObjCException(block, &caught)
+    return ok ? nil : caught
+}
+
 // MARK: - ArcFace CoreML Model Singleton
 
 /// Resolves the compiled w600k_r50 CoreML model URL on first call (caching the
@@ -174,16 +191,40 @@ nonisolated func arcfaceEmbedding(from faceImage: CGImage, model: MLModel) -> [F
     CVPixelBufferUnlockBaseAddress(pb, [])
 
     // Run CoreML prediction. The lock guards against MLE5BindEmptyMemoryObjectToPort
-    // crashes seen under heavy concurrent inference even with per-call MLModel
-    // instances (see comment on `arcfacePredictionLock` declaration).
+    // races. VSCatchObjCException guards against NSExceptions that Swift's
+    // do/try/catch cannot intercept (CoreML throws ObjC exceptions from MLE5
+    // even under serialized, per-instance access — crash 2026-05-23).
     do {
         let input = try MLDictionaryFeatureProvider(dictionary: ["faceImage": pb])
-        let output: MLFeatureProvider = try arcfacePredictionLock.withLock {
-            try model.prediction(from: input)
+        var output: MLFeatureProvider?
+        var swiftError: (any Error)?
+
+        let ok: Bool = arcfacePredictionLock.withLock {
+            var caughtException: NSException?
+            let success = VSCatchObjCException({
+                do {
+                    output = try model.prediction(from: input)
+                } catch {
+                    swiftError = error
+                }
+            }, &caughtException)
+            if !success {
+                let n = arcfaceExceptionCountLock.withLock { arcfaceExceptionCount += 1; return arcfaceExceptionCount }
+                let name = caughtException?.name.rawValue ?? "unknown"
+                let reason = caughtException?.reason ?? "no reason"
+                let info = caughtException?.userInfo?.description ?? "none"
+                let msg = "⚠️ CoreML NSException caught (#\(n), would have been SIGABRT) — name: \(name), reason: \(reason), userInfo: \(info)"
+                arcfaceLogger.error("\(msg, privacy: .public)")
+                appLog.write(msg)
+            }
+            return success
         }
 
-        // The output tensor name from the converted model
-        // Try common output names
+        if let swiftError {
+            arcfaceLogger.warning("CoreML prediction Swift error: \(swiftError.localizedDescription, privacy: .public)")
+        }
+        guard ok, swiftError == nil, let output else { return nil }
+
         for name in output.featureNames {
             if let arr = output.featureValue(for: name)?.multiArrayValue {
                 let count = arr.count

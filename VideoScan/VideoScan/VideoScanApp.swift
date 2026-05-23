@@ -64,6 +64,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let startLine = "app started — \(BuildInfo.summary) (pid \(ProcessInfo.processInfo.processIdentifier))"
         NSLog("VideoScan: %@", startLine)
         appLog.write(startLine)
+
+        // Last-gasp signal handler: writes to videoscan.log on SIGSEGV/SIGBUS/
+        // SIGFPE/SIGILL/SIGABRT, then re-raises for the system crash report.
+        appLog.url.path.withCString { VSInstallCrashGuard($0) }
+
         let detached = RAMDisk.cleanupStaleMounts()
         if !detached.isEmpty {
             NSLog("VideoScan: reaped %d orphaned RAM disk(s) from previous run: %@",
