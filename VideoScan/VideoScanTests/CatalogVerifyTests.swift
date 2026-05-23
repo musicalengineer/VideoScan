@@ -87,7 +87,7 @@ struct CatalogHealthReportTests {
 @MainActor
 struct CatalogVerifyIntegrationTests {
 
-    @Test func verifyBackfillsProvenance() {
+    @Test func verifyBackfillsProvenance() async {
         let model = VideoScanModel()
         model.scanTargets.removeAll()
         model.records.removeAll()
@@ -111,12 +111,13 @@ struct CatalogVerifyIntegrationTests {
         #expect(rec.scanContext.volumeName.isEmpty)
 
         model.verifyCatalog(for: target)
+        await target.scanTask?.value
 
         #expect(!rec.scanContext.volumeName.isEmpty)
         #expect(!rec.scanContext.scanHost.isEmpty)
     }
 
-    @Test func verifyDetectsDeletedFiles() {
+    @Test func verifyDetectsDeletedFiles() async {
         let model = VideoScanModel()
         model.scanTargets.removeAll()
         model.records.removeAll()
@@ -136,11 +137,12 @@ struct CatalogVerifyIntegrationTests {
         model.records.append(rec)
 
         model.verifyCatalog(for: target)
+        await target.scanTask?.value
 
         #expect(target.status == .complete)
     }
 
-    @Test func backfillAllUpdatesRecords() {
+    @Test func backfillAllUpdatesRecords() async {
         let model = VideoScanModel()
         model.records.removeAll()
 
@@ -157,6 +159,7 @@ struct CatalogVerifyIntegrationTests {
         #expect(rec.scanContext.volumeName.isEmpty)
 
         model.backfillAllProvenance()
+        await model.backfillTask?.value
 
         #expect(!rec.scanContext.volumeName.isEmpty)
     }
