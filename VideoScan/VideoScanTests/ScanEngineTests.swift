@@ -427,6 +427,31 @@ struct VolumeRootTests {
         let result = model.volumeRoot(for: "/Users/test/Videos/file.mov")
         #expect(result == "/Users/test/Videos")
     }
+
+    @Test func nonVolumePathWithMatchingScanTarget() {
+        let model = VideoScanModel()
+        model.scanTargets.removeAll()
+        let target = CatalogScanTarget(searchPath: "/Users/test/Videos")
+        model.scanTargets = [target]
+        let result = model.volumeRoot(for: "/Users/test/Videos/sub/file.mov")
+        #expect(result == "/Users/test/Videos")
+    }
+
+    @Test func volumePathIgnoresScanTargets() {
+        let model = VideoScanModel()
+        model.scanTargets.removeAll()
+        let target = CatalogScanTarget(searchPath: "/Volumes/MyDrive/Subfolder")
+        model.scanTargets = [target]
+        let result = model.volumeRoot(for: "/Volumes/MyDrive/Subfolder/file.mov")
+        #expect(result == "/Volumes/MyDrive")
+    }
+
+    @Test func rootPathFallback() {
+        let model = VideoScanModel()
+        model.scanTargets.removeAll()
+        let result = model.volumeRoot(for: "/file.mov")
+        #expect(result == "/")
+    }
 }
 
 // MARK: - CatalogScanTarget Tests
