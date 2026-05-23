@@ -408,7 +408,7 @@ struct AboutView: View {
                     Text("VideoScan")
                         .font(.largeTitle.bold())
                         .foregroundColor(.white)
-                    Text("Find the people you love in your home videos")
+                    Text("Find friends and family in all your home videos.")
                         .font(.callout)
                         .foregroundColor(.white.opacity(0.9))
                 }
@@ -422,27 +422,20 @@ struct AboutView: View {
             // Body
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    AboutSection(icon: "heart.fill", color: .pink, title: "What it does") {
-                        Text("Find people and organize your video memories")
-                    }
+                    AboutSection(icon: "heart.fill", color: .pink, title: "Catalogs your videos so you can search for people."){}
 
-                    AboutSection(icon: "person.crop.rectangle.stack", color: .blue, title: "How it works") {
-                        Text("Provide reference photos of someone so you can find them in your videos.")
-                    }
+                    AboutSection(icon: "person.crop.rectangle.stack", color: .blue, title: "Repairs broken videos and updates them to a modern format.") {}
 
-                    AboutSection(icon: "externaldrive.connected.to.line.below", color: .green, title: "Scans all your media and builds a catalog") {
-                        Text("Works locally and on network volumes in parallel, as needed.")
-                    }
+                    AboutSection(icon: "externaldrive.connected.to.line.below", color: .green, title: "Finds videos on attached storage or network drives.") {}
 
-                    AboutSection(icon: "waveform.and.magnifyingglass", color: .purple, title: "Handles 40+ video formats") {
-                    }
+                    AboutSection(icon: "waveform.and.magnifyingglass", color: .purple, title: "Understands most video formats and helps you archive your memories.") {}
 
                     Divider()
 
                     HStack {
                         Spacer()
                         VStack(spacing: 4) {
-                            Text("Developed By Rick Breen.   Inspired by Donna.")
+                            Text("Developed By Rick.  Inspired by Donna.")
                                 .font(.headline)
                             Text(BuildInfo.summary)
                                 .font(.system(.caption, design: .monospaced))
