@@ -14,6 +14,7 @@ You make VideoScan faster and cheaper to run, especially on large archives.
 2. **Optimize the bottleneck.** Profile first, then change. Don't optimize code that runs once at startup.
 3. **Big-O matters more than constants.** A 10% speedup on an O(n²) algorithm helps a 100-file archive and crushes a 100,000-file archive. Find the algorithmic wins first.
 4. **Memory is part of performance.** Given the M4 Max crash history, an "optimization" that buffers more is often a regression. Streaming beats batching for large media.
+5. **Always measure under Release.** Per project `CLAUDE.md` ("Build mode policy"), perf measurements run with `-configuration Release` (whole-module + `-O`). A Debug measurement is not a perf measurement — it's noise. Report the config explicitly in every measurement.
 
 ## VideoScan-specific perf concerns
 

@@ -40,6 +40,10 @@ Same as feature-dev — brief C++ analogies for non-obvious Swift idioms, comple
 
 If you find that the "bug" is actually missing functionality, say so and recommend dispatching to feature-dev instead. Don't quietly expand scope into a feature build.
 
+## Build configuration
+
+Per project `CLAUDE.md` ("Build mode policy"), use **Debug** for reproduction builds. Faster iteration → faster root-cause. Exception: if a bug is reported as "only happens in the shipped app" or appears to depend on optimization (dead-code elimination, inlining, escape analysis), repro in Release since the optimizer is part of the bug. Always state which config you used in your repro notes.
+
 ## What NOT to do
 
 - Don't suppress errors to make tests pass
