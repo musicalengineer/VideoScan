@@ -16,8 +16,11 @@ import Foundation
 ///  - v2: adds `savedFromHost` so cross-machine imports can tag records with
 ///    their machine of origin. v1 snapshots still load: missing keys decode
 ///    as defaults.
+///  - v3: VideoRecord gains `suspectedPeople: [String]` (borderline-confidence
+///    face matches). Migration is additive — v2 catalog.json files load
+///    unchanged via decodeIfPresent ?? [] on the record decoder.
 struct CatalogSnapshot: Codable {
-    static let currentVersion = 2
+    static let currentVersion = 3
 
     var version: Int = Self.currentVersion
     var savedAt: Date = Date()

@@ -38,6 +38,44 @@ private let pfScanLog = Logger(
 
 extension PersonFinderModel {
 
+    // MARK: Confidence-tier split (Step 1b)
+    //
+    // Splits a presence-filtered result set into "confirmed" (strong-match)
+    // and "suspected" (borderline) buckets so the catalog writeback can
+    // route names to `detectedPeople` vs `suspectedPeople`. Lives here so
+    // PersonFinder owns the classification — it has the engine + threshold
+    // context — and the catalog stays a dumb sink.
+
+    /// How close to the threshold a match has to be to count as
+    /// "suspected" rather than "confirmed". A `bestDistance` of
+    /// `threshold - margin` is the cutoff: closer than that → confirmed.
+    nonisolated static let confidenceMargin: Float = 0.05
+
+    /// Partition `results` into (confirmed, suspected). All entries are
+    /// assumed to have passed the presence filter (i.e. bestDistance
+    /// already ≤ threshold). The strong-match cutoff is `threshold − margin`:
+    /// distances at or below it become confirmed; distances within the
+    /// margin of the threshold become suspected.
+    nonisolated static func splitByConfidence(
+        _ results: [pfVideoResult],
+        threshold: Float,
+        margin: Float = confidenceMargin
+    ) -> (confirmed: [pfVideoResult], suspected: [pfVideoResult]) {
+        var confirmed: [pfVideoResult] = []
+        var suspected: [pfVideoResult] = []
+        let strongCutoff = threshold - margin
+        for r in results {
+            let bestDist = r.segments.map(\.bestDistance).min()
+                ?? .greatestFiniteMagnitude
+            if bestDist <= strongCutoff {
+                confirmed.append(r)
+            } else {
+                suspected.append(r)
+            }
+        }
+        return (confirmed, suspected)
+    }
+
     private nonisolated static func referenceCacheIdentifiers(referencePath: String, filenames: [String]) -> [String] {
         guard !referencePath.isEmpty else { return filenames }
         let baseURL = URL(fileURLWithPath: referencePath)
@@ -52,6 +90,61 @@ extension PersonFinderModel {
             job.assignedProfile = person
         }
         jobs.append(job)
+    }
+
+    // MARK: - "Search for Family" (Step 3)
+    //
+    // Fans a search across every saved POI profile against a single target
+    // path. Each POI becomes its own ScanJob, running in parallel via the
+    // existing per-job Task.detached path — per the parallelize-aggressively
+    // design principle. Single right-click ⇒ N concurrent scans across all
+    // your family members.
+
+    /// Enqueue (but don't start) one ScanJob per saved POI profile that has
+    /// reference photos loaded. Profiles with empty `referencePath` are
+    /// skipped — they'd fail at startJob's pre-flight anyway. Returns the
+    /// newly-appended jobs so the UI can expand / focus them.
+    ///
+    /// Pure side effect on `jobs`. Split from `startFamilyScan(at:)` so
+    /// tests can verify the enqueue behavior without driving Task.detached
+    /// file I/O.
+    @discardableResult
+    func enqueueFamilyJobs(at path: String) -> [ScanJob] {
+        let viable = savedProfiles.filter { !$0.referencePath.isEmpty }
+        let newJobs: [ScanJob] = viable.map { profile in
+            let job = ScanJob(searchPath: path)
+            job.assignedProfile = profile
+            jobs.append(job)
+            return job
+        }
+        return newJobs
+    }
+
+    /// Fan-out entry point: enqueue + immediately start every Family scan.
+    /// Each job runs on its own detached Task so engines run in parallel.
+    /// Returns the new jobs (typically used by the UI to expand them).
+    @discardableResult
+    func startFamilyScan(at path: String) -> [ScanJob] {
+        let newJobs = enqueueFamilyJobs(at: path)
+        // Narrative log line at the user-triggered fan-out boundary —
+        // one line per "Search for Family" click. Each subsequent
+        // per-job "Starting search for X on Y…" line comes from
+        // startJobAfterLoad's existing appLog.write, so this is the
+        // headline above that detail.
+        if !newJobs.isEmpty {
+            let volume = URL(fileURLWithPath: path).lastPathComponent
+            let names = newJobs.compactMap { $0.assignedProfile?.name }
+                .joined(separator: ", ")
+            appLog.write("Search for Family on \(volume): \(newJobs.count) parallel job(s) — \(names)")
+            let skipped = savedProfiles.count - newJobs.count
+            if skipped > 0 {
+                appLog.write("  Skipped \(skipped) profile(s) without reference photos")
+            }
+        }
+        for job in newJobs {
+            startJob(job)
+        }
+        return newJobs
     }
 
     /// Load reference faces for a specific job's assigned person.
@@ -103,6 +196,11 @@ extension PersonFinderModel {
 
         let searchPath = job.searchPath
         let jobSettings = self.settings
+        // Capture the catalog writeback closure on MainActor so the
+        // detached Task below can invoke it inside its own MainActor.run.
+        // The closure's `@MainActor` annotation makes its type Sendable
+        // across the actor hop.
+        let onComplete = self.onScanComplete
 
         job.scanTask = Task.detached(priority: .utility) {
             let skipBundles = jobSettings.skipBundles
@@ -160,6 +258,10 @@ extension PersonFinderModel {
                 job.status = .done
                 job.stopElapsedTimer()
                 job.appendLog("Restored from cache: \(clipResults.count) video(s) with hits, \(totalSegments) segment(s)")
+                let (confirmed, suspected) = Self.splitByConfidence(
+                    validResults, threshold: threshold
+                )
+                onComplete?(job.personLabel, confirmed, suspected)
             }
         }
     }
@@ -309,13 +411,16 @@ extension PersonFinderModel {
         }
         let settings = jobSettings
         let dash = self.dashboard
+        // Capture writeback on MainActor so the static nonisolated runScan
+        // can invoke it inside its own MainActor.run completion hop.
+        let onComplete = self.onScanComplete
         job.scanTask = Task { [weak self, weak job] in
             guard let job else { return }
             await MainActor.run {
                 dash?.visionActive = settings.recognitionEngine == .vision || settings.recognitionEngine == .arcface
                 dash?.activeEngineLabel = settings.recognitionEngine == .arcface ? "ArcFace / CoreML + ANE" : "Vision / ANE"
             }
-            await PersonFinderModel.runScan(job: job, prints: prints, settings: settings, refFilenames: refCacheIdentifiers, dashboard: dash)
+            await PersonFinderModel.runScan(job: job, prints: prints, settings: settings, refFilenames: refCacheIdentifiers, dashboard: dash, onComplete: onComplete)
             await MainActor.run {
                 dash?.visionActive = false; dash?.visionFPS = 0; dash?.visionMsPerFrame = 0
                 // Clear scanningPersonName when no jobs are still scanning
@@ -824,7 +929,14 @@ extension PersonFinderModel {
         prints: [VNFeaturePrintObservation],
         settings: PersonFinderSettings,
         refFilenames: [String],
-        dashboard: DashboardState?
+        dashboard: DashboardState?,
+        onComplete: (
+            @MainActor (
+                _ personLabel: String,
+                _ confirmed: [pfVideoResult],
+                _ suspected: [pfVideoResult]
+            ) -> Void
+        )?
     ) async {
         let path = await job.searchPath
         let scanThreshold = settings.recognitionEngine == .arcface
@@ -952,6 +1064,15 @@ extension PersonFinderModel {
                 // and stop, so all three "worth bookmarking" transitions go
                 // through one code path.
                 Self.persistDescriptor(for: job, settings: settings)
+
+                // Catalog writeback: splits matches by confidence tier, then
+                // appends `personLabel` to each matched VideoRecord's
+                // `detectedPeople` (confirmed) or `suspectedPeople`
+                // (borderline) list. Wired by VideoScanApp.
+                let (confirmed, suspected) = Self.splitByConfidence(
+                    validResults, threshold: scanThreshold
+                )
+                onComplete?(person, confirmed, suspected)
             }
         }
     }
