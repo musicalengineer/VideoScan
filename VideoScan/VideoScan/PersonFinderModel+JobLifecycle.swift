@@ -126,6 +126,21 @@ extension PersonFinderModel {
     @discardableResult
     func startFamilyScan(at path: String) -> [ScanJob] {
         let newJobs = enqueueFamilyJobs(at: path)
+        // Narrative log line at the user-triggered fan-out boundary —
+        // one line per "Search for Family" click. Each subsequent
+        // per-job "Starting search for X on Y…" line comes from
+        // startJobAfterLoad's existing appLog.write, so this is the
+        // headline above that detail.
+        if !newJobs.isEmpty {
+            let volume = URL(fileURLWithPath: path).lastPathComponent
+            let names = newJobs.compactMap { $0.assignedProfile?.name }
+                .joined(separator: ", ")
+            appLog.write("Search for Family on \(volume): \(newJobs.count) parallel job(s) — \(names)")
+            let skipped = savedProfiles.count - newJobs.count
+            if skipped > 0 {
+                appLog.write("  Skipped \(skipped) profile(s) without reference photos")
+            }
+        }
         for job in newJobs {
             startJob(job)
         }
