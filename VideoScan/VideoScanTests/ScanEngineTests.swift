@@ -416,12 +416,14 @@ struct VolumeRootTests {
 
     @Test func volumePathExtraction() {
         let model = VideoScanModel()
+        model.scanTargets.removeAll()
         #expect(model.volumeRoot(for: "/Volumes/MyDrive/folder/file.mov") == "/Volumes/MyDrive")
         #expect(model.volumeRoot(for: "/Volumes/Backup/deep/nested/file.mxf") == "/Volumes/Backup")
     }
 
     @Test func nonVolumePath() {
         let model = VideoScanModel()
+        model.scanTargets.removeAll()
         let result = model.volumeRoot(for: "/Users/test/Videos/file.mov")
         #expect(result == "/Users/test/Videos")
     }
