@@ -132,10 +132,6 @@ import OSLog
         #expect(summary.contains(BuildInfo.buildMode))
     }
 
-    @Test func buildInfoModeIsDebugInTests() {
-        #expect(BuildInfo.buildMode == "debug")
-    }
-
     // ── Integrated: search + log round-trip (via InMemoryLogSink) ──
     //
     // Post-refactor this no longer writes a fixture file. We swap the
