@@ -207,7 +207,7 @@ import OSLog
         sink.write("a")
         sink.write("b")
         sink.clear()
-        #expect(sink.count == 0)
+        #expect(sink.lines.isEmpty)
         sink.write("c")
         #expect(sink.lines == ["c"])
     }
