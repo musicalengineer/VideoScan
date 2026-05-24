@@ -17,17 +17,24 @@ enum VolumeReachability {
     // block the main thread for many seconds — observed beachball up to 60s
     // with 3-4 Person Finder scans driving frequent table redraws.
     //
-    // Two changes mitigate that without rewriting every caller:
-    //   1. Cache by VOLUME, not by full path. All files on /Volumes/Foo share
-    //      one reachability bit; checking once per volume per render is the
-    //      right granularity.
-    //   2. TTL the cache. A reasonably short TTL (5s) keeps the UI fresh
-    //      enough for "drive went away" detection while collapsing thousands
-    //      of redundant stat() calls into one per volume per 5 seconds.
+    // The semantics are deliberately "is the VOLUME mounted?", not "does this
+    // specific file exist?":
+    //   - Cache key is the volume root (/Volumes/X). All files on /Volumes/X
+    //     share one reachability bit; per-file existence is a different
+    //     concern (use FileManager.fileExists for that).
+    //   - The cached value is computed by stat()'ing the VOLUME ROOT, not the
+    //     specific file path. Before this fix the cache key was per-volume but
+    //     the stat target was the file path, so during Verify or Scan passes
+    //     the per-volume bit flipped many times per second as different files
+    //     happened to be missing/present — driving an italics flicker on every
+    //     catalog row (issue: italics flicker on Verify/Scan).
+    //   - TTL is short (5s) so a yanked drive flips to offline quickly. Mount/
+    //     unmount notifications still call `invalidateCache()` for immediate
+    //     propagation.
     //
-    // The cache is invalidated explicitly by VideoScanModel on mount/unmount
-    // notifications, so volume-state changes propagate immediately and don't
-    // wait for the TTL.
+    // For paths NOT under /Volumes (internal disk, e.g. /Users/rickb/...),
+    // fall back to caching/stat'ing by full path — internal paths don't have
+    // the multi-file-on-one-mount aggregation problem.
     nonisolated(unsafe) private static var cache: [String: (reachable: Bool, expiresAt: CFAbsoluteTime)] = [:]
     private static let cacheLock = OSAllocatedUnfairLock()
     private static let cacheTTL: CFAbsoluteTime = 5.0
@@ -37,13 +44,18 @@ enum VolumeReachability {
         cacheLock.withLock { cache.removeAll() }
     }
 
-    /// True if `path` exists and is reachable right now. Empty paths return
-    /// false. Network volume paths return false when the share is unmounted.
+    /// True if the volume containing `path` is currently mounted. For paths
+    /// under `/Volumes/X/...` this answers "is /Volumes/X mounted right now?"
+    /// — independent of whether the specific file exists. For internal paths
+    /// (not under /Volumes) it falls back to a per-path existence check, which
+    /// is the right answer when there's no separable "volume" to ask about.
     ///
-    /// Backed by a 5-second per-volume cache (see comment on `cache` above).
-    /// First call for a volume pays the stat cost; repeats within the TTL
-    /// return instantly. The cache is keyed by volume name (`volumeName(forPath:)`),
-    /// so all files on the same mount share one cache slot.
+    /// Backed by a 5-second cache (see comment on `cache` above). First call
+    /// for a volume pays the stat cost; repeats within the TTL return instantly.
+    ///
+    /// Note: if you need "does this specific file exist?", use
+    /// `FileManager.default.fileExists(atPath:)` directly — that's a different
+    /// question from this one.
     static func isReachable(path: String) -> Bool {
         guard !path.isEmpty else { return false }
 
@@ -53,24 +65,28 @@ enum VolumeReachability {
             return hit.reachable
         }
 
-        // Cache miss — pay the syscall, then cache the result.
+        // Cache miss — stat the right target. For /Volumes paths, stat the
+        // volume root; for everything else, stat the original path.
+        // `key` already IS the volume root for /Volumes paths, so we can
+        // reuse it as the stat target.
+        let statTarget = key
         var isDir: ObjCBool = false
-        let exists = FileManager.default.fileExists(atPath: path, isDirectory: &isDir)
+        let exists = FileManager.default.fileExists(atPath: statTarget, isDirectory: &isDir)
         let reachable: Bool
         if exists {
             reachable = true
         } else {
             // checkResourceIsReachable handles a few cases fileExists doesn't,
             // particularly bookmarked URLs and quick-existence checks on /Volumes.
-            reachable = (try? URL(fileURLWithPath: path).checkResourceIsReachable()) ?? false
+            reachable = (try? URL(fileURLWithPath: statTarget).checkResourceIsReachable()) ?? false
         }
         cacheLock.withLock { cache[key] = (reachable, now + cacheTTL) }
         return reachable
     }
 
-    /// Cache key for `isReachable`. For paths under /Volumes, this is the
-    /// volume name ("MediaArchive"), so every file on that mount shares one
-    /// cache slot. For internal paths, falls back to the full path.
+    /// Cache key (and, for /Volumes paths, the stat target) for `isReachable`.
+    /// For paths under /Volumes, this is the volume root "/Volumes/<name>".
+    /// For internal paths, falls back to the full path.
     private static func cacheKey(forPath path: String) -> String {
         let comps = (path as NSString).pathComponents
         if comps.count >= 3, comps[1] == "Volumes" {

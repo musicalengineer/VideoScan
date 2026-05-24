@@ -769,27 +769,44 @@ struct CatalogView: View {
 
     /// Build VolumeRow values from filtered scan targets for the Table.
     private var volumeTableRows: [VolumeRow] {
-        filteredScanTargets.map { target in
+        // Snapshot global activity flags once per table redraw so every row
+        // computes its `uiStatus` against the same instant. Without the
+        // snapshot a model update mid-loop could flip the meaning of
+        // adjacent rows. (Cheap — these are scalar reads.)
+        let isCombining = model.isCombining
+        let isBackfilling = model.isBackfillingProvenance
+        let verifyingIDs = model.verifyingTargetIDs
+
+        return filteredScanTargets.map { target in
             let recs = model.records.filter { $0.fullPath.hasPrefix(target.searchPath) }
             let errCount = recs.filter { $0.streamType == .ffprobeFailed }.count
             let bytes = recs.reduce(into: Int64(0)) { $0 += $1.sizeBytes }
             let isNet = VolumeReachability.isNetworkVolume(path: target.searchPath)
-            let conn: String
-            let connColor: Color
-            if !target.isReachable {
-                conn = "Offline"; connColor = .orange
-            } else if isNet {
-                conn = "Remote"; connColor = .purple
+
+            // Per-target progress, if scan tracking has populated counts.
+            // 0/0 → nil (discovery phase), else clamped to 0…1.
+            let progress: Double?
+            if target.filesFound > 0 {
+                progress = min(1.0, Double(target.filesScanned) / Double(target.filesFound))
             } else {
-                conn = "Connected"; connColor = .green
+                progress = nil
             }
+
+            let uiStatus = VolumeUIStatus.compute(VolumeUIStatusInputs(
+                mountReachable: target.isReachable,
+                targetStatus: target.status,
+                isCombining: isCombining,
+                isBackfilling: isBackfilling,
+                isVerifyingThisVolume: verifyingIDs.contains(target.id),
+                scanProgress: progress
+            ))
+
             return VolumeRow(
                 id: target.id,
                 name: VolumeReachability.volumeName(forPath: target.searchPath),
                 path: target.searchPath,
                 status: target.status,
-                connection: conn,
-                connectionColor: connColor,
+                uiStatus: uiStatus,
                 files: recs.count,
                 errors: errCount,
                 mediaBytes: bytes,
@@ -1041,17 +1058,11 @@ struct CatalogView: View {
             .width(min: 100, ideal: 150)
 
             TableColumn("Status") { row in
-                Text(row.connection)
-                    .font(.system(size: 15, weight: .bold, design: .monospaced))
-                    .foregroundColor(row.connectionColor)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(
-                        RoundedRectangle(cornerRadius: 3)
-                            .fill(row.connectionColor.opacity(0.12))
-                    )
+                // Pill + cycling spinner when a remediation pass is active.
+                // See VolumeStatusView.swift / VolumeUIStatus.swift.
+                VolumeStatusView(status: row.uiStatus)
             }
-            .width(min: 70, ideal: 85)
+            .width(min: 70, ideal: 110)
 
             TableColumn("Files") { row in
                 Text(row.files > 0 ? "\(row.files)" : "—")
