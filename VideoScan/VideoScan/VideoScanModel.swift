@@ -156,6 +156,14 @@ final class VideoScanModel: ObservableObject {
     @Published var isCorrelating: Bool = false
     @Published var isAnalyzingDuplicates: Bool = false
     @Published var isDeletingDuplicates: Bool = false
+    /// Scan-target IDs currently undergoing a Verify pass. Verify uses
+    /// `target.status = .scanning` for its lifecycle plumbing, so this set
+    /// is the only way to distinguish a verify from a fresh scan in the UI.
+    /// Read by VolumeUIStatus.compute().
+    @Published var verifyingTargetIDs: Set<UUID> = []
+    /// True while `backfillAllProvenance` is running. Drives the
+    /// "Backfilling" badge in VolumeStatusView.
+    @Published var isBackfillingProvenance: Bool = false
     /// Progress text shown in toolbar during correlate/duplicate operations
     @Published var correlateStatus: String = ""
     @Published var duplicateStatus: String = ""
@@ -2326,6 +2334,12 @@ final class VideoScanModel: ObservableObject {
         target.filesFound = volumeRecords.count
         target.filesScanned = 0
         target.startElapsedTimer()
+        // Mark this target as verifying so VolumeUIStatus surfaces the
+        // "Verifying" badge instead of "Scanning". Target ID set is cleared
+        // in the task's final block. (Verify reuses .scanning status because
+        // the existing lifecycle plumbing — pause, stop, elapsed timer —
+        // assumes it; the badge difference lives only at the view layer.)
+        verifyingTargetIDs.insert(target.id)
 
         // Snapshot the record paths + sizes so the background task can
         // do all the filesystem I/O without touching MainActor state.
@@ -2418,6 +2432,7 @@ final class VideoScanModel: ObservableObject {
 
             target.stopElapsedTimer()
             target.status = .complete
+            self.verifyingTargetIDs.remove(target.id)
             self.updateGlobalScanState()
 
             self.log(report.summary)
@@ -2477,12 +2492,19 @@ final class VideoScanModel: ObservableObject {
         let snapshots = allSnaps
         let volumes = volOrder
 
+        isBackfillingProvenance = true
         backfillTask = Task {
             struct BackfillResult {
                 let recIndex: Int
                 let reachable: Bool
                 var capturedContext: ScanContext?
             }
+
+            // Defer-style cleanup: clear the global flag on every exit path
+            // — completion, cancellation, exception. `defer` ≈ C++ RAII guard.
+            // The outer class is @MainActor so this closure inherits it and
+            // the flag write is main-thread-safe.
+            defer { self.isBackfillingProvenance = false }
 
             let startTime = CFAbsoluteTimeGetCurrent()
 
@@ -2858,7 +2880,14 @@ final class VideoScanModel: ObservableObject {
         // the walk phase can vanish by the time we probe (symlinks, aliases,
         // unmounted subdirs). Skip immediately rather than wasting time on
         // ffprobe which will also fail.
-        guard VolumeReachability.isReachable(path: path) else {
+        //
+        // This is a true per-file existence question, so we use
+        // `FileManager.fileExists` directly rather than VolumeReachability.
+        // VolumeReachability answers "is the VOLUME mounted?" — a single bit
+        // shared by every file on the mount — which is the wrong granularity
+        // here. Using it caused per-file existence misses to overwrite the
+        // cached mount bit and flicker the catalog UI (italics flicker bug).
+        guard fm.fileExists(atPath: path) else {
             let rec = VideoRecord()
             rec.filename      = url.lastPathComponent
             rec.ext           = url.pathExtension.uppercased()

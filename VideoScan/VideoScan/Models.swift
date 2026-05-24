@@ -886,8 +886,10 @@ struct VolumeRow: Identifiable {
     let name: String                // friendly volume name
     let path: String                // full search path
     let status: CatalogTargetStatus
-    let connection: String          // "Connected", "Offline", "Remote"
-    let connectionColor: Color
+    /// User-facing status (drives VolumeStatusView). Replaces the older
+    /// `connection`/`connectionColor` pair, which only encoded mount state
+    /// and missed Verify/Backfill/Combine activity.
+    let uiStatus: VolumeUIStatus
     let files: Int
     let errors: Int
     let mediaBytes: Int64
