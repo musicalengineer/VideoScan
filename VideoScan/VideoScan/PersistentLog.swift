@@ -10,7 +10,10 @@ import Foundation
 ///   log.write("Starting scan...")                // immediate disk write
 ///   log.close()                                  // flushes and closes
 ///
-final class PersistentLog: @unchecked Sendable {
+/// Conforms to `LogSink` so the global `appLog` symbol can be swapped to
+/// a Null or in-memory sink under tests without touching call sites.
+/// See `LogSink.swift` for the DI rationale.
+final class PersistentLog: LogSink, @unchecked Sendable {
     static let logDir: URL = {
         let dir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Logs/VideoScan")
@@ -27,6 +30,9 @@ final class PersistentLog: @unchecked Sendable {
         self.name = name
         self.url = Self.logDir.appendingPathComponent("\(name).log")
     }
+
+    /// LogSink conformance — file sinks always have a URL.
+    var fileURL: URL? { url }
 
     /// Open the log file.
     /// - Parameter append: if false (default), overwrites previous content (per-job logs).
@@ -72,6 +78,15 @@ final class PersistentLog: @unchecked Sendable {
             // Sync to disk immediately — no OS buffering
             try? handle.synchronize()
         }
+    }
+
+    /// LogSink conformance — PersistentLog flushes on every write(), so
+    /// this is a no-op except as a safety net in case future buffering
+    /// is introduced. Cheap to call.
+    func flush() {
+        lock.lock()
+        defer { lock.unlock() }
+        try? handle?.synchronize()
     }
 
     /// Close the log file.
