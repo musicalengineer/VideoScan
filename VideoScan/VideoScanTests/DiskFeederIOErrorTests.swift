@@ -29,8 +29,9 @@ import Testing
 
         let fh = try #require(FileHandle(forReadingAtPath: tmp.path))
 
-        // Pull the rug: close the fd, simulating volume disconnect mid-read
-        close(fh.fileDescriptor)
+        // Close through Foundation to avoid EXC_GUARD on guarded FDs
+        // (macOS 15 Intel enforces GUARD_TYPE_FD on raw close())
+        fh.closeFile()
 
         // read(upToCount:) must throw, not SIGABRT
         #expect(throws: (any Error).self) {
@@ -46,12 +47,12 @@ import Testing
         try Data(repeating: 0xAB, count: 64 * 1024).write(to: tmp)
         defer { try? FileManager.default.removeItem(at: tmp) }
 
-        // Swift snippet that opens the file, closes the fd, then calls
-        // the old readData(ofLength:) API. This should SIGABRT.
+        // Swift snippet that opens the file, closes it, then calls
+        // the old readData(ofLength:) API. This should SIGABRT or SIGKILL.
         let script = """
         import Foundation
         let fh = FileHandle(forReadingAtPath: "\(tmp.path)")!
-        close(fh.fileDescriptor)
+        fh.closeFile()
         let _ = fh.readData(ofLength: 4096)
         exit(0)
         """
