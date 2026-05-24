@@ -8,28 +8,45 @@
 import SwiftUI
 import AppKit
 
-// MARK: - App Lifecycle Log
+// MARK: - App Lifecycle Log (DI via LogSink)
 //
 // Persistent file at ~/Library/Logs/VideoScan/videoscan.log — accumulates
 // across launches so you can read "started X, quit Y, started Z" history
 // by `tail` or Console.app. Distinct from per-scan PersistentLog instances
 // (which truncate per job) and from the macOS unified log (`log show`).
 //
-// Test-host short-circuit: skip start() under XCTest / Swift Testing
-// hosts so testbed runs don't bloat the user's real videoscan.log.
-// Other PersistentLog instances (per-job face_detect logs,
-// LogVerificationTests fixtures) are unaffected — only this one
-// global instance is gated. Cheap retrofit alternative to true
-// Logger DI: same outcome, zero call-site changes.
-let appLog: PersistentLog = {
-    let log = PersistentLog(name: "videoscan")
-    if !appLogIsRunningUnderTests {
-        log.start(append: true)
-    }
-    return log
-}()
+// `appLog` is typed as `LogSink` (a protocol — see LogSink.swift) so test
+// code can swap in NullLogSink / InMemoryLogSink without touching the 30+
+// production call sites. In production this is a `PersistentLog` writing
+// to videoscan.log. Under a test host this defaults to `NullLogSink` so
+// even forgotten test-side injection can't pollute the user's real log.
+//
+// Why `var` and not `let`: tests need to overwrite this from
+// `LogSinks+Test.swift` to inject an InMemoryLogSink for content
+// assertions. The production code never mutates it after init.
+//
+// Swift's top-level `var` is roughly a C++ namespace-scope variable
+// with a lazy initializer — first access runs the closure, then
+// caches the result.
+nonisolated(unsafe) var appLog: LogSink = makeDefaultAppLog()
 
-/// Mirrors CatalogStore.isRunningTests so the gate on `appLog` is
+/// Builds the default sink for the global `appLog`. Returns a
+/// production `PersistentLog` opened on videoscan.log, OR a discarding
+/// `NullLogSink` if we detect we're being hosted by XCTest / Swift
+/// Testing. Test code is still expected to inject an `InMemoryLogSink`
+/// when it wants to assert on output — the NullLogSink is just the
+/// safe-by-default fallback so a forgotten injection can't write to
+/// the user's real videoscan.log.
+private func makeDefaultAppLog() -> LogSink {
+    if appLogIsRunningUnderTests {
+        return NullLogSink(name: "videoscan-null")
+    }
+    let log = PersistentLog(name: "videoscan")
+    log.start(append: true)
+    return log
+}
+
+/// Mirrors CatalogStore.isRunningTests so the default appLog sink is
 /// consistent with the codebase's other test-environment checks.
 private let appLogIsRunningUnderTests: Bool = {
     if NSClassFromString("XCTestCase") != nil { return true }
@@ -67,7 +84,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Last-gasp signal handler: writes to videoscan.log on SIGSEGV/SIGBUS/
         // SIGFPE/SIGILL/SIGABRT, then re-raises for the system crash report.
-        appLog.url.path.withCString { VSInstallCrashGuard($0) }
+        // Skipped when appLog isn't file-backed (e.g. NullLogSink under tests)
+        // — there's nowhere to write and AppDelegate already guards against
+        // running under tests anyway.
+        if let logPath = appLog.fileURL?.path {
+            logPath.withCString { VSInstallCrashGuard($0) }
+        }
 
         let detached = RAMDisk.cleanupStaleMounts()
         if !detached.isEmpty {
