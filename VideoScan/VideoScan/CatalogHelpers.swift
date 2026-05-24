@@ -329,6 +329,11 @@ struct CatalogContent: View {
     @State private var showRenameSheet = false
     @State private var renameTarget: VideoRecord?
     @State private var renameText: String = ""
+    /// Non-nil drives an alert + keeps the rename sheet re-openable so the
+    /// user sees *why* nothing happened. Original code silently caught the
+    /// FileManager error and dismissed the sheet, leaving the user staring
+    /// at the unchanged catalog wondering what went wrong.
+    @State private var renameError: String?
     @State private var showNotesSheet = false
     @State private var notesTarget: VideoRecord?
     @State private var notesText: String = ""
@@ -517,6 +522,32 @@ struct CatalogContent: View {
                 onCancel: { showRenameSheet = false }
             )
         }
+        // Surface rename failures (silent fail was the original bug).
+        // `Binding(get:set:)` lets us treat the optional string as the
+        // alert's isPresented trigger; setting to false clears the error.
+        .alert(
+            "Couldn't Rename File",
+            isPresented: Binding(
+                get: { renameError != nil },
+                set: { if !$0 { renameError = nil } }
+            ),
+            presenting: renameError
+        ) { _ in
+            Button("Try Again") {
+                renameError = nil
+                // Re-open the sheet so the user can adjust the name. The
+                // sheet state retains `renameTarget` and `renameText` so
+                // the user picks up exactly where they were.
+                if renameTarget != nil { showRenameSheet = true }
+            }
+            Button("Cancel", role: .cancel) {
+                renameError = nil
+                renameTarget = nil
+                renameText = ""
+            }
+        } message: { msg in
+            Text(msg)
+        }
         .sheet(isPresented: $showNotesSheet) {
             NotesSheet(
                 notes: $notesText,
@@ -533,34 +564,32 @@ struct CatalogContent: View {
 
     private func performRename() {
         guard let rec = renameTarget else { return }
-        let ext = (rec.filename as NSString).pathExtension
-        let newFilename = renameText.trimmingCharacters(in: .whitespaces) + "." + ext
-        guard newFilename != rec.filename, !renameText.isEmpty else {
-            showRenameSheet = false
-            return
-        }
 
-        let oldPath = rec.fullPath
-        let dir = (oldPath as NSString).deletingLastPathComponent
-        let newPath = (dir as NSString).appendingPathComponent(newFilename)
-
-        // Check destination doesn't already exist
-        guard !FileManager.default.fileExists(atPath: newPath) else {
-            showRenameSheet = false
-            return
-        }
+        // Close the sheet first; if the rename fails we re-open via the
+        // alert's "Try Again" button. Dismissing here keeps the UI from
+        // double-stacking sheet+alert when the alert appears.
+        showRenameSheet = false
 
         do {
-            try FileManager.default.moveItem(atPath: oldPath, toPath: newPath)
-            // Update the catalog record in-place
-            rec.filename = newFilename
-            rec.fullPath = newPath
-            // Trigger table refresh
+            try model.renameRecord(rec, toBaseName: renameText)
+            // Success: refresh the cached table snapshot so the row
+            // re-renders with the new name. saveCatalogDebounced() is
+            // already invoked inside renameRecord.
             tableData = computeFiltered()
+            renameTarget = nil
+            renameText = ""
+        } catch VideoScanModel.RenameError.nameUnchanged,
+                VideoScanModel.RenameError.emptyName {
+            // Treat "user opened sheet and clicked OK with no change"
+            // and "user cleared the field" as no-ops, not errors. Matches
+            // the original behavior and avoids alert spam.
+            renameTarget = nil
+            renameText = ""
+        } catch let err as VideoScanModel.RenameError {
+            renameError = err.errorDescription ?? "Unknown rename error."
         } catch {
-            // Silent fail — file may be on offline volume or locked
+            renameError = error.localizedDescription
         }
-        showRenameSheet = false
     }
 
     private var pairFilterBanner: some View {

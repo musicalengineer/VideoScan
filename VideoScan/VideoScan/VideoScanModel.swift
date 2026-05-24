@@ -206,6 +206,14 @@ final class VideoScanModel: ObservableObject {
     /// Thumbnail cache — keyed by fullPath, avoids regenerating from video file on re-click
     private let thumbnailCache = NSCache<NSString, NSImage>()
 
+    /// Drop any cached thumbnail under `path`. Called from the rename path
+    /// (VideoScanModel+Rename) so a renamed record doesn't leak a stale
+    /// entry under its old `fullPath` key. Internal to the model so the
+    /// NSCache itself stays private.
+    func invalidateThumbnailCacheEntry(forPath path: String) {
+        thumbnailCache.removeObject(forKey: path as NSString)
+    }
+
     let ffprobePath = ToolLocator.ffprobePath
 
     let videoExtensions: Set<String> = [
