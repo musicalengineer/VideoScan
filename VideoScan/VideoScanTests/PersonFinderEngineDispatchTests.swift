@@ -19,7 +19,13 @@ import Foundation
 /// we hand to dispatch can append without data races. Mirrors the way
 /// the production code marshals log lines through MainActor in
 /// PersonFinderModel+JobLifecycle.
-actor LogSink {
+///
+/// Renamed from `LogSink` 2026-05-23 to avoid colliding with the
+/// production `LogSink` protocol introduced for appLog DI
+/// (VideoScan/LogSink.swift). This actor is unrelated to that
+/// protocol — it's a local helper for verifying log lines emitted
+/// from dispatch internals.
+actor DispatchLogActor {
     private(set) var lines: [String] = []
     func append(_ line: String) { lines.append(line) }
     func contains(_ needle: String) -> Bool {
@@ -50,7 +56,7 @@ struct PersonFinderEngineDispatchTests {
 
     @Test(.disabled(if: Self.dlibTestsHangOnCI, "Hangs on GH virt-M1 (see comment above)"))
     func dlibBailsWhenPythonPathEmpty() async {
-        let sink = LogSink()
+        let sink = DispatchLogActor()
         var settings = PersonFinderSettings()
         settings.pythonPath = ""
         settings.recognitionScript = ""
@@ -77,7 +83,7 @@ struct PersonFinderEngineDispatchTests {
     func dlibBailsWhenPythonPathNonExecutable() async {
         // Point pythonPath at a real-but-not-executable file (this source
         // file itself), so isExecutableFile returns false.
-        let sink = LogSink()
+        let sink = DispatchLogActor()
         var settings = PersonFinderSettings()
         settings.pythonPath = #filePath  // exists, not executable
         settings.recognitionScript = #filePath
@@ -104,7 +110,7 @@ struct PersonFinderEngineDispatchTests {
         // Use the system /bin/sh as a real executable, then point
         // recognitionScript at a path that doesn't exist. This passes
         // the python guard and falls through to the script-existence guard.
-        let sink = LogSink()
+        let sink = DispatchLogActor()
         var settings = PersonFinderSettings()
         settings.pythonPath = "/bin/sh"  // exists, executable on every macOS
         settings.recognitionScript = "/tmp/nonexistent_script_\(UUID().uuidString).py"
@@ -135,7 +141,7 @@ struct PersonFinderEngineDispatchTests {
         // "  dlib: script=..." before the existence checks. These lines
         // are the first thing Rick sees when a scan misbehaves; they
         // need to keep being emitted even when the bail fires.
-        let sink = LogSink()
+        let sink = DispatchLogActor()
         var settings = PersonFinderSettings()
         settings.pythonPath = "/usr/bin/false"  // exists + executable
         settings.recognitionScript = "/tmp/missing_\(UUID().uuidString).py"
@@ -167,7 +173,7 @@ struct PersonFinderEngineDispatchTests {
         // pfProcessVideoWithDlib calls Task.isCancelled right after
         // pauseGate.waitIfPaused(). A pre-cancelled Task should return
         // nil before any subprocess work or even the path-check guards.
-        let sink = LogSink()
+        let sink = DispatchLogActor()
         var settings = PersonFinderSettings()
         settings.pythonPath = "/bin/sh"
         settings.recognitionScript = "/tmp/whatever.py"
