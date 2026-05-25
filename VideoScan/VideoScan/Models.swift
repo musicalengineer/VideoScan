@@ -749,38 +749,46 @@ enum VolumePhase: String, CaseIterable, Codable {
 
 enum VolumeRole: String, CaseIterable, Codable {
     case unassigned  = "Unassigned"
+    case system      = "System"
     case original    = "Original"
     case backup      = "Backup"
     case archive     = "Archive"
     case lta         = "Long-Term Archive"
+    case retired     = "Retired"
 
     var icon: String {
         switch self {
         case .unassigned: return "questionmark.circle"
+        case .system:     return "internaldrive.fill"
         case .original:   return "film.stack"
         case .backup:     return "doc.on.doc"
         case .archive:    return "archivebox.fill"
         case .lta:        return "icloud.fill"
+        case .retired:    return "archivebox"
         }
     }
 
     var color: Color {
         switch self {
         case .unassigned: return .secondary
+        case .system:     return .purple
         case .original:   return .orange
         case .backup:     return .blue
         case .archive:    return .green
         case .lta:        return .mint
+        case .retired:    return .brown
         }
     }
 
     var shortLabel: String {
         switch self {
         case .unassigned: return "—"
+        case .system:     return "SYS"
         case .original:   return "ORIG"
         case .backup:     return "BKUP"
         case .archive:    return "ARCH"
         case .lta:        return "LTA"
+        case .retired:    return "RTD"
         }
     }
 }
