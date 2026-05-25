@@ -47,6 +47,36 @@ struct CatalogToolbar<Dashboard: View>: View {
     @Binding var showRemoved: Bool
     @ViewBuilder let dashboardContent: () -> Dashboard
 
+    // MARK: Delete-Confirmed-Junk sheet state
+    //
+    // Owned by the toolbar so the entry point and the two sheets live in
+    // one file — the parent doesn't need to know about either sheet. The
+    // workflow is:
+    //   1. user clicks "Delete Confirmed Junk… (N)" → showConfirmSheet=true
+    //   2. confirm sheet's "Move to Trash" or "Delete Permanently" → run
+    //      model.deleteConfirmedJunk, stash result + mode, dismiss confirm,
+    //      open result sheet
+    //   3. result sheet's OK → dismiss result.
+    //
+    // SwiftUI `@State` here ≈ a C++ member variable that triggers a view
+    // re-render when written. The struct is a value type but @State boxes
+    // its storage so mutations persist across re-renders.
+    @State private var showJunkConfirmSheet = false
+    @State private var showJunkResultSheet = false
+    @State private var junkResult: VideoScanModel.JunkDeletionResult?
+    @State private var junkResultMode: VideoScanModel.JunkDeletionMode = .toTrash
+    @State private var junkResultBytesSucceeded: Int64 = 0
+
+    /// Active (non-purged) records currently marked .confirmedJunk. This is
+    /// the same query the model exposes via `confirmedJunkRecords`; we read
+    /// it directly off the published `records` array so the button label
+    /// updates live as the user tags more rows.
+    private var confirmedJunk: [VideoRecord] {
+        model.records.filter {
+            $0.mediaDisposition == .confirmedJunk && $0.purgedAt == nil
+        }
+    }
+
     private var canCombine: Bool {
         guard !isScanning && !isCombining else { return false }
         return hasCorrelatedPairs
@@ -187,6 +217,23 @@ struct CatalogToolbar<Dashboard: View>: View {
                 .tint(.red)
             }
 
+            // Delete Confirmed Junk — visible only when there are
+            // confirmed-junk records to act on. Hidden (not just disabled)
+            // when count is 0 because a permanently-disabled trash button
+            // would read as scary leftover plumbing.
+            if !confirmedJunk.isEmpty {
+                Button {
+                    showJunkConfirmSheet = true
+                } label: {
+                    Label("Delete Junk (\(confirmedJunk.count))",
+                          systemImage: "trash.fill")
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+                .disabled(isScanning || isCombining)
+                .help("Delete files marked as Confirmed Junk. You'll pick Trash vs. permanent in the next step.")
+            }
+
             Button {
                 CatalogScanWindowController.shared.show(dashboard: dashboard, model: model)
             } label: {
@@ -285,6 +332,57 @@ struct CatalogToolbar<Dashboard: View>: View {
         }
         .padding(10)
         .background(Color(NSColor.windowBackgroundColor))
+        // Confirmation sheet — picks Move to Trash vs Delete Permanently.
+        .sheet(isPresented: $showJunkConfirmSheet) {
+            let snapshot = confirmedJunk
+            let totalBytes = snapshot.reduce(into: Int64(0)) { $0 += $1.sizeBytes }
+            DeleteConfirmedJunkConfirmSheet(
+                count: snapshot.count,
+                totalBytes: totalBytes,
+                onCancel: { /* dismiss is automatic */ },
+                onAct: { mode in
+                    // The button list rendered above used the `snapshot`
+                    // computed at sheet-open time. Re-query the model so a
+                    // record tagged after we opened the sheet doesn't miss
+                    // the pass. (Same query, but evaluated against current
+                    // state.) Bytes for the result sheet sum over the
+                    // pre-deletion snapshot so the "freed X GB" reading
+                    // matches what the confirmation sheet promised.
+                    let targets = model.records.filter {
+                        $0.mediaDisposition == .confirmedJunk && $0.purgedAt == nil
+                    }
+                    let bytesBefore = targets.reduce(into: Int64(0)) { $0 += $1.sizeBytes }
+                    let result = model.deleteConfirmedJunk(targets, mode: mode)
+                    junkResult = result
+                    junkResultMode = mode
+                    // Only count the bytes that actually succeeded —
+                    // failed records weren't moved/removed; alreadyMissing
+                    // had zero bytes from our perspective (file was gone
+                    // before we touched it). For accuracy we approximate
+                    // by scaling: succeeded / (attempted - missing) ratio
+                    // applied to bytesBefore. Cleaner alternative would
+                    // be returning per-record bytes from the model; this
+                    // approximation is good enough for the result sheet's
+                    // human-readable summary and keeps the model API
+                    // narrow.
+                    let nonMissing = max(result.attempted - result.alreadyMissing, 0)
+                    junkResultBytesSucceeded = nonMissing > 0
+                        ? Int64(Double(bytesBefore) * Double(result.succeeded) / Double(nonMissing))
+                        : 0
+                    showJunkResultSheet = true
+                }
+            )
+        }
+        // Result sheet — shows succeeded/missing/failed breakdown.
+        .sheet(isPresented: $showJunkResultSheet) {
+            if let r = junkResult {
+                DeleteConfirmedJunkResultSheet(
+                    mode: junkResultMode,
+                    result: r,
+                    bytesSucceeded: junkResultBytesSucceeded
+                )
+            }
+        }
     }
 
 }
