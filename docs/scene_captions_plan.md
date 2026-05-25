@@ -191,6 +191,56 @@ its smoke test `tests/test_vlm_caption.py`. They have **zero overlap**
 with any Swift code or the family-tagging branch and are safe to
 ignore from your side.
 
+## MLX error-handling strategy
+
+Stage 6a's first integration attempt revealed that MLX C++ errors
+(shape mismatch, OOM, malformed tensor inputs) bypass Swift
+`try/catch`. The pipeline is: C++ `mlx_fast_*` op detects the error →
+calls `_mlx_error` → trampolines into mlx-swift's
+`ErrorHandler.dispatch` → default path calls `fatalError(message)` →
+SIGTRAP. Crash trace at
+`~/Library/Logs/DiagnosticReports/VideoScan-2026-05-25-170604.ips`.
+
+The existing `ObjCExceptionCatcher` doesn't help — these aren't
+NSExceptions, they're a separate error callback channel.
+
+mlx-swift 0.29.1 ships an official escape hatch:
+`MLX.withError { ... }` installs a task-local handler that captures
+the C++ error message into an `ErrorBox`, then throws
+`MLXError.caught(message)` on scope exit instead of letting the
+default fatalError path fire. VideoScan wraps this as `runMLX { ... }`
+in `VideoScan/MLXSafety.swift` and uses it around every
+MLXVLM/MLXLMCommon call site in `CaptionRunner`. A belt-and-suspenders
+global handler is installed at app launch
+(`installMLXSafetyNet()` in `AppDelegate.applicationDidFinishLaunching`)
+that logs + stores any error from a call site that wasn't wrapped,
+rather than crashing.
+
+Why this approach over alternatives considered:
+
+- **`setErrorHandler` with a global C handler only**: The
+  `@convention(c)` callback can't `throw` directly, only log/store.
+  Per-call wrapping is needed for the call site to surface the error
+  as a Swift `throws`. We do both: the global handler is the safety
+  net; `runMLX` is the primary defense.
+- **Objective-C++ shim**: Wrong tool. MLX doesn't throw C++
+  exceptions across the C ABI; it uses an explicit error callback.
+  An `@try`/`@catch` shim catches nothing here.
+- **Signal handler (SIGTRAP → throw)**: Possible but ugly and
+  fragile. Not needed when mlx-swift already exposes the right hook.
+
+This pattern scales to batch captioning (stage 6b): `runMLX` is
+per-call, not per-launch, so a thousand-video loop naturally gets a
+thousand independent error scopes. A bad input fails one frame, the
+batch keeps going. The global safety net never has to fire in normal
+operation — it's just there for paths a future call site might miss
+(e.g. background model warmup).
+
+Tests in `VideoScanTests/MLXSafetyTests.swift` provoke real
+broadcast errors via cheap in-memory `MLXArray` ops and assert the
+process survives. They run on every full suite sweep (no
+`VS_RUN_VLM` gating — they don't touch the VLM).
+
 ## Open questions to revisit before the captions branch starts
 
 - **mlx-swift VLM API surface** — needs an investigation pass. If
