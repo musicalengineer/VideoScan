@@ -82,6 +82,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("VideoScan: %@", startLine)
         appLog.write(startLine)
 
+        // Install the MLX safety net BEFORE any MLX code runs. This is
+        // the belt-and-suspenders global handler — per-call runMLX
+        // wrappers (see MLXSafety.swift) are the primary defense, but
+        // any forgotten call site will fall through to this handler
+        // instead of SIGTRAP. Skipped under tests; tests that need it
+        // call installMLXSafetyNet() explicitly.
+        installMLXSafetyNet()
+
         // Last-gasp signal handler: writes to videoscan.log on SIGSEGV/SIGBUS/
         // SIGFPE/SIGILL/SIGABRT, then re-raises for the system crash report.
         // Skipped when appLog isn't file-backed (e.g. NullLogSink under tests)
