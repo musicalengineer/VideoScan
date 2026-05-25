@@ -6,6 +6,12 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		FACE000000000000000000B1 /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = FACE000000000000000000A1 /* MLXVLM */; };
+		FACE000000000000000000B2 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = FACE000000000000000000A2 /* MLXLMCommon */; };
+		FACE000000000000000000B3 /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = FACE000000000000000000A3 /* MLX */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		0DC193362F676648006295E7 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +58,9 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FACE000000000000000000B1 /* MLXVLM in Frameworks */,
+				FACE000000000000000000B2 /* MLXLMCommon in Frameworks */,
+				FACE000000000000000000B3 /* MLX in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -112,6 +121,9 @@
 			);
 			name = VideoScan;
 			packageProductDependencies = (
+				FACE000000000000000000A1 /* MLXVLM */,
+				FACE000000000000000000A2 /* MLXLMCommon */,
+				FACE000000000000000000A3 /* MLX */,
 			);
 			productName = VideoScan;
 			productReference = 0DC193282F676647006295E7 /* VideoScan.app */;
@@ -195,6 +207,9 @@
 			);
 			mainGroup = 0DC1931F2F676647006295E7;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				FACE000000000000000000A0 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 0DC193292F676647006295E7 /* Products */;
 			projectDirPath = "";
@@ -579,6 +594,35 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		FACE000000000000000000A0 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ml-explore/mlx-swift-examples";
+			requirement = {
+				kind = exactVersion;
+				version = 2.29.1;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		FACE000000000000000000A1 /* MLXVLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FACE000000000000000000A0 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */;
+			productName = MLXVLM;
+		};
+		FACE000000000000000000A2 /* MLXLMCommon */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FACE000000000000000000A0 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */;
+			productName = MLXLMCommon;
+		};
+		FACE000000000000000000A3 /* MLX */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = FACE000000000000000000A0 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */;
+			productName = MLX;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 0DC193202F676647006295E7 /* Project object */;
 }
