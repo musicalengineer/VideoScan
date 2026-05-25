@@ -18,7 +18,20 @@ import Testing
 /// proven both (a) the crash is reproducible and (b) the ObjC guard saves us.
 ///
 /// Without VSCatchObjCException, this test kills the test host with SIGABRT.
-@Suite("ArcFace MLE5 Crash Provocation")
+///
+/// **Opt-in:** these tests are SKIPPED by default. Set environment variable
+/// `VS_RUN_STRESS=1` to enable them. Suite is intentionally aggressive —
+/// 16-thread × 300-prediction concurrent provocations that crash unprotected
+/// builds — so it has no business running in standard `xcodebuild test`
+/// sweeps. Enable explicitly when you want to verify the NSException guard
+/// still holds.
+@Suite(
+    "ArcFace MLE5 Crash Provocation",
+    .disabled(
+        if: ProcessInfo.processInfo.environment["VS_RUN_STRESS"] != "1",
+        "Stress suite — set VS_RUN_STRESS=1 to enable."
+    )
+)
 struct ArcFaceMLE5ProvocationTests {
 
     // MARK: - Provocation: shared model, no lock, maximum contention
