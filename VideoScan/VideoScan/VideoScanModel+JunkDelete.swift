@@ -25,6 +25,14 @@ extension VideoScanModel {
     //    from Finder), we still update the catalog record so the row reads
     //    consistently afterward. The count surfaces in the result sheet so
     //    the user knows what happened.
+    //  - "Skipped offline" is a DIFFERENT bucket. If the volume containing
+    //    the file isn't currently mounted we do NOT touch the record at
+    //    all — no purgedAt stamp, no lifecycleStage change. The user
+    //    remounts the drive later and runs the workflow again; the rows
+    //    are still tagged .confirmedJunk and waiting. (Distinct from
+    //    "alreadyMissing", which means the volume IS reachable but the
+    //    specific file is gone — that one's a soft-delete because there's
+    //    nothing more to do.)
     //  - Per-record errors are collected and reported, not thrown. One
     //    permission-denied file does NOT abort the batch — the user marked
     //    20 things as junk and wants the other 19 gone.
@@ -60,7 +68,13 @@ extension VideoScanModel {
         let succeeded: Int
         /// Records whose `fullPath` did not exist when we tried — catalog
         /// was still updated (purgedAt + lifecycleStage), but no disk op.
+        /// (Volume WAS reachable; the specific file just wasn't there.)
         let alreadyMissing: Int
+        /// Records whose volume isn't currently mounted. We do NOT touch
+        /// these records — they stay tagged .confirmedJunk and the user
+        /// can retry after remounting the drive. Distinct from
+        /// `alreadyMissing` because the user can still act on these later.
+        let skippedOffline: Int
         /// Per-record failures with the underlying FileManager error.
         /// Surfaced in the result sheet so the user knows which files
         /// were skipped and why (permissions, locked, etc.).
@@ -92,6 +106,7 @@ extension VideoScanModel {
                 attempted: 0,
                 succeeded: 0,
                 alreadyMissing: 0,
+                skippedOffline: 0,
                 failed: []
             )
         }
@@ -100,10 +115,36 @@ extension VideoScanModel {
         let fm = FileManager.default
         var succeeded = 0
         var alreadyMissing = 0
+        var skippedOffline = 0
         var failed: [(record: VideoRecord, error: Error)] = []
 
         for rec in records {
             let path = rec.fullPath
+
+            // Offline-volume pre-filter. We only treat /Volumes/<X>/...
+            // paths this way — those are the only paths that can be
+            // legitimately "offline" (drive unmounted). Internal paths
+            // (/Users, /tmp, /private, etc.) live on the boot volume and
+            // are always reachable; for those, a missing file is just
+            // alreadyMissing, not offline.
+            //
+            // The 5s cache on VolumeReachability makes this a near-free
+            // check per record (volume root is stat'd at most once per
+            // 5s per volume), and skipping here avoids a FileManager
+            // call that would otherwise block on a sleeping/disconnected
+            // mount point. We do NOT stamp purgedAt / lifecycleStage in
+            // this branch: the user will remount the drive and re-run,
+            // and the row needs to still be tagged .confirmedJunk for
+            // that retry to find it.
+            //
+            // Swift's `guard` here ≈ C++ "early continue" — but the
+            // negation is positive: if it's on a /Volumes mount AND that
+            // mount isn't currently reachable, count + continue.
+            if Self.isExternalVolumePath(path),
+               !VolumeReachability.isReachable(path: path) {
+                skippedOffline += 1
+                continue
+            }
 
             // Missing-file branch. We do NOT pre-flight every file with
             // fileExists() because the disk op below already reports
@@ -167,12 +208,13 @@ extension VideoScanModel {
         // the pattern used by purgeRecords() above.
         saveCatalogDebounced()
 
-        log("Delete Confirmed Junk: attempted=\(records.count) succeeded=\(succeeded) missing=\(alreadyMissing) failed=\(failed.count) mode=\(mode == .toTrash ? "trash" : "permanent")")
+        log("Delete Confirmed Junk: attempted=\(records.count) succeeded=\(succeeded) missing=\(alreadyMissing) offline=\(skippedOffline) failed=\(failed.count) mode=\(mode == .toTrash ? "trash" : "permanent")")
 
         return JunkDeletionResult(
             attempted: records.count,
             succeeded: succeeded,
             alreadyMissing: alreadyMissing,
+            skippedOffline: skippedOffline,
             failed: failed
         )
     }
@@ -191,5 +233,66 @@ extension VideoScanModel {
         records.filter {
             $0.mediaDisposition == .confirmedJunk && $0.purgedAt == nil
         }
+    }
+
+    /// Reachability-split view over `confirmedJunkRecords`. The
+    /// confirmation sheet shows separate counts/byte totals for
+    /// currently-actionable rows vs. rows whose volume isn't mounted.
+    /// Computed once when the sheet opens; the 5s reachability cache
+    /// makes this O(records) with at most one stat() per unique volume.
+    struct ConfirmedJunkSplit {
+        let reachable: [VideoRecord]
+        let offline: [VideoRecord]
+        var reachableBytes: Int64 {
+            reachable.reduce(into: Int64(0)) { $0 += $1.sizeBytes }
+        }
+        var offlineBytes: Int64 {
+            offline.reduce(into: Int64(0)) { $0 += $1.sizeBytes }
+        }
+    }
+
+    /// Split an arbitrary record list by current volume reachability.
+    /// Static so the confirmation sheet can call it without going through
+    /// the model — it operates purely on the records + the global
+    /// VolumeReachability cache. Unit-tested independently.
+    ///
+    /// Mirrors the predicate in `deleteConfirmedJunk`: only paths under
+    /// `/Volumes/<X>/...` are eligible to be "offline" (drive unmounted).
+    /// Internal paths (/Users, /tmp, /private, ...) live on the boot
+    /// volume and are always reachable; if their file is gone, that's
+    /// alreadyMissing — not offline.
+    static func splitByReachability(
+        _ records: [VideoRecord]
+    ) -> ConfirmedJunkSplit {
+        var reachable: [VideoRecord] = []
+        var offline: [VideoRecord] = []
+        reachable.reserveCapacity(records.count)
+        for r in records {
+            if isExternalVolumePath(r.fullPath),
+               !VolumeReachability.isReachable(path: r.fullPath) {
+                offline.append(r)
+            } else {
+                // Everything else — internal disk, empty path, or
+                // /Volumes path whose drive IS mounted — goes to
+                // reachable so deleteConfirmedJunk gets to bucket it
+                // (succeeded / alreadyMissing / failed).
+                reachable.append(r)
+            }
+        }
+        return ConfirmedJunkSplit(reachable: reachable, offline: offline)
+    }
+
+    /// True iff `path` is under "/Volumes/<volumeName>/..." — i.e. lives
+    /// on a removable/external mount that could be ejected. Internal
+    /// paths (/Users, /tmp, /private, /System, ...) return false because
+    /// their "volume" is the boot disk and is always present.
+    ///
+    /// Static + nonisolated so callers in any context can use it without
+    /// hopping actors.
+    nonisolated static func isExternalVolumePath(_ path: String) -> Bool {
+        guard !path.isEmpty else { return false }
+        let comps = (path as NSString).pathComponents
+        // ["/", "Volumes", "<name>", ...] → length ≥ 3, comps[1] == "Volumes".
+        return comps.count >= 3 && comps[1] == "Volumes"
     }
 }

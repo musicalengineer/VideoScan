@@ -417,6 +417,171 @@ struct JunkDeletionTests {
     // returns ONLY active (non-purged) records tagged .confirmedJunk.
     // Records with other dispositions, and purged confirmed-junk records,
     // must NOT be in the set.
+    // MARK: - 10. Offline volume: skippedOffline bucket
+
+    // regression: feature/triage-offline-aware — when a record's volume
+    // isn't currently mounted, the delete pass must:
+    //   - count it in `skippedOffline` (NOT `failed`, NOT `alreadyMissing`)
+    //   - NOT touch the record (purgedAt stays nil, lifecycleStage
+    //     stays as it was — so the user can retry after remounting)
+    //   - sum: succeeded + alreadyMissing + skippedOffline + failed.count
+    //     == attempted
+    //
+    // We point the record at /Volumes/NonexistentVolume-<uuid>/foo.mp4.
+    // The /Volumes/<name> prefix is what VolumeReachability uses to key
+    // its cache; a guaranteed-not-present volume name returns false from
+    // isReachable() without ever touching the actual file path.
+    @Test func skippedOfflineIsCountedSeparately() {
+        VolumeReachability.invalidateCache()
+        let fakeVol = "NonexistentVolume-\(UUID().uuidString)"
+        let rec = VideoRecord()
+        rec.fullPath = "/Volumes/\(fakeVol)/foo.mp4"
+        rec.filename = "foo.mp4"
+        rec.directory = "/Volumes/\(fakeVol)"
+        rec.mediaDisposition = .confirmedJunk
+        rec.sizeBytes = 1_000_000
+
+        let model = VideoScanModel()
+        model.records = [rec]
+
+        let result = model.deleteConfirmedJunk([rec], mode: .toTrash)
+
+        #expect(result.attempted == 1)
+        #expect(result.skippedOffline == 1,
+                "Offline record must land in skippedOffline")
+        #expect(result.succeeded == 0,
+                "Offline record must NOT count as succeeded")
+        #expect(result.alreadyMissing == 0,
+                "Offline record must NOT count as alreadyMissing (different bucket — volume could come back)")
+        #expect(result.failed.isEmpty,
+                "Offline record must NOT count as a failure")
+        // Critical: record must be untouched so a retry after remount
+        // still finds it as active confirmed-junk.
+        #expect(rec.purgedAt == nil,
+                "Offline record must NOT be soft-deleted — volume might come back")
+        #expect(rec.lifecycleStage == .cataloged,
+                "Offline record's lifecycleStage must be unchanged")
+        // Counts always reconcile.
+        #expect(result.succeeded + result.alreadyMissing
+                + result.skippedOffline + result.failed.count
+                == result.attempted)
+    }
+
+    // MARK: - 11. Mixed batch: all four buckets land correctly
+
+    // regression: feature/triage-offline-aware — a single batch can hit
+    // every bucket. Build one of each:
+    //   - reachable + present  → succeeded
+    //   - reachable + missing  → alreadyMissing
+    //   - offline              → skippedOffline
+    //   - reachable + permission-denied parent → failed
+    // (The last bucket inherits the best-effort caveat from test 6.)
+    @Test func mixedBatchReportsAllBuckets() throws {
+        VolumeReachability.invalidateCache()
+        let tmp = try Self.makeTmpDir(label: "mixed-buckets")
+        defer {
+            _ = try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: tmp.path)
+            try? FileManager.default.removeItem(at: tmp)
+        }
+
+        // (1) Reachable + present — should succeed.
+        let okURL = tmp.appendingPathComponent("ok.mov")
+        try Self.writeFixture(at: okURL)
+        let okRec = Self.record(at: okURL)
+
+        // (2) Reachable + missing — should be alreadyMissing.
+        let ghostURL = tmp.appendingPathComponent("ghost.mov")
+        let ghostRec = Self.record(at: ghostURL)
+        #expect(!FileManager.default.fileExists(atPath: ghostURL.path))
+
+        // (3) Offline volume — should be skippedOffline.
+        let fakeVol = "NonexistentVolume-\(UUID().uuidString)"
+        let offlineRec = VideoRecord()
+        offlineRec.fullPath = "/Volumes/\(fakeVol)/junk.mp4"
+        offlineRec.filename = "junk.mp4"
+        offlineRec.directory = "/Volumes/\(fakeVol)"
+        offlineRec.mediaDisposition = .confirmedJunk
+        offlineRec.sizeBytes = 500_000
+
+        // (4) Reachable + permission-denied parent — should fail (or
+        // succeed on lenient filesystems; see test 6's caveat).
+        let lockedDir = tmp.appendingPathComponent("locked")
+        try FileManager.default.createDirectory(at: lockedDir,
+                                                withIntermediateDirectories: true)
+        let lockedURL = lockedDir.appendingPathComponent("trapped.mov")
+        try Self.writeFixture(at: lockedURL)
+        let lockedRec = Self.record(at: lockedURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o555], ofItemAtPath: lockedDir.path)
+        defer {
+            _ = try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: lockedDir.path)
+        }
+
+        let all = [okRec, ghostRec, offlineRec, lockedRec]
+        let model = VideoScanModel()
+        model.records = all
+
+        let result = model.deleteConfirmedJunk(all, mode: .permanent)
+
+        #expect(result.attempted == 4)
+        // Hard contracts (independent of the lenient-filesystem caveat):
+        #expect(result.succeeded >= 1,
+                "OK record must always succeed")
+        #expect(result.alreadyMissing == 1,
+                "Ghost record must be the one in alreadyMissing")
+        #expect(result.skippedOffline == 1,
+                "Offline record must be the one in skippedOffline")
+        // Counts always sum to attempted.
+        #expect(result.succeeded + result.alreadyMissing
+                + result.skippedOffline + result.failed.count == 4,
+                "Bucket counts must sum to attempted")
+        // OK record is processed regardless of locked record's outcome.
+        #expect(okRec.purgedAt != nil)
+        #expect(okRec.lifecycleStage == .deletedPermanently)
+        // Ghost record is soft-deleted (alreadyMissing branch).
+        #expect(ghostRec.purgedAt != nil)
+        #expect(ghostRec.lifecycleStage == .deletedPermanently)
+        // Offline record is UNTOUCHED — user can retry after remount.
+        #expect(offlineRec.purgedAt == nil,
+                "Offline record must NOT be touched")
+        #expect(offlineRec.lifecycleStage == .cataloged)
+    }
+
+    // MARK: - 12. splitByReachability helper
+
+    // regression: feature/triage-offline-aware — the split helper that
+    // powers the confirmation sheet's breakdown must partition correctly
+    // and preserve every input record exactly once (no drops, no dupes).
+    @Test func splitByReachability_partitionsCleanly() {
+        VolumeReachability.invalidateCache()
+        let fakeVol = "NonexistentVolume-\(UUID().uuidString)"
+
+        let onlineRec = VideoRecord()
+        onlineRec.fullPath = "/tmp/online_\(UUID().uuidString).mov"
+
+        let offlineRec = VideoRecord()
+        offlineRec.fullPath = "/Volumes/\(fakeVol)/offline.mov"
+
+        let emptyPathRec = VideoRecord()
+        emptyPathRec.fullPath = ""
+
+        let split = VideoScanModel.splitByReachability(
+            [onlineRec, offlineRec, emptyPathRec])
+
+        // No record is dropped, none duplicated.
+        #expect(split.reachable.count + split.offline.count == 3)
+        // Offline record is in the offline bucket.
+        #expect(split.offline.contains { $0 === offlineRec })
+        #expect(!split.reachable.contains { $0 === offlineRec })
+        // Online record is in the reachable bucket.
+        #expect(split.reachable.contains { $0 === onlineRec })
+        // Empty-path record falls into reachable (deleteConfirmedJunk
+        // will then bucket it as alreadyMissing).
+        #expect(split.reachable.contains { $0 === emptyPathRec })
+    }
+
     @Test func confirmedJunkRecords_filtersCorrectly() {
         let model = VideoScanModel()
 
