@@ -552,6 +552,15 @@ enum LifecycleStage: String, Codable, CaseIterable {
     case cataloged = "Cataloged"
     case reviewing = "In Triage"
     case archived  = "Archived"
+    /// File moved to macOS Trash via Delete Confirmed Junk workflow.
+    /// Record is preserved (soft-deleted via `purgedAt`); the file itself
+    /// is recoverable from Finder's Trash until the user empties it.
+    case trashed   = "Trashed"
+    /// File hard-removed from disk via Delete Confirmed Junk workflow.
+    /// Record preserved (soft-deleted via `purgedAt`); the file is gone
+    /// and cannot be recovered from the app. Distinct from `.trashed`
+    /// so the UI can show the right post-delete provenance to the user.
+    case deletedPermanently = "Deleted"
 }
 
 // MARK: - Media Disposition (per-file lifecycle)
