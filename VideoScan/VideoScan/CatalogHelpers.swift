@@ -335,10 +335,8 @@ struct CatalogToolbar<Dashboard: View>: View {
         // Confirmation sheet — picks Move to Trash vs Delete Permanently.
         .sheet(isPresented: $showJunkConfirmSheet) {
             let snapshot = confirmedJunk
-            let totalBytes = snapshot.reduce(into: Int64(0)) { $0 += $1.sizeBytes }
             DeleteConfirmedJunkConfirmSheet(
-                count: snapshot.count,
-                totalBytes: totalBytes,
+                records: snapshot,
                 onCancel: { /* dismiss is automatic */ },
                 onAct: { mode in
                     // The button list rendered above used the `snapshot`
@@ -351,23 +349,32 @@ struct CatalogToolbar<Dashboard: View>: View {
                     let targets = model.records.filter {
                         $0.mediaDisposition == .confirmedJunk && $0.purgedAt == nil
                     }
-                    let bytesBefore = targets.reduce(into: Int64(0)) { $0 += $1.sizeBytes }
+                    // bytesBefore covers only reachable records — offline
+                    // ones get skipped without a disk op, so they
+                    // shouldn't show up in the "freed N GB" reading.
+                    let split = VideoScanModel.splitByReachability(targets)
+                    let bytesBefore = split.reachableBytes
                     let result = model.deleteConfirmedJunk(targets, mode: mode)
                     junkResult = result
                     junkResultMode = mode
                     // Only count the bytes that actually succeeded —
                     // failed records weren't moved/removed; alreadyMissing
                     // had zero bytes from our perspective (file was gone
-                    // before we touched it). For accuracy we approximate
-                    // by scaling: succeeded / (attempted - missing) ratio
-                    // applied to bytesBefore. Cleaner alternative would
-                    // be returning per-record bytes from the model; this
+                    // before we touched it); skippedOffline ditto (we
+                    // never touched the disk). For accuracy we
+                    // approximate by scaling: succeeded over the
+                    // attempted-minus-noops denominator applied to the
+                    // reachable bytesBefore. Cleaner alternative would be
+                    // returning per-record bytes from the model; this
                     // approximation is good enough for the result sheet's
                     // human-readable summary and keeps the model API
                     // narrow.
-                    let nonMissing = max(result.attempted - result.alreadyMissing, 0)
-                    junkResultBytesSucceeded = nonMissing > 0
-                        ? Int64(Double(bytesBefore) * Double(result.succeeded) / Double(nonMissing))
+                    let actionable = max(
+                        result.attempted - result.alreadyMissing - result.skippedOffline,
+                        0
+                    )
+                    junkResultBytesSucceeded = actionable > 0
+                        ? Int64(Double(bytesBefore) * Double(result.succeeded) / Double(actionable))
                         : 0
                     showJunkResultSheet = true
                 }

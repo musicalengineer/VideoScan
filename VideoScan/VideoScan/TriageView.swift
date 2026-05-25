@@ -47,6 +47,15 @@ struct TriageView: View {
     @State private var analysisSummary: MediaAnalyzer.AnalysisSummary?
     @State private var showAnalysisSummary = false
 
+    // Offline-aware filter. When on, the triage table hides any record
+    // whose volume isn't currently mounted — useful when the user wants
+    // to focus on what they can actually act on right now. Default off
+    // so the existing "show everything" behavior is preserved.
+    // `@AppStorage` ≈ a C++ singleton-backed bool whose value is
+    // persisted to NSUserDefaults under the named key — survives
+    // relaunches.
+    @AppStorage("triageShowOnlineOnly") private var showOnlineOnly: Bool = false
+
     private var triageRecords: [VideoRecord] {
         // Global-inert filter: purged records are out of scope for triage —
         // a removed-from-catalog file shouldn't show up as something to
@@ -71,9 +80,18 @@ struct TriageView: View {
             base = triageRecords.filter { $0.mediaDisposition == .recoverable }
         }
 
-        if searchText.isEmpty { return base }
+        // Apply the "Online volumes only" toggle BEFORE the search filter
+        // so the search runs over the smaller set. The reachability check
+        // is backed by VolumeReachability's 5s per-volume cache, so even
+        // with thousands of records this is at most one stat() per volume
+        // every five seconds.
+        let afterOnline = showOnlineOnly
+            ? base.filter { VolumeReachability.isReachable(path: $0.fullPath) }
+            : base
+
+        if searchText.isEmpty { return afterOnline }
         let q = searchText.lowercased()
-        return base.filter {
+        return afterOnline.filter {
             $0.filename.lowercased().contains(q) ||
             $0.directory.lowercased().contains(q) ||
             $0.notes.lowercased().contains(q) ||
@@ -272,6 +290,18 @@ struct TriageView: View {
             .disabled(triageRecords.isEmpty || isAnalyzing)
             .help("Score and classify files using heuristics")
 
+            // "Online volumes only" — sibling to the search field. Lives
+            // here (not in the sidebar) because it's a view-modifier, not
+            // a disposition pick. State is @AppStorage-backed so it
+            // survives relaunches at the user's preference.
+            Toggle(isOn: $showOnlineOnly) {
+                Label("Online volumes only", systemImage: "externaldrive.connected.to.line.below")
+                    .labelStyle(.titleAndIcon)
+            }
+            .toggleStyle(.switch)
+            .controlSize(.small)
+            .help("Hide records whose volume isn't currently mounted")
+
             TextField("Search", text: $searchText)
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: 180)
@@ -334,11 +364,19 @@ struct TriageView: View {
             .width(30)
 
             TableColumn("Filename", value: \.filename) { rec in
+                // Italic + secondary when the row's volume isn't mounted —
+                // mirrors the catalog-table pattern (CatalogHelpers.swift
+                // around line 854). Visual cue that "you can't act on
+                // this right now". When the toggle filter is active these
+                // rows are hidden entirely, but the toggle defaults off,
+                // so we still need a clear marker in the default view.
+                let offline = !VolumeReachability.isReachable(path: rec.fullPath)
                 Text(rec.filename)
                     .font(.system(size: 13, design: .monospaced))
-                    .foregroundColor(rec.filenameColor)
+                    .italic(offline)
+                    .foregroundColor(offline ? .secondary : rec.filenameColor)
                     .lineLimit(1)
-                    .help(rec.fullPath)
+                    .help(offline ? "\(rec.fullPath) (offline)" : rec.fullPath)
             }
             .width(min: 150, ideal: 250)
 
