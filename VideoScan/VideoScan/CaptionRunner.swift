@@ -261,14 +261,20 @@ struct MLXVLMCaptionRunner: CaptionRunner {
             // the host machine is shared with other GPU workloads (FD
             // pipeline running at the same time, e.g.).
             MLX.GPU.set(cacheLimit: 20 * 1024 * 1024) // 20 MB
-            container = try await VLMModelFactory.shared.loadContainer(
-                configuration: VLMRegistry.qwen2_5VL3BInstruct4Bit
-            ) { progress in
-                // Progress is from HubApi during weight download; quiet
-                // unless we're actively downloading. Once cached this
-                // never fires after the first call.
-                if progress.totalUnitCount > 0 && progress.completedUnitCount % (progress.totalUnitCount / 20 + 1) == 0 {
-                    captionLogger.info("VLM weight download: \(progress.completedUnitCount)/\(progress.totalUnitCount)")
+            // Wrap the load path in runMLX too — weight load can hit a
+            // shape/quantization mismatch (especially with mismatched
+            // mlx-swift / mlx-swift-examples versions) and we don't want
+            // that to SIGTRAP either.
+            container = try await runMLX {
+                try await VLMModelFactory.shared.loadContainer(
+                    configuration: VLMRegistry.qwen2_5VL3BInstruct4Bit
+                ) { progress in
+                    // Progress is from HubApi during weight download; quiet
+                    // unless we're actively downloading. Once cached this
+                    // never fires after the first call.
+                    if progress.totalUnitCount > 0 && progress.completedUnitCount % (progress.totalUnitCount / 20 + 1) == 0 {
+                        captionLogger.info("VLM weight download: \(progress.completedUnitCount)/\(progress.totalUnitCount)")
+                    }
                 }
             }
         } catch {
@@ -316,26 +322,37 @@ struct MLXVLMCaptionRunner: CaptionRunner {
                 ]
 
                 do {
-                    let text: String = try await container.perform { context in
-                        var userInput = UserInput(chat: chat)
-                        userInput.processing.resize = .init(width: 448, height: 448)
-                        let lmInput = try await context.processor.prepare(input: userInput)
+                    // `runMLX` wraps the entire MLX/MLXVLM/MLXLMCommon
+                    // call chain in `MLX.withError`, converting any C++
+                    // layer error (shape mismatch, OOM, malformed
+                    // tensor) into a Swift throw of MLXError.caught
+                    // instead of letting it land in fatalError → SIGTRAP.
+                    // See MLXSafety.swift for the underlying mechanism.
+                    let text: String = try await runMLX {
+                        try await container.perform { context in
+                            var userInput = UserInput(chat: chat)
+                            userInput.processing.resize = .init(width: 448, height: 448)
+                            let lmInput = try await context.processor.prepare(input: userInput)
 
-                        let stream = try MLXLMCommon.generate(
-                            input: lmInput, parameters: generateParameters, context: context
-                        )
+                            let stream = try MLXLMCommon.generate(
+                                input: lmInput, parameters: generateParameters, context: context
+                            )
 
-                        var buffer = ""
-                        for await item in stream {
-                            if let chunk = item.chunk {
-                                buffer += chunk
+                            var buffer = ""
+                            for await item in stream {
+                                if let chunk = item.chunk {
+                                    buffer += chunk
+                                }
                             }
+                            // Force GPU to sync before returning so we
+                            // don't pipeline several frames worth of
+                            // generation in flight and burn RAM. Also
+                            // forces any deferred MLX errors to surface
+                            // inside the withError scope rather than on
+                            // a later op.
+                            MLX.Stream.gpu.synchronize()
+                            return buffer
                         }
-                        // Force GPU to sync before returning so we
-                        // don't pipeline several frames worth of
-                        // generation in flight and burn RAM.
-                        MLX.Stream.gpu.synchronize()
-                        return buffer
                     }
 
                     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
