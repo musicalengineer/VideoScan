@@ -214,6 +214,15 @@ final class IdentifyFamilyModel: ObservableObject {
         ]
         var env = ProcessInfo.processInfo.environment
         env["PYTHONUNBUFFERED"] = "1"
+        // cluster_faces.py shells out to ffmpeg internally (via facenet
+        // preprocessing / video frame extraction). When the app is launched
+        // from Xcode or Finder, the inherited PATH typically doesn't include
+        // /opt/homebrew/bin (or /usr/local/bin on Intel), so the Python child
+        // fails with `[Errno 2] No such file or directory: 'ffmpeg'`. Mirror
+        // the AudioTranscriber subprocess pattern — same helper, same fix.
+        env["PATH"] = augmentedPathWithHomebrew(
+            inheriting: ProcessInfo.processInfo.environment["PATH"]
+        )
         proc.environment = env
         let outPipe = Pipe()
         let errPipe = Pipe()
