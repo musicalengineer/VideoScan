@@ -217,22 +217,11 @@ struct CatalogToolbar<Dashboard: View>: View {
                 .tint(.red)
             }
 
-            // Delete Confirmed Junk — visible only when there are
-            // confirmed-junk records to act on. Hidden (not just disabled)
-            // when count is 0 because a permanently-disabled trash button
-            // would read as scary leftover plumbing.
-            if !confirmedJunk.isEmpty {
-                Button {
-                    showJunkConfirmSheet = true
-                } label: {
-                    Label("Delete Junk (\(confirmedJunk.count))",
-                          systemImage: "trash.fill")
-                }
-                .buttonStyle(.bordered)
-                .tint(.red)
-                .disabled(isScanning || isCombining)
-                .help("Delete files marked as Confirmed Junk. You'll pick Trash vs. permanent in the next step.")
-            }
+            // Delete Confirmed Junk lives in the Triage toolbar (which has
+            // the dispositions + analyze + filters in one place). The
+            // confirm/result sheets stay attached below for sheet plumbing
+            // — they're presented from this view when invoked from any
+            // future entry point in the catalog row context menu.
 
             Button {
                 CatalogScanWindowController.shared.show(dashboard: dashboard, model: model)

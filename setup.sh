@@ -73,8 +73,17 @@ if command -v xcodebuild >/dev/null 2>&1; then
 fi
 
 # Homebrew (cannot fully auto-install — interactive prompt for sudo)
+# Probe canonical paths in addition to $PATH because SSH non-login shells
+# (e.g. `ssh host "./setup.sh"`) inherit /usr/bin:/bin only — brew installed
+# at /opt/homebrew/bin/brew won't be on PATH despite being present.
 if command -v brew >/dev/null 2>&1; then
     say_satisfied "Homebrew ($(brew --version | head -1))"
+elif [[ -x /opt/homebrew/bin/brew ]]; then
+    eval "$(/opt/homebrew/bin/brew shellenv)"
+    say_satisfied "Homebrew ($(brew --version | head -1)) [added /opt/homebrew to PATH for this run]"
+elif [[ -x /usr/local/bin/brew ]]; then
+    eval "$(/usr/local/bin/brew shellenv)"
+    say_satisfied "Homebrew ($(brew --version | head -1)) [added /usr/local to PATH for this run]"
 else
     say_failed "Homebrew" "install from https://brew.sh and re-run"
     echo

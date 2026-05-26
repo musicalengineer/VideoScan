@@ -47,6 +47,21 @@ struct TriageView: View {
     @State private var analysisSummary: MediaAnalyzer.AnalysisSummary?
     @State private var showAnalysisSummary = false
 
+    // Delete-Junk sheet state — mirror of the catalog-toolbar pattern in
+    // CatalogHelpers.swift. Users naturally expect to tag-then-delete in
+    // the same view, so we expose the same workflow here.
+    @State private var showJunkConfirmSheet = false
+    @State private var showJunkResultSheet = false
+    @State private var junkResult: VideoScanModel.JunkDeletionResult?
+    @State private var junkResultMode: VideoScanModel.JunkDeletionMode = .toTrash
+    @State private var junkResultBytesSucceeded: Int64 = 0
+
+    private var confirmedJunk: [VideoRecord] {
+        model.records.filter {
+            $0.mediaDisposition == .confirmedJunk && $0.purgedAt == nil
+        }
+    }
+
     // Offline-aware filter. When on, the triage table hides any record
     // whose volume isn't currently mounted — useful when the user wants
     // to focus on what they can actually act on right now. Default off
@@ -249,6 +264,44 @@ struct TriageView: View {
                 fileTable(rows: rows)
             }
         }
+        // Delete-Junk sheets — mirror the catalog-toolbar wiring so users
+        // can tag-then-delete without leaving Triage. Confirm sheet asks
+        // Move-to-Trash vs Delete Permanently; result sheet shows the
+        // per-bucket breakdown.
+        .sheet(isPresented: $showJunkConfirmSheet) {
+            let snapshot = confirmedJunk
+            DeleteConfirmedJunkConfirmSheet(
+                records: snapshot,
+                onCancel: { /* dismiss is automatic */ },
+                onAct: { mode in
+                    let targets = model.records.filter {
+                        $0.mediaDisposition == .confirmedJunk && $0.purgedAt == nil
+                    }
+                    let split = VideoScanModel.splitByReachability(targets)
+                    let bytesBefore = split.reachableBytes
+                    let result = model.deleteConfirmedJunk(targets, mode: mode)
+                    junkResult = result
+                    junkResultMode = mode
+                    let actionable = max(
+                        result.attempted - result.alreadyMissing - result.skippedOffline,
+                        0
+                    )
+                    junkResultBytesSucceeded = actionable > 0
+                        ? Int64(Double(bytesBefore) * Double(result.succeeded) / Double(actionable))
+                        : 0
+                    showJunkResultSheet = true
+                }
+            )
+        }
+        .sheet(isPresented: $showJunkResultSheet) {
+            if let r = junkResult {
+                DeleteConfirmedJunkResultSheet(
+                    mode: junkResultMode,
+                    result: r,
+                    bytesSucceeded: junkResultBytesSucceeded
+                )
+            }
+        }
     }
 
     private var toolbar: some View {
@@ -261,6 +314,21 @@ struct TriageView: View {
             Spacer()
 
             triageButtons
+
+            // Delete Junk — only visible when there's confirmed junk to act on.
+            // Sheet pattern mirrors the catalog toolbar so the model code can
+            // be reused (confirmedJunk + DeleteConfirmedJunkConfirmSheet).
+            if !confirmedJunk.isEmpty {
+                Button {
+                    showJunkConfirmSheet = true
+                } label: {
+                    Label("Delete Junk (\(confirmedJunk.count))",
+                          systemImage: "trash.fill")
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+                .help("Move to Trash or delete permanently — sheet shows the split between reachable and offline volumes")
+            }
 
             Button {
                 promoteSelectedToArchive()
