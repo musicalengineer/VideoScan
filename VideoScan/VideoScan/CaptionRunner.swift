@@ -217,18 +217,73 @@ private let kCaptionPrompt = "Describe this video frame in one sentence: setting
 /// Hidden default — Qwen2.5-VL-3B-Instruct-4bit, the configuration
 /// pre-registered in `VLMRegistry`. Matches the existing modelID
 /// string written to `VideoRecord.sceneCaptionModel`.
-struct MLXVLMCaptionRunner: CaptionRunner {
+///
+/// Stage 6b note: this was a `struct` in 6a and loaded the model
+/// container on every `caption(...)` call. The orchestrator (S6b) wants
+/// a session-scoped container that survives across files in a batch.
+/// `actor` ≈ a class with implicit mutex around all members — the
+/// container is lazily loaded inside ensureContainer() and cached for
+/// the actor's lifetime. The orchestrator builds one runner instance
+/// per batch, so a batch of N videos hits exactly one model load.
+actor MLXVLMCaptionRunner: CaptionRunner {
 
-    let modelID: String = "qwen2.5-vl-3b-4bit"
+    nonisolated let modelID: String = "qwen2.5-vl-3b-4bit"
 
     /// Max tokens per caption. Captions are deliberately short
     /// ("one sentence") so a tight budget keeps inference fast and
     /// avoids the model running on into rambling territory. The
     /// Python prototype defaults to 120; we match for parity.
-    let maxTokens: Int
+    nonisolated let maxTokens: Int
+
+    /// Cached model container. nil until the first `caption(...)` call
+    /// (or explicit `prewarm()`); reused across every subsequent call
+    /// on this actor instance. Drops with the actor when the batch
+    /// ends — the orchestrator does not retain runners across batches,
+    /// so memory does not leak between Caption Videos invocations.
+    private var cachedContainer: ModelContainer?
 
     init(maxTokens: Int = 120) {
         self.maxTokens = maxTokens
+    }
+
+    /// Optional: explicitly load the container before the first
+    /// `caption(...)` call. The orchestrator can call this to show
+    /// "Loading model…" in the progress UI before the per-file loop
+    /// starts. Subsequent caption() calls hit the cached instance.
+    func prewarm() async throws {
+        _ = try await ensureContainer()
+    }
+
+    /// Lazily load (or return cached) container. Single point of model
+    /// load — every code path that needs the container goes through
+    /// here. Wrap in runMLX to keep the load itself crash-safe.
+    private func ensureContainer() async throws -> ModelContainer {
+        if let cached = cachedContainer { return cached }
+        captionLogger.info("MLXVLMCaptionRunner: loading model container (first call this session)")
+        // GPU memory cache cap — keeps the model from ballooning if
+        // the host machine is shared with other GPU workloads (FD
+        // pipeline running at the same time, e.g.).
+        MLX.GPU.set(cacheLimit: 20 * 1024 * 1024) // 20 MB
+        do {
+            let container = try await runMLX {
+                try await VLMModelFactory.shared.loadContainer(
+                    configuration: VLMRegistry.qwen2_5VL3BInstruct4Bit
+                ) { progress in
+                    // Progress is from HubApi during weight download;
+                    // quiet unless we're actively downloading. Once
+                    // cached this never fires after the first call.
+                    if progress.totalUnitCount > 0 && progress.completedUnitCount % (progress.totalUnitCount / 20 + 1) == 0 {
+                        captionLogger.info("VLM weight download: \(progress.completedUnitCount)/\(progress.totalUnitCount)")
+                    }
+                }
+            }
+            cachedContainer = container
+            captionLogger.info("MLXVLMCaptionRunner: model container loaded and cached")
+            return container
+        } catch {
+            captionLogger.error("VLM model load failed: \(error.localizedDescription, privacy: .public)")
+            throw CaptionRunnerError.modelLoadFailed(reason: error.localizedDescription)
+        }
     }
 
     func caption(
@@ -251,36 +306,10 @@ struct MLXVLMCaptionRunner: CaptionRunner {
         //    cost. Order preserved; failed slots will be skipped below.
         let frames = try await extractFrames(from: videoURL, atTimestamps: timestamps)
 
-        // 2. Load the VLM via VLMModelFactory — mirrors the working
-        //    invocation pattern in mlx-swift-examples' VLMEval sample.
-        //    Subsequent calls hit the HuggingFace cache. Per-call
-        //    instance — see header comment for rationale.
-        let container: ModelContainer
-        do {
-            // GPU memory cache cap — keeps the model from ballooning if
-            // the host machine is shared with other GPU workloads (FD
-            // pipeline running at the same time, e.g.).
-            MLX.GPU.set(cacheLimit: 20 * 1024 * 1024) // 20 MB
-            // Wrap the load path in runMLX too — weight load can hit a
-            // shape/quantization mismatch (especially with mismatched
-            // mlx-swift / mlx-swift-examples versions) and we don't want
-            // that to SIGTRAP either.
-            container = try await runMLX {
-                try await VLMModelFactory.shared.loadContainer(
-                    configuration: VLMRegistry.qwen2_5VL3BInstruct4Bit
-                ) { progress in
-                    // Progress is from HubApi during weight download; quiet
-                    // unless we're actively downloading. Once cached this
-                    // never fires after the first call.
-                    if progress.totalUnitCount > 0 && progress.completedUnitCount % (progress.totalUnitCount / 20 + 1) == 0 {
-                        captionLogger.info("VLM weight download: \(progress.completedUnitCount)/\(progress.totalUnitCount)")
-                    }
-                }
-            }
-        } catch {
-            captionLogger.error("VLM model load failed: \(error.localizedDescription, privacy: .public)")
-            throw CaptionRunnerError.modelLoadFailed(reason: error.localizedDescription)
-        }
+        // 2. Resolve the VLM container. Lazily loaded the first time;
+        //    subsequent files in the same batch hit the actor-cached
+        //    instance. See ensureContainer() for the load path.
+        let container = try await ensureContainer()
 
         // 3. Caption each successful frame. Cancellation honored
         //    between frames so a user-cancelled batch stops promptly
@@ -385,11 +414,15 @@ struct MLXVLMCaptionRunner: CaptionRunner {
 /// build configuration. Lets the protocol surface compile cleanly on
 /// branches that haven't yet adopted the dep — the actual production
 /// build always has `canImport(MLXVLM)` true.
-struct MLXVLMCaptionRunner: CaptionRunner {
-    let modelID: String = "qwen2.5-vl-3b-4bit"
+actor MLXVLMCaptionRunner: CaptionRunner {
+    nonisolated let modelID: String = "qwen2.5-vl-3b-4bit"
 
     init(maxTokens: Int = 120) {
         _ = maxTokens   // silence unused warning under the stub path
+    }
+
+    func prewarm() async throws {
+        throw CaptionRunnerError.notImplemented(engine: "MLXVLM")
     }
 
     func caption(
