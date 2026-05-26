@@ -289,7 +289,16 @@ struct TriageView: View {
                     junkResultBytesSucceeded = actionable > 0
                         ? Int64(Double(bytesBefore) * Double(result.succeeded) / Double(actionable))
                         : 0
-                    showJunkResultSheet = true
+                    // SwiftUI only allows one sheet active per view at a
+                    // time. Flipping showJunkResultSheet true synchronously
+                    // here collides with the confirm sheet's dismiss
+                    // animation — the result sheet tries to present while
+                    // the confirm sheet is still on-screen → UI hangs
+                    // with a half-dismissed sheet stub. Defer just past
+                    // the dismiss animation window.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        showJunkResultSheet = true
+                    }
                 }
             )
         }
