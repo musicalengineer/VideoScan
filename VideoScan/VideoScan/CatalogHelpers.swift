@@ -365,7 +365,14 @@ struct CatalogToolbar<Dashboard: View>: View {
                     junkResultBytesSucceeded = actionable > 0
                         ? Int64(Double(bytesBefore) * Double(result.succeeded) / Double(actionable))
                         : 0
-                    showJunkResultSheet = true
+                    // Chained .sheet trap: flipping the result-sheet flag
+                    // synchronously collides with the confirm sheet's
+                    // dismiss animation — SwiftUI only allows one sheet
+                    // per view at a time. Defer just past the dismiss
+                    // animation window.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        showJunkResultSheet = true
+                    }
                 }
             )
         }
