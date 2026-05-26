@@ -53,6 +53,25 @@ else
     say_skipped "Xcode" "not detected — install from Mac App Store to build the app"
 fi
 
+# Metal Toolchain — required to compile mlx-swift's Metal kernels.
+# Auto-downloaded by xcodebuild on first build, but doing it explicitly
+# here keeps the first-build experience predictable on a fresh machine.
+# ~688 MB system asset, persisted across all Xcode invocations.
+if command -v xcodebuild >/dev/null 2>&1; then
+    # `xcodebuild -showComponents` lists currently-installed components; grep
+    # for MetalToolchain. If absent, kick off the download.
+    if xcodebuild -showComponents 2>/dev/null | grep -qi "metal.*toolchain"; then
+        say_satisfied "Metal Toolchain (Xcode component)"
+    else
+        echo "  ${DIM}→ downloading Metal Toolchain (~688 MB, one-time)...${RESET}"
+        if xcodebuild -downloadComponent MetalToolchain >/dev/null 2>&1; then
+            say_installed "Metal Toolchain"
+        else
+            say_skipped "Metal Toolchain" "auto-download failed; Xcode will prompt on first MLX build"
+        fi
+    fi
+fi
+
 # Homebrew (cannot fully auto-install — interactive prompt for sudo)
 if command -v brew >/dev/null 2>&1; then
     say_satisfied "Homebrew ($(brew --version | head -1))"
@@ -160,6 +179,52 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+section "MLX virtual environment (audio transcription + VLM captioning)"
+# ---------------------------------------------------------------------------
+# mlx-vlm and mlx-whisper require transformers>=5 / numpy>=2, which break
+# facenet-pytorch in the main venv. Keep them isolated in venv-mlx/.
+
+VENV_MLX="$REPO_ROOT/venv-mlx"
+
+if ! command -v "$PYTHON" >/dev/null 2>&1; then
+    say_skipped "venv-mlx" "$PYTHON not on PATH"
+else
+    if [[ -x "$VENV_MLX/bin/python" ]]; then
+        vmlx_ver=$("$VENV_MLX/bin/python" --version 2>&1 | awk '{print $2}')
+        say_satisfied "venv-mlx at $VENV_MLX (Python $vmlx_ver)"
+    else
+        echo "  ${DIM}→ creating venv-mlx at $VENV_MLX...${RESET}"
+        if "$PYTHON" -m venv "$VENV_MLX" >/dev/null 2>&1; then
+            vmlx_ver=$("$VENV_MLX/bin/python" --version 2>&1 | awk '{print $2}')
+            say_installed "venv-mlx at $VENV_MLX (Python $vmlx_ver)"
+        else
+            say_failed "venv-mlx" "$PYTHON -m venv $VENV_MLX failed"
+        fi
+    fi
+
+    if [[ -x "$VENV_MLX/bin/python" ]]; then
+        if [[ -f "$REPO_ROOT/scripts/requirements-mlx.txt" ]]; then
+            req_count=$(grep -cE '^[A-Za-z]' "$REPO_ROOT/scripts/requirements-mlx.txt")
+            echo "  ${DIM}→ verifying $req_count MLX packages against requirements-mlx.txt...${RESET}"
+            before=$("$VENV_MLX/bin/pip" freeze 2>/dev/null | sort)
+            if "$VENV_MLX/bin/pip" install --quiet -r "$REPO_ROOT/scripts/requirements-mlx.txt" >/dev/null 2>&1; then
+                after=$("$VENV_MLX/bin/pip" freeze 2>/dev/null | sort)
+                new_pkgs=$(comm -13 <(echo "$before") <(echo "$after") | wc -l | tr -d ' ')
+                if [[ "$new_pkgs" == "0" ]]; then
+                    say_satisfied "all $req_count MLX packages already installed"
+                else
+                    say_installed "$new_pkgs MLX package(s) (of $req_count direct deps)"
+                fi
+            else
+                say_failed "MLX packages" "venv-mlx pip install failed (run it directly to see errors)"
+            fi
+        else
+            say_skipped "MLX packages" "scripts/requirements-mlx.txt not found"
+        fi
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 section "Git hooks (optional dev tooling)"
 # ---------------------------------------------------------------------------
 
@@ -203,4 +268,13 @@ echo "${GREEN}${BOLD}All dependencies are met.${RESET}"
 echo "Launch VideoScan with:"
 echo "    open ${REPO_ROOT}/VideoScan/VideoScan.xcodeproj"
 echo "Then build and run (⌘R) in Xcode."
+echo
+echo "${BOLD}Optional dev-machine speedup:${RESET}"
+echo "  Mount a 32 GB RAM disk and point Xcode DerivedData at it for"
+echo "  dramatically faster builds (Debug edit-build-run loop drops"
+echo "  from ~3 min to ~5 sec). On the Mac Studio M4 Max this is a"
+echo "  big win. Setup script lives at:"
+echo "    ~/bin/setup-xcoderam.sh"
+echo "  (If missing on this machine, see VideoScan's README or ask"
+echo "   Claude to recreate it — it's a 10-line shell script.)"
 echo
