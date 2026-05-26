@@ -23,3 +23,4 @@
 {"ts":"2026-05-23T07:49:48Z","sha":"285e6273","run_kind":"nightly","concurrency_warnings":169,"codeql_findings":0,"tsan_issues":null,"swiftlint_strict":40,"periphery_aggressive":0}
 {"ts":"2026-05-24T08:06:32Z","sha":"5342f36c","run_kind":"nightly","concurrency_warnings":150,"codeql_findings":0,"tsan_issues":null,"swiftlint_strict":46,"periphery_aggressive":0}
 {"ts":"2026-05-25T09:14:44Z","sha":"0c1e5b42","run_kind":"nightly","concurrency_warnings":149,"codeql_findings":0,"tsan_issues":null,"swiftlint_strict":46,"periphery_aggressive":0}
+{"ts":"2026-05-26T08:59:59Z","sha":"53705bc8","run_kind":"nightly","concurrency_warnings":14,"codeql_findings":0,"tsan_issues":null,"swiftlint_strict":47,"periphery_aggressive":0}
