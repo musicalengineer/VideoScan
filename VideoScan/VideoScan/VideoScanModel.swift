@@ -1972,14 +1972,16 @@ final class VideoScanModel: ObservableObject {
                 url: url,
                 prefetchToRAM: rootIsNetwork,
                 ramPath: ramMountPoint,
-                skipHashing: skipHashing
+                skipHashing: skipHashing,
+                scanRootPath: root
             )
         } else {
             rec = await self.probeFile(
                 url: url,
                 prefetchToRAM: rootIsNetwork,
                 ramPath: ramMountPoint,
-                skipHashing: skipHashing
+                skipHashing: skipHashing,
+                scanRootPath: root
             )
         }
         await MainActor.run {
@@ -2828,7 +2830,7 @@ final class VideoScanModel: ObservableObject {
     /// VolumeComparer `(filename, size)` fallback can still match it against
     /// other volumes — without that, every timed-out file would be flagged as
     /// "unique to this volume" in Compare & Rescue.
-    nonisolated func probeFileWithTimeout(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false) async -> VideoRecord {
+    nonisolated func probeFileWithTimeout(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false, scanRootPath: String? = nil) async -> VideoRecord {
         // Best-effort stat before the race. stat() is metadata-only and
         // usually fast even on SMB when content reads stall. We use this only
         // to populate the timeout record; probeFile re-fetches on its own
@@ -2841,7 +2843,7 @@ final class VideoScanModel: ObservableObject {
         do {
             return try await withThrowingTaskGroup(of: VideoRecord.self) { group in
                 group.addTask {
-                    await self.probeFile(url: url, prefetchToRAM: prefetchToRAM, ramPath: ramPath, skipHashing: skipHashing)
+                    await self.probeFile(url: url, prefetchToRAM: prefetchToRAM, ramPath: ramPath, skipHashing: skipHashing, scanRootPath: scanRootPath)
                 }
                 group.addTask {
                     try await Task.sleep(nanoseconds: self.probeTimeoutSeconds * 1_000_000_000)
@@ -2872,7 +2874,7 @@ final class VideoScanModel: ObservableObject {
     /// Probe a single file and return a populated VideoRecord.
     /// If prefetchToRAM is true and ramPath is available, copies the first 10MB
     /// to the RAM disk so ffprobe reads at memory speed instead of network speed.
-    nonisolated func probeFile(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false) async -> VideoRecord {
+    nonisolated func probeFile(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false, scanRootPath: String? = nil) async -> VideoRecord {
         let fm = FileManager.default
         let path = url.path
 
@@ -2911,7 +2913,7 @@ final class VideoScanModel: ObservableObject {
         // syscalls — cheap even when multiplied across thousands of hits.
         if let cached = metadataCache.lookup(path: path, fileSize: fileSize, modDate: modDate) {
             cached.wasCacheHit = true
-            cached.scanContext = ScanContext.capture(for: url)
+            cached.scanContext = ScanContext.capture(for: url, scanRootPath: scanRootPath)
             return cached
         }
 
@@ -2970,7 +2972,7 @@ final class VideoScanModel: ObservableObject {
         // Stamp scan-time provenance. Done after caching so the SQLite cache
         // schema stays stable — scanContext lives in catalog.json only and is
         // recaptured fresh on every scan.
-        rec.scanContext = ScanContext.capture(for: url)
+        rec.scanContext = ScanContext.capture(for: url, scanRootPath: scanRootPath)
         return rec
     }
 

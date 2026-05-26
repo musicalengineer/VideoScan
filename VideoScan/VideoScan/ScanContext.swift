@@ -42,6 +42,15 @@ struct ScanContext: Codable, Equatable {
     /// When the scan that produced this context ran.
     var scannedAt: Date?
 
+    /// When the scan target was a SUBFOLDER (not a whole volume), this is
+    /// the basename of that folder — e.g. "Movies" for /Volumes/X/Movies.
+    /// Empty when the scan target was the whole volume root.
+    ///
+    /// Lets the catalog UI disambiguate multiple scan targets with the same
+    /// folder name across different volumes ("RicksBackups › Movies" vs
+    /// "InternalRaid › Movies").
+    var scanRootLabel: String = ""
+
     /// `true` if this context has any provenance data at all. Useful for
     /// UI that wants to say "provenance not yet captured" for legacy
     /// records.
@@ -60,7 +69,7 @@ struct ScanContext: Codable, Equatable {
     // legacy `{}` blobs written before a field existed) decodes cleanly to
     // defaults. Mirrors the forward-compatible pattern used by VideoRecord.
     private enum CodingKeys: String, CodingKey {
-        case scanHost, volumeUUID, volumeMountType, volumeName, remoteServerName, scannedAt
+        case scanHost, volumeUUID, volumeMountType, volumeName, remoteServerName, scannedAt, scanRootLabel
     }
 
     init(from decoder: Decoder) throws {
@@ -71,6 +80,7 @@ struct ScanContext: Codable, Equatable {
         volumeName       = try c.decodeIfPresent(String.self, forKey: .volumeName) ?? ""
         remoteServerName = try c.decodeIfPresent(String.self, forKey: .remoteServerName) ?? ""
         scannedAt        = try c.decodeIfPresent(Date.self, forKey: .scannedAt)
+        scanRootLabel    = try c.decodeIfPresent(String.self, forKey: .scanRootLabel) ?? ""
     }
 
     func encode(to encoder: Encoder) throws {
@@ -81,6 +91,9 @@ struct ScanContext: Codable, Equatable {
         if !volumeName.isEmpty { try c.encode(volumeName, forKey: .volumeName) }
         if !remoteServerName.isEmpty { try c.encode(remoteServerName, forKey: .remoteServerName) }
         try c.encodeIfPresent(scannedAt, forKey: .scannedAt)
+        // Only emit scanRootLabel when populated — keeps snapshot deltas minimal
+        // for whole-volume scans (the common case).
+        if !scanRootLabel.isEmpty { try c.encode(scanRootLabel, forKey: .scanRootLabel) }
     }
 }
 
@@ -88,7 +101,14 @@ extension ScanContext {
     /// Capture provenance for a file URL at scan time. Callers should pass
     /// the real on-disk URL, not a RAM-disk prefetch path — the whole
     /// point is to tag where the file actually lives.
-    static func capture(for url: URL, now: Date = Date()) -> ScanContext {
+    ///
+    /// - Parameter scanRootPath: The scan target's `searchPath` (the folder
+    ///   the user pointed VideoScan at). When this is a subfolder of a
+    ///   volume — e.g. `/Volumes/MyBook/Movies` — its basename is stamped
+    ///   into `scanRootLabel` so the UI can disambiguate "Movies" between
+    ///   volumes. Pass `nil` to skip (callers that don't know the root, or
+    ///   backfill paths where the scan root is meaningless).
+    static func capture(for url: URL, scanRootPath: String? = nil, now: Date = Date()) -> ScanContext {
         var ctx = ScanContext()
         ctx.scanHost = CatalogHost.currentName
         ctx.scannedAt = now
@@ -105,6 +125,50 @@ extension ScanContext {
                 ctx.volumeName = name
             }
         }
+
+        // Stamp the scan-root label only when the scan target is a SUBFOLDER
+        // of a volume, not the volume root itself or "/" — those are
+        // already represented adequately by `volumeName`.
+        if let rootPath = scanRootPath,
+           let label = subfolderLabel(forScanRootPath: rootPath) {
+            ctx.scanRootLabel = label
+        }
         return ctx
+    }
+
+    /// Returns the basename of `scanRootPath` when it is a SUBFOLDER of a
+    /// volume (or a non-root path on the system disk). Returns `nil` when
+    /// the path is the whole-volume root (`/Volumes/<X>` or `/`) — those
+    /// cases need no disambiguation because `volumeName` already covers them.
+    ///
+    /// Examples:
+    ///   `/Volumes/MyBook`                  → nil      (whole volume)
+    ///   `/Volumes/MyBook/`                 → nil      (trailing slash)
+    ///   `/Volumes/MyBook/Movies`           → "Movies"
+    ///   `/Volumes/MyBook/Movies/2024`      → "2024"
+    ///   `/`                                → nil      (root)
+    ///   `/Users/rickb/Movies`              → "Movies"
+    ///   `""`                               → nil
+    static func subfolderLabel(forScanRootPath scanRootPath: String) -> String? {
+        // Strip trailing slashes so `/Volumes/X/` and `/Volumes/X` behave the
+        // same. Swift's `URL.standardizedFileURL` would do this too, but a
+        // small string trim is cheaper and doesn't touch the filesystem.
+        var path = scanRootPath
+        while path.count > 1 && path.hasSuffix("/") {
+            path.removeLast()
+        }
+        guard !path.isEmpty, path != "/" else { return nil }
+
+        let comps = (path as NSString).pathComponents
+        // /Volumes/<X>     → 3 comps ["/", "Volumes", "X"] — whole volume, no label
+        // /Volumes/<X>/<Y> → 4+ comps — subfolder, label = last component
+        if comps.count >= 2 && comps[1] == "Volumes" {
+            return comps.count >= 4 ? comps.last : nil
+        }
+        // For paths NOT under /Volumes (e.g. /Users/rickb/Movies), any non-root
+        // path is treated as a subfolder. The volume IS the system disk and
+        // its name ("Macintosh HD") doesn't naturally embed a useful tail, so
+        // exposing the folder name helps the UI either way.
+        return (path as NSString).lastPathComponent
     }
 }
