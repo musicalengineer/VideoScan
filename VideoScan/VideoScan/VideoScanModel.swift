@@ -357,8 +357,38 @@ final class VideoScanModel: ObservableObject {
 
     private var mountObservers: [NSObjectProtocol] = []
 
+    /// Synchronous mount-event handler factored out of `installVolumeMountObservers`
+    /// so unit tests can exercise the auto-add policy without juggling a real
+    /// NSNotificationCenter dispatch and Task hop. The observer block below
+    /// just calls this on the main actor.
+    ///
+    /// Strict-catalog policy: volumes are NEVER auto-added on mount. We only:
+    ///   1. Invalidate the reachability cache (drops 5s TTL of stale "offline").
+    ///   2. Refresh reachability on every existing target.
+    ///   3. Re-check reachability on any existing target whose searchPath sits
+    ///      under the newly mounted volume — load-bearing for USB/TB offline
+    ///      → online flip without waiting for TTL.
+    ///   4. Log a friendly note that the user can use Add Scan Target.
+    @MainActor
+    func handleVolumeMounted(at volumeURL: URL?) {
+        VolumeReachability.invalidateCache()
+        refreshTargetReachability()
+        if let url = volumeURL {
+            let volumeRoot = url.path
+            for t in scanTargets where t.searchPath.hasPrefix(volumeRoot) {
+                t.isReachable = VolumeReachability.isReachable(path: t.searchPath)
+            }
+            log("Volume mounted: \(url.lastPathComponent) (not auto-added — use Add Scan Target to catalog)")
+        }
+        notifyTargetsChanged()
+    }
+
     /// Listen for drive mount/unmount events so the Scan Target list can
-    /// flip its offline indicator without polling, and auto-add newly mounted volumes.
+    /// flip its offline indicator without polling. Strict catalog policy:
+    /// volumes are NEVER auto-added on mount. The user must explicitly add a
+    /// target via `addScanTarget()` (or via a successful scan establishing one).
+    /// This prevents random RAM disks, sparse images, and DMGs from polluting
+    /// the catalog target list.
     private func installVolumeMountObservers() {
         let nc = NSWorkspace.shared.notificationCenter
         let mount = nc.addObserver(
@@ -370,30 +400,7 @@ final class VideoScanModel: ObservableObject {
             // hopping to the main actor so we don't capture `note` itself.
             let volumeURL = note.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL
             Task { @MainActor in
-                guard let self else { return }
-                // Mount changes invalidate the per-volume reachability cache
-                // — without this, the catalog table would keep returning
-                // stale "offline" for the new mount until the 5s TTL expires.
-                VolumeReachability.invalidateCache()
-                self.refreshTargetReachability()
-                // Auto-add newly mounted volume as a scan target (skip RAM disk)
-                if let url = volumeURL {
-                    let path = url.path
-                    let volumeRoot = url.path
-                    for t in self.scanTargets where t.searchPath.hasPrefix(volumeRoot) {
-                        t.isReachable = VolumeReachability.isReachable(path: t.searchPath)
-                    }
-                    if !path.isEmpty,
-                       !url.lastPathComponent.hasPrefix("VideoScan_Temp"),
-                       self.scanTargets.contains(where: { $0.searchPath == path }) == false {
-                        let target = CatalogScanTarget(searchPath: path)
-                        target.isReachable = true
-                        self.scanTargets.append(target)
-                        self.persistScanTargets()
-                        self.log("Auto-added mounted volume: \(url.lastPathComponent)")
-                    }
-                }
-                self.notifyTargetsChanged()
+                self?.handleVolumeMounted(at: volumeURL)
             }
         }
         let unmount = nc.addObserver(
@@ -1707,6 +1714,41 @@ final class VideoScanModel: ObservableObject {
             }
             persistScanTargets()
         }
+    }
+
+    /// Number of scan targets that pass the "unscanned & idle" sweep.
+    /// Used by the UI to decide whether to surface the cleanup affordance.
+    var unscannedTargetCount: Int {
+        scanTargets.lazy.filter { Self.isUnscannedRemovable($0) }.count
+    }
+
+    /// Belt-and-suspenders predicate used by `cleanupUnscannedTargets` and the
+    /// UI count. Kept `static` so tests can exercise it directly and so it
+    /// stays in lock-step between the count badge and the actual removal.
+    static func isUnscannedRemovable(_ t: CatalogScanTarget) -> Bool {
+        if t.lastScannedDate != nil { return false }
+        if !t.status.isIdle { return false }
+        // Defensive against double-cleanup races and against the obvious noise
+        // case where XcodeRAM was somehow injected into scanTargets.
+        if t.searchPath.hasPrefix("/Volumes/XcodeRAM") { return false }
+        return true
+    }
+
+    /// Remove scan targets that have never been scanned successfully and
+    /// aren't currently doing anything. This is the manual escape hatch for
+    /// users whose target list got polluted by the old auto-add-on-mount
+    /// behavior. Returns the number of targets removed.
+    @discardableResult
+    func cleanupUnscannedTargets() -> Int {
+        // Swift's `filter` returns a new Array — equivalent to a C++
+        // std::copy_if into a fresh vector. No mutation of `scanTargets` yet.
+        let toRemove = scanTargets.filter { Self.isUnscannedRemovable($0) }
+        let removeIDs = Set(toRemove.map { $0.id })
+        scanTargets.removeAll { removeIDs.contains($0.id) }
+        persistScanTargets()
+        log("Cleaned up \(toRemove.count) unscanned scan target(s)")
+        notifyTargetsChanged()
+        return toRemove.count
     }
 
     /// Discover all mounted volumes (local + network) and return them grouped by type.
