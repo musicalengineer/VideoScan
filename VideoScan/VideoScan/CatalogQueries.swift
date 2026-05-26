@@ -97,6 +97,14 @@ nonisolated func pfTokenMatches(_ token: SearchToken, _ rec: VideoRecord) -> Boo
         // matches via Donna (detectedPeople) + "playing guitar" (sceneCaptions).
         // For v2 at >10k records, see docs/scene_captions_plan.md FTS5 plan.
         if rec.sceneCaptions.contains(where: { $0.text.lowercased().contains(n) }) { return true }
+        // Audio transcript search (Phase 1 — linear substring across the
+        // single transcript text blob). Same case-insensitive comparison
+        // and same hit semantics as sceneCaptions: a token matches if any
+        // text source contains it — caller doesn't distinguish "matched
+        // via caption" from "matched via transcript". For thousands of
+        // orphaned audio-only MXFs this turns Whisper output into a
+        // first-class search dimension.
+        if let t = rec.audioTranscript, t.lowercased().contains(n) { return true }
         if rec.avidClipName.lowercased().contains(n) { return true }
         if rec.videoCodec.lowercased().contains(n) { return true }
         if rec.audioCodec.lowercased().contains(n) { return true }
