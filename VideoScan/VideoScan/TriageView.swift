@@ -279,25 +279,34 @@ struct TriageView: View {
                     }
                     let split = VideoScanModel.splitByReachability(targets)
                     let bytesBefore = split.reachableBytes
-                    let result = model.deleteConfirmedJunk(targets, mode: mode)
-                    junkResult = result
-                    junkResultMode = mode
-                    let actionable = max(
-                        result.attempted - result.alreadyMissing - result.skippedOffline,
-                        0
-                    )
-                    junkResultBytesSucceeded = actionable > 0
-                        ? Int64(Double(bytesBefore) * Double(result.succeeded) / Double(actionable))
-                        : 0
-                    // SwiftUI only allows one sheet active per view at a
-                    // time. Flipping showJunkResultSheet true synchronously
-                    // here collides with the confirm sheet's dismiss
-                    // animation — the result sheet tries to present while
-                    // the confirm sheet is still on-screen → UI hangs
-                    // with a half-dismissed sheet stub. Defer just past
-                    // the dismiss animation window.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                        showJunkResultSheet = true
+                    // deleteConfirmedJunk is async — the disk loop runs
+                    // off the main thread so the UI stays responsive on
+                    // big batches. The onAct closure isn't async, so
+                    // wrap the await in a Task. The function is
+                    // @MainActor so the continuation lands back on main.
+                    Task {
+                        let result = await model.deleteConfirmedJunk(
+                            targets, mode: mode)
+                        junkResult = result
+                        junkResultMode = mode
+                        let actionable = max(
+                            result.attempted - result.alreadyMissing - result.skippedOffline,
+                            0
+                        )
+                        junkResultBytesSucceeded = actionable > 0
+                            ? Int64(Double(bytesBefore) * Double(result.succeeded) / Double(actionable))
+                            : 0
+                        // SwiftUI only allows one sheet active per view
+                        // at a time. Flipping showJunkResultSheet true
+                        // synchronously here collides with the confirm
+                        // sheet's dismiss animation — the result sheet
+                        // tries to present while the confirm sheet is
+                        // still on-screen → UI hangs with a
+                        // half-dismissed sheet stub. Defer just past
+                        // the dismiss animation window.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                            showJunkResultSheet = true
+                        }
                     }
                 }
             )
