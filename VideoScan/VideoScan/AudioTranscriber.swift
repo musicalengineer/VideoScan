@@ -212,23 +212,12 @@ struct MLXWhisperTranscriber: AudioTranscriber {
 // progress + transcript on stdout. Stdout/stderr are surfaced to
 // the app log for diagnostic context.
 
-/// Build a PATH string that prefixes the standard Homebrew prefixes
-/// onto whatever the parent process inherited. Exposed at file scope
-/// (rather than buried in `transcribe`) so a unit test can pin the
-/// ordering contract without spawning a real subprocess.
-///
-/// Order matters: `/opt/homebrew/bin` is checked first (Apple Silicon),
-/// then `/usr/local/bin` (Intel / older installs), then the inherited
-/// PATH. A nil/empty inherited PATH falls back to the POSIX default so
-/// we never produce a string with a trailing colon (which on some
-/// shells implicitly means "include cwd" — not what we want).
-func augmentedPathWithHomebrew(inheriting inheritedPath: String?) -> String {
-    let inherited: String = {
-        if let p = inheritedPath, !p.isEmpty { return p }
-        return "/usr/bin:/bin:/usr/sbin:/sbin"
-    }()
-    return "/opt/homebrew/bin:/usr/local/bin:" + inherited
-}
+// NOTE: `augmentedPathWithHomebrew(inheriting:)` used to live here.
+// It moved to SubprocessEnv.swift in fix/identify-family-path so
+// IdentifyFamilyModel (and any future Process()-launching code that
+// shells out to Homebrew tools) can share the same helper. Behavior
+// and ordering contract are unchanged — see SubprocessEnv.swift for
+// the doc comment.
 
 struct PythonSubprocessAudioTranscriber: AudioTranscriber {
 
