@@ -190,6 +190,11 @@ struct CatalogView: View {
     @State private var deleteVolumeCatalogTarget: CatalogScanTarget?
     /// Selected volume IDs in the scan volumes table.
     @State private var selectedVolumeIDs: Set<UUID> = []
+    /// Caption Videos orchestration state. Built lazily — the
+    /// orchestrator owns its own MLX model container so we don't want
+    /// to construct one until the user actually invokes the action.
+    @StateObject private var captionOrchestrator = CaptionOrchestrator()
+    @State private var showCaptionProgress = false
     /// Opens an independent resizable window keyed by CatalogInfoItem value.
     /// Defined as a `WindowGroup(for:)` scene in VideoScanApp.
     @Environment(\.openWindow) private var openWindow
@@ -385,6 +390,12 @@ struct CatalogView: View {
         }
         .sheet(isPresented: $showVolumeCompare) {
             VolumeCompareSheet(model: model)
+        }
+        .sheet(isPresented: $showCaptionProgress) {
+            CaptionProgressSheet(
+                orchestrator: captionOrchestrator,
+                isPresented: $showCaptionProgress
+            )
         }
         .alert("Delete Catalog", isPresented: $showDeleteAllCatalogConfirm) {
             Button("Delete All", role: .destructive) {
@@ -1210,6 +1221,36 @@ struct CatalogView: View {
                     Label("Verify Catalog", systemImage: "checkmark.shield")
                 }
                 .disabled(!first.status.isIdle)
+            }
+            if single {
+                // Caption Videos — sibling per-target action to "Find
+                // Person" (which lives on the People tab). Runs the VLM
+                // captioner over every cataloged video on this volume.
+                // Disabled when there are no eligible videos so the
+                // user gets a hint rather than a confusing no-op.
+                let captionableCount = model.records.filter { r in
+                    r.fullPath.hasPrefix(first.searchPath) &&
+                    (r.streamType == .videoAndAudio || r.streamType == .videoOnly)
+                }.count
+                Button(action: {
+                    showCaptionProgress = true
+                    Task {
+                        await captionOrchestrator.startCaptioning(target: first, model: model)
+                    }
+                }) {
+                    Label(
+                        captionableCount > 0
+                            ? "Caption Videos (\(captionableCount))"
+                            : "Caption Videos",
+                        systemImage: "text.viewfinder"
+                    )
+                }
+                .disabled(captionableCount == 0 || captionOrchestrator.currentStatus.isActive)
+                .help(
+                    captionableCount == 0
+                        ? "No video files on this volume — nothing to caption"
+                        : "Run the vision-language model on every video on this volume to generate scene captions"
+                )
             }
             if targets.count > 1 || (single && model.records.contains(where: { $0.scanContext.volumeName.isEmpty })) {
                 Button(action: { model.backfillAllProvenance() }) {
