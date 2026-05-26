@@ -877,14 +877,18 @@ struct CatalogContent: View {
             }
             .width(min: 180, ideal: 260)
 
-            TableColumn("Volume", value: \.volumeName) { rec in
-                Text(rec.volumeName)
+            // Sort by `displayVolumeLabel` so folder-scoped scans of the same
+            // folder name (e.g. multiple "Movies" subfolders across volumes)
+            // sort together under their owning volume. The label embeds the
+            // volume name as the prefix, so this preserves volume grouping.
+            TableColumn("Volume", value: \.displayVolumeLabel) { rec in
+                Text(rec.displayVolumeLabel)
                     .font(.system(.body, design: .monospaced))
                     .foregroundColor(.secondary)
                     .lineLimit(1)
                     .help(rec.fullPath)
             }
-            .width(min: 80, ideal: 120)
+            .width(min: 80, ideal: 160)
 
             TableColumn("Stream", value: \.streamTypeRaw) { rec in
                 let unpaired = rec.streamType.needsCorrelation && rec.pairedWith == nil
