@@ -15,3 +15,10 @@
 # ---- Apple MLX vision-language ----
 # Pulls mlx, mlx-lm, transformers, tokenizers, safetensors, pillow, etc.
 mlx-vlm
+
+# ---- Apple MLX speech-to-text (Phase 1 audio transcription) ----
+# Used by scripts/whisper_transcribe.py, invoked from the Swift app's
+# PythonSubprocessAudioTranscriber. Default model is
+# mlx-community/whisper-medium-mlx-q4 (~244 MB); downloaded on first
+# use into ~/.cache/huggingface.
+mlx-whisper

@@ -195,6 +195,29 @@ class VideoRecord: Identifiable, Codable {
     /// `sceneCaptionModel` for the "captioned 2026-05-22 with qwen2.5-vl-3b-4bit"
     /// provenance string.
     var sceneCaptionDate: Date?
+
+    // MARK: Audio transcript (Phase 1 — engine + data + search only)
+    //
+    // Single-line transcript field — Whisper produces a single text blob,
+    // not per-frame entries (unlike VLM captioning). If we ever want
+    // timestamped segments, that's a future schema change. The three
+    // fields below mirror the sceneCaption* shape for the same reasons:
+    // text + provenance model id + when. All optional / nil-by-default
+    // so legacy catalogs round-trip cleanly (decodeIfPresent ?? nil).
+    /// Full transcript of the audio track (audio-only files: entire
+    /// content; video+audio files: just the audio). Empty string is a
+    /// valid value meaning "ran transcription, found no speech" — that's
+    /// distinct from nil ("never transcribed").
+    var audioTranscript: String?
+    /// Provenance: which engine + model produced the transcript.
+    /// Suggested format e.g. "whisper-medium-mlx-q4", matches the
+    /// modelID returned by the `AudioTranscriber` implementation.
+    var audioTranscriptModel: String?
+    /// Wall-clock time the transcript was generated. Pair with
+    /// `audioTranscriptModel` for the "transcribed 2026-05-25 with
+    /// whisper-medium-mlx-q4" provenance string.
+    var audioTranscriptDate: Date?
+
     var combinedFromPairID: UUID?             // links back to source pair group
 
     /// Hostname of the machine that originally cataloged this record.
@@ -356,6 +379,7 @@ class VideoRecord: Identifiable, Codable {
         case junkScore, junkReasons
         case starRating, detectedPeople, suspectedPeople, combinedFromPairID
         case sceneCaptions, sceneCaptionModel, sceneCaptionDate
+        case audioTranscript, audioTranscriptModel, audioTranscriptDate
         case sourceHost
         case scanContext
         case purgedAt
@@ -433,6 +457,13 @@ class VideoRecord: Identifiable, Codable {
         sceneCaptions               = try c.decodeIfPresent([SceneCaption].self, forKey: .sceneCaptions) ?? []
         sceneCaptionModel           = try c.decodeIfPresent(String.self, forKey: .sceneCaptionModel)
         sceneCaptionDate            = try c.decodeIfPresent(Date.self, forKey: .sceneCaptionDate)
+        // Audio transcript fields — additive optional, same migration pattern
+        // as scene captions. Legacy catalogs (no audioTranscript* keys) come
+        // back with nil, transcribed records round-trip unchanged. No catalog
+        // version bump required (additive optionals only).
+        audioTranscript             = try c.decodeIfPresent(String.self, forKey: .audioTranscript)
+        audioTranscriptModel        = try c.decodeIfPresent(String.self, forKey: .audioTranscriptModel)
+        audioTranscriptDate         = try c.decodeIfPresent(Date.self, forKey: .audioTranscriptDate)
         combinedFromPairID          = try c.decodeIfPresent(UUID.self, forKey: .combinedFromPairID)
         scanContext                 = try c.decodeIfPresent(ScanContext.self, forKey: .scanContext) ?? ScanContext()
         // decodeIfPresent so legacy catalog.json files (no purgedAt key) round-
@@ -520,6 +551,12 @@ class VideoRecord: Identifiable, Codable {
         }
         try c.encodeIfPresent(sceneCaptionModel, forKey: .sceneCaptionModel)
         try c.encodeIfPresent(sceneCaptionDate, forKey: .sceneCaptionDate)
+        // Audio transcript: only write when something to write. Matches the
+        // sceneCaption* shape — keeps catalog.json deltas minimal for the
+        // (majority) of records that haven't been transcribed.
+        try c.encodeIfPresent(audioTranscript, forKey: .audioTranscript)
+        try c.encodeIfPresent(audioTranscriptModel, forKey: .audioTranscriptModel)
+        try c.encodeIfPresent(audioTranscriptDate, forKey: .audioTranscriptDate)
         if combinedFromPairID != nil {
             try c.encode(combinedFromPairID, forKey: .combinedFromPairID)
         }
