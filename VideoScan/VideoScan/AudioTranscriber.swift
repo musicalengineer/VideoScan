@@ -211,6 +211,25 @@ struct MLXWhisperTranscriber: AudioTranscriber {
 // temp file (path passed via --out) so we don't have to parse mixed
 // progress + transcript on stdout. Stdout/stderr are surfaced to
 // the app log for diagnostic context.
+
+/// Build a PATH string that prefixes the standard Homebrew prefixes
+/// onto whatever the parent process inherited. Exposed at file scope
+/// (rather than buried in `transcribe`) so a unit test can pin the
+/// ordering contract without spawning a real subprocess.
+///
+/// Order matters: `/opt/homebrew/bin` is checked first (Apple Silicon),
+/// then `/usr/local/bin` (Intel / older installs), then the inherited
+/// PATH. A nil/empty inherited PATH falls back to the POSIX default so
+/// we never produce a string with a trailing colon (which on some
+/// shells implicitly means "include cwd" — not what we want).
+func augmentedPathWithHomebrew(inheriting inheritedPath: String?) -> String {
+    let inherited: String = {
+        if let p = inheritedPath, !p.isEmpty { return p }
+        return "/usr/bin:/bin:/usr/sbin:/sbin"
+    }()
+    return "/opt/homebrew/bin:/usr/local/bin:" + inherited
+}
+
 struct PythonSubprocessAudioTranscriber: AudioTranscriber {
 
     let modelID: String = "python-whisper-medium-mlx-q4"
@@ -289,6 +308,17 @@ struct PythonSubprocessAudioTranscriber: AudioTranscriber {
         ]
         var env = ProcessInfo.processInfo.environment
         env["PYTHONUNBUFFERED"] = "1"
+        // mlx-whisper shells out to `ffmpeg` internally for audio decoding.
+        // When the app is launched from Xcode or Finder, the inherited PATH
+        // typically doesn't include /opt/homebrew/bin (or /usr/local/bin on
+        // Intel), so the Python child fails with `[Errno 2] No such file or
+        // directory: 'ffmpeg'`. Prepending Homebrew prefixes makes the
+        // lookup work regardless of how the parent app was launched.
+        // Hardcoded ≈ a #define in C — fine for this narrow fix; if we ever
+        // need a generic Homebrew-prefix detector we'll lift it then.
+        env["PATH"] = augmentedPathWithHomebrew(
+            inheriting: ProcessInfo.processInfo.environment["PATH"]
+        )
         proc.environment = env
 
         let stdoutPipe = Pipe()
