@@ -343,35 +343,44 @@ struct CatalogToolbar<Dashboard: View>: View {
                     // shouldn't show up in the "freed N GB" reading.
                     let split = VideoScanModel.splitByReachability(targets)
                     let bytesBefore = split.reachableBytes
-                    let result = model.deleteConfirmedJunk(targets, mode: mode)
-                    junkResult = result
-                    junkResultMode = mode
-                    // Only count the bytes that actually succeeded —
-                    // failed records weren't moved/removed; alreadyMissing
-                    // had zero bytes from our perspective (file was gone
-                    // before we touched it); skippedOffline ditto (we
-                    // never touched the disk). For accuracy we
-                    // approximate by scaling: succeeded over the
-                    // attempted-minus-noops denominator applied to the
-                    // reachable bytesBefore. Cleaner alternative would be
-                    // returning per-record bytes from the model; this
-                    // approximation is good enough for the result sheet's
-                    // human-readable summary and keeps the model API
-                    // narrow.
-                    let actionable = max(
-                        result.attempted - result.alreadyMissing - result.skippedOffline,
-                        0
-                    )
-                    junkResultBytesSucceeded = actionable > 0
-                        ? Int64(Double(bytesBefore) * Double(result.succeeded) / Double(actionable))
-                        : 0
-                    // Chained .sheet trap: flipping the result-sheet flag
-                    // synchronously collides with the confirm sheet's
-                    // dismiss animation — SwiftUI only allows one sheet
-                    // per view at a time. Defer just past the dismiss
-                    // animation window.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                        showJunkResultSheet = true
+                    // deleteConfirmedJunk is async — the disk loop runs
+                    // off the main thread so the UI stays responsive on
+                    // big batches. The onAct closure isn't async, so wrap
+                    // the await in a Task. The function is @MainActor so
+                    // the continuation lands back on main automatically.
+                    Task {
+                        let result = await model.deleteConfirmedJunk(
+                            targets, mode: mode)
+                        junkResult = result
+                        junkResultMode = mode
+                        // Only count the bytes that actually succeeded —
+                        // failed records weren't moved/removed;
+                        // alreadyMissing had zero bytes from our
+                        // perspective (file was gone before we touched
+                        // it); skippedOffline ditto (we never touched
+                        // the disk). For accuracy we approximate by
+                        // scaling: succeeded over the
+                        // attempted-minus-noops denominator applied to
+                        // the reachable bytesBefore. Cleaner alternative
+                        // would be returning per-record bytes from the
+                        // model; this approximation is good enough for
+                        // the result sheet's human-readable summary and
+                        // keeps the model API narrow.
+                        let actionable = max(
+                            result.attempted - result.alreadyMissing - result.skippedOffline,
+                            0
+                        )
+                        junkResultBytesSucceeded = actionable > 0
+                            ? Int64(Double(bytesBefore) * Double(result.succeeded) / Double(actionable))
+                            : 0
+                        // Chained .sheet trap: flipping the result-sheet
+                        // flag synchronously collides with the confirm
+                        // sheet's dismiss animation — SwiftUI only allows
+                        // one sheet per view at a time. Defer just past
+                        // the dismiss animation window.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                            showJunkResultSheet = true
+                        }
                     }
                 }
             )
