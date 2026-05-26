@@ -171,6 +171,13 @@ struct CatalogView: View {
     /// Persisted across launches like other catalog UI prefs.
     /// Default OFF — purged rows hidden until the user opts in.
     @AppStorage("catalogShowRemoved") private var showRemoved: Bool = false
+    /// Strict-catalog policy: scan targets that have never been scanned and
+    /// aren't currently doing anything are hidden from the Scan Volumes
+    /// table by default. The user opts in with a small toggle near the table.
+    /// `@AppStorage` ≈ a C++ singleton bool persisted via NSUserDefaults.
+    @AppStorage("catalogShowUnscannedTargets") private var showUnscannedTargets: Bool = false
+    /// Whether the "Clean up unscanned…" confirmation alert is showing.
+    @State private var showCleanupUnscannedConfirm = false
     @State private var combinePairItem: CombinePairItem?
     /// Set of scan-target searchPaths whose records the user wants to see in
     /// the catalog table. Derived from `selectedVolumeIDs` so that selecting
@@ -404,6 +411,16 @@ struct CatalogView: View {
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("This will delete all \(model.records.count) catalog records across every volume. The probe cache is unaffected.\n\nAre you sure?")
+        }
+        .alert("Clean up unscanned scan targets?", isPresented: $showCleanupUnscannedConfirm) {
+            Button("Remove", role: .destructive) {
+                let removed = model.cleanupUnscannedTargets()
+                model.log("User confirmed cleanup of \(removed) unscanned scan target(s)")
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            let count = model.unscannedTargetCount
+            Text("Remove \(count) scan target\(count == 1 ? "" : "s") that have never been scanned? You can always re-add them later via Add Scan Target. Existing catalog records are not affected.")
         }
         .alert("Delete Volume Catalog", isPresented: $showDeleteVolumeCatalogConfirm) {
             Button("Delete", role: .destructive) {
@@ -847,19 +864,42 @@ struct CatalogView: View {
         }
     }
 
+    /// Strict-catalog policy predicate. A target counts as "scanned" if either:
+    ///   - it has a successful `lastScannedDate`, OR
+    ///   - it isn't idle (currently scanning, paused mid-scan, waiting for the
+    ///     volume to come back, etc. — i.e. real work in flight).
+    /// Note: `CatalogTargetStatus.isIdle` is `true` for `.idle` and
+    /// `.resumable`. A resumable target with no last-scan date is treated as
+    /// unscanned here — that's intentional, it matches the cleanup predicate
+    /// in `VideoScanModel.isUnscannedRemovable`.
+    private func hasBeenScanned(_ t: CatalogScanTarget) -> Bool {
+        if t.lastScannedDate != nil { return true }
+        if !t.status.isIdle { return true }
+        return false
+    }
+
     /// Targets that pass the current Volume Options filters.
-    /// Always hides the RAM disk (VideoScan_Temp).
+    /// Always hides the RAM disk (VideoScan_Temp). Also hides "never scanned"
+    /// targets unless `showUnscannedTargets` is on — strict-catalog policy.
     private var filteredScanTargets: [CatalogScanTarget] {
         let base = model.scanTargets.filter {
             !$0.searchPath.contains("VideoScan_Temp")
         }
 
-        // "All Ever Scanned" = show everything, no filtering
+        // Strict-catalog default: hide targets that have never been scanned.
+        // The user can flip the toggle to see the full list (useful right
+        // after adding new targets that haven't been scanned yet).
+        let scopedToScanned = showUnscannedTargets
+            ? base
+            : base.filter { hasBeenScanned($0) }
+
+        // "All Ever Scanned" = show everything within the strict-catalog scope,
+        // no further user-filter narrowing.
         if volumeFilters.contains(.allScanned) {
-            return base
+            return scopedToScanned
         }
 
-        return base.filter { target in
+        return scopedToScanned.filter { target in
             let path = target.searchPath
             let hasRecords = model.records.contains { $0.fullPath.hasPrefix(path) }
             let hasBadFiles = model.records.contains {
@@ -926,6 +966,34 @@ struct CatalogView: View {
                 .menuStyle(.borderlessButton)
                 .fixedSize()
                 .help("Filter which volumes appear in the list")
+
+                // Strict-catalog: hide-by-default + opt-in toggle. Pattern
+                // mirrors TriageView's "Online volumes only" switch — small
+                // control, AppStorage-backed, lives next to the table it
+                // governs.
+                Toggle(isOn: $showUnscannedTargets) {
+                    Label("Show unscanned", systemImage: "eye")
+                        .labelStyle(.titleAndIcon)
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .help("Show scan targets that haven't been scanned yet. Off by default — strict catalog view.")
+
+                // One-time cleanup affordance for users whose target list got
+                // polluted by the old auto-add-on-mount behavior. Only visible
+                // when there's actually something to clean up — mirrors the
+                // Delete Junk pattern that only surfaces when count > 0.
+                if model.unscannedTargetCount > 0 {
+                    Button(role: .destructive, action: {
+                        showCleanupUnscannedConfirm = true
+                    }) {
+                        Label("Clean up unscanned… (\(model.unscannedTargetCount))",
+                              systemImage: "trash.slash")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .help("Remove scan targets that have never been scanned and aren't currently active. Doesn't touch catalog records.")
+                }
 
                 Menu {
                     Section("Scan") {
