@@ -315,6 +315,28 @@ class VideoRecord: Identifiable, Codable {
         return VolumeReachability.volumeName(forPath: fullPath)
     }
 
+    /// Disambiguated label for the catalog "Volume" column. Returns just
+    /// the volume name for whole-volume scans, or "Volume › Folder" for
+    /// folder scans. The "›" U+203A SINGLE RIGHT-POINTING ANGLE QUOTATION
+    /// MARK reads cleaner than "/" and matches the macOS breadcrumb idiom.
+    ///
+    /// Legacy records (no `scanRootLabel`) read the same as before — just
+    /// the volume name. Only newly scanned or re-scanned subfolder records
+    /// pick up the combined form.
+    var displayVolumeLabel: String {
+        let vol = volumeName
+        let root = scanContext.scanRootLabel
+        // Defensive guards:
+        //   - empty root  → whole-volume scan or legacy record → vol alone
+        //   - root == vol → degenerate case (scan root happened to equal the
+        //                   volume name, e.g. capture stamped the volume root)
+        //                   → vol alone, no " › " duplication
+        //   - empty vol   → fall back to root so the column is never blank
+        guard !root.isEmpty, root != vol else { return vol }
+        guard !vol.isEmpty else { return root }
+        return "\(vol) › \(root)"
+    }
+
     /// Filename tint color based on archival/disposition status.
     /// Priority: damaged (red) → junk (gray) → archived (green) →
     /// master (blue) → in-progress (orange) → flagged (yellow) → default (primary).
