@@ -18,6 +18,11 @@ import Foundation
 //   - Legacy catalog.json (no lifecycleStage key) still decodes as
 //     .cataloged.
 //
+// 2026-05-26 async refactor (fix/junk-delete-async):
+//   - deleteConfirmedJunk is now `async` so the FileManager loop can
+//     hop off @MainActor onto a detached task. Every test that calls it
+//     gains `async` + `await`. The result contract is unchanged.
+//
 // Tests own their tmp directory and clean up on exit. CatalogStore
 // short-circuits I/O under tests, so we never touch user catalog.json.
 
@@ -62,7 +67,7 @@ struct JunkDeletionTests {
     // stamps purgedAt + lifecycleStage = .trashed on every record, and
     // leaves fullPath unchanged (user can still see where the file used
     // to live in the Show Removed view).
-    @Test func deleteToTrash_movesFilesAndStampsRecords() throws {
+    @Test func deleteToTrash_movesFilesAndStampsRecords() async throws {
         let tmp = try Self.makeTmpDir(label: "trash-happy")
         defer { try? FileManager.default.removeItem(at: tmp) }
 
@@ -75,7 +80,7 @@ struct JunkDeletionTests {
         model.records = recs
 
         let before = Date()
-        let result = model.deleteConfirmedJunk(recs, mode: .toTrash)
+        let result = await model.deleteConfirmedJunk(recs, mode: .toTrash)
         let after = Date()
 
         #expect(result.attempted == 3, "All 3 records should be attempted")
@@ -106,7 +111,7 @@ struct JunkDeletionTests {
 
     // MARK: - 2. Positive: removeItem (permanent) path
 
-    @Test func deletePermanent_removesFilesAndStampsRecords() throws {
+    @Test func deletePermanent_removesFilesAndStampsRecords() async throws {
         let tmp = try Self.makeTmpDir(label: "perm-happy")
         defer { try? FileManager.default.removeItem(at: tmp) }
 
@@ -118,7 +123,7 @@ struct JunkDeletionTests {
         let model = VideoScanModel()
         model.records = recs
 
-        let result = model.deleteConfirmedJunk(recs, mode: .permanent)
+        let result = await model.deleteConfirmedJunk(recs, mode: .permanent)
 
         #expect(result.attempted == 3)
         #expect(result.succeeded == 3)
@@ -223,7 +228,7 @@ struct JunkDeletionTests {
     // as alreadyMissing, still stamp purgedAt + lifecycleStage so the
     // row doesn't keep showing as active confirmed-junk on the next
     // pass, and do not raise an error.
-    @Test func deletes_recordsMissingFileAsAlreadyMissing() throws {
+    @Test func deletes_recordsMissingFileAsAlreadyMissing() async throws {
         let tmp = try Self.makeTmpDir(label: "missing")
         defer { try? FileManager.default.removeItem(at: tmp) }
 
@@ -236,7 +241,7 @@ struct JunkDeletionTests {
         let model = VideoScanModel()
         model.records = [rec]
 
-        let result = model.deleteConfirmedJunk([rec], mode: .toTrash)
+        let result = await model.deleteConfirmedJunk([rec], mode: .toTrash)
 
         #expect(result.attempted == 1)
         #expect(result.succeeded == 0,
@@ -253,7 +258,7 @@ struct JunkDeletionTests {
 
     // Same idea but exercising the .permanent branch's missing-file
     // handling — the lifecycleStage should follow the requested mode.
-    @Test func deletePermanent_recordsMissingFileAsAlreadyMissingWithDeletedStage() throws {
+    @Test func deletePermanent_recordsMissingFileAsAlreadyMissingWithDeletedStage() async throws {
         let tmp = try Self.makeTmpDir(label: "missing-perm")
         defer { try? FileManager.default.removeItem(at: tmp) }
 
@@ -262,7 +267,7 @@ struct JunkDeletionTests {
         let model = VideoScanModel()
         model.records = [rec]
 
-        let result = model.deleteConfirmedJunk([rec], mode: .permanent)
+        let result = await model.deleteConfirmedJunk([rec], mode: .permanent)
 
         #expect(result.alreadyMissing == 1)
         #expect(result.failed.isEmpty)
@@ -286,7 +291,7 @@ struct JunkDeletionTests {
     // permissions to 0o555 (read+execute, no write), and try to trash
     // it. macOS's APFS denies trashItem under that scenario with EACCES.
     // We restore permissions in defer so cleanup works.
-    @Test func deletes_capturesFileManagerErrorsPerRecord() throws {
+    @Test func deletes_capturesFileManagerErrorsPerRecord() async throws {
         let tmp = try Self.makeTmpDir(label: "permerror")
         defer {
             // Restore perms before cleanup so removeItem(at: tmp) works.
@@ -321,8 +326,8 @@ struct JunkDeletionTests {
         let model = VideoScanModel()
         model.records = [okRec, lockedRec]
 
-        let result = model.deleteConfirmedJunk([okRec, lockedRec],
-                                               mode: .permanent)
+        let result = await model.deleteConfirmedJunk([okRec, lockedRec],
+                                                     mode: .permanent)
 
         #expect(result.attempted == 2)
         // The unwritable-parent test is best-effort: on some filesystems
@@ -345,7 +350,7 @@ struct JunkDeletionTests {
                     "Failure entry should reference the locked record, not the OK one")
             // And the locked record must NOT be soft-deleted (the file
             // is still there; the row should remain active so the user
-            // can retry).
+            // can retry or inspect).
             #expect(lockedRec.purgedAt == nil,
                     "Failed record must NOT be stamped with purgedAt — file is still on disk")
             #expect(lockedRec.lifecycleStage == .cataloged,
@@ -359,7 +364,7 @@ struct JunkDeletionTests {
     // outcomes and the result counts must remain consistent. (This test
     // pairs succeeded + alreadyMissing; the failed case is exercised in
     // test 6 above.)
-    @Test func deletes_mixedBatchSumsCorrectly() throws {
+    @Test func deletes_mixedBatchSumsCorrectly() async throws {
         let tmp = try Self.makeTmpDir(label: "mixed")
         defer { try? FileManager.default.removeItem(at: tmp) }
 
@@ -379,7 +384,7 @@ struct JunkDeletionTests {
         let all = realRecs + ghostRecs
         model.records = all
 
-        let result = model.deleteConfirmedJunk(all, mode: .toTrash)
+        let result = await model.deleteConfirmedJunk(all, mode: .toTrash)
 
         #expect(result.attempted == 4)
         #expect(result.succeeded == 2,
@@ -399,11 +404,11 @@ struct JunkDeletionTests {
 
     // MARK: - 8. Edge: empty selection → no-op
 
-    @Test func deletes_emptySelectionReturnsZeroResult() {
+    @Test func deletes_emptySelectionReturnsZeroResult() async {
         let model = VideoScanModel()
         model.records = []
 
-        let result = model.deleteConfirmedJunk([], mode: .toTrash)
+        let result = await model.deleteConfirmedJunk([], mode: .toTrash)
 
         #expect(result.attempted == 0)
         #expect(result.succeeded == 0)
@@ -431,7 +436,7 @@ struct JunkDeletionTests {
     // The /Volumes/<name> prefix is what VolumeReachability uses to key
     // its cache; a guaranteed-not-present volume name returns false from
     // isReachable() without ever touching the actual file path.
-    @Test func skippedOfflineIsCountedSeparately() {
+    @Test func skippedOfflineIsCountedSeparately() async {
         VolumeReachability.invalidateCache()
         let fakeVol = "NonexistentVolume-\(UUID().uuidString)"
         let rec = VideoRecord()
@@ -444,7 +449,7 @@ struct JunkDeletionTests {
         let model = VideoScanModel()
         model.records = [rec]
 
-        let result = model.deleteConfirmedJunk([rec], mode: .toTrash)
+        let result = await model.deleteConfirmedJunk([rec], mode: .toTrash)
 
         #expect(result.attempted == 1)
         #expect(result.skippedOffline == 1,
@@ -476,7 +481,7 @@ struct JunkDeletionTests {
     //   - offline              → skippedOffline
     //   - reachable + permission-denied parent → failed
     // (The last bucket inherits the best-effort caveat from test 6.)
-    @Test func mixedBatchReportsAllBuckets() throws {
+    @Test func mixedBatchReportsAllBuckets() async throws {
         VolumeReachability.invalidateCache()
         let tmp = try Self.makeTmpDir(label: "mixed-buckets")
         defer {
@@ -523,7 +528,7 @@ struct JunkDeletionTests {
         let model = VideoScanModel()
         model.records = all
 
-        let result = model.deleteConfirmedJunk(all, mode: .permanent)
+        let result = await model.deleteConfirmedJunk(all, mode: .permanent)
 
         #expect(result.attempted == 4)
         // Hard contracts (independent of the lenient-filesystem caveat):
@@ -615,5 +620,99 @@ struct JunkDeletionTests {
                 "Already-purged confirmed-junk must NOT be in confirmedJunkRecords (already actioned)")
         #expect(!cjIDs.contains(unreviewed.id),
                 "Unreviewed must NOT be in confirmedJunkRecords")
+    }
+
+    // MARK: - 13. Main thread stays responsive during deletion (async refactor)
+    //
+    // regression: fix/junk-delete-async (2026-05-26) — the FileManager
+    // loop used to run synchronously on @MainActor and pin the UI for
+    // many seconds on batches of a few hundred files. After the refactor
+    // the disk pass runs on a detached task, so the main thread MUST be
+    // able to service other @MainActor work concurrently while
+    // deleteConfirmedJunk is in flight.
+    //
+    // Mechanism: kick off the deletion as a Task, then race a "tick"
+    // Task against it. The tick Task schedules a long sequence of cheap
+    // @MainActor steps (via Task.yield()) and records how many it
+    // completes before the deletion finishes. If main is blocked, the
+    // tick count is small (or zero). If main is responsive — i.e. the
+    // detached FileManager loop has correctly hopped off main — the tick
+    // count is large.
+    //
+    // We use a generously-sized batch (200 fixture files) so on the
+    // pre-refactor sync impl this test would visibly fail: the disk
+    // loop would block main for seconds and zero (or near-zero) ticks
+    // would land. On the async impl ticks fire freely while the
+    // detached task chews through trashItem calls.
+    //
+    // Hard assertion: we expect at least 20 successful main-thread
+    // yields during the deletion. That's a conservative lower bound —
+    // local runs see hundreds of ticks — but it's high enough above
+    // zero that a regression to a synchronous loop would trip it.
+    @Test func mainThreadStaysResponsiveDuringDeletion() async throws {
+        let tmp = try Self.makeTmpDir(label: "responsive")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        // 200 fixture files — big enough that a sync trashItem loop
+        // pins main for several seconds on APFS. The async impl should
+        // chew through them without blocking.
+        let count = 200
+        let urls = (0..<count).map {
+            tmp.appendingPathComponent("resp_\($0).mov")
+        }
+        for url in urls { try Self.writeFixture(at: url) }
+        let recs = urls.map { Self.record(at: $0) }
+
+        let model = VideoScanModel()
+        model.records = recs
+
+        // Tick counter — incremented on @MainActor from a parallel Task
+        // that yields back to the scheduler between increments. If main
+        // is blocked, the yields don't get a chance to resume; if main
+        // is free, the counter climbs.
+        //
+        // We store the counter in a single-element class so both Tasks
+        // can mutate it; the @MainActor isolation comes from the Task's
+        // own context (we explicitly tag the ticker Task @MainActor).
+        final class TickCounter { var value: Int = 0 }
+        let counter = TickCounter()
+        // Set when the deletion Task finishes — the ticker stops then.
+        final class DoneFlag { var done: Bool = false }
+        let flag = DoneFlag()
+
+        // Tick task: stay on @MainActor, repeatedly yield + increment
+        // until the deletion finishes. Each Task.yield() returns
+        // control to the scheduler; the deletion's await-on-detached
+        // task ALSO yields control, so the two interleave freely if
+        // the main thread isn't blocked.
+        let ticker = Task { @MainActor in
+            while !flag.done {
+                counter.value += 1
+                await Task.yield()
+            }
+        }
+
+        // Kick the deletion and wait for it. Inside this Task, the
+        // detached FileManager loop runs off-main; the await suspends
+        // (doesn't block) this Task until done, leaving main free for
+        // the ticker to run.
+        let result = await model.deleteConfirmedJunk(recs, mode: .toTrash)
+        flag.done = true
+        // Let the ticker observe `done` and exit cleanly.
+        _ = await ticker.value
+
+        // Sanity: the deletion did its job.
+        #expect(result.attempted == count)
+        #expect(result.succeeded == count,
+                "All fixture files should be trashed")
+
+        // The actual responsiveness contract. On the pre-refactor sync
+        // impl, ticks would land near zero (main was pinned in the
+        // FileManager loop). On the async impl we see hundreds. 20 is
+        // a deliberately conservative lower bound — high enough above
+        // zero to catch a regression, low enough that a slow CI runner
+        // still passes.
+        #expect(counter.value >= 20,
+                "Main thread should service at least 20 ticks during a 200-file deletion. Counter was \(counter.value); a regression to a synchronous on-main FileManager loop would drop this near zero.")
     }
 }
