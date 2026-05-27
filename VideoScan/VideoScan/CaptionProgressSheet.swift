@@ -34,7 +34,7 @@ struct CaptionProgressSheet: View {
     /// when the target's path is opaque (mounted at /Volumes/...).
     private var titleLabel: String {
         if let t = orchestrator.currentTarget {
-            return "Captioning " + VolumeReachability.volumeName(forPath: t.searchPath)
+            return "Captioning " + VolumeReachability.displayLabel(forPath: t.searchPath)
         }
         return "Captioning"
     }

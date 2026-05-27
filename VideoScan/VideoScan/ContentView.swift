@@ -432,7 +432,7 @@ struct CatalogView: View {
         } message: {
             if let target = deleteVolumeCatalogTarget {
                 let count = model.records.filter { $0.fullPath.hasPrefix(target.searchPath) }.count
-                Text("Delete \(count) catalog record(s) for \(VolumeReachability.volumeName(forPath: target.searchPath))?\n\nThe probe cache is unaffected — a re-scan will replay quickly from cache.")
+                Text("Delete \(count) catalog record(s) for \(VolumeReachability.displayLabel(forPath: target.searchPath))?\n\nThe probe cache is unaffected — a re-scan will replay quickly from cache.")
             } else {
                 Text("Delete catalog records for this volume?")
             }
@@ -577,7 +577,7 @@ struct CatalogView: View {
     /// is the volume path, so repeat invocations focus the existing window
     /// rather than stacking duplicates.
     private func showCatalogInfo(for target: CatalogScanTarget) {
-        let volName = VolumeReachability.volumeName(forPath: target.searchPath)
+        let volName = VolumeReachability.displayLabel(forPath: target.searchPath)
         let recs = model.records.filter { $0.fullPath.hasPrefix(target.searchPath) }
         let item = CatalogInfoItem(
             volumePath: target.searchPath,
@@ -831,7 +831,7 @@ struct CatalogView: View {
 
             return VolumeRow(
                 id: target.id,
-                name: VolumeReachability.volumeName(forPath: target.searchPath),
+                name: VolumeReachability.displayLabel(forPath: target.searchPath),
                 path: target.searchPath,
                 status: target.status,
                 uiStatus: uiStatus,
@@ -1010,7 +1010,7 @@ struct CatalogView: View {
                                     model.startTarget(target)
                                 }
                             }) {
-                                Label(VolumeReachability.volumeName(forPath: target.searchPath),
+                                Label(VolumeReachability.displayLabel(forPath: target.searchPath),
                                       systemImage: target.status == .resumable ? "arrow.clockwise" : "play.fill")
                             }
                         }
@@ -1025,7 +1025,7 @@ struct CatalogView: View {
                                 deleteVolumeCatalogTarget = target
                                 showDeleteVolumeCatalogConfirm = true
                             }) {
-                                Label("\(VolumeReachability.volumeName(forPath: target.searchPath)) (\(count))",
+                                Label("\(VolumeReachability.displayLabel(forPath: target.searchPath)) (\(count))",
                                       systemImage: "trash")
                             }
                         }

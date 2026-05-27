@@ -139,7 +139,7 @@ struct ArchiveView: View {
     @Environment(\.openWindow) private var openWindow
 
     private func volumeRoleRow(_ target: CatalogScanTarget) -> some View {
-        let name = VolumeReachability.volumeName(forPath: target.searchPath)
+        let name = VolumeReachability.displayLabel(forPath: target.searchPath)
         let fileCount = model.records.filter { $0.fullPath.hasPrefix(target.searchPath) }.count
 
         return HStack(spacing: 6) {

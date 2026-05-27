@@ -275,7 +275,7 @@ extension PersonFinderModel {
         // diagnosis. startJobAfterLoad still re-checks as a belt-and-suspenders
         // guard against the (rare) volume-goes-offline-mid-load race.
         if !VolumeReachability.isReachable(path: job.searchPath) {
-            let volumeName = VolumeReachability.volumeName(forPath: job.searchPath)
+            let volumeName = VolumeReachability.displayLabel(forPath: job.searchPath)
             let msg = "⚠ Volume \"\(volumeName)\" is offline. Mount it and try again."
             job.appendLog(msg)
             osLog.error("startJob bailed: volume offline (\(job.searchPath, privacy: .public))")
@@ -334,7 +334,7 @@ extension PersonFinderModel {
         // external drive. Without this check, findVideos returns 0 and the
         // user gets a confusing "No videos found" instead of "Volume offline."
         if !VolumeReachability.isReachable(path: job.searchPath) {
-            let volumeName = VolumeReachability.volumeName(forPath: job.searchPath)
+            let volumeName = VolumeReachability.displayLabel(forPath: job.searchPath)
             let msg = "⚠ Volume \"\(volumeName)\" is offline. Mount it and try again."
             job.appendLog(msg)
             osLog.error("runJob bailed: volume offline (\(job.searchPath, privacy: .public))")
@@ -1035,7 +1035,7 @@ extension PersonFinderModel {
                 let elapsedMin = Int(job.elapsedSecs) / 60
                 let elapsedSec = Int(job.elapsedSecs) % 60
                 let elapsed = "\(elapsedMin)m \(elapsedSec)s"
-                let volumeName = VolumeReachability.volumeName(forPath: job.searchPath)
+                let volumeName = VolumeReachability.displayLabel(forPath: job.searchPath)
                 let onVol = volumeName.isEmpty ? "" : " on \(volumeName)"
                 // displayName drops the parenthetical descriptor — just
                 // "Vision" / "ArcFace" / "dlib" / "Hybrid". Matches the UI

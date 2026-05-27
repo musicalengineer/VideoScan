@@ -316,9 +316,10 @@ class VideoRecord: Identifiable, Codable {
     }
 
     /// Disambiguated label for the catalog "Volume" column. Returns just
-    /// the volume name for whole-volume scans, or "Volume › Folder" for
-    /// folder scans. The "›" U+203A SINGLE RIGHT-POINTING ANGLE QUOTATION
-    /// MARK reads cleaner than "/" and matches the macOS breadcrumb idiom.
+    /// the volume name for whole-volume scans, or "Volume > Folder" for
+    /// folder scans. The " > " ASCII breadcrumb reads naturally and is
+    /// trivially typeable/searchable — used everywhere subfolder scans need
+    /// volume context (catalog column, inspector, scan-target menus).
     ///
     /// Legacy records (no `scanRootLabel`) read the same as before — just
     /// the volume name. Only newly scanned or re-scanned subfolder records
@@ -330,11 +331,11 @@ class VideoRecord: Identifiable, Codable {
         //   - empty root  → whole-volume scan or legacy record → vol alone
         //   - root == vol → degenerate case (scan root happened to equal the
         //                   volume name, e.g. capture stamped the volume root)
-        //                   → vol alone, no " › " duplication
+        //                   → vol alone, no " > " duplication
         //   - empty vol   → fall back to root so the column is never blank
         guard !root.isEmpty, root != vol else { return vol }
         guard !vol.isEmpty else { return root }
-        return "\(vol) › \(root)"
+        return "\(vol) > \(root)"
     }
 
     /// Filename tint color based on archival/disposition status.
