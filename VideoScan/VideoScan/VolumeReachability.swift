@@ -202,4 +202,56 @@ enum VolumeReachability {
         }
         return (path as NSString).deletingLastPathComponent
     }
+
+    /// Disambiguating display label for any path: volume name alone for
+    /// whole-volume scans, "Volume > Folder" for subfolder scans. Mirrors
+    /// `VideoRecord.displayVolumeLabel` for paths that don't have a captured
+    /// scan context yet — scan targets, menu items, sidebar entries.
+    ///
+    /// Resolves the volume name from `URL.resourceValues(forKeys:
+    /// [.volumeNameKey])` when the path is reachable — that's the OS's
+    /// user-visible volume name ("Macintosh HD", "M4drive", "MyBook3Terabytes").
+    /// When the path is offline or URLResourceValues fails, falls back to
+    /// `volumeName(forPath:)`'s path-string heuristic.
+    ///
+    /// The subfolder portion comes from `ScanContext.subfolderLabel` — nil
+    /// for volume roots, the last component otherwise. Same composition
+    /// rules as `displayVolumeLabel`:
+    ///   - empty folder → just the volume name
+    ///   - folder == volume name → just the volume (no " > " duplication)
+    ///   - empty volume → fall back to the folder name
+    ///
+    /// Examples (assuming a boot disk named "M4drive"):
+    ///   "/Volumes/MyBook"               → "MyBook"
+    ///   "/Volumes/M4drive/rickb"        → "M4drive > rickb"
+    ///   "/Users/rickb/Movies"           → "M4drive > Movies"
+    ///   "/Users/rickb"                  → "M4drive > rickb"
+    ///   "/"                             → "" (no useful label)
+    ///
+    /// Callers that need the raw path-string label (for legacy-record
+    /// fallbacks, internal logic, or "is this duplicate on the same
+    /// volume" comparisons) should keep using `volumeName(forPath:)`.
+    static func displayLabel(forPath path: String) -> String {
+        let vol = resolvedVolumeName(forPath: path)
+        let folder = ScanContext.subfolderLabel(forScanRootPath: path) ?? ""
+        if folder.isEmpty || folder == vol {
+            return vol
+        }
+        if vol.isEmpty {
+            return folder
+        }
+        return "\(vol) > \(folder)"
+    }
+
+    /// Volume name from URLResourceValues when available, with fallback to
+    /// the path-string heuristic. Used by `displayLabel(forPath:)`.
+    private static func resolvedVolumeName(forPath path: String) -> String {
+        guard !path.isEmpty else { return "" }
+        let url = URL(fileURLWithPath: path)
+        if let vals = try? url.resourceValues(forKeys: [.volumeNameKey]),
+           let name = vals.volumeName, !name.isEmpty {
+            return name
+        }
+        return volumeName(forPath: path)
+    }
 }

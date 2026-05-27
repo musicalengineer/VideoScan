@@ -47,8 +47,8 @@ struct ScanContext: Codable, Equatable {
     /// Empty when the scan target was the whole volume root.
     ///
     /// Lets the catalog UI disambiguate multiple scan targets with the same
-    /// folder name across different volumes ("RicksBackups › Movies" vs
-    /// "InternalRaid › Movies").
+    /// folder name across different volumes ("RicksBackups > Movies" vs
+    /// "InternalRaid > Movies").
     var scanRootLabel: String = ""
 
     /// `true` if this context has any provenance data at all. Useful for

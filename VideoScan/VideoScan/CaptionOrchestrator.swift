@@ -151,7 +151,7 @@ final class CaptionOrchestrator: ObservableObject {
         }
 
         captionOrchLog.info("CaptionOrchestrator starting: target=\(targetPrefix, privacy: .public), candidates=\(candidates.count), engine=\(runner.modelID, privacy: .public), force=\(force)")
-        appLog.write("Caption Videos: starting \(candidates.count) candidate(s) on \(VolumeReachability.volumeName(forPath: targetPrefix)) with \(runner.modelID)")
+        appLog.write("Caption Videos: starting \(candidates.count) candidate(s) on \(VolumeReachability.displayLabel(forPath: targetPrefix)) with \(runner.modelID)")
 
         activeTask = Task { [weak self] in
             await self?.runBatch(

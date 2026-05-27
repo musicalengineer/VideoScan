@@ -1088,7 +1088,7 @@ struct CatalogContent: View {
 
                                 if !onlineMatches.isEmpty {
                                     let byVolume = Dictionary(grouping: onlineMatches) {
-                                        VolumeReachability.volumeName(forPath: $0.fullPath)
+                                        VolumeReachability.displayLabel(forPath: $0.fullPath)
                                     }
                                     Menu("Find Online Copy (\(onlineMatches.count))") {
                                         ForEach(byVolume.keys.sorted(), id: \.self) { vol in
@@ -1115,7 +1115,7 @@ struct CatalogContent: View {
                                             selectedIDs = [dup.id]
                                             onSelect(dup.id)
                                         } label: {
-                                            let vol = VolumeReachability.volumeName(forPath: dup.fullPath)
+                                            let vol = VolumeReachability.displayLabel(forPath: dup.fullPath)
                                             Text("\(dup.filename) — \(vol)\(online ? "" : " (offline)")")
                                         }
                                     }
@@ -1224,7 +1224,7 @@ struct CatalogContent: View {
                                 Image(systemName: "externaldrive.fill")
                                     .font(.system(size: 14))
                                     .foregroundColor(.accentColor)
-                                Text(VolumeReachability.volumeName(forPath: rec.fullPath))
+                                Text(VolumeReachability.displayLabel(forPath: rec.fullPath))
                                     .font(.system(size: 16, weight: .bold))
                                     .foregroundColor(.primary)
                                     .lineLimit(1)
@@ -1568,7 +1568,7 @@ struct InspectorPanel: View {
                         }
                         // Volume name — prominent.
                         // Use `displayVolumeLabel` so folder scans show as
-                        // "Volume › Folder" (e.g. "M4drive › rickb"), matching
+                        // "Volume > Folder" (e.g. "M4drive > rickb"), matching
                         // the catalog table's Volume column. The old
                         // VolumeReachability.volumeName(forPath:) helper
                         // collapses any "/Users/<X>/..." path to "<X>",
@@ -1859,7 +1859,7 @@ struct InspectorPanel: View {
         // Header
         lines.append(rec.filename)
         lines.append("  Stream Type: \(rec.streamTypeRaw)")
-        lines.append("  Volume: \(VolumeReachability.volumeName(forPath: rec.fullPath))")
+        lines.append("  Volume: \(VolumeReachability.displayLabel(forPath: rec.fullPath))")
         if rec.starRating > 0 {
             lines.append("  Rating: \(String(repeating: "★", count: rec.starRating))")
         }
@@ -1904,7 +1904,7 @@ struct InspectorPanel: View {
             section("Correlation")
             if let paired = rec.pairedWith {
                 add("Paired With", paired.filename)
-                add("Pair Volume", VolumeReachability.volumeName(forPath: paired.fullPath))
+                add("Pair Volume", VolumeReachability.displayLabel(forPath: paired.fullPath))
                 add("Pair Path", paired.fullPath)
             }
             if let conf = rec.pairConfidence {

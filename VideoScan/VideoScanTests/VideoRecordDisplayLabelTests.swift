@@ -29,11 +29,11 @@ struct VideoRecordDisplayLabelTests {
     }
 
     @Test func scanRootDifferentFromVolumeJoinsWithBreadcrumb() {
-        // Folder-scoped scan: column shows "Volume › Folder" so two
+        // Folder-scoped scan: column shows "Volume > Folder" so two
         // different "Movies" folders on different volumes don't look
         // identical in the table.
         let rec = makeRecord(volumeName: "MyBook", scanRootLabel: "Movies")
-        #expect(rec.displayVolumeLabel == "MyBook › Movies")
+        #expect(rec.displayVolumeLabel == "MyBook > Movies")
     }
 
     @Test func twoDifferentVolumesSameFolderProduceDistinctLabels() {
@@ -41,14 +41,14 @@ struct VideoRecordDisplayLabelTests {
         let a = makeRecord(volumeName: "RicksBackups", scanRootLabel: "Movies")
         let b = makeRecord(volumeName: "InternalRaid",  scanRootLabel: "Movies")
         #expect(a.displayVolumeLabel != b.displayVolumeLabel)
-        #expect(a.displayVolumeLabel == "RicksBackups › Movies")
-        #expect(b.displayVolumeLabel == "InternalRaid › Movies")
+        #expect(a.displayVolumeLabel == "RicksBackups > Movies")
+        #expect(b.displayVolumeLabel == "InternalRaid > Movies")
     }
 
     @Test func scanRootEqualToVolumeNameAvoidsDuplication() {
         // Defensive case: if the scan-root label happens to equal the volume
         // name (degenerate capture, or someone scanned /Volumes/MyBook itself
-        // and the label got stamped anyway), don't show "MyBook › MyBook".
+        // and the label got stamped anyway), don't show "MyBook > MyBook".
         let rec = makeRecord(volumeName: "MyBook", scanRootLabel: "MyBook")
         #expect(rec.displayVolumeLabel == "MyBook")
     }
@@ -70,6 +70,6 @@ struct VideoRecordDisplayLabelTests {
         // When capture stamps `scanRootLabel` from a deep path, only the
         // basename ends up in the column — full subpath would clutter the UI.
         let rec = makeRecord(volumeName: "MyBook", scanRootLabel: "summer")
-        #expect(rec.displayVolumeLabel == "MyBook › summer")
+        #expect(rec.displayVolumeLabel == "MyBook > summer")
     }
 }

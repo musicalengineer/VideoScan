@@ -31,9 +31,9 @@ struct VolumesWindow: View {
         model.scanTargets
             .filter { !$0.searchPath.contains("VideoScan_Temp") }
             .sorted {
-                VolumeReachability.volumeName(forPath: $0.searchPath)
+                VolumeReachability.displayLabel(forPath: $0.searchPath)
                     .localizedCaseInsensitiveCompare(
-                        VolumeReachability.volumeName(forPath: $1.searchPath)
+                        VolumeReachability.displayLabel(forPath: $1.searchPath)
                     ) == .orderedAscending
             }
     }
@@ -122,7 +122,7 @@ private struct VolumeListRow: View {
                 .scaleEffect(scale, anchor: .leading)
                 .frame(width: 38 * scale, alignment: .leading)
             VStack(alignment: .leading, spacing: 1) {
-                Text(VolumeReachability.volumeName(forPath: target.searchPath))
+                Text(VolumeReachability.displayLabel(forPath: target.searchPath))
                     .font(.system(size: 14 * scale, weight: .medium))
                     .lineLimit(1)
                 Text(target.searchPath)
@@ -185,7 +185,7 @@ private struct VolumeEditor: View {
                     .font(.system(size: 32))
                     .foregroundColor(target.role.color)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(VolumeReachability.volumeName(forPath: target.searchPath))
+                    Text(VolumeReachability.displayLabel(forPath: target.searchPath))
                         .font(.title.bold())
                     Text(target.searchPath)
                         .font(.system(size: 13, design: .monospaced))
