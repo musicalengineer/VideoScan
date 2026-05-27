@@ -30,17 +30,14 @@ done
 MOUNT="/Volumes/$NAME"
 
 if [ -d "$MOUNT" ]; then
-    echo "$NAME already mounted — nothing to do."
-    df -h "$MOUNT"
-    exit 0
+    echo "$NAME already mounted — skipping creation."
+else
+    # hdiutil takes sectors; 512 B each → 2 Mi sectors per GB.
+    SECTORS=$(( SIZE_GB * 1024 * 1024 * 2 ))
+    DEV=$(hdiutil attach -nomount "ram://$SECTORS" | awk '{print $1}')
+    echo "Created ${SIZE_GB} GB RAM device: $DEV"
+    diskutil erasevolume APFS "$NAME" "$DEV"
 fi
-
-# hdiutil takes sectors; 512 B each → 2 Mi sectors per GB.
-SECTORS=$(( SIZE_GB * 1024 * 1024 * 2 ))
-
-DEV=$(hdiutil attach -nomount "ram://$SECTORS" | awk '{print $1}')
-echo "Created ${SIZE_GB} GB RAM device: $DEV"
-diskutil erasevolume APFS "$NAME" "$DEV"
 
 # Point Xcode at the RAM-backed DerivedData. Persists across reboots, but
 # re-assert each run in case prefs were reset (or this is a fresh machine).
@@ -48,5 +45,23 @@ defaults write com.apple.dt.Xcode IDECustomDerivedDataLocation "$MOUNT"
 defaults write com.apple.dt.Xcode IDEDerivedDataLocationStyle 2
 
 echo ""
-echo "Ready. Restart Xcode if it's open so it picks up the new DerivedData."
 df -h "$MOUNT"
+
+# Verify the Xcode prefs actually stuck — a running Xcode can silently
+# overwrite them on quit. Reading them back is the only honest check.
+echo ""
+STYLE=$(defaults read com.apple.dt.Xcode IDEDerivedDataLocationStyle 2>/dev/null || echo "<unset>")
+LOC=$(defaults read com.apple.dt.Xcode IDECustomDerivedDataLocation 2>/dev/null || echo "<unset>")
+if [ "$STYLE" = "2" ] && [ "$LOC" = "$MOUNT" ]; then
+    echo "Xcode prefs OK: Custom DerivedData → $LOC (style=$STYLE)"
+else
+    echo "WARNING: Xcode prefs do not match expected values."
+    echo "  IDEDerivedDataLocationStyle  = $STYLE  (expected 2)"
+    echo "  IDECustomDerivedDataLocation = $LOC"
+    echo "  Expected mount               = $MOUNT"
+    echo "  Quit Xcode if it's running and re-run this script."
+fi
+
+if pgrep -x Xcode >/dev/null; then
+    echo "NOTE: Xcode is running — quit and relaunch so it picks up the location."
+fi
