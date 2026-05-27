@@ -12,6 +12,18 @@ final class SeekingFrameProvider: @unchecked Sendable {
     private let slots: DispatchSemaphore
     private let cancelFlag = OSAllocatedUnfairLock(initialState: false)
 
+    // Slots that have been "lent" to the consumer via `yield(...)` but
+    // not yet returned via `releaseSlot()`. Tracked so that on stream
+    // termination (e.g. Find Person job cancelled, consumer abandons
+    // mid-iteration) we can signal the semaphore enough times to bring
+    // its counter back to its initial value before deinit. Without
+    // this, frames buffered inside AsyncStream that the consumer never
+    // read leave the counter permanently below the initial — and
+    // DispatchSemaphore's `dispose` crashes (EXC_BREAKPOINT in
+    // _dispatch_semaphore_dispose.cold.1) when deallocated below initial.
+    // Mirrors the pattern in FramePrefetcher.
+    private let outstandingSlots = OSAllocatedUnfairLock(initialState: 0)
+
     private static let logger = Logger(
         subsystem: "Rick-Breen.VideoScan", category: "seeking-frames")
     private static let ciContext = CIContext(options: [.useSoftwareRenderer: false])
@@ -29,6 +41,7 @@ final class SeekingFrameProvider: @unchecked Sendable {
     }
 
     func releaseSlot() {
+        outstandingSlots.withLock { $0 = max(0, $0 - 1) }
         slots.signal()
     }
 
@@ -38,6 +51,7 @@ final class SeekingFrameProvider: @unchecked Sendable {
         let interval = self.frameInterval
         let sem = self.slots
         let flag = self.cancelFlag
+        let owed = self.outstandingSlots
 
         return AsyncStream<PrefetchedFrame> { continuation in
             let queue = DispatchQueue(
@@ -45,6 +59,17 @@ final class SeekingFrameProvider: @unchecked Sendable {
 
             continuation.onTermination = { @Sendable _ in
                 flag.withLock { $0 = true }
+                // Drain the slot debt so the semaphore can dispose cleanly.
+                // For every frame we yielded but the consumer hasn't (and
+                // now won't) call `releaseSlot()` on, signal once.
+                let drainCount = owed.withLock { d -> Int in
+                    let v = d
+                    d = 0
+                    return v
+                }
+                for _ in 0..<drainCount { sem.signal() }
+                // Plus one more to wake the producer if it's currently
+                // blocked on `sem.wait()` for the next slot.
                 sem.signal()
             }
 
@@ -66,7 +91,13 @@ final class SeekingFrameProvider: @unchecked Sendable {
 
                     sem.wait()
                     let doneAfterWait = flag.withLock { $0 }
-                    if doneAfterWait { break }
+                    if doneAfterWait {
+                        // Cancellation arrived while we were blocked; balance
+                        // the wait we just completed so the counter doesn't
+                        // accumulate a deficit on this exit path.
+                        sem.signal()
+                        break
+                    }
 
                     let requestTime = CMTime(seconds: t, preferredTimescale: 600)
                     let t0 = CFAbsoluteTimeGetCurrent()
@@ -102,6 +133,8 @@ final class SeekingFrameProvider: @unchecked Sendable {
                     let decodeTime = CFAbsoluteTimeGetCurrent() - t0
                     frameCount += 1
 
+                    // Hand the slot to the consumer — releaseSlot() returns it.
+                    owed.withLock { $0 += 1 }
                     continuation.yield(
                         PrefetchedFrame(
                             pixelBuffer: pixelBuffer,
