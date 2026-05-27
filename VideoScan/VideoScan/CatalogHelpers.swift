@@ -1566,12 +1566,20 @@ struct InspectorPanel: View {
                                 set: { rec.starRating = $0 }
                             ))
                         }
-                        // Volume name — prominent
+                        // Volume name — prominent.
+                        // Use `displayVolumeLabel` so folder scans show as
+                        // "Volume › Folder" (e.g. "M4drive › rickb"), matching
+                        // the catalog table's Volume column. The old
+                        // VolumeReachability.volumeName(forPath:) helper
+                        // collapses any "/Users/<X>/..." path to "<X>",
+                        // hiding the actual volume — see catalog with 125
+                        // records under /Users/rickb that all appeared as
+                        // just "rickb" in this inspector.
                         HStack(spacing: 4) {
                             Image(systemName: "externaldrive.fill")
                                 .font(.system(size: 11))
                                 .foregroundColor(.accentColor)
-                            Text(VolumeReachability.volumeName(forPath: rec.fullPath))
+                            Text(rec.displayVolumeLabel)
                                 .font(.system(size: 14, weight: .bold))
                                 .foregroundColor(.primary)
                                 .textSelection(.enabled)
