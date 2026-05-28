@@ -142,16 +142,17 @@ final class VideoScanModel: ObservableObject {
         }
     }
 
-    private static let savedTargetsKey = "VideoScan.scanTargetPaths"
-    private static let savedDatesKey = "VideoScan.scanTargetDates"
-    private static let savedPhasesKey = "VideoScan.scanTargetPhases"
-    private static let savedRolesKey = "VideoScan.scanTargetRoles"
-    private static let savedTrustKey = "VideoScan.scanTargetTrust"
-    private static let savedFilesystemKey = "VideoScan.scanTargetFilesystems"
-    private static let savedMediaTechKey = "VideoScan.scanTargetMediaTechs"
-    private static let savedPurchaseYearKey = "VideoScan.scanTargetPurchaseYears"
-    private static let savedCapacityKey = "VideoScan.scanTargetCapacities"
-    private static let savedNotesKey = "VideoScan.scanTargetNotes"
+    // Internal so VideoScanModel+ScanTargetPersistence can reference them.
+    static let savedTargetsKey = "VideoScan.scanTargetPaths"
+    static let savedDatesKey = "VideoScan.scanTargetDates"
+    static let savedPhasesKey = "VideoScan.scanTargetPhases"
+    static let savedRolesKey = "VideoScan.scanTargetRoles"
+    static let savedTrustKey = "VideoScan.scanTargetTrust"
+    static let savedFilesystemKey = "VideoScan.scanTargetFilesystems"
+    static let savedMediaTechKey = "VideoScan.scanTargetMediaTechs"
+    static let savedPurchaseYearKey = "VideoScan.scanTargetPurchaseYears"
+    static let savedCapacityKey = "VideoScan.scanTargetCapacities"
+    static let savedNotesKey = "VideoScan.scanTargetNotes"
 
     // `internal var` (not `private let`) so tests can swap in a per-test
     // CatalogStore(directory:) instance — necessary because the shared
@@ -159,7 +160,9 @@ final class VideoScanModel: ObservableObject {
     // Application Support. Production code never reassigns this.
     var catalogStore: CatalogStore = .shared
 
-    private static var isRunningTests: Bool {
+    // Internal so VideoScanModel+ScanTargetPersistence can gate persistence
+    // during XCTest runs.
+    static var isRunningTests: Bool {
         if NSClassFromString("XCTestCase") != nil { return true }
         let env = ProcessInfo.processInfo.environment
         if env["XCTestConfigurationFilePath"] != nil { return true }
@@ -289,131 +292,6 @@ final class VideoScanModel: ObservableObject {
     /// from the catalog between purge and undo). Banner shows this in
     /// place of the default "Removed N items." message.
     @Published var lastPurgeUndoError: String?
-
-    private func restoreScanTargets() {
-        let restored = ScanTargetPersistence.restore(
-            existing: scanTargets,
-            savedTargetsKey: Self.savedTargetsKey,
-            savedDatesKey: Self.savedDatesKey,
-            savedPhasesKey: Self.savedPhasesKey,
-            savedRolesKey: Self.savedRolesKey,
-            savedTrustKey: Self.savedTrustKey,
-            savedFilesystemKey: Self.savedFilesystemKey,
-            savedMediaTechKey: Self.savedMediaTechKey,
-            savedPurchaseYearKey: Self.savedPurchaseYearKey,
-            savedCapacityKey: Self.savedCapacityKey,
-            savedNotesKey: Self.savedNotesKey
-        )
-        scanTargets.append(contentsOf: restored)
-    }
-
-    // Internal so VideoScanModel+BundleImportExport.applyBundlePayload can
-    // call it after merging volume metadata from a bundle.
-    func persistScanTargets() {
-        if Self.isRunningTests { return }
-        ScanTargetPersistence.persistPaths(scanTargets, key: Self.savedTargetsKey)
-    }
-
-    // Internal so VideoScanModel+VolumeLifecycle.deleteCatalogForTarget can
-    // persist the post-wipe phase change.
-    func persistScanDates() {
-        if Self.isRunningTests { return }
-        ScanTargetPersistence.persistMetadata(
-            scanTargets,
-            savedDatesKey: Self.savedDatesKey,
-            savedPhasesKey: Self.savedPhasesKey,
-            savedRolesKey: Self.savedRolesKey,
-            savedTrustKey: Self.savedTrustKey,
-            savedFilesystemKey: Self.savedFilesystemKey,
-            savedMediaTechKey: Self.savedMediaTechKey,
-            savedPurchaseYearKey: Self.savedPurchaseYearKey,
-            savedCapacityKey: Self.savedCapacityKey,
-            savedNotesKey: Self.savedNotesKey
-        )
-    }
-
-    // MARK: - Phase Consistency
-
-    /// If a target claims "Cataloged" but has zero records, the catalog was
-    /// deleted or lost — reset to NO CATALOG so the UI doesn't lie.
-    func enforcePhaseConsistency() {
-        for t in scanTargets where t.phase == .cataloged {
-            let hasRecords = records.contains { $0.fullPath.hasPrefix(t.searchPath) }
-            if !hasRecords {
-                t.phase = .noCatalog
-                t.lastScannedDate = nil
-            }
-        }
-    }
-
-    /// If a target shows noCatalog but we have records for it, a previous
-    /// test run (or crash) corrupted the persisted phase. Re-derive the
-    /// phase from actual catalog data. Returns number of targets repaired.
-    @discardableResult
-    func repairCorruptedPhases() -> Int {
-        guard !records.isEmpty else { return 0 }
-        var repaired = 0
-        for t in scanTargets where t.phase == .noCatalog && !t.searchPath.isEmpty {
-            if records.contains(where: { $0.fullPath.hasPrefix(t.searchPath) }) {
-                t.phase = .cataloged
-                repaired += 1
-            }
-        }
-        if repaired > 0 {
-            log("Repaired \(repaired) volume phase(s) — catalog data exists but phases were reset.")
-            persistScanDates()
-        }
-        return repaired
-    }
-
-    /// Update a volume's lifecycle phase and persist.
-    func setPhase(_ phase: VolumePhase, for target: CatalogScanTarget) {
-        target.phase = phase
-        persistScanDates()
-        notifyTargetsChanged()
-    }
-
-    func setRole(_ role: VolumeRole, for target: CatalogScanTarget) {
-        target.role = role
-        persistScanDates()
-        notifyTargetsChanged()
-    }
-
-    func setTrust(_ trust: VolumeTrust, for target: CatalogScanTarget) {
-        target.trust = trust
-        persistScanDates()
-        notifyTargetsChanged()
-    }
-
-    func setFilesystem(_ value: String, for target: CatalogScanTarget) {
-        target.filesystem = value
-        persistScanDates()
-        notifyTargetsChanged()
-    }
-
-    func setMediaTech(_ value: VolumeMediaTech, for target: CatalogScanTarget) {
-        target.mediaTech = value
-        persistScanDates()
-        notifyTargetsChanged()
-    }
-
-    func setPurchaseYear(_ value: Int?, for target: CatalogScanTarget) {
-        target.purchaseYear = value
-        persistScanDates()
-        notifyTargetsChanged()
-    }
-
-    func setCapacityTB(_ value: Double?, for target: CatalogScanTarget) {
-        target.capacityTB = value
-        persistScanDates()
-        notifyTargetsChanged()
-    }
-
-    func setNotes(_ value: String, for target: CatalogScanTarget) {
-        target.notes = value
-        persistScanDates()
-        notifyTargetsChanged()
-    }
 
     // MARK: - Logging (delegates to DashboardState)
 
