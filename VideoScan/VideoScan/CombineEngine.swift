@@ -28,34 +28,13 @@ enum CombineEngine {
     ) async -> CombineResult {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: ffmpegPath)
-
-        var args = [
-            "-y",
-            "-probesize", "50M",
-            "-analyzeduration", "10M",
-            "-i", videoPath,
-            "-i", audioPath,
-            "-map", "0:v",
-            "-map", "1:a",
-        ]
-
-        switch technique {
-        case .streamCopy:
-            args += ["-c:v", "copy", "-c:a", "copy"]
-        case .reencodeProRes:
-            args += ["-c:v", "prores_ks", "-profile:v", "3", "-c:a", "pcm_s24le"]
-        case .reencodeH264:
-            args += ["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-c:a", "aac", "-b:a", "256k"]
-        }
-
-        args += ["-movflags", "+faststart", "-f", "mov"]
-
-        if onProgress != nil {
-            args += ["-progress", "pipe:1"]
-        }
-
-        args.append(outputPath)
-        proc.arguments = args
+        proc.arguments = buildArgs(
+            videoPath: videoPath,
+            audioPath: audioPath,
+            outputPath: outputPath,
+            technique: technique,
+            withProgress: onProgress != nil
+        )
 
         let errPipe = Pipe()
         let outPipe = Pipe()
@@ -133,6 +112,60 @@ enum CombineEngine {
             defer { lock.unlock() }
             return lines.joined(separator: "\n")
         }
+    }
+
+    // MARK: - Argument Construction
+    //
+    // Pulled out as a pure function so the encoder choice + flag set for
+    // each technique can be unit-tested without spawning ffmpeg. If you
+    // change an encoder string here, the matching test in CombineEngineArgsTests
+    // will catch it on the next run.
+    //
+    // Encoder choice notes (2026-05-27):
+    //   .reencodeProRes uses prores_videotoolbox (hardware) instead of
+    //     prores_ks (software). M-series Macs all have a dedicated ProRes
+    //     hardware encoder on the Media Engine — roughly 3-5× faster than
+    //     prores_ks at equivalent quality for archival mezzanine work.
+    //   .reencodeH264 uses h264_videotoolbox instead of libx264. Same
+    //     reasoning — leaves the dedicated H.264 hardware encoder idle
+    //     otherwise. -q:v 70 is a constant-quality target that produces
+    //     visually-very-good results at ~25-40 Mbps for 1080p, matching
+    //     the "smaller files" intent of this case while still substantially
+    //     smaller than ProRes (220 Mbps).
+    //   .streamCopy is unchanged — it's pure mux, zero encoding, nothing
+    //     to accelerate.
+    static func buildArgs(
+        videoPath: String,
+        audioPath: String,
+        outputPath: String,
+        technique: CombineJobStatus.CombineTechnique,
+        withProgress: Bool
+    ) -> [String] {
+        var args = [
+            "-y",
+            "-probesize", "50M",
+            "-analyzeduration", "10M",
+            "-i", videoPath,
+            "-i", audioPath,
+            "-map", "0:v",
+            "-map", "1:a",
+        ]
+
+        switch technique {
+        case .streamCopy:
+            args += ["-c:v", "copy", "-c:a", "copy"]
+        case .reencodeProRes:
+            args += ["-c:v", "prores_videotoolbox", "-profile:v", "3", "-c:a", "pcm_s24le"]
+        case .reencodeH264:
+            args += ["-c:v", "h264_videotoolbox", "-q:v", "70", "-c:a", "aac", "-b:a", "256k"]
+        }
+
+        args += ["-movflags", "+faststart", "-f", "mov"]
+        if withProgress {
+            args += ["-progress", "pipe:1"]
+        }
+        args.append(outputPath)
+        return args
     }
 
     // MARK: - Codec Compatibility
