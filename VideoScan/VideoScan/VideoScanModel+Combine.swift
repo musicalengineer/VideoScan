@@ -411,12 +411,13 @@ extension VideoScanModel {
     func combineAllPairsInternal(pairs: [(video: VideoRecord, audio: VideoRecord)], outputFolder: URL, technique: CombineJobStatus.CombineTechnique = .streamCopy, maxConcurrency: Int? = nil) {
         let appending = isCombining
 
-        let filteredPairs: [(video: VideoRecord, audio: VideoRecord)]
+        // First filter: drop pairs already in flight from a prior call.
+        let dedupedPairs: [(video: VideoRecord, audio: VideoRecord)]
         if appending {
             let activeOutputs = Set(dashboard.combineJobs
                 .filter { $0.phase != .done && $0.phase != .failed && $0.phase != .skipped }
                 .map { $0.outputFilename })
-            filteredPairs = pairs.filter { pair in
+            dedupedPairs = pairs.filter { pair in
                 let baseName = URL(fileURLWithPath: pair.video.fullPath).deletingPathExtension().lastPathComponent
                 let outName = "\(baseName)_combined.mov"
                 if activeOutputs.contains(outName) {
@@ -425,12 +426,37 @@ extension VideoScanModel {
                 }
                 return true
             }
-            guard !filteredPairs.isEmpty else {
+            guard !dedupedPairs.isEmpty else {
                 log("All selected pairs are already in progress.")
                 return
             }
         } else {
-            filteredPairs = pairs
+            dedupedPairs = pairs
+        }
+
+        // Second filter: substitute offline sources with reachable UMID
+        // copies where possible, and drop pairs that can't run at all.
+        // Logs every decision so the user sees exactly what's being
+        // swapped or skipped — important for trust in an overnight run.
+        let plan = prepareCombineBatch(pairs: dedupedPairs)
+        for item in plan.substituted {
+            if item.videoSubstituted {
+                log("  [SUBSTITUTE video] \(item.originalVideo.fullPath)")
+                log("                  →  \(item.resolvedVideo.fullPath)")
+            }
+            if item.audioSubstituted {
+                log("  [SUBSTITUTE audio] \(item.originalAudio.fullPath)")
+                log("                  →  \(item.resolvedAudio.fullPath)")
+            }
+        }
+        for item in plan.blocked {
+            log("  [BLOCKED] \(item.originalVideo.filename) + \(item.originalAudio.filename) — \(item.blockReason ?? "unknown")")
+        }
+        let filteredPairs: [(video: VideoRecord, audio: VideoRecord)] =
+            plan.runnable.map { ($0.resolvedVideo, $0.resolvedAudio) }
+        guard !filteredPairs.isEmpty else {
+            log("No pairs runnable after substitution check — see [BLOCKED] entries above.")
+            return
         }
 
         let jobOffset = dashboard.combineJobs.count
