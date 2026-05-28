@@ -151,6 +151,18 @@ class VideoRecord: Identifiable, Codable {
         !avidClipName.isEmpty || !avidMobID.isEmpty
     }
 
+    /// SMPTE UMID for the MaterialPackage inside the MXF file itself, as
+    /// reported by ffprobe's `material_package_umid` format tag. Distinct
+    /// from `avidMobID` (which comes from a sibling .avb bin file): this
+    /// one is embedded in the MXF essence file and survives a byte-for-byte
+    /// copy to another volume. Used to find substitute copies of offline
+    /// media — if MacPro is unreachable but the same MXF was copied to
+    /// MyBook3Tb, both records share this UMID and the resolver can swap
+    /// the source path transparently.
+    /// Empty for non-MXF files and for MXFs scanned before the field was
+    /// added (re-scan picks it up).
+    var materialPackageUMID: String = ""
+
     var pairedWith: VideoRecord?
     /// Set during decode; CatalogStore resolves it to a real `pairedWith`
     /// reference after the entire array has been decoded.
@@ -395,6 +407,7 @@ class VideoRecord: Identifiable, Codable {
         case timecode, tapeName, isPlayable, partialMD5, fullPath, directory, notes
         case avidClipName, avidMobID, avidMaterialUUID, avidBinFile, avidMobType
         case avidMediaPath, avidTapeName, avidEditRate, avidTracks
+        case materialPackageUMID
         case pairedWithID, pairGroupID, pairConfidence
         case duplicateGroupID, duplicateConfidence, duplicateDisposition
         case duplicateReasons, duplicateBestMatchFilename, duplicateGroupCount
@@ -450,6 +463,7 @@ class VideoRecord: Identifiable, Codable {
         avidTapeName                = try c.decodeIfPresent(String.self, forKey: .avidTapeName) ?? ""
         avidEditRate                = try c.decodeIfPresent(Double.self, forKey: .avidEditRate) ?? 0
         avidTracks                  = try c.decodeIfPresent(String.self, forKey: .avidTracks) ?? ""
+        materialPackageUMID         = try c.decodeIfPresent(String.self, forKey: .materialPackageUMID) ?? ""
         pendingPairedWithID         = try c.decodeIfPresent(UUID.self, forKey: .pairedWithID)
         pairGroupID                 = try c.decodeIfPresent(UUID.self, forKey: .pairGroupID)
         pairConfidence              = try c.decodeIfPresent(PairConfidence.self, forKey: .pairConfidence)
@@ -537,6 +551,9 @@ class VideoRecord: Identifiable, Codable {
         try c.encode(avidTapeName, forKey: .avidTapeName)
         try c.encode(avidEditRate, forKey: .avidEditRate)
         try c.encode(avidTracks, forKey: .avidTracks)
+        if !materialPackageUMID.isEmpty {
+            try c.encode(materialPackageUMID, forKey: .materialPackageUMID)
+        }
         try c.encodeIfPresent(pairedWith?.id, forKey: .pairedWithID)
         try c.encodeIfPresent(pairGroupID, forKey: .pairGroupID)
         try c.encodeIfPresent(pairConfidence, forKey: .pairConfidence)
