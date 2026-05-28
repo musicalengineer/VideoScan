@@ -151,6 +151,12 @@ struct ScanPerformanceSettings {
 @MainActor
 final class VideoScanModel: ObservableObject {
     @Published var records: [VideoRecord] = []
+    /// True when the app is running on a non-master Mac (viewer mode).
+    /// Set by the sync engine at launch via `applyReadOnlyMode(_:)` so
+    /// views can disable Combine / Archive / Delete affordances. The
+    /// CatalogStore layer also refuses writes — this flag is the UI
+    /// half of the belt-and-suspenders. See CatalogSync.swift.
+    @Published var isReadOnly: Bool = false
     @Published var isScanning: Bool = false
     @Published var isCombining: Bool = false
     @Published var isCorrelating: Bool = false
@@ -1250,6 +1256,14 @@ final class VideoScanModel: ObservableObject {
         saveCatalogNow()
         notifyTargetsChanged()
         log("Deleted all \(count) catalog record(s).")
+    }
+
+    /// Apply viewer-mode semantics: flip the UI flag and tell the
+    /// underlying CatalogStore to refuse writes. Idempotent.
+    /// Called by VideoScanApp once CatalogSync has decided the mode.
+    func applyReadOnlyMode(_ readOnly: Bool) {
+        isReadOnly = readOnly
+        catalogStore.isReadOnly = readOnly
     }
 
     /// Persist the current records array. Debounced; bursts of mutations
