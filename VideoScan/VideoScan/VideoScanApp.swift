@@ -193,6 +193,11 @@ enum BuildInfo {
 struct VideoScanApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var catalogModel = VideoScanModel()
+    /// Read-only catalog sync between Rick's Macs. The master writes
+    /// manifest.sha256 after every save; viewers rsync the catalog +
+    /// POI tree on launch and on manual Refresh, verify the manifest,
+    /// and atomically swap into place. See CatalogSync.swift.
+    @StateObject private var catalogSync = CatalogSync.production()
 
     var body: some Scene {
         WindowGroup(id: "main") {
@@ -200,7 +205,25 @@ struct VideoScanApp: App {
                 ContentView()
                     .environmentObject(catalogModel)
                     .environmentObject(catalogModel.dashboard)
-                    .onAppear { appDelegate.catalogModel = catalogModel }
+                    .environmentObject(catalogSync)
+                    .onAppear {
+                        appDelegate.catalogModel = catalogModel
+                        // Apply viewer-vs-master semantics to model + store.
+                        catalogModel.applyReadOnlyMode(catalogSync.isReadOnly)
+                        // On the master, install the observer that
+                        // refreshes manifest.sha256 after each save.
+                        // On a viewer, kick off the initial sync.
+                        if catalogSync.mode == .master {
+                            catalogModel.catalogStore.observer = catalogSync
+                            // Seed the manifest once at launch so a
+                            // viewer that connects before the master
+                            // has saved anything still has something
+                            // to verify against.
+                            catalogSync.writeManifestIfMaster()
+                        } else {
+                            Task { await catalogSync.syncFromMaster() }
+                        }
+                    }
             }
         }
         .windowStyle(.hiddenTitleBar)

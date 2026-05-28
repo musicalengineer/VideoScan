@@ -4,6 +4,7 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var model: VideoScanModel
+    @EnvironmentObject var catalogSync: CatalogSync
     @StateObject private var personFinderModel = PersonFinderModel()
     @StateObject private var identifyFamilyModel = IdentifyFamilyModel()
     @AppStorage("selectedTab") private var selectedTab: Int = 0
@@ -13,12 +14,18 @@ struct ContentView: View {
         ("People", "person.2.fill", 0),
         ("Catalog", "film.stack", 1),
         ("Triage", "checklist", 2),
-        ("Archive", "archivebox.fill", 3),
-        ("Family Tree", "person.3.fill", 4)
+        ("Workbench", "hammer.fill", 3),
+        ("Archive", "archivebox.fill", 4),
+        ("Family Tree", "person.3.fill", 5)
     ]
 
     var body: some View {
         VStack(spacing: 0) {
+            // Viewer-mode banner — invisible on the master. Shows
+            // last-good-snapshot timestamp + a Refresh button.
+            if catalogSync.mode == .viewer {
+                CatalogSyncBanner(sync: catalogSync)
+            }
             // Custom tab bar — centered with traffic-light inset
             HStack(spacing: 0) {
                 // Reserve space for window traffic-light buttons
@@ -71,8 +78,10 @@ struct ContentView: View {
                 case 2:
                     TriageView()
                 case 3:
-                    ArchiveView()
+                    WorkbenchView()
                 case 4:
+                    ArchiveView()
+                case 5:
                     FamilyTreeDemoView()
                 default:
                     PeopleTabView()
@@ -1495,5 +1504,111 @@ struct CatalogInfoWindow: View {
             .padding(12)
         }
         .frame(minWidth: 520, minHeight: 360)
+    }
+}
+
+// MARK: - Catalog Sync Banner
+//
+// Two visual states for the viewer (read-only) Macs:
+//
+//   * Synced — subtle gray strip: the master is reachable, the catalog
+//     was rsync'd in successfully, manifest verified. Quiet so it
+//     doesn't compete with the rest of the UI.
+//
+//   * Fallback (master offline / sync failed) — amber strip with an
+//     attention icon. Worded so the user can NEVER mistake stale data
+//     for live data: "MASTER OFFLINE — showing snapshot from <ago>".
+//
+// On the master itself this view isn't rendered at all (see ContentView).
+
+struct CatalogSyncBanner: View {
+    @ObservedObject var sync: CatalogSync
+
+    var body: some View {
+        HStack(spacing: 10) {
+            iconView
+            VStack(alignment: .leading, spacing: 1) {
+                Text(headlineText)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(headlineColor)
+                if let sub = subText {
+                    Text(sub)
+                        .font(.system(size: 11))
+                        .foregroundStyle(headlineColor.opacity(0.85))
+                }
+            }
+            Spacer()
+            Button(action: { Task { await sync.syncFromMaster() } }) {
+                if case .syncing = sync.state.phase {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Text(isFallback ? "Retry" : "Refresh")
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled({ if case .syncing = sync.state.phase { return true } else { return false } }())
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(backgroundColor)
+    }
+
+    // MARK: - Visual state
+
+    private var isFallback: Bool {
+        switch sync.state.phase {
+        case .failed, .idle: return true
+        case .syncing, .synced: return false
+        }
+    }
+
+    private var backgroundColor: Color {
+        isFallback
+            ? Color(red: 0.85, green: 0.45, blue: 0.10)   // amber — can't-miss
+            : Color(NSColor.controlBackgroundColor)
+    }
+
+    private var headlineColor: Color {
+        isFallback ? .white : .secondary
+    }
+
+    private var iconView: some View {
+        Image(systemName: isFallback ? "exclamationmark.triangle.fill" : "checkmark.circle")
+            .foregroundStyle(headlineColor)
+            .font(.system(size: 14, weight: .semibold))
+    }
+
+    private var headlineText: String {
+        switch sync.state.phase {
+        case .idle:
+            if let last = sync.state.lastSuccessfulSync {
+                return "MASTER OFFLINE — showing snapshot from \(relative(last))"
+            }
+            return "MASTER OFFLINE — no previous snapshot available"
+        case .syncing:
+            return "Read-only · syncing from master…"
+        case .synced(let at):
+            return "Read-only · synced \(relative(at))"
+        case .failed:
+            if let last = sync.state.lastSuccessfulSync {
+                return "MASTER OFFLINE — showing snapshot from \(relative(last))"
+            }
+            return "MASTER OFFLINE — no previous snapshot available"
+        }
+    }
+
+    private var subText: String? {
+        switch sync.state.phase {
+        case .failed(let reason): return reason
+        default: return nil
+        }
+    }
+
+    private func relative(_ date: Date) -> String {
+        let fmt = RelativeDateTimeFormatter()
+        fmt.unitsStyle = .abbreviated
+        return fmt.localizedString(for: date, relativeTo: Date())
     }
 }
