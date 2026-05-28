@@ -288,7 +288,11 @@ final class VideoScanModel: ObservableObject {
     private static let savedCapacityKey = "VideoScan.scanTargetCapacities"
     private static let savedNotesKey = "VideoScan.scanTargetNotes"
 
-    private let catalogStore = CatalogStore.shared
+    // `internal var` (not `private let`) so tests can swap in a per-test
+    // CatalogStore(directory:) instance — necessary because the shared
+    // CatalogStore short-circuits saves under XCTest to avoid polluting
+    // Application Support. Production code never reassigns this.
+    var catalogStore: CatalogStore = .shared
 
     private static var isRunningTests: Bool {
         if NSClassFromString("XCTestCase") != nil { return true }

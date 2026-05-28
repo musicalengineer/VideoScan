@@ -455,19 +455,19 @@ struct ArchiveView: View {
     private func lifecycleAndBackupSections(for recs: [VideoRecord]) -> some View {
         Divider()
         Section("Lifecycle") {
-            Button { for rec in recs { rec.archiveStage = .healthy } } label: {
+            Button { model.setArchiveStage(.healthy, for: recs) } label: {
                 Label("Mark Healthy", systemImage: "heart.fill")
             }
-            Button { for rec in recs { rec.archiveStage = .masterAssigned } } label: {
+            Button { model.setArchiveStage(.masterAssigned, for: recs) } label: {
                 Label("Designate as Master", systemImage: "crown.fill")
             }
-            Button { for rec in recs { rec.archiveStage = .backedUp } } label: {
+            Button { model.setArchiveStage(.backedUp, for: recs) } label: {
                 Label("Mark Backed Up", systemImage: "doc.on.doc.fill")
             }
-            Button { for rec in recs { rec.archiveStage = .readyForArchive } } label: {
+            Button { model.setArchiveStage(.readyForArchive, for: recs) } label: {
                 Label("Mark Ready for Archive", systemImage: "checkmark.seal.fill")
             }
-            Button { for rec in recs { rec.archiveStage = .archived } } label: {
+            Button { model.setArchiveStage(.archived, for: recs) } label: {
                 Label("Mark Archived", systemImage: "archivebox.fill")
             }
         }
@@ -476,36 +476,20 @@ struct ArchiveView: View {
 
         Section("Backed Up To") {
             Button {
-                let entry = BackupEntry(name: "LTA_Crucial", kind: .local, date: Date())
-                for rec in recs { addBackup(rec, entry: entry) }
+                model.addBackup(BackupEntry(name: "LTA_Crucial", kind: .local, date: Date()), to: recs)
             } label: {
                 Label("LTA_Crucial (Local)", systemImage: "externaldrive.fill")
             }
             Button {
-                let entry = BackupEntry(name: "iCloud", kind: .cloud, date: Date())
-                for rec in recs { addBackup(rec, entry: entry) }
+                model.addBackup(BackupEntry(name: "iCloud", kind: .cloud, date: Date()), to: recs)
             } label: {
                 Label("iCloud (Cloud)", systemImage: "icloud.fill")
             }
             Button {
-                let entry = BackupEntry(name: "Breen's NAS", kind: .offsite, date: Date())
-                for rec in recs { addBackup(rec, entry: entry) }
+                model.addBackup(BackupEntry(name: "Breen's NAS", kind: .offsite, date: Date()), to: recs)
             } label: {
                 Label("Breen's NAS (Offsite)", systemImage: "building.2.fill")
             }
-        }
-    }
-
-    // MARK: - Backup Tracking
-
-    private func addBackup(_ rec: VideoRecord, entry: BackupEntry) {
-        // Don't add the same destination twice
-        if !rec.backupDestinations.contains(where: { $0.name == entry.name }) {
-            rec.backupDestinations.append(entry)
-        }
-        // Auto-advance archive stage if not already past backedUp
-        if rec.archiveStage < .backedUp {
-            rec.archiveStage = .backedUp
         }
     }
 
