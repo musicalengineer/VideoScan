@@ -83,6 +83,19 @@ enum CatalogHost {
     }
 }
 
+/// Receives a notification after every successful catalog write. The
+/// CatalogSync engine installs itself here so it can refresh
+/// manifest.sha256 next to the freshly-rewritten catalog.json without
+/// CatalogStore having to know about sync, hostnames, or rsync.
+///
+/// `// `protocol` ≈ a pure-virtual C++ base class — keeps the dependency
+/// arrow pointing the right way (CatalogStore → CatalogStoreObserver,
+/// never CatalogStore → CatalogSync).
+@MainActor
+protocol CatalogStoreObserver: AnyObject {
+    func catalogStoreDidWrite(_ store: CatalogStore)
+}
+
 @MainActor
 final class CatalogStore {
     static let shared = CatalogStore()
@@ -110,6 +123,20 @@ final class CatalogStore {
     private let fileURL: URL
     private let backupURL: URL
     private var debounceTask: Task<Void, Never>?
+
+    /// Belt-and-suspenders read-only guard for the viewer (non-master) Macs.
+    /// When `true`, saveNow / scheduleSave early-return and log instead of
+    /// writing. The UI also disables write affordances and shows a banner,
+    /// but this is the last line of defense at the data layer — any future
+    /// write path automatically picks up the guard without remembering to
+    /// check `model.isReadOnly`. Set once at construction by the sync
+    /// engine; never flips at runtime.
+    var isReadOnly: Bool = false
+
+    /// Notified after every successful write. Used by CatalogSync on the
+    /// master to refresh manifest.sha256. Weak ref so the observer's
+    /// lifetime isn't entangled with the singleton's.
+    weak var observer: CatalogStoreObserver?
 
     /// Outcome of the most recent `load()` call. Inspectable by callers
     /// (or tests) that want to react to "newer version refused" or
@@ -252,6 +279,10 @@ final class CatalogStore {
     /// is flushed before the process exits.
     func saveNow(records: [VideoRecord]) {
         if Self.isRunningTests && self === CatalogStore.shared { return }
+        if isReadOnly {
+            NSLog("VideoScan: CatalogStore.saveNow refused — read-only viewer mode")
+            return
+        }
         debounceTask?.cancel()
         debounceTask = nil
         writeToDisk(records: records)
@@ -261,6 +292,10 @@ final class CatalogStore {
     /// reset the timer so a burst of mutations only triggers one disk write.
     func scheduleSave(records: [VideoRecord]) {
         if Self.isRunningTests && self === CatalogStore.shared { return }
+        if isReadOnly {
+            NSLog("VideoScan: CatalogStore.scheduleSave refused — read-only viewer mode")
+            return
+        }
         debounceTask?.cancel()
         let snapshot = records  // capture the array reference; elements are classes
         debounceTask = Task { [weak self] in
@@ -288,6 +323,11 @@ final class CatalogStore {
             // within a filesystem, so readers see either the old file or
             // the new file, never a partial.
             try data.write(to: fileURL, options: Data.WritingOptions.atomic)
+            // Notify the observer (CatalogSync on the master) so it can
+            // refresh manifest.sha256. Skipped for the test singleton —
+            // tests construct their own CatalogStore(directory:) and can
+            // wire an observer if they need to assert the callback.
+            observer?.catalogStoreDidWrite(self)
         } catch {
             NSLog("VideoScan: failed to save catalog snapshot: %@", String(describing: error))
         }
