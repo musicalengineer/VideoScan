@@ -388,7 +388,7 @@ struct PersonFinderView: View {
                                     Divider()
                                     Button("Show \(profile.name) in Family Tree") {
                                         ftHighlight = profile.name
-                                        selectedTab = 4
+                                        selectedTab = 5
                                     }
                                     Divider()
                                     Button("Edit \(profile.name)\u{2026}") {
