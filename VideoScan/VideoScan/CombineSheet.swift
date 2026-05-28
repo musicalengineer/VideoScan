@@ -18,6 +18,11 @@ struct CombineSheet: View {
     @State private var technique: CombineJobStatus.CombineTechnique = .streamCopy
     @State private var substitutions: [UUID: VideoRecord] = [:]
     @State private var subsSearched = false
+    // Preflight sheet state (2B-2). Holds the BatchPlan to show; non-nil
+    // means the sheet is up. Closure captures the selected pairs + folder
+    // so confirming runs them without re-derivation.
+    @State private var preflightPlan: VideoScanModel.CombineBatchPlan?
+    @State private var preflightProceed: (() -> Void)?
 
     var pairs: [(video: VideoRecord, audio: VideoRecord)] {
         let all = model.correlatedPairs
@@ -82,6 +87,26 @@ struct CombineSheet: View {
         .frame(width: 720)
         .onAppear {
             checkedPairs = Set(onlinePairs.map(\.index))
+        }
+        .sheet(isPresented: Binding(
+            get: { preflightPlan != nil },
+            set: { newValue in if !newValue { preflightPlan = nil; preflightProceed = nil } }
+        )) {
+            if let plan = preflightPlan {
+                CombinePreflightSheet(
+                    plan: plan,
+                    onProceed: {
+                        let proceed = preflightProceed
+                        preflightPlan = nil
+                        preflightProceed = nil
+                        proceed?()
+                    },
+                    onCancel: {
+                        preflightPlan = nil
+                        preflightProceed = nil
+                    }
+                )
+            }
         }
     }
 
@@ -368,21 +393,39 @@ struct CombineSheet: View {
             let label = checkedPairs.count == onlinePairs.count
                 ? "Combine All \(checkedPairs.count) Pairs"
                 : "Combine \(checkedPairs.count) Pair\(checkedPairs.count == 1 ? "" : "s")"
-            Button(label) {
-                guard let folder = outputFolder else { return }
-                let selectedPairs: [(video: VideoRecord, audio: VideoRecord)] = checkedPairs.sorted().compactMap { i in
-                    guard i < pairs.count else { return nil }
-                    return effectivePair(pairs[i])
-                }
-                model.combineSelectedPairs(selectedPairs, outputFolder: folder, technique: technique)
-                dismiss()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                    openWindow(id: "combine")
-                }
-            }
+            Button(label) { handleCombineButton() }
             .buttonStyle(.borderedProminent)
             .disabled(checkedPairs.isEmpty || outputFolder == nil || insufficientSpace)
             .keyboardShortcut(.return)
+        }
+    }
+
+    // Runs the model's batch planner against the currently-selected pairs.
+    // If there are substitutions or blocked pairs the user should see, put
+    // up the preflight sheet for explicit confirmation. Otherwise (the
+    // common all-ready case) skip the sheet and start the combine right
+    // away to keep friction low.
+    private func handleCombineButton() {
+        guard let folder = outputFolder else { return }
+        let selectedPairs: [(video: VideoRecord, audio: VideoRecord)] = checkedPairs.sorted().compactMap { i in
+            guard i < pairs.count else { return nil }
+            return effectivePair(pairs[i])
+        }
+        let plan = model.prepareCombineBatch(pairs: selectedPairs)
+
+        let runAndDismiss = {
+            model.combineSelectedPairs(selectedPairs, outputFolder: folder, technique: technique)
+            dismiss()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                openWindow(id: "combine")
+            }
+        }
+
+        if plan.substituted.isEmpty && plan.blocked.isEmpty {
+            runAndDismiss()
+        } else {
+            preflightProceed = runAndDismiss
+            preflightPlan = plan
         }
     }
 
