@@ -43,22 +43,37 @@ enum TestGroup: String, CaseIterable, Identifiable, Hashable, Codable {
     }
 }
 
-/// Where the test will execute. Hardwired to local for now; SSH-to-MBP
-/// path lands when we wire it up. Reachable hosts are surfaced in the
-/// UI's "Run on" picker.
+/// Where the test will execute. `.local` runs xcodebuild on whichever
+/// Mac TestDriver is running on; `.mbp` SSHes to the M1 MacBook Pro.
+/// Reachable hosts are surfaced in the UI's "Run on" picker.
 enum TestHost: String, CaseIterable, Identifiable, Codable, Hashable {
-    case macStudio = "Mac Studio (local)"
-    case mbp       = "M1 MBP (over SSH)"
+    case local = "local"
+    case mbp   = "mbp"
 
     var id: String { rawValue }
-    /// Hostname or "local" — used by tests that need to know where to run.
-    var sshHost: String? {
+
+    /// Human-readable label shown in pickers, banners, commit messages,
+    /// and metrics rows. Resolved at runtime so the same TestDriver
+    /// binary can run on M5 / Mac Studio / Intel without baking
+    /// "Mac Studio" into the UI when the host is actually something else.
+    var displayName: String {
         switch self {
-        case .macStudio: return nil
-        case .mbp:       return "ricksmacbookpro.local"
+        case .local:
+            let name = Host.current().localizedName ?? "this Mac"
+            return "\(name) (local)"
+        case .mbp:
+            return "M1 MBP (over SSH)"
         }
     }
-    /// Both hosts are wired up: local Mac Studio runs xcodebuild directly;
+
+    /// Hostname or nil — used by tests that need to know where to run.
+    var sshHost: String? {
+        switch self {
+        case .local: return nil
+        case .mbp:   return "ricksmacbookpro.local"
+        }
+    }
+    /// Both hosts are wired up: local runs xcodebuild directly;
     /// MBP runs it via SSH + launchctl submit (see MBPRemote.swift).
     var isImplemented: Bool { true }
 }

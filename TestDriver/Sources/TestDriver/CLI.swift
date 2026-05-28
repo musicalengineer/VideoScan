@@ -40,7 +40,7 @@ enum CLI {
         }
 
         print("TestDriver CLI")
-        print("  host:    \(opts.host.rawValue)")
+        print("  host:    \(opts.host.displayName)")
         print("  tests:   \(entries.count)")
         print("  groups:  \(Set(entries.map(\.group.rawValue)).sorted().joined(separator: ", "))")
         if opts.coverage {
@@ -151,7 +151,7 @@ enum CLI {
         if let cov = coveragePct {
             print(String(format: "Coverage: %.2f%%", cov))
         }
-        print("Host:   \(opts.host.rawValue)")
+        print("Host:   \(opts.host.displayName)")
         print("Repo:   \(repo.oneLine)")
         print("Date:   \(ISO8601DateFormatter().string(from: started))")
         print(publishLine)
@@ -164,7 +164,7 @@ enum CLI {
     // MARK: - Options
 
     struct Options {
-        var host: TestHost = .macStudio
+        var host: TestHost = .local
         var group: TestGroup? = nil
         var filter: String? = nil
         var includeStress: Bool = false
@@ -194,7 +194,7 @@ enum CLI {
                 if raw == "mbp" || raw.contains("mbp") {
                     opts.host = .mbp
                 } else {
-                    opts.host = .macStudio
+                    opts.host = .local
                 }
                 continue
             }

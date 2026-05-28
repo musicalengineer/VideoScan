@@ -26,7 +26,7 @@ final class TestDriverModel: ObservableObject {
     @Published var coverageEnabled: Bool = false
     @Published var coverageIncludeAll: Bool = false
     @Published var lastCoveragePercent: Double? = nil
-    @Published var host: TestHost = .macStudio {
+    @Published var host: TestHost = .local {
         didSet { Task { await refreshRepoInfo() } }
     }
     @Published var repoInfo: RepoInfo = .empty
@@ -52,7 +52,7 @@ final class TestDriverModel: ObservableObject {
 
     func refreshRepoInfo() async {
         let h = host
-        TermLog.log("model", "refreshRepoInfo host=\(h.rawValue)")
+        TermLog.log("model", "refreshRepoInfo host=\(h.displayName)")
         let info = await RepoInspector.inspect(host: h)
         let branches = await RepoInspector.listBranches(host: h)
         await MainActor.run {
@@ -106,12 +106,12 @@ final class TestDriverModel: ObservableObject {
             TermLog.log("ui", "runSelected called with empty selection")
             return
         }
-        TermLog.log("ui", "runSelected: \(toRun.count) tests on host=\(host.rawValue) coverage=\(coverageEnabled)/\(coverageIncludeAll)")
+        TermLog.log("ui", "runSelected: \(toRun.count) tests on host=\(host.displayName) coverage=\(coverageEnabled)/\(coverageIncludeAll)")
         // Plumb the coverage toggles into the run path. Read here so a
         // mid-flight toggle change doesn't apply to a half-finished run.
         VideoScanTests.coverageContext = (enabled: coverageEnabled,
                                           includeAll: coverageIncludeAll)
-        summaryText = "Running \(toRun.count) test(s) on \(host.rawValue)..."
+        summaryText = "Running \(toRun.count) test(s) on \(host.displayName)..."
         totalToRun = toRun.count
         completedCount = 0
         progressFraction = 0
@@ -270,7 +270,7 @@ final class TestDriverModel: ObservableObject {
     /// wedged and Rick wants to know what TestDriver thinks is happening.
     func dumpState() {
         TermLog.log("debug", "=== state dump ===")
-        TermLog.log("debug", "host=\(host.rawValue)")
+        TermLog.log("debug", "host=\(host.displayName)")
         TermLog.log("debug", "selected=\(selected.count)")
         TermLog.log("debug", "currentlyRunning=\(currentlyRunning ?? "—")")
         TermLog.log("debug", "completed=\(completedCount)/\(totalToRun)")
@@ -424,7 +424,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
                     Text("Testing").font(.td(.caption)).foregroundStyle(.secondary)
-                    Text(model.host.rawValue).font(.td(.caption)).bold()
+                    Text(model.host.displayName).font(.td(.caption)).bold()
                     Text("·").foregroundStyle(.secondary)
                     Text(model.repoInfo.projectDir)
                         .font(.td(.caption))
@@ -563,7 +563,7 @@ struct ContentView: View {
                             .foregroundStyle(Color.accentColor)
                     }
                 }
-                Text("\(s.host.rawValue)  ·  \(s.repo.branch) @ \(s.repo.commit)\(s.repo.dirty ? " (dirty)" : "")  ·  v\(s.repo.appVersion)  ·  \(dateFmt.string(from: s.startedAt))")
+                Text("\(s.host.displayName)  ·  \(s.repo.branch) @ \(s.repo.commit)\(s.repo.dirty ? " (dirty)" : "")  ·  v\(s.repo.appVersion)  ·  \(dateFmt.string(from: s.startedAt))")
                     .font(.system(.body, design: .monospaced))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -644,7 +644,7 @@ struct ContentView: View {
                 Text("Run on").font(.td(.caption)).foregroundStyle(.secondary)
                 Picker("", selection: $model.host) {
                     ForEach(TestHost.allCases) { h in
-                        Text(h.isImplemented ? h.rawValue : "\(h.rawValue) — not wired")
+                        Text(h.isImplemented ? h.displayName : "\(h.displayName) — not wired")
                             .tag(h)
                     }
                 }

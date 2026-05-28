@@ -21,6 +21,20 @@ enum VideoScanTests {
     /// stray test invocation behaves exactly as before.
     nonisolated(unsafe) static var coverageContext: (enabled: Bool, includeAll: Bool) = (false, false)
 
+    /// Shared across every xcodebuild test invocation in this process so
+    /// the 2nd→Nth suite picks up cached build products instead of paying
+    /// a full ~90s cold build each time. Auto-discovery surfaces ~130
+    /// suites, and the run loop is sequential — without sharing this
+    /// path, a "run all" pass would re-link the entire test bundle once
+    /// per suite and never finish (the "all-day hang" symptom).
+    /// Unique-per-launch to avoid collisions with a concurrent TestDriver
+    /// instance, but stable across all runs within a single launch.
+    static let sharedDerivedDataPath: String = {
+        let p = NSTemporaryDirectory() + "testdriver-dd-\(UUID().uuidString.prefix(8))"
+        try? FileManager.default.createDirectory(atPath: p, withIntermediateDirectories: true)
+        return p
+    }()
+
     /// Register every test in this file with the global registry.
     static func registerAll() {
         TestRegistry.shared.register([
@@ -378,7 +392,7 @@ enum VideoScanTests {
         // derivedDataPath under /tmp on the MBP. Same SubprocessResult
         // shape comes back, so the parsing/summary code below is shared.
         if host == .mbp {
-            log("Running xcodebuild test on \(host.rawValue)")
+            log("Running xcodebuild test on \(host.displayName)")
             log("  scheme: VideoScan")
             log("  configuration: \(configuration)")
             log("  only-testing: \(onlyTesting)")
@@ -396,15 +410,18 @@ enum VideoScanTests {
                              xcresultPath: nil)
         }
 
-        // Unique derived data path per run to avoid colliding with any
-        // VideoScan instance Rick has open + with concurrent TestDriver runs.
-        let dd = NSTemporaryDirectory() + "testdriver-dd-\(UUID().uuidString.prefix(8))"
-        let xcresultPath = dd + "/Coverage.xcresult"
+        // Reuse a single derivedDataPath for every xcodebuild invocation
+        // in this process so incremental builds kick in for suite #2 and
+        // beyond. xcresult bundles still need to be unique per call —
+        // xcodebuild errors if `-resultBundlePath` points at an existing
+        // directory.
+        let dd = sharedDerivedDataPath
+        let xcresultPath = dd + "/Coverage-\(UUID().uuidString.prefix(8)).xcresult"
         log("Running xcodebuild test")
         log("  scheme: VideoScan")
         log("  configuration: \(configuration)")
         log("  only-testing: \(onlyTesting)")
-        log("  derivedDataPath: \(dd)")
+        log("  derivedDataPath: \(dd) (shared this session)")
         if collectCoverage { log("  coverage: ON -> \(xcresultPath)") }
         log("(this may take several minutes — output streamed below)")
 
