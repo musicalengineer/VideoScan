@@ -9,7 +9,7 @@
 //   1. branch == "main"
 //   2. !dirty
 //   3. ahead == 0 && behind == 0       (the commit IS origin/main HEAD)
-//   4. host is .macStudio or .mbp      (real result, not synthetic)
+//   4. host is .local or .mbp           (real result, not synthetic)
 //   5. The run completed (not cancelled mid-flight)
 //
 // Anything fails: skip silently, log to TermLog, surface in UI banner.
@@ -54,7 +54,7 @@ enum MetricsPublisher {
             return .skipped(reason: "no tests ran")
         }
 
-        TermLog.log("metrics", "publishing run: \(summary.methodsPassed)p/\(summary.methodsFailed)f/\(summary.entriesSkipped)s on \(summary.host.rawValue)")
+        TermLog.log("metrics", "publishing run: \(summary.methodsPassed)p/\(summary.methodsFailed)f/\(summary.entriesSkipped)s on \(summary.host.displayName)")
 
         // Build the JSONL row.
         let row = makeRow(summary: summary)
@@ -88,7 +88,7 @@ enum MetricsPublisher {
             return .failed(message: "git add failed: \(add.stderr.suffix(200))")
         }
 
-        let commitMsg = "testdriver: run on \(summary.host.rawValue) — \(summary.methodsPassed)p/\(summary.methodsFailed)f/\(summary.entriesSkipped)s"
+        let commitMsg = "testdriver: run on \(summary.host.displayName) — \(summary.methodsPassed)p/\(summary.methodsFailed)f/\(summary.entriesSkipped)s"
         let commit = await git(["commit", "-m", commitMsg], in: metricsWorktree)
         guard commit.didSucceed else {
             // No changes? Treat as skipped so we don't error-spam.
@@ -131,7 +131,7 @@ enum MetricsPublisher {
 
         add("ts",          isoFmt.string(from: summary.startedAt))
         add("source",      "testdriver")
-        add("host",        summary.host.rawValue)
+        add("host",        summary.host.displayName)
         add("branch",      summary.repo.branch)
         add("commit",      summary.repo.commit)
         add("commit_date", summary.repo.commitDate)

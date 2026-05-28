@@ -70,7 +70,7 @@ enum RepoInspector {
     /// the same git/plutil commands in an SSH invocation.
     static func inspect(host: TestHost) async -> RepoInfo {
         switch host {
-        case .macStudio:
+        case .local:
             return await inspectLocal()
         case .mbp:
             return await inspectMBP()
@@ -91,7 +91,7 @@ enum RepoInspector {
         let appVersion = readAppVersion(localProjectDir: dir)
         let ab = await aheadBehind
         return RepoInfo(
-            hostLabel: TestHost.macStudio.rawValue,
+            hostLabel: TestHost.local.displayName,
             projectDir: dir,
             branch: branch,
             commit: await commit,
@@ -191,14 +191,14 @@ enum RepoInspector {
         )
         if result.exitCode != 0 {
             var info = RepoInfo.empty
-            info.hostLabel = TestHost.mbp.rawValue
+            info.hostLabel = TestHost.mbp.displayName
             info.projectDir = dir
             info.branch = "(unreachable)"
             info.commit = "ssh exit \(result.exitCode)"
             return info
         }
         var info = RepoInfo.empty
-        info.hostLabel = TestHost.mbp.rawValue
+        info.hostLabel = TestHost.mbp.displayName
         info.projectDir = dir
         for line in result.stdout.components(separatedBy: "\n") {
             guard let colon = line.firstIndex(of: ":") else { continue }
@@ -227,7 +227,7 @@ enum RepoInspector {
     /// Returns local + remote-tracking branches, deduped.
     static func listBranches(host: TestHost) async -> [String] {
         switch host {
-        case .macStudio:
+        case .local:
             let r = await Subprocess.run("/usr/bin/git",
                                          ["-C", localProjectDir,
                                           "for-each-ref", "--format=%(refname:short)",
