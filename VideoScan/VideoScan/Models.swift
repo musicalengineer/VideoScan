@@ -628,6 +628,13 @@ class VideoRecord: Identifiable, Codable {
 enum LifecycleStage: String, Codable, CaseIterable {
     case cataloged = "Cataloged"
     case reviewing = "In Triage"
+    /// Output of Combine / Repair / Transcode workflows that have produced
+    /// a new file but haven't yet been reviewed and promoted to the long-
+    /// term Archive. The Workbench tab surfaces these so the user can spot-
+    /// check recent work before committing it, and prune test artifacts
+    /// without them lingering in the Catalog forever. See
+    /// [[project_archive_combine_pipeline_order]] step 2C.
+    case workbench = "Workbench"
     case archived  = "Archived"
     /// File moved to macOS Trash via Delete Confirmed Junk workflow.
     /// Record is preserved (soft-deleted via `purgedAt`); the file itself

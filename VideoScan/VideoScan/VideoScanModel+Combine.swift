@@ -371,6 +371,12 @@ extension VideoScanModel {
 
         rec.mediaDisposition = .unreviewed
         rec.archiveStage = .none
+        // Newly-combined files start on the Workbench so the user can
+        // spot-check them before promoting to the Archive. Without this,
+        // every overnight Combine batch would silently sprinkle thousands
+        // of new rows into the main Catalog with no way to distinguish
+        // "I just made this" from "scanned six months ago".
+        rec.lifecycleStage = .workbench
         rec.starRating = max(video.starRating, audio.starRating)
         rec.combinedFromPairID = video.pairGroupID
 
