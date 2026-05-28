@@ -85,6 +85,11 @@ enum ScanEngine {
         rec.timecode = fmtTags["timecode"] ?? fmtTags["Timecode"] ?? ""
         rec.tapeName = fmtTags["tape_name"] ?? fmtTags["reel_name"]
                        ?? fmtTags["com.apple.quicktime.reelname"] ?? ""
+        // MXF MaterialPackage UMID. ffprobe emits this as a "0x..."-prefixed
+        // 32-byte hex string in the format-level tags for MXF files. We
+        // store it verbatim — the substitute-file resolver matches by
+        // exact string, no normalization needed.
+        rec.materialPackageUMID = fmtTags["material_package_umid"] ?? ""
 
         var hasVideo = false
         var hasAudio = false
