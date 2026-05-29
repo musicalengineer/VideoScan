@@ -458,13 +458,18 @@ enum VideoScanTests {
             timeoutSeconds: timeoutSeconds,
             // Only stream lines that look meaningful — xcodebuild emits
             // many tens of thousands of build-system lines that would
-            // flood the UI. We surface test-case events, errors, and the
-            // final summary.
+            // flood the UI. We surface test events from both XCTest
+            // (`Test Case`, `Test Suite`) and Swift Testing (◇ / ✔ / ✘),
+            // plus errors and the final summary.
             stdoutLine: { line in
                 if line.contains("Test Case") ||
                    line.contains("Test Suite") ||
                    line.contains("TEST SUCCEEDED") ||
                    line.contains("TEST FAILED") ||
+                   line.contains("◇ Test") ||
+                   line.contains("✔ Test") ||
+                   line.contains("✘ Test") ||
+                   line.contains("Test run with") ||
                    line.contains("error:") ||
                    line.contains("warning:") && line.contains("VideoScan") {
                     log(line)
@@ -487,9 +492,9 @@ enum VideoScanTests {
         elapsed: Double,
         xcresultPath: String?
     ) -> TestResult {
-        let passed = result.stdout.components(separatedBy: " passed on ").count - 1
-        let failed = result.stdout.components(separatedBy: " failed on ").count - 1
-        let counts = (passed: passed, failed: failed)
+        let counts = parseTestCounts(from: result.stdout)
+        let passed = counts.passed
+        let failed = counts.failed
 
         if result.timedOut {
             log("--- summary --- TIMED OUT")
@@ -549,6 +554,53 @@ enum VideoScanTests {
                        log: "\(passed) tests passed",
                        methodCounts: counts,
                        coveragePercent: coverage)
+    }
+
+    /// Tally passed and failed test methods from xcodebuild's stdout.
+    /// Handles both runtimes:
+    ///   - XCTest lines look like:
+    ///       Test Case '-[FooTests testBar]' passed on 'My Mac' (0.001 seconds)
+    ///   - Swift Testing lines look like:
+    ///       ✔ Test sha256Matches() passed after 0.001 seconds.
+    ///       ✘ Test foo() recorded an issue at Foo.swift:42
+    ///       ✘ Test foo() failed after 0.001 seconds with 1 issue.
+    ///       ✘ Suite FooTests failed after 0.001 seconds with 1 issue.
+    ///       ✘ Test run with 2 tests in 1 suite failed after ...
+    /// xcodebuild's own bookkeeping (`Executed N tests`) only sees XCTest
+    /// methods and silently reports 0 for Swift Testing suites, so the
+    /// previous parser was returning a phantom "0 tests executed" failure
+    /// even when every Swift Testing case passed.
+    ///
+    /// For Swift Testing we match only the canonical per-test summary
+    /// markers — `passed after ` / `failed after ` — and explicitly
+    /// exclude the run-level summary (`✘ Test run with …`) and the
+    /// recorded-issue marker (which can fire multiple times for one
+    /// failing test). Without those filters a single failing test was
+    /// counted 3× (recorded + failed + run-summary).
+    private static func parseTestCounts(from stdout: String) -> (passed: Int, failed: Int) {
+        // XCTest format (legacy).
+        let xcPassed = stdout.components(separatedBy: " passed on ").count - 1
+        let xcFailed = stdout.components(separatedBy: " failed on ").count - 1
+
+        // Swift Testing — line-oriented so we can exclude the run-summary
+        // and recorded-issue noise.
+        var stPassed = 0
+        var stFailed = 0
+        for raw in stdout.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(raw)
+            // Skip the test-run-wide summary so it doesn't double-count.
+            if line.contains("Test run with ") { continue }
+            if line.contains("✔ Test "), line.contains(" passed after ") {
+                stPassed += 1
+            } else if line.contains("✘ Test "), line.contains(" failed after ") {
+                // `failed after` only appears on the per-test summary line,
+                // not on `recorded an issue at …` lines. So this counts
+                // each failing test exactly once.
+                stFailed += 1
+            }
+        }
+
+        return (passed: xcPassed + stPassed, failed: xcFailed + stFailed)
     }
 
     /// Invoke `xcrun xccov view --report --json <xcresult>` and aggregate
