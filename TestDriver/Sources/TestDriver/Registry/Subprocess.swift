@@ -120,36 +120,76 @@ enum Subprocess {
         }
         TermLog.log("subproc", "launched pid=\(proc.processIdentifier)")
 
-        // Timeout watcher. `nonisolated(unsafe)` flag is a simple Bool we
-        // flip from a detached task; the read is non-racing because we
-        // only read it AFTER waitUntilExit returns.
+        // Resume-once latch so the continuation can be tripped from any of:
+        //   1. terminationHandler (child exited cleanly)
+        //   2. timeout watcher (we killed it)
+        //   3. a defensive watchdog if neither fires
+        // Foundation's `proc.waitUntilExit()` is known to park forever when
+        // a child exits with bytes still buffered in its stdout/stderr
+        // pipes — the wait expects the pipe reader to drain to EOF, but
+        // a racy readabilityHandler can miss the final readable event and
+        // leave the wait permanently parked. Using terminationHandler
+        // bypasses that wait entirely.
+        let resumeLock = OSAllocatedUnfairLock<Bool>(initialState: false)
         nonisolated(unsafe) var didTimeout = false
-        let timeoutTask: Task<Void, Never>?
-        if let timeoutSeconds {
-            timeoutTask = Task.detached {
-                try? await Task.sleep(for: .seconds(timeoutSeconds))
-                if proc.isRunning {
-                    didTimeout = true
-                    proc.terminate()
+
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            let resumeOnce: @Sendable () -> Void = {
+                let shouldResume = resumeLock.withLock { resumed -> Bool in
+                    guard !resumed else { return false }
+                    resumed = true
+                    return true
+                }
+                if shouldResume { cont.resume() }
+            }
+
+            proc.terminationHandler = { _ in
+                resumeOnce()
+            }
+
+            if let timeoutSeconds {
+                Task.detached {
+                    try? await Task.sleep(for: .seconds(timeoutSeconds))
+                    if proc.isRunning {
+                        didTimeout = true
+                        proc.terminate()
+                        // Give terminate() a moment to land; if the child
+                        // is wedged in the kernel, force-kill so the
+                        // terminationHandler is guaranteed to fire.
+                        try? await Task.sleep(for: .seconds(2))
+                        if proc.isRunning {
+                            kill(proc.processIdentifier, SIGKILL)
+                        }
+                    }
+                    // Belt-and-suspenders: if terminationHandler somehow
+                    // didn't run (Foundation bug), unblock the wait anyway.
+                    try? await Task.sleep(for: .seconds(1))
+                    resumeOnce()
                 }
             }
-        } else {
-            timeoutTask = nil
         }
-
-        // Wait on a background queue so we don't block the calling task's
-        // executor. The readability handlers continue firing.
-        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            DispatchQueue.global(qos: .userInitiated).async {
-                proc.waitUntilExit()
-                cont.resume()
-            }
-        }
-        timeoutTask?.cancel()
 
         // Tear down handlers so the FileHandles don't fire after we return.
-        outPipe.fileHandleForReading.readabilityHandler = nil
-        errPipe.fileHandleForReading.readabilityHandler = nil
+        // Stash references first so the synchronous drain below can read
+        // any bytes that arrived between the last readability event and
+        // the child exit.
+        let outFH = outPipe.fileHandleForReading
+        let errFH = errPipe.fileHandleForReading
+        outFH.readabilityHandler = nil
+        errFH.readabilityHandler = nil
+
+        // Synchronous drain of anything the readability handlers missed.
+        // After terminationHandler fires there's no writer, so these reads
+        // return immediately at EOF — they CANNOT hang the way
+        // waitUntilExit could.
+        if let tail = try? outFH.readToEnd(), !tail.isEmpty,
+           let s = String(data: tail, encoding: .utf8) {
+            outBuf.append(s, lineHandler: stdoutLine)
+        }
+        if let tail = try? errFH.readToEnd(), !tail.isEmpty,
+           let s = String(data: tail, encoding: .utf8) {
+            errBuf.append(s, lineHandler: stderrLine)
+        }
 
         let finalOut = outBuf.flush(lineHandler: stdoutLine)
         let finalErr = errBuf.flush(lineHandler: stderrLine)
