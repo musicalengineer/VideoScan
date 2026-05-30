@@ -113,7 +113,8 @@ Reserve `rsync` only if integration testing surfaces an HFS+ catalog corruption 
 
 #### Flow
 
-After `runRelocate` completes its catalog mutation phase and writes the end-of-batch summary, it calls `maybeOfferRetire(for: options.sourceVolumeRootPath)`:
+After `runRelocate` completes its catalog mutation phase and writes the end-of-batch summary, the §1A post-Apply summary sheet is published (`model.pendingRelocateSummary = ...`). Only after the user dismisses that sheet via its Done button (which calls `model.acknowledgeRelocateSummary()`) does the §1B retire path run `maybeOfferRetire(for: options.sourceVolumeRootPath)`. The trigger order was changed 2026-05-30 — see "§1A.1 Post-Apply summary sheet + dry-run mutation gate" below for the reasoning.
+
 - Pure predicate: `shouldOfferRetire(volumeRootPath:in:) → bool`. True iff the volume has at least one record AND every catalogued record on it is `.manuallyDeleted`.
 - When true, aggregate witnesses (`aggregateRetiredWitnesses` walks every `.manuallyDeleted` record on the volume and parses the structured Bucket E note via `parseWitnessesFromNote`, deduped/sorted union).
 - Set `model.pendingRetireOffer = PendingRetireOffer(...)` carrying volume root path, friendly name, total record count, default reason text, witness union.
@@ -176,6 +177,40 @@ Plus `RelocateSchemaTests.currentSnapshotVersionIsSix` swap for the v5→v6 bump
 - **Dry run flag** in `RelocateOptions` runs reconcile + reports the bucket breakdown without committing any catalog mutation. Lets Rick preview before pulling the trigger.
 - **Test:** `RelocateReconcileTests.swift` — synthetic catalog with 4 records, fault-inject the 4 conditions (file present / file missing / file moved within source / file already at dest), assert correct bucket assignment + catalog mutation after `reconcile()`. ~200 lines.
 - **Expected diff:** ~250 lines engine (reconcile is the heavyweight new logic), ~200 lines tests.
+
+### 1A.1. Post-Apply summary sheet + dry-run mutation gate (added 2026-05-30)
+
+> **Context:** Rick's first end-to-end §1A run (on Maxtor500FW) finished correctly but raced past him into the §1B Retire prompt with no visible confirmation that the source media was accounted for elsewhere. Same session, the dry-run code path was silently committing Bucket B/D/E disposition writes despite the user-facing "preview only" framing.
+
+**Trigger ordering — `pendingRelocateSummary` gates `pendingRetireOffer`:**
+
+- `runRelocate` no longer calls `maybeOfferRetire` itself. Instead it sets a new `@Published var pendingRelocateSummary: RelocateSummary?` on `VideoScanModel` after the work completes (both real runs AND dry-runs).
+- `ContentView` binds a `.sheet(item: $model.pendingRelocateSummary)` to a new `RelocateSummarySheet`. The sheet renders the same buckets the end-of-batch log block carries plus a "Show witnesses" disclosure (up to 10 sample `source → witness` pairs parsed from the Bucket E audit notes) and a clickable pre-relocate snapshot path (reveal-in-Finder).
+- The sheet's **Done** button calls `model.acknowledgeRelocateSummary()`, which drops `pendingRelocateSummary` AND — when the run wasn't a dry-run — calls `maybeOfferRetire`. The retire offer can no longer fire before the user has dismissed the summary.
+
+**Progress sheet — minimum-visible window:**
+
+- A new `RelocateProgressSheet` auto-presents while `model.isRelocating == true`. Two modes: when `toMigrate.count > 0` it shows `[N / M] currentFile.mxf` + a linear progress bar driven by `dashboard.relocateCompleted / dashboard.relocateTotal` + a verified counter; when there's nothing to copy (Bucket B/D/E only) it shows a `"Verifying audit trail…"` spinner.
+- `runRelocate` enforces a minimum visible window of 800 ms via `padToMinVisible(runStart:minVisibleSeconds:)` before publishing the summary. Bucket-E-only sweeps that complete in <100 ms used to flash past unreadable; the pad is a real `Task.sleep` after the I/O has finished, not a fake delay during work.
+
+**Dry-run mutation gate:**
+
+- Previously, Bucket B/D/E disposition writes were applied BEFORE the `if options.dryRun { return }` short-circuit. That was a latent bug — dry-run flipped `archiveStage = .manuallyDeleted` on records the user expected to be untouched. Now every disposition write is wrapped in `if !options.dryRun { ... }`. The dry-run summary computes its counts directly from `reconcile.*.count` instead of the (skipped) mutations.
+- The pre-relocate `.json` snapshot still runs in dry-run (cheap, useful audit), but no record state is touched.
+
+**`relocate.log` routing fix:**
+
+- `PersistentLog` instances are no-ops until `start()` is called (the file handle stays nil). The earlier wiring never opened `relocate.log`, so every `relocateLog.write(...)` silently dropped while the same lines flowed through the in-app `log()` into `catalog.log`. Fixed by calling `relocateLog.start(append: true)` at the top of `runRelocate` and writing a per-session header (`── Relocate session started <ISO8601> on <hostname> v<MARKETING_VERSION>`).
+
+**Tests (`RelocateSummarySheetTests.swift`):**
+
+- `dryRun_doesNotMutateBucketBDEDispositions` — assembled a B + D + E mini-catalog, runs dry-run, asserts all three records still `.archiveStage == .none`.
+- `apply_setsPendingRelocateSummary_andDoesNotFireRetireUntilDone` — verifies trigger ordering directly; `pendingRetireOffer` stays nil until `acknowledgeRelocateSummary()` is called.
+- `summarySheet_witnessDisclosure_extractsSourceWitnessPairsFromBucketE` — pure helper coverage for `witnessSamples(from:limit:)`.
+- `progressUI_shortRun_paddedToMin800ms` — wall-clock check that a Bucket-E-only run holds at least 750 ms before publishing the summary.
+- `relocateLog_writesToRelocateLogFile_notCatalogLog` — measures `relocate.log` growth + spot-checks the session header.
+
+Plus a small touch to `RelocateRetireVolumeTests.snapshotRollback_restoresPreRetiredState` to acknowledge the summary before checking the retire offer (the test now exercises the new gate explicitly).
 
 ### 3. Engine — per-record copy + verify
 
