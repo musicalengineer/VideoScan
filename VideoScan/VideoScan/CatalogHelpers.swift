@@ -461,6 +461,12 @@ struct CatalogContent: View {
     @State private var notesTarget: VideoRecord?
     @State private var notesText: String = ""
 
+    /// §2 Provenance & Audit Trail — File Journey sheet backing. Built
+    /// fresh from the right-clicked record; the sheet binding drops the
+    /// value on dismiss. Swift's `Identifiable?` ≈ a nullable handle that
+    /// drives a sheet present/dismiss cycle.
+    @State private var fileJourneyPayload: FileJourney?
+
     /// Stable snapshot the Table reads from. Decoupled from `records` so the
     /// Table never sees the data array mutate mid-gesture (which races with
     /// AppKit's canDragRows / mouseDown handling and crashes inside
@@ -682,6 +688,10 @@ struct CatalogContent: View {
                 },
                 onCancel: { showNotesSheet = false }
             )
+        }
+        // §2 Provenance & Audit Trail — File Journey sheet.
+        .sheet(item: $fileJourneyPayload) { payload in
+            FileJourneySheet(journey: payload)
         }
     }
 
@@ -1156,6 +1166,19 @@ struct CatalogContent: View {
                             } label: {
                                 Label("Show in Archive", systemImage: "archivebox")
                             }
+                            // §2 Provenance & Audit Trail — surface the
+                            // File Journey timeline for this record. Works
+                            // on every active row, including ones with no
+                            // relocate history (the timeline just shows
+                            // Origin → Current). Active-only — purged
+                            // rows don't need it.
+                            Button {
+                                fileJourneyPayload = model.makeFileJourney(for: rec)
+                            } label: {
+                                Label("Show this file's journey",
+                                      systemImage: "mappin.and.ellipse")
+                            }
+                            .accessibilityIdentifier("catalog.row.showJourney")
                             Button("Copy Path") {
                                 NSPasteboard.general.clearContents()
                                 NSPasteboard.general.setString(rec.fullPath, forType: .string)
