@@ -143,6 +143,7 @@ struct CombineSheet: View {
                     }
                     .buttonStyle(.borderless)
                     .font(.caption)
+                    .accessibilityIdentifier("combineSheet.selectAllOnline")
 
                     Button("Deselect All") {
                         checkedPairs.removeAll()
@@ -292,6 +293,7 @@ struct CombineSheet: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.radioGroup)
+                .accessibilityIdentifier("combineSheet.techniquePicker")
 
                 switch technique {
                 case .streamCopy:
@@ -397,6 +399,7 @@ struct CombineSheet: View {
             .buttonStyle(.borderedProminent)
             .disabled(checkedPairs.isEmpty || outputFolder == nil || insufficientSpace)
             .keyboardShortcut(.return)
+            .accessibilityIdentifier("combineSheet.combineButton")
         }
     }
 

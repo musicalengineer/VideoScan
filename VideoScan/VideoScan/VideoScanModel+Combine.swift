@@ -416,6 +416,10 @@ extension VideoScanModel {
     }
 
     func combineAllPairsInternal(pairs: [(video: VideoRecord, audio: VideoRecord)], outputFolder: URL, technique: CombineJobStatus.CombineTechnique = .streamCopy, maxConcurrency: Int? = nil) {
+        let (pairs, capInfo) = Self.applyTestPairCap(pairs)
+        if let info = capInfo {
+            log("  [UI TEST] VS_COMBINE_LIMIT_N=\(info.cap) — capping \(info.original) → \(info.cap) pairs")
+        }
         let appending = isCombining
 
         // First filter: drop pairs already in flight from a prior call.
@@ -640,5 +644,22 @@ extension VideoScanModel {
         let fmt = ByteCountFormatter()
         fmt.countStyle = .file
         return fmt.string(fromByteCount: bytes)
+    }
+
+    // MARK: - UI test pair cap
+
+    /// When the `VS_COMBINE_LIMIT_N` env var is set (positive integer < count),
+    /// returns the first N pairs and reports the cap so the caller can log.
+    /// No-op otherwise. Used by the bulk-combine UI test to bound a real
+    /// ffmpeg run to a small, deterministic number of pairs.
+    static func applyTestPairCap<T>(_ pairs: [T],
+                                    env: [String: String] = ProcessInfo.processInfo.environment)
+        -> (pairs: [T], capInfo: (original: Int, cap: Int)?)
+    {
+        guard let raw = env["VS_COMBINE_LIMIT_N"],
+              let n = Int(raw), n > 0, n < pairs.count else {
+            return (pairs, nil)
+        }
+        return (Array(pairs.prefix(n)), (pairs.count, n))
     }
 }
