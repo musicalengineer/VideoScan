@@ -144,21 +144,40 @@ extension VideoScanModel {
 
     /// Build the `(source → witness)` sample list for the post-Apply
     /// summary sheet. Walks Bucket E entries and pairs each source record
-    /// with the FIRST witness in its capped list. Capped at `limit` so
-    /// the disclosure stays readable; the full audit trail remains in
-    /// the catalog notes and relocate.log. Pure / nonisolated for tests.
+    /// with the HIGHEST-RANKED safe witness in its list (post-2026-05-30
+    /// safety filter; pre-filter behavior was "first witness"). Capped
+    /// at `limit` so the disclosure stays readable; the full audit trail
+    /// remains in the catalog notes and relocate.log.
+    ///
+    /// Each sample carries the host volume's role + trust so the sheet
+    /// can render the `✅ LaCieWorkspace · Long-Term Archive · Reliable`
+    /// badge line. Pure / nonisolated for tests.
     nonisolated static func witnessSamples(
         from entries: [SafelyRedundantEntry],
         limit: Int = 10
     ) -> [RelocateSummary.WitnessSample] {
         // `prefix(limit)` would clip mid-record; here every record has at
-        // least one witness (otherwise it wouldn't be in Bucket E), so a
-        // straight prefix is the right call.
+        // least one safe witness (otherwise it wouldn't be in Bucket E),
+        // so a straight prefix is the right call.
         entries.prefix(limit).compactMap { entry in
+            // Prefer the safest witness. `safeWitnesses` is already
+            // sorted highest-first by RelocateReconcile, so [0] is the
+            // right pick. Legacy entries (no safeWitnesses populated)
+            // fall back to the audit-trail `witnesses` string array.
+            if let top = entry.safeWitnesses.first {
+                return RelocateSummary.WitnessSample(
+                    sourcePath: entry.rec.fullPath,
+                    witnessPath: top.path,
+                    witnessRole: top.role,
+                    witnessTrust: top.trust
+                )
+            }
             guard let first = entry.witnesses.first else { return nil }
             return RelocateSummary.WitnessSample(
                 sourcePath: entry.rec.fullPath,
-                witnessPath: first
+                witnessPath: first,
+                witnessRole: .unassigned,
+                witnessTrust: .unknown
             )
         }
     }
@@ -457,6 +476,17 @@ extension VideoScanModel {
 
         let samples = Self.witnessSamples(from: reconcile.safelyRedundant, limit: 10)
 
+        // Split safelyRedundant into "top witness is safe" vs "only
+        // degraded witnesses exist." Post-2026-05-30 the reconcile gate
+        // makes the latter group zero in practice (no safe witness ⇒
+        // record falls to Bucket A). We still surface the split so the
+        // sheet header is honest about what happened. Counting on the
+        // entry — not the sample list — because samples are capped at 10.
+        let backedUp = reconcile.safelyRedundant.filter {
+            !$0.safeWitnesses.isEmpty
+        }.count
+        let degradedOnly = reconcile.safelyRedundant.count - backedUp
+
         pendingRelocateSummary = RelocateSummary(
             isDryRun: options.dryRun,
             sourceVolumeName: sourceName.isEmpty ? options.sourceVolumeRootPath : sourceName,
@@ -472,6 +502,8 @@ extension VideoScanModel {
             manuallyDeletedCount: dashboard.relocateManuallyDeleted,
             salvageFailedCount: dashboard.relocateSalvageFailed,
             skippedCount: dashboard.relocateSkipped,
+            safelyBackedUpCount: backedUp,
+            degradedOnlyCount: degradedOnly,
             salvageFailedPaths: cappedFailedPaths,
             witnessSamples: samples,
             elapsedSeconds: elapsed,
@@ -480,17 +512,16 @@ extension VideoScanModel {
         )
     }
 
-    /// Called from the summary sheet's Done button. Drops the summary
-    /// and — if not a dry-run — checks whether the post-Relocate retire
-    /// offer should fire. This is the SINGLE entry point that opens the
-    /// retire sheet now; `runRelocate` no longer calls
-    /// `maybeOfferRetire` itself.
+    /// Called from the summary sheet's Done button. Drops the summary.
+    /// As of 2026-05-30 this NO LONGER fires the §1B retire offer
+    /// automatically — Rick asked for a quieter UX where the Volumes
+    /// window is the explicit retire surface (per
+    /// feedback_friendly_language.md). The `maybeOfferRetire(for:)`
+    /// machinery is still here and still callable directly (tests use
+    /// it; the programmatic path is fine), but the UI no longer fires
+    /// it from the summary Done button.
     func acknowledgeRelocateSummary() {
-        let wasDryRun = pendingRelocateSummary?.isDryRun ?? true
-        let sourcePath = pendingRelocateSummary?.sourceVolumeRootPath
         pendingRelocateSummary = nil
-        guard !wasDryRun, let sourcePath else { return }
-        maybeOfferRetire(for: sourcePath)
     }
 
     /// Set `pendingRetireOffer` if the source volume is 100% disposed.
@@ -526,6 +557,7 @@ extension VideoScanModel {
                                   options: RelocateOptions) -> ReconcileResult {
         let sourceFiles = enumerateFiles(at: options.sourceVolumeRootPath)
         let destFiles = enumerateFiles(at: options.destinationRoot.path)
+        let resolver = makeVolumeSafetyResolver()
         return RelocateReconcile.reconcile(
             records: scope,
             allCatalogRecords: records,
@@ -534,8 +566,38 @@ extension VideoScanModel {
             sourceFiles: sourceFiles,
             destFiles: destFiles,
             skipDupsOnOtherVolumes: options.skipDupsOnOtherVolumes,
+            resolveVolumeSafety: resolver,
             hash: { FileHasher.partialMD5(path: $0) }
         )
+    }
+
+    /// Build the witness-path → host-volume `(role, trust)` resolver from
+    /// the current `scanTargets`. Matches by longest prefix so a target
+    /// at `/Volumes/MyBook` resolves a witness `/Volumes/MyBook/clip.mxf`
+    /// correctly even when an unrelated target at `/Volumes/MyBook-extra`
+    /// exists.
+    ///
+    /// Pre-computes the sorted target list once so the per-witness
+    /// resolution is O(n_targets) (n_targets is ~10s, n_witnesses is the
+    /// catalog size — keep this lookup tight).
+    ///
+    /// Worst-case footprint: one immutable `[(String, VolumeRole, VolumeTrust)]`
+    /// array sized to the active scan-target list. Fixed sub-KB allocation.
+    func makeVolumeSafetyResolver() -> VolumeSafetyResolver {
+        // Snapshot each target's path + role + trust. Sorted descending by
+        // path length so the longest-matching prefix wins on the first
+        // hit. Empty paths excluded — they'd match every witness.
+        let sorted = scanTargets
+            .filter { !$0.searchPath.isEmpty }
+            .map { (path: $0.searchPath, role: $0.role, trust: $0.trust) }
+            .sorted { $0.path.count > $1.path.count }
+        return { witnessPath in
+            for entry in sorted where witnessPath.hasPrefix(entry.path + "/")
+                                   || witnessPath == entry.path {
+                return (entry.role, entry.trust)
+            }
+            return (.unassigned, .unknown)
+        }
     }
 
     private func enumerateFiles(at root: String) -> [ReconcileFileEntry] {

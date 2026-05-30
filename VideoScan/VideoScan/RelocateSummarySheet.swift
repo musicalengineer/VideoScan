@@ -3,30 +3,42 @@ import AppKit
 
 // MARK: - RelocateSummarySheet
 //
-// Post-Apply summary surfaced after a real or dry-run Relocate. Replaces
-// what used to be a console log dump with a visible, dismissable view
-// that demonstrates to the user the media on the source volume is
-// accounted for — either copied to dest, adopted in place, redundantly
-// safe on another volume, or explicitly flagged as salvage-failed.
+// Post-Apply summary surfaced after a real or dry-run Relocate. Family-
+// friendly tone (per feedback_friendly_language.md) — the user came to
+// VideoScan to feel that their old family-media drive's contents are
+// accounted for, not to read a forensic surveillance report.
 //
-// Gates the Retire prompt: the §1B retire offer can only fire after this
-// sheet's Done button has been pressed (the model's
-// `acknowledgeRelocateSummary()` is the single trigger).
+// Three headline modes:
+//   - "Your files are safe"     — every record disposed; every safely-
+//                                  redundant has at least one safe witness.
+//   - "Files copied and verified" — some Bucket A copies happened; the
+//                                   rest were already safely backed up.
+//   - "Dry-run preview"          — preview only.
+//
+// Drops the auto-retire prompt that used to fire from the Done button —
+// instead the sheet ends with "Open the Volumes window to retire <name>
+// when ready." plus a button that opens the Volumes window with the
+// source pre-selected. The `pendingRetireOffer` machinery is still
+// programmatically callable (tests use it) but the UI no longer drives
+// it from here.
 
 struct RelocateSummarySheet: View {
 
     @EnvironmentObject var model: VideoScanModel
     @Environment(\.dismiss) var dismiss
+    /// Lets us deep-link into the Volumes window when the user clicks
+    /// "Open Volumes window". Cmd+Shift+V also works system-wide; this
+    /// button is the in-context shortcut from the summary.
+    @Environment(\.openWindow) var openWindow
 
     /// Snapshot taken at sheet-init time. Owned by parent's
     /// `.sheet(item:)` binding — dismissing + nilling
     /// `pendingRelocateSummary` tears the sheet down cleanly.
     let summary: RelocateSummary
 
-    /// Witness disclosure toggle. Off by default — Rick can expand if
-    /// he wants to see the per-pair audit, but the count alone usually
-    /// answers "are these copies safe?".
-    @State private var showWitnesses: Bool = false
+    /// Degraded-witness disclosure toggle. Hidden by default — Rick
+    /// wanted the "safe drives only" view as the primary signal.
+    @State private var showDegraded: Bool = false
 
     /// Salvage-failed path disclosure. Off by default — empty unless
     /// the run had failures, so this section often won't even render.
@@ -34,8 +46,7 @@ struct RelocateSummarySheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            header
-            volumeLine
+            headline
             countsGrid
             if !summary.witnessSamples.isEmpty {
                 witnessSection
@@ -43,47 +54,82 @@ struct RelocateSummarySheet: View {
             if !summary.salvageFailedPaths.isEmpty {
                 salvageFailedSection
             }
+            volumesWindowCTA
             footer
             buttonBar
         }
         .padding(22)
-        .frame(minWidth: 560, idealWidth: 600)
+        .frame(minWidth: 600, idealWidth: 640)
     }
 
     // MARK: - Sections
 
-    private var header: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "checkmark.seal.fill")
-                .font(.system(size: 32))
-                .foregroundColor(summary.isDryRun ? .blue : .green)
+    /// Family-friendly title + sub-headline. Picks one of three
+    /// modes based on what the run actually did.
+    @ViewBuilder
+    private var headline: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: headlineIcon)
+                .font(.system(size: 36))
+                .foregroundColor(headlineIconColor)
                 .accessibilityIdentifier("relocateSummary.icon")
-            VStack(alignment: .leading, spacing: 2) {
-                Text(summary.isDryRun ? "Dry Run Complete" : "Relocate Complete")
-                    .font(.title2.bold())
+            VStack(alignment: .leading, spacing: 6) {
+                Text(headlineTitle)
+                    .font(.title.bold())
                     .accessibilityIdentifier("relocateSummary.title")
-                if summary.isDryRun {
-                    Text("Catalog unchanged — this was a preview.")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
+                Text(headlineBody)
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("relocateSummary.subtitle")
             }
             Spacer()
         }
     }
 
-    private var volumeLine: some View {
-        HStack(spacing: 6) {
-            Text(summary.sourceVolumeName).fontWeight(.semibold)
-            Text("→")
-                .foregroundColor(.secondary)
-            Text(summary.destinationDisplay)
-                .font(.system(.body, design: .monospaced))
-                .lineLimit(1)
-                .truncationMode(.middle)
-            Spacer()
+    private var headlineIcon: String {
+        if summary.isDryRun { return "eye.fill" }
+        if summary.succeededCount > 0 { return "checkmark.seal.fill" }
+        return "shield.checkered"
+    }
+
+    private var headlineIconColor: Color {
+        if summary.isDryRun { return .blue }
+        return .green
+    }
+
+    private var headlineTitle: String {
+        if summary.isDryRun { return "Dry-run preview" }
+        if summary.succeededCount > 0 { return "Files copied and verified" }
+        return "Your files are safe"
+    }
+
+    /// The conversational sub-headline. Notice the casual tone — "I"
+    /// instead of "The application," and "safer drives" instead of
+    /// "redundant storage volumes." Matches feedback_friendly_language.md.
+    private var headlineBody: String {
+        if summary.isDryRun {
+            return "If you ran this for real, here's what would happen."
         }
-        .accessibilityIdentifier("relocateSummary.volumeLine")
+        let total = summary.succeededCount + summary.safelyBackedUpCount
+        if summary.succeededCount > 0 {
+            // Mixed mode — some copies, some already safe.
+            var line = "I copied \(summary.succeededCount) file"
+                + (summary.succeededCount == 1 ? "" : "s")
+                + " to \(summary.destinationDisplay) and verified the checksums."
+            if summary.safelyBackedUpCount > 0 {
+                line += " \(summary.safelyBackedUpCount) more "
+                line += summary.safelyBackedUpCount == 1 ? "is" : "are"
+                line += " already safely backed up on other drives."
+            }
+            return line
+        }
+        // All safe — the most reassuring path.
+        return "I found backup copies of all \(total) file"
+            + (total == 1 ? "" : "s")
+            + " on safer drives and checksum-verified them. "
+            + "Everything's accounted for — you can retire "
+            + "\(summary.sourceVolumeName) whenever you're ready."
     }
 
     private var countsGrid: some View {
@@ -93,26 +139,37 @@ struct RelocateSummarySheet: View {
             if summary.succeededCount > 0 {
                 countRow(icon: "doc.on.doc.fill",
                          color: .green,
-                         label: "Succeeded",
+                         label: "Copied and verified",
                          count: summary.succeededCount,
-                         detail: byteString(summary.bytesCopied) + " copied",
+                         detail: byteString(summary.bytesCopied) + " copied to "
+                            + summary.destinationDisplay,
                          identifier: "relocateSummary.row.succeeded")
             }
             if summary.adoptedCount > 0 {
                 countRow(icon: "tray.and.arrow.down.fill",
                          color: .blue,
-                         label: "Adopted",
+                         label: "Already at destination",
                          count: summary.adoptedCount,
-                         detail: "already at destination",
+                         detail: "adopted in place",
                          identifier: "relocateSummary.row.adopted")
             }
-            if summary.safelyRedundantCount > 0 {
+            if summary.safelyBackedUpCount > 0 {
                 countRow(icon: "shield.checkered",
                          color: .green,
-                         label: "Safely redundant",
-                         count: summary.safelyRedundantCount,
-                         detail: byteString(summary.safelyRedundantBytes) + " not copied",
+                         label: "Safely backed up elsewhere",
+                         count: summary.safelyBackedUpCount,
+                         detail: byteString(summary.safelyRedundantBytes)
+                            + " not copied — already safe on other drives",
                          identifier: "relocateSummary.row.safelyRedundant")
+            }
+            if summary.degradedOnlyCount > 0 {
+                countRow(icon: "exclamationmark.triangle.fill",
+                         color: .orange,
+                         label: "Backed up only on aging/retired drives",
+                         count: summary.degradedOnlyCount,
+                         detail: "needs attention — see disclosure below",
+                         identifier: "relocateSummary.row.degradedOnly",
+                         badge: true)
             }
             if summary.sourceMovesCount > 0 {
                 countRow(icon: "arrow.left.arrow.right",
@@ -125,7 +182,7 @@ struct RelocateSummarySheet: View {
             if summary.manuallyDeletedCount > 0 {
                 countRow(icon: "trash",
                          color: .secondary,
-                         label: "Manually deleted",
+                         label: "Missing from source",
                          count: summary.manuallyDeletedCount,
                          detail: "marked, kept for audit",
                          identifier: "relocateSummary.row.manuallyDeleted")
@@ -163,13 +220,13 @@ struct RelocateSummarySheet: View {
                 .foregroundColor(color)
                 .frame(width: 22)
             Text(label)
-                .frame(width: 150, alignment: .leading)
+                .frame(width: 250, alignment: .leading)
             Text("\(count)")
                 .font(.system(.body, design: .monospaced).bold())
                 .frame(width: 60, alignment: .trailing)
                 .padding(.vertical, 2)
                 .padding(.horizontal, badge ? 6 : 0)
-                .background(badge ? Color.red.opacity(0.15) : Color.clear)
+                .background(badge ? color.opacity(0.15) : Color.clear)
                 .cornerRadius(4)
             Text(detail)
                 .font(.caption)
@@ -179,41 +236,112 @@ struct RelocateSummarySheet: View {
         .accessibilityIdentifier(identifier)
     }
 
+    /// Witness section with two parts:
+    ///   - Always-visible: safe witnesses (sorted by safety score).
+    ///   - Disclosure: degraded witnesses (retired/unreliable hosts),
+    ///                  greyed and tagged.
     private var witnessSection: some View {
-        // The "show witnesses" disclosure that satisfies Rick's
-        // "convinced the media is properly accounted for" requirement —
-        // up to 10 sample `source → witness` pairs pulled from the
-        // Bucket E audit notes.
-        DisclosureGroup(isExpanded: $showWitnesses) {
-            VStack(alignment: .leading, spacing: 3) {
-                ForEach(summary.witnessSamples) { sample in
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        Text(sample.sourcePath)
-                            .font(.system(.caption, design: .monospaced))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Text("→")
-                            .foregroundColor(.secondary)
-                        Text(sample.witnessPath)
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundColor(.green)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                }
-                if summary.safelyRedundantCount > summary.witnessSamples.count {
-                    Text("… \(summary.safelyRedundantCount - summary.witnessSamples.count) more — see relocate.log")
-                        .font(.caption2)
+        VStack(alignment: .leading, spacing: 6) {
+            // Section header — counts split safe vs degraded.
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text("Safely backed up elsewhere")
+                    .font(.callout.weight(.medium))
+                Text("\(summary.safelyBackedUpCount)")
+                    .font(.system(.callout, design: .monospaced).bold())
+                if summary.degradedOnlyCount > 0 {
+                    Text("·")
                         .foregroundColor(.secondary)
+                    Text("\(summary.degradedOnlyCount) degraded")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+                Spacer()
+            }
+            .accessibilityIdentifier("relocateSummary.witnessHeader")
+
+            // Safe witnesses come first, each rendered with the host
+            // volume's role/trust badge.
+            ForEach(safeSamples) { sample in
+                witnessRow(sample, demoted: false)
+            }
+
+            // Degraded witnesses go under a "See all matches" disclosure.
+            if !degradedSamples.isEmpty {
+                DisclosureGroup(isExpanded: $showDegraded) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(degradedSamples) { sample in
+                            witnessRow(sample, demoted: true)
+                        }
+                    }
+                    .padding(.top, 4)
+                    .accessibilityIdentifier("relocateSummary.degradedList")
+                } label: {
+                    Text("See all matches (\(degradedSamples.count) on aging/retired drives)")
+                        .font(.caption)
+                        .accessibilityIdentifier("relocateSummary.degradedDisclosure")
                 }
             }
-            .padding(.top, 4)
-            .accessibilityIdentifier("relocateSummary.witnessList")
-        } label: {
-            Text("Show witnesses (\(summary.witnessSamples.count))")
-                .font(.callout)
-                .accessibilityIdentifier("relocateSummary.witnessDisclosure")
+
+            // "And N more" hint when the sample is capped.
+            if summary.safelyRedundantCount > summary.witnessSamples.count {
+                Text("… \(summary.safelyRedundantCount - summary.witnessSamples.count) more — see relocate.log")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
         }
+        .padding(10)
+        .background(Color.green.opacity(0.04))
+        .cornerRadius(6)
+    }
+
+    /// One safe-vs-degraded witness row. `demoted` styles the row grey +
+    /// adds the `(retired)` / `(unreliable)` tag.
+    private func witnessRow(_ sample: RelocateSummary.WitnessSample,
+                             demoted: Bool) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: demoted ? "exclamationmark.triangle" : "checkmark.circle.fill")
+                .foregroundColor(demoted ? .orange : .green)
+                .font(.caption)
+                .frame(width: 14)
+            // Host-volume label leads — that's the "where is it safe?"
+            // signal Rick wanted to lead with.
+            Text(sample.witnessVolumeLabel)
+                .font(.system(.caption, design: .monospaced).bold())
+                .foregroundColor(demoted ? .secondary : .primary)
+            Text("·")
+                .foregroundColor(.secondary)
+            Text(sample.witnessRole.rawValue)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+            Text("·")
+                .foregroundColor(.secondary)
+            Text(sample.witnessTrust.rawValue)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+            if demoted {
+                Text(sample.witnessRole == .retired ? "(retired)" : "(unreliable)")
+                    .font(.caption2)
+                    .foregroundColor(.orange)
+            }
+            Spacer()
+            Text((sample.witnessPath as NSString).lastPathComponent)
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .opacity(demoted ? 0.7 : 1.0)
+        .accessibilityIdentifier(demoted
+                                 ? "relocateSummary.witnessRow.demoted"
+                                 : "relocateSummary.witnessRow.safe")
+    }
+
+    private var safeSamples: [RelocateSummary.WitnessSample] {
+        summary.witnessSamples.filter { $0.isSafe }
+    }
+
+    private var degradedSamples: [RelocateSummary.WitnessSample] {
+        summary.witnessSamples.filter { !$0.isSafe }
     }
 
     private var salvageFailedSection: some View {
@@ -239,6 +367,30 @@ struct RelocateSummarySheet: View {
                 .foregroundColor(.red)
                 .font(.callout)
                 .accessibilityIdentifier("relocateSummary.salvageFailedDisclosure")
+        }
+    }
+
+    /// "Open the Volumes window to retire <name> when ready." — replaces
+    /// the auto-retire prompt that used to fire from the Done button.
+    /// Suppressed on dry-run + on runs that left records un-disposed.
+    @ViewBuilder
+    private var volumesWindowCTA: some View {
+        if !summary.isDryRun, summary.salvageFailedCount == 0 {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: "info.circle")
+                    .foregroundColor(.secondary)
+                Text("Open the Volumes window to retire ")
+                    .foregroundColor(.secondary)
+                + Text(summary.sourceVolumeName)
+                    .font(.body.bold())
+                    .foregroundColor(.primary)
+                + Text(" when you're ready.")
+                    .foregroundColor(.secondary)
+                Spacer()
+            }
+            .font(.callout)
+            .padding(.top, 4)
+            .accessibilityIdentifier("relocateSummary.volumesCTA")
         }
     }
 
@@ -285,10 +437,26 @@ struct RelocateSummarySheet: View {
     private var buttonBar: some View {
         HStack {
             Spacer()
+            // "Open Volumes window" — the replacement for the auto-retire
+            // prompt. Pre-selects the source volume via
+            // `pendingVolumesSelectionID` (see VolumesWindow.onAppear).
+            // Suppressed on dry-run.
+            if !summary.isDryRun {
+                Button("Open Volumes window") {
+                    if let target = model.scanTargets.first(
+                        where: { $0.searchPath == summary.sourceVolumeRootPath }
+                    ) {
+                        model.pendingVolumesSelectionID = target.id
+                    }
+                    openWindow(id: "volumes")
+                    model.acknowledgeRelocateSummary()
+                    dismiss()
+                }
+                .accessibilityIdentifier("relocateSummary.openVolumesButton")
+            }
             Button("Done") {
-                // The model's acknowledge() drops the summary AND fires
-                // the §1B retire offer (only when applicable + not
-                // dry-run). This is the ONLY trigger path for retire now.
+                // No longer fires retire offer — feedback_friendly_language.md
+                // calls for the Volumes window to be the retire surface.
                 model.acknowledgeRelocateSummary()
                 dismiss()
             }

@@ -15,8 +15,10 @@ import Foundation
 //   C. sourceSideMove   — found elsewhere on source by size+hash; path rewrite then migrate
 //   D. adopted          — found at planned destination by size+hash; path rewrite, skip copy
 //   E. safelyRedundant  — same (size, partialMD5) exists on a THIRD volume
-//                         (not source, not dest); catalog-only mark-as-deleted
-//                         with audit trail. The source file is never touched.
+//                         (not source, not dest) AND at least one witness
+//                         lives on a *safe* host volume (not retired, not
+//                         unreliable); catalog-only mark-as-deleted with
+//                         audit trail. The source file is never touched.
 //
 // Bucket E is gated by `skipDupsOnOtherVolumes` (default true). It's the
 // critical "failing-drive escape hatch": Mini2TB has 741 records, 739
@@ -24,6 +26,15 @@ import Foundation
 // those 739 onto LaCie — they're already safe elsewhere. Mark them as
 // deleted in the catalog with a witness list and let Rick retire the
 // drive without burning a full copy cycle.
+//
+// **Safety filter (added 2026-05-30):** Rick flagged that "backup on
+// Mini2TB" isn't reassuring when Mini2TB itself is mid-retirement. A
+// witness now must live on a *safe* host volume to count toward Bucket
+// E classification — safe = role != .retired AND trust != .unreliable.
+// Witnesses on degraded volumes are still RECORDED (for the "see all
+// matches" disclosure) but cannot by themselves justify classifying the
+// record as safelyRedundant. If every witness is degraded, the record
+// falls through to Bucket A (must be copied) — the conservative call.
 //
 // Preference order (highest wins): previouslyRelocated → adopted (D) →
 // safelyRedundant (E) → ready (A) → sourceSideMove (C) → manuallyDeleted (B).
@@ -59,9 +70,11 @@ struct ReconcileResult: Equatable {
     var adopted: [(rec: VideoRecord, destPath: String)]
 
     /// Same (size, partialMD5) exists on a volume that is neither the
-    /// source nor the destination. Catalog-only mutation — file on the
-    /// failing source drive is NEVER touched. Witnesses list capped to
-    /// keep notes / audit log small; full count carried separately.
+    /// source nor the destination, AND at least one witness lives on a
+    /// safe host volume (see `WitnessSafety`). Catalog-only mutation —
+    /// file on the failing source drive is NEVER touched. Witnesses
+    /// list capped to keep notes / audit log small; full count carried
+    /// separately.
     var safelyRedundant: [SafelyRedundantEntry]
 
     /// Records under `sourceVolumeRootPath` but already relocated once
@@ -83,20 +96,93 @@ struct ReconcileResult: Equatable {
     }
 }
 
+/// One witness and its host-volume safety attestation. The "is this
+/// reassuring?" decision is computed by the caller (it knows the
+/// project-wide role/trust taxonomy) and passed in via the resolver
+/// closure. Sorted-ranked use of this struct lives in the summary sheet.
+///
+/// `Equatable` so `SafelyRedundantEntry`'s synthesized equality keeps
+/// working; `Codable`-free because the audit-trail note keeps the path
+/// list in a flat, hand-tokenized format (see `formatSafelyRedundantNote`).
+struct SafeWitnessInfo: Equatable, Hashable {
+    let path: String
+    /// Volume role from the host scan target, or `.unassigned` when the
+    /// path doesn't resolve to a known target (the resolver should never
+    /// crash on unknown paths — just hand back unassigned/unknown).
+    let role: VolumeRole
+    let trust: VolumeTrust
+
+    /// Single combined safety score, used by the summary sheet to rank
+    /// witnesses. Role dominates trust at the 10x weighting documented
+    /// below. C++ analogue: a struct with a `<` operator that lexicographic-
+    /// sorts on (role, trust). We pre-compute the int here so SwiftUI's
+    /// sorted(by:) can compare ints, not run the switch each comparison.
+    var safetyScore: Int { roleScore * 10 + trustScore }
+
+    /// "Safe enough to count toward Bucket E classification." Conservative:
+    /// a Long-Term-Archive volume marked Unreliable is NOT safe, and an
+    /// Unassigned/Unknown volume IS safe by default (we don't punish a
+    /// witness for never being categorized — fix-with-data, not rule-out).
+    /// `// `let safe = ...` ≈ a const bool in C++.
+    var isSafe: Bool {
+        role != .retired && trust != .unreliable
+    }
+
+    var roleScore: Int {
+        switch role {
+        case .lta:        return 6
+        case .archive:    return 5
+        case .backup:     return 4
+        case .original:   return 3
+        case .system:     return 2
+        case .unassigned: return 1
+        case .retired:    return 0
+        }
+    }
+
+    var trustScore: Int {
+        switch trust {
+        case .reliable:   return 3
+        case .aging:      return 2
+        case .unknown:    return 1
+        case .unreliable: return 0
+        }
+    }
+}
+
 /// One safely-redundant entry: which record, where the copies live (capped),
 /// and the total count of witnesses (so the UI can say "and N more").
+///
+/// `safeWitnesses` is the rank-ordered subset that passed the safety filter.
+/// `degradedWitnesses` is the rest (retired/unreliable hosts), kept for the
+/// "show all matches" disclosure but never used to justify classification.
+/// `witnesses` (string array) is what gets written into the audit-trail
+/// note — keep it as path strings for backward-compatible parsing.
 struct SafelyRedundantEntry: Equatable {
     let rec: VideoRecord
     /// Witness `fullPath` values on volumes other than source + dest. Capped
     /// at `maxWitnessSample` (5) to keep audit-trail notes from ballooning.
+    /// Sorted by safety score descending so the audit log + summary sheet
+    /// both lead with the safest witness.
     let witnesses: [String]
-    /// Full witness count BEFORE the cap. UI: "and N more witnesses".
+    /// Full witness count BEFORE the cap (safe + degraded). UI: "and N more
+    /// witnesses".
     let totalWitnessCount: Int
+    /// Safe witnesses with their host-volume attestations attached. Capped
+    /// at `maxWitnessSample` and sorted highest safety score first. Drives
+    /// the summary-sheet primary list.
+    let safeWitnesses: [SafeWitnessInfo]
+    /// Degraded witnesses (retired or unreliable hosts). Capped at
+    /// `maxWitnessSample`. Hidden by default; surfaced under a "See all
+    /// matches" disclosure.
+    let degradedWitnesses: [SafeWitnessInfo]
 
     static func == (lhs: SafelyRedundantEntry, rhs: SafelyRedundantEntry) -> Bool {
         lhs.rec.id == rhs.rec.id
             && lhs.witnesses == rhs.witnesses
             && lhs.totalWitnessCount == rhs.totalWitnessCount
+            && lhs.safeWitnesses == rhs.safeWitnesses
+            && lhs.degradedWitnesses == rhs.degradedWitnesses
     }
 }
 
@@ -106,6 +192,14 @@ struct ReconcileFileEntry: Equatable {
     let size: Int64
 }
 
+/// Caller-supplied resolver from a witness `fullPath` to its host volume's
+/// role + trust. The real model implementation walks `scanTargets` to find
+/// the prefix match; tests inject a synthetic dictionary. Returns
+/// `(.unassigned, .unknown)` when the path doesn't resolve to a known
+/// volume — neutral default that keeps the witness *safe* (the role/trust
+/// scoring counts unassigned/unknown as low-but-not-zero).
+typealias VolumeSafetyResolver = (String) -> (role: VolumeRole, trust: VolumeTrust)
+
 enum RelocateReconcile {
 
     /// Maximum number of witness paths we keep per safely-redundant
@@ -114,6 +208,14 @@ enum RelocateReconcile {
     /// the real witness depth. Swift's `Array.prefix` ≈ C++'s
     /// `std::vector::erase(begin+N, end)` but non-mutating.
     static let maxWitnessSample = 5
+
+    /// Convenience: a resolver that always says (unassigned, unknown) —
+    /// used by tests that don't care about the safety filter, and by
+    /// the model when it falls back to legacy behavior. Treats every
+    /// witness as safe-by-default (Bucket E permissive).
+    static let permissiveResolver: VolumeSafetyResolver = { _ in
+        (.unassigned, .unknown)
+    }
 
     /// Classify each in-scope record into one of the five buckets.
     ///
@@ -129,6 +231,10 @@ enum RelocateReconcile {
     /// - Parameter skipDupsOnOtherVolumes: when true, enable Bucket E
     ///   classification. When false, records that would land in E fall
     ///   through to the A/C/B rules as before — preserves legacy behavior.
+    /// - Parameter resolveVolumeSafety: maps a witness path to its host
+    ///   volume's `(role, trust)`. Bucket E now requires at least one
+    ///   witness on a *safe* host (role != .retired AND trust != .unreliable).
+    ///   Pass `permissiveResolver` for the legacy permissive behavior.
     /// - Parameter hash: returns partial-MD5 of a file at the given path.
     ///   Real caller injects `FileHasher.partialMD5(path:)`. Empty string
     ///   on read error.
@@ -140,6 +246,7 @@ enum RelocateReconcile {
         sourceFiles: [ReconcileFileEntry],
         destFiles: [ReconcileFileEntry],
         skipDupsOnOtherVolumes: Bool,
+        resolveVolumeSafety: VolumeSafetyResolver = permissiveResolver,
         hash: (String) -> String
     ) -> ReconcileResult {
 
@@ -226,16 +333,47 @@ enum RelocateReconcile {
             // byte count — never false-positive on empty signal. The toggle
             // (skipDupsOnOtherVolumes=false) leaves witnessIndex empty, so
             // this branch is a no-op when disabled.
+            //
+            // **Safety filter:** classification only fires when at least
+            // one witness lives on a safe host volume. Degraded witnesses
+            // (retired or unreliable host) are retained on the entry for
+            // the disclosure but cannot by themselves justify Bucket E.
             if !rec.partialMD5.isEmpty, rec.sizeBytes > 0 {
                 let key = WitnessKey(size: rec.sizeBytes, md5: rec.partialMD5)
                 if let allWitnesses = witnessIndex[key], !allWitnesses.isEmpty {
-                    let sample = Array(allWitnesses.prefix(maxWitnessSample))
-                    safelyRedundant.append(SafelyRedundantEntry(
-                        rec: rec,
-                        witnesses: sample,
-                        totalWitnessCount: allWitnesses.count
-                    ))
-                    continue
+                    // Resolve every witness once. The resolver result is
+                    // bound to its path here so the sort below has the
+                    // host attestation in hand.
+                    let attested = allWitnesses.map { p -> SafeWitnessInfo in
+                        let (role, trust) = resolveVolumeSafety(p)
+                        return SafeWitnessInfo(path: p, role: role, trust: trust)
+                    }
+                    // Sorted highest-safety-first. Stable on equal scores
+                    // (Swift's sorted is stable in practice on small N).
+                    let ranked = attested.sorted { $0.safetyScore > $1.safetyScore }
+                    let safe = ranked.filter { $0.isSafe }
+                    let degraded = ranked.filter { !$0.isSafe }
+
+                    // Hard gate — at least one safe witness required.
+                    // If safe.isEmpty we DON'T `continue` (that'd skip
+                    // the A/C/B fallthrough below); we just refuse to
+                    // classify as Bucket E and let the rest of the
+                    // cascade decide.
+                    if !safe.isEmpty {
+                        let safeCapped = Array(safe.prefix(maxWitnessSample))
+                        let degradedCapped = Array(degraded.prefix(maxWitnessSample))
+                        let auditPaths = safeCapped.map(\.path)
+                        safelyRedundant.append(SafelyRedundantEntry(
+                            rec: rec,
+                            witnesses: auditPaths,
+                            totalWitnessCount: allWitnesses.count,
+                            safeWitnesses: safeCapped,
+                            degradedWitnesses: degradedCapped
+                        ))
+                        continue
+                    }
+                    // Otherwise: fall through to A/C/B. The conservative
+                    // call — must copy.
                 }
             }
 

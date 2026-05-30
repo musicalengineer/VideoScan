@@ -22,6 +22,11 @@ struct VolumesWindow: View {
     /// while the user decides yes/no. Reinstate is reversible (just
     /// re-retire), so a single yes/no alert is friction enough.
     @State private var reinstateTarget: ReinstateTarget?
+    /// Retire confirmation sheet backing. Carries the source volume +
+    /// pre-aggregated witness list so the sheet can render the verified-
+    /// backups summary. Built lazily from the selected target's records
+    /// at click time.
+    @State private var retireOffer: PendingRetireOffer?
 
     /// Sidebar font/badge scale — grows from 1.0 at 320pt to 1.5 at 540pt.
     /// The text and badge metrics in `VolumeListRow` multiply by this so a wider
@@ -91,6 +96,12 @@ struct VolumesWindow: View {
         .frame(minWidth: 820, minHeight: 540)
         .onAppear { honorPendingSelection() }
         .onChange(of: model.pendingVolumesSelectionID) { honorPendingSelection() }
+        // Retire confirmation — driven by the context-menu Mark Retired
+        // action. Reuses the existing RelocateRetireSheet so the copy +
+        // editable reason field stay in one place.
+        .sheet(item: $retireOffer) { offer in
+            RelocateRetireSheet(offer: offer)
+        }
     }
 
     private func honorPendingSelection() {
@@ -104,22 +115,18 @@ struct VolumesWindow: View {
         List(selection: $selectedID) {
             Section("Volumes") {
                 ForEach(sortedTargets) { target in
-                    VolumeListRow(target: target, scale: sidebarScale)
+                    VolumeListRow(target: target,
+                                  scale: sidebarScale,
+                                  retireStatus: retireStatus(for: target))
                         .tag(Optional(target.id))
-                        // §1B: right-click affordance for retired-vs-not.
-                        // Reinstate is the only action we surface here;
-                        // Retire is driven by the post-Relocate offer.
+                        // §1B + 2026-05-30: right-click menu surfaces
+                        // Reinstate for retired volumes AND Mark Retired
+                        // for 100%-disposed volumes. Mark-Retired is the
+                        // new explicit retire surface — Relocate no
+                        // longer auto-prompts. See
+                        // feedback_friendly_language.md.
                         .contextMenu {
-                            if target.isRetired {
-                                Button("Reinstate \(target.searchPath.split(separator: "/").last.map(String.init) ?? "Volume")") {
-                                    reinstateTarget = ReinstateTarget(
-                                        id: target.id,
-                                        path: target.searchPath,
-                                        name: String(target.searchPath.split(separator: "/").last ?? "volume")
-                                    )
-                                }
-                                .accessibilityIdentifier("volumeRow.reinstate")
-                            }
+                            contextMenuItems(for: target)
                         }
                 }
             }
@@ -149,6 +156,94 @@ struct VolumesWindow: View {
         }
     }
 
+    /// Compose the right-click menu for a sidebar row. Split out for
+    /// readability and because SwiftUI ViewBuilder is happiest with one
+    /// expression per branch.
+    @ViewBuilder
+    private func contextMenuItems(for target: CatalogScanTarget) -> some View {
+        if target.isRetired {
+            Button("Reinstate \(volumeName(target))") {
+                reinstateTarget = ReinstateTarget(
+                    id: target.id,
+                    path: target.searchPath,
+                    name: volumeName(target)
+                )
+            }
+            .accessibilityIdentifier("volumeRow.reinstate")
+        } else {
+            let status = retireStatus(for: target)
+            Button("Mark Retired…") {
+                guard status.canRetire else { return }
+                presentRetireSheet(for: target, status: status)
+            }
+            .disabled(!status.canRetire)
+            .help(status.tooltipForRetireAction)
+            .accessibilityIdentifier("volumeRow.markRetired")
+        }
+    }
+
+    /// "Mini2TB" — the trailing volume-name component. Used in menu labels
+    /// and the Reinstate target struct.
+    private func volumeName(_ target: CatalogScanTarget) -> String {
+        if let last = target.searchPath.split(separator: "/").last {
+            return String(last)
+        }
+        return target.searchPath
+    }
+
+    /// Build the retire offer payload for the confirmation sheet. Pulls
+    /// the witness union from the volume's `.manuallyDeleted` records via
+    /// the existing aggregator, so the sheet shows exactly the same
+    /// witnesses the post-Relocate flow would have shown.
+    private func presentRetireSheet(for target: CatalogScanTarget,
+                                     status: VolumeRetireStatus) {
+        let witnesses = VideoScanModel.aggregateRetiredWitnesses(
+            volumeRootPath: target.searchPath, in: model.records
+        )
+        retireOffer = PendingRetireOffer(
+            volumeRootPath: target.searchPath,
+            volumeName: volumeName(target),
+            recordCount: status.totalRecords,
+            suggestedReason: VideoScanModel.defaultRetireReason(),
+            witnesses: witnesses
+        )
+    }
+
+    /// Compute the retire-readiness status for a target. Drives:
+    ///   - Mark Retired enabled / disabled
+    ///   - Tooltip when disabled
+    ///   - The sidebar row badge (Safe to retire / Disposed degraded)
+    private func retireStatus(for target: CatalogScanTarget) -> VolumeRetireStatus {
+        let total = VideoScanModel.totalRecordsOn(
+            volumeRootPath: target.searchPath, in: model.records
+        )
+        let disposed = VideoScanModel.manuallyDeletedOn(
+            volumeRootPath: target.searchPath, in: model.records
+        )
+        // 100%-disposed predicate matches `shouldOfferRetire`.
+        let allDisposed = total > 0 && disposed == total
+        // Safe-witness aggregate: at least one Bucket E note from the
+        // volume's records contributes at least one witness on a safe
+        // host. We reuse the witness-union list and resolve each through
+        // the model's safety resolver — cheap because Rick has ~10s of
+        // scan targets and the aggregate is typically a few thousand
+        // paths max.
+        let witnesses = VideoScanModel.aggregateRetiredWitnesses(
+            volumeRootPath: target.searchPath, in: model.records
+        )
+        let resolver = model.makeVolumeSafetyResolver()
+        let hasSafeWitness = witnesses.contains { path in
+            let (role, trust) = resolver(path)
+            return role != .retired && trust != .unreliable
+        }
+        return VolumeRetireStatus(
+            totalRecords: total,
+            disposedRecords: disposed,
+            allDisposed: allDisposed,
+            hasSafeWitness: hasSafeWitness
+        )
+    }
+
     private var placeholder: some View {
         VStack(spacing: 12) {
             Image(systemName: "externaldrive")
@@ -167,11 +262,57 @@ struct VolumesWindow: View {
     }
 }
 
+// MARK: - Retire-readiness status (UI-only)
+
+/// Per-volume readiness signal. Computed by `VolumesWindow.retireStatus`
+/// from the model's records + scan targets. Drives badge + menu state.
+/// Internal struct — not part of the persisted model.
+struct VolumeRetireStatus {
+    let totalRecords: Int
+    let disposedRecords: Int
+    let allDisposed: Bool
+    let hasSafeWitness: Bool
+
+    /// "Safe to retire" — every record is disposed AND there's a safe
+    /// witness backing up the contents. Matches Rick's description of
+    /// the green-pill state.
+    var isSafeToRetire: Bool { allDisposed && hasSafeWitness }
+
+    /// "Disposed but degraded" — every record disposed, but no safe
+    /// witness yet. Yellow-pill state.
+    var isDegradedDisposed: Bool { allDisposed && !hasSafeWitness }
+
+    /// Predicate gating the Mark Retired action. We require BOTH 100%
+    /// disposed AND at least one safe witness — otherwise the user could
+    /// retire a drive whose only backup is on another retiring drive,
+    /// which is exactly the regression Rick called out.
+    var canRetire: Bool { isSafeToRetire }
+
+    /// Tooltip shown on the disabled Mark Retired menu item. Tells the
+    /// user what's missing without making them guess.
+    var tooltipForRetireAction: String {
+        if totalRecords == 0 {
+            return "No catalogued files on this volume yet."
+        }
+        if !allDisposed {
+            return "Not all files on this volume are accounted for yet — run Relocate first."
+        }
+        if !hasSafeWitness {
+            return "Files are marked disposed, but no backup copies are confirmed on safer drives."
+        }
+        return "Mark this volume retired."
+    }
+}
+
 // MARK: - Sidebar Row
 
 private struct VolumeListRow: View {
     @ObservedObject var target: CatalogScanTarget
     var scale: CGFloat = 1.0
+    /// Retire-readiness signal from the parent. Optional because the
+    /// parent only computes it for non-retired rows; retired rows get
+    /// the brown badge instead.
+    var retireStatus: VolumeRetireStatus?
 
     var body: some View {
         HStack(spacing: 8) {
@@ -197,6 +338,19 @@ private struct VolumeListRow: View {
                             .foregroundColor(.brown)
                             .cornerRadius(3)
                             .accessibilityIdentifier("volumeRow.retiredBadge")
+                    } else if let s = retireStatus, s.isSafeToRetire {
+                        // Green pill — all records disposed, safe
+                        // witness present. The "you can retire this now"
+                        // green light.
+                        retirePill(text: "Safe to retire",
+                                   bg: .green,
+                                   identifier: "volumeRow.safeToRetireBadge")
+                    } else if let s = retireStatus, s.isDegradedDisposed {
+                        // Yellow pill — disposed but no safe backup. The
+                        // "do not retire yet" warning state.
+                        retirePill(text: "Disposed, degraded backups",
+                                   bg: .yellow,
+                                   identifier: "volumeRow.degradedDisposedBadge")
                     }
                 }
                 Text(target.searchPath)
@@ -216,6 +370,22 @@ private struct VolumeListRow: View {
         .padding(.vertical, 3)
         // Grey out the whole row for retired drives.
         .opacity(target.isRetired ? 0.55 : 1.0)
+    }
+
+    /// Small coloured pill. Shared between the green safe-to-retire and
+    /// yellow degraded-disposed states. Background uses `opacity(0.22)`
+    /// so the foreground colour stays the legible side.
+    private func retirePill(text: String,
+                             bg: Color,
+                             identifier: String) -> some View {
+        Text(text)
+            .font(.system(size: 9 * scale, weight: .medium))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(bg.opacity(0.22))
+            .foregroundColor(bg)
+            .cornerRadius(3)
+            .accessibilityIdentifier(identifier)
     }
 
     /// "2026-05-30" — short, locale-neutral, sortable. Used for the
