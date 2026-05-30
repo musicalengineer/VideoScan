@@ -4,15 +4,19 @@ import Foundation
 
 // MARK: - RelocateSchemaTests
 //
-// Covers the schema additions from §1 of docs/relocate_volume_plan.md:
+// Covers the schema additions from §1 + §1B of docs/relocate_volume_plan.md:
 //   - VideoRecord.originalFullPath: String?
 //   - VideoRecord.originVolume: String?
 //   - ArchiveStage.manuallyDeleted, .salvageFailed
-//   - CatalogSnapshot.currentVersion bumped 4 → 5
+//   - CatalogSnapshot.currentVersion bumped 4 → 5 → 6
+//   - §1B: CatalogScanTarget gains retiredAt / retiredReason /
+//     retiredWitnesses (persisted via UserDefaults + VolumeMetadataSnapshot,
+//     NOT in catalog.json — so v5 catalog.json files decode unchanged).
 //
-// Critically asserts BACKWARD COMPATIBILITY: legacy v4 catalog.json without
-// the new keys must decode unchanged. If this fails on a real catalog, every
-// record loses its data on first load — that's the SEV 1 risk this catches.
+// Critically asserts BACKWARD COMPATIBILITY: legacy v4/v5 catalog.json
+// without the new keys must decode unchanged. If this fails on a real
+// catalog, every record loses its data on first load — that's the SEV 1
+// risk this catches.
 
 @MainActor
 struct RelocateSchemaTests {
@@ -20,8 +24,8 @@ struct RelocateSchemaTests {
     // MARK: - Version bump
 
     @Test
-    func currentSnapshotVersionIsFive() {
-        #expect(CatalogSnapshot.currentVersion == 5)
+    func currentSnapshotVersionIsSix() {
+        #expect(CatalogSnapshot.currentVersion == 6)
     }
 
     // MARK: - New ArchiveStage cases
@@ -132,5 +136,71 @@ struct RelocateSchemaTests {
         let decoded = try dec.decode(CatalogSnapshot.self, from: v4SnapshotJSON)
         #expect(decoded.version == 4)
         #expect(decoded.savedFromHost == "RicksM4")
+    }
+
+    // MARK: - §1B v5 → v6 backward compatibility
+
+    @Test
+    func legacyV5CatalogWithoutRetiredFieldsDecodes() throws {
+        // The §1B version bump is purely a marker — no record-level field
+        // was added. A v5 catalog.json shaped exactly as before the bump
+        // must still decode cleanly on a v6-aware build. Records with the
+        // §1 provenance keys round-trip; the absence of any retire-related
+        // key in the snapshot is the expected shape (retire metadata lives
+        // on CatalogScanTarget, not VideoRecord).
+        let v5SnapshotJSON = """
+        {
+          "version": 5,
+          "savedAt": "2026-05-30T09:00:00Z",
+          "records": [
+            {
+              "id": "22222222-2222-2222-2222-222222222222",
+              "filename": "old.mov",
+              "fullPath": "/Volumes/Mini2TB/old.mov",
+              "directory": "/Volumes/Mini2TB",
+              "partialMD5": "feedface",
+              "sizeBytes": 4096,
+              "originalFullPath": "/Volumes/Mini2TB/old.mov",
+              "originVolume": "Mini2TB"
+            }
+          ],
+          "savedFromHost": "RicksM4"
+        }
+        """.data(using: .utf8)!
+
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        let decoded = try dec.decode(CatalogSnapshot.self, from: v5SnapshotJSON)
+        #expect(decoded.version == 5)
+        #expect(decoded.records.count == 1)
+        #expect(decoded.records.first?.originalFullPath == "/Volumes/Mini2TB/old.mov")
+        #expect(decoded.records.first?.originVolume == "Mini2TB")
+    }
+
+    @Test
+    func legacyVolumeMetadataSnapshotWithoutRetiredFieldsDecodes() throws {
+        // VolumeMetadataSnapshot gained retiredAt/retiredReason/
+        // retiredWitnesses in §1B. Pre-§1B bundle JSON without those keys
+        // must decode cleanly with nil for each — otherwise importing an
+        // older bundle into a v6-aware build would throw.
+        let legacyJSON = """
+        {
+          "searchPath": "/Volumes/Maxtor500FW",
+          "phase": "Cataloged",
+          "role": "Original",
+          "trust": "Aging",
+          "mediaTech": "HDD",
+          "filesystem": "HFS+",
+          "notes": ""
+        }
+        """.data(using: .utf8)!
+
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        let snap = try dec.decode(VolumeMetadataSnapshot.self, from: legacyJSON)
+        #expect(snap.searchPath == "/Volumes/Maxtor500FW")
+        #expect(snap.retiredAt == nil)
+        #expect(snap.retiredReason == nil)
+        #expect(snap.retiredWitnesses == nil)
     }
 }

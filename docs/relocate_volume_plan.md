@@ -95,6 +95,61 @@ Reserve `rsync` only if integration testing surfaces an HFS+ catalog corruption 
 - **Test:** `RelocateScopeTests.swift` covers scope selection, path rewriting (subdirectories, leading/trailing slashes), suggested-name format.
 - **Expected diff:** ~350 lines engine, ~150 lines tests.
 
+### 1B. Retire Volume (added 2026-05-30)
+
+> **Context:** Real-world case is `Maxtor500FW`. After a Bucket E + Bucket B run, 100% of catalog records on that volume are `.manuallyDeleted`. The drive is failing; Rick wants to unplug it and never see the dashboard nag about it being offline again. This isn't about deleting catalog data — those records stay forever for audit and Compare & Rescue. It's about marking the *volume itself* retired so it stops showing up in scan suggestions and dashboard reachability complaints.
+
+- **File (schema):** `VideoScan/VideoScan/Models.swift` — add three optional `@Published` properties to `CatalogScanTarget`:
+  ```swift
+  @Published var retiredAt: Date?
+  @Published var retiredReason: String?       // free-text, e.g. "Failing HDD; all content dup-elsewhere"
+  @Published var retiredWitnesses: [String]?  // union of Bucket E witnesses
+  var isRetired: Bool { retiredAt != nil }
+  ```
+  Presence of `retiredAt` = retired. No new dedicated retire schema in `VideoRecord`; the record-level `.manuallyDeleted` disposition is already enough.
+- **File (persistence):** `ScanTargetPersistence.swift` + `VideoScanModel+ScanTargetPersistence.swift` + three new UserDefaults dictionary keys (`VideoScan.scanTargetRetired{At,Reason,Witnesses}`). Missing entries decode as nil — pre-§1B installs round-trip not-retired.
+- **File (bundle):** `VolumeMetadataSnapshot` gains the same three optional fields so bundle export/import round-trips retirement state. Legacy bundles (pre-§1B) decode the new fields as nil via `decodeIfPresent`.
+- **Catalog version bump:** `CatalogSnapshot.currentVersion 5 → 6`. Pure marker — no record-level field was added, so v5 catalog.json files load cleanly on a v6-aware build. The version signals "a v6-aware build's parallel volume metadata layer (UserDefaults + bundle) *may* carry retire fields."
+
+#### Flow
+
+After `runRelocate` completes its catalog mutation phase and writes the end-of-batch summary, it calls `maybeOfferRetire(for: options.sourceVolumeRootPath)`:
+- Pure predicate: `shouldOfferRetire(volumeRootPath:in:) → bool`. True iff the volume has at least one record AND every catalogued record on it is `.manuallyDeleted`.
+- When true, aggregate witnesses (`aggregateRetiredWitnesses` walks every `.manuallyDeleted` record on the volume and parses the structured Bucket E note via `parseWitnessesFromNote`, deduped/sorted union).
+- Set `model.pendingRetireOffer = PendingRetireOffer(...)` carrying volume root path, friendly name, total record count, default reason text, witness union.
+
+`ContentView` binds a `.sheet(item: $model.pendingRetireOffer)` to `RelocateRetireSheet`. Two buttons:
+- **Retire:** calls `model.retireVolume(at:reason:witnesses:)` → stamps `retiredAt = Date()`, `retiredReason` (free-text, editable in the sheet), `retiredWitnesses`. Persists via `persistScanDates`. Audit-logs to the relocate log + in-app console.
+- **Skip for now:** clears `pendingRetireOffer` without mutation. Can be triggered later from the volume row context menu.
+
+No typed confirmation. Two buttons, fully reversible via Reinstate, friction unnecessary.
+
+#### UI consequences
+
+1. **`VolumesWindow` sidebar:** retired volumes get a `"Retired YYYY-MM-DD"` badge (brown pill), opacity reduced to 0.55, sorted to the bottom. Hidden entirely unless the toolbar `"Show retired"` toggle is ON.
+2. **`VolumesWindow` editor:** the online/offline status line is replaced by a brown archive banner showing the retire date + reason + witness count. The destination-policy badge is hidden (retired drives aren't viable destinations).
+3. **Context menu** on a sidebar row: a `"Reinstate"` action that opens a one-line yes/no alert → `model.reinstateVolume(at:)` clears all three retire fields.
+4. **Scan suggestions:** `startAllTargets` adds a `guard !target.isRetired else { continue }` clause alongside the existing reachable / VideoScan_Temp guards. Reinstate puts the volume back in the loop.
+5. **Dashboard "missing volume" nag:** the only relevant surface is the editor's online/offline line, suppressed for retired drives as described above. A retired-and-offline volume is the expected steady state — silent by design.
+
+#### Tests
+
+`RelocateRetireVolumeTests.swift` — Swift Testing, matches the existing relocate suite style:
+- `retire_firesOnlyWhen100PercentDisposed` — predicate behavior at 0%, 66%, 100%.
+- `retire_neverOffersOnEmptyVolume` — 0 records is not 100%.
+- `retire_stampsTimestampReasonAndWitnesses` — full mutation persists.
+- `retire_aggregatesWitnessesAcrossBucketERecords` — multi-record dedup.
+- `retire_witnessParser_handlesEmbeddedQuotes` — defensive round-trip.
+- `retire_skipDoesNothing` — clearing `pendingRetireOffer` doesn't mutate.
+- `reinstate_clearsAllRetirementFields` — round-trip.
+- `retiredVolume_isExcludedFromScanSuggestions` — predicate logic mirrored.
+- `retiredVolume_isNotFlaggedAsMissing` — predicate logic.
+- `snapshotRollback_restoresPreRetiredState` — pre-relocate snapshot has the volume not-yet-disposed.
+- `volumeMetadataSnapshot_roundTripsRetireFields` — bundle export/import.
+- `legacyV5CatalogWithoutRetiredFieldsDecodes` (in `RelocateSchemaTests`) — v5 catalog.json + legacy `VolumeMetadataSnapshot` JSON decode cleanly on v6 build.
+
+Plus `RelocateSchemaTests.currentSnapshotVersionIsSix` swap for the v5→v6 bump.
+
 ### 1A. Pre-flight reconcile (added 2026-05-29 evening; Bucket E added 2026-05-30)
 
 > **Context:** Rick is manually deleting / moving / pre-copying files off Mini2TB while the feature is being designed. By the time Relocate runs, the catalog will be drifted from reality. Reconcile sorts this out before the migration phase walks records, so manual triage and Relocate compose cleanly.

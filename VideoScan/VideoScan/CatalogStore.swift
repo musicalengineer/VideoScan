@@ -48,8 +48,15 @@ enum CatalogLoadOutcome: Equatable {
 ///    String?` for Relocate Volume provenance, plus two new `ArchiveStage`
 ///    cases (`manuallyDeleted`, `salvageFailed`). Pure additive — v4 loads
 ///    unchanged. See docs/relocate_volume_plan.md.
+///  - v6: Companion to Relocate §1B Retire Volume. No catalog.json schema
+///    change — the retire fields (`retiredAt`, `retiredReason`,
+///    `retiredWitnesses`) live on `CatalogScanTarget` in UserDefaults and
+///    in `VolumeMetadataSnapshot` for bundle export. The version bump is
+///    a marker so a v6-aware build knows the parallel volume metadata
+///    layer *may* carry retire fields; v5 catalog.json files load
+///    unchanged (no record-level fields were added).
 struct CatalogSnapshot: Codable {
-    static let currentVersion = 5
+    static let currentVersion = 6
 
     var version: Int = Self.currentVersion
     var savedAt: Date = Date()
