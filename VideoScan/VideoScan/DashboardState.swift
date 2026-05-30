@@ -124,6 +124,34 @@ final class DashboardState: ObservableObject {
     @Published var combineFailed: Int = 0
     @Published var combineSkipped: Int = 0
 
+    // MARK: - Relocate Progress
+
+    @Published var relocateTotal: Int = 0
+    @Published var relocateCompleted: Int = 0
+    @Published var relocateSucceeded: Int = 0
+    @Published var relocateSalvageFailed: Int = 0
+    @Published var relocateManuallyDeleted: Int = 0
+    @Published var relocateAdopted: Int = 0
+    @Published var relocateSourceMoves: Int = 0
+    @Published var relocateSkipped: Int = 0
+    @Published var relocateBytesCopied: Int64 = 0
+    @Published var relocateCurrentFile: String = ""
+    var relocateStartTime: Date?
+
+    func resetForRelocate(total: Int) {
+        relocateTotal = total
+        relocateCompleted = 0
+        relocateSucceeded = 0
+        relocateSalvageFailed = 0
+        relocateManuallyDeleted = 0
+        relocateAdopted = 0
+        relocateSourceMoves = 0
+        relocateSkipped = 0
+        relocateBytesCopied = 0
+        relocateCurrentFile = ""
+        relocateStartTime = Date()
+    }
+
     // MARK: - Throughput Timer
 
     private var throughputTimer: Timer?

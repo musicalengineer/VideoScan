@@ -22,6 +22,7 @@ struct CatalogToolbar<Dashboard: View>: View {
     let outputCSVPath: String
     let selectedIDs: Set<UUID>
     @Binding var showCombineSheet: Bool
+    @Binding var showRelocateSheet: Bool
     @Binding var showDashboard: Bool
     @Binding var searchText: String
     @Binding var showInspector: Bool
@@ -211,6 +212,14 @@ struct CatalogToolbar<Dashboard: View>: View {
             .disabled(!canCombine && !isCombining)
             .accessibilityIdentifier("catalog.combine.openSheet")
             .help("Mux correlated video + audio pairs into combined files using ffmpeg (no re-encode)")
+
+            Button(action: { showRelocateSheet = true }) {
+                Label("Relocate…", systemImage: "externaldrive.badge.checkmark")
+            }
+            .buttonStyle(.bordered)
+            .disabled(!hasRecords)
+            .accessibilityIdentifier("catalog.relocate.openSheet")
+            .help("Copy catalogued files from a flaky source volume onto a healthier destination and rewrite catalog paths.")
 
             if isCombining {
                 Button(action: onStopCombine) {
