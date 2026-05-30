@@ -504,6 +504,7 @@ struct CombinePairSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Combine Pair")
                 .font(.headline)
+                .accessibilityIdentifier("combinePairSheet.title")
 
             GroupBox("Source Files") {
                 VStack(alignment: .leading, spacing: 6) {
@@ -623,6 +624,7 @@ struct CombinePairSheet: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(outputFolder == nil || !videoOnline || !audioOnline)
                 .keyboardShortcut(.return)
+                .accessibilityIdentifier("combinePairSheet.combineButton")
             }
         }
         .padding(20)

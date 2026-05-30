@@ -107,6 +107,7 @@ struct CatalogToolbar<Dashboard: View>: View {
                         .disabled(selectedIDs.isEmpty)
                     Divider()
                     Button("Find A/V Pairs Across Volumes", action: onCorrelateAcrossVolumes)
+                        .accessibilityIdentifier("catalog.correlate.findPairsAcrossVolumes")
                     Divider()
                     Toggle("Show Pairs Only", isOn: $showPairsOnly)
                         .disabled(!hasCorrelatedPairs)
@@ -122,6 +123,7 @@ struct CatalogToolbar<Dashboard: View>: View {
                 }
                 .menuStyle(.borderlessButton)
                 .disabled(isScanning || isCorrelating || !hasRecords)
+                .accessibilityIdentifier("catalog.correlate.menu")
                 .help("Match video-only files with their corresponding audio-only files (e.g. Avid MXF pairs)")
 
                 if !correlateStatus.isEmpty {
@@ -248,6 +250,7 @@ struct CatalogToolbar<Dashboard: View>: View {
                 TextField("Search filenames…", text: $searchText)
                     .textFieldStyle(.plain)
                     .frame(width: 160)
+                    .accessibilityIdentifier("catalog.searchField")
                 if !searchText.isEmpty {
                     Button(action: { searchText = "" }) {
                         Image(systemName: "xmark.circle.fill")
@@ -1135,6 +1138,7 @@ struct CatalogContent: View {
                                     let audio = rec.streamType == .audioOnly ? rec : partner
                                     onCombinePair?(video, audio)
                                 }
+                                .accessibilityIdentifier("catalog.row.combineThisPair")
                             }
                             Divider()
                             Button {

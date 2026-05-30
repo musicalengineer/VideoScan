@@ -45,6 +45,9 @@ struct ContentView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        // XCUITest hook: e.g. "tab.Catalog" — added for the
+                        // first UI test. Only used by tests; UI is unchanged.
+                        .accessibilityIdentifier("tab.\(tab.label)")
                         .background(
                             selectedTab == tab.tag
                                 ? Color.accentColor.opacity(0.12)

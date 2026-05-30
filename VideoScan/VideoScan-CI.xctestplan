@@ -33,6 +33,18 @@
         "identifier": "0DC193342F676648006295E7",
         "name": "VideoScanTests"
       }
+    },
+    {
+      "parallelizable": false,
+      "skippedTests": [
+        "VideoScanUITests",
+        "VideoScanUITestsLaunchTests"
+      ],
+      "target": {
+        "containerPath": "container:VideoScan.xcodeproj",
+        "identifier": "0DC1933E2F676648006295E7",
+        "name": "VideoScanUITests"
+      }
     }
   ],
   "version": 1
