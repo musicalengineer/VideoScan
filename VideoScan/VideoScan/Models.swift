@@ -134,6 +134,16 @@ class VideoRecord: Identifiable, Codable {
     var fullPath: String = ""
     var directory: String = ""
     var notes: String = ""
+
+    /// Provenance: where this record's file lived before the most recent
+    /// Relocate. Set once at first migration, never overwritten — so even
+    /// after multiple relocates, this still points at the *original* home.
+    /// nil ⇒ never relocated. See docs/relocate_volume_plan.md §1.
+    var originalFullPath: String?
+
+    /// Friendly volume name at original location (the value of
+    /// `volumeName` at the time of first migration). nil ⇒ never relocated.
+    var originVolume: String?
     var wasCacheHit: Bool = false   // transient — not persisted to SQLite cache
 
     // Avid bin metadata (populated by cross-referencing .avb files)
@@ -405,6 +415,7 @@ class VideoRecord: Identifiable, Codable {
         case container, videoCodec, resolution, frameRate, videoBitrate, totalBitrate
         case colorSpace, bitDepth, scanType, audioCodec, audioChannels, audioSampleRate
         case timecode, tapeName, isPlayable, partialMD5, fullPath, directory, notes
+        case originalFullPath, originVolume
         case avidClipName, avidMobID, avidMaterialUUID, avidBinFile, avidMobType
         case avidMediaPath, avidTapeName, avidEditRate, avidTracks
         case materialPackageUMID
@@ -507,6 +518,11 @@ class VideoRecord: Identifiable, Codable {
         // trip cleanly as active records rather than throwing. Regression
         // covered by CatalogPurgeTests.testDecodingLegacyCatalogJsonYieldsNilPurgedAt.
         purgedAt                    = try c.decodeIfPresent(Date.self, forKey: .purgedAt)
+        // Relocate provenance. Legacy catalogs (no keys) decode as nil and
+        // remain treated as "never relocated." Once set on first migration
+        // these keys are encoded on every subsequent write.
+        originalFullPath            = try c.decodeIfPresent(String.self, forKey: .originalFullPath)
+        originVolume                = try c.decodeIfPresent(String.self, forKey: .originVolume)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -607,6 +623,11 @@ class VideoRecord: Identifiable, Codable {
         // for the (vast majority) of records that are never purged, and means
         // un-purging a record makes its JSON byte-identical to before purge.
         try c.encodeIfPresent(purgedAt, forKey: .purgedAt)
+        // Relocate provenance: only written for records that have been
+        // migrated. For un-relocated records (the vast majority pre-rollout)
+        // these add zero bytes to catalog.json.
+        try c.encodeIfPresent(originalFullPath, forKey: .originalFullPath)
+        try c.encodeIfPresent(originVolume, forKey: .originVolume)
     }
 
     var rowColor: Color {
@@ -684,6 +705,11 @@ enum ArchiveStage: String, Codable, CaseIterable, Comparable {
     case backedUp        = "Backed Up"
     case readyForArchive = "Ready"
     case archived        = "Archived"
+    // Out-of-band terminal states introduced by Relocate. Kept at the end
+    // of the case list so Comparable ordering for the happy-path cases is
+    // unchanged. See docs/relocate_volume_plan.md §1, §1A.
+    case manuallyDeleted = "Manually Deleted"
+    case salvageFailed   = "Salvage Failed"
 
     var icon: String {
         switch self {
@@ -693,6 +719,8 @@ enum ArchiveStage: String, Codable, CaseIterable, Comparable {
         case .backedUp:        return "doc.on.doc.fill"
         case .readyForArchive: return "checkmark.seal.fill"
         case .archived:        return "archivebox.fill"
+        case .manuallyDeleted: return "trash.slash.fill"
+        case .salvageFailed:   return "exclamationmark.octagon.fill"
         }
     }
 
@@ -704,6 +732,8 @@ enum ArchiveStage: String, Codable, CaseIterable, Comparable {
         case .backedUp:        return .purple
         case .readyForArchive: return .mint
         case .archived:        return .indigo
+        case .manuallyDeleted: return .secondary
+        case .salvageFailed:   return .red
         }
     }
 

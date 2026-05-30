@@ -44,8 +44,12 @@ enum CatalogLoadOutcome: Equatable {
 ///    `sceneCaptionModel: String?`, `sceneCaptionDate: Date?` for VLM-generated
 ///    natural-language descriptions. Same additive Codable pattern as v3.
 ///    See docs/scene_captions_plan.md.
+///  - v5: VideoRecord gains `originalFullPath: String?` and `originVolume:
+///    String?` for Relocate Volume provenance, plus two new `ArchiveStage`
+///    cases (`manuallyDeleted`, `salvageFailed`). Pure additive — v4 loads
+///    unchanged. See docs/relocate_volume_plan.md.
 struct CatalogSnapshot: Codable {
-    static let currentVersion = 4
+    static let currentVersion = 5
 
     var version: Int = Self.currentVersion
     var savedAt: Date = Date()
