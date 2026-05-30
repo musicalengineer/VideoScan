@@ -28,6 +28,17 @@ struct VolumesWindow: View {
     /// at click time.
     @State private var retireOffer: PendingRetireOffer?
 
+    /// §2 Provenance & Audit Trail — "Where files from <vol> live now"
+    /// sheet backing. Built on demand from the right-clicked target via
+    /// `model.makeVolumeProvenance`. Swift's optional → `.sheet(item:)`
+    /// gives us auto-dismiss when the user closes.
+    @State private var provenanceTarget: VolumeProvenance?
+
+    /// §2 Provenance & Audit Trail — Migration Overview sheet backing.
+    /// Built fresh each time the toolbar button fires; cheap enough on
+    /// the catalog sizes Rick has (~10s of K records).
+    @State private var migrationOverview: MigrationOverview?
+
     /// Sidebar font/badge scale — grows from 1.0 at 320pt to 1.5 at 540pt.
     /// The text and badge metrics in `VolumeListRow` multiply by this so a wider
     /// sidebar gets proportionally bigger labels (Rick's stretch goal).
@@ -102,6 +113,16 @@ struct VolumesWindow: View {
         .sheet(item: $retireOffer) { offer in
             RelocateRetireSheet(offer: offer)
         }
+        // §2 Provenance & Audit Trail — Volume Provenance sheet. Reads
+        // a pre-built `VolumeProvenance` payload from `provenanceTarget`
+        // so SwiftUI tears it down cleanly on dismiss.
+        .sheet(item: $provenanceTarget) { prov in
+            VolumeProvenanceSheet(provenance: prov)
+        }
+        // §2 Provenance & Audit Trail — Migration Overview sheet.
+        .sheet(item: $migrationOverview) { overview in
+            MigrationOverviewSheet(overview: overview)
+        }
     }
 
     private func honorPendingSelection() {
@@ -143,6 +164,18 @@ struct VolumesWindow: View {
                 .help("Surface retired volumes in this list so you can reinstate them.")
                 .accessibilityIdentifier("volumesWindow.showRetired")
             }
+            // §2 Provenance & Audit Trail — Migration Overview entry.
+            // Builds the overview payload on click; the sheet binding
+            // tears down the value when the sheet dismisses.
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    migrationOverview = model.makeMigrationOverview()
+                } label: {
+                    Label("Migration Overview", systemImage: "chart.bar.doc.horizontal")
+                }
+                .help("From aging drives to safe homes — a snapshot of where your library lives now.")
+                .accessibilityIdentifier("volumesWindow.migrationOverview")
+            }
         }
         .alert(item: $reinstateTarget) { tgt in
             Alert(
@@ -161,6 +194,23 @@ struct VolumesWindow: View {
     /// expression per branch.
     @ViewBuilder
     private func contextMenuItems(for target: CatalogScanTarget) -> some View {
+        // §2 Provenance — "Show where files went…" works on both retired
+        // and active volumes. Enabled as long as the catalog has any
+        // record originally cataloged on or relocated from this volume.
+        let hasRecords = VideoScanModel.totalRecordsOn(
+            volumeRootPath: target.searchPath, in: model.records
+        ) > 0
+        Button("Show where files went…") {
+            provenanceTarget = model.makeVolumeProvenance(for: target)
+        }
+        .disabled(!hasRecords)
+        .help(hasRecords
+              ? "See where every file from this drive lives now."
+              : "No catalogued files for this volume yet.")
+        .accessibilityIdentifier("volumeRow.showProvenance")
+
+        Divider()
+
         if target.isRetired {
             Button("Reinstate \(volumeName(target))") {
                 reinstateTarget = ReinstateTarget(

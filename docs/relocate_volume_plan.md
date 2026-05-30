@@ -258,6 +258,57 @@ Three changes follow:
 
 Plus `RelocateRetireVolumeTests.snapshotRollback_restoresPreRetiredState` updated again: Done no longer fires retire; the test now calls `maybeOfferRetire(for:)` directly to simulate the Volumes-window menu action.
 
+### 2. Provenance & Audit Trail (added 2026-05-30 evening)
+
+> **Context (Rick):** "For Matt's 32nd birthday reel I want to be able to point at every clip and show its journey — where it was scanned, what we did to it, where the safe copies are."
+
+A read-only feature that surfaces what the catalog already knows about every file's history. No schema changes; reuses `notes`, `originalFullPath`, `originVolume`, `archiveStage`, `partialMD5`, and the existing `scanTargetRoles` / `scanTargetTrust` taxonomy from §1A.2.
+
+**Three views (all sheets — no new tabs, no toolbar real estate change beyond one button):**
+
+1. **Volume Provenance** — "Where files from \<vol\> live now." Triggered by right-clicking any sidebar row in `VolumesWindow.swift` ("Show where files went…"). Works on retired AND active volumes. Two tabs:
+   - *Safe backups* (default): destination volumes whose host has `role != .retired` AND `trust != .unreliable`. Sorted by the same `roleScore*10 + trustScore` ranking from §1A.2.
+   - *All known copies*: everything, with degraded volumes greyed and tagged `(retired)`/`(unreliable)`.
+   - Header strip: green "All NN files have at least one safe backup" OR yellow "M of NN files lack a safe backup" with a disclosure listing the at-risk filenames. Retired volumes show the retire-date / reason banner.
+
+2. **File Journey** — "Following \<filename\>." Triggered by right-clicking any active record in the catalog table ("Show this file's journey"). Vertical timeline:
+   - Origin (Scanned on \<originVolume\> at \<originalFullPath\>).
+   - One event per parsed Reconcile/Combine/Relocate line in `notes`. Sorted ascending by parsed timestamp; free-form notes pinned to the end.
+   - Current state (Now at \<fullPath\> OR Marked deleted) with safe-witness count.
+   - Disclosure of every other known copy: dup-group siblings ∪ Bucket E witnesses, ranked safe-first.
+   - Hash status line at top.
+
+3. **Migration Overview** — "From aging drives to safe homes." Triggered by a new toolbar button in `VolumesWindow.swift` (icon: `chart.bar.doc.horizontal`). Four sections:
+   - Fleet snapshot pie (records by current host role) — native SwiftUI `Chart` with `SectorMark`.
+   - Migration flow bars (stacked, one bar per origin role; segments = destination roles) — `Chart` with `BarMark`.
+   - Triage funnel (Scanned → Triaged → Repaired/Combined → Archived) — derived from `archiveStage` + `combinedFromPairID`.
+   - "The best stuff" highlight — records that went through Combine AND reached `.archived` OR live on an `.lta`/`.archive` role volume. Big friendly count.
+
+**Files (all new, except thin hooks in two existing files):**
+
+- `VideoScan/VideoScan/ProvenanceTypes.swift` — value types: `VolumeProvenance`, `DestinationVolumeGroup`, `FileJourney`, `JourneyEvent`, `JourneyEventKind`, `KnownCopy`, `MigrationOverview`, `FleetRoleSlice`, `MigrationFlowBar`, `MigrationFlowEntry`, `TriageFunnelStage`.
+- `VideoScan/VideoScan/VideoScanModel+Provenance.swift` — pure `nonisolated static` builders + MainActor wrappers. Reuses `VolumeSafetyResolver` from §1A.2 and `parseWitnessesFromNote` from §1B. New: `parseRelocateEventsFromNotes` lifts every Reconcile/Combine/Relocate line into a typed `ParsedNoteEvent`.
+- `VideoScan/VideoScan/VolumeProvenanceSheet.swift` — View 1. Two-tab Picker + scrollable card list + at-risk disclosure.
+- `VideoScan/VideoScan/FileJourneySheet.swift` — View 2. Vertical timeline with icon spine + copies disclosure.
+- `VideoScan/VideoScan/MigrationOverviewSheet.swift` — View 3. Native `Charts` framework (`SectorMark`, `BarMark`).
+- `VideoScan/VideoScan/VolumesWindow.swift` — adds context-menu item "Show where files went…" + toolbar button "Migration Overview" + two `.sheet(item:)` bindings.
+- `VideoScan/VideoScan/CatalogHelpers.swift` — adds context-menu item "Show this file's journey" to the active-row branch + one `.sheet(item:)` binding.
+
+**Tests (new file `VideoScan/VideoScanTests/ProvenanceTests.swift`, 10 tests):**
+
+- `volumeProvenance_groupsWitnessesByDestinationVolume` — multi-witness records ⇒ groups keyed by host volume, sort by safety score.
+- `volumeProvenance_safeTabExcludesRetiredAndUnreliable` — retired-only witnesses don't satisfy "safely backed up."
+- `volumeProvenance_safeTabIncludesAgingButTrustedNonRetired` — guards against conflating "aging" with "degraded."
+- `volumeProvenance_emptyVolumeShowsEmptyState`.
+- `fileJourney_parsesReconcileEventsFromNotesInOrder` — out-of-order timestamps sort ascending.
+- `fileJourney_handlesRecordWithNoNotes` — minimum-info path renders Origin + Current.
+- `fileJourney_currentStateReflectsArchiveStage` — `.manuallyDeleted` ⇒ retire icon + friendly copy.
+- `migrationOverview_countsByOriginRoleCorrectly` — origin role derived from `originalFullPath` ?? `fullPath`.
+- `migrationOverview_bestStuffCountsRecordsThatAreCombinedAndArchived` — `combinedFromPairID != nil` AND (`.archived` OR on `.lta`/`.archive` volume).
+- `friendlyHeadlineDoesNotContainSecurityJargon` — anti-drift guard. Caught a real "audit" leak during initial implementation; fixed.
+
+**Friendly-tone rule enforced via test guard** (per `feedback_friendly_language.md`): no "audit", "compliance", "integrity scan", "surveillance", or "forensic" in any user-facing string the builders produce.
+
 ### 3. Engine — per-record copy + verify
 
 - **File (new):** `VideoScan/VideoScan/RelocateEngine.swift`
