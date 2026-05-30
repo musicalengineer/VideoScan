@@ -25,6 +25,14 @@ struct RelocateSheet: View {
     }()
     @State private var dryRun: Bool = false
     @State private var maxConcurrency: Int = 1
+    /// When ON, reconcile classifies records duplicated on other volumes
+    /// as safelyRedundant and marks them deleted (catalog-only, with
+    /// audit). Default ON — the "failing drive" use case is the common one.
+    @State private var skipDupsOnOtherVolumes: Bool = true
+    /// Cached reconcile preview, populated by the "Reconcile preview"
+    /// button. Used to drive the bucket-summary table + the disclosure
+    /// under the safely-redundant toggle.
+    @State private var previewResult: ReconcileResult?
 
     // MARK: - Pre-flight stats (recomputed reactively)
 
@@ -69,6 +77,17 @@ struct RelocateSheet: View {
             && !insufficientSpace
     }
 
+    /// Bytes that would be saved by the safelyRedundant rule, summed
+    /// from the preview result. Zero when no preview has been run yet
+    /// or when nothing matched.
+    private var redundantBytes: Int64 {
+        previewResult?.safelyRedundant.reduce(0) { $0 + $1.rec.sizeBytes } ?? 0
+    }
+
+    private var redundantBytesString: String {
+        ByteCountFormatter.string(fromByteCount: redundantBytes, countStyle: .file)
+    }
+
     // MARK: - Body
 
     var body: some View {
@@ -98,6 +117,8 @@ struct RelocateSheet: View {
                     .accessibilityIdentifier("relocateSheet.sourcePath")
                     .onChange(of: sourceVolumePath) { _, new in
                         UserDefaults.standard.set(new, forKey: relocateSourceVolumeKey)
+                        // Source change invalidates any prior preview.
+                        previewResult = nil
                     }
                 if !sourceVolumeExists {
                     Label("Path does not exist", systemImage: "exclamationmark.triangle.fill")
@@ -136,6 +157,28 @@ struct RelocateSheet: View {
             VStack(alignment: .leading, spacing: 8) {
                 Toggle("Dry run (reconcile + preview, no copies)", isOn: $dryRun)
                     .accessibilityIdentifier("relocateSheet.dryRun")
+
+                // The headline "failing-drive escape hatch" option.
+                Toggle("Skip duplicates already on other volumes",
+                       isOn: $skipDupsOnOtherVolumes)
+                    .accessibilityIdentifier("relocateSheet.skipDupsOnOtherVolumes")
+                    .help("When ON, files already present (same size + hash) on a volume other than source or destination are marked deleted in the catalog with a witness audit trail, instead of being copied. The source file is never touched.")
+
+                // Disclosure: populated only after a preview run.
+                if let preview = previewResult {
+                    let n = preview.safelyRedundant.count
+                    Text("\(n) file\(n == 1 ? "" : "s"), \(redundantBytesString) redundant")
+                        .font(.caption)
+                        .foregroundColor(skipDupsOnOtherVolumes ? .green : .secondary)
+                        .padding(.leading, 22)
+                        .accessibilityIdentifier("relocateSheet.redundantDisclosure")
+                } else {
+                    Text("Run the Reconcile preview to see how many files are already mirrored elsewhere.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.leading, 22)
+                }
+
                 Stepper(value: $maxConcurrency, in: 1...4) {
                     Text("Concurrent copies: \(maxConcurrency)")
                         .font(.caption)
@@ -144,11 +187,24 @@ struct RelocateSheet: View {
             }
             .padding(4)
         }
+        .onChange(of: skipDupsOnOtherVolumes) { _, _ in
+            // Toggle change invalidates the preview — the bucket counts
+            // will differ depending on whether E is enabled.
+            previewResult = nil
+        }
     }
 
     private var statsSection: some View {
         GroupBox("Pre-flight") {
             VStack(alignment: .leading, spacing: 4) {
+                // Heads-up explanatory line above the bucket summary.
+                Text("Operates on catalogued videos only. Photos, documents, and project files are not touched — handle those separately.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 4)
+                    .accessibilityIdentifier("relocateSheet.scopeNotice")
+
                 HStack {
                     Text("In-scope records:")
                     Spacer()
@@ -173,9 +229,73 @@ struct RelocateSheet: View {
                         .foregroundColor(.red)
                         .font(.caption)
                 }
+
+                Divider().padding(.vertical, 4)
+
+                // Reconcile preview + bucket summary.
+                HStack {
+                    Button("Reconcile preview") { runPreview() }
+                        .disabled(scopedRecords.isEmpty || destinationFolder == nil)
+                        .accessibilityIdentifier("relocateSheet.reconcilePreview")
+                    if previewResult != nil {
+                        Text("(\(scopedRecords.count) records classified)")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                }
+
+                if let preview = previewResult {
+                    bucketSummaryRows(preview)
+                }
             }
             .padding(4)
         }
+    }
+
+    /// Compact bucket summary table. Mirrors the labels we use in the
+    /// console log so the user sees consistent terminology across the
+    /// preview and the live run.
+    private func bucketSummaryRows(_ r: ReconcileResult) -> some View {
+        let readyBytes = r.ready.reduce(0) { $0 + $1.sizeBytes }
+        let readyBytesString = ByteCountFormatter.string(fromByteCount: readyBytes, countStyle: .file)
+        let nRedundant = r.safelyRedundant.count
+        return VStack(alignment: .leading, spacing: 2) {
+            bucketRow("Ready to migrate", count: r.ready.count, detail: readyBytesString)
+            bucketRow("Already at destination", count: r.adopted.count, detail: "adopt without copy")
+            // The headline new row — surfaced prominently regardless of
+            // current toggle state so Rick can see the magnitude before
+            // committing.
+            bucketRow("Safely redundant",
+                      count: nRedundant,
+                      detail: "\(redundantBytesString) — will mark as deleted with audit trail",
+                      identifier: "relocateSheet.bucket.safelyRedundant",
+                      emphasized: nRedundant > 0)
+            bucketRow("Source-side moves", count: r.sourceSideMoves.count, detail: "paths rewritten")
+            bucketRow("Manually deleted", count: r.manuallyDeleted.count, detail: "marked, kept for audit")
+            bucketRow("Previously relocated", count: r.previouslyRelocated.count, detail: "skipped")
+        }
+        .padding(.top, 4)
+    }
+
+    private func bucketRow(_ label: String,
+                           count: Int,
+                           detail: String,
+                           identifier: String? = nil,
+                           emphasized: Bool = false) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label)
+                .frame(width: 180, alignment: .leading)
+            Text("\(count)")
+                .font(.system(.body, design: .monospaced))
+                .frame(width: 50, alignment: .trailing)
+                .foregroundColor(emphasized ? .green : .primary)
+            Text(detail)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            Spacer()
+        }
+        .accessibilityIdentifier(identifier ?? "")
     }
 
     private var buttonBar: some View {
@@ -204,7 +324,8 @@ struct RelocateSheet: View {
             destinationRoot: dest,
             maxConcurrency: maxConcurrency,
             dryRun: dryRun,
-            skipAlreadyRelocated: true
+            skipAlreadyRelocated: true,
+            skipDupsOnOtherVolumes: skipDupsOnOtherVolumes
         )
         model.relocateVolume(options)
         dismiss()
@@ -222,6 +343,49 @@ struct RelocateSheet: View {
         if panel.runModal() == .OK, let url = panel.url {
             destinationFolder = url
             UserDefaults.standard.set(url.path, forKey: relocateDestFolderKey)
+            previewResult = nil  // dest change invalidates preview
         }
+    }
+
+    /// Synchronous reconcile preview. Walks the source + dest dirs
+    /// (cheap, just enumerator + stat) and runs the pure classifier.
+    /// No catalog mutation. Touches the source drive read-only and
+    /// only for files whose size is referenced by an in-scope record —
+    /// safe on a flaky HDD.
+    private func runPreview() {
+        guard let dest = destinationFolder else { return }
+        let scope = scopedRecords
+        let sourceFiles = enumerateFiles(at: sourceVolumePath)
+        let destFiles = enumerateFiles(at: dest.path)
+        previewResult = RelocateReconcile.reconcile(
+            records: scope,
+            allCatalogRecords: model.records,
+            sourceVolumeRootPath: sourceVolumePath,
+            destinationRoot: dest,
+            sourceFiles: sourceFiles,
+            destFiles: destFiles,
+            skipDupsOnOtherVolumes: skipDupsOnOtherVolumes,
+            hash: { FileHasher.partialMD5(path: $0) }
+        )
+    }
+
+    /// Mirror of VideoScanModel.enumerateFiles — local copy because that
+    /// helper is `private` to the model extension. Walks `root` and
+    /// returns (path, size) for every regular file under it. Returns []
+    /// when the path doesn't exist (e.g. dest folder hasn't been created
+    /// yet).
+    private func enumerateFiles(at root: String) -> [ReconcileFileEntry] {
+        guard FileManager.default.fileExists(atPath: root) else { return [] }
+        let fm = FileManager.default
+        guard let it = fm.enumerator(atPath: root) else { return [] }
+        var out: [ReconcileFileEntry] = []
+        while let rel = it.nextObject() as? String {
+            let path = (root as NSString).appendingPathComponent(rel)
+            var sb = stat()
+            guard stat(path, &sb) == 0 else { continue }
+            if (sb.st_mode & S_IFMT) != S_IFREG { continue }
+            out.append(.init(path: path, size: Int64(sb.st_size)))
+        }
+        return out
     }
 }

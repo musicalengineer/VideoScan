@@ -66,6 +66,7 @@ Reserve `rsync` only if integration testing surfaces an HFS+ catalog corruption 
       var maxConcurrency: Int                // default 1 — Mini2TB is slow; parallel reads hurt
       var dryRun: Bool                       // default false
       var skipAlreadyRelocated: Bool         // default true — re-run safety
+      var skipDupsOnOtherVolumes: Bool       // default true — enables Bucket E (added 2026-05-30)
   }
 
   enum RelocateError: Error {
@@ -94,7 +95,7 @@ Reserve `rsync` only if integration testing surfaces an HFS+ catalog corruption 
 - **Test:** `RelocateScopeTests.swift` covers scope selection, path rewriting (subdirectories, leading/trailing slashes), suggested-name format.
 - **Expected diff:** ~350 lines engine, ~150 lines tests.
 
-### 1A. Pre-flight reconcile (added 2026-05-29 evening)
+### 1A. Pre-flight reconcile (added 2026-05-29 evening; Bucket E added 2026-05-30)
 
 > **Context:** Rick is manually deleting / moving / pre-copying files off Mini2TB while the feature is being designed. By the time Relocate runs, the catalog will be drifted from reality. Reconcile sorts this out before the migration phase walks records, so manual triage and Relocate compose cleanly.
 
@@ -104,12 +105,14 @@ Reserve `rsync` only if integration testing surfaces an HFS+ catalog corruption 
   2. File missing AND no plausible match found in scan of source volume or scan of `destinationRoot` → **Bucket B: manually deleted**. Flip `archiveStage = .manuallyDeleted` (new enum case alongside `salvageFailed`, same conventions), append note "Reconcile <ISO8601>: source file not found", leave `fullPath` untouched so Compare & Rescue can still see what was lost from where.
   3. File missing at recorded path BUT a same-size + same-partialMD5 file is found *elsewhere on the same source volume* → **Bucket C: moved within source before migration**. Rewrite `fullPath` to the new in-source location, log "Reconcile <ISO8601>: source-side move <old> → <new>", queue for migration as Bucket A.
   4. File missing at recorded path BUT a same-size + same-partialMD5 file is already at the planned destination (`rewrittenPath(forSourcePath:rec.fullPath, ...)`) → **Bucket D: pre-migrated manually**. Set `originalFullPath = rec.fullPath`, set `originVolume = rec.volumeName`, rewrite `fullPath` to the dest path. *Skip the copy.* Log "Reconcile <ISO8601>: already at destination — adopted, no copy needed."
+  5. **Bucket E (added 2026-05-30): safely redundant on a third volume.** Same (`sizeBytes`, `partialMD5`) exists on at least one catalogued volume that is *neither* the source nor the destination → mark `archiveStage = .manuallyDeleted` and append a structured audit-trail note carrying the first 5 witness `fullPath` values plus the full witness count. **Source file is never read or modified** — pure catalog mutation. Gated by `skipDupsOnOtherVolumes: Bool` (default `true`) in `RelocateOptions`. Preference order: destination match (Bucket D) wins over safely-redundant; the source-still-present record (Bucket A) also wins. This is the failing-drive escape hatch: Mini2TB has 741 records, ~739 dup'd on MyBook3Terabytes / InternalRaid / Seagate2TB / LACIE500; we don't burn a copy cycle on content already safe elsewhere. Empty-hash records and zero-byte records are unconditionally excluded — too weak a signal for a "safely redundant" claim.
 - **Discovery scan optimization:** Build a `[Int64 -> [URL]]` size-index of source volume contents once at start (fast — single `enumerator` walk; no hashing). Only hash candidate files when a record's size matches an entry in the index. Same trick on the destination subfolder. Without this, reconcile would be O(records × files) hashes — unaffordable on a flaky drive.
 - **Reconcile dashboard line in the pre-flight UI:**
   ```
   Reconcile complete:
     Ready to migrate:     112
     Already at dest:       18   (will be adopted, not copied)
+    Safely redundant:     739   (will mark as deleted with audit trail)
     Source-side moves:      4   (paths rewritten)
     Manually deleted:       6   (will be marked deleted, kept for audit)
   ```
