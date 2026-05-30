@@ -1,5 +1,10 @@
 import Foundation
 
+// Dedicated persistent log for Relocate runs. Lands at
+// ~/Library/Logs/VideoScan/relocate.log. Outlives the in-app console,
+// so post-mortems on a long overnight run are possible.
+private let relocateLog = PersistentLog(name: "relocate")
+
 // MARK: - VideoScanModel+Relocate
 //
 // Implements the "Relocate Volume" feature: copy every catalogued file
@@ -55,8 +60,8 @@ extension VideoScanModel {
     /// Records whose `fullPath` is under `sourceVolumeRootPath`.
     /// Matching uses a trailing slash so `/Volumes/Mini2TB-backup` does
     /// not false-match `/Volumes/Mini2TB`.
-    static func recordsScoped(to sourceVolumeRootPath: String,
-                              in all: [VideoRecord]) -> [VideoRecord] {
+    nonisolated static func recordsScoped(to sourceVolumeRootPath: String,
+                                          in all: [VideoRecord]) -> [VideoRecord] {
         let prefix = sourceVolumeRootPath.hasSuffix("/")
             ? sourceVolumeRootPath
             : sourceVolumeRootPath + "/"
@@ -66,9 +71,9 @@ extension VideoScanModel {
     /// Translate a source file's absolute path to its destination path
     /// under `destRoot`, preserving the subdirectory layout beneath
     /// `sourceRoot`. Trailing slashes on either input are normalized.
-    static func rewrittenPath(forSourcePath src: String,
-                              sourceRoot: String,
-                              destRoot: String) -> String {
+    nonisolated static func rewrittenPath(forSourcePath src: String,
+                                          sourceRoot: String,
+                                          destRoot: String) -> String {
         let normalizedSourceRoot = sourceRoot.hasSuffix("/")
             ? String(sourceRoot.dropLast())
             : sourceRoot
@@ -90,8 +95,8 @@ extension VideoScanModel {
     /// Suggest a destination folder name like "from-Mini2TB-20260530".
     /// Stable across the same day; collisions are the user's problem to
     /// resolve via the dest-folder picker.
-    static func suggestDestinationName(forSourceVolumeName name: String,
-                                       now: Date = Date()) -> String {
+    nonisolated static func suggestDestinationName(forSourceVolumeName name: String,
+                                                    now: Date = Date()) -> String {
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyyMMdd"
         fmt.timeZone = TimeZone.current
@@ -99,5 +104,262 @@ extension VideoScanModel {
         let cleaned = name.replacingOccurrences(of: "/", with: "-")
                           .replacingOccurrences(of: " ", with: "_")
         return "from-\(cleaned)-\(stamp)"
+    }
+
+    // MARK: - Public entry
+
+    /// Kick off a Relocate Volume run. Fire-and-forget — sets
+    /// `isRelocating = true` and spawns a Task that does reconcile →
+    /// snapshot → per-record copy → catalog mutation → summary.
+    /// Refuses to start when `isReadOnly`, already running, or scope
+    /// is empty.
+    func relocateVolume(_ options: RelocateOptions) {
+        guard !isReadOnly else {
+            log("Relocate refused: read-only viewer mode.")
+            return
+        }
+        guard !isRelocating else {
+            log("Relocate refused: already running.")
+            return
+        }
+
+        let scope = Self.recordsScoped(to: options.sourceVolumeRootPath, in: records)
+        guard !scope.isEmpty else {
+            log("Relocate: no catalogued files under \(options.sourceVolumeRootPath).")
+            return
+        }
+
+        isRelocating = true
+        dashboard.resetForRelocate(total: scope.count)
+        log("""
+
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          Relocate Volume — \(options.sourceVolumeRootPath)
+          → \(options.destinationRoot.path)
+          (\(scope.count) catalogued file(s))
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        """)
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.runRelocate(scope: scope, options: options)
+            self.isRelocating = false
+        }
+    }
+
+    // MARK: - Run
+
+    private func runRelocate(scope: [VideoRecord], options: RelocateOptions) async {
+        relocateLog.write("─── Relocate started: source=\(options.sourceVolumeRootPath) dest=\(options.destinationRoot.path) scope=\(scope.count) dryRun=\(options.dryRun)")
+
+        // 1A. Reconcile pre-flight.
+        let reconcile = performReconcile(scope: scope, options: options)
+        logReconcileSummary(reconcile)
+        relocateLog.write("Reconcile: ready=\(reconcile.ready.count) adopted=\(reconcile.adopted.count) sourceMoves=\(reconcile.sourceSideMoves.count) manuallyDeleted=\(reconcile.manuallyDeleted.count) previouslyRelocated=\(reconcile.previouslyRelocated.count)")
+
+        // Track salvageFailed for the final summary block.
+        var salvageFailedPaths: [String] = []
+
+        // Snapshot catalog.json before any mutation.
+        snapshotCatalogPreRelocate()
+
+        // Apply zero-copy mutations: Bucket B (manuallyDeleted),
+        // Bucket C (rewrite path then queue for migration),
+        // Bucket D (adopt — stamp provenance, skip copy).
+        for r in reconcile.manuallyDeleted {
+            r.archiveStage = .manuallyDeleted
+            r.notes = appendNote(r.notes, "Reconcile \(stamp()): source file not found")
+            relocateLog.write("[RECONCILE] manually-deleted: \(r.fullPath)")
+            dashboard.relocateManuallyDeleted += 1
+            dashboard.relocateCompleted += 1
+        }
+        for (r, dest) in reconcile.adopted {
+            if r.originalFullPath == nil { r.originalFullPath = r.fullPath }
+            if r.originVolume == nil { r.originVolume = r.volumeName }
+            relocateLog.write("[RECONCILE] adopted: \(r.fullPath) → \(dest)")
+            r.fullPath = dest
+            r.directory = (dest as NSString).deletingLastPathComponent
+            r.notes = appendNote(r.notes, "Reconcile \(stamp()): adopted existing copy at dest")
+            dashboard.relocateAdopted += 1
+            dashboard.relocateCompleted += 1
+        }
+        // Bucket C: rewrite path to the in-source new location THEN
+        // queue for migration (treat as Bucket A from here on).
+        var toMigrate: [VideoRecord] = reconcile.ready
+        for (r, newSrc) in reconcile.sourceSideMoves {
+            relocateLog.write("[RECONCILE] source-move: \(r.fullPath) → \(newSrc)")
+            r.fullPath = newSrc
+            r.directory = (newSrc as NSString).deletingLastPathComponent
+            r.notes = appendNote(r.notes, "Reconcile \(stamp()): source-side move detected")
+            dashboard.relocateSourceMoves += 1
+            toMigrate.append(r)
+        }
+        // Previously-relocated short-circuit
+        for r in reconcile.previouslyRelocated where options.skipAlreadyRelocated {
+            relocateLog.write("[RECONCILE] previously-relocated, skipping: \(r.fullPath)")
+            dashboard.relocateSkipped += 1
+            dashboard.relocateCompleted += 1
+            _ = r  // record left alone
+        }
+        catalogStore.scheduleSave(records: records)
+
+        if options.dryRun {
+            log("[DRY RUN] No files copied. Would have migrated \(toMigrate.count) record(s).")
+            relocateLog.write("[DRY RUN] no copies; would migrate \(toMigrate.count) record(s)")
+            logRelocateSummary(salvageFailedPaths: [])
+            return
+        }
+
+        // 4. Per-record copy + verify + commit.
+        for (i, rec) in toMigrate.enumerated() {
+            let newPath = Self.rewrittenPath(
+                forSourcePath: rec.fullPath,
+                sourceRoot: options.sourceVolumeRootPath,
+                destRoot: options.destinationRoot.path
+            )
+            dashboard.relocateCurrentFile = rec.filename
+            log("  [\(i + 1)/\(toMigrate.count)] \(rec.filename)")
+            log("    \(rec.fullPath) → \(newPath)")
+
+            let job = RelocateJob(
+                recordID: rec.id,
+                sourcePath: rec.fullPath,
+                destPath: newPath,
+                expectedBytes: rec.sizeBytes,
+                expectedPartialMD5: rec.partialMD5
+            )
+            let outcome = await RelocateEngine.runOne(job)
+            switch outcome {
+            case .success(let bytes, let newHash, let dur):
+                if rec.originalFullPath == nil { rec.originalFullPath = rec.fullPath }
+                if rec.originVolume == nil { rec.originVolume = rec.volumeName }
+                let oldPath = rec.fullPath
+                rec.fullPath = newPath
+                rec.directory = (newPath as NSString).deletingLastPathComponent
+                rec.partialMD5 = newHash
+                dashboard.relocateSucceeded += 1
+                dashboard.relocateBytesCopied += bytes
+                log("    ✓ copied \(bytes) bytes in \(String(format: "%.1f", dur))s")
+                relocateLog.write("[OK] \(oldPath) → \(newPath) (\(bytes) bytes, \(String(format: "%.2f", dur))s, hash=\(newHash.prefix(8)))")
+            case .salvageFailed(let reason, let stage):
+                rec.archiveStage = .salvageFailed
+                rec.notes = appendNote(rec.notes, "Relocate \(stamp()): \(stage.rawValue) — \(reason)")
+                dashboard.relocateSalvageFailed += 1
+                log("    ✗ SALVAGE FAILED at \(stage.rawValue): \(reason)")
+                relocateLog.write("[FAIL/\(stage.rawValue)] \(rec.fullPath) — \(reason)")
+                salvageFailedPaths.append(rec.fullPath)
+            }
+            dashboard.relocateCompleted += 1
+            // Debounced disk write — not per record, but frequent enough
+            // that a crash loses no more than ~2s of state.
+            catalogStore.scheduleSave(records: records)
+        }
+        catalogStore.scheduleSave(records: records)
+        logRelocateSummary(salvageFailedPaths: salvageFailedPaths)
+    }
+
+    // MARK: - Reconcile FS walk
+
+    private func performReconcile(scope: [VideoRecord],
+                                  options: RelocateOptions) -> ReconcileResult {
+        let sourceFiles = enumerateFiles(at: options.sourceVolumeRootPath)
+        let destFiles = enumerateFiles(at: options.destinationRoot.path)
+        return RelocateReconcile.reconcile(
+            records: scope,
+            sourceVolumeRootPath: options.sourceVolumeRootPath,
+            destinationRoot: options.destinationRoot,
+            sourceFiles: sourceFiles,
+            destFiles: destFiles,
+            hash: { FileHasher.partialMD5(path: $0) }
+        )
+    }
+
+    private func enumerateFiles(at root: String) -> [ReconcileFileEntry] {
+        guard FileManager.default.fileExists(atPath: root) else { return [] }
+        let fm = FileManager.default
+        guard let it = fm.enumerator(atPath: root) else { return [] }
+        var out: [ReconcileFileEntry] = []
+        while let rel = it.nextObject() as? String {
+            let path = (root as NSString).appendingPathComponent(rel)
+            var sb = stat()
+            guard stat(path, &sb) == 0 else { continue }
+            // Skip directories — only files matter for size matching.
+            if (sb.st_mode & S_IFMT) != S_IFREG { continue }
+            out.append(.init(path: path, size: Int64(sb.st_size)))
+        }
+        return out
+    }
+
+    // MARK: - Snapshot
+
+    private func snapshotCatalogPreRelocate() {
+        let dst = (catalogStore.fileLocation as NSString).deletingLastPathComponent
+        let snap = (dst as NSString).appendingPathComponent("catalog.pre-relocate.\(snapshotStamp()).json")
+        do {
+            if FileManager.default.fileExists(atPath: catalogStore.fileLocation) {
+                try FileManager.default.copyItem(atPath: catalogStore.fileLocation, toPath: snap)
+                log("Pre-relocate snapshot: \(snap)")
+            }
+        } catch {
+            log("⚠ Pre-relocate snapshot failed: \(error.localizedDescription) — proceeding anyway")
+        }
+    }
+
+    private func snapshotStamp() -> String {
+        let fmt = ISO8601DateFormatter()
+        return fmt.string(from: Date()).replacingOccurrences(of: ":", with: "-")
+    }
+
+    private func stamp() -> String { ISO8601DateFormatter().string(from: Date()) }
+
+    private func appendNote(_ existing: String, _ msg: String) -> String {
+        existing.isEmpty ? msg : existing + "\n" + msg
+    }
+
+    // MARK: - Logging
+
+    private func logReconcileSummary(_ r: ReconcileResult) {
+        log("""
+          Reconcile:
+            Ready to migrate:   \(r.ready.count)
+            Already at dest:    \(r.adopted.count)   (adopt without copy)
+            Source-side moves:  \(r.sourceSideMoves.count)   (paths rewritten)
+            Manually deleted:   \(r.manuallyDeleted.count)   (marked, kept for audit)
+            Previously done:    \(r.previouslyRelocated.count)
+        """)
+    }
+
+    private func logRelocateSummary(salvageFailedPaths: [String]) {
+        let mb = Double(dashboard.relocateBytesCopied) / 1_048_576.0
+        let elapsed = dashboard.relocateStartTime.map { Date().timeIntervalSince($0) } ?? 0
+        let mbps = elapsed > 0 ? mb / elapsed : 0
+
+        var failedBlock = ""
+        if !salvageFailedPaths.isEmpty {
+            let head = salvageFailedPaths.prefix(20).map { "    • " + $0 }.joined(separator: "\n")
+            let more = salvageFailedPaths.count > 20
+                ? "\n    …and \(salvageFailedPaths.count - 20) more — see ~/Library/Logs/VideoScan/relocate.log"
+                : ""
+            failedBlock = "\n  Salvage failed files:\n\(head)\(more)"
+        }
+
+        let snapshotHint = "\n  Pre-relocate snapshot kept in app support — restore via `cp` if needed."
+
+        log("""
+
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          Relocate Complete
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+          Succeeded:        \(dashboard.relocateSucceeded)
+          Adopted:          \(dashboard.relocateAdopted)
+          Source moves:     \(dashboard.relocateSourceMoves)
+          Manually deleted: \(dashboard.relocateManuallyDeleted)
+          Salvage failed:   \(dashboard.relocateSalvageFailed)
+          Skipped:          \(dashboard.relocateSkipped)
+          Bytes copied:     \(String(format: "%.1f", mb)) MB
+          Wall clock:       \(String(format: "%.1f", elapsed))s (\(String(format: "%.1f", mbps)) MB/s)\(failedBlock)\(snapshotHint)
+        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        """)
+        relocateLog.write("─── Relocate complete: succeeded=\(dashboard.relocateSucceeded) adopted=\(dashboard.relocateAdopted) sourceMoves=\(dashboard.relocateSourceMoves) manuallyDeleted=\(dashboard.relocateManuallyDeleted) salvageFailed=\(dashboard.relocateSalvageFailed) skipped=\(dashboard.relocateSkipped) bytes=\(dashboard.relocateBytesCopied) elapsed=\(String(format: "%.1f", elapsed))s")
     }
 }

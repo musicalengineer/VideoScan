@@ -18,6 +18,7 @@ final class VideoScanModel: ObservableObject {
     @Published var isReadOnly: Bool = false
     @Published var isScanning: Bool = false
     @Published var isCombining: Bool = false
+    @Published var isRelocating: Bool = false
     @Published var isCorrelating: Bool = false
     @Published var isAnalyzingDuplicates: Bool = false
     @Published var isDeletingDuplicates: Bool = false

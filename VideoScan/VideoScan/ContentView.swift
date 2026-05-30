@@ -162,6 +162,7 @@ struct CatalogView: View {
     @AppStorage("selectedTab") private var selectedTab: Int = 0
     @State private var selectedIDs: Set<UUID> = []
     @State private var showCombineSheet = false
+    @State private var showRelocateSheet = false
     @State private var showDashboard = false
     @State private var showInspector = true
     @State private var sortOrder = [KeyPathComparator(\VideoRecord.filename)]
@@ -244,6 +245,7 @@ struct CatalogView: View {
                 outputCSVPath: model.outputCSVPath,
                 selectedIDs: selectedIDs,
                 showCombineSheet: $showCombineSheet,
+                showRelocateSheet: $showRelocateSheet,
                 showDashboard: $showDashboard,
                 searchText: $searchText,
                 showInspector: $showInspector,
@@ -392,6 +394,9 @@ struct CatalogView: View {
         )
         .sheet(isPresented: $showCombineSheet) {
             CombineSheet(selectedIDs: selectedIDs)
+        }
+        .sheet(isPresented: $showRelocateSheet) {
+            RelocateSheet()
         }
         .sheet(item: $combinePairItem) { item in
             CombinePairSheet(originalVideo: item.video, originalAudio: item.audio)
