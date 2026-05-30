@@ -134,6 +134,15 @@ final class DashboardState: ObservableObject {
     @Published var relocateAdopted: Int = 0
     @Published var relocateSourceMoves: Int = 0
     @Published var relocateSkipped: Int = 0
+    /// Records classified as "same content exists on a third volume" by the
+    /// new safelyRedundant rule. These are marked .manuallyDeleted with an
+    /// audit-trail note carrying the witness list; the source file is never
+    /// touched. See VideoScanModel+Relocate.swift §1A.
+    @Published var relocateSafelyRedundant: Int = 0
+    /// Sum of sizeBytes across safelyRedundant records. Surfaced in the UI
+    /// disclosure under the toggle and in the end-of-batch summary as the
+    /// "MB not copied" savings figure.
+    @Published var relocateSafelyRedundantBytes: Int64 = 0
     @Published var relocateBytesCopied: Int64 = 0
     @Published var relocateCurrentFile: String = ""
     var relocateStartTime: Date?
@@ -147,6 +156,8 @@ final class DashboardState: ObservableObject {
         relocateAdopted = 0
         relocateSourceMoves = 0
         relocateSkipped = 0
+        relocateSafelyRedundant = 0
+        relocateSafelyRedundantBytes = 0
         relocateBytesCopied = 0
         relocateCurrentFile = ""
         relocateStartTime = Date()

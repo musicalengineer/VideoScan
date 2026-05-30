@@ -43,6 +43,18 @@ struct RelocateOptions {
     /// (`originalFullPath != nil`). Set false to force re-attempts on
     /// previously salvage-failed records that you've since worked around.
     var skipAlreadyRelocated: Bool = true
+
+    /// When ON (default), reconcile classifies a record as
+    /// `.safelyRedundant` if the same (sizeBytes, partialMD5) lives on
+    /// any catalogued volume other than source + destination. Those
+    /// records get a catalog-only mark-as-deleted with an audit trail;
+    /// the source file is never read. Critical for retiring a failing
+    /// drive when most of its content is already mirrored elsewhere
+    /// (the Mini2TB scenario — 739/741 records dup'd on other drives).
+    ///
+    /// Toggle OFF to fall back to the legacy A/B/C/D rules; those
+    /// records will copy normally (Bucket A) instead.
+    var skipDupsOnOtherVolumes: Bool = true
 }
 
 /// Error surface for the public relocate entry point.
@@ -106,6 +118,22 @@ extension VideoScanModel {
         return "from-\(cleaned)-\(stamp)"
     }
 
+    /// Render a structured audit-trail note for a safely-redundant
+    /// classification. Format is a single line of `key=value`-ish JSON-lite
+    /// so the catalog notes column stays one logical line per event but is
+    /// still grep-able. The witness list is the same capped sample carried
+    /// on the `SafelyRedundantEntry`. Pure & nonisolated so tests can call
+    /// without a VideoScanModel.
+    nonisolated static func formatSafelyRedundantNote(stamp: String,
+                                                       witnesses: [String],
+                                                       totalWitnessCount: Int) -> String {
+        // Quote each witness path and join — avoids accidental field-break
+        // on a literal comma in a filename. JSON-array shape, but inline.
+        let quoted = witnesses.map { "\"\($0.replacingOccurrences(of: "\"", with: "\\\""))\"" }
+                              .joined(separator: ", ")
+        return "Reconcile \(stamp): reason=dup-on-other-volume witnesses=[\(quoted)] totalWitnesses=\(totalWitnessCount)"
+    }
+
     // MARK: - Public entry
 
     /// Kick off a Relocate Volume run. Fire-and-forget — sets
@@ -150,12 +178,12 @@ extension VideoScanModel {
     // MARK: - Run
 
     private func runRelocate(scope: [VideoRecord], options: RelocateOptions) async {
-        relocateLog.write("─── Relocate started: source=\(options.sourceVolumeRootPath) dest=\(options.destinationRoot.path) scope=\(scope.count) dryRun=\(options.dryRun)")
+        relocateLog.write("─── Relocate started: source=\(options.sourceVolumeRootPath) dest=\(options.destinationRoot.path) scope=\(scope.count) dryRun=\(options.dryRun) skipDupsOnOtherVolumes=\(options.skipDupsOnOtherVolumes)")
 
         // 1A. Reconcile pre-flight.
         let reconcile = performReconcile(scope: scope, options: options)
         logReconcileSummary(reconcile)
-        relocateLog.write("Reconcile: ready=\(reconcile.ready.count) adopted=\(reconcile.adopted.count) sourceMoves=\(reconcile.sourceSideMoves.count) manuallyDeleted=\(reconcile.manuallyDeleted.count) previouslyRelocated=\(reconcile.previouslyRelocated.count)")
+        relocateLog.write("Reconcile: ready=\(reconcile.ready.count) adopted=\(reconcile.adopted.count) sourceMoves=\(reconcile.sourceSideMoves.count) safelyRedundant=\(reconcile.safelyRedundant.count) manuallyDeleted=\(reconcile.manuallyDeleted.count) previouslyRelocated=\(reconcile.previouslyRelocated.count)")
 
         // Track salvageFailed for the final summary block.
         var salvageFailedPaths: [String] = []
@@ -165,7 +193,8 @@ extension VideoScanModel {
 
         // Apply zero-copy mutations: Bucket B (manuallyDeleted),
         // Bucket C (rewrite path then queue for migration),
-        // Bucket D (adopt — stamp provenance, skip copy).
+        // Bucket D (adopt — stamp provenance, skip copy),
+        // Bucket E (safelyRedundant — mark as manuallyDeleted with witness audit).
         for r in reconcile.manuallyDeleted {
             r.archiveStage = .manuallyDeleted
             r.notes = appendNote(r.notes, "Reconcile \(stamp()): source file not found")
@@ -183,6 +212,25 @@ extension VideoScanModel {
             dashboard.relocateAdopted += 1
             dashboard.relocateCompleted += 1
         }
+        // Bucket E: safely redundant. Catalog-only mark-as-deleted with
+        // structured audit trail. Source file is NEVER touched — the
+        // failing drive doesn't get another read. Same disposition
+        // mutation as Bucket B so the snapshot rollback path treats them
+        // identically (restore archiveStage + notes from snapshot copy).
+        var safelyRedundantBytes: Int64 = 0
+        for entry in reconcile.safelyRedundant {
+            let r = entry.rec
+            r.archiveStage = .manuallyDeleted
+            r.notes = appendNote(r.notes,
+                Self.formatSafelyRedundantNote(stamp: stamp(),
+                                               witnesses: entry.witnesses,
+                                               totalWitnessCount: entry.totalWitnessCount))
+            relocateLog.write("[RECONCILE] safely-redundant: \(r.fullPath) — \(entry.totalWitnessCount) witness(es), first: \(entry.witnesses.first ?? "?")")
+            dashboard.relocateSafelyRedundant += 1
+            dashboard.relocateCompleted += 1
+            safelyRedundantBytes += r.sizeBytes
+        }
+        dashboard.relocateSafelyRedundantBytes = safelyRedundantBytes
         // Bucket C: rewrite path to the in-source new location THEN
         // queue for migration (treat as Bucket A from here on).
         var toMigrate: [VideoRecord] = reconcile.ready
@@ -266,10 +314,12 @@ extension VideoScanModel {
         let destFiles = enumerateFiles(at: options.destinationRoot.path)
         return RelocateReconcile.reconcile(
             records: scope,
+            allCatalogRecords: records,
             sourceVolumeRootPath: options.sourceVolumeRootPath,
             destinationRoot: options.destinationRoot,
             sourceFiles: sourceFiles,
             destFiles: destFiles,
+            skipDupsOnOtherVolumes: options.skipDupsOnOtherVolumes,
             hash: { FileHasher.partialMD5(path: $0) }
         )
     }
@@ -323,6 +373,7 @@ extension VideoScanModel {
           Reconcile:
             Ready to migrate:   \(r.ready.count)
             Already at dest:    \(r.adopted.count)   (adopt without copy)
+            Safely redundant:   \(r.safelyRedundant.count)   (mark deleted with audit)
             Source-side moves:  \(r.sourceSideMoves.count)   (paths rewritten)
             Manually deleted:   \(r.manuallyDeleted.count)   (marked, kept for audit)
             Previously done:    \(r.previouslyRelocated.count)
@@ -333,6 +384,7 @@ extension VideoScanModel {
         let mb = Double(dashboard.relocateBytesCopied) / 1_048_576.0
         let elapsed = dashboard.relocateStartTime.map { Date().timeIntervalSince($0) } ?? 0
         let mbps = elapsed > 0 ? mb / elapsed : 0
+        let savedMB = Double(dashboard.relocateSafelyRedundantBytes) / 1_048_576.0
 
         var failedBlock = ""
         if !salvageFailedPaths.isEmpty {
@@ -352,6 +404,7 @@ extension VideoScanModel {
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
           Succeeded:        \(dashboard.relocateSucceeded)
           Adopted:          \(dashboard.relocateAdopted)
+          Safely redundant: \(dashboard.relocateSafelyRedundant)   (\(String(format: "%.1f", savedMB)) MB not copied)
           Source moves:     \(dashboard.relocateSourceMoves)
           Manually deleted: \(dashboard.relocateManuallyDeleted)
           Salvage failed:   \(dashboard.relocateSalvageFailed)
@@ -360,6 +413,6 @@ extension VideoScanModel {
           Wall clock:       \(String(format: "%.1f", elapsed))s (\(String(format: "%.1f", mbps)) MB/s)\(failedBlock)\(snapshotHint)
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         """)
-        relocateLog.write("─── Relocate complete: succeeded=\(dashboard.relocateSucceeded) adopted=\(dashboard.relocateAdopted) sourceMoves=\(dashboard.relocateSourceMoves) manuallyDeleted=\(dashboard.relocateManuallyDeleted) salvageFailed=\(dashboard.relocateSalvageFailed) skipped=\(dashboard.relocateSkipped) bytes=\(dashboard.relocateBytesCopied) elapsed=\(String(format: "%.1f", elapsed))s")
+        relocateLog.write("─── Relocate complete: succeeded=\(dashboard.relocateSucceeded) adopted=\(dashboard.relocateAdopted) safelyRedundant=\(dashboard.relocateSafelyRedundant) sourceMoves=\(dashboard.relocateSourceMoves) manuallyDeleted=\(dashboard.relocateManuallyDeleted) salvageFailed=\(dashboard.relocateSalvageFailed) skipped=\(dashboard.relocateSkipped) bytes=\(dashboard.relocateBytesCopied) elapsed=\(String(format: "%.1f", elapsed))s")
     }
 }
