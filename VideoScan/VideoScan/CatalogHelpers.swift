@@ -209,6 +209,7 @@ struct CatalogToolbar<Dashboard: View>: View {
             }
             .buttonStyle(.bordered)
             .disabled(!canCombine && !isCombining)
+            .accessibilityIdentifier("catalog.combine.openSheet")
             .help("Mux correlated video + audio pairs into combined files using ffmpeg (no re-encode)")
 
             if isCombining {

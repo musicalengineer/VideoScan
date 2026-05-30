@@ -37,6 +37,8 @@
     {
       "parallelizable": false,
       "skippedTests": [
+        "CombineBulkWorkflowUITests",
+        "CombineWorkflowUITests",
         "VideoScanUITests",
         "VideoScanUITestsLaunchTests"
       ],
