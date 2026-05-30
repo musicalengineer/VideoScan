@@ -3,6 +3,14 @@ import Foundation
 // Dedicated persistent log for Relocate runs. Lands at
 // ~/Library/Logs/VideoScan/relocate.log. Outlives the in-app console,
 // so post-mortems on a long overnight run are possible.
+//
+// IMPORTANT: PersistentLog is a no-op until `start()` is called (the
+// file handle is nil until then). Earlier wiring constructed the
+// instance but never opened it, so every `relocateLog.write(...)`
+// silently dropped while the same lines also flowed through `log()`
+// into catalog.log. Fixed in `runRelocate` (Fix 3): we call
+// `start(append: true)` once at the top of every run, write a session
+// header, and let subsequent writes flush to disk.
 private let relocateLog = PersistentLog(name: "relocate")
 
 // MARK: - VideoScanModel+Relocate
@@ -134,6 +142,27 @@ extension VideoScanModel {
         return "Reconcile \(stamp): reason=dup-on-other-volume witnesses=[\(quoted)] totalWitnesses=\(totalWitnessCount)"
     }
 
+    /// Build the `(source → witness)` sample list for the post-Apply
+    /// summary sheet. Walks Bucket E entries and pairs each source record
+    /// with the FIRST witness in its capped list. Capped at `limit` so
+    /// the disclosure stays readable; the full audit trail remains in
+    /// the catalog notes and relocate.log. Pure / nonisolated for tests.
+    nonisolated static func witnessSamples(
+        from entries: [SafelyRedundantEntry],
+        limit: Int = 10
+    ) -> [RelocateSummary.WitnessSample] {
+        // `prefix(limit)` would clip mid-record; here every record has at
+        // least one witness (otherwise it wouldn't be in Bucket E), so a
+        // straight prefix is the right call.
+        entries.prefix(limit).compactMap { entry in
+            guard let first = entry.witnesses.first else { return nil }
+            return RelocateSummary.WitnessSample(
+                sourcePath: entry.rec.fullPath,
+                witnessPath: first
+            )
+        }
+    }
+
     // MARK: - Public entry
 
     /// Kick off a Relocate Volume run. Fire-and-forget — sets
@@ -178,7 +207,25 @@ extension VideoScanModel {
     // MARK: - Run
 
     private func runRelocate(scope: [VideoRecord], options: RelocateOptions) async {
+        // Fix 3 — open the dedicated relocate.log file. Without this,
+        // every `relocateLog.write(...)` call is a silent no-op because
+        // PersistentLog's file handle stays nil. We append-open so
+        // sequential runs accumulate; the per-session header below lets
+        // the post-mortem reader separate them.
+        relocateLog.start(append: true)
+        let host = ProcessInfo.processInfo.hostName
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        relocateLog.write("── Relocate session started \(ISO8601DateFormatter().string(from: Date())) on \(host) v\(version)")
         relocateLog.write("─── Relocate started: source=\(options.sourceVolumeRootPath) dest=\(options.destinationRoot.path) scope=\(scope.count) dryRun=\(options.dryRun) skipDupsOnOtherVolumes=\(options.skipDupsOnOtherVolumes)")
+
+        // Fix 2 — pin a minimum start time. A fast run (Bucket E only,
+        // 0.5s on Maxtor500FW) used to flash past too quick for Rick to
+        // register what happened. We hold the progress sheet up for at
+        // least 800ms by deferring the summary publication until this
+        // wall-clock budget is met. Real work, not theatre — the I/O
+        // actually has to land first; we only pad if it finished early.
+        let runStart = Date()
+        let minVisibleSeconds: TimeInterval = 0.8
 
         // 1A. Reconcile pre-flight.
         let reconcile = performReconcile(scope: scope, options: options)
@@ -189,72 +236,117 @@ extension VideoScanModel {
         var salvageFailedPaths: [String] = []
 
         // Snapshot catalog.json before any mutation.
-        snapshotCatalogPreRelocate()
+        let snapshotPath = snapshotCatalogPreRelocate()
 
         // Apply zero-copy mutations: Bucket B (manuallyDeleted),
         // Bucket C (rewrite path then queue for migration),
         // Bucket D (adopt — stamp provenance, skip copy),
         // Bucket E (safelyRedundant — mark as manuallyDeleted with witness audit).
-        for r in reconcile.manuallyDeleted {
-            r.archiveStage = .manuallyDeleted
-            r.notes = appendNote(r.notes, "Reconcile \(stamp()): source file not found")
-            relocateLog.write("[RECONCILE] manually-deleted: \(r.fullPath)")
-            dashboard.relocateManuallyDeleted += 1
-            dashboard.relocateCompleted += 1
-        }
-        for (r, dest) in reconcile.adopted {
-            if r.originalFullPath == nil { r.originalFullPath = r.fullPath }
-            if r.originVolume == nil { r.originVolume = r.volumeName }
-            relocateLog.write("[RECONCILE] adopted: \(r.fullPath) → \(dest)")
-            r.fullPath = dest
-            r.directory = (dest as NSString).deletingLastPathComponent
-            r.notes = appendNote(r.notes, "Reconcile \(stamp()): adopted existing copy at dest")
-            dashboard.relocateAdopted += 1
-            dashboard.relocateCompleted += 1
-        }
-        // Bucket E: safely redundant. Catalog-only mark-as-deleted with
-        // structured audit trail. Source file is NEVER touched — the
-        // failing drive doesn't get another read. Same disposition
-        // mutation as Bucket B so the snapshot rollback path treats them
-        // identically (restore archiveStage + notes from snapshot copy).
+        //
+        // Fix 1 (dry-run mutation gate): in dry-run mode we must NOT
+        // mutate the catalog at all. The previous code applied Bucket
+        // B/D/E disposition writes BEFORE the dryRun early-return, which
+        // was a latent bug — the dry-run record would silently flip to
+        // .manuallyDeleted even though the "no copies happen" message
+        // promised the catalog was untouched. We now wrap every
+        // disposition write in `if !options.dryRun`, and for the dry-run
+        // summary we drive the counts off `reconcile.*.count` instead.
         var safelyRedundantBytes: Int64 = 0
-        for entry in reconcile.safelyRedundant {
-            let r = entry.rec
-            r.archiveStage = .manuallyDeleted
-            r.notes = appendNote(r.notes,
-                Self.formatSafelyRedundantNote(stamp: stamp(),
-                                               witnesses: entry.witnesses,
-                                               totalWitnessCount: entry.totalWitnessCount))
-            relocateLog.write("[RECONCILE] safely-redundant: \(r.fullPath) — \(entry.totalWitnessCount) witness(es), first: \(entry.witnesses.first ?? "?")")
-            dashboard.relocateSafelyRedundant += 1
-            dashboard.relocateCompleted += 1
-            safelyRedundantBytes += r.sizeBytes
+        if !options.dryRun {
+            for r in reconcile.manuallyDeleted {
+                r.archiveStage = .manuallyDeleted
+                r.notes = appendNote(r.notes, "Reconcile \(stamp()): source file not found")
+                relocateLog.write("[RECONCILE] manually-deleted: \(r.fullPath)")
+                dashboard.relocateManuallyDeleted += 1
+                dashboard.relocateCompleted += 1
+            }
+            for (r, dest) in reconcile.adopted {
+                if r.originalFullPath == nil { r.originalFullPath = r.fullPath }
+                if r.originVolume == nil { r.originVolume = r.volumeName }
+                relocateLog.write("[RECONCILE] adopted: \(r.fullPath) → \(dest)")
+                r.fullPath = dest
+                r.directory = (dest as NSString).deletingLastPathComponent
+                r.notes = appendNote(r.notes, "Reconcile \(stamp()): adopted existing copy at dest")
+                dashboard.relocateAdopted += 1
+                dashboard.relocateCompleted += 1
+            }
+            // Bucket E: safely redundant. Catalog-only mark-as-deleted with
+            // structured audit trail. Source file is NEVER touched — the
+            // failing drive doesn't get another read. Same disposition
+            // mutation as Bucket B so the snapshot rollback path treats them
+            // identically (restore archiveStage + notes from snapshot copy).
+            for entry in reconcile.safelyRedundant {
+                let r = entry.rec
+                r.archiveStage = .manuallyDeleted
+                r.notes = appendNote(r.notes,
+                    Self.formatSafelyRedundantNote(stamp: stamp(),
+                                                   witnesses: entry.witnesses,
+                                                   totalWitnessCount: entry.totalWitnessCount))
+                relocateLog.write("[RECONCILE] safely-redundant: \(r.fullPath) — \(entry.totalWitnessCount) witness(es), first: \(entry.witnesses.first ?? "?")")
+                dashboard.relocateSafelyRedundant += 1
+                dashboard.relocateCompleted += 1
+                safelyRedundantBytes += r.sizeBytes
+            }
+            dashboard.relocateSafelyRedundantBytes = safelyRedundantBytes
+        } else {
+            // Dry-run: just paint the counts without touching records.
+            // Skipping the dashboard pre-population would leave the
+            // progress sheet at 0 for the entire run; instead we drive
+            // the same dashboard counters off the reconcile result so
+            // the user sees what WOULD happen.
+            dashboard.relocateManuallyDeleted = reconcile.manuallyDeleted.count
+            dashboard.relocateAdopted = reconcile.adopted.count
+            dashboard.relocateSafelyRedundant = reconcile.safelyRedundant.count
+            safelyRedundantBytes = reconcile.safelyRedundant.reduce(0) { $0 + $1.rec.sizeBytes }
+            dashboard.relocateSafelyRedundantBytes = safelyRedundantBytes
+            dashboard.relocateCompleted = reconcile.manuallyDeleted.count
+                + reconcile.adopted.count
+                + reconcile.safelyRedundant.count
         }
-        dashboard.relocateSafelyRedundantBytes = safelyRedundantBytes
+
         // Bucket C: rewrite path to the in-source new location THEN
         // queue for migration (treat as Bucket A from here on).
+        // Path rewrites are mutations too — guard them off in dry-run.
         var toMigrate: [VideoRecord] = reconcile.ready
-        for (r, newSrc) in reconcile.sourceSideMoves {
-            relocateLog.write("[RECONCILE] source-move: \(r.fullPath) → \(newSrc)")
-            r.fullPath = newSrc
-            r.directory = (newSrc as NSString).deletingLastPathComponent
-            r.notes = appendNote(r.notes, "Reconcile \(stamp()): source-side move detected")
-            dashboard.relocateSourceMoves += 1
-            toMigrate.append(r)
+        if !options.dryRun {
+            for (r, newSrc) in reconcile.sourceSideMoves {
+                relocateLog.write("[RECONCILE] source-move: \(r.fullPath) → \(newSrc)")
+                r.fullPath = newSrc
+                r.directory = (newSrc as NSString).deletingLastPathComponent
+                r.notes = appendNote(r.notes, "Reconcile \(stamp()): source-side move detected")
+                dashboard.relocateSourceMoves += 1
+                toMigrate.append(r)
+            }
+            // Previously-relocated short-circuit
+            for r in reconcile.previouslyRelocated where options.skipAlreadyRelocated {
+                relocateLog.write("[RECONCILE] previously-relocated, skipping: \(r.fullPath)")
+                dashboard.relocateSkipped += 1
+                dashboard.relocateCompleted += 1
+                _ = r  // record left alone
+            }
+            catalogStore.scheduleSave(records: records)
+        } else {
+            dashboard.relocateSourceMoves = reconcile.sourceSideMoves.count
+            dashboard.relocateSkipped = options.skipAlreadyRelocated
+                ? reconcile.previouslyRelocated.count
+                : 0
+            dashboard.relocateCompleted += dashboard.relocateSkipped
         }
-        // Previously-relocated short-circuit
-        for r in reconcile.previouslyRelocated where options.skipAlreadyRelocated {
-            relocateLog.write("[RECONCILE] previously-relocated, skipping: \(r.fullPath)")
-            dashboard.relocateSkipped += 1
-            dashboard.relocateCompleted += 1
-            _ = r  // record left alone
-        }
-        catalogStore.scheduleSave(records: records)
 
         if options.dryRun {
             log("[DRY RUN] No files copied. Would have migrated \(toMigrate.count) record(s).")
             relocateLog.write("[DRY RUN] no copies; would migrate \(toMigrate.count) record(s)")
             logRelocateSummary(salvageFailedPaths: [])
+            // Pad to min-visible window even on dry-run so a 50ms
+            // reconcile doesn't blink past.
+            await padToMinVisible(runStart: runStart, minVisibleSeconds: minVisibleSeconds)
+            publishSummary(
+                options: options,
+                reconcile: reconcile,
+                salvageFailedPaths: [],
+                snapshotPath: snapshotPath,
+                elapsed: Date().timeIntervalSince(runStart)
+            )
             return
         }
 
@@ -305,11 +397,100 @@ extension VideoScanModel {
         catalogStore.scheduleSave(records: records)
         logRelocateSummary(salvageFailedPaths: salvageFailedPaths)
 
-        // §1B Retire Volume offer. If every catalogued record on the
-        // source volume is now `.manuallyDeleted` (Bucket B + Bucket E
-        // disposed 100%), surface the retire modal. Pure check; no
-        // mutation here — the user clicks Retire / Skip from the sheet.
-        maybeOfferRetire(for: options.sourceVolumeRootPath)
+        // Fix 2 — minimum-visible padding before the summary sheet
+        // pops. On a Bucket-E-heavy run with zero copies the entire
+        // pipeline finishes in <100ms; pad up to 800ms so the user
+        // actually sees the "Verifying audit trail…" spinner instead
+        // of a flash.
+        await padToMinVisible(runStart: runStart, minVisibleSeconds: minVisibleSeconds)
+
+        // Fix 1 — set the summary sheet but do NOT call
+        // `maybeOfferRetire` here. Trigger ordering: the user must
+        // dismiss the summary first. The summary sheet's Done button
+        // fires the retire offer instead. See ContentView wiring.
+        publishSummary(
+            options: options,
+            reconcile: reconcile,
+            salvageFailedPaths: salvageFailedPaths,
+            snapshotPath: snapshotPath,
+            elapsed: Date().timeIntervalSince(runStart)
+        )
+    }
+
+    /// Pad to the min-visible window if the work finished early. Pure
+    /// `Task.sleep` — no fake busy-loop, no UI tick. If the work already
+    /// took longer than the budget this is a zero-cost no-op.
+    private func padToMinVisible(runStart: Date,
+                                  minVisibleSeconds: TimeInterval) async {
+        let elapsed = Date().timeIntervalSince(runStart)
+        let remaining = minVisibleSeconds - elapsed
+        guard remaining > 0 else { return }
+        try? await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
+    }
+
+    /// Compose the summary payload and publish to
+    /// `pendingRelocateSummary`. Caller passes in the just-finished
+    /// reconcile + run telemetry; we extract witness samples from the
+    /// Bucket E entries (or, on a dry-run, the same source).
+    ///
+    /// Driven by `@Published` so the sheet pops automatically.
+    private func publishSummary(options: RelocateOptions,
+                                 reconcile: ReconcileResult,
+                                 salvageFailedPaths: [String],
+                                 snapshotPath: String?,
+                                 elapsed: TimeInterval) {
+        let mb = Double(dashboard.relocateBytesCopied) / 1_048_576.0
+        let mbps = elapsed > 0 ? mb / elapsed : 0
+
+        let sourceName = (options.sourceVolumeRootPath as NSString).lastPathComponent
+        let destFull = options.destinationRoot.path
+        // Short display like "LaCieWorkspace/from-Maxtor500": last two
+        // path components when available, else just the leaf.
+        let destURL = options.destinationRoot
+        let destLeaf = destURL.lastPathComponent
+        let destParent = destURL.deletingLastPathComponent().lastPathComponent
+        let destDisplay = destParent.isEmpty ? destLeaf : "\(destParent)/\(destLeaf)"
+
+        // Cap the salvage-failed disclosure at 20 entries — same cap the
+        // log block uses; full list is in relocate.log.
+        let cappedFailedPaths = Array(salvageFailedPaths.prefix(20))
+
+        let samples = Self.witnessSamples(from: reconcile.safelyRedundant, limit: 10)
+
+        pendingRelocateSummary = RelocateSummary(
+            isDryRun: options.dryRun,
+            sourceVolumeName: sourceName.isEmpty ? options.sourceVolumeRootPath : sourceName,
+            sourceVolumeRootPath: options.sourceVolumeRootPath,
+            destinationDisplay: destDisplay,
+            destinationRootPath: destFull,
+            succeededCount: dashboard.relocateSucceeded,
+            bytesCopied: dashboard.relocateBytesCopied,
+            adoptedCount: dashboard.relocateAdopted,
+            safelyRedundantCount: dashboard.relocateSafelyRedundant,
+            safelyRedundantBytes: dashboard.relocateSafelyRedundantBytes,
+            sourceMovesCount: dashboard.relocateSourceMoves,
+            manuallyDeletedCount: dashboard.relocateManuallyDeleted,
+            salvageFailedCount: dashboard.relocateSalvageFailed,
+            skippedCount: dashboard.relocateSkipped,
+            salvageFailedPaths: cappedFailedPaths,
+            witnessSamples: samples,
+            elapsedSeconds: elapsed,
+            averageMBps: mbps,
+            snapshotPath: snapshotPath
+        )
+    }
+
+    /// Called from the summary sheet's Done button. Drops the summary
+    /// and — if not a dry-run — checks whether the post-Relocate retire
+    /// offer should fire. This is the SINGLE entry point that opens the
+    /// retire sheet now; `runRelocate` no longer calls
+    /// `maybeOfferRetire` itself.
+    func acknowledgeRelocateSummary() {
+        let wasDryRun = pendingRelocateSummary?.isDryRun ?? true
+        let sourcePath = pendingRelocateSummary?.sourceVolumeRootPath
+        pendingRelocateSummary = nil
+        guard !wasDryRun, let sourcePath else { return }
+        maybeOfferRetire(for: sourcePath)
     }
 
     /// Set `pendingRetireOffer` if the source volume is 100% disposed.
@@ -375,16 +556,25 @@ extension VideoScanModel {
 
     // MARK: - Snapshot
 
-    private func snapshotCatalogPreRelocate() {
+    /// Snapshot the live catalog.json into a sibling
+    /// `catalog.pre-relocate.<stamp>.json`. Returns the absolute path of
+    /// the snapshot on success, nil if no source catalog existed yet OR
+    /// the copy threw. Path is surfaced in the post-Apply summary so
+    /// Rick can click through to it in Finder.
+    @discardableResult
+    private func snapshotCatalogPreRelocate() -> String? {
         let dst = (catalogStore.fileLocation as NSString).deletingLastPathComponent
         let snap = (dst as NSString).appendingPathComponent("catalog.pre-relocate.\(snapshotStamp()).json")
         do {
             if FileManager.default.fileExists(atPath: catalogStore.fileLocation) {
                 try FileManager.default.copyItem(atPath: catalogStore.fileLocation, toPath: snap)
                 log("Pre-relocate snapshot: \(snap)")
+                return snap
             }
+            return nil
         } catch {
             log("⚠ Pre-relocate snapshot failed: \(error.localizedDescription) — proceeding anyway")
+            return nil
         }
     }
 

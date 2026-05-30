@@ -398,9 +398,33 @@ struct CatalogView: View {
         .sheet(isPresented: $showRelocateSheet) {
             RelocateSheet()
         }
+        // In-flight progress — autostarts when isRelocating flips true,
+        // dismisses when the run completes (after the model's min-800ms
+        // visibility pad). Summary sheet pops in its place.
+        // Binding is read-only (the model owns the flag); setter is a
+        // no-op so a stray dismiss gesture can't desync the UI from the
+        // engine. The engine clears the flag itself when runRelocate
+        // returns.
+        .sheet(isPresented: Binding(
+            get: { model.isRelocating },
+            set: { _ in }
+        )) {
+            RelocateProgressSheet(dashboard: model.dashboard)
+                .environmentObject(model)
+        }
+        // Post-Apply summary. Set by runRelocate AFTER the work
+        // completes (real run OR dry-run). The Done button calls
+        // `model.acknowledgeRelocateSummary()`, which is the single
+        // trigger that fires the §1B retire offer — so the user is
+        // never rushed into Retire without seeing this sheet first.
+        .sheet(item: $model.pendingRelocateSummary) { summary in
+            RelocateSummarySheet(summary: summary)
+                .environmentObject(model)
+        }
         // §1B Retire Volume — surfaces automatically after a Relocate
         // run that leaves 100% of the source volume's records marked
-        // .manuallyDeleted. See docs/relocate_volume_plan.md §1B.
+        // .manuallyDeleted, AND only after the post-Apply summary has
+        // been acknowledged. See docs/relocate_volume_plan.md §1B.
         .sheet(item: $model.pendingRetireOffer) { offer in
             RelocateRetireSheet(offer: offer)
         }

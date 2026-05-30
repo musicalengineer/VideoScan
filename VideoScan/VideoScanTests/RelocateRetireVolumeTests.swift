@@ -324,7 +324,16 @@ struct RelocateRetireVolumeTests {
         ))
         await waitForRelocateDone(model)
 
-        // Confirm the offer surfaced.
+        // 2026-05-30: trigger ordering changed — the summary sheet now
+        // gates the retire offer. `pendingRetireOffer` is nil until the
+        // user clicks Done on the summary. We simulate that here so the
+        // rest of this snapshot-rollback test still exercises the
+        // retire+reinstate round-trip.
+        #expect(model.pendingRelocateSummary != nil)
+        #expect(model.pendingRetireOffer == nil)
+        model.acknowledgeRelocateSummary()
+
+        // Confirm the offer surfaced after acknowledgment.
         let offer = try #require(model.pendingRetireOffer)
         #expect(offer.volumeRootPath == ws.source.path)
         #expect(offer.recordCount == 1)

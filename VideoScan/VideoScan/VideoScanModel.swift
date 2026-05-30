@@ -25,6 +25,13 @@ final class VideoScanModel: ObservableObject {
     /// or Skip clears it. nil ⇒ no pending offer. Carries the source
     /// volume root path so the sheet doesn't have to recompute.
     @Published var pendingRetireOffer: PendingRetireOffer?
+    /// Post-Apply summary sheet payload. Set unconditionally at the end of
+    /// `runRelocate` (both real runs AND dry runs). The UI binds a
+    /// `.sheet(item:)` to this. The sheet's Done button is the ONLY trigger
+    /// that fires `maybeOfferRetire` — Rick has to see the verification
+    /// summary before the Retire prompt can appear. See
+    /// docs/relocate_volume_plan.md (§1A summary-sheet note).
+    @Published var pendingRelocateSummary: RelocateSummary?
     @Published var isCorrelating: Bool = false
     @Published var isAnalyzingDuplicates: Bool = false
     @Published var isDeletingDuplicates: Bool = false
