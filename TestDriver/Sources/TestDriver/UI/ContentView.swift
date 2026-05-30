@@ -383,6 +383,12 @@ struct ContentView: View {
                     .font(.td(.headline))
                     .padding(8)
                 Divider()
+                // Failures panel — only renders when there are failed entries.
+                // Lists each by name + first line of failure message, with
+                // click-to-inspect so the log below switches to that entry.
+                // Without this the user has to scroll the entry tree hunting
+                // for ✗ icons, which gets impractical past ~100 entries.
+                failuresPanel
                 if model.briefMode && model.totalToRun > 0 {
                     briefProgressGrid.padding(8)
                 } else {
@@ -409,6 +415,85 @@ struct ContentView: View {
             return stored
         }
         return model.liveLog
+    }
+
+    /// Snapshot of entries currently in `.failed` status, in registry order.
+    /// Recomputed on each render — small (typically <20 items) and reactive
+    /// to `model.status` changes via SwiftUI's @Published observation.
+    private var failedEntries: [(id: String, name: String, message: String)] {
+        TestRegistry.shared.all().compactMap { entry in
+            guard case let .failed(message, _) = model.status[entry.id] else { return nil }
+            return (entry.id, entry.name, message)
+        }
+    }
+
+    /// "Failures (N)" section that renders above the log when any entries
+    /// are in .failed status. Each row jumps to that entry's stored log
+    /// when clicked. Capped at 220pt tall so a run with many fails still
+    /// leaves room for the log scrollview below.
+    @ViewBuilder
+    private var failuresPanel: some View {
+        let failed = failedEntries
+        if !failed.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 6) {
+                    Image(systemName: "xmark.octagon.fill")
+                        .foregroundStyle(.red)
+                    Text("Failures (\(failed.count))")
+                        .font(.td(.headline))
+                    Spacer()
+                    Text("click a row to view its log")
+                        .font(.td(.caption2))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 1) {
+                        ForEach(failed, id: \.id) { entry in
+                            failureRow(id: entry.id, name: entry.name, message: entry.message)
+                        }
+                    }
+                    .padding(.horizontal, 4)
+                    .padding(.bottom, 4)
+                }
+                .frame(maxHeight: 220)
+                Divider()
+            }
+            .background(Color.red.opacity(0.06))
+        }
+    }
+
+    private func failureRow(id: String, name: String, message: String) -> some View {
+        let selected = (inspectedID == id)
+        return Button {
+            inspectedID = id
+        } label: {
+            HStack(alignment: .top, spacing: 6) {
+                Text("✗").foregroundStyle(.red).bold().frame(width: 14)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(name)
+                        .font(.td(.body, weight: .semibold))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Text(message)
+                        .font(.td(.caption))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(selected ? Color.accentColor.opacity(0.15) : Color.clear)
+            .cornerRadius(4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(name)
     }
 
     // MARK: - Repo / result banners
