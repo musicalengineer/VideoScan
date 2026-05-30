@@ -113,7 +113,7 @@ Reserve `rsync` only if integration testing surfaces an HFS+ catalog corruption 
 
 #### Flow
 
-After `runRelocate` completes its catalog mutation phase and writes the end-of-batch summary, the §1A post-Apply summary sheet is published (`model.pendingRelocateSummary = ...`). Only after the user dismisses that sheet via its Done button (which calls `model.acknowledgeRelocateSummary()`) does the §1B retire path run `maybeOfferRetire(for: options.sourceVolumeRootPath)`. The trigger order was changed 2026-05-30 — see "§1A.1 Post-Apply summary sheet + dry-run mutation gate" below for the reasoning.
+After `runRelocate` completes its catalog mutation phase and writes the end-of-batch summary, the §1A post-Apply summary sheet is published (`model.pendingRelocateSummary = ...`). The summary sheet's Done button calls `model.acknowledgeRelocateSummary()` — but as of §1A.2 (2026-05-30 PM) that no longer fires the retire offer. Instead the summary ends with "Open Volumes window to retire <name>", and the explicit retire surface is the new "Mark Retired…" context-menu action in the Volumes window (which calls `maybeOfferRetire(for:)` and presents the same `RelocateRetireSheet`). The `pendingRetireOffer` programmatic path is unchanged — tests still drive it directly via `maybeOfferRetire(for:)`. Trigger-order history: see §1A.1 (gate-after-summary) and §1A.2 (move-to-Volumes-window) below.
 
 - Pure predicate: `shouldOfferRetire(volumeRootPath:in:) → bool`. True iff the volume has at least one record AND every catalogued record on it is `.manuallyDeleted`.
 - When true, aggregate witnesses (`aggregateRetiredWitnesses` walks every `.manuallyDeleted` record on the volume and parses the structured Bucket E note via `parseWitnessesFromNote`, deduped/sorted union).
@@ -211,6 +211,52 @@ Plus `RelocateSchemaTests.currentSnapshotVersionIsSix` swap for the v5→v6 bump
 - `relocateLog_writesToRelocateLogFile_notCatalogLog` — measures `relocate.log` growth + spot-checks the session header.
 
 Plus a small touch to `RelocateRetireVolumeTests.snapshotRollback_restoresPreRetiredState` to acknowledge the summary before checking the retire offer (the test now exercises the new gate explicitly).
+
+### 1A.2. Safe-witness ranking + Volumes-window retire flow + friendly copy (added 2026-05-30, same day)
+
+> **Context (Rick):** "the backups/dups verified copies being on mini2tb is not so reassuring, the role or status of that drive is old or nearing retirement [...] when you confirm we have copies/backups we need to see the safest volume first [...] ideally the app would give a very reassuring message saying 'we got ya files dude, there safe over here and I just checksummed them and so, all is well [...]'."
+
+Three changes follow:
+
+**Safe-witness filter (reconcile-time gate):**
+
+- New `SafeWitnessInfo` struct: `path`, `role`, `trust`, derived `safetyScore` (`roleScore*10 + trustScore` — role weighted 10x to dominate trust), derived `isSafe` (role != .retired AND trust != .unreliable).
+- `SafelyRedundantEntry` gains `safeWitnesses: [SafeWitnessInfo]` (ranked safe-only) and `degradedWitnesses: [SafeWitnessInfo]` (retired/unreliable hosts). The existing `witnesses: [String]` audit-trail array now contains the safe-only top sample so backward-compatible parsing keeps working.
+- `RelocateReconcile.reconcile(...)` gains `resolveVolumeSafety: VolumeSafetyResolver` parameter (closure `(String) -> (VolumeRole, VolumeTrust)`). Default is `permissiveResolver` so existing test callers compile unchanged.
+- Bucket E classification now hard-gates on `!safe.isEmpty`. If every witness lives on a degraded host, the record falls through to Bucket A (must be copied) — the conservative call. The same record's degraded witnesses are still recorded on the entry for the disclosure but cannot justify classification.
+- `VideoScanModel.makeVolumeSafetyResolver()` builds the resolver from the current `scanTargets` — longest-prefix match, falls back to `(.unassigned, .unknown)` for unknown paths (neutral; counts as safe-by-default since neither matches the explicit retired/unreliable predicates).
+
+**Family-friendly summary copy + Volumes-window CTA:**
+
+- `RelocateSummarySheet` rewritten with three headline modes:
+  - "Your files are safe" — every record disposed and at least one safe witness per record. Subhead: "I found backup copies of all NN files on safer drives and checksum-verified them. Everything's accounted for — you can retire <name> whenever you're ready."
+  - "Files copied and verified" — some Bucket A copies happened. Subhead summarises copies + remaining safely-backed-up count.
+  - "Dry-run preview" — preview only.
+- Witness section reorganised: safe witnesses appear first with `host volume · role · trust` badges, sorted by safety score. Degraded witnesses go under a "See all matches (N on aging/retired drives)" disclosure and are greyed + tagged `(retired)` / `(unreliable)`.
+- "Open Volumes window" button added. Clicking it pre-selects the source volume (`model.pendingVolumesSelectionID`) and opens the Volumes window via `@Environment(\.openWindow)`. Replaces the prior auto-retire trigger from the Done button.
+- `acknowledgeRelocateSummary()` no longer fires `maybeOfferRetire`. The `pendingRetireOffer` machinery + `maybeOfferRetire(for:)` API remain — tests use the programmatic path, and the Mark Retired action in the Volumes window calls into it.
+
+**Mark Retired action in Volumes window:**
+
+- New `VolumeRetireStatus` UI-only struct: `totalRecords`, `disposedRecords`, `allDisposed`, `hasSafeWitness`. Derived predicates: `isSafeToRetire`, `isDegradedDisposed`, `canRetire` (= `isSafeToRetire`).
+- Right-click menu on each non-retired sidebar row gains a "Mark Retired…" item, enabled only when `canRetire` is true. Disabled state carries a tooltip explaining what's missing ("Not all files on this volume are accounted for yet — run Relocate first." / "Files are marked disposed, but no backup copies are confirmed on safer drives.").
+- Sidebar row badges: green pill "Safe to retire" when `isSafeToRetire`; yellow pill "Disposed, degraded backups" when `isDegradedDisposed`.
+- Clicking Mark Retired builds a `PendingRetireOffer` (witness union via `aggregateRetiredWitnesses`) and presents the existing `RelocateRetireSheet`. Single confirmation surface for both the (deprecated) post-Relocate flow and the new explicit menu flow.
+
+**Tests added to `RelocateSummarySheetTests.swift`:**
+
+- `bucketE_requiresAtLeastOneSafeWitness` — fault-injects a degraded-only witness set, asserts no Bucket E classification; then adds a safe witness and asserts classification fires.
+- `witnessRanking_sortsBySafetyScore_roleDominatesOverTrust` — LTA+Aging beats Backup+Reliable in the safe-witness ranking.
+- `witnessRanking_demotesRetiredAndUnreliableBelowSafeOnes` — retired/unreliable witnesses go into `degradedWitnesses`, safe goes into `safeWitnesses`.
+- `summarySheet_headlineMatchesPattern_allSafe` — Bucket E only + safe witness ⇒ `succeededCount == 0`, `safelyBackedUpCount > 0`.
+- `summarySheet_headlineMatchesPattern_mixedCopyAndRedundant` — mixed Bucket A + Bucket E run.
+- `summarySheet_endsWithVolumesWindowCTA_notAutoRetirePrompt` — `acknowledgeRelocateSummary()` no longer fires `pendingRetireOffer`.
+
+**Tests in new `VolumesWindowRetireTests.swift`:**
+
+- `volumesWindow_markRetiredAction_enabledOnlyWhen100PercentSafelyDisposed` — state machine: empty → no record → disposed-with-degraded-only → disposed-with-safe (enabled) → mixed-not-disposed.
+
+Plus `RelocateRetireVolumeTests.snapshotRollback_restoresPreRetiredState` updated again: Done no longer fires retire; the test now calls `maybeOfferRetire(for:)` directly to simulate the Volumes-window menu action.
 
 ### 3. Engine — per-record copy + verify
 

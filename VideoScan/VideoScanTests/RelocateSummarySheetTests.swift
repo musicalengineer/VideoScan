@@ -146,27 +146,39 @@ struct RelocateSummarySheetTests {
         #expect(model.pendingRetireOffer == nil)
     }
 
-    // MARK: - 2. Trigger ordering — summary before retire
+    // MARK: - 2. Summary ends with Volumes CTA, not auto-retire prompt
 
     @Test
-    func apply_setsPendingRelocateSummary_andDoesNotFireRetireUntilDone() async throws {
+    func summarySheet_endsWithVolumesWindowCTA_notAutoRetirePrompt() async throws {
         let ws = try Self.makeWorkspace()
         defer { try? FileManager.default.removeItem(at: ws.root) }
 
         // One Bucket E record → after Apply, the source is 100%
-        // disposed (.manuallyDeleted), so the §1B retire path SHOULD
-        // be eligible. The fix makes sure it doesn't fire until the
-        // summary is acknowledged.
+        // disposed (.manuallyDeleted). Previously, clicking Done on the
+        // summary would auto-fire the retire offer. Per Rick's
+        // 2026-05-30 feedback (friendly_language), the Volumes window
+        // is now the retire surface — Done just drops the summary and
+        // the user opens the Volumes window themselves.
         let src = ws.source.appendingPathComponent("safe.bin")
         let (sx, hx) = try writeFile(at: src, bytes: 1024)
         let srcRec = makeRecord(fullPath: src.path, size: sx, md5: hx)
+        // Witness on a SAFE host volume — required for Bucket E
+        // classification under the post-2026-05-30 safety filter.
         let witnessRec = makeRecord(fullPath: "/Volumes/MyBook/safe.bin",
                                     size: sx, md5: hx)
 
         let model = VideoScanModel()
         model.catalogStore = CatalogStore(directory: ws.catalog)
         model.records = [srcRec, witnessRec]
-        model.scanTargets = [CatalogScanTarget(searchPath: ws.source.path)]
+        // Mark MyBook as a safe (backup + reliable) host so Bucket E
+        // classification fires. Plain scan target for the source.
+        let safeWitness = CatalogScanTarget(searchPath: "/Volumes/MyBook")
+        safeWitness.role = .backup
+        safeWitness.trust = .reliable
+        model.scanTargets = [
+            CatalogScanTarget(searchPath: ws.source.path),
+            safeWitness
+        ]
         model.catalogStore.saveNow(records: model.records)
 
         model.relocateVolume(RelocateOptions(
@@ -179,22 +191,21 @@ struct RelocateSummarySheetTests {
         ))
         await waitForSummary(model)
 
-        // Trigger ordering — summary present, retire offer NOT yet set.
+        // Summary is present. Retire offer should NEVER fire before
+        // acknowledgment.
         let summary = try #require(model.pendingRelocateSummary)
         #expect(summary.isDryRun == false)
         #expect(summary.sourceVolumeRootPath == ws.source.path)
         #expect(model.pendingRetireOffer == nil,
                 "Retire offer fired before summary was acknowledged")
 
-        // Now simulate the user clicking Done. This is what the sheet
-        // calls in its button handler.
+        // Acknowledge: drops summary. CRUCIAL: does NOT fire the retire
+        // offer. The Volumes window is the explicit retire surface now.
         model.acknowledgeRelocateSummary()
 
-        // Summary is cleared; retire offer IS now set.
         #expect(model.pendingRelocateSummary == nil)
-        let offer = try #require(model.pendingRetireOffer)
-        #expect(offer.volumeRootPath == ws.source.path)
-        #expect(offer.recordCount == 1)
+        #expect(model.pendingRetireOffer == nil,
+                "Done should not auto-fire retire — feedback_friendly_language")
     }
 
     // MARK: - 3. Witness sample extraction
@@ -211,18 +222,36 @@ struct RelocateSummarySheetTests {
         r2.fullPath = "/Volumes/Old/b.bin"
         r2.filename = "b.bin"
 
+        // Build minimal safeWitnesses arrays so `witnessSamples` picks
+        // the safe-ranked path. The reconcile engine always populates
+        // these in production; the legacy fallback (audit-trail string
+        // array) covers older serialized state.
         let entries: [SafelyRedundantEntry] = [
             .init(rec: r1,
                   witnesses: ["/Volumes/MyBook/a.bin", "/Volumes/Backup/a.bin"],
-                  totalWitnessCount: 2),
+                  totalWitnessCount: 2,
+                  safeWitnesses: [
+                    .init(path: "/Volumes/MyBook/a.bin",
+                          role: .backup, trust: .reliable),
+                    .init(path: "/Volumes/Backup/a.bin",
+                          role: .backup, trust: .reliable)
+                  ],
+                  degradedWitnesses: []),
             .init(rec: r2,
                   witnesses: ["/Volumes/MyBook/b.bin"],
-                  totalWitnessCount: 1)
+                  totalWitnessCount: 1,
+                  safeWitnesses: [
+                    .init(path: "/Volumes/MyBook/b.bin",
+                          role: .backup, trust: .reliable)
+                  ],
+                  degradedWitnesses: [])
         ]
         let samples = VideoScanModel.witnessSamples(from: entries, limit: 10)
         #expect(samples.count == 2)
         #expect(samples[0].sourcePath == "/Volumes/Old/a.bin")
         #expect(samples[0].witnessPath == "/Volumes/MyBook/a.bin")
+        #expect(samples[0].witnessRole == .backup)
+        #expect(samples[0].witnessTrust == .reliable)
         #expect(samples[1].sourcePath == "/Volumes/Old/b.bin")
         #expect(samples[1].witnessPath == "/Volumes/MyBook/b.bin")
 
@@ -233,7 +262,12 @@ struct RelocateSummarySheetTests {
             r.filename = "x\(i).bin"
             return .init(rec: r,
                          witnesses: ["/Volumes/MyBook/x\(i).bin"],
-                         totalWitnessCount: 1)
+                         totalWitnessCount: 1,
+                         safeWitnesses: [
+                            .init(path: "/Volumes/MyBook/x\(i).bin",
+                                  role: .backup, trust: .reliable)
+                         ],
+                         degradedWitnesses: [])
         }
         let capped = VideoScanModel.witnessSamples(from: many, limit: 10)
         #expect(capped.count == 10)
@@ -350,5 +384,300 @@ struct RelocateSummarySheetTests {
         }()
         #expect(body.contains("Relocate session started"),
                 "Header line missing — relocate.log open or header write failed")
+    }
+
+    // MARK: - 6. Bucket E requires at least one safe witness (post-2026-05-30)
+
+    @Test
+    func bucketE_requiresAtLeastOneSafeWitness() {
+        // Rick's framing: a "backup" that lives on a retired or
+        // unreliable volume isn't reassuring. The Bucket E classification
+        // should refuse to fire on degraded-only witnesses; the record
+        // falls through to Bucket A (must be copied) instead.
+        let src = VideoRecord()
+        src.fullPath = "/Volumes/SourceDrive/clip.mxf"
+        src.filename = "clip.mxf"
+        src.sizeBytes = 1024
+        src.partialMD5 = "deadbeefdeadbeefdeadbeefdeadbeef"
+
+        // Two witnesses, BOTH on degraded hosts.
+        let retiredWitness = VideoRecord()
+        retiredWitness.fullPath = "/Volumes/OldMaxtor/clip.mxf"
+        retiredWitness.sizeBytes = 1024
+        retiredWitness.partialMD5 = src.partialMD5
+
+        let unreliableWitness = VideoRecord()
+        unreliableWitness.fullPath = "/Volumes/FlakyDrive/clip.mxf"
+        unreliableWitness.sizeBytes = 1024
+        unreliableWitness.partialMD5 = src.partialMD5
+
+        // Resolver marks both hosts degraded.
+        let resolver: VolumeSafetyResolver = { p in
+            if p.hasPrefix("/Volumes/OldMaxtor/") { return (.retired, .reliable) }
+            if p.hasPrefix("/Volumes/FlakyDrive/") { return (.backup, .unreliable) }
+            return (.unassigned, .unknown)
+        }
+
+        let result = RelocateReconcile.reconcile(
+            records: [src],
+            allCatalogRecords: [src, retiredWitness, unreliableWitness],
+            sourceVolumeRootPath: "/Volumes/SourceDrive",
+            destinationRoot: URL(fileURLWithPath: "/Volumes/Dest"),
+            sourceFiles: [],
+            destFiles: [],
+            skipDupsOnOtherVolumes: true,
+            resolveVolumeSafety: resolver,
+            hash: { _ in "" }
+        )
+
+        // Bucket E refused to fire: no safe witness.
+        #expect(result.safelyRedundant.isEmpty,
+                "Record with degraded-only witnesses must NOT be safelyRedundant")
+        // Falls through to manuallyDeleted (no file at recorded path,
+        // no source-side match in sourceFiles).
+        #expect(result.manuallyDeleted.count == 1)
+
+        // Now add a SAFE witness — classification should flip on.
+        let safeWitness = VideoRecord()
+        safeWitness.fullPath = "/Volumes/LaCieWorkspace/clip.mxf"
+        safeWitness.sizeBytes = 1024
+        safeWitness.partialMD5 = src.partialMD5
+        let resolverWithSafe: VolumeSafetyResolver = { p in
+            if p.hasPrefix("/Volumes/OldMaxtor/") { return (.retired, .reliable) }
+            if p.hasPrefix("/Volumes/FlakyDrive/") { return (.backup, .unreliable) }
+            if p.hasPrefix("/Volumes/LaCieWorkspace/") { return (.lta, .reliable) }
+            return (.unassigned, .unknown)
+        }
+        let result2 = RelocateReconcile.reconcile(
+            records: [src],
+            allCatalogRecords: [src, retiredWitness, unreliableWitness, safeWitness],
+            sourceVolumeRootPath: "/Volumes/SourceDrive",
+            destinationRoot: URL(fileURLWithPath: "/Volumes/Dest"),
+            sourceFiles: [],
+            destFiles: [],
+            skipDupsOnOtherVolumes: true,
+            resolveVolumeSafety: resolverWithSafe,
+            hash: { _ in "" }
+        )
+        #expect(result2.safelyRedundant.count == 1)
+        let entry = try? #require(result2.safelyRedundant.first)
+        // Safe witness leads the safeWitnesses list.
+        #expect(entry?.safeWitnesses.first?.path == "/Volumes/LaCieWorkspace/clip.mxf")
+        // Both degraded witnesses are retained on the entry for the
+        // "see all matches" disclosure.
+        #expect(entry?.degradedWitnesses.count == 2)
+    }
+
+    // MARK: - 7. Witness ranking — role dominates trust
+
+    @Test
+    func witnessRanking_sortsBySafetyScore_roleDominatesOverTrust() {
+        // Same-record, multiple witnesses, mix of roles/trusts. After
+        // ranking, an Archive+Aging witness should outrank a Backup+
+        // Reliable one (role weighted 10x trust).
+        let src = VideoRecord()
+        src.fullPath = "/Volumes/Src/x.bin"
+        src.sizeBytes = 1024
+        src.partialMD5 = "aa"
+
+        let witnesses = [
+            ("/Volumes/A/x.bin", VolumeRole.backup, VolumeTrust.reliable),
+            ("/Volumes/B/x.bin", VolumeRole.lta, VolumeTrust.aging),
+            ("/Volumes/C/x.bin", VolumeRole.archive, VolumeTrust.unknown),
+            ("/Volumes/D/x.bin", VolumeRole.original, VolumeTrust.reliable)
+        ]
+        let resolver: VolumeSafetyResolver = { p in
+            for (path, role, trust) in witnesses where p.hasPrefix(path) {
+                return (role, trust)
+            }
+            return (.unassigned, .unknown)
+        }
+        let witnessRecords = witnesses.map { (path, _, _) -> VideoRecord in
+            let r = VideoRecord()
+            r.fullPath = path
+            r.sizeBytes = 1024
+            r.partialMD5 = "aa"
+            return r
+        }
+
+        let result = RelocateReconcile.reconcile(
+            records: [src],
+            allCatalogRecords: [src] + witnessRecords,
+            sourceVolumeRootPath: "/Volumes/Src",
+            destinationRoot: URL(fileURLWithPath: "/Volumes/Dest"),
+            sourceFiles: [],
+            destFiles: [],
+            skipDupsOnOtherVolumes: true,
+            resolveVolumeSafety: resolver,
+            hash: { _ in "" }
+        )
+        let entry = try? #require(result.safelyRedundant.first)
+        // Expected order (highest safetyScore first):
+        //   LTA + Aging      → 6*10 + 2 = 62
+        //   Archive + Unknown→ 5*10 + 1 = 51
+        //   Backup + Reliable→ 4*10 + 3 = 43
+        //   Original + Reliable → 3*10 + 3 = 33
+        let safePaths = entry?.safeWitnesses.map(\.path) ?? []
+        #expect(safePaths == [
+            "/Volumes/B/x.bin",   // LTA + Aging
+            "/Volumes/C/x.bin",   // Archive + Unknown
+            "/Volumes/A/x.bin",   // Backup + Reliable
+            "/Volumes/D/x.bin"    // Original + Reliable
+        ])
+    }
+
+    // MARK: - 8. Witness ranking — retired/unreliable demoted below safe
+
+    @Test
+    func witnessRanking_demotesRetiredAndUnreliableBelowSafeOnes() {
+        // Mix of one safe + one retired + one unreliable. Reconcile
+        // result should split into safeWitnesses (just the safe one)
+        // and degradedWitnesses (the other two).
+        let src = VideoRecord()
+        src.fullPath = "/Volumes/Src/y.bin"
+        src.sizeBytes = 512
+        src.partialMD5 = "bb"
+
+        let mybook = VideoRecord()
+        mybook.fullPath = "/Volumes/MyBook/y.bin"
+        mybook.sizeBytes = 512
+        mybook.partialMD5 = "bb"
+
+        let mini2tb = VideoRecord()  // retired
+        mini2tb.fullPath = "/Volumes/Mini2TB/y.bin"
+        mini2tb.sizeBytes = 512
+        mini2tb.partialMD5 = "bb"
+
+        let flaky = VideoRecord()  // unreliable
+        flaky.fullPath = "/Volumes/Flaky/y.bin"
+        flaky.sizeBytes = 512
+        flaky.partialMD5 = "bb"
+
+        let resolver: VolumeSafetyResolver = { p in
+            if p.hasPrefix("/Volumes/MyBook/") { return (.backup, .reliable) }
+            if p.hasPrefix("/Volumes/Mini2TB/") { return (.retired, .reliable) }
+            if p.hasPrefix("/Volumes/Flaky/") { return (.backup, .unreliable) }
+            return (.unassigned, .unknown)
+        }
+
+        let result = RelocateReconcile.reconcile(
+            records: [src],
+            allCatalogRecords: [src, mybook, mini2tb, flaky],
+            sourceVolumeRootPath: "/Volumes/Src",
+            destinationRoot: URL(fileURLWithPath: "/Volumes/Dest"),
+            sourceFiles: [],
+            destFiles: [],
+            skipDupsOnOtherVolumes: true,
+            resolveVolumeSafety: resolver,
+            hash: { _ in "" }
+        )
+        let entry = try? #require(result.safelyRedundant.first)
+        #expect(entry?.safeWitnesses.map(\.path) == ["/Volumes/MyBook/y.bin"])
+        // Retired + unreliable both demoted. Order within degraded
+        // doesn't matter for Rick's UX (it's grey-and-tagged either
+        // way), but the count does.
+        #expect(entry?.degradedWitnesses.count == 2)
+        let demotedPaths = Set(entry?.degradedWitnesses.map(\.path) ?? [])
+        #expect(demotedPaths == [
+            "/Volumes/Mini2TB/y.bin",
+            "/Volumes/Flaky/y.bin"
+        ])
+    }
+
+    // MARK: - 9. Summary headline — all-safe pattern
+
+    @Test
+    func summarySheet_headlineMatchesPattern_allSafe() async throws {
+        let ws = try Self.makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: ws.root) }
+
+        // One Bucket E record with a safe witness — produces the
+        // "Your files are safe" headline (no Bucket A copies, all
+        // already-safe).
+        let src = ws.source.appendingPathComponent("safe.bin")
+        let (sx, hx) = try writeFile(at: src, bytes: 512)
+        let srcRec = makeRecord(fullPath: src.path, size: sx, md5: hx)
+        let witnessRec = makeRecord(fullPath: "/Volumes/MyBook/safe.bin",
+                                    size: sx, md5: hx)
+
+        let model = VideoScanModel()
+        model.catalogStore = CatalogStore(directory: ws.catalog)
+        model.records = [srcRec, witnessRec]
+        let safeWitness = CatalogScanTarget(searchPath: "/Volumes/MyBook")
+        safeWitness.role = .lta
+        safeWitness.trust = .reliable
+        model.scanTargets = [
+            CatalogScanTarget(searchPath: ws.source.path),
+            safeWitness
+        ]
+        model.catalogStore.saveNow(records: model.records)
+
+        model.relocateVolume(RelocateOptions(
+            sourceVolumeRootPath: ws.source.path,
+            destinationRoot: ws.dest,
+            maxConcurrency: 1,
+            dryRun: false,
+            skipAlreadyRelocated: true,
+            skipDupsOnOtherVolumes: true
+        ))
+        await waitForSummary(model)
+
+        let summary = try #require(model.pendingRelocateSummary)
+        #expect(summary.succeededCount == 0)
+        #expect(summary.safelyBackedUpCount == 1)
+        #expect(summary.degradedOnlyCount == 0)
+        // Sample carries the safe host's role/trust.
+        let sample = try #require(summary.witnessSamples.first)
+        #expect(sample.witnessRole == .lta)
+        #expect(sample.witnessTrust == .reliable)
+        #expect(sample.isSafe)
+    }
+
+    // MARK: - 10. Summary headline — mixed copy + redundant pattern
+
+    @Test
+    func summarySheet_headlineMatchesPattern_mixedCopyAndRedundant() async throws {
+        let ws = try Self.makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: ws.root) }
+
+        // One Bucket A record (will be copied) + one Bucket E record
+        // (will not be copied). Produces the "Files copied and
+        // verified" headline.
+        let copyMe = ws.source.appendingPathComponent("copy.bin")
+        let (cSize, cHash) = try writeFile(at: copyMe, bytes: 256)
+        let copyRec = makeRecord(fullPath: copyMe.path, size: cSize, md5: cHash)
+
+        let redundant = ws.source.appendingPathComponent("redundant.bin")
+        let (rSize, rHash) = try writeFile(at: redundant, bytes: 128)
+        let redundantRec = makeRecord(fullPath: redundant.path, size: rSize, md5: rHash)
+        let witnessRec = makeRecord(fullPath: "/Volumes/MyBook/redundant.bin",
+                                    size: rSize, md5: rHash)
+
+        let model = VideoScanModel()
+        model.catalogStore = CatalogStore(directory: ws.catalog)
+        model.records = [copyRec, redundantRec, witnessRec]
+        let safeWitness = CatalogScanTarget(searchPath: "/Volumes/MyBook")
+        safeWitness.role = .backup
+        safeWitness.trust = .reliable
+        model.scanTargets = [
+            CatalogScanTarget(searchPath: ws.source.path),
+            safeWitness
+        ]
+        model.catalogStore.saveNow(records: model.records)
+
+        model.relocateVolume(RelocateOptions(
+            sourceVolumeRootPath: ws.source.path,
+            destinationRoot: ws.dest,
+            maxConcurrency: 1,
+            dryRun: false,
+            skipAlreadyRelocated: true,
+            skipDupsOnOtherVolumes: true
+        ))
+        await waitForSummary(model)
+
+        let summary = try #require(model.pendingRelocateSummary)
+        #expect(summary.succeededCount == 1, "one Bucket A copy should have happened")
+        #expect(summary.safelyBackedUpCount == 1, "one Bucket E record should be safely backed up")
+        #expect(summary.degradedOnlyCount == 0)
     }
 }

@@ -46,14 +46,24 @@ struct RelocateSummary: Identifiable, Equatable {
     let salvageFailedCount: Int
     let skippedCount: Int
 
+    /// Subset of `safelyRedundantCount` whose top-ranked witness lives
+    /// on a safe host volume (role != .retired AND trust != .unreliable).
+    /// Drives the section header "<safelyBacked> · <degradedOnly>".
+    /// Always ≤ `safelyRedundantCount`.
+    let safelyBackedUpCount: Int
+    /// `safelyRedundantCount - safelyBackedUpCount`. Records where the
+    /// only witnesses were on retired/unreliable volumes — included for
+    /// audit completeness but shown demoted.
+    let degradedOnlyCount: Int
+
     /// Per-path detail for the salvage-failed disclosure. Empty when the
     /// run had no failures. Capped on the producing side.
     let salvageFailedPaths: [String]
 
-    /// Sample `source → witness` pairs, parsed from each Bucket E
-    /// record's audit-trail note. Capped at 10 — enough to satisfy "show
-    /// me a few examples" without ballooning the sheet. Full witness list
-    /// stays in the catalog notes + relocate.log.
+    /// Sample `source → witness` pairs (top-ranked witness per source),
+    /// extracted from each Bucket E record. Capped at 10 — enough to
+    /// satisfy "show me a few examples" without ballooning the sheet.
+    /// Full witness list stays in the catalog notes + relocate.log.
     let witnessSamples: [WitnessSample]
 
     /// Wall clock seconds for the entire run.
@@ -67,9 +77,33 @@ struct RelocateSummary: Identifiable, Equatable {
     /// snapshotting failed (logged + we proceeded anyway).
     let snapshotPath: String?
 
+    /// One source-to-witness pairing. Carries the host volume's
+    /// role + trust so the summary sheet can render the safety badge
+    /// without having to query the model.
     struct WitnessSample: Equatable, Identifiable {
         let id = UUID()
         let sourcePath: String
         let witnessPath: String
+        let witnessRole: VolumeRole
+        let witnessTrust: VolumeTrust
+
+        /// "MyBook3Terabytes" — leading path component of the witness for
+        /// display. Mirrors `VolumeReachability.volumeName(forPath:)` but
+        /// keeps the struct self-sufficient (no side-on resolver needed
+        /// at render time).
+        var witnessVolumeLabel: String {
+            let comps = (witnessPath as NSString).pathComponents
+            if comps.count >= 3, comps[1] == "Volumes" { return comps[2] }
+            if comps.count >= 3, comps[1] == "Users" { return comps[2] }
+            if comps.count >= 3 { return comps[1] }
+            return (witnessPath as NSString).deletingLastPathComponent
+        }
+
+        /// "Safe enough to display un-demoted." Mirrors
+        /// `SafeWitnessInfo.isSafe` so the summary sheet doesn't pull in
+        /// the reconcile module just to compute the same predicate.
+        var isSafe: Bool {
+            witnessRole != .retired && witnessTrust != .unreliable
+        }
     }
 }

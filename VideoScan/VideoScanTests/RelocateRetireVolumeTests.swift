@@ -324,16 +324,23 @@ struct RelocateRetireVolumeTests {
         ))
         await waitForRelocateDone(model)
 
-        // 2026-05-30: trigger ordering changed — the summary sheet now
-        // gates the retire offer. `pendingRetireOffer` is nil until the
-        // user clicks Done on the summary. We simulate that here so the
-        // rest of this snapshot-rollback test still exercises the
-        // retire+reinstate round-trip.
+        // 2026-05-30: the summary sheet now ends with a "Open the
+        // Volumes window to retire" CTA — clicking Done on the sheet
+        // does NOT auto-fire the retire offer (per
+        // feedback_friendly_language.md). The retire offer remains
+        // programmatically callable via `maybeOfferRetire(for:)` — we
+        // exercise that here so the rest of the rollback round-trip
+        // can run.
         #expect(model.pendingRelocateSummary != nil)
         #expect(model.pendingRetireOffer == nil)
         model.acknowledgeRelocateSummary()
+        // Done no longer auto-fires retire:
+        #expect(model.pendingRetireOffer == nil)
+        // The Volumes-window Mark Retired action calls into the same
+        // maybeOfferRetire path. Drive that directly.
+        model.maybeOfferRetire(for: ws.source.path)
 
-        // Confirm the offer surfaced after acknowledgment.
+        // Confirm the offer surfaced after the explicit call.
         let offer = try #require(model.pendingRetireOffer)
         #expect(offer.volumeRootPath == ws.source.path)
         #expect(offer.recordCount == 1)
