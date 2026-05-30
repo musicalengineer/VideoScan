@@ -1,7 +1,8 @@
 import Foundation
 
 /// Persistence helpers for CatalogScanTarget metadata (phase, role, trust,
-/// filesystem, purchaseYear, capacityTB, notes, lastScannedDate).
+/// filesystem, purchaseYear, capacityTB, notes, lastScannedDate, plus the
+/// §1B retire fields: retiredAt, retiredReason, retiredWitnesses).
 /// All data stored in UserDefaults using the provided key prefix.
 @MainActor enum ScanTargetPersistence {
 
@@ -20,7 +21,10 @@ import Foundation
         savedMediaTechKey: String,
         savedPurchaseYearKey: String,
         savedCapacityKey: String,
-        savedNotesKey: String
+        savedNotesKey: String,
+        savedRetiredAtKey: String,
+        savedRetiredReasonKey: String,
+        savedRetiredWitnessesKey: String
     ) -> [CatalogScanTarget] {
         let paths = UserDefaults.standard.stringArray(forKey: savedTargetsKey) ?? []
         let dates = UserDefaults.standard.dictionary(forKey: savedDatesKey) as? [String: Date] ?? [:]
@@ -32,6 +36,11 @@ import Foundation
         let purchaseYears = UserDefaults.standard.dictionary(forKey: savedPurchaseYearKey) as? [String: Int] ?? [:]
         let capacities = UserDefaults.standard.dictionary(forKey: savedCapacityKey) as? [String: Double] ?? [:]
         let notes = UserDefaults.standard.dictionary(forKey: savedNotesKey) as? [String: String] ?? [:]
+        // §1B retire dictionaries. Each is keyed by searchPath; presence in
+        // retiredAt dict is the retired-or-not signal.
+        let retiredAt = UserDefaults.standard.dictionary(forKey: savedRetiredAtKey) as? [String: Date] ?? [:]
+        let retiredReason = UserDefaults.standard.dictionary(forKey: savedRetiredReasonKey) as? [String: String] ?? [:]
+        let retiredWitnesses = UserDefaults.standard.dictionary(forKey: savedRetiredWitnessesKey) as? [String: [String]] ?? [:]
 
         var result: [CatalogScanTarget] = []
         for p in paths where !p.isEmpty {
@@ -58,6 +67,11 @@ import Foundation
                 t.purchaseYear = purchaseYears[p]
                 t.capacityTB = capacities[p]
                 t.notes = notes[p] ?? ""
+                // §1B Retire — three parallel optional fields. Missing keys
+                // round-trip as nil so legacy installs come back not-retired.
+                t.retiredAt = retiredAt[p]
+                t.retiredReason = retiredReason[p]
+                t.retiredWitnesses = retiredWitnesses[p]
                 result.append(t)
             }
         }
@@ -80,7 +94,10 @@ import Foundation
         savedMediaTechKey: String,
         savedPurchaseYearKey: String,
         savedCapacityKey: String,
-        savedNotesKey: String
+        savedNotesKey: String,
+        savedRetiredAtKey: String,
+        savedRetiredReasonKey: String,
+        savedRetiredWitnessesKey: String
     ) {
         var dates: [String: Date] = [:]
         var phases: [String: String] = [:]
@@ -91,6 +108,9 @@ import Foundation
         var purchaseYears: [String: Int] = [:]
         var capacities: [String: Double] = [:]
         var notesMap: [String: String] = [:]
+        var retiredAtMap: [String: Date] = [:]
+        var retiredReasonMap: [String: String] = [:]
+        var retiredWitnessesMap: [String: [String]] = [:]
         for t in targets {
             if let d = t.lastScannedDate { dates[t.searchPath] = d }
             phases[t.searchPath] = t.phase.rawValue
@@ -101,6 +121,12 @@ import Foundation
             if let y = t.purchaseYear { purchaseYears[t.searchPath] = y }
             if let c = t.capacityTB { capacities[t.searchPath] = c }
             if !t.notes.isEmpty { notesMap[t.searchPath] = t.notes }
+            // §1B Retire — only write entries for retired volumes. Absence
+            // is the not-retired signal (parallel to how purchase year and
+            // notes are handled above).
+            if let r = t.retiredAt { retiredAtMap[t.searchPath] = r }
+            if let r = t.retiredReason, !r.isEmpty { retiredReasonMap[t.searchPath] = r }
+            if let w = t.retiredWitnesses, !w.isEmpty { retiredWitnessesMap[t.searchPath] = w }
         }
         UserDefaults.standard.set(dates, forKey: savedDatesKey)
         UserDefaults.standard.set(phases, forKey: savedPhasesKey)
@@ -111,6 +137,9 @@ import Foundation
         UserDefaults.standard.set(purchaseYears, forKey: savedPurchaseYearKey)
         UserDefaults.standard.set(capacities, forKey: savedCapacityKey)
         UserDefaults.standard.set(notesMap, forKey: savedNotesKey)
+        UserDefaults.standard.set(retiredAtMap, forKey: savedRetiredAtKey)
+        UserDefaults.standard.set(retiredReasonMap, forKey: savedRetiredReasonKey)
+        UserDefaults.standard.set(retiredWitnessesMap, forKey: savedRetiredWitnessesKey)
     }
 
     // MARK: - Volume Snapshot
@@ -125,5 +154,11 @@ import Foundation
         t.capacityTB = s.capacityTB
         t.notes = s.notes
         if let d = s.lastScannedDate { t.lastScannedDate = d }
+        // §1B Retire — apply from snapshot if the bundle carried these fields.
+        // Legacy bundles (pre-§1B) decode with nil/nil/nil and leave the
+        // target's existing retire state untouched.
+        t.retiredAt = s.retiredAt
+        t.retiredReason = s.retiredReason
+        t.retiredWitnesses = s.retiredWitnesses
     }
 }

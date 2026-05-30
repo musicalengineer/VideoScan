@@ -85,6 +85,11 @@ struct VolumeMetadataSnapshot: Codable {
     var capacityTB: Double?
     var notes: String
     var lastScannedDate: Date?
+    // §1B Retire — three optional fields. Legacy bundles (pre-§1B) decode
+    // these as nil via decodeIfPresent and round-trip cleanly.
+    var retiredAt: Date?
+    var retiredReason: String?
+    var retiredWitnesses: [String]?
 
     @MainActor
     init(from target: CatalogScanTarget) {
@@ -98,6 +103,9 @@ struct VolumeMetadataSnapshot: Codable {
         self.capacityTB = target.capacityTB
         self.notes = target.notes
         self.lastScannedDate = target.lastScannedDate
+        self.retiredAt = target.retiredAt
+        self.retiredReason = target.retiredReason
+        self.retiredWitnesses = target.retiredWitnesses
     }
 }
 

@@ -256,20 +256,27 @@ struct PhaseConsistencyTests {
 @MainActor
 struct ScanTargetPersistenceTests {
 
+    // §1B Retire Volume — three additional dictionary keys (retAt, retRsn,
+    // retWit). Tuple grew but all existing callsites at the bottom of this
+    // suite get a paired update below.
     private func makeTestKeys() -> (paths: String, dates: String, phases: String,
                                      roles: String, trust: String, fs: String,
-                                     mt: String, py: String, cap: String, notes: String) {
+                                     mt: String, py: String, cap: String, notes: String,
+                                     retAt: String, retRsn: String, retWit: String) {
         let id = UUID().uuidString.prefix(8)
         return ("t\(id)_p", "t\(id)_d", "t\(id)_ph", "t\(id)_r",
                 "t\(id)_tr", "t\(id)_f", "t\(id)_m", "t\(id)_py",
-                "t\(id)_c", "t\(id)_n")
+                "t\(id)_c", "t\(id)_n",
+                "t\(id)_rA", "t\(id)_rR", "t\(id)_rW")
     }
 
     private func cleanupKeys(_ k: (paths: String, dates: String, phases: String,
                                     roles: String, trust: String, fs: String,
-                                    mt: String, py: String, cap: String, notes: String)) {
+                                    mt: String, py: String, cap: String, notes: String,
+                                    retAt: String, retRsn: String, retWit: String)) {
         for key in [k.paths, k.dates, k.phases, k.roles, k.trust,
-                    k.fs, k.mt, k.py, k.cap, k.notes] {
+                    k.fs, k.mt, k.py, k.cap, k.notes,
+                    k.retAt, k.retRsn, k.retWit] {
             UserDefaults.standard.removeObject(forKey: key)
         }
     }
@@ -290,7 +297,10 @@ struct ScanTargetPersistenceTests {
             savedRolesKey: k.roles, savedTrustKey: k.trust,
             savedFilesystemKey: k.fs, savedMediaTechKey: k.mt,
             savedPurchaseYearKey: k.py, savedCapacityKey: k.cap,
-            savedNotesKey: k.notes
+            savedNotesKey: k.notes,
+            savedRetiredAtKey: k.retAt,
+            savedRetiredReasonKey: k.retRsn,
+            savedRetiredWitnessesKey: k.retWit
         )
 
         let restored = ScanTargetPersistence.restore(
@@ -299,7 +309,10 @@ struct ScanTargetPersistenceTests {
             savedPhasesKey: k.phases, savedRolesKey: k.roles,
             savedTrustKey: k.trust, savedFilesystemKey: k.fs,
             savedMediaTechKey: k.mt, savedPurchaseYearKey: k.py,
-            savedCapacityKey: k.cap, savedNotesKey: k.notes
+            savedCapacityKey: k.cap, savedNotesKey: k.notes,
+            savedRetiredAtKey: k.retAt,
+            savedRetiredReasonKey: k.retRsn,
+            savedRetiredWitnessesKey: k.retWit
         )
 
         #expect(restored.count == 2)
@@ -324,7 +337,10 @@ struct ScanTargetPersistenceTests {
             savedRolesKey: k.roles, savedTrustKey: k.trust,
             savedFilesystemKey: k.fs, savedMediaTechKey: k.mt,
             savedPurchaseYearKey: k.py, savedCapacityKey: k.cap,
-            savedNotesKey: k.notes
+            savedNotesKey: k.notes,
+            savedRetiredAtKey: k.retAt,
+            savedRetiredReasonKey: k.retRsn,
+            savedRetiredWitnessesKey: k.retWit
         )
 
         let restored = ScanTargetPersistence.restore(
@@ -333,7 +349,10 @@ struct ScanTargetPersistenceTests {
             savedPhasesKey: k.phases, savedRolesKey: k.roles,
             savedTrustKey: k.trust, savedFilesystemKey: k.fs,
             savedMediaTechKey: k.mt, savedPurchaseYearKey: k.py,
-            savedCapacityKey: k.cap, savedNotesKey: k.notes
+            savedCapacityKey: k.cap, savedNotesKey: k.notes,
+            savedRetiredAtKey: k.retAt,
+            savedRetiredReasonKey: k.retRsn,
+            savedRetiredWitnessesKey: k.retWit
         )
 
         #expect(restored.isEmpty)

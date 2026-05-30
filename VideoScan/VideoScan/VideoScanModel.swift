@@ -19,6 +19,12 @@ final class VideoScanModel: ObservableObject {
     @Published var isScanning: Bool = false
     @Published var isCombining: Bool = false
     @Published var isRelocating: Bool = false
+    /// §1B Retire Volume — set by `runRelocate` when the just-completed
+    /// run leaves 100% of the source volume's catalogued records marked
+    /// `.manuallyDeleted`. The UI binds a sheet to this; selecting Retire
+    /// or Skip clears it. nil ⇒ no pending offer. Carries the source
+    /// volume root path so the sheet doesn't have to recompute.
+    @Published var pendingRetireOffer: PendingRetireOffer?
     @Published var isCorrelating: Bool = false
     @Published var isAnalyzingDuplicates: Bool = false
     @Published var isDeletingDuplicates: Bool = false
@@ -170,6 +176,12 @@ final class VideoScanModel: ObservableObject {
     static let savedPurchaseYearKey = "VideoScan.scanTargetPurchaseYears"
     static let savedCapacityKey = "VideoScan.scanTargetCapacities"
     static let savedNotesKey = "VideoScan.scanTargetNotes"
+    // §1B Retire Volume — three parallel dictionaries keyed by searchPath.
+    // Presence of an entry in savedRetiredAtKey is the retired-or-not signal;
+    // reason + witnesses are aggregate data captured at retire time.
+    static let savedRetiredAtKey = "VideoScan.scanTargetRetiredAt"
+    static let savedRetiredReasonKey = "VideoScan.scanTargetRetiredReason"
+    static let savedRetiredWitnessesKey = "VideoScan.scanTargetRetiredWitnesses"
 
     // `internal var` (not `private let`) so tests can swap in a per-test
     // CatalogStore(directory:) instance — necessary because the shared

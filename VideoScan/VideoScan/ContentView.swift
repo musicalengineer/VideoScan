@@ -398,6 +398,12 @@ struct CatalogView: View {
         .sheet(isPresented: $showRelocateSheet) {
             RelocateSheet()
         }
+        // §1B Retire Volume — surfaces automatically after a Relocate
+        // run that leaves 100% of the source volume's records marked
+        // .manuallyDeleted. See docs/relocate_volume_plan.md §1B.
+        .sheet(item: $model.pendingRetireOffer) { offer in
+            RelocateRetireSheet(offer: offer)
+        }
         .sheet(item: $combinePairItem) { item in
             CombinePairSheet(originalVideo: item.video, originalAudio: item.audio)
         }

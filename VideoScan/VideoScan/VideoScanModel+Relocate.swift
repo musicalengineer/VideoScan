@@ -304,6 +304,39 @@ extension VideoScanModel {
         }
         catalogStore.scheduleSave(records: records)
         logRelocateSummary(salvageFailedPaths: salvageFailedPaths)
+
+        // §1B Retire Volume offer. If every catalogued record on the
+        // source volume is now `.manuallyDeleted` (Bucket B + Bucket E
+        // disposed 100%), surface the retire modal. Pure check; no
+        // mutation here — the user clicks Retire / Skip from the sheet.
+        maybeOfferRetire(for: options.sourceVolumeRootPath)
+    }
+
+    /// Set `pendingRetireOffer` if the source volume is 100% disposed.
+    /// Internal so tests can drive the same logic directly. See
+    /// docs/relocate_volume_plan.md §1B.
+    func maybeOfferRetire(for volumeRootPath: String) {
+        guard Self.shouldOfferRetire(volumeRootPath: volumeRootPath, in: records) else {
+            return
+        }
+        // Skip the offer when the volume is already retired (idempotency
+        // for re-running Relocate against a retired drive — rare, but
+        // shouldn't double-prompt).
+        if let target = scanTargets.first(where: { $0.searchPath == volumeRootPath }),
+           target.isRetired {
+            return
+        }
+        let total = Self.totalRecordsOn(volumeRootPath: volumeRootPath, in: records)
+        let witnesses = Self.aggregateRetiredWitnesses(volumeRootPath: volumeRootPath, in: records)
+        let volumeName = (volumeRootPath as NSString).lastPathComponent
+        pendingRetireOffer = PendingRetireOffer(
+            volumeRootPath: volumeRootPath,
+            volumeName: volumeName.isEmpty ? volumeRootPath : volumeName,
+            recordCount: total,
+            suggestedReason: Self.defaultRetireReason(),
+            witnesses: witnesses
+        )
+        log("Retire prompt: \(total) record(s) on \(volumeRootPath) are all marked deleted — offering retire.")
     }
 
     // MARK: - Reconcile FS walk

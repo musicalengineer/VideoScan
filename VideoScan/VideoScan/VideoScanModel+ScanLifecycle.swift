@@ -92,6 +92,10 @@ extension VideoScanModel {
         for target in scanTargets where target.status.isIdle || target.status == .stopped {
             guard !target.searchPath.contains("VideoScan_Temp") else { continue }
             guard target.isReachable else { continue }
+            // §1B: skip retired volumes. They're not coming back; the
+            // catalog already has whatever they held. Reinstate (via the
+            // Volumes window context menu) re-includes them.
+            guard !target.isRetired else { continue }
             startTarget(target)
         }
     }

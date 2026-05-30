@@ -1119,6 +1119,37 @@ final class CatalogScanTarget: ObservableObject, Identifiable {
     /// User notes — model number, serial, location, history, etc.
     @Published var notes: String = ""
 
+    /// §1B — Retirement metadata. When `retiredAt != nil` this volume has
+    /// been *retired*: physically disconnected and not coming back. The
+    /// catalog still has the records (preserved for audit), but the volume
+    /// is excluded from scan suggestions, "missing volume" complaints, and
+    /// dashboard nags. Reinstate by setting all three back to nil.
+    ///
+    /// Set after a Relocate run that lands every catalogued record on the
+    /// source volume in `.manuallyDeleted` (Bucket B + Bucket E disposed
+    /// 100% of records). Two-button modal (`Retire` / `Skip for now`) —
+    /// no typed confirmation; fully reversible via the Reinstate context
+    /// action. See docs/relocate_volume_plan.md §1B.
+    ///
+    /// Swift's `Date?` ≈ C++ `std::optional<Date>` — nil means "not retired."
+    @Published var retiredAt: Date?
+
+    /// Free-text reason captured at retire time. Default-populated from
+    /// the Relocate end-of-run modal (e.g. "All records dup-elsewhere or
+    /// source-deleted via Relocate 2026-05-30"), editable before the user
+    /// hits Retire.
+    @Published var retiredReason: String?
+
+    /// Union of Bucket E witness paths aggregated across every
+    /// `.manuallyDeleted` record on this volume. Lets the post-retire
+    /// audit trail answer "where does the content from this drive live now?"
+    /// without re-querying every record. Deduped at retire time.
+    @Published var retiredWitnesses: [String]?
+
+    /// Convenience predicate. `// guard let` ≈ C++ early-return after a
+    /// null check.
+    var isRetired: Bool { retiredAt != nil }
+
     /// Computed archival-destination suitability. Rules (first match wins):
     ///   1. RAID-0 or trust=Unreliable → Forbidden
     ///   2. Offline → Discouraged (can't write to it now)

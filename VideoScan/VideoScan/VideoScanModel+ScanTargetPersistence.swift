@@ -25,7 +25,10 @@ extension VideoScanModel {
             savedMediaTechKey: Self.savedMediaTechKey,
             savedPurchaseYearKey: Self.savedPurchaseYearKey,
             savedCapacityKey: Self.savedCapacityKey,
-            savedNotesKey: Self.savedNotesKey
+            savedNotesKey: Self.savedNotesKey,
+            savedRetiredAtKey: Self.savedRetiredAtKey,
+            savedRetiredReasonKey: Self.savedRetiredReasonKey,
+            savedRetiredWitnessesKey: Self.savedRetiredWitnessesKey
         )
         scanTargets.append(contentsOf: restored)
     }
@@ -47,7 +50,10 @@ extension VideoScanModel {
             savedMediaTechKey: Self.savedMediaTechKey,
             savedPurchaseYearKey: Self.savedPurchaseYearKey,
             savedCapacityKey: Self.savedCapacityKey,
-            savedNotesKey: Self.savedNotesKey
+            savedNotesKey: Self.savedNotesKey,
+            savedRetiredAtKey: Self.savedRetiredAtKey,
+            savedRetiredReasonKey: Self.savedRetiredReasonKey,
+            savedRetiredWitnessesKey: Self.savedRetiredWitnessesKey
         )
     }
 

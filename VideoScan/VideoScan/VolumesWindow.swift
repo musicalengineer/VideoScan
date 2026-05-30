@@ -14,6 +14,14 @@ struct VolumesWindow: View {
     @EnvironmentObject var model: VideoScanModel
     @State private var selectedID: UUID?
     @State private var sidebarWidth: CGFloat = 320
+    /// §1B — toggle to surface retired volumes in this editor. Default
+    /// OFF so the everyday view stays uncluttered; the Reinstate context
+    /// menu is reachable by flipping this on.
+    @State private var showRetired: Bool = false
+    /// Confirmation alert backing for Reinstate. Holds the target path
+    /// while the user decides yes/no. Reinstate is reversible (just
+    /// re-retire), so a single yes/no alert is friction enough.
+    @State private var reinstateTarget: ReinstateTarget?
 
     /// Sidebar font/badge scale — grows from 1.0 at 320pt to 1.5 at 540pt.
     /// The text and badge metrics in `VolumeListRow` multiply by this so a wider
@@ -27,15 +35,29 @@ struct VolumesWindow: View {
 
     /// Hide the RAM disk scratch volume (VideoScan_Temp) — it's plumbing,
     /// not an archive target, and shouldn't show up in the Volumes editor.
+    /// §1B: retired volumes sort to the bottom; hidden entirely when the
+    /// `Show retired` toggle is OFF.
     private var sortedTargets: [CatalogScanTarget] {
         model.scanTargets
             .filter { !$0.searchPath.contains("VideoScan_Temp") }
-            .sorted {
-                VolumeReachability.displayLabel(forPath: $0.searchPath)
+            .filter { showRetired || !$0.isRetired }
+            .sorted { a, b in
+                // Retired-vs-active first: active before retired.
+                if a.isRetired != b.isRetired { return !a.isRetired }
+                return VolumeReachability.displayLabel(forPath: a.searchPath)
                     .localizedCaseInsensitiveCompare(
-                        VolumeReachability.displayLabel(forPath: $1.searchPath)
+                        VolumeReachability.displayLabel(forPath: b.searchPath)
                     ) == .orderedAscending
             }
+    }
+
+    /// Identifiable wrapper so `.alert(item:)` can drive the confirmation
+    /// dialog from `reinstateTarget`. A bare String would also work but
+    /// SwiftUI prefers an `Identifiable` payload for sheet/alert items.
+    private struct ReinstateTarget: Identifiable {
+        let id: UUID
+        let path: String
+        let name: String
     }
 
     private var selectedTarget: CatalogScanTarget? {
@@ -84,10 +106,47 @@ struct VolumesWindow: View {
                 ForEach(sortedTargets) { target in
                     VolumeListRow(target: target, scale: sidebarScale)
                         .tag(Optional(target.id))
+                        // §1B: right-click affordance for retired-vs-not.
+                        // Reinstate is the only action we surface here;
+                        // Retire is driven by the post-Relocate offer.
+                        .contextMenu {
+                            if target.isRetired {
+                                Button("Reinstate \(target.searchPath.split(separator: "/").last.map(String.init) ?? "Volume")") {
+                                    reinstateTarget = ReinstateTarget(
+                                        id: target.id,
+                                        path: target.searchPath,
+                                        name: String(target.searchPath.split(separator: "/").last ?? "volume")
+                                    )
+                                }
+                                .accessibilityIdentifier("volumeRow.reinstate")
+                            }
+                        }
                 }
             }
         }
         .listStyle(.sidebar)
+        .toolbar {
+            // Show retired toggle — pinned to the toolbar so it's always
+            // reachable without scrolling.
+            ToolbarItem(placement: .automatic) {
+                Toggle(isOn: $showRetired) {
+                    Label("Show retired", systemImage: "archivebox")
+                }
+                .toggleStyle(.button)
+                .help("Surface retired volumes in this list so you can reinstate them.")
+                .accessibilityIdentifier("volumesWindow.showRetired")
+            }
+        }
+        .alert(item: $reinstateTarget) { tgt in
+            Alert(
+                title: Text("Reinstate \(tgt.name)?"),
+                message: Text("This volume will go back to active status. Catalog records are not affected."),
+                primaryButton: .default(Text("Reinstate")) {
+                    model.reinstateVolume(at: tgt.path)
+                },
+                secondaryButton: .cancel()
+            )
+        }
     }
 
     private var placeholder: some View {
@@ -122,9 +181,24 @@ private struct VolumeListRow: View {
                 .scaleEffect(scale, anchor: .leading)
                 .frame(width: 38 * scale, alignment: .leading)
             VStack(alignment: .leading, spacing: 1) {
-                Text(VolumeReachability.displayLabel(forPath: target.searchPath))
-                    .font(.system(size: 14 * scale, weight: .medium))
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(VolumeReachability.displayLabel(forPath: target.searchPath))
+                        .font(.system(size: 14 * scale, weight: .medium))
+                        .lineLimit(1)
+                    // §1B retired badge. "Retired YYYY-MM-DD" — replaces
+                    // the policy badge visually because a retired volume
+                    // isn't a viable destination.
+                    if target.isRetired, let r = target.retiredAt {
+                        Text("Retired \(Self.shortStamp(r))")
+                            .font(.system(size: 9 * scale, weight: .medium))
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Color.brown.opacity(0.18))
+                            .foregroundColor(.brown)
+                            .cornerRadius(3)
+                            .accessibilityIdentifier("volumeRow.retiredBadge")
+                    }
+                }
                 Text(target.searchPath)
                     .font(.system(size: 11 * scale, design: .monospaced))
                     .foregroundColor(.secondary)
@@ -132,10 +206,25 @@ private struct VolumeListRow: View {
                     .truncationMode(.middle)
             }
             Spacer(minLength: 4)
-            PolicyBadge(policy: target.destinationPolicy)
-                .scaleEffect(0.95 * scale, anchor: .trailing)
+            // Hide the destination-policy badge for retired drives — the
+            // retired badge tells you everything you need.
+            if !target.isRetired {
+                PolicyBadge(policy: target.destinationPolicy)
+                    .scaleEffect(0.95 * scale, anchor: .trailing)
+            }
         }
         .padding(.vertical, 3)
+        // Grey out the whole row for retired drives.
+        .opacity(target.isRetired ? 0.55 : 1.0)
+    }
+
+    /// "2026-05-30" — short, locale-neutral, sortable. Used for the
+    /// retired badge so the badge stays one line at all sidebar widths.
+    static func shortStamp(_ d: Date) -> String {
+        let fmt = DateFormatter()
+        fmt.dateFormat = "yyyy-MM-dd"
+        fmt.timeZone = TimeZone.current
+        return fmt.string(from: d)
     }
 }
 
@@ -193,17 +282,70 @@ private struct VolumeEditor: View {
                         .textSelection(.enabled)
                 }
                 Spacer()
-                PolicyBadge(policy: target.destinationPolicy)
-                    .scaleEffect(1.15)
+                // §1B: retired drives don't show a destination-policy
+                // badge — they're not viable destinations. The retired
+                // banner below tells the whole story.
+                if !target.isRetired {
+                    PolicyBadge(policy: target.destinationPolicy)
+                        .scaleEffect(1.15)
+                }
             }
-            HStack(spacing: 6) {
-                Image(systemName: target.isReachable ? "checkmark.circle.fill" : "wifi.slash")
-                    .foregroundColor(target.isReachable ? .green : .orange)
-                Text(target.isReachable ? "Online" : "Offline")
-                    .font(.callout)
-                    .foregroundColor(.secondary)
+            // §1B: retired status replaces the online/offline line. A
+            // retired drive being offline is the expected steady state,
+            // so the "Offline" badge would be noise; instead we show
+            // when + why it was retired.
+            if target.isRetired {
+                retiredStatusLine
+            } else {
+                HStack(spacing: 6) {
+                    Image(systemName: target.isReachable ? "checkmark.circle.fill" : "wifi.slash")
+                        .foregroundColor(target.isReachable ? .green : .orange)
+                    Text(target.isReachable ? "Online" : "Offline")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                }
             }
         }
+    }
+
+    /// Retired drives get a brown archive banner with the date stamp +
+    /// reason. The Reinstate affordance lives in the sidebar context
+    /// menu, not here — clicking through to the editor is read-only for
+    /// retired volumes (matches the "fully reversible, just not via
+    /// every surface" UX).
+    @ViewBuilder
+    private var retiredStatusLine: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Image(systemName: "archivebox.fill")
+                .foregroundColor(.brown)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Retired" + (target.retiredAt.map { " on \(Self.shortDateStamp($0))" } ?? ""))
+                    .font(.callout.bold())
+                    .foregroundColor(.brown)
+                if let reason = target.retiredReason, !reason.isEmpty {
+                    Text(reason)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let w = target.retiredWitnesses, !w.isEmpty {
+                    Text("\(w.count) witness path(s) recorded.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .padding(8)
+        .background(Color.brown.opacity(0.08))
+        .cornerRadius(6)
+        .accessibilityIdentifier("volumeEditor.retiredBanner")
+    }
+
+    static func shortDateStamp(_ d: Date) -> String {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .none
+        return f.string(from: d)
     }
 
     private var workflowSection: some View {
