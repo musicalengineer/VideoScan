@@ -398,6 +398,7 @@ extension VideoScanModel {
     func logCombineSummary() {
         let allDone = dashboard.combineCompleted >= dashboard.combineTotal
         guard allDone else { return }
+        let perfBlock = VideoScanModel.formatCombinePerfSummary(jobs: dashboard.combineJobs)
         self.log("""
 
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -405,7 +406,7 @@ extension VideoScanModel {
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
           Succeeded: \(dashboard.combineSucceeded)
           Skipped:   \(dashboard.combineSkipped)
-          Failed:    \(dashboard.combineFailed)
+          Failed:    \(dashboard.combineFailed)\(perfBlock)
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         """)
         // Match the "Combining N pair(s)…" line emitted in combineSelectedPairs.
@@ -567,5 +568,77 @@ extension VideoScanModel {
         isCombining = false
         isCombinePaused = false
         dashboard.combineCurrentFile = ""
+    }
+}
+
+// MARK: - Perf summary formatting (pure, testable)
+
+extension VideoScanModel {
+
+    /// Build the perf-summary block appended to the Combine Complete banner.
+    /// Pure function — reads only the timing data carried on each job and
+    /// stats output files on disk. Returns an empty string when no timing
+    /// data is available (e.g. all jobs were skipped).
+    ///
+    /// Leading "\n" lets the caller concatenate directly after the counts.
+    static func formatCombinePerfSummary(jobs: [CombineJobStatus],
+                                         fileManager: FileManager = .default,
+                                         now: Date = Date()) -> String {
+        let ranJobs = jobs.filter { $0.startTime != nil && $0.endTime != nil }
+        guard let earliestStart = ranJobs.compactMap(\.startTime).min(),
+              let latestEnd = ranJobs.compactMap(\.endTime).max() else {
+            return ""
+        }
+        _ = now  // reserved for future "elapsed since first start" if needed
+
+        let wallSeconds = latestEnd.timeIntervalSince(earliestStart)
+        let succeeded = ranJobs.filter { $0.phase == .done }
+        let durations = succeeded.compactMap(\.elapsed).sorted()
+
+        var lines: [String] = []
+        lines.append("  Wall clock:        \(formatPerfDuration(wallSeconds))")
+
+        if !durations.isEmpty {
+            let total = durations.reduce(0, +)
+            let avg = total / Double(durations.count)
+            let median = durations[durations.count / 2]
+            let mn = durations.first ?? 0
+            let mx = durations.last ?? 0
+            let parallelism = wallSeconds > 0 ? total / wallSeconds : 0
+            lines.append("  Per-job duration:  median \(formatPerfDuration(median)), avg \(formatPerfDuration(avg)), min \(formatPerfDuration(mn)), max \(formatPerfDuration(mx))")
+            lines.append("  Sum of job time:   \(formatPerfDuration(total)) (effective parallelism: \(String(format: "%.1fx", parallelism)))")
+        }
+
+        let outputBytes = succeeded.reduce(Int64(0)) { acc, job in
+            let attrs = try? fileManager.attributesOfItem(atPath: job.outputPath)
+            return acc + ((attrs?[.size] as? Int64) ?? 0)
+        }
+        if outputBytes > 0 && wallSeconds > 0 {
+            let mbWritten = Double(outputBytes) / 1_048_576.0
+            let mbps = mbWritten / wallSeconds
+            lines.append("  Output:            \(formatPerfBytes(outputBytes)) total → \(String(format: "%.1f", mbps)) MB/s effective")
+        }
+
+        return "\n" + lines.joined(separator: "\n")
+    }
+
+    static func formatPerfDuration(_ seconds: TimeInterval) -> String {
+        if seconds < 60 {
+            return String(format: "%.1fs", seconds)
+        } else if seconds < 3600 {
+            let m = Int(seconds) / 60
+            let s = Int(seconds) % 60
+            return "\(m)m \(s)s"
+        } else {
+            let h = Int(seconds) / 3600
+            let m = (Int(seconds) % 3600) / 60
+            return "\(h)h \(m)m"
+        }
+    }
+
+    static func formatPerfBytes(_ bytes: Int64) -> String {
+        let fmt = ByteCountFormatter()
+        fmt.countStyle = .file
+        return fmt.string(fromByteCount: bytes)
     }
 }
