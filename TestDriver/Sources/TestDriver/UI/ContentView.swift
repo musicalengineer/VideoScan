@@ -788,8 +788,22 @@ struct ContentView: View {
     private var progressBar: some View {
         Group {
             if model.totalToRun > 0 {
-                VStack(alignment: .leading, spacing: 2) {
-                    ProgressView(value: model.progressFraction)
+                VStack(alignment: .leading, spacing: 4) {
+                    // Hand-rolled bar instead of the system ProgressView so we
+                    // can guarantee a thicker hit-target — the default macOS
+                    // progress style renders at ~4pt and Rick can't see it at
+                    // a glance during a 25-min run. ~12pt tall is roughly 2x
+                    // the system default; rounded corners match macOS feel.
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Color.secondary.opacity(0.2))
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Color.accentColor)
+                                .frame(width: max(0, geo.size.width * model.progressFraction))
+                        }
+                    }
+                    .frame(height: 12)
                     HStack {
                         Text("\(model.completedCount) of \(model.totalToRun)")
                             .font(.td(.caption))
