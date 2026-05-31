@@ -495,17 +495,21 @@ enum VideoScanTests {
         let counts = parseTestCounts(from: result.stdout)
         let passed = counts.passed
         let failed = counts.failed
+        let skipped = counts.skipped
+        // TestResult.methodCounts is a (passed, failed) tuple — skipped
+        // count is reported separately via the .skipped TestStatus case.
+        let methodCounts = (passed: passed, failed: failed)
 
         if result.timedOut {
             log("--- summary --- TIMED OUT")
             return .failed("Timed out (\(Int(elapsed))s)",
                            duration: elapsed,
                            log: String(result.stdout.suffix(2000)),
-                           methodCounts: counts)
+                           methodCounts: methodCounts)
         }
 
         log("--- summary ---")
-        log("Passed: \(passed), Failed: \(failed), xcodebuild exit: \(result.exitCode)")
+        log("Passed: \(passed), Failed: \(failed), Skipped: \(skipped), xcodebuild exit: \(result.exitCode)")
 
         // Pull coverage if we have an xcresult and the run produced output.
         let coverage = xcresultPath.flatMap { extractCoveragePercent(xcresultPath: $0, log: log) }
@@ -524,7 +528,7 @@ enum VideoScanTests {
                     "TestDriver passes ENABLE_TESTABILITY=YES for Release.",
                     duration: elapsed,
                     log: tail,
-                    methodCounts: counts,
+                    methodCounts: methodCounts,
                     coveragePercent: coverage)
             }
             // SSH-specific: connection failure shows up as exit 255.
@@ -534,29 +538,44 @@ enum VideoScanTests {
                     "logged in, and reachable at ricksmacbookpro.local.",
                     duration: elapsed,
                     log: result.stderr.isEmpty ? tail : result.stderr,
-                    methodCounts: counts,
+                    methodCounts: methodCounts,
                     coveragePercent: coverage)
             }
             return .failed("\(failed) failed of \(passed + failed) (xcodebuild exit \(result.exitCode))",
                            duration: elapsed,
                            log: tail,
-                           methodCounts: counts,
+                           methodCounts: methodCounts,
                            coveragePercent: coverage)
         }
-        if passed == 0 {
-            return .failed("0 tests executed — Swift Testing discovery may have skipped silently",
-                           duration: elapsed,
-                           log: String(result.stdout.suffix(1000)),
-                           methodCounts: counts,
+        // Exit 0, no XCTest failures, no Swift Testing failures.
+        // Three sub-cases:
+        //   1. Some tests passed → .passed (normal happy path)
+        //   2. Zero tests passed but tests were skipped → .skipped
+        //      Suites whose every @Test method has `.disabled(if:)` legitimately
+        //      run and report success with zero "passed" markers. Reporting
+        //      this as failed produced false alarms (FramePrefetcherTests gated
+        //      on CI, GeneratedMediaPerformanceTests gated on VIDEOSCAN_PERF,
+        //      CombinePipelineIntegrationTests marked manual-only).
+        //   3. Zero of everything → .failed (truly nothing ran; suite name
+        //      probably wrong or test bundle didn't build the expected symbol)
+        if passed > 0 {
+            return .passed(elapsed,
+                           log: "\(passed) tests passed" + (skipped > 0 ? " (+ \(skipped) skipped)" : ""),
+                           methodCounts: methodCounts,
                            coveragePercent: coverage)
         }
-        return .passed(elapsed,
-                       log: "\(passed) tests passed",
-                       methodCounts: counts,
+        if skipped > 0 {
+            return .skipped("All \(skipped) test(s) gated by .disabled(...) for current env",
+                            log: String(result.stdout.suffix(1000)))
+        }
+        return .failed("0 tests executed — Swift Testing discovery may have skipped silently",
+                       duration: elapsed,
+                       log: String(result.stdout.suffix(1000)),
+                       methodCounts: methodCounts,
                        coveragePercent: coverage)
     }
 
-    /// Tally passed and failed test methods from xcodebuild's stdout.
+    /// Tally passed / failed / skipped test methods from xcodebuild's stdout.
     /// Handles both runtimes:
     ///   - XCTest lines look like:
     ///       Test Case '-[FooTests testBar]' passed on 'My Mac' (0.001 seconds)
@@ -565,19 +584,19 @@ enum VideoScanTests {
     ///       ✘ Test foo() recorded an issue at Foo.swift:42
     ///       ✘ Test foo() failed after 0.001 seconds with 1 issue.
     ///       ✘ Suite FooTests failed after 0.001 seconds with 1 issue.
-    ///       ✘ Test run with 2 tests in 1 suite failed after ...
+    ///       ✘ Test run with 2 tests in 1 suite failed after …
+    ///       ➜ Test "foo" skipped: "reason"      (.disabled traits)
     /// xcodebuild's own bookkeeping (`Executed N tests`) only sees XCTest
     /// methods and silently reports 0 for Swift Testing suites, so the
-    /// previous parser was returning a phantom "0 tests executed" failure
-    /// even when every Swift Testing case passed.
+    /// previous parser returned a phantom "0 tests executed" failure even
+    /// when every Swift Testing case passed.
     ///
     /// For Swift Testing we match only the canonical per-test summary
     /// markers — `passed after ` / `failed after ` — and explicitly
     /// exclude the run-level summary (`✘ Test run with …`) and the
     /// recorded-issue marker (which can fire multiple times for one
-    /// failing test). Without those filters a single failing test was
-    /// counted 3× (recorded + failed + run-summary).
-    private static func parseTestCounts(from stdout: String) -> (passed: Int, failed: Int) {
+    /// failing test). Skipped tests use a distinct ➜ marker.
+    private static func parseTestCounts(from stdout: String) -> (passed: Int, failed: Int, skipped: Int) {
         // XCTest format (legacy).
         let xcPassed = stdout.components(separatedBy: " passed on ").count - 1
         let xcFailed = stdout.components(separatedBy: " failed on ").count - 1
@@ -586,6 +605,7 @@ enum VideoScanTests {
         // and recorded-issue noise.
         var stPassed = 0
         var stFailed = 0
+        var stSkipped = 0
         for raw in stdout.split(separator: "\n", omittingEmptySubsequences: false) {
             let line = String(raw)
             // Skip the test-run-wide summary so it doesn't double-count.
@@ -597,10 +617,17 @@ enum VideoScanTests {
                 // not on `recorded an issue at …` lines. So this counts
                 // each failing test exactly once.
                 stFailed += 1
+            } else if line.contains("➜ Test "), line.contains(" skipped") {
+                // `.disabled(if:)`, `.disabled("reason")`, and `.disabled(if: !env)`
+                // all emit one ➜ marker per gated @Test method. A suite whose
+                // every test is disabled produces a successful xcodebuild
+                // exit with passed=failed=0; without counting these skips
+                // we'd return a phantom "0 tests executed" failure.
+                stSkipped += 1
             }
         }
 
-        return (passed: xcPassed + stPassed, failed: xcFailed + stFailed)
+        return (passed: xcPassed + stPassed, failed: xcFailed + stFailed, skipped: stSkipped)
     }
 
     /// Invoke `xcrun xccov view --report --json <xcresult>` and aggregate
