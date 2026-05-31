@@ -39,6 +39,11 @@ struct VolumesWindow: View {
     /// the catalog sizes Rick has (~10s of K records).
     @State private var migrationOverview: MigrationOverview?
 
+    /// Drive Health — standalone sheet target. Lives at the window
+    /// level (not the row) so the sheet inherits the parent's
+    /// environmentObject reliably.
+    @State private var driveHealthTarget: CatalogScanTarget?
+
     /// Sidebar font/badge scale — grows from 1.0 at 320pt to 1.5 at 540pt.
     /// The text and badge metrics in `VolumeListRow` multiply by this so a wider
     /// sidebar gets proportionally bigger labels (Rick's stretch goal).
@@ -122,6 +127,13 @@ struct VolumesWindow: View {
         // §2 Provenance & Audit Trail — Migration Overview sheet.
         .sheet(item: $migrationOverview) { overview in
             MigrationOverviewSheet(overview: overview)
+        }
+        // Drive Health standalone sheet. Triggered from the row
+        // context menu ("Show Drive Health…"). Same data as the
+        // inline editor card, but bigger.
+        .sheet(item: $driveHealthTarget) { target in
+            DriveHealthSheet(target: target)
+                .environmentObject(model)
         }
     }
 
@@ -208,6 +220,18 @@ struct VolumesWindow: View {
               ? "See where every file from this drive lives now."
               : "No catalogued files for this volume yet.")
         .accessibilityIdentifier("volumeRow.showProvenance")
+
+        // Drive Health — quick way to inspect SMART data without
+        // entering the editor. Enabled whenever the volume is
+        // online; offline drives can't be probed.
+        Button("Show Drive Health…") {
+            driveHealthTarget = target
+        }
+        .disabled(!target.isReachable)
+        .help(target.isReachable
+              ? "Check this drive's health (SMART data, age, sector health)."
+              : "Drive is offline — connect it to probe its health.")
+        .accessibilityIdentifier("volumeRow.showDriveHealth")
 
         Divider()
 
@@ -654,6 +678,15 @@ private struct VolumeEditor: View {
                         .onSubmit { commitCapacity() }
                 }
                 Spacer()
+            }
+            // Drive Health card — sits at the bottom of Hardware so
+            // the SMART-driven recommendation is right next to the
+            // manual Reliability/purchase-year fields it informs.
+            // Retired/offline drives skip the card entirely; the rest
+            // get an async probe.
+            if !target.isRetired {
+                DriveHealthCard(target: target)
+                    .padding(.top, 4)
             }
         }
     }
