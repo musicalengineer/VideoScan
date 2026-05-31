@@ -151,6 +151,33 @@ No typed confirmation. Two buttons, fully reversible via Reinstate, friction unn
 
 Plus `RelocateSchemaTests.currentSnapshotVersionIsSix` swap for the v5→v6 bump.
 
+### 1B.1. Delete from list (added 2026-05-31)
+
+> **Context:** §1B Retire is the *"data is safely backed up, drive is going on the shelf"* path. It assumes the volume was a real catalog target and we want its records (plus history) preserved forever. But the Volumes window also accumulates *erroneous* entries — typos, dangling mounts, one-time scratch paths. The driving case is `/Volumes/rickb`: 0 catalog records, no purpose, just visual noise. Retire is wrong for it (nothing to back up; the brown badge would be a lie). The right call is to remove the entry from the list entirely.
+
+**Delete vs. Retire — when to use which:**
+
+| | Retire | Delete from list |
+|---|---|---|
+| **Use when** | Data is safely backed up; drive is going on the shelf | Volume entry was a mistake (orphan, typo, never used) |
+| **Catalog records** | Kept, marked `.manuallyDeleted`, retain history | Untouched — become orphans (no scan-target context) |
+| **`scanTargets` entry** | Kept, gets brown "Retired YYYY-MM-DD" badge | Removed entirely |
+| **UserDefaults entries** | Updated (retire fields stamped) | All per-path entries cleared (dates, roles, trust, etc.) |
+| **Reversibility** | Reinstate button puts it back to active | Re-scan the volume to re-add the entry |
+| **Friction** | Two-button sheet, no typed confirmation | Destructive alert ("This cannot be undone") |
+| **System-volume guard** | Allowed (the system volume is reachable, so usually not 100%-disposed anyway) | Blocked outright (`role == .system OR searchPath == "/"`) |
+
+- **Surface:** Right-click on a volume row in the Volumes window → `"Delete from list…"` (red, with ellipsis to signal a confirmation dialog). Available for ALL volumes including retired ones; disabled only for the system volume.
+- **Confirmation:** Single `.alert(item:)` carrying the pre-computed orphan count so the message reads truthfully ("The N catalog records still pointing at this path will become orphans"). Cancel is the default-highlighted button.
+- **Model:** `VideoScanModel.deleteScanTarget(_:)` in `VideoScanModel+DeleteScanTarget.swift`. Removes from `scanTargets`, calls `persistScanTargets()` + `persistScanDates()` to rebuild every per-path UserDefaults dict from the surviving targets (the path naturally falls out), logs `"Volume <name> deleted from scan-targets list (had <N> catalog records — kept as orphans)"` to `catalog.log` and the in-app console.
+- **Tests:** `DeleteScanTargetTests.swift` — Swift Testing.
+  - `deleteScanTarget_removesFromScanTargets` — basic removal.
+  - `deleteScanTarget_clearsAllPerPathDictionaries` — every dict (dates, phases, roles, trust, filesystem, mediaTech, purchaseYear, capacity, notes, retiredAt, retiredReason, retiredWitnesses) loses the doomed path; surviving targets keep theirs.
+  - `deleteScanTarget_doesNotTouchCatalogRecords` — records' `fullPath` + `id` unchanged; orphans still scope to the deleted volume path.
+  - `deleteScanTarget_systemVolume_isBlocked` — both `role == .system` AND `searchPath == "/"` trip the guard.
+  - `deleteScanTarget_logsBreadcrumb` — console flush carries "deleted from scan-targets list" + record count.
+  - `deleteScanTarget_returnsFalseWhenTargetNotInArray` — idempotent no-op for stray objects.
+
 ### 1A. Pre-flight reconcile (added 2026-05-29 evening; Bucket E added 2026-05-30)
 
 > **Context:** Rick is manually deleting / moving / pre-copying files off Mini2TB while the feature is being designed. By the time Relocate runs, the catalog will be drifted from reality. Reconcile sorts this out before the migration phase walks records, so manual triage and Relocate compose cleanly.

@@ -44,6 +44,15 @@ struct VolumesWindow: View {
     /// environmentObject reliably.
     @State private var driveHealthTarget: CatalogScanTarget?
 
+    /// "Delete from list" confirmation alert backing. Distinct from
+    /// Retire — this is for orphan / typo / dangling scan targets
+    /// (e.g. `/Volumes/rickb` with 0 records) that should never have
+    /// been added. See `delete-vs-retire` note in
+    /// docs/relocate_volume_plan.md. Carries the pre-computed orphan
+    /// count so the alert can render "N catalog records will become
+    /// orphans" without re-walking records on each render.
+    @State private var deleteTarget: DeleteTarget?
+
     /// Sidebar font/badge scale — grows from 1.0 at 320pt to 1.5 at 540pt.
     /// The text and badge metrics in `VolumeListRow` multiply by this so a wider
     /// sidebar gets proportionally bigger labels (Rick's stretch goal).
@@ -79,6 +88,16 @@ struct VolumesWindow: View {
         let id: UUID
         let path: String
         let name: String
+    }
+
+    /// Identifiable wrapper for the Delete confirmation alert. Carries
+    /// the orphan-record count snapshotted at right-click time so the
+    /// alert body can be a plain `Text` without re-querying records.
+    private struct DeleteTarget: Identifiable {
+        let id: UUID
+        let path: String
+        let name: String
+        let orphanCount: Int
     }
 
     private var selectedTarget: CatalogScanTarget? {
@@ -199,6 +218,45 @@ struct VolumesWindow: View {
                 secondaryButton: .cancel()
             )
         }
+        // "Delete from list" — destructive confirmation. The
+        // `.destructive` role colors the button red so the user can't
+        // miss what kind of action they're confirming. Cancel is the
+        // default-highlighted button (safety first).
+        .alert(item: $deleteTarget) { tgt in
+            Alert(
+                title: Text("Delete \(tgt.name) from the Volumes list?"),
+                message: Text(deleteAlertMessage(for: tgt)),
+                primaryButton: .destructive(Text("Delete")) {
+                    if let target = model.scanTargets.first(where: { $0.searchPath == tgt.path }) {
+                        // If the deleted target was selected, clear
+                        // selection so the editor pane falls back to
+                        // its placeholder gracefully.
+                        if selectedID == target.id { selectedID = nil }
+                        model.deleteScanTarget(target)
+                    }
+                },
+                secondaryButton: .cancel()
+            )
+        }
+    }
+
+    /// Compose the alert body. Pulled out so it stays one expression and
+    /// the count + orphan language is in one place.
+    private func deleteAlertMessage(for tgt: DeleteTarget) -> String {
+        let recordsClause: String
+        switch tgt.orphanCount {
+        case 0:
+            recordsClause = "No catalog records point at this path."
+        case 1:
+            recordsClause = "The 1 catalog record still pointing at this path will become an orphan (kept for history but no scan-target context)."
+        default:
+            recordsClause = "The \(tgt.orphanCount) catalog records still pointing at this path will become orphans (kept for history but no scan-target context)."
+        }
+        return """
+        This removes it from the scan-targets list. \(recordsClause) You can re-add the volume by scanning again.
+
+        This cannot be undone.
+        """
     }
 
     /// Compose the right-click menu for a sidebar row. Split out for
@@ -254,6 +312,34 @@ struct VolumesWindow: View {
             .help(status.tooltipForRetireAction)
             .accessibilityIdentifier("volumeRow.markRetired")
         }
+
+        Divider()
+
+        // "Delete from list…" — orphan/erroneous scan-target cleanup.
+        // Distinct from Mark Retired: retire is for safely-backed-up
+        // drives going on the shelf; delete is for entries that
+        // shouldn't exist at all (typos, dangling mounts, /Volumes/rickb
+        // with 0 records). Available for ALL volumes including retired,
+        // gated only by the system-volume guard.
+        let isSystem = target.role == .system || target.searchPath == "/"
+        let orphanCount = VideoScanModel.totalRecordsOn(
+            volumeRootPath: target.searchPath, in: model.records
+        )
+        Button(role: .destructive) {
+            deleteTarget = DeleteTarget(
+                id: target.id,
+                path: target.searchPath,
+                name: volumeName(target),
+                orphanCount: orphanCount
+            )
+        } label: {
+            Text("Delete from list…")
+        }
+        .disabled(isSystem)
+        .help(isSystem
+              ? "The system volume can't be deleted from this list."
+              : "Remove this volume entry from the scan-targets list. Catalog records are kept as orphans.")
+        .accessibilityIdentifier("volumeRow.deleteFromList")
     }
 
     /// "Mini2TB" — the trailing volume-name component. Used in menu labels
