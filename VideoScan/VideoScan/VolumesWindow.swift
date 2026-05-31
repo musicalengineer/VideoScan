@@ -669,12 +669,14 @@ private struct VolumeEditor: View {
                     TextField("YYYY", text: $purchaseYearText)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 90)
+                        .onChange(of: purchaseYearText) { _, _ in commitPurchaseYear() }
                         .onSubmit { commitPurchaseYear() }
                 }
                 pickerColumn(title: "Capacity (TB)") {
                     TextField("0.0", text: $capacityTBText)
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 90)
+                        .onChange(of: capacityTBText) { _, _ in commitCapacity() }
                         .onSubmit { commitCapacity() }
                 }
                 Spacer()
