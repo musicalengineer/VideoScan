@@ -27,10 +27,18 @@ enum VideoScanTests {
     /// suites, and the run loop is sequential — without sharing this
     /// path, a "run all" pass would re-link the entire test bundle once
     /// per suite and never finish (the "all-day hang" symptom).
-    /// Unique-per-launch to avoid collisions with a concurrent TestDriver
-    /// instance, but stable across all runs within a single launch.
+    ///
+    /// Stable across TD launches (no UUID) so that:
+    ///   - The test-runner VideoScan.app lives at the same filesystem path
+    ///     forever, meaning a TCC grant (Full Disk Access, Files & Folders,
+    ///     etc.) attached to that .app survives across TD restarts instead
+    ///     of forcing the user to re-approve dialogs on every launch.
+    ///   - Build products from the previous TD session warm-start the
+    ///     incremental compiler immediately on relaunch.
+    /// Concurrent TDs on the same Mac would conflict here — acceptable
+    /// trade-off since that's not a normal workflow.
     static let sharedDerivedDataPath: String = {
-        let p = NSTemporaryDirectory() + "testdriver-dd-\(UUID().uuidString.prefix(8))"
+        let p = NSTemporaryDirectory() + "testdriver-dd-shared"
         try? FileManager.default.createDirectory(atPath: p, withIntermediateDirectories: true)
         return p
     }()
