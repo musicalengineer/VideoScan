@@ -755,9 +755,9 @@ private struct VolumeEditor: View {
             model.setPurchaseYear(nil, for: target)
         } else if let y = Int(trimmed), (1990...2100).contains(y) {
             model.setPurchaseYear(y, for: target)
-        } else {
-            purchaseYearText = target.purchaseYear.map(String.init) ?? ""
         }
+        // else: partial / invalid input — don't reset; let user keep typing.
+        // syncTextFields() will restore saved value on next re-open if needed.
     }
 
     private func commitCapacity() {
@@ -766,8 +766,7 @@ private struct VolumeEditor: View {
             model.setCapacityTB(nil, for: target)
         } else if let v = Double(trimmed), v > 0 {
             model.setCapacityTB(v, for: target)
-        } else {
-            capacityTBText = target.capacityTB.map { String(format: "%.2f", $0) } ?? ""
         }
+        // else: partial / invalid input — don't reset; let user keep typing.
     }
 }
