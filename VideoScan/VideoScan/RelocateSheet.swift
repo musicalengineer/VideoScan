@@ -112,14 +112,23 @@ struct RelocateSheet: View {
     private var sourceSection: some View {
         GroupBox("Source Volume") {
             VStack(alignment: .leading, spacing: 6) {
-                TextField("/Volumes/Mini2TB", text: $sourceVolumePath)
-                    .textFieldStyle(.roundedBorder)
-                    .accessibilityIdentifier("relocateSheet.sourcePath")
-                    .onChange(of: sourceVolumePath) { _, new in
-                        UserDefaults.standard.set(new, forKey: relocateSourceVolumeKey)
-                        // Source change invalidates any prior preview.
-                        previewResult = nil
-                    }
+                // TextField + Browse button. The field stays editable for
+                // power users / typed network paths (smb://host/share/…
+                // when not pre-mounted under /Volumes). The Browse button
+                // matches the same NSOpenPanel pattern used in the rest of
+                // the app (CombineSheet, PersonFinderView, etc.).
+                HStack(spacing: 8) {
+                    TextField("/Volumes/Mini2TB", text: $sourceVolumePath)
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityIdentifier("relocateSheet.sourcePath")
+                        .onChange(of: sourceVolumePath) { _, new in
+                            UserDefaults.standard.set(new, forKey: relocateSourceVolumeKey)
+                            // Source change invalidates any prior preview.
+                            previewResult = nil
+                        }
+                    Button("Browse…") { chooseSourceVolume() }
+                        .accessibilityIdentifier("relocateSheet.browseSource")
+                }
                 if !sourceVolumeExists {
                     Label("Path does not exist", systemImage: "exclamationmark.triangle.fill")
                         .foregroundColor(.red)
@@ -329,6 +338,48 @@ struct RelocateSheet: View {
         )
         model.relocateVolume(options)
         dismiss()
+    }
+
+    /// Browse panel for the source volume. Mirrors `chooseDestinationFolder`
+    /// — same NSOpenPanel pattern the rest of the app uses (CombineSheet,
+    /// PersonFinderView, ScanJobRow). Cuts down on typos when picking a
+    /// `/Volumes/...` root, and surfaces mounted SMB/AFP shares in the
+    /// panel's Locations sidebar for free. The TextField is still editable
+    /// for typed paths (e.g. an unmounted share root).
+    private func chooseSourceVolume() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = false  // source is an existing volume — don't offer to make one
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose source volume root (e.g. /Volumes/Mini2TB)"
+        panel.prompt = "Select"
+        // Seed the panel at /Volumes so the mounted-drives picker is the
+        // first thing Rick sees.
+        if sourceVolumeExists {
+            panel.directoryURL = URL(fileURLWithPath: sourceVolumePath)
+        } else {
+            panel.directoryURL = URL(fileURLWithPath: "/Volumes")
+        }
+        if panel.runModal() == .OK, let url = panel.url {
+            sourceVolumePath = Self.normalizeSourcePath(url.path)
+            UserDefaults.standard.set(sourceVolumePath, forKey: relocateSourceVolumeKey)
+            previewResult = nil  // source change invalidates preview
+        }
+    }
+
+    /// Strip a single trailing slash from a picked path so the value we
+    /// store matches the typed-input convention (`/Volumes/Mini2TB`, not
+    /// `/Volumes/Mini2TB/`). `recordsScoped` is tolerant of either form,
+    /// but keeping the stored UserDefault clean avoids surprising the
+    /// user the next time the sheet opens. The root `/` itself is
+    /// preserved untouched — defensive against a pathological pick.
+    ///
+    /// Swift's `static func` on a struct ≈ a free function namespaced in
+    /// C++; pure helper for testability.
+    static func normalizeSourcePath(_ path: String) -> String {
+        guard path.count > 1, path.hasSuffix("/") else { return path }
+        return String(path.dropLast())
     }
 
     private func chooseDestinationFolder() {
