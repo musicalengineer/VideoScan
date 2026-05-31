@@ -69,8 +69,12 @@ struct RelocateSheet: View {
     }
 
     private var canRelocate: Bool {
-        !model.isRelocating
-            && !model.isReadOnly
+        // Note (§3 Relocate Job Queue — 2026-05-31): we no longer block
+        // on `model.isRelocating`. If a job is already running, this
+        // Run click adds the new request to the queue instead of
+        // starting it immediately. Button label flips to "Add to
+        // Queue" so the user knows what's happening.
+        !model.isReadOnly
             && !scopedRecords.isEmpty
             && destinationFolder != nil
             && sourceVolumeExists
@@ -313,9 +317,20 @@ struct RelocateSheet: View {
             Button("Cancel") { dismiss() }
                 .keyboardShortcut(.escape)
 
-            let label = dryRun
-                ? "Dry Run (\(scopedRecords.count) record(s))"
-                : "Relocate \(scopedRecords.count) record(s) (\(totalBytesString))"
+            // Context-aware label: "Add to Queue" when something else
+            // is already running (the Run click slips into the queue);
+            // "Run / Dry Run" otherwise. The Jobs panel toolbar button
+            // surfaces the depth so the user can verify their adds.
+            let busy = model.isRelocating
+            let label: String = {
+                if dryRun {
+                    return busy
+                        ? "Add Dry Run to Queue (\(scopedRecords.count) record(s))"
+                        : "Dry Run (\(scopedRecords.count) record(s))"
+                }
+                let base = "\(scopedRecords.count) record(s) (\(totalBytesString))"
+                return busy ? "Add to Queue — \(base)" : "Relocate \(base)"
+            }()
             Button(label) { handleRelocate() }
                 .buttonStyle(.borderedProminent)
                 .disabled(!canRelocate)

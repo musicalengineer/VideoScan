@@ -54,10 +54,15 @@ struct RelocateIntegrationTests {
         return r
     }
 
-    /// Poll until `model.isRelocating == false`, up to 60s.
+    /// Poll until the post-flight summary lands. Under the §3 queue
+    /// (2026-05-31) `isRelocating` stays true through `.awaitingDone`
+    /// until the user dismisses the summary, so the canonical "work is
+    /// finished" signal is `pendingRelocateSummary != nil`. Same
+    /// observable outcome as the pre-queue test (catalog mutated, dest
+    /// written) — just a different waypoint.
     private func waitForRelocateDone(_ model: VideoScanModel, timeout: TimeInterval = 60) async {
         let deadline = Date().addingTimeInterval(timeout)
-        while model.isRelocating && Date() < deadline {
+        while model.pendingRelocateSummary == nil && Date() < deadline {
             try? await Task.sleep(nanoseconds: 50_000_000)  // 50ms
         }
     }

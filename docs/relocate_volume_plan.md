@@ -492,6 +492,76 @@ A read-only feature that surfaces what the catalog already knows about every fil
 
 ---
 
+### 3. Relocate Job Queue (added 2026-05-31)
+
+> **Context:** Rick wants to fire off Relocate on multiple Mac Pro volumes (HighSierra → osx10.8 → InternalRaid → ExternalRAID, ~80–120 min sequentially) and walk away to dinner. The pre-§3 model gates on a Bool `isRelocating` so only one run can be in flight at a time, and the Relocate sheet is modal — there's no way to queue. He explicitly said *"if it looks parallel to the user (like a queue) they can kick a bunch of these relocs off and go to dinner or bed and come back and voila."*
+
+> **Decision: serial queue, parallel-looking UI.** Actually-parallel relocate runs are a lose: concurrent writes to one destination thrash the FS, concurrent reads from a single networked Mac Pro share one NIC, and concurrent catalog mutations race on the in-memory model. The user-perspective parallelism (kick off four, walk away) is achieved by a queue.
+
+#### Data model
+
+- **File (new):** `VideoScan/VideoScan/RelocateQueuedJob.swift`
+- `RelocateJobStatus` enum (queued / reconciling / copying / awaitingDone / complete / failed(reason) / canceled). Monotonic in the happy path; failure can short-circuit.
+- `RelocateQueuedJob` struct (Identifiable, Equatable) — captures the source path, pre-resolved volume name, destination, `RelocateOptions` snapshot, enqueue/start/completed timestamps, status, optional summary, optional `CopyProgress` tick. Naming note: there's already a per-file `RelocateJob` in `RelocateEngine.swift` for the engine-level copy job; the queue-level type carries the "Queued" suffix to disambiguate.
+- `RelocateOptions: Equatable` conformance added in the same file — needed for the job struct's synthesized `Equatable`.
+
+#### Model state changes
+
+- **File:** `VideoScan/VideoScan/VideoScanModel.swift`
+- Replace stored `@Published var isRelocating: Bool = false` with `@Published var relocateQueue: [RelocateQueuedJob] = []`.
+- `isRelocating` becomes a computed property: `relocateQueue.contains { $0.isInFlight }` — keeps every UI gating call site working unchanged. "In flight" = `.reconciling | .copying | .awaitingDone` (the user-perspective definition of "something's happening").
+
+#### Queue management
+
+- **File (new):** `VideoScan/VideoScan/VideoScanModel+RelocateQueue.swift`
+- `enqueueRelocate(sourceRootPath:destinationRoot:options:) -> UUID?` — appends a `.queued` job. If nothing is in flight, immediately kicks `startNextQueuedJobIfIdle()` (which spawns the runner task).
+- `cancelRelocateJob(id:) -> Bool` — effective only on `.queued` jobs; running jobs run to completion (v1 has no mid-copy abort).
+- `clearCompletedJobs()` — drops `.complete / .failed / .canceled` entries.
+- `startNextQueuedJobIfIdle()` — picks oldest queued, flips its status to `.reconciling` on the same actor turn (prevents double-spawn), spawns the runner.
+- `advanceQueueAfterCurrent()` — called from `acknowledgeRelocateSummary`. Flips the `.awaitingDone` job to `.complete`, posts the UserNotification, then kicks the next queued job.
+- `updateJobStatus / attachJobSummary / updateJobCopyProgress` — atomic mutators that the runner uses so SwiftUI sees one diff per transition.
+- Queue counts: `queuedCount`, `runningCount`, `completedCount`, `failedCount`, `canceledCount` — drive the panel headline.
+
+#### Runner refactor
+
+- **File:** `VideoScan/VideoScan/VideoScanModel+Relocate.swift`
+- `relocateVolume(_:)` becomes a thin shim around `enqueueRelocate(...)`. Pre-existing test suites that drive it directly (`RelocateIntegrationTests`, `RelocateSafelyRedundantTests`, `RelocateRetireVolumeTests`, `RelocateSummarySheetTests`) keep working with no body changes; they get queue-mediated semantics for free.
+- `runRelocate(jobID:)` is the new public entry. Looks up the job by id, updates status at every transition (reconciling → copying → awaitingDone), calls `updateJobCopyProgress` per file.
+- `publishSummary(jobID:options:...)` attaches the summary to the queued job AND publishes `pendingRelocateSummary` for the existing summary sheet.
+- `acknowledgeRelocateSummary()` calls `advanceQueueAfterCurrent()` at the end so dismissing the summary advances the queue.
+
+#### UI surfaces
+
+- **Relocate sheet (`RelocateSheet.swift`)**: drops the `!model.isRelocating` gate from `canRelocate`. Run button label flips to "Add to Queue" when busy. Sheet still dismisses immediately on Run.
+- **In-flight progress sheet + Summary sheet**: unchanged binding. They observe `pendingRelocateSummary` and `isRelocating`, which now reflect the current head-of-queue job.
+- **New: `RelocateJobsPanel.swift`** — full panel with sorted job list (in-flight → queued → terminal), per-job status pill, progress bar during `.copying`, elapsed time on terminal jobs. Row context menu offers Cancel (queued), Show summary (complete), Show details (failed). Toolbar `Clear completed` button.
+- **VolumesWindow toolbar**: new `Relocate Jobs` button (tray.full SF Symbol) with a red badge overlaying the queued count when > 0. Opens `RelocateJobsPanel` as a sheet.
+
+#### macOS notifications
+
+- `postCompletionNotification(for:)` in `VideoScanModel+RelocateQueue.swift` posts via `UNUserNotificationCenter` when a job transitions to `.complete` or `.failed`.
+- Best-effort: we DON'T request permission — we check `settings.authorizationStatus` and gracefully no-op if not authorized. Soundless so a 2-AM completion doesn't wake Rick.
+- Pure formatters `notificationTitle(for:)` / `notificationBody(for:)` are static + nonisolated so tests can verify rendering without UN plumbing.
+
+#### Test coverage
+
+- **File (new):** `VideoScan/VideoScanTests/RelocateQueueTests.swift`
+- `enqueueRelocate_idle_immediatelyStartsTheJob`, `enqueueRelocate_busy_keepsJobInQueuedState`, `firstJobCompletes_secondJobAutoStarts`, `cancelRelocateJob_queuedJob_marksItCanceled`, `cancelRelocateJob_runningJob_isNoOp`, `clearCompletedJobs_removesCompleteFailedCanceled_keepsQueuedAndRunning`, `dismissingSummary_advancesQueue`, `isRelocatingComputed_returnsTrueWhileAnyJobInProgress`, `summaryPersistsOnJobAfterCompletion`, plus pure formatter tests for notification text.
+- **Existing test impact:** `waitForRelocateDone` helpers in the older suites now poll `pendingRelocateSummary != nil` instead of `isRelocating == false` — `isRelocating` stays true through `.awaitingDone` per spec.
+
+#### Memory footprint
+
+- O(jobs) entries in `relocateQueue`. Each job is a few hundred bytes of metadata + an optional ~few-KB `RelocateSummary`. A Rick-scale night with 4 jobs is sub-KB total. Big payloads (catalogs, file lists) live on `VideoScanModel`, not on the job.
+
+#### Out of scope for v1
+
+- No pause / resume of a queued or running job.
+- No drag-to-reorder queue entries.
+- No mid-copy abort of a running job (engine has no cancel checkpoint between files).
+- No persistence of the queue across app launches — if Rick force-quits mid-queue, the queued entries are gone.
+
+---
+
 ## Risk register (severity ordered)
 
 1. **SEV 1 — Mid-run crash leaves catalog half-mutated.** Mitigated by per-record `scheduleSave` debounce (≤2s unwritten window), atomic-rename in `CatalogStore.writeToDisk`, pre-relocate full snapshot (§5), and `originalFullPath != nil` as resume marker. Residual: a record may be "copied to dest, catalog still says source" for up to 2s — SIGKILL there orphans the dest file. The `.relocate-state.json` audit trail (§4) lets resume detect this.

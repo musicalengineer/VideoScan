@@ -184,48 +184,50 @@ extension VideoScanModel {
 
     // MARK: - Public entry
 
-    /// Kick off a Relocate Volume run. Fire-and-forget — sets
-    /// `isRelocating = true` and spawns a Task that does reconcile →
-    /// snapshot → per-record copy → catalog mutation → summary.
-    /// Refuses to start when `isReadOnly`, already running, or scope
-    /// is empty.
+    /// Kick off a Relocate Volume run. As of §3 (Relocate Job Queue —
+    /// 2026-05-31) this is a thin shim that routes through
+    /// `enqueueRelocate(...)`. Behavior matches the pre-queue contract
+    /// when nothing is currently running: a new task spawns and
+    /// `isRelocating` (now computed) flips true. When something is
+    /// already running, the new request slips into the queue and
+    /// dequeues automatically when its turn arrives. Existing tests
+    /// still poll `isRelocating` and that still works.
     func relocateVolume(_ options: RelocateOptions) {
-        guard !isReadOnly else {
-            log("Relocate refused: read-only viewer mode.")
-            return
-        }
-        guard !isRelocating else {
-            log("Relocate refused: already running.")
-            return
-        }
-
-        let scope = Self.recordsScoped(to: options.sourceVolumeRootPath, in: records)
-        guard !scope.isEmpty else {
-            log("Relocate: no catalogued files under \(options.sourceVolumeRootPath).")
-            return
-        }
-
-        isRelocating = true
-        dashboard.resetForRelocate(total: scope.count)
-        log("""
-
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          Relocate Volume — \(options.sourceVolumeRootPath)
-          → \(options.destinationRoot.path)
-          (\(scope.count) catalogued file(s))
-        ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-        """)
-
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            await self.runRelocate(scope: scope, options: options)
-            self.isRelocating = false
-        }
+        _ = enqueueRelocate(
+            sourceRootPath: options.sourceVolumeRootPath,
+            destinationRoot: options.destinationRoot,
+            options: options
+        )
     }
 
     // MARK: - Run
 
-    private func runRelocate(scope: [VideoRecord], options: RelocateOptions) async {
+    /// Drive one queued job through reconcile → snapshot → per-record
+    /// copy → catalog mutation → summary. Looks up the job by id at
+    /// every transition so cancel-from-UI sees up-to-date state. Sets
+    /// the job's terminal status to `.awaitingDone` so the user must
+    /// dismiss the summary sheet before the queue advances.
+    func runRelocate(jobID: UUID) async {
+        guard let initialIdx = relocateQueue.firstIndex(where: { $0.id == jobID }) else {
+            return
+        }
+        let options = relocateQueue[initialIdx].options
+        let scope = Self.recordsScoped(to: options.sourceVolumeRootPath, in: records)
+        // Defensive — enqueueRelocate already guards on empty scope,
+        // but races (e.g. records removed between enqueue and run) are
+        // possible. Treat as a clean .failed transition.
+        guard !scope.isEmpty else {
+            updateJobStatus(id: jobID, status: .failed(reason: "no records in scope"))
+            advanceQueueAfterCurrent()
+            return
+        }
+        dashboard.resetForRelocate(total: scope.count)
+        await runRelocate(scope: scope, options: options, jobID: jobID)
+    }
+
+    private func runRelocate(scope: [VideoRecord],
+                              options: RelocateOptions,
+                              jobID: UUID) async {
         // Fix 3 — open the dedicated relocate.log file. Without this,
         // every `relocateLog.write(...)` call is a silent no-op because
         // PersistentLog's file handle stays nil. We append-open so
@@ -360,6 +362,7 @@ extension VideoScanModel {
             // reconcile doesn't blink past.
             await padToMinVisible(runStart: runStart, minVisibleSeconds: minVisibleSeconds)
             publishSummary(
+                jobID: jobID,
                 options: options,
                 reconcile: reconcile,
                 salvageFailedPaths: [],
@@ -369,7 +372,13 @@ extension VideoScanModel {
             return
         }
 
-        // 4. Per-record copy + verify + commit.
+        // 4. Per-record copy + verify + commit. The queue-level job
+        // flips to .copying here so the Jobs panel's progress bar can
+        // light up; reconcile-only runs (dry-run, or all-Bucket-B/D/E)
+        // skip this loop and never see .copying.
+        if !toMigrate.isEmpty {
+            updateJobStatus(id: jobID, status: .copying)
+        }
         for (i, rec) in toMigrate.enumerated() {
             let newPath = Self.rewrittenPath(
                 forSourcePath: rec.fullPath,
@@ -380,14 +389,14 @@ extension VideoScanModel {
             log("  [\(i + 1)/\(toMigrate.count)] \(rec.filename)")
             log("    \(rec.fullPath) → \(newPath)")
 
-            let job = RelocateJob(
+            let perFileJob = RelocateJob(
                 recordID: rec.id,
                 sourcePath: rec.fullPath,
                 destPath: newPath,
                 expectedBytes: rec.sizeBytes,
                 expectedPartialMD5: rec.partialMD5
             )
-            let outcome = await RelocateEngine.runOne(job)
+            let outcome = await RelocateEngine.runOne(perFileJob)
             switch outcome {
             case .success(let bytes, let newHash, let dur):
                 if rec.originalFullPath == nil { rec.originalFullPath = rec.fullPath }
@@ -409,6 +418,18 @@ extension VideoScanModel {
                 salvageFailedPaths.append(rec.fullPath)
             }
             dashboard.relocateCompleted += 1
+            // Push the per-file progress tick to the queued job so the
+            // Jobs panel's bar moves. `dashboard.relocateCompleted`
+            // already covers Bucket B/D/E pre-population for the
+            // overall count; here we just mirror the live state onto
+            // the job for the panel's local view.
+            updateJobCopyProgress(
+                id: jobID,
+                done: i + 1,
+                total: toMigrate.count,
+                currentFile: rec.filename,
+                bytesCopied: dashboard.relocateBytesCopied
+            )
             // Debounced disk write — not per record, but frequent enough
             // that a crash loses no more than ~2s of state.
             catalogStore.scheduleSave(records: records)
@@ -428,6 +449,7 @@ extension VideoScanModel {
         // dismiss the summary first. The summary sheet's Done button
         // fires the retire offer instead. See ContentView wiring.
         publishSummary(
+            jobID: jobID,
             options: options,
             reconcile: reconcile,
             salvageFailedPaths: salvageFailedPaths,
@@ -452,8 +474,12 @@ extension VideoScanModel {
     /// reconcile + run telemetry; we extract witness samples from the
     /// Bucket E entries (or, on a dry-run, the same source).
     ///
-    /// Driven by `@Published` so the sheet pops automatically.
-    private func publishSummary(options: RelocateOptions,
+    /// Driven by `@Published` so the sheet pops automatically. Also
+    /// attaches the summary to the queued job and flips its status to
+    /// `.awaitingDone` so the Jobs panel reflects the same state and
+    /// the queue advance fires from the summary sheet's Done button.
+    private func publishSummary(jobID: UUID,
+                                 options: RelocateOptions,
                                  reconcile: ReconcileResult,
                                  salvageFailedPaths: [String],
                                  snapshotPath: String?,
@@ -487,7 +513,7 @@ extension VideoScanModel {
         }.count
         let degradedOnly = reconcile.safelyRedundant.count - backedUp
 
-        pendingRelocateSummary = RelocateSummary(
+        let summary = RelocateSummary(
             isDryRun: options.dryRun,
             sourceVolumeName: sourceName.isEmpty ? options.sourceVolumeRootPath : sourceName,
             sourceVolumeRootPath: options.sourceVolumeRootPath,
@@ -510,9 +536,21 @@ extension VideoScanModel {
             averageMBps: mbps,
             snapshotPath: snapshotPath
         )
+        pendingRelocateSummary = summary
+        // Attach to the queued job and flip status. The job's summary
+        // persists through .complete so the Jobs panel can re-open the
+        // summary sheet later via its context menu.
+        attachJobSummary(id: jobID, summary: summary)
+        updateJobStatus(id: jobID, status: .awaitingDone)
     }
 
-    /// Called from the summary sheet's Done button. Drops the summary.
+    /// Called from the summary sheet's Done button. Drops the summary
+    /// and (as of §3 — 2026-05-31) advances the relocate queue: the
+    /// `.awaitingDone` job flips to `.complete`, fires the user
+    /// notification, and the next queued job starts. Without this call
+    /// the queue would stall — a deliberate UX choice so the user can't
+    /// miss a summary by walking away from the screen.
+    ///
     /// As of 2026-05-30 this NO LONGER fires the §1B retire offer
     /// automatically — Rick asked for a quieter UX where the Volumes
     /// window is the explicit retire surface (per
@@ -522,6 +560,7 @@ extension VideoScanModel {
     /// it from the summary Done button.
     func acknowledgeRelocateSummary() {
         pendingRelocateSummary = nil
+        advanceQueueAfterCurrent()
     }
 
     /// Set `pendingRetireOffer` if the source volume is 100% disposed.

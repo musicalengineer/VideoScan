@@ -39,6 +39,10 @@ struct VolumesWindow: View {
     /// the catalog sizes Rick has (~10s of K records).
     @State private var migrationOverview: MigrationOverview?
 
+    /// §3 Relocate Job Queue — Jobs panel sheet backing. Toolbar
+    /// button toggles this; the panel itself observes `model.relocateQueue`.
+    @State private var showRelocateJobsPanel: Bool = false
+
     /// Drive Health — standalone sheet target. Lives at the window
     /// level (not the row) so the sheet inherits the parent's
     /// environmentObject reliably.
@@ -147,6 +151,11 @@ struct VolumesWindow: View {
         .sheet(item: $migrationOverview) { overview in
             MigrationOverviewSheet(overview: overview)
         }
+        // §3 Relocate Job Queue — Jobs panel.
+        .sheet(isPresented: $showRelocateJobsPanel) {
+            RelocateJobsPanel()
+                .environmentObject(model)
+        }
         // Drive Health standalone sheet. Triggered from the row
         // context menu ("Show Drive Health…"). Same data as the
         // inline editor card, but bigger.
@@ -206,6 +215,31 @@ struct VolumesWindow: View {
                 }
                 .help("From aging drives to safe homes — a snapshot of where your library lives now.")
                 .accessibilityIdentifier("volumesWindow.migrationOverview")
+            }
+            // §3 Relocate Job Queue — entry point for the Jobs panel.
+            // Badge mirrors the Migration Overview button style; the
+            // queued-count overlay only renders when there's something
+            // to see, so the everyday "no jobs" toolbar stays clean.
+            ToolbarItem(placement: .automatic) {
+                Button {
+                    showRelocateJobsPanel = true
+                } label: {
+                    Label("Relocate Jobs", systemImage: "tray.full")
+                        .overlay(alignment: .topTrailing) {
+                            if model.queuedCount > 0 {
+                                Text("\(model.queuedCount)")
+                                    .font(.caption2.bold())
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 1)
+                                    .background(Color.red)
+                                    .clipShape(Capsule())
+                                    .offset(x: 8, y: -8)
+                            }
+                        }
+                }
+                .help("Queue of Relocate runs — kick off several and walk away.")
+                .accessibilityIdentifier("volumesWindow.relocateJobs")
             }
         }
         .alert(item: $reinstateTarget) { tgt in
