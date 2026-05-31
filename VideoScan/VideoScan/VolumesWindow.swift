@@ -17,7 +17,7 @@ struct VolumesWindow: View {
     /// §1B — toggle to surface retired volumes in this editor. Default
     /// OFF so the everyday view stays uncluttered; the Reinstate context
     /// menu is reachable by flipping this on.
-    @State private var showRetired: Bool = false
+    @State private var showRetired: Bool = true
     /// Confirmation alert backing for Reinstate. Holds the target path
     /// while the user decides yes/no. Reinstate is reversible (just
     /// re-retire), so a single yes/no alert is friction enough.
