@@ -18,7 +18,21 @@ final class VideoScanModel: ObservableObject {
     @Published var isReadOnly: Bool = false
     @Published var isScanning: Bool = false
     @Published var isCombining: Bool = false
-    @Published var isRelocating: Bool = false
+    /// §3 Relocate Job Queue — backing store for the per-volume queue.
+    /// Each user "Run/Add to Queue" click appends one job; the queue is
+    /// strictly serial (a parallel-to-the-user illusion). See
+    /// `VideoScanModel+RelocateQueue.swift` and
+    /// docs/relocate_volume_plan.md §3.
+    @Published var relocateQueue: [RelocateQueuedJob] = []
+    /// True while any queued job is in flight. Replaces the prior stored
+    /// `isRelocating: Bool` — kept as a computed property so existing UI
+    /// gating (`disabled(model.isRelocating)`, the in-flight progress
+    /// sheet binding, RelocateSheet's `canRelocate`) keeps working
+    /// unchanged. Drives `.reconciling`, `.copying`, and `.awaitingDone`
+    /// — the user-facing definition of "something's happening."
+    var isRelocating: Bool {
+        relocateQueue.contains { $0.isInFlight }
+    }
     /// §1B Retire Volume — set by `runRelocate` when the just-completed
     /// run leaves 100% of the source volume's catalogued records marked
     /// `.manuallyDeleted`. The UI binds a sheet to this; selecting Retire

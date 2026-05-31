@@ -55,9 +55,12 @@ struct RelocateRetireVolumeTests {
         return r
     }
 
+    /// Poll until the post-flight summary lands. Under the §3 queue
+    /// (2026-05-31) `isRelocating` stays true through `.awaitingDone`
+    /// so we use the summary as the "work done" signal.
     private func waitForRelocateDone(_ model: VideoScanModel, timeout: TimeInterval = 60) async {
         let deadline = Date().addingTimeInterval(timeout)
-        while model.isRelocating && Date() < deadline {
+        while model.pendingRelocateSummary == nil && Date() < deadline {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
     }
