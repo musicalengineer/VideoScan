@@ -508,6 +508,15 @@ private struct VolumeListRow: View {
     /// the brown badge instead.
     var retireStatus: VolumeRetireStatus?
 
+    // 2026-05-31: Rick's "old eyes" font bump — base sizes bumped +2pt
+    // across every text element in this row. The existing `scale`
+    // multiplier still applies on top of the new base so the
+    // wider-sidebar growth from 1.0x → 1.5x stays intact.
+    //
+    //   Volume label     14 → 16
+    //   Path subtitle    11 → 13
+    //   Retired badge     9 → 11
+    //   Safe/Degraded     9 → 11   (see retirePill)
     var body: some View {
         HStack(spacing: 8) {
             VolumeBadge(role: target.role,
@@ -518,14 +527,14 @@ private struct VolumeListRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 6) {
                     Text(VolumeReachability.displayLabel(forPath: target.searchPath))
-                        .font(.system(size: 14 * scale, weight: .medium))
+                        .font(.system(size: 16 * scale, weight: .medium))
                         .lineLimit(1)
                     // §1B retired badge. "Retired YYYY-MM-DD" — replaces
                     // the policy badge visually because a retired volume
                     // isn't a viable destination.
                     if target.isRetired, let r = target.retiredAt {
                         Text("Retired \(Self.shortStamp(r))")
-                            .font(.system(size: 9 * scale, weight: .medium))
+                            .font(.system(size: 11 * scale, weight: .medium))
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
                             .background(Color.brown.opacity(0.18))
@@ -548,7 +557,7 @@ private struct VolumeListRow: View {
                     }
                 }
                 Text(target.searchPath)
-                    .font(.system(size: 11 * scale, design: .monospaced))
+                    .font(.system(size: 13 * scale, design: .monospaced))
                     .foregroundColor(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -573,7 +582,7 @@ private struct VolumeListRow: View {
                              bg: Color,
                              identifier: String) -> some View {
         Text(text)
-            .font(.system(size: 9 * scale, weight: .medium))
+            .font(.system(size: 11 * scale, weight: .medium))
             .padding(.horizontal, 5)
             .padding(.vertical, 1)
             .background(bg.opacity(0.22))
@@ -615,6 +624,14 @@ private struct VolumeEditor: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 header
+                // 2026-05-31: "Relocated to" indicator. Sits between the
+                // Volume ID header and the Workflow picker so users see
+                // at a glance that the catalog for this drive now lives
+                // somewhere else. Shows nothing when no records have
+                // moved off this volume.
+                if let summary = relocatedSummary {
+                    relocatedBanner(summary)
+                }
                 Divider()
                 workflowSection
                 Divider()
@@ -627,6 +644,72 @@ private struct VolumeEditor: View {
         }
         .onAppear { syncTextFields() }
         .onChange(of: target.id) { syncTextFields() }
+    }
+
+    /// Compute the relocated-to summary for the current target. Reads
+    /// `model.records` so the banner updates live when a Relocate job
+    /// finishes and the @Published records array changes. Returns nil
+    /// when no records originated on this volume OR all of them are still
+    /// resident here.
+    private var relocatedSummary: VideoScanModel.RelocatedDestinationSummary? {
+        let leaf: String = {
+            if let last = target.searchPath.split(separator: "/").last {
+                return String(last)
+            }
+            return target.searchPath
+        }()
+        return VideoScanModel.relocatedDestinationSummary(
+            sourceVolumeRootPath: target.searchPath,
+            sourceVolumeName: leaf,
+            allRecords: model.records
+        )
+    }
+
+    /// Blue-tinted banner. SF Symbol arrow + headline + monospaced
+    /// destination path + count subtitle. Path is `textSelection(.enabled)`
+    /// so the user can copy it.
+    @ViewBuilder
+    private func relocatedBanner(_ s: VideoScanModel.RelocatedDestinationSummary) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "arrow.right.circle.fill")
+                .font(.system(size: 22))
+                .foregroundColor(.blue)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Relocated to:")
+                    .font(.callout.weight(.semibold))
+                    .foregroundColor(.blue)
+                Text(s.dominantDestinationPath)
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(.primary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(relocatedSubtitle(s))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            Spacer(minLength: 4)
+        }
+        .padding(10)
+        .background(Color.blue.opacity(0.10))
+        .cornerRadius(6)
+        .accessibilityIdentifier("volumeEditor.relocatedBanner")
+    }
+
+    /// "<moved> of <total> records moved" + optional
+    /// "(... and N more on other volumes)".
+    private func relocatedSubtitle(_ s: VideoScanModel.RelocatedDestinationSummary) -> String {
+        let recordWord = s.movedRecordCount == 1 ? "record" : "records"
+        var base: String
+        if s.movedRecordCount == s.totalOriginRecords {
+            base = "All \(s.movedRecordCount) \(recordWord) moved."
+        } else {
+            base = "\(s.movedRecordCount) of \(s.totalOriginRecords) \(recordWord) moved."
+        }
+        if s.hasOtherDestinations {
+            let volWord = s.otherDestinationVolumeCount == 1 ? "volume" : "volumes"
+            base += " (… and \(s.otherDestinationVolumeCount) more on other \(volWord).)"
+        }
+        return base
     }
 
     // MARK: Sections
