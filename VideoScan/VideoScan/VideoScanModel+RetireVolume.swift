@@ -66,14 +66,48 @@ extension VideoScanModel {
             .count
     }
 
+    /// Count of records that originated on this volume — i.e. whose
+    /// `originVolume` matches OR whose `originalFullPath` is under
+    /// `volumeRootPath`. These records may have been relocated to
+    /// another volume via Bucket-D adoption or Bucket-A copy, so their
+    /// current `fullPath` no longer matches the source. We still want
+    /// to count them when deciding retire eligibility, because the
+    /// source volume IS effectively empty / dispositioned.
+    nonisolated static func originatedOnCount(volumeRootPath: String,
+                                              in all: [VideoRecord]) -> Int {
+        let name = (volumeRootPath as NSString).lastPathComponent
+        let pathPrefix = volumeRootPath.hasSuffix("/") ? volumeRootPath : volumeRootPath + "/"
+        return all.filter { r in
+            if let ov = r.originVolume, ov == name { return true }
+            if let op = r.originalFullPath, op.hasPrefix(pathPrefix) { return true }
+            return false
+        }.count
+    }
+
     /// Pure predicate: "should the retire prompt fire after the current
-    /// Relocate run?" True iff there's at least one record AND every
-    /// catalogued record on the volume is `.manuallyDeleted`. Used by
-    /// the post-Relocate hook AND directly by tests.
+    /// Relocate run?" True iff the volume has at least one record (current
+    /// OR originated-here) AND no record currently under this volume's
+    /// path has a non-`.manuallyDeleted` archiveStage. That covers three
+    /// migration outcomes:
+    ///   - Bucket E (safely redundant): records stay under this path with
+    ///     `.manuallyDeleted` — gate passes when 100% are deleted
+    ///   - Bucket B (source not found): same as above
+    ///   - Bucket D (adopted) / Bucket A (copied): records' `fullPath`
+    ///     is rewritten away from this volume — gate passes because the
+    ///     "currently under this volume" set becomes empty (0 == 0 trivially
+    ///     satisfies "no non-deleted record here")
+    /// Used by the post-Relocate hook AND directly by tests.
     nonisolated static func shouldOfferRetire(volumeRootPath: String,
                                               in all: [VideoRecord]) -> Bool {
         let total = totalRecordsOn(volumeRootPath: volumeRootPath, in: all)
-        guard total > 0 else { return false }
+        let originated = originatedOnCount(volumeRootPath: volumeRootPath, in: all)
+        // Volume must have been used at some point (currently has records
+        // OR had records that moved away). Pure-empty volumes that were
+        // never scanned shouldn't show as retire-eligible.
+        guard total > 0 || originated > 0 else { return false }
+        // Every record currently under this path must be .manuallyDeleted.
+        // If total == 0 (all records moved via Bucket A/D), this is
+        // trivially true.
         return manuallyDeletedOn(volumeRootPath: volumeRootPath, in: all) == total
     }
 

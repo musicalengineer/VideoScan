@@ -407,6 +407,14 @@ struct VolumesWindow: View {
     ///   - Mark Retired enabled / disabled
     ///   - Tooltip when disabled
     ///   - The sidebar row badge (Safe to retire / Disposed degraded)
+    ///
+    /// Covers three Migrate outcomes:
+    ///   - Bucket E (safelyRedundant): records stay under this volume's
+    ///     path with `.manuallyDeleted` and audit-trail witnesses
+    ///   - Bucket B (source not found): same archiveStage, no witnesses
+    ///   - Bucket A (copied) / Bucket D (adopted): records' fullPath is
+    ///     rewritten away from this volume entirely — `total` drops to
+    ///     zero, the originated set tracks where they went
     private func retireStatus(for target: CatalogScanTarget) -> VolumeRetireStatus {
         let total = VideoScanModel.totalRecordsOn(
             volumeRootPath: target.searchPath, in: model.records
@@ -414,14 +422,23 @@ struct VolumesWindow: View {
         let disposed = VideoScanModel.manuallyDeletedOn(
             volumeRootPath: target.searchPath, in: model.records
         )
-        // 100%-disposed predicate matches `shouldOfferRetire`.
-        let allDisposed = total > 0 && disposed == total
-        // Safe-witness aggregate: at least one Bucket E note from the
-        // volume's records contributes at least one witness on a safe
-        // host. We reuse the witness-union list and resolve each through
-        // the model's safety resolver — cheap because Rick has ~10s of
-        // scan targets and the aggregate is typically a few thousand
-        // paths max.
+        // Pull originated count — records whose origin was this volume,
+        // even if their current fullPath is elsewhere (Bucket A/D moved).
+        let originated = VideoScanModel.originatedOnCount(
+            volumeRootPath: target.searchPath, in: model.records
+        )
+        // canRetire: every record currently under this path is disposed
+        // AND the volume has been used at some point. If total == 0 due
+        // to Bucket A/D moves, originated > 0 saves us.
+        let usedAtSomePoint = total > 0 || originated > 0
+        let allDisposed = usedAtSomePoint && (disposed == total)
+        // Safe-witness aggregate — two sources:
+        //   1. Bucket E audit notes (witnesses list)
+        //   2. Bucket A/D migration destination — for records that moved
+        //      away from this volume, check whether their current host
+        //      volume passes the safe-witness rule (role != .retired AND
+        //      trust != .unreliable). This is what makes Bucket-D-adopted
+        //      volumes retire-eligible.
         let witnesses = VideoScanModel.aggregateRetiredWitnesses(
             volumeRootPath: target.searchPath, in: model.records
         )
@@ -429,13 +446,40 @@ struct VolumesWindow: View {
         let hasSafeWitness = witnesses.contains { path in
             let (role, trust) = resolver(path)
             return role != .retired && trust != .unreliable
-        }
+        } || hasSafeMigratedDestination(target: target, resolver: resolver)
         return VolumeRetireStatus(
             totalRecords: total,
             disposedRecords: disposed,
             allDisposed: allDisposed,
             hasSafeWitness: hasSafeWitness
         )
+    }
+
+    /// For records that originated on `target` but whose current fullPath
+    /// lives on a different volume (Bucket A copied / Bucket D adopted),
+    /// check whether at least one such destination volume is safe per the
+    /// §1A.2 safe-witness rule. Returns true if so — that destination is
+    /// effectively the "safe copy" for retire purposes.
+    private func hasSafeMigratedDestination(
+        target: CatalogScanTarget,
+        resolver: (String) -> (VolumeRole, VolumeTrust)
+    ) -> Bool {
+        let name = (target.searchPath as NSString).lastPathComponent
+        let pathPrefix = target.searchPath.hasSuffix("/")
+            ? target.searchPath : target.searchPath + "/"
+        for r in model.records {
+            // Only consider records that originated on this volume…
+            let originatedHere = (r.originVolume == name)
+                || (r.originalFullPath?.hasPrefix(pathPrefix) ?? false)
+            guard originatedHere else { continue }
+            // …and whose current fullPath has moved off this volume.
+            guard !r.fullPath.hasPrefix(pathPrefix) else { continue }
+            let (role, trust) = resolver(r.fullPath)
+            if role != .retired && trust != .unreliable {
+                return true
+            }
+        }
+        return false
     }
 
     private var placeholder: some View {
