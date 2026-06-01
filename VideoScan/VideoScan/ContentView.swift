@@ -1201,6 +1201,10 @@ struct CatalogView: View {
 
                 Spacer().frame(minWidth: 20)
 
+                backupStatusBadge
+
+                Spacer().frame(minWidth: 8)
+
                 Button(action: { model.startAllTargets() }) {
                     Label("Scan All", systemImage: "play.fill")
                 }
@@ -1666,6 +1670,97 @@ struct CatalogView: View {
             fmt.dateFormat = "MMM d, yyyy"
         }
         return fmt.string(from: date)
+    }
+
+    /// Backup-status pill rendered in the scan-targets header. Color
+    /// hints at recency at a glance: green < 7 days, yellow 7–30,
+    /// orange > 30, red when never. Click reveals the last bundle in
+    /// Finder when present, or fires Export Everything when no backup
+    /// has happened yet (cheaper one-click path than digging through
+    /// the app menu).
+    @ViewBuilder
+    private var backupStatusBadge: some View {
+        let now = Date()
+        let last = model.lastBackupAt
+        let path = model.lastBackupPath
+        let dayCount = last.map { Int(now.timeIntervalSince($0) / 86_400) }
+        let (label, color, icon): (String, Color, String) = {
+            guard let last, let dayCount else {
+                return ("Never backed up", .red, "externaldrive.badge.exclamationmark")
+            }
+            let where_ = path.map { Self.shortBackupDest($0) } ?? "?"
+            if dayCount < 1 {
+                let fmt = DateFormatter()
+                fmt.timeStyle = .short
+                fmt.dateStyle = .none
+                return ("Backed up \(fmt.string(from: last)) → \(where_)",
+                        .green, "externaldrive.badge.checkmark")
+            } else if dayCount < 7 {
+                return ("Backed up \(dayCount)d ago → \(where_)",
+                        .green, "externaldrive.badge.checkmark")
+            } else if dayCount < 30 {
+                return ("Backed up \(dayCount)d ago → \(where_)",
+                        .yellow, "externaldrive.badge.checkmark")
+            } else {
+                return ("Backed up \(dayCount)d ago → \(where_)",
+                        .orange, "externaldrive.badge.exclamationmark")
+            }
+        }()
+        Button(action: backupBadgeAction) {
+            HStack(spacing: 5) {
+                Image(systemName: icon)
+                    .font(.system(size: 13))
+                Text(label)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+            }
+            .foregroundColor(color)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(color.opacity(0.4), lineWidth: 1)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(color.opacity(0.08))
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .help(backupBadgeTooltip())
+    }
+
+    private func backupBadgeAction() {
+        if let p = model.lastBackupPath,
+           FileManager.default.fileExists(atPath: p) {
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: p)])
+        } else {
+            // No backup yet — kick off the export panel directly.
+            model.exportBundleViaPanel()
+        }
+    }
+
+    private func backupBadgeTooltip() -> String {
+        guard let last = model.lastBackupAt else {
+            return "No catalog backup yet. Click to run Export Everything…"
+        }
+        let fmt = DateFormatter()
+        fmt.dateStyle = .medium
+        fmt.timeStyle = .short
+        let where_ = model.lastBackupPath ?? "(unknown location)"
+        return "Last Export Everything: \(fmt.string(from: last))\n\(where_)\n\nClick to reveal in Finder."
+    }
+
+    /// Shorten a bundle path to its containing folder name + ".../leaf",
+    /// e.g. "/Users/rickb/iCloud Drive/Backups/VideoScan_…bundle" →
+    /// "Backups / VideoScan_…bundle" — enough for the badge to convey
+    /// "did this land in iCloud or somewhere else?".
+    private static func shortBackupDest(_ path: String) -> String {
+        let url = URL(fileURLWithPath: path)
+        let leaf = url.lastPathComponent
+        let parent = url.deletingLastPathComponent().lastPathComponent
+        if parent.isEmpty || parent == "/" { return leaf }
+        return "\(parent) / \(leaf)"
     }
 
     /// One-cell renderer for the Role column. Two flavors:

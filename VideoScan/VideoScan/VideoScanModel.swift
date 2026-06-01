@@ -134,6 +134,42 @@ final class VideoScanModel: ObservableObject {
         volumeAggregatesRevision &+= 1
     }
 
+    // MARK: - Backup status (Export Everything tracking)
+    //
+    // The "Export Everything…" menu writes a .videoscanbundle that's the
+    // canonical disaster-recovery snapshot — catalog records, scan-target
+    // metadata, POI profiles + photos, manifest with SHA-256s. Persisting
+    // when/where the user last exported makes the badge in the catalog
+    // header honest about recency, so Rick can see at a glance whether
+    // today's Migrate work is safely captured off the Mac Studio.
+    //
+    // Persisted via UserDefaults so the badge survives app restarts.
+
+    /// Date of the most recent successful Export Everything, or nil if
+    /// the catalog has never been bundle-exported on this machine.
+    @Published var lastBackupAt: Date? = {
+        let t = UserDefaults.standard.double(forKey: "VideoScan.lastBackupAt")
+        return t > 0 ? Date(timeIntervalSince1970: t) : nil
+    }()
+
+    /// Filesystem path of the most recent successful Export Everything
+    /// destination. Used to render "→ iCloud Drive" or similar in the
+    /// badge and to power click-to-reveal in Finder.
+    @Published var lastBackupPath: String? = UserDefaults.standard.string(forKey: "VideoScan.lastBackupPath")
+
+    /// Call from `exportBundleViaPanel` after a successful bundle write.
+    /// Updates both the published values (drives the badge) and the
+    /// UserDefaults entries (survives restart).
+    func recordBackupSuccess(at url: URL) {
+        let now = Date()
+        UserDefaults.standard.set(now.timeIntervalSince1970,
+                                  forKey: "VideoScan.lastBackupAt")
+        UserDefaults.standard.set(url.path,
+                                  forKey: "VideoScan.lastBackupPath")
+        lastBackupAt = now
+        lastBackupPath = url.path
+    }
+
     /// High-frequency dashboard + console state — separate ObservableObject
     /// so updates don't trigger re-render of the main Table view.
     let dashboard = DashboardState()
