@@ -406,7 +406,7 @@ struct CatalogView: View {
         // engine. The engine clears the flag itself when runRelocate
         // returns.
         .sheet(isPresented: Binding(
-            get: { model.isRelocating },
+            get: { model.isRelocateActivelyWorking },
             set: { _ in }
         )) {
             RelocateProgressSheet(dashboard: model.dashboard)

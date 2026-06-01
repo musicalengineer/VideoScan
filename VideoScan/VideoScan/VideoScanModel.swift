@@ -33,6 +33,23 @@ final class VideoScanModel: ObservableObject {
     var isRelocating: Bool {
         relocateQueue.contains { $0.isInFlight }
     }
+
+    /// Distinct from `isRelocating`: this is true ONLY while a job is in
+    /// .reconciling or .copying — NOT during .awaitingDone. The progress
+    /// sheet binds to this so it dismisses the moment the work finishes,
+    /// freeing SwiftUI's single-sheet stack to render the post-flight
+    /// summary sheet (which is bound to `pendingRelocateSummary`). Without
+    /// this distinction the progress sheet stayed up while .awaitingDone
+    /// held isRelocating true, blocking the summary from ever appearing —
+    /// the "stuck at preparing" bug observed 2026-05-31.
+    var isRelocateActivelyWorking: Bool {
+        relocateQueue.contains { job in
+            switch job.status {
+            case .reconciling, .copying: return true
+            default: return false
+            }
+        }
+    }
     /// §1B Retire Volume — set by `runRelocate` when the just-completed
     /// run leaves 100% of the source volume's catalogued records marked
     /// `.manuallyDeleted`. The UI binds a sheet to this; selecting Retire
