@@ -236,8 +236,8 @@ extension VideoScanModel {
         relocateLog.start(append: true)
         let host = ProcessInfo.processInfo.hostName
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
-        relocateLog.write("── Relocate session started \(ISO8601DateFormatter().string(from: Date())) on \(host) v\(version)")
-        relocateLog.write("─── Relocate started: source=\(options.sourceVolumeRootPath) dest=\(options.destinationRoot.path) scope=\(scope.count) dryRun=\(options.dryRun) skipDupsOnOtherVolumes=\(options.skipDupsOnOtherVolumes)")
+        relocateLog.write("── Migrate session started \(ISO8601DateFormatter().string(from: Date())) on \(host) v\(version)")
+        relocateLog.write("─── Migrate started: source=\(options.sourceVolumeRootPath) dest=\(options.destinationRoot.path) scope=\(scope.count) dryRun=\(options.dryRun) skipDupsOnOtherVolumes=\(options.skipDupsOnOtherVolumes)")
 
         // Fix 2 — pin a minimum start time. A fast run (Bucket E only,
         // 0.5s on Maxtor500FW) used to flash past too quick for Rick to
@@ -356,6 +356,8 @@ extension VideoScanModel {
 
         if options.dryRun {
             log("[DRY RUN] No files copied. Would have migrated \(toMigrate.count) record(s).")
+            // relocate.log filename is intentionally preserved (per renaming
+            // policy log file paths stay the same).
             relocateLog.write("[DRY RUN] no copies; would migrate \(toMigrate.count) record(s)")
             logRelocateSummary(salvageFailedPaths: [])
             // Pad to min-visible window even on dry-run so a 50ms
@@ -411,7 +413,11 @@ extension VideoScanModel {
                 relocateLog.write("[OK] \(oldPath) → \(newPath) (\(bytes) bytes, \(String(format: "%.2f", dur))s, hash=\(newHash.prefix(8)))")
             case .salvageFailed(let reason, let stage):
                 rec.archiveStage = .salvageFailed
-                rec.notes = appendNote(rec.notes, "Relocate \(stamp()): \(stage.rawValue) — \(reason)")
+                // Note prefix is user-visible (rendered in FileJourneySheet),
+                // so this writes "Migrate" going forward. The parser in
+                // VideoScanModel+Provenance.swift still accepts the legacy
+                // "Relocate" prefix so old catalogs keep rendering.
+                rec.notes = appendNote(rec.notes, "Migrate \(stamp()): \(stage.rawValue) — \(reason)")
                 dashboard.relocateSalvageFailed += 1
                 log("    ✗ SALVAGE FAILED at \(stage.rawValue): \(reason)")
                 relocateLog.write("[FAIL/\(stage.rawValue)] \(rec.fullPath) — \(reason)")
@@ -669,12 +675,12 @@ extension VideoScanModel {
         do {
             if FileManager.default.fileExists(atPath: catalogStore.fileLocation) {
                 try FileManager.default.copyItem(atPath: catalogStore.fileLocation, toPath: snap)
-                log("Pre-relocate snapshot: \(snap)")
+                log("Pre-migrate snapshot: \(snap)")
                 return snap
             }
             return nil
         } catch {
-            log("⚠ Pre-relocate snapshot failed: \(error.localizedDescription) — proceeding anyway")
+            log("⚠ Pre-migrate snapshot failed: \(error.localizedDescription) — proceeding anyway")
             return nil
         }
     }
@@ -719,12 +725,12 @@ extension VideoScanModel {
             failedBlock = "\n  Salvage failed files:\n\(head)\(more)"
         }
 
-        let snapshotHint = "\n  Pre-relocate snapshot kept in app support — restore via `cp` if needed."
+        let snapshotHint = "\n  Pre-migrate snapshot kept in app support — restore via `cp` if needed."
 
         log("""
 
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          Relocate Complete
+          Migrate Complete
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
           Succeeded:        \(dashboard.relocateSucceeded)
           Adopted:          \(dashboard.relocateAdopted)
@@ -737,6 +743,6 @@ extension VideoScanModel {
           Wall clock:       \(String(format: "%.1f", elapsed))s (\(String(format: "%.1f", mbps)) MB/s)\(failedBlock)\(snapshotHint)
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         """)
-        relocateLog.write("─── Relocate complete: succeeded=\(dashboard.relocateSucceeded) adopted=\(dashboard.relocateAdopted) safelyRedundant=\(dashboard.relocateSafelyRedundant) sourceMoves=\(dashboard.relocateSourceMoves) manuallyDeleted=\(dashboard.relocateManuallyDeleted) salvageFailed=\(dashboard.relocateSalvageFailed) skipped=\(dashboard.relocateSkipped) bytes=\(dashboard.relocateBytesCopied) elapsed=\(String(format: "%.1f", elapsed))s")
+        relocateLog.write("─── Migrate complete: succeeded=\(dashboard.relocateSucceeded) adopted=\(dashboard.relocateAdopted) safelyRedundant=\(dashboard.relocateSafelyRedundant) sourceMoves=\(dashboard.relocateSourceMoves) manuallyDeleted=\(dashboard.relocateManuallyDeleted) salvageFailed=\(dashboard.relocateSalvageFailed) skipped=\(dashboard.relocateSkipped) bytes=\(dashboard.relocateBytesCopied) elapsed=\(String(format: "%.1f", elapsed))s")
     }
 }

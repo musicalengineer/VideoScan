@@ -45,7 +45,7 @@ struct RelocateProgressSheet: View {
         HStack(spacing: 10) {
             ProgressView()
                 .controlSize(.small)
-            Text("Relocate in progress")
+            Text("Migrate in progress")
                 .font(.headline)
                 .accessibilityIdentifier("relocateProgress.title")
             Spacer()

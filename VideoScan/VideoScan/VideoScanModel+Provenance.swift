@@ -114,12 +114,22 @@ extension VideoScanModel {
         )
     }
 
-    /// `Relocate <ISO8601>: <body>` — currently only emitted on salvage
-    /// failures. The body carries `<stage> — <reason>`. Same `": "`
-    /// separator trick as `parseReconcileLine`.
+    /// `Migrate <ISO8601>: <body>` (or legacy `Relocate <ISO8601>: <body>`)
+    /// — currently only emitted on salvage failures. The body carries
+    /// `<stage> — <reason>`. Same `": "` separator trick as
+    /// `parseReconcileLine`. Both prefixes are accepted so catalogs
+    /// written before the 2026-05-31 user-facing rename still render
+    /// cleanly in the File Journey timeline.
     nonisolated private static func parseRelocateLine(_ line: String) -> ParsedNoteEvent? {
-        guard line.hasPrefix("Relocate ") else { return nil }
-        let afterPrefix = line.dropFirst("Relocate ".count)
+        let prefix: String
+        if line.hasPrefix("Migrate ") {
+            prefix = "Migrate "
+        } else if line.hasPrefix("Relocate ") {
+            prefix = "Relocate "
+        } else {
+            return nil
+        }
+        let afterPrefix = line.dropFirst(prefix.count)
         guard let sepRange = afterPrefix.range(of: ": ") else { return nil }
         let stamp = String(afterPrefix[..<sepRange.lowerBound])
             .trimmingCharacters(in: .whitespaces)
@@ -129,7 +139,7 @@ extension VideoScanModel {
             timestamp: parseISO8601(stamp),
             kind: .relocate,
             icon: JourneyEventKind.relocate.defaultIcon,
-            sentence: "Relocate hit a problem: \(body)"
+            sentence: "Migrate hit a problem: \(body)"
         )
     }
 

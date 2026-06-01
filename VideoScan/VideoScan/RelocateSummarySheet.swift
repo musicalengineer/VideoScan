@@ -201,7 +201,7 @@ struct RelocateSummarySheet: View {
                          color: .secondary,
                          label: "Skipped",
                          count: summary.skippedCount,
-                         detail: "previously relocated",
+                         detail: "previously migrated",
                          identifier: "relocateSummary.row.skipped")
             }
         }
@@ -287,6 +287,8 @@ struct RelocateSummarySheet: View {
                 Text("… \(summary.safelyRedundantCount - summary.witnessSamples.count) more — see relocate.log")
                     .font(.caption2)
                     .foregroundColor(.secondary)
+                    // Filename `relocate.log` is intentional (log file paths
+                    // are not part of the user-facing rename).
             }
         }
         .padding(10)
@@ -412,7 +414,7 @@ struct RelocateSummarySheet: View {
                 HStack {
                     Image(systemName: "doc.zipper")
                         .foregroundColor(.secondary)
-                    Text("Pre-relocate snapshot:")
+                    Text("Pre-migrate snapshot:")
                     Button {
                         // Reveal in Finder. URL form first; falls back
                         // to selectFile if reveal fails for any reason.

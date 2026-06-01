@@ -214,7 +214,7 @@ struct CatalogToolbar<Dashboard: View>: View {
             .help("Mux correlated video + audio pairs into combined files using ffmpeg (no re-encode)")
 
             Button(action: { showRelocateSheet = true }) {
-                Label("Relocate…", systemImage: "externaldrive.badge.checkmark")
+                Label("Migrate…", systemImage: "externaldrive.badge.checkmark")
             }
             .buttonStyle(.bordered)
             .disabled(!hasRecords)

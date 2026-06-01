@@ -102,7 +102,7 @@ struct VolumesWindowRetireTests {
         status = makeStatus(for: vol, model: model)
         #expect(status.canRetire == false)
         #expect(status.allDisposed == false)
-        #expect(status.tooltipForRetireAction.contains("run Relocate first"))
+        #expect(status.tooltipForRetireAction.contains("run Migrate first"))
 
         // State 3: disposed but ALL witnesses on degraded host → action
         // still disabled, with the specific "no safe witness" tooltip.

@@ -122,7 +122,7 @@ struct MigrationOverviewSheet: View {
                 .font(.title3.bold())
                 .accessibilityIdentifier("migrationOverview.flowTitle")
             if overview.flowBars.isEmpty {
-                emptyHint("No movement to show yet — nothing has been relocated.")
+                emptyHint("No movement to show yet — nothing has been migrated.")
             } else {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(overview.flowBars) { bar in

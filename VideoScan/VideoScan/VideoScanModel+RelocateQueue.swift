@@ -38,12 +38,12 @@ extension VideoScanModel {
                          destinationRoot: URL,
                          options: RelocateOptions) -> UUID? {
         guard !isReadOnly else {
-            log("Relocate refused: read-only viewer mode.")
+            log("Migrate refused: read-only viewer mode.")
             return nil
         }
         let scope = Self.recordsScoped(to: sourceRootPath, in: records)
         guard !scope.isEmpty else {
-            log("Relocate: no catalogued files under \(sourceRootPath).")
+            log("Migrate: no catalogued files under \(sourceRootPath).")
             return nil
         }
 
@@ -55,7 +55,7 @@ extension VideoScanModel {
             options: options
         )
         relocateQueue.append(job)
-        log("Relocate queued: \(job.sourceVolumeName) → \(destinationRoot.path) (queue depth: \(queuedCount))")
+        log("Migrate queued: \(job.sourceVolumeName) → \(destinationRoot.path) (queue depth: \(queuedCount))")
         // Kick the runner if idle. If something's already in flight,
         // this is a no-op — the runner's completion path picks the
         // next queued job.
@@ -74,14 +74,14 @@ extension VideoScanModel {
             return false
         }
         guard relocateQueue[idx].status == .queued else {
-            log("Relocate cancel ignored: job \(id) is \(relocateQueue[idx].statusLabel).")
+            log("Migrate cancel ignored: job \(id) is \(relocateQueue[idx].statusLabel).")
             return false
         }
         var job = relocateQueue[idx]
         job.status = .canceled
         job.completedAt = Date()
         relocateQueue[idx] = job
-        log("Relocate canceled (queued): \(job.sourceVolumeName)")
+        log("Migrate canceled (queued): \(job.sourceVolumeName)")
         return true
     }
 
@@ -93,7 +93,7 @@ extension VideoScanModel {
         relocateQueue.removeAll { $0.isTerminal }
         let after = relocateQueue.count
         if before != after {
-            log("Relocate queue: cleared \(before - after) completed job(s).")
+            log("Migrate queue: cleared \(before - after) completed job(s).")
         }
     }
 
@@ -135,7 +135,7 @@ extension VideoScanModel {
         log("""
 
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          Relocate Volume — \(job.sourceVolumeRootPath)
+          Migrate Volume — \(job.sourceVolumeRootPath)
           → \(job.destinationRoot.path)
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         """)
@@ -253,12 +253,13 @@ extension VideoScanModel {
     }
 
     /// Pure formatter — exposed as a static so a test can verify the
-    /// rendering without spinning up UserNotifications. Mirrors the
-    /// spec language: "Relocate done: <volumeName>" / "Relocate failed:".
+    /// rendering without spinning up UserNotifications. Renders the
+    /// user-visible language: "Migrate done: <volumeName>" /
+    /// "Migrate failed:".
     nonisolated static func notificationTitle(for job: RelocateQueuedJob) -> String {
         switch job.status {
-        case .failed: return "Relocate failed: \(job.sourceVolumeName)"
-        default:      return "Relocate done: \(job.sourceVolumeName)"
+        case .failed: return "Migrate failed: \(job.sourceVolumeName)"
+        default:      return "Migrate done: \(job.sourceVolumeName)"
         }
     }
 

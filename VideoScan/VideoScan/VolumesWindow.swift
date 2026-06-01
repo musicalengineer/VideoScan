@@ -224,7 +224,7 @@ struct VolumesWindow: View {
                 Button {
                     showRelocateJobsPanel = true
                 } label: {
-                    Label("Relocate Jobs", systemImage: "tray.full")
+                    Label("Migrate Jobs", systemImage: "tray.full")
                         .overlay(alignment: .topTrailing) {
                             if model.queuedCount > 0 {
                                 Text("\(model.queuedCount)")
@@ -238,7 +238,7 @@ struct VolumesWindow: View {
                             }
                         }
                 }
-                .help("Queue of Relocate runs — kick off several and walk away.")
+                .help("Queue of Migrate runs — kick off several and walk away.")
                 .accessibilityIdentifier("volumesWindow.relocateJobs")
             }
         }
@@ -489,7 +489,7 @@ struct VolumeRetireStatus {
             return "No catalogued files on this volume yet."
         }
         if !allDisposed {
-            return "Not all files on this volume are accounted for yet — run Relocate first."
+            return "Not all files on this volume are accounted for yet — run Migrate first."
         }
         if !hasSafeWitness {
             return "Files are marked disposed, but no backup copies are confirmed on safer drives."
@@ -675,7 +675,7 @@ private struct VolumeEditor: View {
                 .font(.system(size: 22))
                 .foregroundColor(.blue)
             VStack(alignment: .leading, spacing: 3) {
-                Text("Relocated to:")
+                Text("Migrated to:")
                     .font(.callout.weight(.semibold))
                     .foregroundColor(.blue)
                 Text(s.dominantDestinationPath)

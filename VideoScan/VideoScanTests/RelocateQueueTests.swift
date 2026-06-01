@@ -483,7 +483,7 @@ struct RelocateQueueTests {
         )
         let title = VideoScanModel.notificationTitle(for: job)
         let body  = VideoScanModel.notificationBody(for: job)
-        #expect(title == "Relocate done: Maxtor500FW")
+        #expect(title == "Migrate done: Maxtor500FW")
         #expect(body.contains("161 copied"))
         #expect(body.contains("264 safely backed up"))
         #expect(body.contains("13m"))
@@ -501,7 +501,7 @@ struct RelocateQueueTests {
             ),
             status: .failed(reason: "disk full")
         )
-        #expect(VideoScanModel.notificationTitle(for: job) == "Relocate failed: Bad")
+        #expect(VideoScanModel.notificationTitle(for: job) == "Migrate failed: Bad")
         #expect(VideoScanModel.notificationBody(for: job) == "disk full")
     }
 }
