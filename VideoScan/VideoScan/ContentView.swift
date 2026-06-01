@@ -1180,6 +1180,13 @@ struct CatalogView: View {
                         .lineLimit(1)
                         .help(row.path)
                 }
+                // `contentShape` makes the whole cell hit-testable (not just
+                // the glyphs of the text), so a double-click anywhere in the
+                // cell opens the Volumes editor. Mirrors the pattern in
+                // ArchiveView.swift on a VolumeBadge row.
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) { openVolumesEditor(for: row.id) }
             }
             .width(min: 100, ideal: 150)
 
@@ -1187,6 +1194,9 @@ struct CatalogView: View {
                 // Pill + cycling spinner when a remediation pass is active.
                 // See VolumeStatusView.swift / VolumeUIStatus.swift.
                 VolumeStatusView(status: row.uiStatus)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) { openVolumesEditor(for: row.id) }
             }
             .width(min: 70, ideal: 110)
 
@@ -1194,19 +1204,27 @@ struct CatalogView: View {
                 Text(row.files > 0 ? "\(row.files)" : "—")
                     .font(.system(size: 15, design: .monospaced))
                     .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) { openVolumesEditor(for: row.id) }
             }
             .width(min: 50, ideal: 60)
 
             TableColumn("Errors") { row in
-                if row.errors > 0 {
-                    Text("\(row.errors)")
-                        .font(.system(size: 15, design: .monospaced))
-                        .foregroundColor(.red)
-                } else {
-                    Text("—")
-                        .font(.system(size: 15, design: .monospaced))
-                        .foregroundColor(.secondary)
+                Group {
+                    if row.errors > 0 {
+                        Text("\(row.errors)")
+                            .font(.system(size: 15, design: .monospaced))
+                            .foregroundColor(.red)
+                    } else {
+                        Text("—")
+                            .font(.system(size: 15, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) { openVolumesEditor(for: row.id) }
             }
             .width(min: 50, ideal: 60)
 
@@ -1214,19 +1232,27 @@ struct CatalogView: View {
                 Text(row.mediaBytes > 0 ? Self.formatBytesStatic(row.mediaBytes) : "—")
                     .font(.system(size: 15, design: .monospaced))
                     .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) { openVolumesEditor(for: row.id) }
             }
             .width(min: 70, ideal: 90)
 
             TableColumn("Scanned") { row in
-                if let date = row.lastScanned {
-                    Text(Self.shortDateStatic(date))
-                        .font(.system(size: 15, design: .monospaced))
-                        .foregroundColor(.secondary)
-                } else {
-                    Text("—")
-                        .font(.system(size: 15, design: .monospaced))
-                        .foregroundColor(.secondary)
+                Group {
+                    if let date = row.lastScanned {
+                        Text(Self.shortDateStatic(date))
+                            .font(.system(size: 15, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    } else {
+                        Text("—")
+                            .font(.system(size: 15, design: .monospaced))
+                            .foregroundColor(.secondary)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) { openVolumesEditor(for: row.id) }
             }
             .width(min: 75, ideal: 95)
 
@@ -1246,6 +1272,9 @@ struct CatalogView: View {
                     }
                 }
                 .foregroundColor(row.status.isActive ? .orange : row.phase.color)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) { openVolumesEditor(for: row.id) }
             }
             .width(min: 95, ideal: 115)
 
@@ -1292,6 +1321,16 @@ struct CatalogView: View {
             volumeContextMenu(for: ids)
         }
         .font(.system(size: 14))
+    }
+
+    /// Open the Volumes editor window with the given scan target pre-selected.
+    /// Mirrors the Volume Roles & Archive… context-menu action (volumeContextVolumeSection)
+    /// and the VolumeBadge double-click in ArchiveView. Safe if the id no longer
+    /// resolves — VolumesWindow keeps whatever selection it had.
+    /// (Swift's `private func` on a struct ≈ a C++ member function with file/class linkage.)
+    private func openVolumesEditor(for targetID: UUID) {
+        model.pendingVolumesSelectionID = targetID
+        openWindow(id: "volumes")
     }
 
     @ViewBuilder
