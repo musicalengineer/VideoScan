@@ -288,6 +288,13 @@ extension VideoScanModel {
     /// Resume a previously interrupted scan from its checkpoint.
     func resumeTarget(_ target: CatalogScanTarget) {
         guard !target.searchPath.isEmpty else { return }
+        // §1B: same retire guard as startTarget. Resume eventually
+        // converges on the same record-write path, so the same audit
+        // trail destruction would apply.
+        guard !target.isRetired else {
+            log("--- Resume refused: \(URL(fileURLWithPath: target.searchPath).lastPathComponent) is retired. Reinstate via Volumes window to enable scanning. ---")
+            return
+        }
         guard let checkpoint = ScanCheckpointStorage.load(for: target.searchPath) else {
             log("No checkpoint found for \(target.searchPath) — starting fresh scan")
             startTarget(target)

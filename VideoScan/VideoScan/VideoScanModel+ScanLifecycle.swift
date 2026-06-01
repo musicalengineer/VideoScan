@@ -13,6 +13,15 @@ extension VideoScanModel {
 
     func startTarget(_ target: CatalogScanTarget) {
         guard !target.searchPath.isEmpty else { return }
+        // §1B: retired volumes are off-limits for rescan. The destructive
+        // bit is the `records.removeAll` line below — it would wipe the
+        // Bucket-E `.manuallyDeleted` witness records that ARE the
+        // retire audit trail. The user has to Reinstate first via the
+        // Volumes window if they really want to re-scan.
+        guard !target.isRetired else {
+            log("--- Scan refused: \(URL(fileURLWithPath: target.searchPath).lastPathComponent) is retired. Reinstate via Volumes window to enable scanning. ---")
+            return
+        }
         if let missing = DependencyChecker.checkScan() {
             missingDependency = missing
             log("--- Scan blocked: \(missing.displayName) not installed (\(missing.installHint)) ---")

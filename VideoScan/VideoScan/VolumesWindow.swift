@@ -353,9 +353,12 @@ struct VolumesWindow: View {
         // Distinct from Mark Retired: retire is for safely-backed-up
         // drives going on the shelf; delete is for entries that
         // shouldn't exist at all (typos, dangling mounts, /Volumes/rickb
-        // with 0 records). Available for ALL volumes including retired,
-        // gated only by the system-volume guard.
-        let isSystem = target.role == .system || target.searchPath == "/"
+        // with 0 records). Available for ALL volumes including retired
+        // and System-tagged. Only the actual boot volume root "/" is
+        // hard-blocked — `role == .system` is a user policy tag (skip
+        // during scans), not a "this is undeleteable" assertion, so it
+        // does not gate this action.
+        let isBootRoot = target.searchPath == "/"
         let orphanCount = VideoScanModel.totalRecordsOn(
             volumeRootPath: target.searchPath, in: model.records
         )
@@ -369,9 +372,9 @@ struct VolumesWindow: View {
         } label: {
             Text("Delete from list…")
         }
-        .disabled(isSystem)
-        .help(isSystem
-              ? "The system volume can't be deleted from this list."
+        .disabled(isBootRoot)
+        .help(isBootRoot
+              ? "The boot volume can't be deleted from this list."
               : "Remove this volume entry from the scan-targets list. Catalog records are kept as orphans.")
         .accessibilityIdentifier("volumeRow.deleteFromList")
     }
