@@ -210,6 +210,22 @@ struct CatalogView: View {
     @State private var deleteVolumeCatalogTarget: CatalogScanTarget?
     /// Selected volume IDs in the scan volumes table.
     @State private var selectedVolumeIDs: Set<UUID> = []
+    /// Per-volume aggregate cache (file count, error count, byte sum,
+    /// pre-built Cmd+I popover text). Recomputed once per records or
+    /// scan-target change via the `.onChange` modifiers below. Without
+    /// this cache, `volumeTableRows` triple-walked the full ~13K record
+    /// catalog for every visible target on every SwiftUI body re-eval —
+    /// every click of a volume row caused ~620K iterations on the main
+    /// thread, racing NSTableView's selection visuals and producing
+    /// the "highlight sometimes appears, sometimes doesn't" lag.
+    @State private var volumeAggregateCache: [UUID: VolumeAggregate] = [:]
+    /// Sort order for the Scan Volumes table. Defaults to volume-name
+    /// ascending, which matches the historical implicit ordering. Bound
+    /// to the Table via `Table(_:selection:sortOrder:)` so column-header
+    /// clicks rotate through ascending → descending → none.
+    @State private var volumeTableSortOrder: [KeyPathComparator<VolumeRow>] = [
+        KeyPathComparator(\VolumeRow.name)
+    ]
     /// True when the user clicked Hide on the Migrate progress sheet to
     /// suppress it without canceling the in-flight job — lets them queue
     /// another volume. Auto-resets when `isRelocateActivelyWorking` flips
@@ -868,10 +884,13 @@ struct CatalogView: View {
         let isBackfilling = model.isBackfillingProvenance
         let verifyingIDs = model.verifyingTargetIDs
 
-        return filteredScanTargets.map { target in
-            let recs = model.records.filter { $0.fullPath.hasPrefix(target.searchPath) || ($0.originalFullPath?.hasPrefix(target.searchPath) ?? false) }
-            let errCount = recs.filter { $0.streamType == .ffprobeFailed }.count
-            let bytes = recs.reduce(into: Int64(0)) { $0 += $1.sizeBytes }
+        let rows = filteredScanTargets.map { target in
+            // Pull the file/byte/error/Cmd+I aggregate from the cache. On
+            // a cache miss (cold start before the first refresh fires, or
+            // a target added since the last refresh) we serve a zeroed
+            // placeholder — the next `.onChange` trigger populates it.
+            // O(1) per row vs the old O(records) filter.
+            let agg = volumeAggregateCache[target.id]
             let isNet = VolumeReachability.isNetworkVolume(path: target.searchPath)
 
             // Per-target progress, if scan tracking has populated counts.
@@ -898,16 +917,78 @@ struct CatalogView: View {
                 path: target.searchPath,
                 status: target.status,
                 uiStatus: uiStatus,
-                files: recs.count,
-                errors: errCount,
-                mediaBytes: bytes,
+                files: agg?.files ?? 0,
+                errors: agg?.errors ?? 0,
+                mediaBytes: agg?.mediaBytes ?? 0,
                 phase: target.phase,
                 lastScanned: target.lastScannedDate,
                 isReachable: target.isReachable,
                 isNetwork: isNet,
-                catalogStatusText: Self.buildCatalogInfo(records: recs, target: target)
+                catalogStatusText: agg?.catalogStatusText ?? "Loading catalog data…",
+                role: target.role,
+                trust: target.trust
             )
         }
+        // Apply the user-controlled sort. KeyPathComparator is cheap for
+        // ~15 rows; no need to memoize. Empty sort order falls back to
+        // the natural map order from filteredScanTargets.
+        return volumeTableSortOrder.isEmpty
+            ? rows
+            : rows.sorted(using: volumeTableSortOrder)
+    }
+
+    /// Walk the catalog once and bucket records into each volume's
+    /// aggregate. Replaces the per-row O(records) filters that used to
+    /// dominate `volumeTableRows`. Single pass over `model.records`,
+    /// per-record prefix check against every scan target — total work
+    /// O(records × targets), done once per records-changed trigger
+    /// rather than once per render.
+    ///
+    /// A record can belong to BOTH the volume it currently lives on AND
+    /// the volume it originated from (Bucket-A copy / Bucket-D adoption
+    /// rewrites `fullPath` but preserves `originalFullPath`). That
+    /// matches the historical filter semantics — the Volumes table
+    /// counted those records on the source volume even after migration
+    /// — so we preserve the double-count.
+    private func recomputeVolumeAggregates() {
+        let targets = model.scanTargets
+        guard !targets.isEmpty else {
+            volumeAggregateCache = [:]
+            return
+        }
+        // Sort prefixes longest-first so nested target paths
+        // (e.g. /Volumes/MyBook AND /Volumes/MyBook/Sub) both match
+        // correctly — `hasPrefix` is greedy on this side anyway, but the
+        // sort keeps semantics explicit.
+        let entries: [(id: UUID, target: CatalogScanTarget, prefix: String)] = targets
+            .sorted { $0.searchPath.count > $1.searchPath.count }
+            .map { ($0.id, $0, $0.searchPath) }
+        var buckets: [UUID: [VideoRecord]] = [:]
+        buckets.reserveCapacity(entries.count)
+        for r in model.records {
+            for e in entries {
+                if r.fullPath.hasPrefix(e.prefix)
+                    || (r.originalFullPath?.hasPrefix(e.prefix) ?? false) {
+                    buckets[e.id, default: []].append(r)
+                }
+            }
+        }
+        var built: [UUID: VolumeAggregate] = [:]
+        built.reserveCapacity(entries.count)
+        for e in entries {
+            let recs = buckets[e.id] ?? []
+            let errCount = recs.reduce(into: 0) { acc, r in
+                if r.streamType == .ffprobeFailed { acc += 1 }
+            }
+            let bytes = recs.reduce(into: Int64(0)) { $0 += $1.sizeBytes }
+            built[e.id] = VolumeAggregate(
+                files: recs.count,
+                errors: errCount,
+                mediaBytes: bytes,
+                catalogStatusText: Self.buildCatalogInfo(records: recs, target: e.target)
+            )
+        }
+        volumeAggregateCache = built
     }
 
     /// Look up the CatalogScanTarget for a VolumeRow ID.
@@ -1065,7 +1146,7 @@ struct CatalogView: View {
                         }
                         .disabled(model.scanTargets.isEmpty)
 
-                        ForEach(model.scanTargets.filter { $0.status.isIdle && $0.isReachable && !$0.searchPath.contains("VideoScan_Temp") }) { target in
+                        ForEach(model.scanTargets.filter { $0.status.isIdle && $0.isReachable && !$0.searchPath.contains("VideoScan_Temp") && !$0.isRetired }) { target in
                             Button(action: {
                                 if target.status == .resumable {
                                     model.resumeTarget(target)
@@ -1175,6 +1256,19 @@ struct CatalogView: View {
                 .frame(width: 0, height: 0)
                 .accessibilityHidden(true)
         )
+        // Per-volume aggregate cache refresh triggers. Keep these here on
+        // the pane that consumes the cache so a hidden Catalog tab still
+        // refreshes its cache on tab switch via `.onAppear`. Count-based
+        // triggers cover the dominant change paths (scan completion,
+        // record import, scan-target add/remove, purge). In-place
+        // mutation paths that change `fullPath` without changing the
+        // overall count (Bucket-D adoption) call
+        // `notifyVolumeAggregatesStale()` directly — see below.
+        .onAppear { recomputeVolumeAggregates() }
+        .onChange(of: model.records.count) { recomputeVolumeAggregates() }
+        .onChange(of: model.scanTargets.count) { recomputeVolumeAggregates() }
+        .onChange(of: model.lastPurgedBatch) { recomputeVolumeAggregates() }
+        .onChange(of: model.volumeAggregatesRevision) { recomputeVolumeAggregates() }
     }
 
     /// Auto-size the volume pane to fit all visible rows (header ~32 + ~30 per row),
@@ -1187,8 +1281,20 @@ struct CatalogView: View {
     // MARK: - Volume Table
 
     private var volumeTable: some View {
-        Table(volumeTableRows, selection: $selectedVolumeIDs) {
-            TableColumn("Volume") { row in
+        Table(volumeTableRows, selection: $selectedVolumeIDs, sortOrder: $volumeTableSortOrder) {
+            // Note: the per-cell `.onTapGesture(count: 2)` previously here
+            // (one per column, opened the Volumes editor) was removed
+            // because SwiftUI's gesture arbiter has to wait the
+            // double-tap window before it can resolve a single click,
+            // which delayed the Table's selection highlight on every
+            // mouse click — a classic "click sometimes highlights,
+            // sometimes doesn't" feel. Keyboard nav was unaffected
+            // because it bypasses gesture recognition. Double-click to
+            // open the Volumes editor needs to come back via NSEvent
+            // monitor or a non-gesture path; for now Rick uses
+            // right-click → Volume Roles & Archive… or Cmd+E from the
+            // selected row.
+            TableColumn("Volume", value: \VolumeRow.name) { row in
                 HStack(spacing: 6) {
                     Text(row.name)
                         .font(.system(size: 15, weight: .medium, design: .monospaced))
@@ -1196,13 +1302,7 @@ struct CatalogView: View {
                         .lineLimit(1)
                         .help(row.path)
                 }
-                // `contentShape` makes the whole cell hit-testable (not just
-                // the glyphs of the text), so a double-click anywhere in the
-                // cell opens the Volumes editor. Mirrors the pattern in
-                // ArchiveView.swift on a VolumeBadge row.
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-                .onTapGesture(count: 2) { openVolumesEditor(for: row.id) }
             }
             .width(min: 100, ideal: 150)
 
@@ -1211,18 +1311,14 @@ struct CatalogView: View {
                 // See VolumeStatusView.swift / VolumeUIStatus.swift.
                 VolumeStatusView(status: row.uiStatus)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2) { openVolumesEditor(for: row.id) }
             }
             .width(min: 70, ideal: 110)
 
-            TableColumn("Files") { row in
+            TableColumn("Files", value: \VolumeRow.files) { row in
                 Text(row.files > 0 ? "\(row.files)" : "—")
                     .font(.system(size: 15, design: .monospaced))
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2) { openVolumesEditor(for: row.id) }
             }
             .width(min: 50, ideal: 60)
 
@@ -1239,22 +1335,18 @@ struct CatalogView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-                .onTapGesture(count: 2) { openVolumesEditor(for: row.id) }
             }
             .width(min: 50, ideal: 60)
 
-            TableColumn("Media Size") { row in
+            TableColumn("Media Size", value: \VolumeRow.mediaBytes) { row in
                 Text(row.mediaBytes > 0 ? Self.formatBytesStatic(row.mediaBytes) : "—")
                     .font(.system(size: 15, design: .monospaced))
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                    .onTapGesture(count: 2) { openVolumesEditor(for: row.id) }
             }
             .width(min: 70, ideal: 90)
 
-            TableColumn("Scanned") { row in
+            TableColumn("Scanned", value: \VolumeRow.lastScanned, comparator: OptionalDateComparator()) { row in
                 Group {
                     if let date = row.lastScanned {
                         Text(Self.shortDateStatic(date))
@@ -1267,8 +1359,6 @@ struct CatalogView: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-                .onTapGesture(count: 2) { openVolumesEditor(for: row.id) }
             }
             .width(min: 75, ideal: 95)
 
@@ -1280,6 +1370,22 @@ struct CatalogView: View {
                             .scaleEffect(0.7)
                         Text("In Progress")
                             .font(.system(size: 15, weight: .medium))
+                    } else if let t = target(for: row.id), t.isRetired {
+                        // §1B Retire — a retired volume still has its
+                        // catalog (records carry the safe-witness
+                        // dispositions or originVolume backfill); the
+                        // underlying `phase` enum can stay at whatever
+                        // it was, but the user-facing label should
+                        // reflect retirement, not "NO CATALOG". A
+                        // checkmark.seal reads as "completed/sealed",
+                        // matching the lifecycle stage; system purple
+                        // signals "preserved historical record" without
+                        // the "warning" weight of orange or the "safe
+                        // for active use" weight of green.
+                        Image(systemName: "checkmark.seal.fill")
+                            .font(.system(size: 15))
+                        Text("RETIRED")
+                            .font(.system(size: 15, weight: .medium))
                     } else {
                         Image(systemName: row.phase.icon)
                             .font(.system(size: 15))
@@ -1287,12 +1393,29 @@ struct CatalogView: View {
                             .font(.system(size: 15))
                     }
                 }
-                .foregroundColor(row.status.isActive ? .orange : row.phase.color)
+                .foregroundColor(
+                    row.status.isActive
+                        ? .orange
+                        : (target(for: row.id)?.isRetired == true
+                           ? .purple
+                           : row.phase.color)
+                )
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-                .onTapGesture(count: 2) { openVolumesEditor(for: row.id) }
             }
             .width(min: 95, ideal: 115)
+
+            // Role column — shows volume role (Original/Backup/Archive/
+            // LTA/etc.) on its own when trust is .reliable or .unknown,
+            // and "Role · Trust" when trust is degraded so the user can
+            // spot drives that need attention without opening the
+            // editor. Trust word inherits VolumeTrust.color so .aging is
+            // yellow and .unreliable is red. Sortable on the role's
+            // raw value.
+            TableColumn("Role", value: \VolumeRow.role.rawValue) { row in
+                roleTrustCell(role: row.role, trust: row.trust)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .width(min: 90, ideal: 130)
 
             TableColumn("") { row in
                 HStack(spacing: 6) {
@@ -1543,6 +1666,37 @@ struct CatalogView: View {
             fmt.dateFormat = "MMM d, yyyy"
         }
         return fmt.string(from: date)
+    }
+
+    /// One-cell renderer for the Role column. Two flavors:
+    ///   - quiet: just the role label in its own color (no trust word)
+    ///   - degraded: "Role · Trust" with each word in its color, so a
+    ///     glance at the table surfaces drives that need attention
+    /// Unassigned + unknown trust renders as the universal "—" so empty
+    /// rows don't shout for attention.
+    @ViewBuilder
+    private func roleTrustCell(role: VolumeRole, trust: VolumeTrust) -> some View {
+        if role == .unassigned && (trust == .unknown || trust == .reliable) {
+            Text("—")
+                .font(.system(size: 14, design: .monospaced))
+                .foregroundColor(.secondary)
+        } else {
+            HStack(spacing: 4) {
+                Text(role.rawValue)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundColor(role.color)
+                    .lineLimit(1)
+                if trust == .aging || trust == .unreliable {
+                    Text("·")
+                        .font(.system(size: 14))
+                        .foregroundColor(.secondary)
+                    Text(trust.rawValue)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(trust.color)
+                        .lineLimit(1)
+                }
+            }
+        }
     }
 }
 

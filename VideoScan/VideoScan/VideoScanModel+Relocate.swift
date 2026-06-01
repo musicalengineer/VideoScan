@@ -450,6 +450,13 @@ extension VideoScanModel {
         // of a flash.
         await padToMinVisible(runStart: runStart, minVisibleSeconds: minVisibleSeconds)
 
+        // Bucket-D adoption and per-file copies rewrite `fullPath` and
+        // `originalFullPath` on existing records — same array count, so
+        // ContentView's count-based aggregate-cache triggers won't fire.
+        // Bump the revision counter so the per-volume table totals
+        // refresh now that records have moved between volume buckets.
+        notifyVolumeAggregatesStale()
+
         // Fix 1 — set the summary sheet but do NOT call
         // `maybeOfferRetire` here. Trigger ordering: the user must
         // dismiss the summary first. The summary sheet's Done button

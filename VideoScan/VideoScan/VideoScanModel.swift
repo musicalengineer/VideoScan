@@ -117,6 +117,23 @@ final class VideoScanModel: ObservableObject {
         scanTargets = scanTargets
     }
 
+    /// Revision counter for in-place mutations of `records` that don't
+    /// change the array count — currently the Bucket-D adoption path
+    /// rewrites `fullPath` on existing records without adding/removing
+    /// entries. Bumping this flips the published value and lets
+    /// ContentView's per-volume aggregate cache invalidate. Pure count
+    /// triggers aren't enough because a Bucket-D move shifts records
+    /// from one volume's bucket to another without changing total
+    /// count.
+    @Published var volumeAggregatesRevision: Int = 0
+
+    /// Bump the per-volume aggregate cache so ContentView rebuilds its
+    /// `[UUID: VolumeAggregate]` map. Call after any bulk in-place
+    /// mutation of `records` that doesn't change overall count.
+    func notifyVolumeAggregatesStale() {
+        volumeAggregatesRevision &+= 1
+    }
+
     /// High-frequency dashboard + console state — separate ObservableObject
     /// so updates don't trigger re-render of the main Table view.
     let dashboard = DashboardState()
