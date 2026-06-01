@@ -538,8 +538,16 @@ struct CatalogContent: View {
         var out = pfApplyPurgeFilter(records, showRemoved: showRemoved)
         if !filterTargetPaths.isEmpty {
             let prefixes = Array(filterTargetPaths)
+            // Match records currently at this volume OR records that originated
+            // here and were relocated elsewhere (Bucket-A copy, Bucket-D adoption).
+            // Without the originalFullPath check, clicking a source volume after a
+            // Relocate run shows 0 records — the records still exist but live
+            // under the destination volume now.
             out = out.filter { rec in
-                prefixes.contains(where: { rec.fullPath.hasPrefix($0) })
+                prefixes.contains(where: { prefix in
+                    rec.fullPath.hasPrefix(prefix)
+                    || (rec.originalFullPath?.hasPrefix(prefix) ?? false)
+                })
             }
         }
         if !searchText.isEmpty {
