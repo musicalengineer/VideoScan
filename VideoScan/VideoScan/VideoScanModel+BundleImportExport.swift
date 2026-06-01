@@ -38,6 +38,10 @@ extension VideoScanModel {
             let summary = try BundleExporter.writeBundle(records: records,
                                                          scanTargets: scanTargets,
                                                          to: url)
+            // Stamp the backup-status badge — see VideoScanModel.lastBackupAt.
+            // Doing this on the success path only so a thrown error doesn't
+            // claim a backup that didn't complete.
+            recordBackupSuccess(at: url)
             let m = summary.manifest
             // BundleExporter.writeBundle strips purged records before encoding.
             // Surface the excluded count so the local-only purge state is
