@@ -478,7 +478,7 @@ struct CatalogView: View {
             Button("Cancel", role: .cancel) { }
         } message: {
             if let target = deleteVolumeCatalogTarget {
-                let count = model.records.filter { $0.fullPath.hasPrefix(target.searchPath) }.count
+                let count = model.records.filter { $0.fullPath.hasPrefix(target.searchPath) || ($0.originalFullPath?.hasPrefix(target.searchPath) ?? false) }.count
                 Text("Delete \(count) catalog record(s) for \(VolumeReachability.displayLabel(forPath: target.searchPath))?\n\nThe probe cache is unaffected — a re-scan will replay quickly from cache.")
             } else {
                 Text("Delete catalog records for this volume?")
@@ -625,7 +625,7 @@ struct CatalogView: View {
     /// rather than stacking duplicates.
     private func showCatalogInfo(for target: CatalogScanTarget) {
         let volName = VolumeReachability.displayLabel(forPath: target.searchPath)
-        let recs = model.records.filter { $0.fullPath.hasPrefix(target.searchPath) }
+        let recs = model.records.filter { $0.fullPath.hasPrefix(target.searchPath) || ($0.originalFullPath?.hasPrefix(target.searchPath) ?? false) }
         let item = CatalogInfoItem(
             volumePath: target.searchPath,
             title: "Catalog Info — \(volName)",
@@ -853,7 +853,7 @@ struct CatalogView: View {
         let verifyingIDs = model.verifyingTargetIDs
 
         return filteredScanTargets.map { target in
-            let recs = model.records.filter { $0.fullPath.hasPrefix(target.searchPath) }
+            let recs = model.records.filter { $0.fullPath.hasPrefix(target.searchPath) || ($0.originalFullPath?.hasPrefix(target.searchPath) ?? false) }
             let errCount = recs.filter { $0.streamType == .ffprobeFailed }.count
             let bytes = recs.reduce(into: Int64(0)) { $0 += $1.sizeBytes }
             let isNet = VolumeReachability.isNetworkVolume(path: target.searchPath)
@@ -1065,9 +1065,9 @@ struct CatalogView: View {
 
                     Section("Delete") {
                         ForEach(model.scanTargets.filter { target in
-                            model.records.contains { $0.fullPath.hasPrefix(target.searchPath) }
+                            model.records.contains { $0.fullPath.hasPrefix(target.searchPath) || ($0.originalFullPath?.hasPrefix(target.searchPath) ?? false) }
                         }) { target in
-                            let count = model.records.filter { $0.fullPath.hasPrefix(target.searchPath) }.count
+                            let count = model.records.filter { $0.fullPath.hasPrefix(target.searchPath) || ($0.originalFullPath?.hasPrefix(target.searchPath) ?? false) }.count
                             Button(role: .destructive, action: {
                                 deleteVolumeCatalogTarget = target
                                 showDeleteVolumeCatalogConfirm = true
