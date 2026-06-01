@@ -210,6 +210,12 @@ struct CatalogView: View {
     @State private var deleteVolumeCatalogTarget: CatalogScanTarget?
     /// Selected volume IDs in the scan volumes table.
     @State private var selectedVolumeIDs: Set<UUID> = []
+    /// True when the user clicked Hide on the Migrate progress sheet to
+    /// suppress it without canceling the in-flight job — lets them queue
+    /// another volume. Auto-resets when `isRelocateActivelyWorking` flips
+    /// back to false (run ends), so the next queued job's progress sheet
+    /// appears automatically.
+    @State private var progressSheetHiddenByUser: Bool = false
     /// Caption Videos orchestration state. Built lazily — the
     /// orchestrator owns its own MLX model container so we don't want
     /// to construct one until the user actually invokes the action.
@@ -406,11 +412,21 @@ struct CatalogView: View {
         // engine. The engine clears the flag itself when runRelocate
         // returns.
         .sheet(isPresented: Binding(
-            get: { model.isRelocateActivelyWorking },
-            set: { _ in }
+            get: { model.isRelocateActivelyWorking && !progressSheetHiddenByUser },
+            set: { newValue in
+                if !newValue { progressSheetHiddenByUser = true }
+            }
         )) {
-            RelocateProgressSheet(dashboard: model.dashboard)
+            RelocateProgressSheet(
+                dashboard: model.dashboard,
+                onHide: { progressSheetHiddenByUser = true }
+            )
                 .environmentObject(model)
+        }
+        .onChange(of: model.isRelocateActivelyWorking) { _, working in
+            // Reset the suppression flag when work stops, so the next
+            // queued job's progress sheet appears automatically.
+            if !working { progressSheetHiddenByUser = false }
         }
         // Post-Apply summary. Set by runRelocate AFTER the work
         // completes (real run OR dry-run). The Done button calls

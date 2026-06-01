@@ -27,6 +27,12 @@ struct RelocateProgressSheet: View {
     // Shadow the dashboard so SwiftUI re-renders on each counter tick.
     @ObservedObject var dashboard: DashboardState
 
+    /// Action the parent passes in to dismiss the sheet without canceling
+    /// the underlying job. The job keeps running; the user can now open
+    /// the Migrate sheet again and queue a second volume. Status stays
+    /// visible in the Migrate Jobs panel toolbar badge.
+    var onHide: () -> Void
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
@@ -35,6 +41,7 @@ struct RelocateProgressSheet: View {
             } else {
                 idleSpinner
             }
+            footer
         }
         .padding(22)
         .frame(minWidth: 500, idealWidth: 540)
@@ -49,6 +56,19 @@ struct RelocateProgressSheet: View {
                 .font(.headline)
                 .accessibilityIdentifier("relocateProgress.title")
             Spacer()
+        }
+    }
+
+    /// Hide-not-cancel control row. Lets the user queue another Migrate
+    /// while the current one keeps running. Status stays visible via the
+    /// Migrate Jobs panel toolbar badge.
+    private var footer: some View {
+        HStack {
+            Spacer()
+            Button("Hide", action: onHide)
+                .keyboardShortcut(.cancelAction)
+                .help("Close this sheet — the job keeps running. Open Migrate Jobs to monitor or add another volume to the queue.")
+                .accessibilityIdentifier("relocateProgress.hide")
         }
     }
 
