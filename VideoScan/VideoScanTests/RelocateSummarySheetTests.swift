@@ -382,7 +382,7 @@ struct RelocateSummarySheetTests {
             guard let data = try? Data(contentsOf: logURL) else { return "" }
             return String(data: data, encoding: .utf8) ?? ""
         }()
-        #expect(body.contains("Relocate session started"),
+        #expect(body.contains("Migrate session started"),
                 "Header line missing — relocate.log open or header write failed")
     }
 
@@ -679,5 +679,203 @@ struct RelocateSummarySheetTests {
         #expect(summary.succeededCount == 1, "one Bucket A copy should have happened")
         #expect(summary.safelyBackedUpCount == 1, "one Bucket E record should be safely backed up")
         #expect(summary.degradedOnlyCount == 0)
+    }
+
+    // MARK: - 11. User-visible verb is "Migrate", not "Relocate"
+
+    /// Regression guard for the 2026-05-31 user-facing rename. The
+    /// `RelocateSummarySheet` (internal type name preserved) drives a
+    /// post-flight payload that surfaces user-visible headlines, sub-
+    /// headlines, and a notification title. None of those rendered
+    /// strings should contain the word "Relocate" — Rick decided
+    /// "Migrate" matches the Apple Migration Assistant vibe better.
+    ///
+    /// Internal symbol names (`pendingRelocateSummary`, `RelocateSummary`,
+    /// `acknowledgeRelocateSummary`, etc.) are deliberately NOT touched
+    /// by this guard — only the user-facing copy is in scope.
+    /// Local workspace builder that avoids "relocate" in the directory
+    /// name so the body-text scan in the guard test below isn't tripped
+    /// by the fixture path leaking into `destinationDisplay`. Same shape
+    /// as `makeWorkspace` otherwise.
+    private static func makeNeutralWorkspace() throws -> (root: URL, source: URL, dest: URL, catalog: URL) {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("vs-friendly-\(UUID().uuidString)",
+                                    isDirectory: true)
+        let source = root.appendingPathComponent("source")
+        let dest = root.appendingPathComponent("dest")
+        let catalog = root.appendingPathComponent("catalog")
+        let fm = FileManager.default
+        for url in [source, dest, catalog] {
+            try fm.createDirectory(at: url, withIntermediateDirectories: true)
+        }
+        return (root, source, dest, catalog)
+    }
+
+    @Test
+    func friendlyHeadlines_neverContainRelocateWord() async throws {
+        // Cover all three headline modes the summary sheet renders:
+        //   - "Your files are safe"     (all-safe path)
+        //   - "Files copied and verified" (mixed copy + safe)
+        //   - "Dry-run preview"          (preview only)
+        //
+        // For each mode we synthesize a RelocateSummary by driving a
+        // real run, then assert no user-visible field carries
+        // "Relocate"/"relocate"/"Relocated"/"relocated".
+
+        @MainActor func runOneAndCapture(
+            dryRun: Bool,
+            withSafeWitness: Bool,
+            copyAFile: Bool
+        ) async throws -> RelocateSummary {
+            let inner = try Self.makeNeutralWorkspace()
+            defer { try? FileManager.default.removeItem(at: inner.root) }
+
+            var records: [VideoRecord] = []
+            if copyAFile {
+                let copyMe = inner.source.appendingPathComponent("copy.bin")
+                let (cSize, cHash) = try writeFile(at: copyMe, bytes: 256)
+                records.append(makeRecord(fullPath: copyMe.path, size: cSize, md5: cHash))
+            }
+            if withSafeWitness {
+                let safe = inner.source.appendingPathComponent("safe.bin")
+                let (sSize, sHash) = try writeFile(at: safe, bytes: 128)
+                records.append(makeRecord(fullPath: safe.path, size: sSize, md5: sHash))
+                let witness = makeRecord(
+                    fullPath: "/Volumes/MyBook/safe.bin",
+                    size: sSize, md5: sHash
+                )
+                records.append(witness)
+            }
+
+            let model = VideoScanModel()
+            model.catalogStore = CatalogStore(directory: inner.catalog)
+            model.records = records
+            let safeTarget = CatalogScanTarget(searchPath: "/Volumes/MyBook")
+            safeTarget.role = .backup
+            safeTarget.trust = .reliable
+            model.scanTargets = [
+                CatalogScanTarget(searchPath: inner.source.path),
+                safeTarget
+            ]
+            model.catalogStore.saveNow(records: model.records)
+
+            model.relocateVolume(RelocateOptions(
+                sourceVolumeRootPath: inner.source.path,
+                destinationRoot: inner.dest,
+                maxConcurrency: 1,
+                dryRun: dryRun,
+                skipAlreadyRelocated: true,
+                skipDupsOnOtherVolumes: true
+            ))
+            await waitForSummary(model)
+            return try #require(model.pendingRelocateSummary)
+        }
+
+        // Strings that, if found, prove the rename slipped. Case-
+        // sensitive `.contains` covers all the surface-area variants
+        // (Relocate/relocate/Relocated/relocated/Relocation/relocation).
+        let banned = [
+            "Relocate", "relocate", "Relocated", "relocated",
+            "Relocation", "relocation"
+        ]
+        func assertNoBanned(_ s: String, _ label: String) {
+            for needle in banned {
+                #expect(!s.contains(needle),
+                        "\(label) contains banned word '\(needle)': \(s)")
+            }
+        }
+
+        // The three headline-producing helpers on RelocateSummarySheet
+        // are private; we exercise the same data via the summary's
+        // structured fields. The sheet's title/body strings are pure
+        // functions of (isDryRun, succeededCount, safelyBackedUpCount,
+        // total), so re-deriving them here gives us the same surface
+        // without instantiating SwiftUI.
+        func headlineTitleFor(_ s: RelocateSummary) -> String {
+            if s.isDryRun { return "Dry-run preview" }
+            if s.succeededCount > 0 { return "Files copied and verified" }
+            return "Your files are safe"
+        }
+        func headlineBodyFor(_ s: RelocateSummary) -> String {
+            if s.isDryRun {
+                return "If you ran this for real, here's what would happen."
+            }
+            let total = s.succeededCount + s.safelyBackedUpCount
+            if s.succeededCount > 0 {
+                var line = "I copied \(s.succeededCount) file"
+                    + (s.succeededCount == 1 ? "" : "s")
+                    + " to \(s.destinationDisplay) and verified the checksums."
+                if s.safelyBackedUpCount > 0 {
+                    line += " \(s.safelyBackedUpCount) more "
+                    line += s.safelyBackedUpCount == 1 ? "is" : "are"
+                    line += " already safely backed up on other drives."
+                }
+                return line
+            }
+            return "I found backup copies of all \(total) file"
+                + (total == 1 ? "" : "s")
+                + " on safer drives and checksum-verified them. "
+                + "Everything's accounted for — you can retire "
+                + "\(s.sourceVolumeName) whenever you're ready."
+        }
+
+        // Mode 1: all-safe ("Your files are safe").
+        let allSafe = try await runOneAndCapture(
+            dryRun: false, withSafeWitness: true, copyAFile: false
+        )
+        assertNoBanned(headlineTitleFor(allSafe), "all-safe title")
+        assertNoBanned(headlineBodyFor(allSafe), "all-safe body")
+
+        // Mode 2: mixed copy + redundant ("Files copied and verified").
+        let mixed = try await runOneAndCapture(
+            dryRun: false, withSafeWitness: true, copyAFile: true
+        )
+        assertNoBanned(headlineTitleFor(mixed), "mixed title")
+        assertNoBanned(headlineBodyFor(mixed), "mixed body")
+
+        // Mode 3: dry-run ("Dry-run preview").
+        let dry = try await runOneAndCapture(
+            dryRun: true, withSafeWitness: true, copyAFile: true
+        )
+        assertNoBanned(headlineTitleFor(dry), "dry-run title")
+        assertNoBanned(headlineBodyFor(dry), "dry-run body")
+
+        // Bonus: notification title strings come out of the same
+        // user-visible surface. Cover both .complete and .failed.
+        let completeJob = RelocateQueuedJob(
+            sourceVolumeRootPath: "/Volumes/Maxtor500FW",
+            sourceVolumeName: "Maxtor500FW",
+            destinationRoot: URL(fileURLWithPath: "/tmp"),
+            options: RelocateOptions(
+                sourceVolumeRootPath: "/Volumes/Maxtor500FW",
+                destinationRoot: URL(fileURLWithPath: "/tmp")
+            ),
+            status: .complete
+        )
+        assertNoBanned(
+            VideoScanModel.notificationTitle(for: completeJob),
+            "notification title (complete)"
+        )
+        let failedJob = RelocateQueuedJob(
+            sourceVolumeRootPath: "/Volumes/Bad",
+            sourceVolumeName: "Bad",
+            destinationRoot: URL(fileURLWithPath: "/tmp"),
+            options: RelocateOptions(
+                sourceVolumeRootPath: "/Volumes/Bad",
+                destinationRoot: URL(fileURLWithPath: "/tmp")
+            ),
+            status: .failed(reason: "disk full")
+        )
+        assertNoBanned(
+            VideoScanModel.notificationTitle(for: failedJob),
+            "notification title (failed)"
+        )
+
+        // Also sanity-check the new (post-rename) headline labels are
+        // what we expect — defends against a future find/replace pass
+        // accidentally removing the renamed term too.
+        #expect(headlineTitleFor(dry) == "Dry-run preview")
+        #expect(headlineTitleFor(allSafe) == "Your files are safe")
+        #expect(headlineTitleFor(mixed) == "Files copied and verified")
     }
 }

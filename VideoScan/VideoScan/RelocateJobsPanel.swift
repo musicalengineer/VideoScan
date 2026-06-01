@@ -55,7 +55,7 @@ struct RelocateJobsPanel: View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
             Image(systemName: "tray.full")
                 .foregroundColor(.accentColor)
-            Text("Relocate Jobs")
+            Text("Migrate Jobs")
                 .font(.headline)
             Text("Queued \(model.queuedCount) · Running \(model.runningCount) "
                  + "· Done \(model.completedCount) · Failed \(model.failedCount)")
@@ -90,9 +90,9 @@ struct RelocateJobsPanel: View {
             Image(systemName: "tray")
                 .font(.system(size: 32))
                 .foregroundColor(.secondary)
-            Text("No relocate jobs yet.")
+            Text("No migrate jobs yet.")
                 .foregroundColor(.secondary)
-            Text("Use the Relocate Volume sheet to queue one.")
+            Text("Use the Migrate Volume sheet to queue one.")
                 .font(.caption)
                 .foregroundColor(.secondary)
         }

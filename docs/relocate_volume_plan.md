@@ -266,7 +266,7 @@ Three changes follow:
 **Mark Retired action in Volumes window:**
 
 - New `VolumeRetireStatus` UI-only struct: `totalRecords`, `disposedRecords`, `allDisposed`, `hasSafeWitness`. Derived predicates: `isSafeToRetire`, `isDegradedDisposed`, `canRetire` (= `isSafeToRetire`).
-- Right-click menu on each non-retired sidebar row gains a "Mark Retired…" item, enabled only when `canRetire` is true. Disabled state carries a tooltip explaining what's missing ("Not all files on this volume are accounted for yet — run Relocate first." / "Files are marked disposed, but no backup copies are confirmed on safer drives.").
+- Right-click menu on each non-retired sidebar row gains a "Mark Retired…" item, enabled only when `canRetire` is true. Disabled state carries a tooltip explaining what's missing ("Not all files on this volume are accounted for yet — run Migrate first." / "Files are marked disposed, but no backup copies are confirmed on safer drives.").
 - Sidebar row badges: green pill "Safe to retire" when `isSafeToRetire`; yellow pill "Disposed, degraded backups" when `isDegradedDisposed`.
 - Clicking Mark Retired builds a `PendingRetireOffer` (witness union via `aggregateRetiredWitnesses`) and presents the existing `RelocateRetireSheet`. Single confirmation surface for both the (deprecated) post-Relocate flow and the new explicit menu flow.
 

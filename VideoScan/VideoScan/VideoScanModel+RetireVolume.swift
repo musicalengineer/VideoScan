@@ -210,6 +210,6 @@ extension VideoScanModel {
         let fmt = DateFormatter()
         fmt.dateFormat = "yyyy-MM-dd"
         fmt.timeZone = TimeZone.current
-        return "All records dup-elsewhere or source-deleted via Relocate \(fmt.string(from: now))"
+        return "All records dup-elsewhere or source-deleted via Migrate \(fmt.string(from: now))"
     }
 }

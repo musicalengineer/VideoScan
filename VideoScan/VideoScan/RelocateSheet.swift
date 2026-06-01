@@ -96,7 +96,7 @@ struct RelocateSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Relocate Volume")
+            Text("Migrate Volume")
                 .font(.headline)
                 .accessibilityIdentifier("relocateSheet.title")
 
@@ -286,7 +286,7 @@ struct RelocateSheet: View {
                       emphasized: nRedundant > 0)
             bucketRow("Source-side moves", count: r.sourceSideMoves.count, detail: "paths rewritten")
             bucketRow("Manually deleted", count: r.manuallyDeleted.count, detail: "marked, kept for audit")
-            bucketRow("Previously relocated", count: r.previouslyRelocated.count, detail: "skipped")
+            bucketRow("Previously migrated", count: r.previouslyRelocated.count, detail: "skipped")
         }
         .padding(.top, 4)
     }
@@ -329,7 +329,7 @@ struct RelocateSheet: View {
                         : "Dry Run (\(scopedRecords.count) record(s))"
                 }
                 let base = "\(scopedRecords.count) record(s) (\(totalBytesString))"
-                return busy ? "Add to Queue — \(base)" : "Relocate \(base)"
+                return busy ? "Add to Queue — \(base)" : "Migrate \(base)"
             }()
             Button(label) { handleRelocate() }
                 .buttonStyle(.borderedProminent)
