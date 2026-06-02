@@ -181,6 +181,28 @@
   }
   .section-heading:first-of-type { margin-top: 8px; }
 
+  /* Staleness banner — shown only when newest testdriver row is >36h old.
+     Surfaced by JS via .hidden toggle. Bright red to be impossible to
+     miss; clicking the log path is informational only. */
+  #staleness-banner {
+    background: var(--bad-dim);
+    border: 1px solid var(--bad);
+    color: var(--bad);
+    border-radius: var(--radius);
+    padding: 14px 18px;
+    margin-bottom: 20px;
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1.5;
+  }
+  #staleness-banner code {
+    background: rgba(0,0,0,0.3);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: 'SF Mono', Menlo, Monaco, monospace;
+    font-size: 12px;
+  }
+
   /* Footer */
   .footer {
     margin-top: 32px;
@@ -215,6 +237,10 @@
   static analysis. Runtime tests and TSan run on Mac hardware.<br>
   <a href="https://github.com/musicalengineer/VideoScan">musicalengineer/VideoScan</a>
 </div>
+
+<!-- Shown only when latest TestDriver row is older than the threshold
+     defined in JS (currently 36h). Hidden by default. -->
+<div id="staleness-banner" class="hidden"></div>
 
 <div id="status">Loading metrics&hellip;</div>
 
@@ -283,20 +309,73 @@
 </div>
 
 <script>
-// Try GitHub raw URL first (works on Pages), fall back to local file.
 // Two streams: per-CI history and nightly static analysis. Both live on
-// the orphan `metrics` branch.
-const RAW_BASE = "https://raw.githubusercontent.com/musicalengineer/VideoScan/metrics/metrics";
+// the orphan `metrics` branch. We prefer SHA-pinned raw URLs (uncacheable
+// by Fastly) when we can resolve the current tip via the public branches
+// API; otherwise fall back to branch-pinned URLs (cacheable, slow refresh)
+// then to local files for `file://` opens.
+const REPO = "musicalengineer/VideoScan";
+const BRANCH_API = `https://api.github.com/repos/${REPO}/branches/metrics`;
+const RAW_BRANCH_BASE = `https://raw.githubusercontent.com/${REPO}/metrics/metrics`;
 const CACHE_BUSTER = `t=${Date.now()}`;
-const HISTORY_URL = `${RAW_BASE}/history.jsonl?${CACHE_BUSTER}`;
-const NIGHTLY_URL = `${RAW_BASE}/static_analysis.jsonl?${CACHE_BUSTER}`;
-const TESTDRIVER_URL = `${RAW_BASE}/testdriver.jsonl?${CACHE_BUSTER}`;
-const HISTORY_LOCAL = `./history.jsonl?t=${Date.now()}`;
-const NIGHTLY_LOCAL = `./static_analysis.jsonl?t=${Date.now()}`;
-const TESTDRIVER_LOCAL = `./testdriver.jsonl?t=${Date.now()}`;
+const HISTORY_LOCAL = `./history.jsonl?${CACHE_BUSTER}`;
+const NIGHTLY_LOCAL = `./static_analysis.jsonl?${CACHE_BUSTER}`;
+const TESTDRIVER_LOCAL = `./testdriver.jsonl?${CACHE_BUSTER}`;
+
+// Resolved at load time. If the API call fails (rate limit, offline,
+// etc.) these stay null and the fetch path uses the branch-pinned URL.
+let METRICS_SHA = null;
+
+// Staleness threshold for the TestDriver banner. 36h gives some slack
+// for weekends + DST jitter — nightly runs at 02:00 local daily.
+const STALENESS_THRESHOLD_HOURS = 36;
 
 const $status = document.getElementById("status");
+const $staleBanner = document.getElementById("staleness-banner");
 function fail(msg) { $status.classList.add("error"); $status.textContent = msg; }
+
+async function resolveMetricsSha() {
+  try {
+    const r = await fetch(BRANCH_API, { cache: "no-store" });
+    if (!r.ok) return null;
+    const j = await r.json();
+    return j?.commit?.sha || null;
+  } catch { return null; }
+}
+
+function rawUrl(fileName) {
+  // SHA-pinned raw URLs are immutable, so Fastly serves them cold to
+  // any caller — exactly what we want for "show me TODAY's nightly
+  // row immediately" after the page loads. Falls back to branch URL.
+  if (METRICS_SHA) {
+    return `https://raw.githubusercontent.com/${REPO}/${METRICS_SHA}/metrics/${fileName}`;
+  }
+  return `${RAW_BRANCH_BASE}/${fileName}?${CACHE_BUSTER}`;
+}
+
+function hoursSince(isoTs) {
+  if (!isoTs) return Infinity;
+  const ms = Date.now() - new Date(isoTs).getTime();
+  if (Number.isNaN(ms)) return Infinity;
+  return ms / (1000 * 60 * 60);
+}
+
+function showStalenessBanner(latestTs) {
+  if (!$staleBanner) return;
+  const hrs = hoursSince(latestTs);
+  if (hrs <= STALENESS_THRESHOLD_HOURS) {
+    $staleBanner.classList.add("hidden");
+    return;
+  }
+  const days = Math.floor(hrs / 24);
+  const pretty = days >= 2
+    ? `${days} days ago`
+    : `${Math.floor(hrs)} hours ago`;
+  $staleBanner.innerHTML =
+    `&#9888; <strong>Metrics stale</strong> &mdash; last successful TestDriver run ${pretty}. ` +
+    `Check <code>~/Library/Logs/VideoScan/nightly_test_*.log</code> on the Mac Studio.`;
+  $staleBanner.classList.remove("hidden");
+}
 
 function parseJsonl(text) {
   return text.split("\n")
@@ -378,7 +457,10 @@ function drawLine(canvasId, labels, datasets) {
 
 async function fetchText(remote, local) {
   try {
-    const r = await fetch(remote);
+    // `cache: no-store` skips the browser cache; SHA-pinned URLs are
+    // already CDN-cold but the browser may still serve a stale copy on
+    // a refresh-within-session.
+    const r = await fetch(remote, { cache: "no-store" });
     if (r.ok) return await r.text();
   } catch {}
   try {
@@ -397,8 +479,12 @@ function dateLabels(rows) {
 }
 
 async function loadData() {
+  // Resolve a SHA for the metrics branch first so subsequent fetches go
+  // to immutable URLs. Null is fine — fetchText will use the branch URL.
+  METRICS_SHA = await resolveMetricsSha();
+
   // ---- Per-push history ----
-  const historyText = await fetchText(HISTORY_URL, HISTORY_LOCAL);
+  const historyText = await fetchText(rawUrl("history.jsonl"), HISTORY_LOCAL);
   if (!historyText) {
     fail("No metrics data available. Push to main or run scripts/collect_metrics.sh locally.");
     return;
@@ -414,7 +500,7 @@ async function loadData() {
   const prev = rows.length > 1 ? rows[rows.length - 2] : {};
 
   // ---- Nightly static analysis (optional \u2014 may not exist yet) ----
-  const nightlyText = await fetchText(NIGHTLY_URL, NIGHTLY_LOCAL);
+  const nightlyText = await fetchText(rawUrl("static_analysis.jsonl"), NIGHTLY_LOCAL);
   const nightlyRows = nightlyText ? parseJsonl(nightlyText) : [];
   nightlyRows.sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
   const nLast = nightlyRows.length ? nightlyRows[nightlyRows.length - 1] : {};
@@ -510,11 +596,22 @@ async function loadData() {
   drawLine("chart-regressions", labels, [{ label: "regression markers", data: col("regression_count"), ...lineStyle("#bc8cff") }]);
 
   // ---- TestDriver (local runs) ----
-  const tdText = await fetchText(TESTDRIVER_URL, TESTDRIVER_LOCAL);
+  const tdText = await fetchText(rawUrl("testdriver.jsonl"), TESTDRIVER_LOCAL);
   const tdRows = tdText ? parseJsonl(tdText) : [];
   tdRows.sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
   const tdLast = tdRows.length ? tdRows[tdRows.length - 1] : {};
   const tdPrev = tdRows.length > 1 ? tdRows[tdRows.length - 2] : {};
+
+  // ---- Staleness banner ----
+  // Show only if the freshest TestDriver row is older than the threshold.
+  // We intentionally pick the most recent ts (any status — even a `skipped`
+  // row counts as proof the nightly is alive). If we had ZERO rows we also
+  // show the banner — that's the "never ran" case.
+  if (tdRows.length === 0) {
+    showStalenessBanner(null);
+  } else {
+    showStalenessBanner(tdLast.ts);
+  }
 
   const tdCardsEl = document.getElementById("td-cards");
   if (tdRows.length) {
