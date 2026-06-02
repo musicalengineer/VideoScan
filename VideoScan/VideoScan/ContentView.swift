@@ -96,6 +96,13 @@ struct ContentView: View {
         }
         .frame(minWidth: 900, minHeight: 600)
         .onAppear {
+            // Wire PersonFinder scan code to the shared DashboardState
+            // (visionFPS / msPerFrame / workers updates flow through here).
+            // Moved out of PersonFinderView so that view can stop subscribing
+            // to DashboardState's 51 @Published props — the subscription was
+            // the dominant SwiftUI hot path during long scans.
+            personFinderModel.dashboard = model.dashboard
+
             // Bridge PersonFinder scan completions to catalog writeback:
             // every "Donna found in /v/X.mov" produces a tag on that
             // VideoRecord — confirmed matches go to `detectedPeople`,
