@@ -1125,12 +1125,14 @@ struct CatalogContent: View {
                                         ForEach(byVolume.keys.sorted(), id: \.self) { vol in
                                             if let files = byVolume[vol] {
                                                 Section(vol) {
-                                                    // Explicit `id:` disambiguates SwiftUI's
-                                                    // `ForEach` from Charts' `ForEach` on Xcode
-                                                    // 16.4 (older toolchain mis-resolves the
-                                                    // overload when Charts is transitively
-                                                    // visible). Harmless on newer toolchains.
-                                                    ForEach(files, id: \.id) { match in
+                                                    // Fully-qualify SwiftUI.ForEach so Xcode 16.4
+                                                    // doesn't mis-resolve to Charts' ForEach inside
+                                                    // a Menu→Section block. The first attempt to
+                                                    // add `id: \.id` wasn't enough — Charts also
+                                                    // exposes an (data, id:, content:) overload.
+                                                    // Namespacing is the only foolproof fix on the
+                                                    // older toolchain. Harmless on Xcode 26.3.
+                                                    SwiftUI.ForEach(files) { match in
                                                         Button(match.filename) {
                                                             NSWorkspace.shared.selectFile(
                                                                 match.fullPath,
