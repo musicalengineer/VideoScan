@@ -1399,22 +1399,30 @@ struct CatalogContent: View {
     /// Same root cause as `tagColumnCell` below — see commit history.
     @ViewBuilder
     private func onlineCopyMenu(onlineMatches: [VideoRecord]) -> some View {
+        // Flatten to a single (label, match) list and prefix the volume name
+        // onto each button. We previously grouped with Section, but on
+        // Xcode 16.4 Charts contributes a `Section`/`ForEach` overload
+        // pair whose result-builder context (ChartContentBuilder) wins
+        // overload resolution and breaks the build. Flattening sidesteps
+        // the whole problem — one ForEach, one Button per row, no Section.
+        // UX cost is small: instead of grouped submenu sections we get
+        // "Volume — filename" labels in a single list.
         let byVolume = Dictionary(grouping: onlineMatches) {
             VolumeReachability.displayLabel(forPath: $0.fullPath)
         }
-        let volumePairs: [(label: String, files: [VideoRecord])] =
-            byVolume.keys.sorted().map { ($0, byVolume[$0] ?? []) }
+        let flat: [(id: UUID, label: String, path: String)] =
+            byVolume.keys.sorted().flatMap { vol -> [(UUID, String, String)] in
+                (byVolume[vol] ?? []).map { match in
+                    (match.id, "\(vol) — \(match.filename)", match.fullPath)
+                }
+            }
         Menu("Find Online Copy (\(onlineMatches.count))") {
-            ForEach(volumePairs, id: \.label) { pair in
-                Section(pair.label) {
-                    ForEach(pair.files) { match in
-                        Button(match.filename) {
-                            NSWorkspace.shared.selectFile(
-                                match.fullPath,
-                                inFileViewerRootedAtPath: ""
-                            )
-                        }
-                    }
+            ForEach(flat, id: \.id) { entry in
+                Button(entry.label) {
+                    NSWorkspace.shared.selectFile(
+                        entry.path,
+                        inFileViewerRootedAtPath: ""
+                    )
                 }
             }
         }
