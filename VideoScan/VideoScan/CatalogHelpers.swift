@@ -1118,31 +1118,11 @@ struct CatalogContent: View {
                                 }
 
                                 if !onlineMatches.isEmpty {
-                                    // Pre-flatten the per-volume grouping into a sorted [(label, files)]
-                                    // array. Doing the lookup outside the view builder avoids the
-                                    // `if let files = byVolume[vol]` branch that confused Xcode 16.4's
-                                    // result-builder inference (it was picking ChartContentBuilder for
-                                    // the conditional content, then poisoning the inner ForEach/Section
-                                    // overloads). No behavior change on Xcode 26.3.
-                                    let byVolume = Dictionary(grouping: onlineMatches) {
-                                        VolumeReachability.displayLabel(forPath: $0.fullPath)
-                                    }
-                                    let volumePairs: [(label: String, files: [VideoRecord])] =
-                                        byVolume.keys.sorted().map { ($0, byVolume[$0] ?? []) }
-                                    Menu("Find Online Copy (\(onlineMatches.count))") {
-                                        ForEach(volumePairs, id: \.label) { pair in
-                                            Section(pair.label) {
-                                                ForEach(pair.files) { match in
-                                                    Button(match.filename) {
-                                                        NSWorkspace.shared.selectFile(
-                                                            match.fullPath,
-                                                            inFileViewerRootedAtPath: ""
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
+                                    // Extracted to a dedicated method so Xcode 16.4 has a tiny,
+                                    // isolated type-check context for the Menu→ForEach→Section→
+                                    // ForEach chain. Inline, the compiler was leaking
+                                    // ChartContentBuilder candidates into overload resolution.
+                                    onlineCopyMenu(onlineMatches: onlineMatches)
                                 }
 
                                 Menu("All Matches (\(groupMatches.count))") {
@@ -1403,6 +1383,39 @@ struct CatalogContent: View {
                 }
                 .frame(height: 140)
                 .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    /// Extracted "Find Online Copy" submenu for the active-row context
+    /// menu. Inlining `Menu { ForEach { Section { ForEach { Button } } } }`
+    /// inside the row's context menu confused Xcode 16.4's overload
+    /// resolution — Charts' `ChartContentBuilder` was leaking into the
+    /// candidate set for the nested Section/ForEach combinations,
+    /// producing "result builder 'ChartContentBuilder' does not implement
+    /// any 'buildBlock'" errors. Encapsulating the menu in a dedicated
+    /// `@ViewBuilder` function gives the compiler a small, isolated
+    /// type-check context where the SwiftUI ViewBuilder candidates win.
+    /// Same root cause as `tagColumnCell` below — see commit history.
+    @ViewBuilder
+    private func onlineCopyMenu(onlineMatches: [VideoRecord]) -> some View {
+        let byVolume = Dictionary(grouping: onlineMatches) {
+            VolumeReachability.displayLabel(forPath: $0.fullPath)
+        }
+        let volumePairs: [(label: String, files: [VideoRecord])] =
+            byVolume.keys.sorted().map { ($0, byVolume[$0] ?? []) }
+        Menu("Find Online Copy (\(onlineMatches.count))") {
+            ForEach(volumePairs, id: \.label) { pair in
+                Section(pair.label) {
+                    ForEach(pair.files) { match in
+                        Button(match.filename) {
+                            NSWorkspace.shared.selectFile(
+                                match.fullPath,
+                                inFileViewerRootedAtPath: ""
+                            )
+                        }
+                    }
+                }
             }
         }
     }
