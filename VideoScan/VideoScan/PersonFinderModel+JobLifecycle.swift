@@ -456,6 +456,7 @@ extension PersonFinderModel {
         Task { await job.pauseGate.pause() }
         job.status = .paused
         job.completedAt = Date()
+        job.pauseElapsedTimer()
         osLog.info("Job paused: \(job.searchPath, privacy: .public)")
         let personName = job.assignedProfile?.name ?? "(global)"
         let volumeName = URL(fileURLWithPath: job.searchPath).lastPathComponent
@@ -493,6 +494,7 @@ extension PersonFinderModel {
         guard job.status == .paused else { return }
         Task { await job.pauseGate.resume() }
         job.status = .scanning
+        job.resumeElapsedTimer()
         osLog.info("Job resumed: \(job.searchPath, privacy: .public)")
         let personName = job.assignedProfile?.name ?? "(global)"
         let volumeName = URL(fileURLWithPath: job.searchPath).lastPathComponent
@@ -778,9 +780,7 @@ extension PersonFinderModel {
                 logFn: logFn, progressFn: progressFn,
                 frameFn: { img, matched, unmatched in
                     await progressState.update {
-                        job.liveFrame = img
-                        job.liveMatchedRects = matched
-                        job.liveUnmatchedRects = unmatched
+                        job.livePreview = ScanJob.LivePreview(frame: img, matched: matched, unmatched: unmatched)
                     }
                 },
                 distFn: distFn,

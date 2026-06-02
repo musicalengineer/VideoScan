@@ -234,11 +234,11 @@ private struct ActiveJobFaceDetectView: View {
                                 .padding(.top, 2)
                         }
                     }
-                } else if let frame = job.liveFrame {
+                } else if let frame = job.livePreview.frame {
                     LiveFramePreview(
                         frame: frame,
-                        matchedRects: job.liveMatchedRects,
-                        unmatchedRects: job.liveUnmatchedRects
+                        matchedRects: job.livePreview.matched,
+                        unmatchedRects: job.livePreview.unmatched
                     )
                     .overlay(alignment: .topLeading) {
                         FaceDetectHUD(job: job)

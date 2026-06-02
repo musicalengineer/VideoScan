@@ -195,9 +195,7 @@ func pfRunArcFaceEngine(
         logFn: logFn, progressFn: progressFn,
         frameFn: { img, matched, unmatched in
             await progressState.update {
-                job.liveFrame = img
-                job.liveMatchedRects = matched
-                job.liveUnmatchedRects = unmatched
+                job.livePreview = ScanJob.LivePreview(frame: img, matched: matched, unmatched: unmatched)
             }
         },
         distFn: distFn,
