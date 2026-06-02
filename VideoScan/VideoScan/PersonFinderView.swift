@@ -11,7 +11,16 @@ private let pfViewLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "per
 // MARK: - Main View
 
 struct PersonFinderView: View {
-    @EnvironmentObject var dashboard: DashboardState
+    // NOTE: Don't subscribe to DashboardState here. Earlier this view had
+    // `@EnvironmentObject var dashboard: DashboardState` but never read
+    // `dashboard.*` in its body — only used it once in onAppear to wire
+    // `model.dashboard = dashboard`. Each of DashboardState's 51 @Published
+    // properties (visionFPS, visionMsPerFrame, visionWorkers, etc.) gets
+    // written multiple times per second during scans, retriggering this
+    // view's body and cascading through every ScanJobRow. The Matt-scan
+    // sample showed PersonFinderView.body 166× in 30s as the dominant
+    // SwiftUI hot path. Wiring is now done in ContentView, which already
+    // observes the model that owns the dashboard reference.
     @EnvironmentObject var model: PersonFinderModel
     @EnvironmentObject var catalogModel: VideoScanModel
     @AppStorage("selectedTab") private var selectedTab: Int = 0
@@ -79,9 +88,6 @@ struct PersonFinderView: View {
             }
         }
         .frame(minWidth: 960, maxHeight: .infinity, alignment: .top)
-        .onAppear {
-            model.dashboard = dashboard
-        }
     }
 
     private func sectionHeader(_ title: String, icon: String,
