@@ -1,9 +1,13 @@
 name: CI
 
+# Slim build + tests pipeline for every push to main.
+#
+# Static-analysis tooling (SwiftLint, Periphery, CodeQL, strict concurrency)
+# lives in nightly-analysis.yml. PRs no longer run CI because Rick works
+# direct-to-main per project policy (feedback_main_branch_ok).
+
 on:
   push:
-    branches: [main]
-  pull_request:
     branches: [main]
   workflow_dispatch:
 
@@ -30,24 +34,11 @@ jobs:
           swift --version
           system_profiler SPHardwareDataType | grep "Chip\|Memory"
 
-      - name: Install SwiftLint, Periphery & FFmpeg
+      - name: Install FFmpeg
         run: |
-          brew install swiftlint || true
-          # Use the homebrew-core formula (3.x), not the cask (stuck at 2.21.2).
-          brew install periphery || true
           brew install ffmpeg || true
-          echo "Periphery: $(periphery version)"
           ffmpeg -version | head -1
           ffprobe -version | head -1
-
-      - name: SwiftLint (warn-only for now)
-        run: |
-          echo "## SwiftLint Report" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          swiftlint lint --reporter emoji 2>&1 | tee -a $GITHUB_STEP_SUMMARY || true
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          swiftlint lint --reporter xcode > swiftlint-raw.txt 2>&1 || true
-          echo "SWIFTLINT_OUTPUT=$(pwd)/swiftlint-raw.txt" >> $GITHUB_ENV
 
       # Build ONCE — app + test targets. Shared DerivedData for all later steps.
       - name: Build (app + tests)
@@ -67,19 +58,6 @@ jobs:
             grep 'error:' xcodebuild-build.log | head -20
             exit 1
           fi
-
-      - name: Periphery — unused code report (non-blocking)
-        continue-on-error: true
-        run: |
-          echo "## Periphery — unused code" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          periphery scan \
-            --skip-build \
-            --index-store-path DerivedData/Index.noindex/DataStore \
-            --format xcode \
-            2>&1 | tee periphery-raw.txt | tee -a $GITHUB_STEP_SUMMARY || true
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "PERIPHERY_OUTPUT=$(pwd)/periphery-raw.txt" >> $GITHUB_ENV
 
       # ── Unit Tests ──────────────────────────────────────────────────
       # Uses test-without-building to skip the redundant rebuild.
@@ -212,7 +190,7 @@ jobs:
       # ── Metrics ─────────────────────────────────────────────────────
 
       - name: Collect metrics + push to `metrics` branch
-        if: always() && github.event_name != 'pull_request'
+        if: always()
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

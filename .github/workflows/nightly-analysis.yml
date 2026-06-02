@@ -55,6 +55,17 @@ jobs:
           # Every Swift "upcoming feature" we can flip on as a warning.
           # `enable-upcoming-feature` opts a code path into Swift 6 semantics
           # while staying on Swift 5 — perfect for nightly reporting.
+          #
+          # NOTE: `InternalImportsByDefault` is intentionally OMITTED from
+          # this list. Enabling it triggers a hard build error in
+          # swift-numerics (transitive dep via Charts):
+          #   Double+Real.swift:N: error: 'libm_cos' is internal and cannot
+          #   be referenced from a '@_transparent' function
+          # That's an upstream issue in swift-numerics's @_transparent
+          # libm shims when InternalImports is enabled; not our code.
+          # Revisit once swift-numerics is bumped past the fixed release
+          # (https://github.com/apple/swift-numerics — track @_transparent
+          # cleanup). See bug-fix dispatch 2026-06-02.
           UPCOMING_FLAGS=""
           for feat in BareSlashRegexLiterals ConciseMagicFile \
                       ForwardTrailingClosures ImplicitOpenExistentials \
@@ -62,7 +73,7 @@ jobs:
                       DisableOutwardActorInference IsolatedDefaultValues \
                       GlobalConcurrency InferSendableFromCaptures \
                       RegionBasedIsolation ExistentialAny \
-                      DeprecateApplicationMain InternalImportsByDefault; do
+                      DeprecateApplicationMain; do
             UPCOMING_FLAGS+=" -Xfrontend -enable-upcoming-feature -Xfrontend $feat"
           done
           # Compiler-side perf cliffs (type-inference >100ms).
@@ -422,6 +433,71 @@ jobs:
             swiftlint-strict.txt
             periphery-strict.txt
           retention-days: 30
+
+  # -------------------------------------------------------------------
+  # Warn-only SwiftLint + Periphery — historically lived in ci.yml on
+  # every push. Moved here 2026-06-02 to keep per-push CI focused on
+  # build+tests. Never fails the workflow; report is informational only.
+  lint-warn:
+    name: SwiftLint + Periphery (warn-only)
+    runs-on: macos-15
+    timeout-minutes: 15
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+
+      - name: Install tools
+        run: |
+          brew install swiftlint || true
+          brew install periphery || true
+          echo "Periphery: $(periphery version)"
+          echo "SwiftLint: $(swiftlint version)"
+
+      - name: SwiftLint (warn-only)
+        run: |
+          echo "## SwiftLint Report (warn-only)" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          swiftlint lint --reporter emoji 2>&1 | tee -a $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          swiftlint lint --reporter xcode > swiftlint-raw.txt 2>&1 || true
+
+      - name: Build (Periphery needs index data)
+        run: |
+          xcodebuild build \
+            -project VideoScan/VideoScan.xcodeproj \
+            -scheme VideoScan \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            MACOSX_DEPLOYMENT_TARGET=15.0 \
+            -derivedDataPath DerivedData 2>&1 | tail -20
+
+      - name: Periphery (warn-only, default retention)
+        continue-on-error: true
+        run: |
+          echo "## Periphery — unused code (warn-only)" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          periphery scan \
+            --skip-build \
+            --index-store-path DerivedData/Index.noindex/DataStore \
+            --format xcode \
+            2>&1 | tee periphery-raw.txt | tee -a $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload warn-only logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-warn
+          path: |
+            swiftlint-raw.txt
+            periphery-raw.txt
+          retention-days: 14
 
   # -------------------------------------------------------------------
   aggregate:
