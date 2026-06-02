@@ -79,18 +79,28 @@ struct SceneCaptionsTests {
         #expect(snap.records[0].sceneCaptionDate == nil)
     }
 
-    // Current schema version is 4. If this fails, someone bumped it
-    // without updating the migration tests.
-    @Test func currentVersionIs4() {
-        #expect(CatalogSnapshot.currentVersion == 4)
+    // Current schema version canary. If this fails, someone bumped
+    // CatalogSnapshot.currentVersion without adding migration tests
+    // for the new version. When updating: bump the literal AND add a
+    // `vNCatalogJson…` round-trip test below.
+    //
+    // History: v2 (legacy), v3 (added caption fields), v4 (sceneCaption
+    // model/date metadata), v5 (scanContext nested on record), v6
+    // (originVolume + originalFullPath for Bucket-A/D adoption).
+    // v5 and v6 migration tests are a known gap — only forward round-
+    // trip is covered by `vNCatalogJsonRoundTripsCaptions` below.
+    @Test func currentVersionIs6() {
+        #expect(CatalogSnapshot.currentVersion == 6)
     }
 
     // MARK: - Round-trip
 
-    // A v4 catalog with captions populated round-trips through
-    // encode + decode unchanged. Locks down encode-if-non-empty and
-    // encodeIfPresent for the new fields.
-    @Test func v4CatalogJsonRoundTripsCaptions() throws {
+    // A current-schema catalog with captions populated round-trips
+    // through encode + decode unchanged. Locks down encode-if-non-empty
+    // and encodeIfPresent for the new fields. Asserts the live schema
+    // version (currently 6) — bump the assertion when the canary above
+    // is bumped.
+    @Test func v6CatalogJsonRoundTripsCaptions() throws {
         let r = VideoRecord()
         r.fullPath = "/v/family.mov"
         r.filename = "family.mov"
@@ -107,7 +117,7 @@ struct SceneCaptionsTests {
         let data = try JSONEncoder().encode(snap)
         let decoded = try JSONDecoder().decode(CatalogSnapshot.self, from: data)
 
-        #expect(decoded.version == 4)
+        #expect(decoded.version == 6)
         #expect(decoded.records.count == 1)
         let rec = decoded.records[0]
         #expect(rec.detectedPeople == ["Donna"])
