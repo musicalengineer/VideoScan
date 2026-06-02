@@ -1118,28 +1118,26 @@ struct CatalogContent: View {
                                 }
 
                                 if !onlineMatches.isEmpty {
+                                    // Pre-flatten the per-volume grouping into a sorted [(label, files)]
+                                    // array. Doing the lookup outside the view builder avoids the
+                                    // `if let files = byVolume[vol]` branch that confused Xcode 16.4's
+                                    // result-builder inference (it was picking ChartContentBuilder for
+                                    // the conditional content, then poisoning the inner ForEach/Section
+                                    // overloads). No behavior change on Xcode 26.3.
                                     let byVolume = Dictionary(grouping: onlineMatches) {
                                         VolumeReachability.displayLabel(forPath: $0.fullPath)
                                     }
+                                    let volumePairs: [(label: String, files: [VideoRecord])] =
+                                        byVolume.keys.sorted().map { ($0, byVolume[$0] ?? []) }
                                     Menu("Find Online Copy (\(onlineMatches.count))") {
-                                        SwiftUI.ForEach(byVolume.keys.sorted(), id: \.self) { vol in
-                                            if let files = byVolume[vol] {
-                                                // Both Section and ForEach must be fully qualified
-                                                // here. Charts is transitively visible via SwiftUI
-                                                // and on Xcode 16.4 the result-builder context
-                                                // inside a Menu picks `ChartContentBuilder` for the
-                                                // Section content closure, which then poisons the
-                                                // inner ForEach overload resolution too. Qualifying
-                                                // both forces SwiftUI's ViewBuilder context.
-                                                // Harmless on Xcode 26.3.
-                                                SwiftUI.Section(vol) {
-                                                    SwiftUI.ForEach(files) { match in
-                                                        Button(match.filename) {
-                                                            NSWorkspace.shared.selectFile(
-                                                                match.fullPath,
-                                                                inFileViewerRootedAtPath: ""
-                                                            )
-                                                        }
+                                        ForEach(volumePairs, id: \.label) { pair in
+                                            Section(pair.label) {
+                                                ForEach(pair.files) { match in
+                                                    Button(match.filename) {
+                                                        NSWorkspace.shared.selectFile(
+                                                            match.fullPath,
+                                                            inFileViewerRootedAtPath: ""
+                                                        )
                                                     }
                                                 }
                                             }
