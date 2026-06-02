@@ -1125,7 +1125,12 @@ struct CatalogContent: View {
                                         ForEach(byVolume.keys.sorted(), id: \.self) { vol in
                                             if let files = byVolume[vol] {
                                                 Section(vol) {
-                                                    ForEach(files) { match in
+                                                    // Explicit `id:` disambiguates SwiftUI's
+                                                    // `ForEach` from Charts' `ForEach` on Xcode
+                                                    // 16.4 (older toolchain mis-resolves the
+                                                    // overload when Charts is transitively
+                                                    // visible). Harmless on newer toolchains.
+                                                    ForEach(files, id: \.id) { match in
                                                         Button(match.filename) {
                                                             NSWorkspace.shared.selectFile(
                                                                 match.fullPath,
