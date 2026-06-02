@@ -27,7 +27,14 @@ struct SiliconChipView: View {
 
     @State private var pulse: Double = 0
     @State private var matchFlashStrength: Double = 0
-    private let pulseTimer = Timer.publish(every: 1.0/30.0, on: .main, in: .common).autoconnect()
+    // Pulse timer was 30 Hz — each tick invalidates @State, redraws Canvas,
+    // and re-resolves LocalizedStringKey for the load-percent Text labels.
+    // That heavy Canvas-with-Text path was the dominant SwiftUI render cost
+    // (sample during a "Delete permanently" hang showed it eating ~6.7 s of
+    // 10 s on the main thread). 8 Hz keeps the 15% breathing animation and
+    // 0.7 s match-flash decay visually smooth at a fraction of the cost.
+    private static let pulseHz: Double = 8.0
+    private let pulseTimer = Timer.publish(every: 1.0 / pulseHz, on: .main, in: .common).autoconnect()
 
     private var pCoreLoad: Double {
         // cpuLoad1 is system-wide load average, scale by core count
@@ -90,7 +97,7 @@ struct SiliconChipView: View {
                 .frame(height: 150)
         }
         .onReceive(pulseTimer) { _ in
-            pulse += 1.0/30.0
+            pulse += 1.0 / Self.pulseHz
             // Decay match flash
             if let last = dashboard.lastMatchFlashAt {
                 let age = Date().timeIntervalSince(last)
@@ -173,7 +180,8 @@ struct MiniSiliconChipView: View {
     @ObservedObject var dashboard: DashboardState
 
     @State private var matchFlashStrength: Double = 0
-    private let pulseTimer = Timer.publish(every: 1.0/15.0, on: .main, in: .common).autoconnect()
+    // Was 15 Hz — same SwiftUI render-budget reasoning as SiliconChipView.
+    private let pulseTimer = Timer.publish(every: 1.0/8.0, on: .main, in: .common).autoconnect()
 
     private var aneLoad: Double {
         guard dashboard.visionActive else { return 0 }
