@@ -133,6 +133,14 @@ final class ScanJob: ObservableObject, Identifiable {
     /// (taskStarted ? now - taskStarted : 0). Reset on startElapsedTimer.
     fileprivate var accumulatedElapsed: TimeInterval = 0
 
+    /// Buffer for appendLog batching — lines accumulate here and flush to the
+    /// @Published `consoleLines` array once per `consoleFlushIntervalSec`.
+    /// Cuts per-line SwiftUI invalidations to per-batch (typically ~5× fewer
+    /// re-renders on the RTFD window's console pane during chatty scans).
+    private var pendingConsoleLines: [String] = []
+    private var consoleFlushScheduled: Bool = false
+    private static let consoleFlushIntervalSec: Double = 0.200
+
     /// Cooperative pause gate — tasks check this between videos
     let pauseGate = PauseGate()
 
@@ -145,9 +153,31 @@ final class ScanJob: ObservableObject, Identifiable {
     }
 
     func appendLog(_ line: String) {
-        persistentLog?.write(line)
-        consoleLines.append(line)
-        if consoleLines.count > 2000 { consoleLines.removeFirst(consoleLines.count - 2000) }
+        persistentLog?.write(line)  // disk write is immediate — crash-safe
+        pendingConsoleLines.append(line)
+        scheduleConsoleFlush()
+    }
+
+    /// Schedule a single flush of pendingConsoleLines into the @Published
+    /// consoleLines array. Idempotent — multiple appendLog calls within the
+    /// flush window coalesce into one publish.
+    private func scheduleConsoleFlush() {
+        if consoleFlushScheduled { return }
+        consoleFlushScheduled = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(Int(Self.consoleFlushIntervalSec * 1000)))
+            self?.flushConsoleLines()
+        }
+    }
+
+    private func flushConsoleLines() {
+        consoleFlushScheduled = false
+        guard !pendingConsoleLines.isEmpty else { return }
+        consoleLines.append(contentsOf: pendingConsoleLines)
+        pendingConsoleLines.removeAll(keepingCapacity: true)
+        if consoleLines.count > 2000 {
+            consoleLines.removeFirst(consoleLines.count - 2000)
+        }
     }
 
     func reset() {
@@ -158,6 +188,8 @@ final class ScanJob: ObservableObject, Identifiable {
         videosTotal = 0; videosScanned = 0; videosWithHits = 0
         clipsFound = 0; presenceSecs = 0
         results = []; consoleLines = []
+        pendingConsoleLines.removeAll(keepingCapacity: false)
+        consoleFlushScheduled = false
         compiledVideoPaths = []; elapsedSecs = 0
         compilationStatus = .idle; compilationProgress = 0
         compilationPhase = ""; compilationClipsTotal = 0; compilationClipsDone = 0
@@ -184,7 +216,13 @@ final class ScanJob: ObservableObject, Identifiable {
         accumulatedElapsed = 0
         timerTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(500))
+                // 1 Hz is enough for the displayed "elapsed 0:01:23" — the
+                // earlier 2 Hz tick was overkill and contributed a steady
+                // background of @Published invalidations to every observer
+                // of the ScanJob (ScanJobRow, RTFD window, etc.). With 4
+                // concurrent jobs the prior rate produced ~240 extra
+                // invalidations per 30 s window.
+                try? await Task.sleep(for: .seconds(1))
                 await MainActor.run { [weak self] in
                     guard let self else { return }
                     let live = self.taskStarted.map { Date().timeIntervalSince($0) } ?? 0
@@ -213,6 +251,10 @@ final class ScanJob: ObservableObject, Identifiable {
         if let s = taskStarted { accumulatedElapsed += Date().timeIntervalSince(s) }
         elapsedSecs = accumulatedElapsed
         taskStarted = nil
+        // Drain any buffered console lines so the final state shown to the
+        // user reflects everything that was logged, not just up to the last
+        // scheduled flush.
+        flushConsoleLines()
     }
 }
 

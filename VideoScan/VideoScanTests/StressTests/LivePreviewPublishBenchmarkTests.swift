@@ -148,6 +148,59 @@ struct LivePreviewPublishBenchmarkTests {
     }
 }
 
+// MARK: - appendLog batching benchmark
+//
+// Question: does the 200ms flush window in ScanJob.appendLog actually coalesce
+// many per-line @Published invalidations into one per-batch invalidation on
+// `consoleLines`? Verified by counting objectWillChange notifications during
+// a rapid append burst.
+
+@MainActor
+struct AppendLogBatchingBenchmarkTests {
+
+    @Test func rapidAppendLogCoalescesIntoSinglePublishPerWindow() async throws {
+        let job = ScanJob(searchPath: "/tmp")
+        var notifications = 0
+        let sub = job.objectWillChange.sink { _ in notifications += 1 }
+        defer { sub.cancel() }
+
+        // 100 rapid log lines — synchronous, no awaits between them so they
+        // all land within a single 200 ms flush window.
+        for i in 0..<100 {
+            job.appendLog("line \(i)")
+        }
+        let immediateNotifications = notifications
+
+        // Wait for the flush — 200 ms window + slack.
+        try await Task.sleep(for: .milliseconds(400))
+        let afterFlush = notifications
+
+        LivePreviewPublishBenchmarkTests.logLine("appendLog: 100 calls fired \(immediateNotifications) immediate + \(afterFlush - immediateNotifications) flush notifications (= \(afterFlush) total)")
+
+        // Immediate path: appendLog only mutates pendingConsoleLines (not
+        // @Published), so we expect 0 sends during the append burst.
+        #expect(immediateNotifications == 0, "appendLog mutates non-@Published buffer; expected 0 immediate sends, got \(immediateNotifications)")
+
+        // After flush: one append(contentsOf:) on consoleLines fires one
+        // objectWillChange send. (No overflow trim needed at 100 lines.)
+        #expect(afterFlush <= 2, "Expected ≤2 total notifications after flush; got \(afterFlush)")
+        #expect(job.consoleLines.count == 100, "All buffered lines should land in consoleLines")
+    }
+
+    @Test func appendLogDuringScanDoesNotLeavePendingLinesAfterStop() async throws {
+        let job = ScanJob(searchPath: "/tmp")
+        for i in 0..<10 {
+            job.appendLog("scan line \(i)")
+        }
+        // Simulate the producer side calling stop before the 200 ms flush
+        // fires — drain must still happen.
+        job.startElapsedTimer()
+        job.stopElapsedTimer()
+
+        #expect(job.consoleLines.count == 10, "stopElapsedTimer should drain pending console lines")
+    }
+}
+
 // MARK: - Pause-aware elapsed timer correctness
 //
 // Verifies the new pauseElapsedTimer / resumeElapsedTimer behavior: paused
