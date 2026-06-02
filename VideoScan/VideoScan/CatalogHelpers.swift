@@ -341,27 +341,23 @@ struct CatalogToolbar<Dashboard: View>: View {
                 records: snapshot,
                 onCancel: { /* dismiss is automatic */ },
                 onAct: { mode in
-                    // The button list rendered above used the `snapshot`
-                    // computed at sheet-open time. Re-query the model so a
-                    // record tagged after we opened the sheet doesn't miss
-                    // the pass. (Same query, but evaluated against current
-                    // state.) Bytes for the result sheet sum over the
-                    // pre-deletion snapshot so the "freed X GB" reading
-                    // matches what the confirmation sheet promised.
-                    let targets = model.records.filter {
-                        $0.mediaDisposition == .confirmedJunk && $0.purgedAt == nil
-                    }
-                    // bytesBefore covers only reachable records — offline
-                    // ones get skipped without a disk op, so they
-                    // shouldn't show up in the "freed N GB" reading.
-                    let split = VideoScanModel.splitByReachability(targets)
-                    let bytesBefore = split.reachableBytes
-                    // deleteConfirmedJunk is async — the disk loop runs
-                    // off the main thread so the UI stays responsive on
-                    // big batches. The onAct closure isn't async, so wrap
-                    // the await in a Task. The function is @MainActor so
-                    // the continuation lands back on main automatically.
-                    Task {
+                    // CRITICAL: defer ALL work into the Task. The Button
+                    // calls onAct() and then dismiss(); anything synchronous
+                    // in onAct blocks the main thread before dismiss can
+                    // run, which freezes the sheet dismiss animation
+                    // partway through (half-iconified frozen-sheet
+                    // symptom). splitByReachability can touch the file
+                    // system to probe mount points and varies in latency.
+                    Task { @MainActor in
+                        // Re-query the model so a record tagged after we
+                        // opened the sheet doesn't miss the pass.
+                        let targets = model.records.filter {
+                            $0.mediaDisposition == .confirmedJunk && $0.purgedAt == nil
+                        }
+                        // bytesBefore covers only reachable records —
+                        // offline ones get skipped without a disk op.
+                        let split = VideoScanModel.splitByReachability(targets)
+                        let bytesBefore = split.reachableBytes
                         let result = await model.deleteConfirmedJunk(
                             targets, mode: mode)
                         junkResult = result

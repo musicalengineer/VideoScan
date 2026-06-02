@@ -274,17 +274,19 @@ struct TriageView: View {
                 records: snapshot,
                 onCancel: { /* dismiss is automatic */ },
                 onAct: { mode in
-                    let targets = model.records.filter {
-                        $0.mediaDisposition == .confirmedJunk && $0.purgedAt == nil
-                    }
-                    let split = VideoScanModel.splitByReachability(targets)
-                    let bytesBefore = split.reachableBytes
-                    // deleteConfirmedJunk is async — the disk loop runs
-                    // off the main thread so the UI stays responsive on
-                    // big batches. The onAct closure isn't async, so
-                    // wrap the await in a Task. The function is
-                    // @MainActor so the continuation lands back on main.
-                    Task {
+                    // CRITICAL: defer ALL work into the Task. The Button
+                    // calls onAct() then dismiss() — anything synchronous
+                    // here blocks the main thread before dismiss can run,
+                    // which freezes the sheet dismiss animation partway
+                    // through (half-iconified frozen sheet symptom).
+                    // splitByReachability touches the file system to probe
+                    // mount points and can take seconds on slow volumes.
+                    Task { @MainActor in
+                        let targets = model.records.filter {
+                            $0.mediaDisposition == .confirmedJunk && $0.purgedAt == nil
+                        }
+                        let split = VideoScanModel.splitByReachability(targets)
+                        let bytesBefore = split.reachableBytes
                         let result = await model.deleteConfirmedJunk(
                             targets, mode: mode)
                         junkResult = result
