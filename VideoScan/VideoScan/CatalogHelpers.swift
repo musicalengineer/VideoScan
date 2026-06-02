@@ -1122,16 +1122,17 @@ struct CatalogContent: View {
                                         VolumeReachability.displayLabel(forPath: $0.fullPath)
                                     }
                                     Menu("Find Online Copy (\(onlineMatches.count))") {
-                                        ForEach(byVolume.keys.sorted(), id: \.self) { vol in
+                                        SwiftUI.ForEach(byVolume.keys.sorted(), id: \.self) { vol in
                                             if let files = byVolume[vol] {
-                                                Section(vol) {
-                                                    // Fully-qualify SwiftUI.ForEach so Xcode 16.4
-                                                    // doesn't mis-resolve to Charts' ForEach inside
-                                                    // a Menu→Section block. The first attempt to
-                                                    // add `id: \.id` wasn't enough — Charts also
-                                                    // exposes an (data, id:, content:) overload.
-                                                    // Namespacing is the only foolproof fix on the
-                                                    // older toolchain. Harmless on Xcode 26.3.
+                                                // Both Section and ForEach must be fully qualified
+                                                // here. Charts is transitively visible via SwiftUI
+                                                // and on Xcode 16.4 the result-builder context
+                                                // inside a Menu picks `ChartContentBuilder` for the
+                                                // Section content closure, which then poisons the
+                                                // inner ForEach overload resolution too. Qualifying
+                                                // both forces SwiftUI's ViewBuilder context.
+                                                // Harmless on Xcode 26.3.
+                                                SwiftUI.Section(vol) {
                                                     SwiftUI.ForEach(files) { match in
                                                         Button(match.filename) {
                                                             NSWorkspace.shared.selectFile(
