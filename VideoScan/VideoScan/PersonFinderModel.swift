@@ -107,10 +107,16 @@ final class ScanJob: ObservableObject, Identifiable {
     nonisolated(unsafe) var recognitionResults: [pfVideoResult] = []
     nonisolated(unsafe) var recognitionOutputDir: String = ""
 
-    // Live frame preview
-    @Published var liveFrame: CGImage?
-    @Published var liveMatchedRects: [CGRect] = []     // Vision normalized coords, bottom-left origin
-    @Published var liveUnmatchedRects: [CGRect] = []
+    // Live frame preview — three values that always change together,
+    // packed into one @Published so each per-frame update fires a single
+    // SwiftUI invalidation instead of three. Coords are Vision normalized,
+    // bottom-left origin (matches the producer side).
+    struct LivePreview: Equatable {
+        var frame: CGImage?
+        var matched: [CGRect] = []
+        var unmatched: [CGRect] = []
+    }
+    @Published var livePreview: LivePreview = .init()
 
     // Best feature-print distance seen across all videos (lower = closer match)
     @Published var bestDist: Float = .greatestFiniteMagnitude
@@ -123,6 +129,9 @@ final class ScanJob: ObservableObject, Identifiable {
     var scanTask: Task<Void, Never>?
     var timerTask: Task<Void, Never>?
     fileprivate var taskStarted: Date?
+    /// Wall time accumulated across pauses. elapsedSecs = accumulatedElapsed +
+    /// (taskStarted ? now - taskStarted : 0). Reset on startElapsedTimer.
+    fileprivate var accumulatedElapsed: TimeInterval = 0
 
     /// Cooperative pause gate — tasks check this between videos
     let pauseGate = PauseGate()
@@ -153,9 +162,10 @@ final class ScanJob: ObservableObject, Identifiable {
         compilationStatus = .idle; compilationProgress = 0
         compilationPhase = ""; compilationClipsTotal = 0; compilationClipsDone = 0
         recognitionResults = []; recognitionOutputDir = ""
-        liveFrame = nil; liveMatchedRects = []; liveUnmatchedRects = []
+        livePreview = .init()
         bestDist = .greatestFiniteMagnitude
         scanTask = nil; timerTask = nil; compilationTask = nil; taskStarted = nil
+        accumulatedElapsed = 0
     }
 
     func finalizeResults(_ filtered: [ClipResult]) {
@@ -171,20 +181,37 @@ final class ScanJob: ObservableObject, Identifiable {
 
     func startElapsedTimer() {
         taskStarted = Date()
+        accumulatedElapsed = 0
         timerTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .milliseconds(500))
                 await MainActor.run { [weak self] in
-                    guard let self, let s = self.taskStarted else { return }
-                    self.elapsedSecs = Date().timeIntervalSince(s)
+                    guard let self else { return }
+                    let live = self.taskStarted.map { Date().timeIntervalSince($0) } ?? 0
+                    self.elapsedSecs = self.accumulatedElapsed + live
                 }
             }
         }
     }
 
+    /// Freeze the wall-clock contribution into the accumulator so the next
+    /// timer tick reads "paused elapsed = accumulator + 0". pauseJob calls this.
+    func pauseElapsedTimer() {
+        if let s = taskStarted {
+            accumulatedElapsed += Date().timeIntervalSince(s)
+            taskStarted = nil
+        }
+    }
+
+    /// Resume wall-clock counting from the current accumulator.
+    func resumeElapsedTimer() {
+        if taskStarted == nil { taskStarted = Date() }
+    }
+
     func stopElapsedTimer() {
         timerTask?.cancel()
-        if let s = taskStarted { elapsedSecs = Date().timeIntervalSince(s) }
+        if let s = taskStarted { accumulatedElapsed += Date().timeIntervalSince(s) }
+        elapsedSecs = accumulatedElapsed
         taskStarted = nil
     }
 }
