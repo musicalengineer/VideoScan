@@ -1286,18 +1286,14 @@ struct CatalogView: View {
 
     private var volumeTable: some View {
         Table(volumeTableRows, selection: $selectedVolumeIDs, sortOrder: $volumeTableSortOrder) {
-            // Note: the per-cell `.onTapGesture(count: 2)` previously here
-            // (one per column, opened the Volumes editor) was removed
-            // because SwiftUI's gesture arbiter has to wait the
-            // double-tap window before it can resolve a single click,
-            // which delayed the Table's selection highlight on every
-            // mouse click — a classic "click sometimes highlights,
-            // sometimes doesn't" feel. Keyboard nav was unaffected
-            // because it bypasses gesture recognition. Double-click to
-            // open the Volumes editor needs to come back via NSEvent
-            // monitor or a non-gesture path; for now Rick uses
-            // right-click → Volume Roles & Archive… or Cmd+E from the
-            // selected row.
+            // Cells are now plain — no per-cell tap gestures. Double-
+            // click to open the editor is handled by the Table's
+            // `.contextMenu(forSelectionType:menu:primaryAction:)`
+            // modifier below (canonical SwiftUI `Table` equivalent of
+            // NSTableView.doubleAction, macOS 13+). Single-click
+            // selection stays snappy because `primaryAction` is
+            // dispatched independently of selection — no gesture-
+            // arbiter tap-count window.
             TableColumn("Volume", value: \VolumeRow.name) { row in
                 HStack(spacing: 6) {
                     Text(row.name)
@@ -1460,8 +1456,18 @@ struct CatalogView: View {
             }
             .width(min: 55, ideal: 70)
         }
+        // `primaryAction:` is SwiftUI's canonical equivalent of
+        // NSTableView.doubleAction — fires on double-click OR Return
+        // when a row is keyboard-focused. Dispatched independently of
+        // the Table's selection binding, so single-click selection
+        // stays snappy (no gesture-arbiter tap-count window). This
+        // replaces the per-cell `.onTapGesture(count: 2)` /
+        // `.simultaneousGesture(TapGesture(count: 2))` approaches that
+        // both delayed single-click selection by ~250 ms.
         .contextMenu(forSelectionType: UUID.self) { ids in
             volumeContextMenu(for: ids)
+        } primaryAction: { ids in
+            if let id = ids.first { openVolumesEditor(for: id) }
         }
         .font(.system(size: 14))
     }
