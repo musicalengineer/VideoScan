@@ -340,56 +340,17 @@ struct CatalogToolbar<Dashboard: View>: View {
             DeleteConfirmedJunkConfirmSheet(
                 records: snapshot,
                 onCancel: { /* dismiss is automatic */ },
-                onAct: { mode in
-                    // CRITICAL: defer ALL work into the Task. The Button
-                    // calls onAct() and then dismiss(); anything synchronous
-                    // in onAct blocks the main thread before dismiss can
-                    // run, which freezes the sheet dismiss animation
-                    // partway through (half-iconified frozen-sheet
-                    // symptom). splitByReachability can touch the file
-                    // system to probe mount points and varies in latency.
-                    Task { @MainActor in
-                        // Re-query the model so a record tagged after we
-                        // opened the sheet doesn't miss the pass.
-                        let targets = model.records.filter {
-                            $0.mediaDisposition == .confirmedJunk && $0.purgedAt == nil
-                        }
-                        // bytesBefore covers only reachable records —
-                        // offline ones get skipped without a disk op.
-                        let split = VideoScanModel.splitByReachability(targets)
-                        let bytesBefore = split.reachableBytes
-                        let result = await model.deleteConfirmedJunk(
-                            targets, mode: mode)
-                        junkResult = result
-                        junkResultMode = mode
-                        // Only count the bytes that actually succeeded —
-                        // failed records weren't moved/removed;
-                        // alreadyMissing had zero bytes from our
-                        // perspective (file was gone before we touched
-                        // it); skippedOffline ditto (we never touched
-                        // the disk). For accuracy we approximate by
-                        // scaling: succeeded over the
-                        // attempted-minus-noops denominator applied to
-                        // the reachable bytesBefore. Cleaner alternative
-                        // would be returning per-record bytes from the
-                        // model; this approximation is good enough for
-                        // the result sheet's human-readable summary and
-                        // keeps the model API narrow.
-                        let actionable = max(
-                            result.attempted - result.alreadyMissing - result.skippedOffline,
-                            0
-                        )
-                        junkResultBytesSucceeded = actionable > 0
-                            ? Int64(Double(bytesBefore) * Double(result.succeeded) / Double(actionable))
-                            : 0
-                        // Chained .sheet trap: flipping the result-sheet
-                        // flag synchronously collides with the confirm
-                        // sheet's dismiss animation — SwiftUI only allows
-                        // one sheet per view at a time. Defer just past
-                        // the dismiss animation window.
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                            showJunkResultSheet = true
-                        }
+                onAct: JunkDeleteAction.makeOnAct(model: model) { result, mode, bytesSucceeded in
+                    junkResult = result
+                    junkResultMode = mode
+                    junkResultBytesSucceeded = bytesSucceeded
+                    // Chained .sheet trap: flipping the result-sheet
+                    // flag synchronously collides with the confirm
+                    // sheet's dismiss animation — SwiftUI only allows
+                    // one sheet per view at a time. Defer just past
+                    // the dismiss animation window.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        showJunkResultSheet = true
                     }
                 }
             )
