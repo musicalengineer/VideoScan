@@ -273,42 +273,16 @@ struct TriageView: View {
             DeleteConfirmedJunkConfirmSheet(
                 records: snapshot,
                 onCancel: { /* dismiss is automatic */ },
-                onAct: { mode in
-                    // CRITICAL: defer ALL work into the Task. The Button
-                    // calls onAct() then dismiss() — anything synchronous
-                    // here blocks the main thread before dismiss can run,
-                    // which freezes the sheet dismiss animation partway
-                    // through (half-iconified frozen sheet symptom).
-                    // splitByReachability touches the file system to probe
-                    // mount points and can take seconds on slow volumes.
-                    Task { @MainActor in
-                        let targets = model.records.filter {
-                            $0.mediaDisposition == .confirmedJunk && $0.purgedAt == nil
-                        }
-                        let split = VideoScanModel.splitByReachability(targets)
-                        let bytesBefore = split.reachableBytes
-                        let result = await model.deleteConfirmedJunk(
-                            targets, mode: mode)
-                        junkResult = result
-                        junkResultMode = mode
-                        let actionable = max(
-                            result.attempted - result.alreadyMissing - result.skippedOffline,
-                            0
-                        )
-                        junkResultBytesSucceeded = actionable > 0
-                            ? Int64(Double(bytesBefore) * Double(result.succeeded) / Double(actionable))
-                            : 0
-                        // SwiftUI only allows one sheet active per view
-                        // at a time. Flipping showJunkResultSheet true
-                        // synchronously here collides with the confirm
-                        // sheet's dismiss animation — the result sheet
-                        // tries to present while the confirm sheet is
-                        // still on-screen → UI hangs with a
-                        // half-dismissed sheet stub. Defer just past
-                        // the dismiss animation window.
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                            showJunkResultSheet = true
-                        }
+                onAct: JunkDeleteAction.makeOnAct(model: model) { result, mode, bytesSucceeded in
+                    junkResult = result
+                    junkResultMode = mode
+                    junkResultBytesSucceeded = bytesSucceeded
+                    // SwiftUI only allows one sheet active per view at a
+                    // time. Flipping showJunkResultSheet synchronously
+                    // here collides with the confirm sheet's dismiss
+                    // animation. Defer just past the dismiss window.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        showJunkResultSheet = true
                     }
                 }
             )
