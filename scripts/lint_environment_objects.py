@@ -90,8 +90,11 @@ ENV_OBJ_RE = re.compile(
 )
 
 # Per-declaration opt-out annotation. Place on the line BEFORE the
-# @EnvironmentObject declaration.
-OPT_OUT_LINE = "// swiftlint:disable-next-line vs-env-object-unused"
+# @EnvironmentObject declaration. Uses a `vs-lint:` prefix instead of
+# SwiftLint's `swiftlint:disable-next-line` syntax so SwiftLint doesn't
+# generate "Invalid SwiftLint Command" warnings for our custom rule
+# (the rule lives in this Python script, not in .swiftlint.yml).
+OPT_OUT_LINE = "// vs-lint:disable-next vs-env-object-unused"
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +217,7 @@ struct GoodView: View {
 SELFTEST_OPTOUT = """import SwiftUI
 
 struct OptOutView: View {
-    // swiftlint:disable-next-line vs-env-object-unused
+    // vs-lint:disable-next vs-env-object-unused
     @EnvironmentObject var dashboard: DashboardState
 
     var body: some View {
@@ -290,10 +293,9 @@ def main(argv: list[str]) -> int:
                 f"{var_name}: {type_name} is declared but never read as "
                 f"`{var_name}.<property>` in this file. The subscription "
                 f"retriggers the view's body on every @Published change "
-                f"to the {type_name} for no purpose. Drop the declaration "
-                f"and access the reference indirectly, or annotate the "
-                f"line above with `{OPT_OUT_LINE}` if forwarding is "
-                f"intentional. (vs-env-object-unused)"
+                f"to the {type_name} for no purpose. Drop the declaration, "
+                f"or annotate the line above with `{OPT_OUT_LINE}` if "
+                f"forwarding is intentional. (vs-env-object-unused)"
             )
             total_findings += 1
 

@@ -308,7 +308,7 @@ struct DriveHealthSheet: View {
     // TODO(env-object-cleanup): forwarded only via .environmentObject(model)
     // to DriveHealthCard below. Subscribing here is overhead — see
     // project_bug_prevention_strategy memory.
-    // swiftlint:disable-next-line vs-env-object-unused
+    // vs-lint:disable-next vs-env-object-unused
     @EnvironmentObject var model: VideoScanModel
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var target: CatalogScanTarget

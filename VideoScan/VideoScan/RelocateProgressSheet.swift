@@ -26,7 +26,7 @@ struct RelocateProgressSheet: View {
     // dashboard.* only. See project_bug_prevention_strategy memory; this
     // is the same forwarding-overhead antipattern as PersonFinderView's
     // dashboard cascade (fixed 2026-06-02).
-    // swiftlint:disable-next-line vs-env-object-unused
+    // vs-lint:disable-next vs-env-object-unused
     @EnvironmentObject var model: VideoScanModel
 
     // Shadow the dashboard so SwiftUI re-renders on each counter tick.
