@@ -23,12 +23,13 @@ enum JunkSheet: Identifiable {
                 VideoScanModel.JunkDeletionMode,
                 Int64)
 
-    var id: String {
-        switch self {
-        case .confirm: return "confirm"
-        case .result:  return "result"
-        }
-    }
+    /// CRITICAL: both cases return the SAME id. SwiftUI uses `id` to
+    /// decide whether an item change should animate a dismiss-then-present
+    /// cycle or just swap content in place. Different ids per case would
+    /// re-introduce the very race this enum was created to eliminate
+    /// (confirm dismiss racing result present). Same id → SwiftUI keeps
+    /// the modal context alive and switches content atomically.
+    var id: String { "junkSheet" }
 }
 
 // MARK: - JunkDeleteAction
