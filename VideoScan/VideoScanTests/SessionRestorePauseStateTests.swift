@@ -115,6 +115,68 @@ struct SessionRestorePauseStateTests {
         #expect(abs(got - expected) < 0.01, "Paused progress should be \(expected), got \(got)")
     }
 
+    @Test func resumeFromDiskPausedJobInvokesStartJobPath() async throws {
+        _ = try Self.cleanStore()
+
+        // Persist a paused-state descriptor for a volume that won't be
+        // mounted during the test — startJob's first guard inside its
+        // restored-from-disk branch is the reachability check, so we get
+        // a deterministic "fell through into startJob" signal: status
+        // transitions to .failed with an "offline" message instead of
+        // staying at .paused.
+        let descriptor = PersistedJobDescriptor(
+            id: UUID(),
+            personName: "TestPerson",
+            profileFolderName: nil,
+            searchPath: "/Volumes/_DefinitelyNotMounted_VS_RestoreResumeTest",
+            engine: "vision",
+            threshold: 0.5,
+            referencePath: "",
+            referenceFilenames: [],
+            completedAt: Date(),
+            videosScanned: 50,
+            videosTotal: 100,
+            videosWithHits: 0,
+            clipsFound: 0,
+            presenceSecs: 0,
+            elapsedSecs: 0,
+            statusRaw: "paused"
+        )
+        try ScanJobsStorage.save(descriptor)
+
+        let model = PersonFinderModel()
+        model.restoreSessionFromDisk()
+        #expect(model.jobs.count == 1)
+        let job = model.jobs[0]
+
+        // Sanity: precondition. The earlier test already covers these but
+        // we re-assert here so a failure in this test pinpoints the
+        // resumeJob branch, not the makeJob branch.
+        #expect(job.status == .paused, "Precondition: restored job must be .paused")
+        #expect(job.wasRestoredFromDisk, "Precondition: restored job must carry the flag")
+
+        // The user clicks Resume on a from-disk paused job. The contract
+        // we're pinning down: resumeJob must route to startJob (NOT the
+        // pauseGate.resume() path, which would be a no-op since the
+        // scanTask was nil'd at app exit).
+        model.resumeJob(job)
+
+        // Three observable effects prove the startJob branch ran:
+        //  1. wasRestoredFromDisk reset to false (so a subsequent
+        //     in-process pause/resume uses the gate path).
+        //  2. status is NOT still .paused — startJob always transitions
+        //     to either .scanning (volume reachable) or .failed (not).
+        //  3. The specific .failed message contains "offline" — proves
+        //     execution reached startJob's reachability guard, not just
+        //     some other transition.
+        #expect(!job.wasRestoredFromDisk, "Flag must reset after resume")
+        if case .failed(let msg) = job.status {
+            #expect(msg.contains("offline"), "Expected offline failure msg, got: \(msg)")
+        } else {
+            Issue.record("Expected startJob's reachability guard to fire; got status=\(job.status.label) — likely means resumeJob fell into the wrong branch")
+        }
+    }
+
     @Test func completedJobStillRestoresAsDone() async throws {
         _ = try Self.cleanStore()
 
