@@ -129,6 +129,14 @@ final class ScanJob: ObservableObject, Identifiable {
     var scanTask: Task<Void, Never>?
     var timerTask: Task<Void, Never>?
     fileprivate var taskStarted: Date?
+    /// True when this job was reconstructed from a persisted descriptor
+    /// on app launch and the user paused it before the previous quit.
+    /// resumeJob uses this to choose its strategy: in-process paused jobs
+    /// (this flag false) release the pauseGate to let the still-running
+    /// scanTask continue between videos; from-disk paused jobs (this flag
+    /// true) have no live scanTask, so resume re-invokes startJob and lets
+    /// the per-video PersonFinderCache lookup skip files already scanned.
+    var wasRestoredFromDisk: Bool = false
     /// Wall time accumulated across pauses. elapsedSecs = accumulatedElapsed +
     /// (taskStarted ? now - taskStarted : 0). Reset on startElapsedTimer.
     fileprivate var accumulatedElapsed: TimeInterval = 0

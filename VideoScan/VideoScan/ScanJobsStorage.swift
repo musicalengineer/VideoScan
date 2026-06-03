@@ -42,6 +42,59 @@ struct PersistedJobDescriptor: Codable, Equatable, Identifiable {
     let clipsFound: Int
     let presenceSecs: Double
     let elapsedSecs: Double
+
+    /// Job's status at persist time. Optional so descriptors written before
+    /// 2026-06-03 (when this field was added) decode as nil and are treated
+    /// as `.done` for backward compat. New writes always set this. Stored
+    /// as a String (the ScanJobStatus.label value) for forward portability
+    /// — adding a new status case shouldn't break decoding old JSON.
+    ///
+    /// Currently the only states the UI actually cares about across an app
+    /// restart are .done (normal-completion bookmark) and .paused (user
+    /// paused mid-scan, expects to Resume). Other statuses are transient
+    /// in-process states (.scanning, .compiling, .loading, etc.) that would
+    /// never be persisted in practice.
+    let statusRaw: String?
+
+    /// Explicit init with `statusRaw` defaulted to nil so existing test
+    /// fixtures that construct descriptors via the memberwise init don't
+    /// have to be updated for the field added 2026-06-03. New production
+    /// writers (makeDescriptor) always set statusRaw explicitly.
+    init(
+        id: UUID,
+        personName: String,
+        profileFolderName: String?,
+        searchPath: String,
+        engine: String,
+        threshold: Float,
+        referencePath: String,
+        referenceFilenames: [String],
+        completedAt: Date,
+        videosScanned: Int,
+        videosTotal: Int,
+        videosWithHits: Int,
+        clipsFound: Int,
+        presenceSecs: Double,
+        elapsedSecs: Double,
+        statusRaw: String? = nil
+    ) {
+        self.id = id
+        self.personName = personName
+        self.profileFolderName = profileFolderName
+        self.searchPath = searchPath
+        self.engine = engine
+        self.threshold = threshold
+        self.referencePath = referencePath
+        self.referenceFilenames = referenceFilenames
+        self.completedAt = completedAt
+        self.videosScanned = videosScanned
+        self.videosTotal = videosTotal
+        self.videosWithHits = videosWithHits
+        self.clipsFound = clipsFound
+        self.presenceSecs = presenceSecs
+        self.elapsedSecs = elapsedSecs
+        self.statusRaw = statusRaw
+    }
 }
 
 enum ScanJobsStorage {
