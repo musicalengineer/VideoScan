@@ -167,7 +167,7 @@ xcodebuild build-for-testing \
     -destination 'platform=macOS' \
     -derivedDataPath /tmp/nightly-dd \
     -enableCodeCoverage YES \
-    CODE_SIGNING_ALLOWED=NO \
+    CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS= \
     -quiet 2>&1 | tail -5
 BUILD_RC="${PIPESTATUS[0]:-$?}"
 
@@ -191,7 +191,7 @@ xcodebuild test-without-building \
     -derivedDataPath /tmp/nightly-dd \
     -enableCodeCoverage YES \
     -resultBundlePath /tmp/nightly-results.xcresult \
-    CODE_SIGNING_ALLOWED=NO \
+    CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS= \
     2>&1 | tee /tmp/nightly-test-output.log
 TEST_RC="${PIPESTATUS[0]:-$?}"
 TEST_END=$(date +%s)
