@@ -1122,6 +1122,9 @@ extension PersonFinderModel {
         guard !descriptors.isEmpty else { return }
         osLog.info("Session restore: \(descriptors.count) prior search(es) found on disk")
 
+        var pendingRehydrations: [(ScanJob, PersistedJobDescriptor)] = []
+        pendingRehydrations.reserveCapacity(descriptors.count)
+
         for descriptor in descriptors {
             let job = Self.makeJob(from: descriptor)
 
@@ -1136,9 +1139,32 @@ extension PersonFinderModel {
             }
 
             jobs.append(job)
+            pendingRehydrations.append((job, descriptor))
+        }
 
-            // Background rehydration — populate results from the SQLite cache.
-            Task.detached(priority: .utility) {
+        // SERIAL background rehydration. Each rehydrateResultsFromCache call
+        // walks the descriptor's search path (potentially a slow USB / network
+        // volume) via pfFindVideoFiles and hashes ~500 reference images per
+        // profile via blocking getattrlist syscalls inside cachedRefHash.
+        //
+        // The previous code fired one Task.detached per descriptor, fanning
+        // out N parallel restores. With N ≥ 4, those blocking syscalls
+        // saturate Swift's cooperative thread pool (~14 slots on M4 Max),
+        // and every other async task in the app — including the Task{}
+        // spawned by a Delete-Permanently button press, and the Task.detached
+        // inside deleteConfirmedJunk — has to wait in the queue. That
+        // manifests as a UI hang: the sheet dismiss animation stalls partway
+        // because SwiftUI's display cycle can't make progress while the pool
+        // is held by blocking I/O. (Diagnosed via lldb 2026-06-02 — multiple
+        // Tasks parked in __getattrlist while the delete waited for a slot.)
+        //
+        // Sequential restore keeps total latency comparable (the bottleneck
+        // is disk speed, not parallelism: serial 4 × 3s ≈ 12s, parallel 4 × 3s
+        // ≈ same because they fight for the same disk) without starving
+        // the cooperative pool. Lazy-on-select rehydration is a future
+        // improvement but the right shape was wrong, not the cost.
+        Task.detached(priority: .utility) {
+            for (job, descriptor) in pendingRehydrations {
                 await Self.rehydrateResultsFromCache(job: job, descriptor: descriptor)
             }
         }
