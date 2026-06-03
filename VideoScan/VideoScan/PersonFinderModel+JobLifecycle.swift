@@ -492,13 +492,29 @@ extension PersonFinderModel {
 
     func resumeJob(_ job: ScanJob) {
         guard job.status == .paused else { return }
-        Task { await job.pauseGate.resume() }
-        job.status = .scanning
-        job.resumeElapsedTimer()
-        osLog.info("Job resumed: \(job.searchPath, privacy: .public)")
         let personName = job.assignedProfile?.name ?? "(global)"
         let volumeName = URL(fileURLWithPath: job.searchPath).lastPathComponent
-        appLog.write("Resumed search for \(personName) on \(volumeName)")
+        if job.wasRestoredFromDisk {
+            // Restored-from-disk pause: scanTask was nil'd by app exit, so
+            // pauseGate.resume() would be a no-op. Re-invoke startJob — the
+            // per-file PersonFinderCache lookup inside the scan loop skips
+            // every video already cached and picks up where the user left
+            // off. Wall-time cost of the skip is dominated by disk speed
+            // (~minutes on LaCie, ~seconds on SSD). Reset the flag so a
+            // subsequent in-process pause/resume follows the gate path.
+            job.wasRestoredFromDisk = false
+            osLog.info("Job resumed (restored from disk → restart with cache skip): \(job.searchPath, privacy: .public)")
+            appLog.write("Resumed search for \(personName) on \(volumeName) — cache replay")
+            startJob(job)
+        } else {
+            // In-process pause: there's a live scanTask awaiting the gate.
+            // Releasing the gate lets it continue between videos.
+            Task { await job.pauseGate.resume() }
+            job.status = .scanning
+            job.resumeElapsedTimer()
+            osLog.info("Job resumed (in-process): \(job.searchPath, privacy: .public)")
+            appLog.write("Resumed search for \(personName) on \(volumeName)")
+        }
     }
 
     func togglePauseJob(_ job: ScanJob) {
@@ -1093,6 +1109,18 @@ extension PersonFinderModel {
         let threshold = engine == .arcface ? settings.arcfaceThreshold : settings.threshold
         let referencePath = job.assignedProfile?.referencePath ?? settings.referencePath
         let referenceFilenames = job.assignedFaces.map(\.sourceFilename)
+        // Record the job's current status so a paused scan can come back as
+        // .paused after app restart instead of being silently promoted to
+        // .done. Only .paused and .done are meaningful across launches;
+        // anything else (transient .scanning / .loading / .compiling) means
+        // either the persist was triggered mid-flight (unusual) or the user
+        // hasn't reached a bookmarkable state — we collapse those to .done
+        // so the row is at least visible, with progress reflecting reality.
+        let statusRaw: String
+        switch job.status {
+        case .paused:        statusRaw = "paused"
+        default:             statusRaw = "done"
+        }
         return PersistedJobDescriptor(
             id: job.id,
             personName: personName,
@@ -1108,7 +1136,8 @@ extension PersonFinderModel {
             videosWithHits: job.videosWithHits,
             clipsFound: job.clipsFound,
             presenceSecs: job.presenceSecs,
-            elapsedSecs: job.elapsedSecs
+            elapsedSecs: job.elapsedSecs,
+            statusRaw: statusRaw
         )
     }
 
@@ -1211,9 +1240,21 @@ extension PersonFinderModel {
         job.clipsFound = descriptor.clipsFound
         job.presenceSecs = descriptor.presenceSecs
         job.elapsedSecs = descriptor.elapsedSecs
-        job.status = .done
+        // Restore the status the job had when persisted. Old descriptors
+        // (written before 2026-06-03) have statusRaw == nil and are treated
+        // as .done. Paused jobs come back as .paused with progress
+        // reflecting actual completion so the row shows e.g. "40% paused"
+        // not the misleading "100% done" that the pre-fix code produced.
+        if descriptor.statusRaw == "paused" {
+            job.status = .paused
+            let total = max(descriptor.videosTotal, 1)
+            job.progress = Double(descriptor.videosScanned) / Double(total)
+        } else {
+            job.status = .done
+            job.progress = 1.0
+        }
         job.completedAt = descriptor.completedAt
-        job.progress = 1.0
+        job.wasRestoredFromDisk = true
         // Restore the engine that actually ran. The descriptor knows (it was
         // recorded at completion); the live ScanJob doesn't infer this
         // correctly via fall-through to profile.engine — the profile's
