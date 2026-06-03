@@ -50,11 +50,18 @@ struct TriageView: View {
     // Delete-Junk sheet state — mirror of the catalog-toolbar pattern in
     // CatalogHelpers.swift. Users naturally expect to tag-then-delete in
     // the same view, so we expose the same workflow here.
-    @State private var showJunkConfirmSheet = false
-    @State private var showJunkResultSheet = false
-    @State private var junkResult: VideoScanModel.JunkDeletionResult?
-    @State private var junkResultMode: VideoScanModel.JunkDeletionMode = .toTrash
-    @State private var junkResultBytesSucceeded: Int64 = 0
+    // Junk-sheet state — a single Identifiable enum drives one .sheet(item:)
+    // modifier, replacing the previous pair of chained .sheet(isPresented:)
+    // bindings. The chained pattern raced: when the delete task completed
+    // faster than the 0.4s defer allowed (or when the system was busy and
+    // dismiss took longer than 0.4s), the result sheet tried to present
+    // while the confirm sheet was still dismissing — SwiftUI choked,
+    // confirm sheet stuck mid-iconify, app appeared unresponsive ("cannot
+    // return to main window" — Rick's report 2026-06-02 night). With
+    // .sheet(item:), the .confirm → .result transition is one atomic
+    // item-binding mutation and SwiftUI swaps content inside the same
+    // modal presentation. See JunkSheet definition in JunkDeleteAction.swift.
+    @State private var junkSheet: JunkSheet? = nil
 
     private var confirmedJunk: [VideoRecord] {
         model.records.filter {
@@ -268,31 +275,27 @@ struct TriageView: View {
         // can tag-then-delete without leaving Triage. Confirm sheet asks
         // Move-to-Trash vs Delete Permanently; result sheet shows the
         // per-bucket breakdown.
-        .sheet(isPresented: $showJunkConfirmSheet) {
-            let snapshot = confirmedJunk
-            DeleteConfirmedJunkConfirmSheet(
-                records: snapshot,
-                onCancel: { /* dismiss is automatic */ },
-                onAct: JunkDeleteAction.makeOnAct(model: model) { result, mode, bytesSucceeded in
-                    junkResult = result
-                    junkResultMode = mode
-                    junkResultBytesSucceeded = bytesSucceeded
-                    // SwiftUI only allows one sheet active per view at a
-                    // time. Flipping showJunkResultSheet synchronously
-                    // here collides with the confirm sheet's dismiss
-                    // animation. Defer just past the dismiss window.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                        showJunkResultSheet = true
+        // Single .sheet(item:) drives both confirm and result. Cancel sets
+        // junkSheet = nil; Delete buttons don't call dismiss() — the
+        // JunkDeleteAction callback transitions the binding from .confirm
+        // to .result(...) when the disk pass returns, swapping content
+        // atomically inside the same modal presentation. No race possible.
+        .sheet(item: $junkSheet) { sheet in
+            switch sheet {
+            case .confirm:
+                DeleteConfirmedJunkConfirmSheet(
+                    records: confirmedJunk,
+                    onCancel: { /* dismiss is automatic via @Environment(\.dismiss) */ },
+                    onAct: JunkDeleteAction.makeOnAct(model: model) { result, mode, bytesSucceeded in
+                        // Atomic content transition: confirm → result.
+                        junkSheet = .result(result, mode, bytesSucceeded)
                     }
-                }
-            )
-        }
-        .sheet(isPresented: $showJunkResultSheet) {
-            if let r = junkResult {
+                )
+            case .result(let r, let mode, let bytes):
                 DeleteConfirmedJunkResultSheet(
-                    mode: junkResultMode,
+                    mode: mode,
                     result: r,
-                    bytesSucceeded: junkResultBytesSucceeded
+                    bytesSucceeded: bytes
                 )
             }
         }
@@ -314,7 +317,7 @@ struct TriageView: View {
             // be reused (confirmedJunk + DeleteConfirmedJunkConfirmSheet).
             if !confirmedJunk.isEmpty {
                 Button {
-                    showJunkConfirmSheet = true
+                    junkSheet = .confirm
                 } label: {
                     Label("Delete Junk (\(confirmedJunk.count))",
                           systemImage: "trash.fill")
