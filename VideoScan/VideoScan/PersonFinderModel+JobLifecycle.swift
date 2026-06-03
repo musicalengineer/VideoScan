@@ -502,7 +502,15 @@ extension PersonFinderModel {
             // off. Wall-time cost of the skip is dominated by disk speed
             // (~minutes on LaCie, ~seconds on SSD). Reset the flag so a
             // subsequent in-process pause/resume follows the gate path.
+            //
+            // CRITICAL: startJob's first guard is `!job.status.isActive`,
+            // and .paused IS considered active. Clear status to .idle so
+            // startJob proceeds. The transition .paused → .idle → (whatever
+            // startJob lands on) is brief and on MainActor, so no observer
+            // sees the .idle state in practice. Caught 2026-06-03 by
+            // resumeFromDiskPausedJobInvokesStartJobPath regression test.
             job.wasRestoredFromDisk = false
+            job.status = .idle
             osLog.info("Job resumed (restored from disk → restart with cache skip): \(job.searchPath, privacy: .public)")
             appLog.write("Resumed search for \(personName) on \(volumeName) — cache replay")
             startJob(job)
