@@ -1142,30 +1142,57 @@ extension PersonFinderModel {
             pendingRehydrations.append((job, descriptor))
         }
 
-        // SERIAL background rehydration. Each rehydrateResultsFromCache call
-        // walks the descriptor's search path (potentially a slow USB / network
-        // volume) via pfFindVideoFiles and hashes ~500 reference images per
-        // profile via blocking getattrlist syscalls inside cachedRefHash.
+        // CONCURRENCY-CAPPED background rehydration. Each
+        // rehydrateResultsFromCache call walks the descriptor's search path
+        // (potentially a slow USB / network volume) via pfFindVideoFiles
+        // and hashes ~500–1100 reference images per profile via blocking
+        // getattrlist syscalls inside cachedRefHash. Rick's catalog had 9
+        // persisted descriptors as of 2026-06-03 (matt, donna, rick, etc.)
+        // with timmy at 1087 reference images, matt at 813, donna at 687…
         //
-        // The previous code fired one Task.detached per descriptor, fanning
-        // out N parallel restores. With N ≥ 4, those blocking syscalls
-        // saturate Swift's cooperative thread pool (~14 slots on M4 Max),
-        // and every other async task in the app — including the Task{}
-        // spawned by a Delete-Permanently button press, and the Task.detached
-        // inside deleteConfirmedJunk — has to wait in the queue. That
-        // manifests as a UI hang: the sheet dismiss animation stalls partway
-        // because SwiftUI's display cycle can't make progress while the pool
-        // is held by blocking I/O. (Diagnosed via lldb 2026-06-02 — multiple
-        // Tasks parked in __getattrlist while the delete waited for a slot.)
+        // History of this site:
+        //  - Original code: one Task.detached per descriptor in a loop, all
+        //    fanning out in parallel. With N ≥ 4, blocking syscalls saturate
+        //    Swift's cooperative pool (~14 slots on M4 Max) and starve other
+        //    async tasks. Originally misdiagnosed (2026-06-02 evening) as
+        //    the cause of the Triage Delete-Permanently hang; the real cause
+        //    was the chained-.sheet race (fixed in 03b5600 / 000efd1).
+        //  - Serialized variant (9be626e): one job at a time, no pool risk
+        //    but pathologically slow startup — 9 × ~1 min on LaCie = ~9 min
+        //    before the user could start any new work. Rick observed this
+        //    2026-06-03 with the Matt scan apparently hanging when it was
+        //    actually just queued behind 8 prior rehydrations.
         //
-        // Sequential restore keeps total latency comparable (the bottleneck
-        // is disk speed, not parallelism: serial 4 × 3s ≈ 12s, parallel 4 × 3s
-        // ≈ same because they fight for the same disk) without starving
-        // the cooperative pool. Lazy-on-select rehydration is a future
-        // improvement but the right shape was wrong, not the cost.
+        // Current shape: TaskGroup with a 3-way concurrency cap. Each "slot"
+        // takes one job from the queue, awaits its rehydration, then picks
+        // up the next. Caps pool occupancy at 3 (out of ~14), leaving plenty
+        // of headroom for UI tasks and new scans, while giving 3× the
+        // parallelism vs serial. Empirically the disk-bound stages don't
+        // benefit much past 3 (they fight over the same I/O bandwidth) so
+        // 3 is the knee of the curve.
+        let maxConcurrentRehydrations = 3
         Task.detached(priority: .utility) {
-            for (job, descriptor) in pendingRehydrations {
-                await Self.rehydrateResultsFromCache(job: job, descriptor: descriptor)
+            await withTaskGroup(of: Void.self) { group in
+                var slotIndex = 0
+                // Fill the initial slot quota.
+                while slotIndex < min(maxConcurrentRehydrations, pendingRehydrations.count) {
+                    let pair = pendingRehydrations[slotIndex]
+                    group.addTask {
+                        await Self.rehydrateResultsFromCache(job: pair.0, descriptor: pair.1)
+                    }
+                    slotIndex += 1
+                }
+                // As each completes, start the next pending one — keeps at
+                // most `maxConcurrentRehydrations` running concurrently.
+                while await group.next() != nil {
+                    if slotIndex < pendingRehydrations.count {
+                        let pair = pendingRehydrations[slotIndex]
+                        group.addTask {
+                            await Self.rehydrateResultsFromCache(job: pair.0, descriptor: pair.1)
+                        }
+                        slotIndex += 1
+                    }
+                }
             }
         }
     }
