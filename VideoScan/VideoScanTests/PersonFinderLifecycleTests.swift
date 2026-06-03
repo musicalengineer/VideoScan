@@ -151,6 +151,7 @@ struct PersonFinderLifecycleTests {
         } else {
             Issue.record("Expected .failed status for offline volume; got \(job.status.label)")
         }
+        job.flushConsoleLines()  // bypass the 200ms appendLog batch for sync test read
         let log = job.consoleLines.joined(separator: "\n")
         #expect(log.contains("offline"), "Console should mention offline; got: \(log)")
     }
@@ -207,6 +208,7 @@ struct PersonFinderLifecycleTests {
 
         model.startJob(job)
 
+        job.flushConsoleLines()  // bypass 200ms appendLog batch for sync test read
         let log = job.consoleLines.joined(separator: "\n")
         #expect(log.contains("Load reference photos first"),
                 "Should log the load-references hint; got: \(log)")
@@ -248,6 +250,7 @@ struct PersonFinderLifecycleTests {
         // solo). Poll only on the same conditions the assertions check, so we
         // never short-circuit on a transient (.loading) state with empty log.
         let bailLogged: () -> Bool = {
+            job.flushConsoleLines()  // bypass 200ms appendLog batch for sync test read
             let log = job.consoleLines.joined(separator: "\n")
             return log.contains("Set Python path") ||
                    log.contains("Set reference photos path") ||
@@ -268,6 +271,7 @@ struct PersonFinderLifecycleTests {
         // .failed if reachability fired first — both prove no scan started.
         #expect(job.status != .scanning,
                 "Dlib not configured should prevent scanning; got \(job.status.label)")
+        job.flushConsoleLines()  // bypass 200ms appendLog batch for sync test read
         let log = job.consoleLines.joined(separator: "\n")
         let bailedOnConfig = log.contains("Set Python path")
         let bailedOnRefs   = log.contains("Set reference photos path")
@@ -386,6 +390,7 @@ struct PersonFinderLifecycleTests {
         model.togglePauseJob(job)
 
         #expect(job.status == .idle, "Toggle on idle should not transition")
+        job.flushConsoleLines()  // bypass 200ms appendLog batch for sync test read
         let log = job.consoleLines.joined(separator: "\n")
         #expect(log.contains("[pause]"), "Should log a pause-ignored line; got: \(log)")
         #expect(log.contains("Ignored"), "Hint should explain the no-op; got: \(log)")
@@ -552,6 +557,7 @@ struct PersonFinderLifecycleTests {
         model.startCompilation(job: job)
 
         #expect(job.compilationStatus == .idle)
+        job.flushConsoleLines()  // bypass 200ms appendLog batch for sync test read
         let log = job.consoleLines.joined(separator: "\n")
         #expect(log.contains("No recognition results"),
                 "Should log the empty-results message; got: \(log)")

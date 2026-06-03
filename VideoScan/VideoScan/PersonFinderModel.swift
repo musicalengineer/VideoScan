@@ -170,7 +170,12 @@ final class ScanJob: ObservableObject, Identifiable {
         }
     }
 
-    private func flushConsoleLines() {
+    /// Synchronously drain pendingConsoleLines into the @Published
+    /// `consoleLines` array. Production code lets the 200ms timer do this
+    /// automatically (preserves the batching win on chatty scans); tests and
+    /// other synchronous consumers can call this directly when they need an
+    /// immediate view of recently-logged lines without waiting for the timer.
+    func flushConsoleLines() {
         consoleFlushScheduled = false
         guard !pendingConsoleLines.isEmpty else { return }
         consoleLines.append(contentsOf: pendingConsoleLines)
