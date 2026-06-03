@@ -99,3 +99,61 @@ opt_in_rules:
 # force_unwrapping warn-only (not error). Tests get a lot of legitimate `!`.
 force_unwrapping:
   severity: warning
+
+# --- Custom rules: project-specific antipattern detectors. ---
+#
+# Each rule below is a regex-based check for a known shape of bug that has
+# bitten this project at least once. The cost of writing a rule (~half a
+# day) is paid back permanently — the rule catches the pattern at lint
+# time on every PR, no Swift-expert review needed. See
+# project_bug_prevention_strategy memory for the framework.
+#
+# To test a single rule against the codebase:
+#   swiftlint lint --no-cache --enable-rule <rule-name>
+#
+custom_rules:
+
+  # ----- chained_sheet_isPresented ------------------------------------------
+  #
+  # Bug: TriageView and CatalogHelpers each had two consecutive
+  # `.sheet(isPresented: $a)` and `.sheet(isPresented: $b)` modifiers with a
+  # `DispatchQueue.main.asyncAfter(0.4)` defer between them. The defer was
+  # the original author's documented band-aid for SwiftUI's "one sheet per
+  # view" rule. Under any system load, the dismiss of the first sheet
+  # outran the 0.4s window and the second sheet tried to present while the
+  # first was still dismissing → SwiftUI modal state machine deadlocked
+  # → app appeared unresponsive ("half-iconified frozen sheet").
+  #
+  # Fix: replace with a single .sheet(item:) driven by an Identifiable enum
+  # whose cases ALL return the same `id`. See project_chained_sheet_antipattern
+  # memory for the recipe.
+  #
+  # The regex matches when two `.sheet(isPresented:` calls appear within
+  # ~600 characters of each other (roughly 15–25 lines, which covers any
+  # realistic same-view modifier chain). False-positive cases (two sheets
+  # on genuinely different views that happen to live close in the same
+  # file) are rare in this codebase; if you hit one, use a
+  # // swiftlint:disable:next chained_sheet_isPresented annotation.
+  chained_sheet_isPresented:
+    name: "Chained .sheet(isPresented:) modifiers"
+    regex: '\.sheet\s*\(\s*isPresented:[\s\S]{0,600}?\.sheet\s*\(\s*isPresented:'
+    message: "Two .sheet(isPresented:) modifiers in close succession race the dismiss animation against the second present. Replace with .sheet(item:) driven by an Identifiable enum with a SINGLE shared id across all cases. See project_chained_sheet_antipattern memory."
+    severity: warning
+
+  # ----- async_after_presentation_flip --------------------------------------
+  #
+  # Bug shape: a `DispatchQueue.main.asyncAfter(deadline: .now() + X)` whose
+  # closure flips a `show*` / `is*Presented` style binding. Almost always a
+  # timing band-aid for a SwiftUI animation race. The 0.4s defer between
+  # confirm sheet and result sheet is the canonical example. Replace with
+  # a proper state-machine transition (.sheet(item:), .onChange of the
+  # presentation binding, etc.). See project_bug_prevention_strategy memory.
+  #
+  # Regex matches `DispatchQueue.main.asyncAfter` followed within ~300
+  # characters by a write to a `show*` identifier. Narrow enough to avoid
+  # false-positives on legitimate timing patterns.
+  async_after_presentation_flip:
+    name: "DispatchQueue.asyncAfter flipping a presentation binding"
+    regex: 'DispatchQueue\.main\.asyncAfter[\s\S]{0,300}?\s+show[A-Z][a-zA-Z]*\s*='
+    message: "asyncAfter that sets a `show*` binding is a timing band-aid for a SwiftUI animation race. Replace with a proper state-machine transition (.sheet(item:) atomic content swap, .onChange of dismiss completion, etc.). See project_bug_prevention_strategy memory."
+    severity: warning
