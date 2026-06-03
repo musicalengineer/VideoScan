@@ -1,0 +1,74 @@
+#!/bin/bash
+# Pre-commit hook:
+#   1. Reject files larger than 75 MB (under GitHub's 100 MB hard limit).
+#   2. Run SwiftLint on staged .swift files — warn only, does NOT block commit.
+#      To escalate to blocking on violations, set SWIFTLINT_STRICT=1 in env.
+#
+# To commit without running any of this: git commit --no-verify
+
+MAX_SIZE=$((75 * 1024 * 1024))
+
+status=0
+
+# --- File-size gate (hard block) ---
+while IFS= read -r -d '' file; do
+    size=$(wc -c < "$file" 2>/dev/null | tr -d ' ')
+    if [ -n "$size" ] && [ "$size" -gt "$MAX_SIZE" ]; then
+        echo "BLOCKED: $(du -h "$file" | cut -f1)  $file  (limit: 75 MB)"
+        status=1
+    fi
+done < <(git diff --cached --name-only --diff-filter=ACM -z)
+
+if [ "$status" -ne 0 ]; then
+    echo ""
+    echo "To commit anyway: git commit --no-verify"
+    echo "Consider adding large files to .gitignore"
+    exit 1
+fi
+
+# --- SwiftLint on staged Swift files (warn-only) ---
+if command -v swiftlint >/dev/null 2>&1; then
+    # Collect staged .swift paths (added/copied/modified) as a null-separated list.
+    staged_swift=$(git diff --cached --name-only --diff-filter=ACM -z -- '*.swift' | tr '\0' '\n' | grep -v '^$' || true)
+    if [ -n "$staged_swift" ]; then
+        echo "swiftlint: checking $(echo "$staged_swift" | wc -l | tr -d ' ') staged Swift file(s)…"
+        # --use-script-input-files reads paths from SCRIPT_INPUT_FILE_N env vars.
+        count=0
+        export SCRIPT_INPUT_FILE_COUNT=$(echo "$staged_swift" | wc -l | tr -d ' ')
+        while IFS= read -r f; do
+            export "SCRIPT_INPUT_FILE_$count=$PWD/$f"
+            count=$((count + 1))
+        done <<< "$staged_swift"
+
+        if [ "${SWIFTLINT_STRICT:-0}" = "1" ]; then
+            swiftlint lint --use-script-input-files --strict || exit 1
+        else
+            swiftlint lint --use-script-input-files --quiet || true
+        fi
+    fi
+else
+    echo "swiftlint: not installed — skipping lint (install: brew install swiftlint)"
+fi
+
+# --- Custom @EnvironmentObject usage linter (blocking) ---
+# Catches the PersonFinderView-cascade antipattern: a view declares
+# @EnvironmentObject var X but never reads X.prop in the body. The
+# subscription retriggers body re-eval on every @Published change to
+# the model for no purpose. See project_bug_prevention_strategy memory.
+#
+# The linter is fast (<1s on the full codebase). Runs on EVERY commit
+# regardless of which files are staged so a config change can't sneak
+# in a new violation. Annotate intentional forwarding with
+#   // swiftlint:disable-next-line vs-env-object-unused
+if command -v python3 >/dev/null 2>&1 \
+        && [ -f "$PWD/scripts/lint_environment_objects.py" ]; then
+    python3 scripts/lint_environment_objects.py || {
+        echo ""
+        echo "@EnvironmentObject usage check failed. See project_bug_prevention_strategy memory."
+        echo "Either drop the unused declaration or annotate it intentional."
+        echo "To commit anyway: git commit --no-verify"
+        exit 1
+    }
+fi
+
+exit 0

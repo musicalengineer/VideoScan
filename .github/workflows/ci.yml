@@ -40,6 +40,14 @@ jobs:
           ffmpeg -version | head -1
           ffprobe -version | head -1
 
+      # Antipattern linters — fast (<1s), blocking. Runs BEFORE the build
+      # so a structural mistake doesn't burn 5-10 minutes of compile.
+      # See project_bug_prevention_strategy memory for the framework.
+      - name: Lint — @EnvironmentObject usage
+        run: |
+          python3 scripts/lint_environment_objects.py --selftest
+          python3 scripts/lint_environment_objects.py
+
       # Build ONCE — app + test targets. Shared DerivedData for all later steps.
       - name: Build (app + tests)
         run: |
