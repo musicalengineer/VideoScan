@@ -141,16 +141,20 @@ struct DeleteConfirmedJunkConfirmSheet: View {
 
                 Spacer()
 
+                // Don't call dismiss() in the delete buttons. The parent
+                // uses .sheet(item:) with a JunkSheet enum; onAct transitions
+                // the item from .confirm to .result(...) when the disk pass
+                // completes, which atomically swaps sheet content inside the
+                // same modal presentation. Calling dismiss() here would race
+                // that transition against SwiftUI's dismiss animation.
                 Button("Move to Trash") {
                     onAct(.toTrash)
-                    dismiss()
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(reachableCount == 0)
 
                 Button("Delete Permanently", role: .destructive) {
                     onAct(.permanent)
-                    dismiss()
                 }
                 .disabled(reachableCount == 0)
             }

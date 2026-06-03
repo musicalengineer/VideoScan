@@ -1,5 +1,36 @@
 import Foundation
 
+// MARK: - JunkSheet state machine
+//
+// Single Identifiable enum that drives the .sheet(item:) modifier replacing
+// the previous pair of chained .sheet(isPresented:) modifiers. The chained
+// pattern raced: confirm-sheet dismiss animation and result-sheet present
+// could overlap when the delete task completed faster than the 0.4s defer
+// allowed (or when the system was busy and dismiss took longer). Symptom:
+// confirm sheet stuck mid-iconify, app appears unresponsive ("cannot return
+// to main window" — Rick's report 2026-06-02).
+//
+// With .sheet(item:), the transition from .confirm to .result happens via
+// a SINGLE item-binding mutation. SwiftUI handles the content swap inside
+// the same modal presentation context — no second .sheet ever tries to
+// activate. Cancel still dismisses normally (item → nil); Delete buttons
+// don't call dismiss() at all; the JunkDeleteAction callback flips
+// item → .result(...) when the disk pass completes.
+
+enum JunkSheet: Identifiable {
+    case confirm
+    case result(VideoScanModel.JunkDeletionResult,
+                VideoScanModel.JunkDeletionMode,
+                Int64)
+
+    var id: String {
+        switch self {
+        case .confirm: return "confirm"
+        case .result:  return "result"
+        }
+    }
+}
+
 // MARK: - JunkDeleteAction
 //
 // Shared implementation of the `onAct` closure used by
