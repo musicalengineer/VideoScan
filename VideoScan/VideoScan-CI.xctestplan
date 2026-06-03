@@ -39,6 +39,7 @@
       "skippedTests": [
         "CombineBulkWorkflowUITests",
         "CombineWorkflowUITests",
+        "PauseRestartUITests",
         "VideoScanUITests",
         "VideoScanUITestsLaunchTests"
       ],

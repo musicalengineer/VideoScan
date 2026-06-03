@@ -1,6 +1,17 @@
 import Foundation
 import SwiftUI
 
+// XCUITest hook — must run BEFORE any code touches the real Application
+// Support directory. The override redirects POI/scan_jobs/catalog
+// reads-and-writes to a per-process tmp dir so UI tests can't pollute
+// Rick's real catalog. No-op when the launch flag is absent.
+//
+// See UITestStorageOverride.swift for the full rationale (in particular
+// why the existing isRunningTests checks don't fire for XCUITest).
+if UITestStorageOverride.isActive {
+    UITestStorageOverride.activate()
+}
+
 let isTestHost = ProcessInfo.processInfo.environment["XCTESTCONFIGURATION_TEMP_DIR"] != nil
 
 if isTestHost {

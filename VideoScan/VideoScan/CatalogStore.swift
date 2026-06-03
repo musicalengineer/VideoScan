@@ -156,10 +156,18 @@ final class CatalogStore {
     private(set) var lastLoadOutcome: CatalogLoadOutcome = .missing
 
     init() {
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first ?? URL(fileURLWithPath: NSHomeDirectory())
+        // XCUITest with --ui-test-fresh-storage redirects the entire
+        // Application Support root so the test can't overwrite the user's
+        // real catalog.json. See UITestStorageOverride.swift.
+        let appSupport: URL
+        if let uiTestRoot = UITestStorageOverride.applicationSupportRoot {
+            appSupport = uiTestRoot
+        } else {
+            appSupport = FileManager.default.urls(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask
+            ).first ?? URL(fileURLWithPath: NSHomeDirectory())
+        }
         let dir = appSupport.appendingPathComponent("VideoScan", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         self.fileURL = dir.appendingPathComponent("catalog.json")

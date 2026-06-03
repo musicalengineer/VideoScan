@@ -352,6 +352,38 @@ final class PersonFinderModel: ObservableObject {
         if !Self.isRunningTests {
             restoreSessionFromDisk()
         }
+
+        // XCUITest seed: when launched with `--ui-test-fresh-storage`, the
+        // pause/quit/restart canary needs a job in a state from which the
+        // user can click Pause. Seeding happens AFTER restoreSessionFromDisk
+        // so the FIRST launch lands a fresh .scanning job, and the SECOND
+        // launch (same tmp dir) restores the persisted .paused descriptor
+        // and skips the seed. See UITestStorageOverride.swift.
+        if UITestStorageOverride.isActive && jobs.isEmpty {
+            seedUITestScanningJob()
+        }
+    }
+
+    /// XCUITest helper — seed one ScanJob whose status is .scanning so the
+    /// canary test has a row to click Pause on. The job has no real
+    /// scanTask attached, so pauseJob's `Task { await pauseGate.pause() }`
+    /// no-ops cleanly. Status transitions and descriptor persistence are
+    /// the only things this test cares about.
+    ///
+    /// Only called when `UITestStorageOverride.isActive` is true.
+    private func seedUITestScanningJob() {
+        let job = ScanJob(searchPath: UITestStorageOverride.syntheticSearchPath.path)
+        // Reattach the synthetic POI loaded by POIStorage so the row's
+        // summary sentence ("Paused: TestPerson on fake-test-volume…") has a
+        // person name. The savedProfiles array is populated by the same
+        // model's reference-load path on first access.
+        if let profile = try? POIProfile.load(name: UITestStorageOverride.syntheticPOIName) {
+            job.assignedProfile = profile
+        }
+        job.videosTotal = 100
+        job.videosScanned = 25
+        job.status = .scanning
+        jobs.append(job)
     }
 
     /// True when this process is a unit-test host. Mirrors the multi-signal

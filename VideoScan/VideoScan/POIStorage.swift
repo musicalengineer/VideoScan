@@ -41,10 +41,19 @@ enum POIStorage {
     // MARK: - Paths
 
     /// Root directory for all POI data. Created on first access.
+    ///
+    /// Under XCUITest with `--ui-test-fresh-storage`, this redirects to a
+    /// per-process tmp dir so the test can't pollute Rick's real Family
+    /// gallery. See UITestStorageOverride.swift.
     static var storeDir: URL {
-        let base = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first ?? URL(fileURLWithPath: NSHomeDirectory())
+        let base: URL
+        if let testRoot = UITestStorageOverride.applicationSupportRoot {
+            base = testRoot
+        } else {
+            base = FileManager.default.urls(
+                for: .applicationSupportDirectory, in: .userDomainMask
+            ).first ?? URL(fileURLWithPath: NSHomeDirectory())
+        }
         let dir = base
             .appendingPathComponent("VideoScan", isDirectory: true)
             .appendingPathComponent("POI", isDirectory: true)

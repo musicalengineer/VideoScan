@@ -28,6 +28,16 @@ struct ScanJobRow: View {
     private var isActive: Bool { job.status.isActive }
     private var isScanning: Bool { job.status == .scanning }
 
+    /// First 8 hex chars of the job's UUID — used as the per-row suffix in
+    /// accessibility identifiers so XCUITest can disambiguate when multiple
+    /// rows exist. Stable across app restart because the same UUID round-
+    /// trips through PersistedJobDescriptor.
+    /// Pattern matches the `tab.<Label>` / `combinePairSheet.<element>`
+    /// convention used elsewhere; see PauseRestartUITests.
+    private var axJobID: String {
+        String(job.id.uuidString.lowercased().prefix(8))
+    }
+
     private var personName: String { job.assignedProfile?.name ?? "—" }
     private var volName: String { (job.searchPath as NSString).lastPathComponent }
     /// Prose form for inline use ("using algorithm: ArcFace") — friendly
@@ -174,12 +184,17 @@ struct ScanJobRow: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.regular)
+                    // XCUITest hook — same ID on collapsed and expanded
+                    // variants so the test can find the button regardless
+                    // of which row layout is rendered.
+                    .accessibilityIdentifier("scanJob.pauseResume.\(axJobID)")
 
                     Button(action: onStop) {
                         Image(systemName: "stop.fill")
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.regular)
+                    .accessibilityIdentifier("scanJob.stop.\(axJobID)")
                 } else if isIdle {
                     Button {
                         if job.assignedProfile == nil {
@@ -194,6 +209,7 @@ struct ScanJobRow: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.regular)
+                    .accessibilityIdentifier("scanJob.start.\(axJobID)")
 
                     Button(action: onRemove) {
                         Image(systemName: "trash")
@@ -201,6 +217,7 @@ struct ScanJobRow: View {
                     .buttonStyle(.bordered)
                     .controlSize(.regular)
                     .foregroundColor(.red)
+                    .accessibilityIdentifier("scanJob.remove.\(axJobID)")
                 }
             }
         }
@@ -586,27 +603,37 @@ struct ScanJobRow: View {
 
     @ViewBuilder
     private var statusBadge: some View {
+        // XCUITest hook — same ID on every concrete case so the test can
+        // query the label regardless of which status is rendered. The
+        // returned XCUIElement's .label is the visible text ("Paused",
+        // "Done", etc.) for the canary's pause-survives-restart assertion.
+        let axID = "scanJob.status.\(axJobID)"
         switch job.status {
         case .done:
             Label("Done", systemImage: "checkmark.circle.fill")
                 .font(.body.weight(.semibold))
                 .foregroundColor(.green)
+                .accessibilityIdentifier(axID)
         case .scanning:
             Text("Scanning")
                 .font(.body.weight(.semibold))
                 .foregroundColor(.blue)
+                .accessibilityIdentifier(axID)
         case .paused:
             Text("Paused")
                 .font(.body.weight(.semibold))
                 .foregroundColor(.yellow)
+                .accessibilityIdentifier(axID)
         case .failed:
             Text("Failed")
                 .font(.body.weight(.semibold))
                 .foregroundColor(.red)
+                .accessibilityIdentifier(axID)
         case .cancelled:
             Text("Stopped")
                 .font(.body.weight(.semibold))
                 .foregroundColor(.secondary)
+                .accessibilityIdentifier(axID)
         default:
             EmptyView()
         }
@@ -867,12 +894,16 @@ struct ScanJobRow: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.regular)
+            // XCUITest hook — same ID as the collapsed-row button so the
+            // test code doesn't need to know which layout is rendered.
+            .accessibilityIdentifier("scanJob.pauseResume.\(axJobID)")
 
             Button(action: onStop) {
                 Label("Stop", systemImage: "stop.fill")
             }
             .buttonStyle(.bordered)
             .controlSize(.regular)
+            .accessibilityIdentifier("scanJob.stop.\(axJobID)")
 
             if job.status == .scanning, let onPreview {
                 Button { onPreview() } label: {
@@ -895,6 +926,7 @@ struct ScanJobRow: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.regular)
+            .accessibilityIdentifier("scanJob.start.\(axJobID)")
 
             if !isIdle {
                 Button(action: onReset) {

@@ -132,7 +132,12 @@ enum ScanJobsStorage {
     /// variants below.
     static var storeDir: URL {
         let base: URL
-        if isRunningTests {
+        if let uiTestRoot = UITestStorageOverride.applicationSupportRoot {
+            // XCUITest with --ui-test-fresh-storage. Mirrors the in-process
+            // unit-test redirect below, but driven from argv (the XCUITest
+            // host doesn't link XCTest into the app binary).
+            base = uiTestRoot
+        } else if isRunningTests {
             base = URL(fileURLWithPath: NSTemporaryDirectory())
                 .appendingPathComponent(
                     "VideoScanTests-\(ProcessInfo.processInfo.processIdentifier)",
