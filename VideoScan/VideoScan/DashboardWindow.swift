@@ -7,7 +7,7 @@ struct DashboardWindow: View {
     // ExpandedDashboard(dashboard:). See project_bug_prevention_strategy
     // memory; can be removed once ExpandedDashboard takes the ref via
     // a model or env-key indirection.
-    // swiftlint:disable-next-line vs-env-object-unused
+    // vs-lint:disable-next vs-env-object-unused
     @EnvironmentObject var dashboard: DashboardState
 
     var body: some View {
