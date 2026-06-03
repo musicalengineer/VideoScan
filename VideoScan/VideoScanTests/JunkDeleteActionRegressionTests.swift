@@ -91,6 +91,28 @@ struct JunkDeleteActionRegressionTests {
         #expect(probe.fired, "onAct's deferred Task didn't fire onComplete within 2s")
     }
 
+    @Test func junkSheetCasesShareSingleIdentity() throws {
+        // SwiftUI's .sheet(item:) uses `id` to decide whether an item change
+        // is a content swap (same id) or a dismiss-then-present cycle
+        // (different ids). If the JunkSheet cases ever return different ids,
+        // the previous chained-sheet race comes back: confirm tries to
+        // dismiss while result tries to present, deadlocking the modal
+        // state machine.
+        //
+        // Regression history: original fix landed 2026-06-02 night after Rick
+        // hit a hang where the file was deleted but the sheet stuck mid-
+        // iconify and Triage became unresponsive. Diagnosed via lldb — main
+        // thread idle, no work blocked, sheet state machine deadlocked.
+        let dummyResult = VideoScanModel.JunkDeletionResult(
+            attempted: 1, succeeded: 1, alreadyMissing: 0,
+            skippedOffline: 0, failed: []
+        )
+        let confirm = JunkSheet.confirm
+        let result = JunkSheet.result(dummyResult, .toTrash, 0)
+        #expect(confirm.id == result.id,
+                "JunkSheet cases must share a single id so SwiftUI keeps the modal context across the .confirm → .result transition. Different ids re-introduce the chained-sheet race.")
+    }
+
     @Test func onActSchedulesWorkOnMainActor() async throws {
         // The Task runs at @MainActor explicitly so subsequent UI state
         // writes from onComplete are safe without further hopping.
