@@ -572,6 +572,11 @@ nonisolated func pfProcessVideoWithArcFace(
             // for the same fix.)
             break
         }
+        let elapsedWall = CFAbsoluteTimeGetCurrent() - wallStart
+        if pfShouldAbortForWatchdog(elapsedSecs: elapsedWall, mediaSecs: ctx.duration) {
+            await logFn("[\(index)/\(total)] \(filename) — watchdog abort (wall=\(pfFormatDuration(elapsedWall)) exceeded \(pfFormatDuration(max(60, ctx.duration * 10))) budget for \(pfFormatDuration(ctx.duration)) clip)")
+            break
+        }
         releaseFrameSlot()
 
         let frameTime = frame.presentationTime
