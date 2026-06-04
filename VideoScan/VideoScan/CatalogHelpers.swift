@@ -1674,6 +1674,10 @@ struct InspectorPanel: View {
                         inspectorRow("Sample Rate", rec.audioSampleRate)
                     }
 
+                    inspectorSection("Family Tags", systemImage: "person.crop.circle") {
+                        InspectorFamilyTagsView(record: rec)
+                    }
+
                     inspectorSection("Timestamps", systemImage: "calendar") {
                         inspectorRow("Created", rec.dateCreated)
                         inspectorRow("Modified", rec.dateModified)

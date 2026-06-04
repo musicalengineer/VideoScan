@@ -295,6 +295,18 @@ final class VideoScanModel: ObservableObject {
     }
 
     init() {
+        // Listen for catalog-mutation pings from InspectorFamilyTagsView
+        // (and any other downstream view that mutates a VideoRecord's
+        // class-typed fields, which can't fire @Published didSet on
+        // the records array). Triggers the debounced save path.
+        NotificationCenter.default.addObserver(
+            forName: .videoScanCatalogMutated,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.saveCatalogDebounced()
+            self?.objectWillChange.send()
+        }
         restoreScanTargets()
         // Restore previously-scanned records so the user can browse the
         // catalog even when source volumes are offline.
