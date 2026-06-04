@@ -320,6 +320,53 @@ struct CatalogSearchBarTests {
         // "Volumes" should not match either.
         #expect(!pfRecordFilenameOrPersonMatch(r, query: "volumes"))
     }
+
+    // Semantic-content fields (captions, audio transcripts) ARE
+    // searched — they're "what's in the video" tags, not location
+    // metadata. This is the deliberate distinction from path/directory
+    // above: typing "donna" should find a clip captioned "donna
+    // playing guitar" even if the filename is IMG_4521.MOV, the same
+    // way it finds a clip tagged Donna in detectedPeople. Drives
+    // Rick's 2026-06-03 "Search metadata" request — captions are
+    // currently 0/13,570 populated, so this is greenfield, but lights
+    // up the moment any VLM-captioning run completes.
+    @Test func sceneCaptionTextIsSearched() {
+        let r = VideoRecord()
+        r.filename = "IMG_4521.MOV"
+        r.sceneCaptions = [
+            SceneCaption(timestamp: 0.0, text: "Donna playing guitar in the living room"),
+            SceneCaption(timestamp: 5.0, text: "Close-up of acoustic guitar strings")
+        ]
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "guitar"))
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "GUITAR")) // case-insensitive
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "living room"))
+        #expect(!pfRecordFilenameOrPersonMatch(r, query: "kayak"))
+    }
+
+    @Test func audioTranscriptIsSearched() {
+        let r = VideoRecord()
+        r.filename = "MVI_6129.MOV"
+        r.audioTranscript = "Happy anniversary honey it's been thirty years"
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "anniversary"))
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "ANNIVERSARY")) // case-insensitive
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "thirty years"))
+        #expect(!pfRecordFilenameOrPersonMatch(r, query: "graduation"))
+    }
+
+    @Test func nilAudioTranscriptDoesNotCrashAndNeverMatches() {
+        let r = VideoRecord()
+        r.filename = "IMG_0001.mov"
+        // audioTranscript stays nil — never-transcribed default
+        #expect(!pfRecordFilenameOrPersonMatch(r, query: "anything"))
+        #expect(pfRecordFilenameOrPersonMatch(r, query: ""))
+    }
+
+    @Test func emptySceneCaptionsArrayDoesNotMatch() {
+        let r = VideoRecord()
+        r.filename = "IMG_0001.mov"
+        r.sceneCaptions = []   // explicit empty (post-caption-run with no detected scenes)
+        #expect(!pfRecordFilenameOrPersonMatch(r, query: "anything"))
+    }
 }
 
 // MARK: - peopleSortKey tests (sortable People column)

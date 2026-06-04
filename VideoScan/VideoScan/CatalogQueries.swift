@@ -151,6 +151,12 @@ nonisolated func pfRecordFilenameOrPersonMatch(_ rec: VideoRecord, query: String
     if rec.filename.lowercased().contains(q) { return true }
     if rec.detectedPeople.contains(where: { $0.lowercased().contains(q) }) { return true }
     if rec.suspectedPeople.contains(where: { $0.lowercased().contains(q) }) { return true }
+    // Semantic content tags — captions and audio transcripts describe
+    // what's IN the video, so they belong with people tags as
+    // "content-style" fields. Distinct from path/directory above which
+    // describe where the file lives and are intentionally excluded.
+    if rec.sceneCaptions.contains(where: { $0.text.lowercased().contains(q) }) { return true }
+    if let t = rec.audioTranscript, t.lowercased().contains(q) { return true }
     return false
 }
 
