@@ -238,6 +238,36 @@ class VideoRecord: Identifiable, Codable {
     /// Videos" runs. Re-captioning replaces the array wholesale; we
     /// don't merge captions from different models.
     var sceneCaptions: [SceneCaption] = []
+    /// OCR date/time hits captured from VLM-targeted dossier prompt
+    /// per-frame. Each entry pins a date-shaped string ("JUN.21 1991",
+    /// "PM 11:30") to its source frame timestamp. The
+    /// `inferredRecordDate` field below is the consensus output from
+    /// these candidates plus other signals. PROVEN 2026-06-04 on
+    /// Clip 03_converted.mov: 11/15 frames agreed on "JUN 21 1991".
+    var ocrDateCandidates: [SceneCaption] = []
+    /// Other on-screen text captured by the VLM dossier prompt —
+    /// signs, captions, name tags, screen content. Searchable.
+    var ocrText: [SceneCaption] = []
+    /// Consensus / triangulated record date from
+    /// `pfInferRecordDate` (OCR + audio + path + file metadata).
+    /// nil ⇒ no dossier run or inconclusive. When set, this is the
+    /// authoritative date — overrides file mtime when picking which
+    /// year-bucket a record belongs in.
+    var inferredRecordDate: Date?
+    /// Confidence in `inferredRecordDate`, 0.0–1.0. OCR consensus
+    /// across ≥3 frames is ~0.95; audio-only mentions ~0.85; path
+    /// year only ~0.5; file mtime alone ~0.3. UI surfaces low-
+    /// confidence dates with a "?" affordance.
+    var inferredDateConfidence: Float?
+    /// Wall-clock time the dossier pass ran. Lets the UI offer
+    /// "re-run with newer model" actions and lets the catalog-wide
+    /// orchestrator skip already-processed records idempotently.
+    var dossierProcessedAt: Date?
+    /// The model stack used for the dossier pass, e.g.
+    /// "qwen2.5-vl-3b-4bit+whisper-medium-mlx-q4". Lets the UI
+    /// distinguish freshly-processed records from older ones and
+    /// trigger re-runs when the engine version changes.
+    var dossierProcessedBy: String?
     /// Provenance: which VLM produced `sceneCaptions`. Lets the UI
     /// distinguish freshly-captioned rows from rows tagged by an older
     /// model and offer "re-caption with current model." nil when no
@@ -457,6 +487,9 @@ class VideoRecord: Identifiable, Codable {
         case starRating, detectedPeople, suspectedPeople, combinedFromPairID
         case confirmedByUserPeople, rejectedPeople
         case sceneCaptions, sceneCaptionModel, sceneCaptionDate
+        case ocrDateCandidates, ocrText
+        case inferredRecordDate, inferredDateConfidence
+        case dossierProcessedAt, dossierProcessedBy
         case audioTranscript, audioTranscriptModel, audioTranscriptDate
         case sourceHost
         case scanContext
@@ -541,6 +574,15 @@ class VideoRecord: Identifiable, Codable {
         sceneCaptions               = try c.decodeIfPresent([SceneCaption].self, forKey: .sceneCaptions) ?? []
         sceneCaptionModel           = try c.decodeIfPresent(String.self, forKey: .sceneCaptionModel)
         sceneCaptionDate            = try c.decodeIfPresent(Date.self, forKey: .sceneCaptionDate)
+        // Dossier fields — additive optional, same migration shape as
+        // suspectedPeople / sceneCaptions: legacy catalogs come back
+        // empty / nil; dossiered records round-trip unchanged.
+        ocrDateCandidates           = try c.decodeIfPresent([SceneCaption].self, forKey: .ocrDateCandidates) ?? []
+        ocrText                     = try c.decodeIfPresent([SceneCaption].self, forKey: .ocrText) ?? []
+        inferredRecordDate          = try c.decodeIfPresent(Date.self, forKey: .inferredRecordDate)
+        inferredDateConfidence      = try c.decodeIfPresent(Float.self, forKey: .inferredDateConfidence)
+        dossierProcessedAt          = try c.decodeIfPresent(Date.self, forKey: .dossierProcessedAt)
+        dossierProcessedBy          = try c.decodeIfPresent(String.self, forKey: .dossierProcessedBy)
         // Audio transcript fields — additive optional, same migration pattern
         // as scene captions. Legacy catalogs (no audioTranscript* keys) come
         // back with nil, transcribed records round-trip unchanged. No catalog
@@ -651,6 +693,19 @@ class VideoRecord: Identifiable, Codable {
         }
         try c.encodeIfPresent(sceneCaptionModel, forKey: .sceneCaptionModel)
         try c.encodeIfPresent(sceneCaptionDate, forKey: .sceneCaptionDate)
+        // Delta-minimal: skip the dossier keys entirely when the
+        // record hasn't been processed yet. Keeps catalog.json deltas
+        // minimal for the 13,569 unprocessed records.
+        if !ocrDateCandidates.isEmpty {
+            try c.encode(ocrDateCandidates, forKey: .ocrDateCandidates)
+        }
+        if !ocrText.isEmpty {
+            try c.encode(ocrText, forKey: .ocrText)
+        }
+        try c.encodeIfPresent(inferredRecordDate, forKey: .inferredRecordDate)
+        try c.encodeIfPresent(inferredDateConfidence, forKey: .inferredDateConfidence)
+        try c.encodeIfPresent(dossierProcessedAt, forKey: .dossierProcessedAt)
+        try c.encodeIfPresent(dossierProcessedBy, forKey: .dossierProcessedBy)
         // Audio transcript: only write when something to write. Matches the
         // sceneCaption* shape — keeps catalog.json deltas minimal for the
         // (majority) of records that haven't been transcribed.
