@@ -1562,6 +1562,34 @@ struct CatalogView: View {
                         : "Run the vision-language model on every video on this volume to generate scene captions"
                 )
             }
+            // Catalog-wide caption — sweeps every reachable volume in
+            // one go. Idempotent: already-captioned records skip
+            // through fast. Roadmap item #4.
+            let reachableCaptionable = pfCatalogWideCaptionCandidates(
+                pfCatalogWideMetadataCandidates(
+                    records: model.records,
+                    reachableVolumePaths: model.scanTargets.filter { $0.isReachable && !$0.searchPath.isEmpty }.map { $0.searchPath }
+                )
+            ).count
+            Button(action: {
+                showCaptionProgress = true
+                Task {
+                    await captionOrchestrator.startCatalogWideCaptioning(model: model)
+                }
+            }) {
+                Label(
+                    reachableCaptionable > 0
+                        ? "Caption All Reachable Volumes (\(reachableCaptionable))"
+                        : "Caption All Reachable Volumes",
+                    systemImage: "text.viewfinder.rtl"
+                )
+            }
+            .disabled(reachableCaptionable == 0 || captionOrchestrator.currentStatus.isActive)
+            .help(
+                reachableCaptionable == 0
+                    ? "No eligible videos on any reachable volume"
+                    : "Run the VLM across every reachable volume — idempotent, can be re-run to pick up new captures"
+            )
             if targets.count > 1 || (single && model.records.contains(where: { $0.scanContext.volumeName.isEmpty })) {
                 Button(action: { model.backfillAllProvenance() }) {
                     Label("Backfill All Volume Names", systemImage: "arrow.triangle.2.circlepath")
