@@ -146,6 +146,28 @@ private nonisolated func pfGenerateFeaturePrint(for image: CGImage) -> VNFeature
     return req.results?.first as? VNFeaturePrintObservation
 }
 
+/// Clamp an AVFoundation-reported nominalFrameRate to the realistic
+/// consumer range. Some files (h264 with corrupt `nb_frames` in the
+/// container) report avg_frame_rate ≈ 60,000+ because ffprobe /
+/// AVFoundation compute it as nb_frames / duration. The hot frame-
+/// sampling loop uses fps to set the stride
+/// (`frameInterval = settings.frameStep / fps`); an uncorrected
+/// 60,000 fps gives an 83µs stride and the loop oversamples ~1000x.
+///
+/// 240 fps is the iPhone slo-mo ceiling — high enough to preserve
+/// genuine high-fps content, low enough that 60,000 obviously trips
+/// the clamp and a 5/240 = 21ms stride stays sane.
+///
+/// Zero / negative pass through; an upstream `guard fps > 0` already
+/// skips those files.
+///
+/// Regression sensor: `PersonFinderFpsClampTests`. Incident:
+/// DickyTheBoysDadBreen-1985.mp4 wedged a 71-second clip for 3h 48m
+/// on 2026-06-03 LaCieWorkspace scan.
+nonisolated func pfClampNominalFps(_ raw: Double, max cap: Double = 240.0) -> Double {
+    raw > cap ? cap : raw
+}
+
 /// Map a track's preferredTransform to the CGImagePropertyOrientation Vision expects.
 nonisolated func pfOrientationFromTransform(_ t: CGAffineTransform) -> CGImagePropertyOrientation {
     switch (t.a, t.b, t.c, t.d) {
@@ -214,7 +236,11 @@ private func pfOpenVisionVideoReader(
         }
         videoTrack = t
         duration = CMTimeGetSeconds(try await asset.load(.duration))
-        fps = Double(try await videoTrack.load(.nominalFrameRate))
+        let rawFps = Double(try await videoTrack.load(.nominalFrameRate))
+        fps = pfClampNominalFps(rawFps)
+        if rawFps > fps {
+            await logFn("[\(index)/\(total)] \(filename) — clamped fps \(String(format: "%.1f", rawFps)) → \(fps) (corrupt container metadata)")
+        }
     } catch {
         await logFn("[\(index)/\(total)] \(filename) — skipped (\(error.localizedDescription))")
         return nil
