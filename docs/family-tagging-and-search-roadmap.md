@@ -41,6 +41,42 @@ Verbatim (lightly edited) from the 2026-06-03 dinner-break message:
 
 ---
 
+## Baseline — current catalog state (2026-06-03 catalog.json)
+
+| metric | count | % of catalog |
+|---|--:|--:|
+| Total records | **13,570** | 100% |
+| Records with any `detectedPeople` | 21 | 0.15% |
+| Records with any `suspectedPeople` | 0 | 0% |
+| Records with any `sceneCaptions` | 0 | 0% |
+| Records with any `audioTranscript` | 0 | 0% |
+| `mediaDisposition = Unreviewed` | 13,553 | 99.9% |
+| `mediaDisposition = Confirmed Junk` | 16 | 0.1% |
+| `mediaDisposition = Important` | 1 | 0.01% |
+| `lifecycleStage = Cataloged` | 11,203 | 82.6% |
+| `lifecycleStage = Archived` | 2,334 | 17.2% |
+
+Of the 21 tagged records, all are either **Donna (19)** or **Matt (2)**.
+
+**What this tells us:**
+
+- The semantic-content infrastructure (captions, transcripts,
+  suspectedPeople) is fully unused on Rick's actual data. Wiring item
+  #1 (search captions) is **predictably zero impact today** —
+  but lights up the moment item #4 (catalog-wide captioning scan)
+  runs even one volume.
+- Person tagging is barely scratched (21 / 13,570 = 0.15%). The
+  `confirmedByUserPeople` schema add (item #2) is greenfield in
+  practice — almost nothing to migrate, no detect-vs-confirm
+  collision possible today.
+- Junk triage is almost entirely unfaced (13,553 unreviewed). The
+  highest-leverage item Rick can run today is probably not in this
+  doc at all — it's *getting the disposition surveyed*. Most of his
+  daily friction may be "find Matt" not because tagging is broken,
+  but because Find Person has only run a few times.
+
+---
+
 ## Audit — what already exists
 
 ### 1. Person-tag schema
