@@ -163,6 +163,12 @@ nonisolated func pfRecordFilenameOrPersonMatch(_ rec: VideoRecord, query: String
     // describe where the file lives and are intentionally excluded.
     if rec.sceneCaptions.contains(where: { $0.text.lowercased().contains(q) }) { return true }
     if let t = rec.audioTranscript, t.lowercased().contains(q) { return true }
+    // Dossier OCR fields — date burn-ins and on-screen text are the
+    // same kind of "what's in the frame" content as captions. Typing
+    // "1991" should find a record whose burn-in shows JUN 1991 even
+    // when the file mtime says 2024 (transcode date).
+    if rec.ocrDateCandidates.contains(where: { $0.text.lowercased().contains(q) }) { return true }
+    if rec.ocrText.contains(where: { $0.text.lowercased().contains(q) }) { return true }
     return false
 }
 
