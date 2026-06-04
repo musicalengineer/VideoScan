@@ -168,6 +168,21 @@ nonisolated func pfClampNominalFps(_ raw: Double, max cap: Double = 240.0) -> Do
     raw > cap ? cap : raw
 }
 
+/// Per-file wall-clock watchdog. Returns true when the file has
+/// burned more than `max(60s, 10 × media duration)` of real time —
+/// the calling loop should log + break. Defense-in-depth: even if
+/// pfClampNominalFps misses some pathology, this stops a single
+/// file from spinning for hours. The 10× factor accommodates slow
+/// disks + slow Vision passes on legit content; the 60s floor
+/// covers ANE warmup variance on very short clips.
+///
+/// Regression sensor: `PersonFinderWatchdogTests`. Same incident
+/// origin as pfClampNominalFps — see that doc for context.
+nonisolated func pfShouldAbortForWatchdog(elapsedSecs: Double, mediaSecs: Double) -> Bool {
+    let budget = max(60.0, mediaSecs * 10.0)
+    return elapsedSecs > budget
+}
+
 /// Map a track's preferredTransform to the CGImagePropertyOrientation Vision expects.
 nonisolated func pfOrientationFromTransform(_ t: CGAffineTransform) -> CGImagePropertyOrientation {
     switch (t.a, t.b, t.c, t.d) {
@@ -463,6 +478,11 @@ nonisolated func pfProcessVideo(
             // copyNextSampleBuffer returns the queue exits cleanly and
             // AVAssetReader's deinit handles teardown without a race.
             // Same applies to the seeker path — just break.
+            break
+        }
+        let elapsedWall = CFAbsoluteTimeGetCurrent() - wallStart
+        if pfShouldAbortForWatchdog(elapsedSecs: elapsedWall, mediaSecs: ctx.duration) {
+            await logFn("[\(index)/\(total)] \(filename) — watchdog abort (wall=\(pfFormatDuration(elapsedWall)) exceeded \(pfFormatDuration(max(60, ctx.duration * 10))) budget for \(pfFormatDuration(ctx.duration)) clip)")
             break
         }
         releaseSlot()
