@@ -354,6 +354,16 @@ struct POIProfile: Codable, Identifiable, Equatable {
     var coverCropScale: Double = 1.0
     /// Manual sort position in the People gallery (lower = further left).
     var sortOrder: Int = Int.max
+    /// Date of birth. Used by pfIdentityCandidates to eliminate
+    /// impossible identities (a person born 1994 cannot be in a video
+    /// from 1991) and to age-match candidates against VLM scene
+    /// descriptions like "baby ~1yr". nil ⇒ unknown, no filtering.
+    /// Editable by hand in the POI profile JSON file.
+    var birthdate: Date?
+    /// Date of death, if applicable. Same logic as birthdate but on
+    /// the upper end — a person who died in 2010 cannot be in a 2024
+    /// video. nil ⇒ alive or unknown.
+    var deathdate: Date?
 
     // MARK: Codable — tolerate missing keys from older JSON files
 
@@ -363,7 +373,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
          minFaceConfidence: Float = 0.55, largestFaceOnly: Bool = false,
          coverImageFilename: String? = nil, notes: String = "", aliases: [String] = [],
          coverCropOffsetX: Double = 0, coverCropOffsetY: Double = 0, coverCropScale: Double = 1.0,
-         sortOrder: Int = Int.max) {
+         sortOrder: Int = Int.max, birthdate: Date? = nil, deathdate: Date? = nil) {
         self.name = name
         self.referencePath = referencePath
         self.rejectedFiles = rejectedFiles
@@ -379,6 +389,8 @@ struct POIProfile: Codable, Identifiable, Equatable {
         self.coverCropOffsetY = coverCropOffsetY
         self.coverCropScale = coverCropScale
         self.sortOrder = sortOrder
+        self.birthdate = birthdate
+        self.deathdate = deathdate
     }
 
     init(from decoder: Decoder) throws {
@@ -398,6 +410,8 @@ struct POIProfile: Codable, Identifiable, Equatable {
         coverCropOffsetY  = try c.decodeIfPresent(Double.self, forKey: .coverCropOffsetY) ?? 0
         coverCropScale    = try c.decodeIfPresent(Double.self, forKey: .coverCropScale) ?? 1.0
         sortOrder         = try c.decodeIfPresent(Int.self, forKey: .sortOrder) ?? Int.max
+        birthdate         = try c.decodeIfPresent(Date.self, forKey: .birthdate)
+        deathdate         = try c.decodeIfPresent(Date.self, forKey: .deathdate)
     }
 
     // MARK: File-based persistence
