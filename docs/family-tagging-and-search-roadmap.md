@@ -71,23 +71,46 @@ doesn't include a "confirm / refute / add person" affordance.
 
 ### 2. Metadata search
 
-`CatalogQueries.matchesQuery` (`CatalogQueries.swift:152`) already searches
-across:
+There are actually TWO matchers in `CatalogQueries.swift`, and the gap is
+not where I first thought.
 
-- filename (the obvious one)
-- `detectedPeople` ✓
-- `suspectedPeople` ✓
-- (none of: `sceneCaptions`, `audioTranscript`, `mediaDisposition` label)
+**(a) Narrow matcher** `pfRecordFilenameOrPersonMatch` (line 149) —
+searches filename + `detectedPeople` + `suspectedPeople`. This is what
+the Catalog tab calls today (`CatalogHelpers.swift:517`). Intentionally
+narrow — there's a design comment at line 144-147 explaining why:
 
-So Rick is mostly right that today's search is filename-only, but it's
-actually filename + people-tag. **The gap is captions + transcripts.**
-Both are stored on `VideoRecord` (`sceneCaptions: [SceneCaption]` with
-`text` per frame; `audioTranscript: String?`) but the search predicate
-doesn't touch either.
+> "Path, directory, codec, notes, etc. are intentionally NOT searched
+> here … those live in the universal search (pfRecordMatchesQuery)
+> which is too broad for the always-on catalog search bar. Typing 'matt'
+> should find files named *matt* and files tagged with Matt, not every
+> file in a 'Matthew' directory."
 
-This is the smallest add of any item in this doc — ~10 lines extending
-`matchesQuery` to include caption text and transcript text. Could ship in
-under an hour with tests.
+**(b) Universal matcher** `pfRecordMatchesQuery` (line 122) — already
+tokenizes AND-of-terms, supports year-range tokens, and searches:
+filename, fullPath, directory, detectedPeople, suspectedPeople,
+**sceneCaptions[*].text**, **audioTranscript**, avidClipName,
+videoCodec, audioCodec, lifecycleStage, archiveStage, notes. **Fully
+unit-tested** (`AudioTranscriberTests.swift` lines 343-382;
+`CatalogQueriesTests.swift` lines 125+).
+
+**But unwired from any UI** — only callers are tests. The Catalog tab
+never invokes it.
+
+So the actual gap is not predicate code (it exists). It's a **UI scope
+decision** about what the Catalog search bar should do. Three options:
+
+| option | effect | downside |
+|---|---|---|
+| **A. Wholesale-swap** Catalog tab to `pfRecordMatchesQuery` | Captions, transcripts, paths, codecs all searchable from the one bar | Re-introduces the "matt → /Matthew/* directory noise" the original author wanted to avoid |
+| **B. Add scope toggle** ("Files + tags" / "All metadata") next to search bar | Preserves the narrow default for "find me Matt"; the broader mode is opt-in | Adds a control to the bar; saved preference becomes new state to manage |
+| **C. Extend narrow matcher** to include `sceneCaptions[*].text` + `audioTranscript` only, leaving path/codec out | Captions + transcripts join filenames + people tags as "things you can find with one click"; no path-noise re-introduction | Two predicates that are 80% the same; possible duplication drift |
+
+I'd vote **C** — captions and transcripts are *semantic content tags*
+in spirit (about what's in the video) and belong with people tags, not
+with location metadata. **C is also still a ~10-line change with tests.**
+
+If Rick wants the full universal-matcher behaviour for ad-hoc
+debugging, **B** layered on top later is also cheap.
 
 ### 3. Captioning pipeline
 
@@ -161,7 +184,7 @@ Smallest, highest-leverage first. Each row stands alone.
 
 | # | item | effort | unlocks |
 |---|---|---|---|
-| 1 | Extend `matchesQuery` to search `sceneCaptions[*].text` + `audioTranscript` | ~1 hr + tests | Rick can search "birthday cake" / "happy anniversary" across the catalog the moment any caption work runs |
+| 1 | Pick scope option A / B / C above and wire the Catalog tab accordingly | A: ~30 min; B: ~2 hrs; C: ~1 hr + tests | Rick can search "birthday cake" / "happy anniversary" across the catalog the moment any caption work runs |
 | 2 | Add `confirmedByUserPeople` field to `VideoRecord` (additive optional, Codable backward compat per the `MediaDisposition`/`statusRaw` precedent) + plumb into `matchesQuery` + `CatalogQueries.peopleCount` | ~2 hrs + tests | Schema for definite-vs-suspected distinction |
 | 3 | "Confirm person on this record" UI in `InspectorPanel` — add/remove/promote name; promote = move from detectedPeople → confirmedByUserPeople | ~3 hrs | Rick can do the manual tagging he wants today |
 | 4 | "Caption All Cataloged" + "Find Family Across Catalog" entry points — wrap the existing per-target engines in a catalog-records iterator with a predicate (online + non-archived + not-already-done) | ~4 hrs | The catalog-wide scan Rick asked for; uses existing engines, no new ML work |
@@ -178,9 +201,16 @@ the ML accuracy arc.
 
 ## Recommendations for the next-up sprint
 
-If Rick says "go," start with item **1** — it's the smallest, lowest-risk,
-testable-in-one-pass, and immediately useful once any captioning has been
-run on real videos. The other items build on it.
+If Rick says "go," start with item **1** option **C** — extending the
+narrow matcher with captions + transcripts. Smallest, lowest-risk,
+testable-in-one-pass, and immediately useful once any captioning has
+been run on real videos. The other items build on it.
+
+**Course-correction note:** my original draft of this section assumed
+the matcher had no caption/transcript support at all. Re-reading
+`CatalogQueries.swift` confirmed the universal matcher does — it's just
+unwired from the Catalog tab. So the actual work is a UI scope choice,
+not a predicate add. Doc updated to match.
 
 Item **3** (manual-confirm UI in InspectorPanel) is the second-best
 starting point if Rick wants to see UI movement first; it's bigger but
