@@ -151,6 +151,12 @@ nonisolated func pfRecordFilenameOrPersonMatch(_ rec: VideoRecord, query: String
     if rec.filename.lowercased().contains(q) { return true }
     if rec.detectedPeople.contains(where: { $0.lowercased().contains(q) }) { return true }
     if rec.suspectedPeople.contains(where: { $0.lowercased().contains(q) }) { return true }
+    // User-confirmed names match the same as algorithm-detected names
+    // for catalog search — both are valid "this video has X" tags.
+    // rejectedPeople is intentionally NOT searched here: a record where
+    // Rick said "not Anna" should never surface for "anna" queries,
+    // which is the whole point of that field.
+    if rec.confirmedByUserPeople.contains(where: { $0.name.lowercased().contains(q) }) { return true }
     // Semantic content tags — captions and audio transcripts describe
     // what's IN the video, so they belong with people tags as
     // "content-style" fields. Distinct from path/directory above which
