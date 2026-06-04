@@ -346,7 +346,11 @@ private func openArcFaceVideoReader(
         }
         videoTrack = t
         duration = CMTimeGetSeconds(try await asset.load(.duration))
-        fps = Double(try await videoTrack.load(.nominalFrameRate))
+        let rawFps = Double(try await videoTrack.load(.nominalFrameRate))
+        fps = pfClampNominalFps(rawFps)
+        if rawFps > fps {
+            await logFn("[\(index)/\(total)] \(filename) — clamped fps \(String(format: "%.1f", rawFps)) → \(fps) (corrupt container metadata)")
+        }
     } catch {
         await logFn("[\(index)/\(total)] \(filename) — skipped (\(error.localizedDescription))")
         return nil
