@@ -168,6 +168,56 @@ final class CaptionOrchestrator: ObservableObject {
         await activeTask?.value
     }
 
+    /// Catalog-wide captioning: iterate every reachable scan target in
+    /// sequence, captioning every eligible video. Idempotent: records
+    /// already captioned with the current engine's modelID are skipped
+    /// by the existing per-target loop (the same skip predicate that
+    /// drives `startCaptioning(target:)`). That property gives us "free"
+    /// pause/resume — if the user quits mid-batch, the next invocation
+    /// picks up where we left off because the completed records are
+    /// already persisted with their captions.
+    ///
+    /// Sequential by design (v1): the VLM is GPU-heavy; running
+    /// multiple targets in parallel would just contend for the same
+    /// MLX compute. Per-target progress lights up through the existing
+    /// currentStatus / currentTarget published state.
+    ///
+    /// Roadmap item #4 (2026-06-04). See
+    /// docs/family-tagging-and-search-roadmap.md and
+    /// `pfCatalogWideMetadataCandidates`.
+    func startCatalogWideCaptioning(model: VideoScanModel) async {
+        guard !currentStatus.isActive else {
+            captionOrchLog.warning("startCatalogWideCaptioning called while already \(String(describing: self.currentStatus))")
+            return
+        }
+
+        let reachable = model.scanTargets.filter { $0.isReachable && !$0.searchPath.isEmpty }
+        captionOrchLog.info("Catalog-wide caption: \(reachable.count) reachable target(s)")
+        appLog.write("Caption Catalog: starting across \(reachable.count) reachable volume(s)")
+
+        guard !reachable.isEmpty else {
+            currentStatus = .finished(captioned: 0, skipped: 0, failed: 0)
+            return
+        }
+
+        for target in reachable {
+            if Task.isCancelled { break }
+            // Per-target invocation reuses the existing batch loop,
+            // including idempotent skip + per-file cancellation. Status
+            // publishing already happens inside.
+            await startCaptioning(target: target, model: model)
+            // After each target settles, currentStatus is .finished —
+            // reset to idle before the next target's startCaptioning
+            // call so its guard doesn't bail.
+            if !Task.isCancelled {
+                currentStatus = .idle
+            }
+        }
+
+        appLog.write("Caption Catalog: completed sweep across \(reachable.count) volume(s)")
+        currentStatus = .finished(captioned: 0, skipped: 0, failed: 0)
+    }
+
     /// Request cancellation. Flips status to `.cancelling`. The active
     /// task observes `Task.isCancelled` / `Task.checkCancellation()` in
     /// the per-file loop (and inside the runner's per-frame loop, see
