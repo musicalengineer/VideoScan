@@ -1678,6 +1678,16 @@ struct InspectorPanel: View {
                         InspectorFamilyTagsView(record: rec)
                     }
 
+                    // Dossier — captions, transcript, OCR text, OCR dates,
+                    // inferred date. Only shown when the record has been
+                    // processed by the dossier pipeline so empty rows don't
+                    // clutter the inspector for un-dossiered records.
+                    if rec.dossierProcessedAt != nil {
+                        inspectorSection("Dossier", systemImage: "doc.text.magnifyingglass") {
+                            InspectorDossierView(record: rec)
+                        }
+                    }
+
                     inspectorSection("Timestamps", systemImage: "calendar") {
                         inspectorRow("Created", rec.dateCreated)
                         inspectorRow("Modified", rec.dateModified)

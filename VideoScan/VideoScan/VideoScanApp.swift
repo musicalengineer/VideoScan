@@ -229,6 +229,11 @@ struct VideoScanApp: App {
                         } else {
                             Task { await catalogSync.syncFromMaster() }
                         }
+                        // Live dossier reload — picks up new dossier
+                        // results written to catalog.json by external
+                        // workers (scripts/dossier_batch.py + merger)
+                        // without quitting the app. Polls every 30s.
+                        catalogModel.startLiveDossierReload()
                     }
             }
         }
