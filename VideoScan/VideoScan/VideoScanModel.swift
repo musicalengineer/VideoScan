@@ -280,6 +280,17 @@ final class VideoScanModel: ObservableObject {
     // Application Support. Production code never reassigns this.
     var catalogStore: CatalogStore = .shared
 
+    /// Live-reload polling task — set by `startLiveDossierReload()` in
+    /// VideoScanModel+LiveReload.swift, cancelled by
+    /// `stopLiveDossierReload()`. nil when the live reload is not
+    /// active (e.g. tests, viewer mode).
+    var liveReloadTask: Task<Void, Never>?
+
+    /// Mtime watermark for the live-reload polling loop. Set to the
+    /// catalog file's mtime at launch (so the first tick doesn't
+    /// re-merge what we just loaded) and on every successful merge.
+    var lastLiveReloadMtime: Date?
+
     // Internal so VideoScanModel+ScanTargetPersistence can gate persistence
     // during XCTest runs.
     static var isRunningTests: Bool {
