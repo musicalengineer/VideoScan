@@ -259,6 +259,12 @@ def main():
     ap.add_argument("--force", action="store_true", help="Re-dossier records that already have dossierProcessedAt")
     ap.add_argument("--save-every", type=int, default=5,
                     help="Write catalog.json after every N processed records (safety against crash)")
+    ap.add_argument("--output-jsonl", type=str, default="",
+                    help="JSONL delta mode: append per-record results here, do NOT mutate catalog.json. "
+                         "Use this when multiple workers process the same catalog from different hosts; "
+                         "a separate merger applies the JSONL files to catalog.json safely.")
+    ap.add_argument("--host", type=str, default=os.uname().nodename,
+                    help="Worker hostname tagged into each JSONL record (default: this machine's hostname).")
     args = ap.parse_args()
 
     if not args.paths_file and not args.filter:
@@ -309,6 +315,15 @@ def main():
     vlm_config = load_config(VLM_MODEL)
     log(f"loaded in {time.time() - t0:.1f}s")
 
+    # JSONL delta mode: append-only output, no catalog.json mutation.
+    # The merger script (merge_dossier_jsonl.py) consumes these files
+    # and applies them to the authoritative catalog.json on M4.
+    jsonl_path = Path(args.output_jsonl).expanduser() if args.output_jsonl else None
+    if jsonl_path:
+        jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+        log(f"JSONL output: {jsonl_path} (host={args.host}) — catalog.json NOT mutated by this worker")
+    jsonl_fh = open(jsonl_path, "a") if jsonl_path else None
+
     started = time.time()
     ok = 0
     failed = 0
@@ -318,9 +333,19 @@ def main():
         try:
             d = dossier_one(path, vlm_model, vlm_processor, vlm_config, args.frames, log)
             if d:
-                # Merge into record. Only set fields we computed.
-                for k, v in d.items():
-                    rec[k] = v
+                if jsonl_fh:
+                    # Delta mode — write one line, don't mutate in-memory record.
+                    jsonl_fh.write(json.dumps({
+                        "fullPath": str(path),
+                        "host": args.host,
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "fields": d,
+                    }, ensure_ascii=False) + "\n")
+                    jsonl_fh.flush()
+                else:
+                    # Direct mode — merge into the in-memory catalog record.
+                    for k, v in d.items():
+                        rec[k] = v
                 ok += 1
             else:
                 failed += 1
@@ -332,13 +357,16 @@ def main():
             log(traceback.format_exc())
             failed += 1
 
-        # Periodic save — survives crashes
-        if n % args.save_every == 0:
+        # Periodic save — only relevant in direct-write mode. JSONL mode
+        # flushes per-line above so progress survives crashes naturally.
+        if not jsonl_fh and n % args.save_every == 0:
             atomic_write_catalog(catalog, CATALOG)
             log(f"  [checkpoint saved at {n}/{len(targets)}]")
 
-    # Final save
-    atomic_write_catalog(catalog, CATALOG)
+    if jsonl_fh:
+        jsonl_fh.close()
+    else:
+        atomic_write_catalog(catalog, CATALOG)
     elapsed = time.time() - started
     log(f"\n=== done in {elapsed:.0f}s — {ok} ok, {failed} failed of {len(targets)} ===")
     logf.close()
