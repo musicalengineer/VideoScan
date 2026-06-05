@@ -239,10 +239,10 @@ struct CatalogView: View {
     /// back to false (run ends), so the next queued job's progress sheet
     /// appears automatically.
     @State private var progressSheetHiddenByUser: Bool = false
-    /// Caption Videos orchestration state. Built lazily — the
-    /// orchestrator owns its own MLX model container so we don't want
-    /// to construct one until the user actually invokes the action.
-    @StateObject private var captionOrchestrator = CaptionOrchestrator()
+    /// Caption Videos orchestration state. Lifted to app level so the
+    /// separate Dossier Dashboard window observes the same in-flight
+    /// state — see VideoScanApp's @StateObject.
+    @EnvironmentObject var captionOrchestrator: CaptionOrchestrator
     @State private var showCaptionProgress = false
     /// Opens an independent resizable window keyed by CatalogInfoItem value.
     /// Defined as a `WindowGroup(for:)` scene in VideoScanApp.
