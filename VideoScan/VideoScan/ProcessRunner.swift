@@ -19,6 +19,14 @@ enum ToolLocator {
     static let ffprobeEnvVar = "VS_FFPROBE_PATH"
     static let pythonEnvVar = "VS_PYTHON_PATH"
     static let python312EnvVar = "VS_PYTHON312_PATH"
+    /// MLX-side Python — separate venv (`venv-mlx`) because mlx-whisper
+    /// requires numpy>=2 while the dlib face-recognition env is pinned
+    /// to numpy<2. Resolved independently from the dlib venv above.
+    static let mlxPythonEnvVar = "VS_MLX_PYTHON_PATH"
+    /// Path to scripts/whisper_transcribe.py — Whisper transcription
+    /// driver run by `PythonSubprocessAudioTranscriber`. Env override
+    /// lets test machines / CI point at the shipped script directly.
+    static let whisperScriptEnvVar = "VS_WHISPER_SCRIPT_PATH"
 
     static let ffmpegCandidates = [
         "/opt/homebrew/bin/ffmpeg",
@@ -42,6 +50,15 @@ enum ToolLocator {
         FileManager.default.currentDirectoryPath + "/venv/bin/python3.12",
         "/opt/homebrew/bin/python3.12",
         "/usr/local/bin/python3.12"
+    ]
+    static let mlxPythonCandidates = [
+        NSHomeDirectory() + "/dev/VideoScan/venv-mlx/bin/python",
+        NSHomeDirectory() + "/dev/VideoScan/venv-mlx/bin/python3",
+        FileManager.default.currentDirectoryPath + "/venv-mlx/bin/python"
+    ]
+    static let whisperScriptCandidates = [
+        NSHomeDirectory() + "/dev/VideoScan/scripts/whisper_transcribe.py",
+        FileManager.default.currentDirectoryPath + "/scripts/whisper_transcribe.py"
     ]
 
     static func firstExecutable(
@@ -88,6 +105,30 @@ enum ToolLocator {
 
     static var python312Path: String {
         resolve(envVar: python312EnvVar, candidates: python312Candidates, fallback: python312Candidates[0])
+    }
+
+    /// MLX venv Python — empty if not present. Used by the Whisper
+    /// transcription subprocess (mlx-whisper) and any future MLX-side
+    /// Python script that can't be ported to mlx-swift yet.
+    static var mlxPythonPath: String {
+        resolve(envVar: mlxPythonEnvVar, candidates: mlxPythonCandidates, fallback: "")
+    }
+
+    /// Path to the Whisper transcription script. Empty if not findable
+    /// — caller must gate. Same shape as `pythonPath` (returns "" on
+    /// miss rather than fabricating a path that won't exist).
+    static var whisperScriptPath: String {
+        // File-existence check, not executable bit — .py files aren't
+        // executable, the Python interpreter is.
+        if let override = ProcessInfo.processInfo.environment[whisperScriptEnvVar],
+           !override.isEmpty,
+           FileManager.default.fileExists(atPath: override) {
+            return override
+        }
+        for candidate in whisperScriptCandidates where FileManager.default.fileExists(atPath: candidate) {
+            return candidate
+        }
+        return ""
     }
 }
 

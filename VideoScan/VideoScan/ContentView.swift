@@ -1590,6 +1590,30 @@ struct CatalogView: View {
                     ? "No eligible videos on any reachable volume"
                     : "Run the VLM across every reachable volume — idempotent, can be re-run to pick up new captures"
             )
+            // Dossier sweep — three-prompt VLM (date / scene / text)
+            // plus Whisper transcription per video, idempotent skip on
+            // already-dossiered records. Populates the dossier schema
+            // fields (ocrDateCandidates, ocrText, inferredRecordDate)
+            // that single-prompt captioning leaves empty.
+            Button(action: {
+                showCaptionProgress = true
+                Task {
+                    await captionOrchestrator.startCatalogWideDossier(model: model)
+                }
+            }) {
+                Label(
+                    reachableCaptionable > 0
+                        ? "Dossier All Reachable Volumes (\(reachableCaptionable))"
+                        : "Dossier All Reachable Volumes",
+                    systemImage: "doc.text.magnifyingglass"
+                )
+            }
+            .disabled(reachableCaptionable == 0 || captionOrchestrator.currentStatus.isActive)
+            .help(
+                reachableCaptionable == 0
+                    ? "No eligible videos on any reachable volume"
+                    : "Run the full dossier (date/scene/text VLM prompts + Whisper transcript) across every reachable volume. ~3× slower than captioning but populates all dossier fields. Idempotent."
+            )
             if targets.count > 1 || (single && model.records.contains(where: { $0.scanContext.volumeName.isEmpty })) {
                 Button(action: { model.backfillAllProvenance() }) {
                     Label("Backfill All Volume Names", systemImage: "arrow.triangle.2.circlepath")

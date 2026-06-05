@@ -60,6 +60,68 @@ protocol CaptionRunner: Sendable {
         videoPath: String,
         atTimestamps timestamps: [Double]
     ) async throws -> [SceneCaption]
+
+    /// Multi-signal dossier extraction. Runs three targeted prompts
+    /// per frame (date / scene / text) and returns the results split
+    /// into the three matching arrays. Date and text prompts emit
+    /// only non-NONE responses; the scene prompt emits one entry per
+    /// successfully-decoded frame.
+    ///
+    /// Default impl wraps `caption(...)` and returns scenes only —
+    /// engines that can natively support targeted prompts (e.g. the
+    /// MLXVLM runner) should override to issue the three prompts as
+    /// a tight per-frame batch sharing one model load.
+    ///
+    /// See `docs/family-tagging-and-search-roadmap.md` (item #4) and
+    /// `scripts/dossier_batch.py` (the original Python prototype) for
+    /// the prompt wording and parse semantics this is parity with.
+    func dossier(
+        videoPath: String,
+        atTimestamps timestamps: [Double]
+    ) async throws -> DossierExtraction
+}
+
+extension CaptionRunner {
+    /// Default dossier impl. Engines without targeted-prompt support
+    /// get scene-only dossiers, which still feed `pfInferRecordDate`'s
+    /// path-year + file-mtime fallbacks. The MLXVLM runner overrides.
+    func dossier(
+        videoPath: String,
+        atTimestamps timestamps: [Double]
+    ) async throws -> DossierExtraction {
+        let scenes = try await caption(videoPath: videoPath, atTimestamps: timestamps)
+        return DossierExtraction(scenes: scenes, dates: [], texts: [])
+    }
+}
+
+// MARK: - DossierExtraction
+//
+// Three independent signal channels from one VLM batch. Shape mirrors
+// `VideoRecord`'s dossier fields so the writeback layer can plop the
+// arrays in directly without re-shaping.
+
+/// Result of a multi-prompt dossier pass over one video. Each array is
+/// keyed by frame timestamp via the `SceneCaption.timestamp` field, so
+/// the UI can later highlight which frame the OCR date came from.
+struct DossierExtraction: Sendable, Equatable {
+    /// Scene descriptions — one per successfully-captioned frame.
+    /// Same semantic as the existing `caption()` result; replaces
+    /// `VideoRecord.sceneCaptions` wholesale.
+    let scenes: [SceneCaption]
+
+    /// OCR date candidates — burn-in timestamps the model read.
+    /// Only includes frames whose response is non-NONE. Fed to
+    /// `pfParseOcrDate` for triangulation.
+    let dates: [SceneCaption]
+
+    /// Other on-screen text — signs, captions, screen content. Only
+    /// includes frames whose response is non-NONE. Searchable via the
+    /// universal matcher.
+    let texts: [SceneCaption]
+
+    /// Empty extraction — useful for engines that return no signals
+    /// (e.g. when frame extraction yielded zero usable frames).
+    static let empty = DossierExtraction(scenes: [], dates: [], texts: [])
 }
 
 // MARK: - Errors
@@ -213,6 +275,35 @@ private func extractFrames(
 /// Prompt fixed for stage 6a — we mirror the Python prototype's prompt
 /// for shape comparability. Stage 6b's UI may make this user-tunable.
 private let kCaptionPrompt = "Describe this video frame in one sentence: setting, activity, count of people, any visible text."
+
+/// Three targeted prompts for the dossier pass. Lifted verbatim from
+/// `scripts/dossier_batch.py`'s PROMPTS dict so the Swift and Python
+/// pipelines produce comparable output across the schema fields:
+///
+///   - `.date`  → `ocrDateCandidates` (after parsing via pfParseOcrDate)
+///   - `.scene` → `sceneCaptions`
+///   - `.text`  → `ocrText`
+///
+/// Wording PROVEN 2026-06-04 on Clip 03_converted.mov: 11 of 15 frames
+/// agreed on "JUN 21 1991" for the date prompt. Don't drift these
+/// without re-validating against the same fixture set — small wording
+/// changes meaningfully shift VLM behavior.
+private enum DossierPromptKind: String, CaseIterable {
+    case date
+    case scene
+    case text
+
+    var promptText: String {
+        switch self {
+        case .date:
+            return "What date or time is shown anywhere in this image, including any timestamp burned into the video? If you see a date or time, give exactly what you see (e.g. 'MAR 14 1991 03:42PM'). If no date/time visible, answer just 'NONE'."
+        case .scene:
+            return "Briefly describe what you see in this image: people (with apparent ages and roles), location, what they're doing, and any era cues (decor, technology, fashion). 2-3 sentences."
+        case .text:
+            return "List all text visible in this image — burned-in subtitles, signs, screen content, anything readable. If no text, answer 'NONE'."
+        }
+    }
+}
 
 /// Hidden default — Qwen2.5-VL-3B-Instruct-4bit, the configuration
 /// pre-registered in `VLMRegistry`. Matches the existing modelID
@@ -405,6 +496,122 @@ actor MLXVLMCaptionRunner: CaptionRunner {
         appLog.write(String(format: "CaptionRunner(MLXVLM) captioned %@ at %d frames in %.1fs",
                             filename, captions.count, elapsed))
         return captions
+    }
+
+    /// Multi-signal dossier — three targeted prompts per frame, single
+    /// model load shared across them. Wall-time-per-frame is ~3× the
+    /// single-prompt `caption()` cost (33s/15-frame clip on M4 Max per
+    /// the Python prototype baseline).
+    ///
+    /// Override of the protocol-extension default. The default would
+    /// give scene-only via `caption()`; this version produces real OCR
+    /// date + text channels too, so the catalog-wide pass actually
+    /// populates `ocrDateCandidates` + `ocrText` from this engine.
+    func dossier(
+        videoPath: String,
+        atTimestamps timestamps: [Double]
+    ) async throws -> DossierExtraction {
+        let filename = (videoPath as NSString).lastPathComponent
+        let started = CFAbsoluteTimeGetCurrent()
+
+        let videoURL = URL(fileURLWithPath: videoPath)
+        guard FileManager.default.fileExists(atPath: videoPath) else {
+            throw CaptionRunnerError.videoUnreadable(path: videoPath)
+        }
+
+        let frames = try await extractFrames(from: videoURL, atTimestamps: timestamps)
+        let container = try await ensureContainer()
+
+        // Per-prompt token budgets diverge from caption's flat
+        // maxTokens: date responses are short ("MAR 14 1991 03:42PM"
+        // ≈ 10 tokens), text responses can be a short list, scene
+        // responses run 2-3 sentences. Tighter budgets keep wall-time
+        // down on the prompts that don't need length.
+        let dateParams  = MLXLMCommon.GenerateParameters(maxTokens: 32,  temperature: 0.0, topP: 0.9)
+        let scnParams   = MLXLMCommon.GenerateParameters(maxTokens: 180, temperature: 0.2, topP: 0.9)
+        let textParams  = MLXLMCommon.GenerateParameters(maxTokens: 96,  temperature: 0.0, topP: 0.9)
+        MLXRandom.seed(0xCAFE_F00D)
+
+        var scenes: [SceneCaption] = []
+        var dates:  [SceneCaption] = []
+        var texts:  [SceneCaption] = []
+        scenes.reserveCapacity(frames.count)
+
+        for (ts, extraction) in frames {
+            try Task.checkCancellation()
+            guard case .success(let cg) = extraction else {
+                if case .failed(let reason) = extraction {
+                    captionLogger.warning("Skipping ts=\(String(format: "%.2f", ts))s in \(filename, privacy: .public): \(reason, privacy: .public)")
+                }
+                continue
+            }
+            let ciImage = CIImage(cgImage: cg)
+            let images: [UserInput.Image] = [.ciImage(ciImage)]
+
+            for kind in DossierPromptKind.allCases {
+                try Task.checkCancellation()
+                let params: MLXLMCommon.GenerateParameters = {
+                    switch kind {
+                    case .date:  return dateParams
+                    case .scene: return scnParams
+                    case .text:  return textParams
+                    }
+                }()
+                let chat: [Chat.Message] = [
+                    .system("You are an image understanding model capable of describing the salient features of any image."),
+                    .user(kind.promptText, images: images, videos: [])
+                ]
+                do {
+                    let text: String = try await runMLX {
+                        try await container.perform { context in
+                            var userInput = UserInput(chat: chat)
+                            userInput.processing.resize = .init(width: 448, height: 448)
+                            let lmInput = try await context.processor.prepare(input: userInput)
+                            let stream = try MLXLMCommon.generate(
+                                input: lmInput, parameters: params, context: context
+                            )
+                            var buffer = ""
+                            for await item in stream {
+                                if let chunk = item.chunk { buffer += chunk }
+                            }
+                            MLX.Stream.gpu.synchronize()
+                            return buffer
+                        }
+                    }
+                    let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if trimmed.isEmpty { continue }
+                    // NONE filtering — match the Python POC: date/text
+                    // responses of "NONE" (case-insensitive, optionally
+                    // with surrounding punctuation) are dropped here.
+                    // Scene captions always retained.
+                    let upper = trimmed.uppercased()
+                    let isNoneAnswer = upper == "NONE"
+                        || upper.hasPrefix("NONE.")
+                        || upper.hasPrefix("NONE ")
+                    switch kind {
+                    case .date:
+                        if !isNoneAnswer {
+                            dates.append(SceneCaption(timestamp: ts, text: trimmed))
+                        }
+                    case .scene:
+                        scenes.append(SceneCaption(timestamp: ts, text: trimmed))
+                    case .text:
+                        if !isNoneAnswer {
+                            texts.append(SceneCaption(timestamp: ts, text: trimmed))
+                        }
+                    }
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    captionLogger.warning("VLM dossier call (\(kind.rawValue, privacy: .public)) failed at ts=\(String(format: "%.2f", ts))s: \(error.localizedDescription, privacy: .public)")
+                }
+            }
+        }
+
+        let elapsed = CFAbsoluteTimeGetCurrent() - started
+        appLog.write(String(format: "CaptionRunner(MLXVLM) dossier %@ — %d scenes, %d dates, %d text in %.1fs",
+                            filename, scenes.count, dates.count, texts.count, elapsed))
+        return DossierExtraction(scenes: scenes, dates: dates, texts: texts)
     }
 }
 
