@@ -257,9 +257,9 @@ struct CatalogToolbar<Dashboard: View>: View {
             HStack(spacing: 4) {
                 Image(systemName: "magnifyingglass")
                     .foregroundColor(.secondary)
-                TextField("Search filenames…", text: $searchText)
+                TextField("Search names, people, captions, speech…", text: $searchText)
                     .textFieldStyle(.plain)
-                    .frame(width: 160)
+                    .frame(width: 260)
                     .accessibilityIdentifier("catalog.searchField")
                 if !searchText.isEmpty {
                     Button(action: { searchText = "" }) {

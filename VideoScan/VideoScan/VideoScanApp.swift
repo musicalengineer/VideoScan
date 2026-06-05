@@ -198,6 +198,11 @@ struct VideoScanApp: App {
     /// POI tree on launch and on manual Refresh, verify the manifest,
     /// and atomically swap into place. See CatalogSync.swift.
     @StateObject private var catalogSync = CatalogSync.production()
+    /// Lifted from ContentView to app level so the separate Dossier
+    /// Dashboard window can observe the same in-flight state. Lazy MLX
+    /// model load is unchanged — the model container only loads on the
+    /// first `caption()` / `dossier()` call.
+    @StateObject private var captionOrchestrator = CaptionOrchestrator()
 
     var body: some Scene {
         WindowGroup(id: "main") {
@@ -206,6 +211,7 @@ struct VideoScanApp: App {
                     .environmentObject(catalogModel)
                     .environmentObject(catalogModel.dashboard)
                     .environmentObject(catalogSync)
+                    .environmentObject(captionOrchestrator)
                     .onAppear {
                         appDelegate.catalogModel = catalogModel
                         // Apply viewer-vs-master semantics to model + store.
@@ -289,6 +295,14 @@ struct VideoScanApp: App {
             DashboardWindow()
                 .environmentObject(catalogModel)
                 .environmentObject(catalogModel.dashboard)
+        }
+        .windowResizability(.contentSize)
+        .defaultPosition(.topTrailing)
+
+        Window("Dossier Dashboard", id: "dossier") {
+            DossierDashboardView()
+                .environmentObject(catalogModel)
+                .environmentObject(captionOrchestrator)
         }
         .windowResizability(.contentSize)
         .defaultPosition(.topTrailing)
@@ -389,6 +403,11 @@ struct WindowMenuItems: View {
             openWindow(id: "volumes")
         }
         .keyboardShortcut("v", modifiers: [.command, .shift])
+
+        Button("Dossier Dashboard") {
+            openWindow(id: "dossier")
+        }
+        .keyboardShortcut("o", modifiers: [.command, .shift])
     }
 }
 
