@@ -42,7 +42,9 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
-CATALOG = Path("~/Library/Application Support/VideoScan/catalog.json").expanduser()
+DEFAULT_CATALOG = Path("~/Library/Application Support/VideoScan/catalog.json").expanduser()
+# Will be overridden by --catalog at runtime.
+CATALOG = DEFAULT_CATALOG
 LOG_DIR = Path("~/Library/Logs/VideoScan/dossier-batch").expanduser()
 
 VLM_MODEL = "mlx-community/Qwen2.5-VL-3B-Instruct-4bit"
@@ -265,7 +267,14 @@ def main():
                          "a separate merger applies the JSONL files to catalog.json safely.")
     ap.add_argument("--host", type=str, default=os.uname().nodename,
                     help="Worker hostname tagged into each JSONL record (default: this machine's hostname).")
+    ap.add_argument("--catalog", type=str, default="",
+                    help="Catalog snapshot to read for skip-check (default: ~/Library/Application Support/VideoScan/catalog.json). "
+                         "On non-M4 workers, point this at a local snapshot scp'd from M4 since "
+                         "Application Support isn't synced across machines.")
     args = ap.parse_args()
+    global CATALOG
+    if args.catalog:
+        CATALOG = Path(args.catalog).expanduser()
 
     if not args.paths_file and not args.filter:
         # Default: Matt-tagged
