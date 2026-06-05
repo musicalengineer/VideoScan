@@ -1,22 +1,47 @@
 import SwiftUI
+import Combine
 
 // MARK: - Dossier Dashboard
 //
-// Live monitor for the catalog-wide dossier sweep started from the
-// Catalog tab's "Dossier All Reachable Volumes" button. Pulls all its
-// state from the shared `CaptionOrchestrator` so the dashboard, the
-// modal progress sheet, and the orchestrator's internal loop are
-// always seeing the same truth.
+// Live monitor for catalog-wide dossier coverage. Pulls progress from
+// two independent sources so it tells the truth regardless of which
+// path is doing the work:
 //
-// Opened either via the toolbar chip or `openWindow(id: "dossier")`.
+//   1. The in-memory catalog (`model.records`) — counts dossier'd
+//      records and per-channel coverage. Updated by both the in-app
+//      orchestrator's writeback AND the live-reload poller that
+//      ingests external worker JSONL deltas via the merger.
+//   2. The shared JSONL delta directory
+//      (/Volumes/Crucial2TB/dossier-deltas/*.jsonl) — per-host line
+//      counts and last-write timestamps so Rick can see which fleet
+//      members are alive and how many records each has produced this
+//      session.
+//
+// The dial reflects catalog-wide progress (dossier'd / total) rather
+// than the in-app sweep's per-batch progress, because in practice the
+// external worker fleet does most of the long-running work. Start/Stop
+// remain wired to the in-app orchestrator for ad-hoc sweeps from
+// within the app.
+//
+// Opened via Window menu → Dossier Dashboard (⌘⇧O) or
+// `openWindow(id: "dossier")`.
 
 struct DossierDashboardView: View {
 
     @EnvironmentObject var captionOrchestrator: CaptionOrchestrator
     @EnvironmentObject var model: VideoScanModel
 
+    /// Per-worker JSONL stats. Refreshed by the timer below; never
+    /// blocking the main thread on its read.
+    @State private var fleet: FleetStats = .empty
+
+    /// Tick the UI every 5s so the dial / counters / fleet panel
+    /// stay current. Matches the merger's 60s catalog write cadence —
+    /// the dial updates well within a worker's per-file budget.
+    private let refreshTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
+
     var body: some View {
-        VStack(alignment: .center, spacing: 20) {
+        VStack(alignment: .center, spacing: 18) {
 
             // Title
             Text("Catalog Dossier")
@@ -24,7 +49,7 @@ struct DossierDashboardView: View {
                 .fontWeight(.semibold)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            // MARK: Dial + headline counters
+            // MARK: Dial + headline coverage counters
             HStack(alignment: .center, spacing: 32) {
                 DialRing(
                     progress: dialProgress,
@@ -32,58 +57,60 @@ struct DossierDashboardView: View {
                 )
                 .frame(width: 180, height: 180)
 
-                VStack(alignment: .leading, spacing: 12) {
-                    StatRow(label: "Done", value: "\(captionOrchestrator.liveCaptioned)", color: .green)
-                    StatRow(label: "Skipped", value: "\(captionOrchestrator.liveSkipped)", color: .secondary)
-                    StatRow(label: "Failed", value: "\(captionOrchestrator.liveFailed)", color: .orange)
-                    StatRow(label: "Total", value: "\(captionOrchestrator.liveTotal)", color: .primary)
+                VStack(alignment: .leading, spacing: 10) {
+                    StatRow(label: "Dossiered", value: "\(coverage.dossiered)", color: .green)
+                    StatRow(label: "Remaining", value: "\(coverage.remaining)", color: .secondary)
+                    StatRow(label: "Catalog", value: "\(coverage.total)", color: .primary)
                     Divider().frame(width: 160)
-                    Text(etaText)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    StatRow(label: "OCR dates", value: "\(coverage.ocrDates)", color: .purple)
+                    StatRow(label: "Strong dates", value: "\(coverage.strongDates)", color: .green)
                 }
                 Spacer()
             }
 
-            // MARK: Currently processing
-            HStack {
-                Image(systemName: "play.circle.fill")
-                    .foregroundColor(.blue)
-                    .imageScale(.large)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Now processing")
+            // MARK: Per-host fleet panel
+            GroupBox(label:
+                HStack(spacing: 4) {
+                    Text("Fleet").font(.headline)
+                    Spacer()
+                    Text("from JSONL deltas — refreshed every 5s")
                         .font(.caption2)
                         .foregroundColor(.secondary)
-                    Text(currentFileLabel)
-                        .font(.system(.body, design: .monospaced))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
                 }
-                Spacer()
+            ) {
+                VStack(spacing: 6) {
+                    ForEach(WorkerHost.allCases, id: \.self) { host in
+                        FleetRow(host: host, stat: fleet[host])
+                    }
+                    if fleet.isEmpty {
+                        Text("No worker JSONLs found at /Volumes/Crucial2TB/dossier-deltas/")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding(.vertical, 4)
+                    }
+                }
+                .padding(.vertical, 4)
             }
-            .padding(12)
-            .background(Color.secondary.opacity(0.08))
-            .cornerRadius(8)
 
-            // MARK: Channel totals (catalog-wide, not per-batch)
-            GroupBox(label: Text("Total dossier coverage").font(.headline)) {
+            // MARK: Channel totals (catalog-wide, across both fleet and in-app sweep)
+            GroupBox(label: Text("Channel coverage").font(.headline)) {
                 HStack(spacing: 24) {
                     ChannelStat(
                         icon: "text.bubble.fill",
                         label: "Scene captions",
-                        value: scenesPopulatedCount,
+                        value: coverage.scenes,
                         color: .indigo
                     )
                     ChannelStat(
                         icon: "calendar.badge.clock",
                         label: "OCR dates",
-                        value: ocrDatesCount,
+                        value: coverage.ocrDates,
                         color: .purple
                     )
                     ChannelStat(
                         icon: "waveform.circle.fill",
                         label: "Transcripts",
-                        value: transcriptsCount,
+                        value: coverage.transcripts,
                         color: .teal
                     )
                 }
@@ -91,19 +118,20 @@ struct DossierDashboardView: View {
                 .frame(maxWidth: .infinity)
             }
 
-            // MARK: Action buttons
+            // MARK: In-app sweep controls (separate from fleet workers)
             HStack(spacing: 12) {
                 Button {
                     Task { await captionOrchestrator.startCatalogWideDossier(model: model) }
                 } label: {
-                    Label("Start", systemImage: "play.fill")
+                    Label("In-app Sweep", systemImage: "play.fill")
                 }
                 .disabled(captionOrchestrator.currentStatus.isActive)
+                .help("Start a dossier sweep from within the app (separate from the external fleet workers).")
 
                 Button(role: .destructive) {
                     captionOrchestrator.cancel()
                 } label: {
-                    Label("Stop", systemImage: "stop.fill")
+                    Label("Stop In-app", systemImage: "stop.fill")
                 }
                 .disabled(!captionOrchestrator.currentStatus.isActive)
 
@@ -113,62 +141,220 @@ struct DossierDashboardView: View {
             }
         }
         .padding(20)
-        .frame(minWidth: 580, minHeight: 480)
+        .frame(minWidth: 620, minHeight: 540)
+        .onAppear { refreshFleet() }
+        .onReceive(refreshTimer) { _ in refreshFleet() }
     }
 
-    // MARK: - Derived state
+    // MARK: - Catalog-wide coverage
 
-    /// Progress 0.0–1.0 for the dial. Reads currentStatus when running,
-    /// falls back to live counters during transition states.
+    private var coverage: CatalogCoverage {
+        CatalogCoverage(records: model.records)
+    }
+
     private var dialProgress: Double {
-        if case .running(let p, _, _) = captionOrchestrator.currentStatus {
-            return p
-        }
-        let total = captionOrchestrator.liveTotal
-        guard total > 0 else { return 0 }
-        return Double(captionOrchestrator.liveCurrentIndex) / Double(total)
+        guard coverage.total > 0 else { return 0 }
+        return Double(coverage.dossiered) / Double(coverage.total)
     }
 
     private var dialCenterLabel: String {
-        let pct = Int(dialProgress * 100)
-        return "\(pct)%"
+        let pct = dialProgress * 100
+        if pct < 1 && coverage.dossiered > 0 { return "<1%" }
+        return "\(Int(pct))%"
     }
 
-    private var currentFileLabel: String {
-        if case .running(_, let file, _) = captionOrchestrator.currentStatus {
-            return file
-        }
-        switch captionOrchestrator.currentStatus {
-        case .idle:       return "(idle — click Start to begin)"
-        case .cancelling: return "(stopping…)"
-        case .finished:   return "(idle)"
-        default:          return "(idle)"
-        }
-    }
+    // MARK: - Fleet refresh
 
-    private var etaText: String {
-        guard case .running(_, _, let eta?) = captionOrchestrator.currentStatus else {
-            return "ETA: —"
-        }
-        return "ETA: \(formatETA(seconds: eta))"
-    }
-
-    /// Catalog-wide totals — counts every record in `model.records` that
-    /// has the corresponding dossier channel populated, not just the
-    /// current batch. So Rick can see "707 scene captions in catalog"
-    /// even when no batch is running.
-    private var scenesPopulatedCount: Int {
-        model.records.reduce(0) { $0 + ($1.sceneCaptions.isEmpty ? 0 : 1) }
-    }
-    private var ocrDatesCount: Int {
-        model.records.reduce(0) { $0 + ($1.ocrDateCandidates.isEmpty ? 0 : 1) }
-    }
-    private var transcriptsCount: Int {
-        model.records.reduce(0) { $0 + (($1.audioTranscript ?? "").isEmpty ? 0 : 1) }
+    private func refreshFleet() {
+        let dir = URL(fileURLWithPath: "/Volumes/Crucial2TB/dossier-deltas")
+        fleet = FleetStats.load(from: dir)
     }
 }
 
-// MARK: - Subviews
+// MARK: - Catalog coverage (pure value type)
+
+private struct CatalogCoverage {
+    let total: Int
+    let dossiered: Int
+    let scenes: Int
+    let ocrDates: Int
+    let transcripts: Int
+    let strongDates: Int
+
+    var remaining: Int { max(0, total - dossiered) }
+
+    init(records: [VideoRecord]) {
+        var t = 0, d = 0, s = 0, o = 0, x = 0, sd = 0
+        for r in records {
+            t += 1
+            if r.dossierProcessedAt != nil { d += 1 }
+            if !r.sceneCaptions.isEmpty { s += 1 }
+            if !r.ocrDateCandidates.isEmpty { o += 1 }
+            if !(r.audioTranscript ?? "").isEmpty { x += 1 }
+            if let conf = r.inferredDateConfidence, conf >= 0.85 { sd += 1 }
+        }
+        total = t; dossiered = d; scenes = s
+        ocrDates = o; transcripts = x; strongDates = sd
+    }
+}
+
+// MARK: - Fleet stats
+
+/// Known worker hosts. Add an entry here when expanding the fleet
+/// (e.g. add Intel one day) — the dashboard's `ForEach` picks it up.
+enum WorkerHost: String, CaseIterable {
+    case m4 = "RicksM4"
+    case m5 = "RicksM5"
+    case m1 = "RicksM1"
+
+    var displayName: String {
+        switch self {
+        case .m4: return "M4 Mac Studio"
+        case .m5: return "M5 MacBook Pro"
+        case .m1: return "M1 MacBook Pro"
+        }
+    }
+
+    var jsonlBasename: String {
+        switch self {
+        case .m4: return "m4.jsonl"
+        case .m5: return "m5.jsonl"
+        case .m1: return "m1.jsonl"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .m4: return .blue
+        case .m5: return .green
+        case .m1: return .orange
+        }
+    }
+}
+
+struct FleetStats {
+    struct HostStat {
+        let recordCount: Int
+        let lastWrite: Date?
+        let fileBytes: Int64
+
+        var aliveLabel: String {
+            guard let lastWrite else { return "no JSONL" }
+            let age = Date().timeIntervalSince(lastWrite)
+            if age < 120 { return "active" }       // wrote in last 2 min
+            if age < 600 { return "warm" }         // last 10 min
+            if age < 3600 { return "idle" }        // last hour
+            return "stale"
+        }
+
+        var aliveColor: Color {
+            guard let lastWrite else { return .gray }
+            let age = Date().timeIntervalSince(lastWrite)
+            if age < 120 { return .green }
+            if age < 600 { return .yellow }
+            if age < 3600 { return .orange }
+            return .red
+        }
+
+        static let empty = HostStat(recordCount: 0, lastWrite: nil, fileBytes: 0)
+    }
+
+    var byHost: [WorkerHost: HostStat]
+
+    subscript(host: WorkerHost) -> HostStat {
+        byHost[host] ?? .empty
+    }
+
+    var isEmpty: Bool {
+        byHost.values.allSatisfy { $0.recordCount == 0 && $0.lastWrite == nil }
+    }
+
+    static let empty = FleetStats(byHost: [:])
+
+    /// Load per-host stats from JSONL files in `dir`. Each file's line
+    /// count is the worker's record count; the file's mtime is its
+    /// last-write time. Doesn't parse the JSONL contents — line count
+    /// alone is enough for the dashboard.
+    static func load(from dir: URL) -> FleetStats {
+        var out: [WorkerHost: HostStat] = [:]
+        let fm = FileManager.default
+        for host in WorkerHost.allCases {
+            let file = dir.appendingPathComponent(host.jsonlBasename)
+            guard fm.fileExists(atPath: file.path) else {
+                out[host] = .empty
+                continue
+            }
+            let attrs = (try? fm.attributesOfItem(atPath: file.path)) ?? [:]
+            let mtime = attrs[FileAttributeKey.modificationDate] as? Date
+            let size = (attrs[FileAttributeKey.size] as? NSNumber)?.int64Value ?? 0
+            // Line count via simple read. Files are kilobytes-to-low-MB;
+            // synchronous read is fine here. For files into the
+            // hundreds of MB we'd want a streamed line counter.
+            let count: Int
+            if let data = try? Data(contentsOf: file) {
+                count = data.lazy.filter { $0 == 0x0A }.count  // count of \n
+            } else {
+                count = 0
+            }
+            out[host] = HostStat(recordCount: count, lastWrite: mtime, fileBytes: size)
+        }
+        return FleetStats(byHost: out)
+    }
+}
+
+// MARK: - Fleet row
+
+private struct FleetRow: View {
+    let host: WorkerHost
+    let stat: FleetStats.HostStat
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(host.color)
+                .frame(width: 10, height: 10)
+            Text(host.displayName)
+                .font(.system(size: 12, weight: .medium))
+                .frame(width: 160, alignment: .leading)
+            Text("\(stat.recordCount) record(s)")
+                .font(.system(size: 12, design: .monospaced))
+                .frame(width: 110, alignment: .leading)
+                .foregroundColor(.secondary)
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(stat.aliveColor)
+                    .frame(width: 7, height: 7)
+                Text(stat.aliveLabel)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .frame(width: 70, alignment: .leading)
+            Spacer()
+            if let last = stat.lastWrite {
+                Text(relativeTime(last))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private func relativeTime(_ date: Date) -> String {
+        let age = Date().timeIntervalSince(date)
+        if age < 60 { return "\(Int(age))s ago" }
+        if age < 3600 {
+            let m = Int(age / 60)
+            return "\(m)m ago"
+        }
+        if age < 86400 {
+            let h = Int(age / 3600)
+            return "\(h)h ago"
+        }
+        let d = Int(age / 86400)
+        return "\(d)d ago"
+    }
+}
+
+// MARK: - Existing subviews (DialRing, StatRow, ChannelStat, StatusBadge)
 
 /// The big colorful ring. Drawn as two stacked circles: faint full
 /// circle (the track), then the colored arc trimmed to the progress
@@ -197,7 +383,7 @@ private struct DialRing: View {
             VStack(spacing: 4) {
                 Text(centerLabel)
                     .font(.system(size: 38, weight: .semibold, design: .rounded))
-                Text("complete")
+                Text("dossiered")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
@@ -216,7 +402,7 @@ private struct StatRow: View {
                 .fill(color)
                 .frame(width: 8, height: 8)
             Text(label)
-                .frame(width: 70, alignment: .leading)
+                .frame(width: 90, alignment: .leading)
                 .foregroundColor(.secondary)
             Text(value)
                 .font(.system(.body, design: .monospaced))
@@ -276,23 +462,10 @@ private struct StatusBadge: View {
 
     private var badgeText: String {
         switch status {
-        case .idle:       return "idle"
-        case .running:    return "running"
+        case .idle:       return "in-app sweep idle"
+        case .running:    return "in-app sweep running"
         case .cancelling: return "stopping…"
-        case .finished:   return "finished"
+        case .finished:   return "in-app sweep finished"
         }
     }
-}
-
-// MARK: - Helpers
-
-private func formatETA(seconds: Int) -> String {
-    let s = max(0, seconds)
-    if s < 60 { return "\(s)s" }
-    let m = s / 60
-    if m < 60 { return "\(m)m \(s % 60)s" }
-    let h = m / 60
-    if h < 24 { return "\(h)h \(m % 60)m" }
-    let d = h / 24
-    return "\(d)d \(h % 24)h"
 }
