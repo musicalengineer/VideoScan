@@ -360,11 +360,12 @@ extension VideoScanModel {
 
         let dateFmt = ISO8601DateFormatter()
         dateFmt.formatOptions = [.withFullDate, .withTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
-        if let created = attrs?[.creationDate] as? Date {
+        // Reject impossible / 2040-sentinel dates per DateValidation.swift.
+        if let created = pfDateOrNilIfImpossible(attrs?[.creationDate] as? Date) {
             rec.dateCreatedRaw = created
             rec.dateCreated = dateFmt.string(from: created)
         }
-        if let modified = attrs?[.modificationDate] as? Date {
+        if let modified = pfDateOrNilIfImpossible(attrs?[.modificationDate] as? Date) {
             rec.dateModifiedRaw = modified
             rec.dateModified = dateFmt.string(from: modified)
         }

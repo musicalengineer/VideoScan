@@ -376,8 +376,12 @@ extension VideoScanModel {
             df.dateFormat = "yyyy-MM-dd HH:mm:ss"
             r.sizeBytes       = fileSize
             r.size            = Formatting.humanSize(fileSize)
-            r.dateModifiedRaw = attrs?[.modificationDate] as? Date
-            r.dateCreatedRaw  = attrs?[.creationDate] as? Date
+            // Reject impossible dates (future, before 1900, or the
+            // known 2040-02-06 06:28:16 UTC sentinel from Rick's old
+            // MacPro PRAM-dead scan) so they never enter the catalog.
+            // See DateValidation.swift for the predicates + tests.
+            r.dateModifiedRaw = pfDateOrNilIfImpossible(attrs?[.modificationDate] as? Date)
+            r.dateCreatedRaw  = pfDateOrNilIfImpossible(attrs?[.creationDate] as? Date)
             r.dateModified    = r.dateModifiedRaw.map { df.string(from: $0) } ?? ""
             r.dateCreated     = r.dateCreatedRaw.map { df.string(from: $0) } ?? ""
 
