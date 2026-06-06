@@ -60,9 +60,6 @@ struct RepoInfo: Equatable {
 
 enum RepoInspector {
 
-    /// Mac Studio path (matches VideoScanTests.projectDir).
-    static let localProjectDir = NSHomeDirectory() + "/dev/VideoScan"
-
     /// MBP path (matches MBPRemote.projectDir).
     static let mbpProjectDir = "/Users/rickb/developer/VideoScan"
 
@@ -80,7 +77,7 @@ enum RepoInspector {
     // MARK: - Local
 
     private static func inspectLocal() async -> RepoInfo {
-        let dir = localProjectDir
+        let dir = VideoScanTests.projectDir
         // Branch first because aheadBehind needs it; the rest run concurrently.
         let branch = await git(["rev-parse", "--abbrev-ref", "HEAD"], in: dir)
         async let commit = git(["rev-parse", "--short", "HEAD"], in: dir)
@@ -229,7 +226,7 @@ enum RepoInspector {
         switch host {
         case .local:
             let r = await Subprocess.run("/usr/bin/git",
-                                         ["-C", localProjectDir,
+                                         ["-C", VideoScanTests.projectDir,
                                           "for-each-ref", "--format=%(refname:short)",
                                           "refs/heads", "refs/remotes"],
                                          timeoutSeconds: 5)

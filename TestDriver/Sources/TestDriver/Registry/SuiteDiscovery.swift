@@ -1,6 +1,6 @@
 // SuiteDiscovery.swift
 //
-// Scans VideoScanTests/*.swift for `@Suite` declarations and auto-registers
+// Scans VideoScanTests/**/*.swift for `@Suite` declarations and auto-registers
 // a TestEntry per suite. This keeps TestDriver in sync with the test target
 // without manual edits — add a new @Suite, relaunch TestDriver, it appears.
 
@@ -8,11 +8,15 @@ import Foundation
 
 enum SuiteDiscovery {
 
-    static let testSourceDir = NSHomeDirectory() + "/dev/VideoScan/VideoScan/VideoScanTests"
+    static var testSourceDir: String {
+        VideoScanTests.projectDir + "/VideoScan/VideoScanTests"
+    }
 
     struct DiscoveredSuite {
         let name: String
-        let filename: String
+        let relativePath: String
+        let group: TestGroup
+        let module: String
     }
 
     /// Walk every `*.swift` under VideoScanTests and pull out the names
@@ -33,7 +37,12 @@ enum SuiteDiscovery {
     /// every time and dedupe at the end.
     static func scan() -> [DiscoveredSuite] {
         let fm = FileManager.default
-        guard let files = try? fm.contentsOfDirectory(atPath: testSourceDir) else { return [] }
+        let root = URL(fileURLWithPath: testSourceDir, isDirectory: true)
+        guard let enumerator = fm.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
 
         // Pass 1: `@Suite`, optional `(...args...)`, optional `@Modifier`s,
         // then `struct Name`. `[^()]*` (no parens at all in attribute args)
@@ -54,16 +63,31 @@ enum SuiteDiscovery {
         var suites: [DiscoveredSuite] = []
         var seen: Set<String> = []
 
-        for file in files.sorted() where file.hasSuffix(".swift") {
-            let path = (testSourceDir as NSString).appendingPathComponent(file)
-            guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+        let files = enumerator.compactMap { item -> URL? in
+            guard let url = item as? URL else { return nil }
+            guard url.pathExtension == "swift" else { return nil }
+            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else {
+                return nil
+            }
+            return url
+        }
+        .sorted { $0.path < $1.path }
+
+        for url in files {
+            let relativePath = Self.relativePath(of: url, under: root)
+            guard let content = try? String(contentsOf: url, encoding: .utf8) else { continue }
             let range = NSRange(content.startIndex..., in: content)
+            let group = Self.group(for: relativePath)
+            let module = Self.moduleName(for: relativePath)
 
             for match in suitePattern.matches(in: content, range: range) {
                 guard let r = Range(match.range(at: 1), in: content) else { continue }
                 let name = String(content[r])
                 if seen.insert(name).inserted {
-                    suites.append(DiscoveredSuite(name: name, filename: file))
+                    suites.append(DiscoveredSuite(name: name,
+                                                  relativePath: relativePath,
+                                                  group: group,
+                                                  module: module))
                 }
             }
 
@@ -73,7 +97,10 @@ enum SuiteDiscovery {
                     guard let r = Range(match.range(at: 1), in: content) else { continue }
                     let name = String(content[r])
                     if seen.insert(name).inserted {
-                        suites.append(DiscoveredSuite(name: name, filename: file))
+                        suites.append(DiscoveredSuite(name: name,
+                                                      relativePath: relativePath,
+                                                      group: group,
+                                                      module: module))
                     }
                 }
             }
@@ -81,19 +108,42 @@ enum SuiteDiscovery {
         return suites
     }
 
+    private static func relativePath(of url: URL, under root: URL) -> String {
+        let rootPath = root.standardizedFileURL.path
+        let path = url.standardizedFileURL.path
+        guard path.hasPrefix(rootPath + "/") else { return url.lastPathComponent }
+        return String(path.dropFirst(rootPath.count + 1))
+    }
+
+    private static func group(for relativePath: String) -> TestGroup {
+        let components = relativePath.split(separator: "/").map(String.init)
+        if relativePath.localizedCaseInsensitiveContains("Performance") { return .performance }
+        if components.contains("StressTests") ||
+            relativePath.localizedCaseInsensitiveContains("StressTests") {
+            return .stress
+        }
+        if relativePath.localizedCaseInsensitiveContains("Regression") { return .regression }
+        if relativePath.localizedCaseInsensitiveContains("Integration") { return .integration }
+        return .unit
+    }
+
+    private static func moduleName(for relativePath: String) -> String {
+        let withoutExtension = (relativePath as NSString).deletingPathExtension
+        let components = withoutExtension.split(separator: "/").map(String.init)
+        if components.count <= 1 { return components.first ?? "VideoScanTests" }
+        return components.dropLast().joined(separator: " / ")
+    }
+
     static func registerDiscoveredSuites(excluding manualSuites: Set<String> = []) {
         let discovered = scan()
         let entries: [TestEntry] = discovered.compactMap { suite -> TestEntry? in
             if manualSuites.contains(suite.name) { return nil }
 
-            let moduleName = suite.filename
-                .replacingOccurrences(of: ".swift", with: "")
-
             return TestEntry(
-                group: .unit,
-                module: moduleName,
+                group: suite.group,
+                module: suite.module,
                 name: suite.name,
-                description: "Auto-discovered from \(suite.filename)",
+                description: "Auto-discovered from \(suite.relativePath)",
                 supportsCoverage: true
             ) { host, log in
                 await VideoScanTests.runDiscoveredSuite(
