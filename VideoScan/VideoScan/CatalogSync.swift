@@ -209,6 +209,10 @@ final class CatalogSync: ObservableObject {
     /// account is `rickb` on every Mac.
     private let remoteUser: String
 
+    /// Auto-refresh polling task for viewer mode. nil when not running.
+    /// See `startViewerAutoRefresh()` for the design rationale.
+    private var autoRefreshTask: Task<Void, Never>?
+
     // MARK: Observable state
 
     @Published private(set) var state = CatalogSyncState()
@@ -411,6 +415,43 @@ final class CatalogSync: ObservableObject {
             source,
             stagingDir.path + "/"
         ]
+    }
+
+    // MARK: - Viewer auto-refresh
+    //
+    // The launch-time `syncFromMaster()` only fires once. Without this
+    // helper, a viewer left running for hours sees nothing new — its
+    // catalog stays frozen even as the master + dossier workers add
+    // hundreds of records. This task fires a fresh `syncFromMaster()`
+    // every `intervalSeconds` so M1/M5 viewers stay current.
+    //
+    // No-op on master mode — the master IS the writer, has nothing to
+    // pull from. Idempotent — repeated calls don't stack tasks. Stop
+    // with `stopViewerAutoRefresh()` (typically not needed; the task
+    // dies with the CatalogSync instance when the app quits).
+
+    /// Start the viewer-side periodic refresh. On master, no-op.
+    /// Default interval is 90s — fast enough that the chip/dial tick
+    /// up noticeably, slow enough that we don't thrash SSH+rsync.
+    @MainActor
+    func startViewerAutoRefresh(intervalSeconds: Double = 90) {
+        guard mode == .viewer else { return }
+        guard autoRefreshTask == nil else { return }
+        log("CatalogSync: starting viewer auto-refresh (\(Int(intervalSeconds))s interval)")
+        autoRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(intervalSeconds))
+                guard !Task.isCancelled else { break }
+                await self?.syncFromMaster()
+            }
+        }
+    }
+
+    /// Cancel the auto-refresh loop. Idempotent.
+    @MainActor
+    func stopViewerAutoRefresh() {
+        autoRefreshTask?.cancel()
+        autoRefreshTask = nil
     }
 
     /// Top-level entry point for a viewer. Idempotent — calling twice while

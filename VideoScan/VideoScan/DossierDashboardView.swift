@@ -50,12 +50,15 @@ struct DossierDashboardView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             // MARK: Dial + headline coverage counters
-            HStack(alignment: .center, spacing: 32) {
+            HStack(alignment: .center, spacing: 36) {
+                // Big dial per Rick's preference for bigger graphics.
+                // Was 180 — bumped to 270 (50% larger) so the % readout
+                // is legible from across the room.
                 DialRing(
                     progress: dialProgress,
                     centerLabel: dialCenterLabel
                 )
-                .frame(width: 180, height: 180)
+                .frame(width: 270, height: 270)
 
                 VStack(alignment: .leading, spacing: 10) {
                     StatRow(label: "Dossiered", value: "\(coverage.dossiered)", color: .green)
@@ -141,7 +144,7 @@ struct DossierDashboardView: View {
             }
         }
         .padding(20)
-        .frame(minWidth: 620, minHeight: 540)
+        .frame(minWidth: 700, minHeight: 700)
         .onAppear { refreshFleet() }
         .onReceive(refreshTimer) { _ in refreshFleet() }
     }
@@ -367,8 +370,10 @@ private struct DialRing: View {
 
     var body: some View {
         ZStack {
+            // Stroke width scaled with the ring — 24 reads better at
+            // 270px than the old 16.
             Circle()
-                .stroke(Color.secondary.opacity(0.18), lineWidth: 16)
+                .stroke(Color.secondary.opacity(0.18), lineWidth: 24)
 
             Circle()
                 .trim(from: 0, to: max(0, min(progress, 1)))
@@ -377,16 +382,18 @@ private struct DialRing: View {
                         gradient: Gradient(colors: [.blue, .indigo, .purple, .pink, .orange]),
                         center: .center
                     ),
-                    style: StrokeStyle(lineWidth: 16, lineCap: .round)
+                    style: StrokeStyle(lineWidth: 24, lineCap: .round)
                 )
                 .rotationEffect(.degrees(-90))
                 .animation(.easeOut(duration: 0.4), value: progress)
 
             VStack(spacing: 4) {
+                // Scaled with the ring — bigger graphics per Rick's
+                // preference. Rounded font reads well at this size.
                 Text(centerLabel)
-                    .font(.system(size: 38, weight: .semibold, design: .rounded))
+                    .font(.system(size: 56, weight: .semibold, design: .rounded))
                 Text("dossiered")
-                    .font(.caption)
+                    .font(.system(size: 13))
                     .foregroundColor(.secondary)
             }
         }
