@@ -22,9 +22,12 @@ sys.path.insert(0, str(SCRIPTS))
 from merge_dossier_jsonl import (  # noqa: E402
     apply_deltas,
     atomic_write_catalog,
+    compute_manifest_lines,
     load_offsets,
     read_new_deltas,
     save_offsets,
+    sha256_hex_of_file,
+    write_manifest,
 )
 
 
@@ -275,6 +278,117 @@ class TestAtomicWriteCatalog(unittest.TestCase):
             self.assertFalse(primary.exists())
             atomic_write_catalog({"version": 6, "records": []}, primary)
             self.assertTrue(primary.exists())
+
+
+class TestManifestWriter(unittest.TestCase):
+    """`write_manifest` + `compute_manifest_lines` must match the
+    Swift master's manifest format byte-for-byte so the viewer's
+    verifyManifest step accepts what we wrote. Regression for the
+    'MASTER OFFLINE / sha256 mismatch' bug Rick hit 2026-06-06 — the
+    merger was updating catalog.json without re-stamping manifest
+    so viewer rsync succeeded but the manifest verify failed.
+    """
+
+    def _setup_minimal_root(self, tmp: str) -> Path:
+        """Build the smallest root_dir the manifest cares about:
+        catalog.json + a tiny POI subtree."""
+        root = Path(tmp)
+        (root / "catalog.json").write_text('{"version":6,"records":[]}')
+        (root / "catalog.json.prev").write_text('{"version":6,"records":[]}')
+        poi = root / "POI" / "donna"
+        poi.mkdir(parents=True)
+        (poi / "ref_001.jpg").write_bytes(b"\xff\xd8\xff\xe0fake-jpeg")
+        (poi / "ref_002.jpg").write_bytes(b"\xff\xd8\xff\xe0another")
+        return root
+
+    def test_sha256_hex_of_file_matches_known_value(self):
+        # Locked-in known hash for "abc" — sanity check that we're
+        # calling the same algorithm the Swift side uses.
+        # SHA-256("abc") = ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+        with tempfile.NamedTemporaryFile("wb", delete=False) as f:
+            f.write(b"abc")
+            path = Path(f.name)
+        try:
+            self.assertEqual(
+                sha256_hex_of_file(path),
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+            )
+        finally:
+            path.unlink()
+
+    def test_compute_manifest_lines_format_matches_shasum(self):
+        # Each line is "<sha256_hex>  <relpath>" with two spaces — same
+        # as `shasum -a 256 <file>` so `shasum -a 256 -c manifest.sha256`
+        # can verify the output.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._setup_minimal_root(tmp)
+            lines = compute_manifest_lines(root)
+            self.assertTrue(len(lines) >= 4,
+                            "Expected catalog + .prev + 2 POI files at minimum")
+            for line in lines:
+                # 64-char hex hash + two spaces + path
+                self.assertRegex(line, r"^[0-9a-f]{64}  \S")
+
+    def test_compute_manifest_lines_sorted_by_relpath(self):
+        # Sorting is required because the Swift verifier compares
+        # lines order-sensitively.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._setup_minimal_root(tmp)
+            lines = compute_manifest_lines(root)
+            relpaths = [l.split("  ", 1)[1] for l in lines]
+            self.assertEqual(relpaths, sorted(relpaths))
+
+    def test_compute_manifest_lines_skips_hidden_files_in_poi(self):
+        # macOS sprinkles .DS_Store everywhere; we must NOT hash them
+        # because the Swift side skips them and would mismatch.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._setup_minimal_root(tmp)
+            (root / "POI" / "donna" / ".DS_Store").write_bytes(b"junk")
+            lines = compute_manifest_lines(root)
+            self.assertFalse(any(".DS_Store" in l for l in lines),
+                             "Hidden files must be skipped to match Swift output")
+
+    def test_compute_manifest_lines_handles_missing_roots_gracefully(self):
+        # An older install might not have POI yet — that's fine, just
+        # produce the catalog lines and move on.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "catalog.json").write_text('{}')
+            lines = compute_manifest_lines(root)
+            self.assertEqual(len(lines), 1)
+            self.assertIn("catalog.json", lines[0])
+
+    def test_write_manifest_round_trips_through_disk(self):
+        # End-to-end: write the manifest, re-compute, expect same lines.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._setup_minimal_root(tmp)
+            n = write_manifest(root)
+            self.assertGreaterEqual(n, 4)
+            manifest = (root / "manifest.sha256").read_text()
+            lines_on_disk = [l for l in manifest.split("\n") if l]
+            recomputed = compute_manifest_lines(root)
+            # The manifest itself is NOT in manifestRoots, so writing
+            # it doesn't change the recomputed lines.
+            self.assertEqual(lines_on_disk, recomputed)
+
+    def test_write_manifest_is_atomic_no_tmp_left_behind(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._setup_minimal_root(tmp)
+            write_manifest(root)
+            tmp_path = root / "manifest.sha256.tmp"
+            self.assertFalse(tmp_path.exists(),
+                             "tmp file must be renamed away, not left behind")
+
+    def test_manifest_changes_when_catalog_changes(self):
+        # The whole point of re-stamping after a write: when catalog
+        # changes, the manifest hash for catalog.json must change too.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self._setup_minimal_root(tmp)
+            lines_v1 = compute_manifest_lines(root)
+            (root / "catalog.json").write_text('{"version":6,"records":[1]}')
+            lines_v2 = compute_manifest_lines(root)
+            self.assertNotEqual(lines_v1, lines_v2,
+                                "Manifest must reflect the catalog change")
 
 
 if __name__ == "__main__":
