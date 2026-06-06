@@ -842,3 +842,112 @@ struct AtomicSwapTests {
                 "previous must be reset to the just-prior live, not pile up generations")
     }
 }
+
+// MARK: - rsync argument construction (regression: master-offline space bug)
+//
+// Verified 2026-06-05: Apple's openrsync (protocol 29, default on
+// macOS 26.x) space-splits the remote source path so a literal space
+// in "/Users/rickb/Library/Application Support/VideoScan/" gets
+// treated as two separate source paths and both fail with "No such
+// file or directory" — manifesting in the UI as "master offline."
+// The fix is to backslash-escape spaces in the remote root. These
+// tests pin that escape into place so it can't silently regress.
+
+@MainActor
+struct RsyncArgumentsSpaceEscapeTests {
+
+    /// Build a CatalogSync configured as a viewer pointing at a typical
+    /// master. We don't need a real runner — we just want to inspect
+    /// the args. Pass through whatever path the test cares about as
+    /// stagingDir.
+    private func makeViewer(masterHost: String = "RicksM4.local") -> CatalogSync {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("vs-rsync-args-test-\(UUID().uuidString.prefix(8))")
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let paths = CatalogSyncPaths(
+            liveDir: root.appendingPathComponent("live"),
+            stagingDir: root.appendingPathComponent("staging"),
+            previousDir: root.appendingPathComponent("previous"),
+            lastSyncFile: root.appendingPathComponent("last_sync.txt")
+        )
+        return makeSync(
+            paths: paths,
+            localHost: "ricksm5.local",   // viewer
+            masterHost: masterHost,
+            runner: StubRsync(sourceTree: paths.liveDir)
+        )
+    }
+
+    @Test
+    func remoteSourcePathEscapesTheSpaceInApplicationSupport() {
+        let sync = makeViewer()
+        let staging = URL(fileURLWithPath: "/tmp/staging")
+        let args = sync.rsyncArguments(stagingDir: staging)
+
+        // The remote source is the argument that ends with VideoScan/
+        // (and contains an @ for user@host:).
+        guard let source = args.first(where: { $0.contains("@") && $0.hasSuffix("VideoScan/") }) else {
+            Issue.record("Expected a remote source arg ending in VideoScan/")
+            return
+        }
+
+        // Regression: openrsync space-splits without the escape. Pin
+        // the backslash-escape into the args so future refactors can't
+        // silently reintroduce the "master offline" bug.
+        #expect(source.contains(#"Application\ Support"#),
+                "Remote source must have a backslash-escaped space in \"Application Support\" so openrsync doesn't split the path: got \(source)")
+        #expect(!source.contains("Application Support") || source.contains(#"Application\ Support"#),
+                "Unescaped space must not appear in the remote source path")
+    }
+
+    @Test
+    func remoteSourceTargetsMasterHostnameAndRemoteUser() {
+        let sync = makeViewer(masterHost: "RicksM4.local")
+        let staging = URL(fileURLWithPath: "/tmp/staging")
+        let args = sync.rsyncArguments(stagingDir: staging)
+        let source = args.first(where: { $0.contains("@") })
+        #expect(source != nil)
+        #expect(source?.hasPrefix("rickb@RicksM4.local:") == true,
+                "Remote source must be rickb@<master>:; got \(source ?? "nil")")
+    }
+
+    @Test
+    func sshOptionsIncludeBatchModeAndConnectTimeout() {
+        // Tight reachability gate so a master-offline viewer doesn't
+        // hang the launch; BatchMode so a missing key fails fast
+        // instead of prompting.
+        let sync = makeViewer()
+        let args = sync.rsyncArguments(stagingDir: URL(fileURLWithPath: "/tmp/staging"))
+        guard let dashE = args.firstIndex(of: "-e"), dashE + 1 < args.count else {
+            Issue.record("Expected -e <ssh opts> in rsync args")
+            return
+        }
+        let sshOpts = args[dashE + 1]
+        #expect(sshOpts.contains("BatchMode=yes"))
+        #expect(sshOpts.contains("ConnectTimeout="))
+    }
+
+    @Test
+    func includesCatalogJsonAndManifestAndPoiTree() {
+        let sync = makeViewer()
+        let args = sync.rsyncArguments(stagingDir: URL(fileURLWithPath: "/tmp/staging"))
+        #expect(args.contains("--include=catalog.json"))
+        #expect(args.contains("--include=catalog.json.prev"))
+        #expect(args.contains("--include=manifest.sha256"))
+        #expect(args.contains("--include=POI/"))
+        #expect(args.contains("--include=POI/**"))
+        #expect(args.contains("--exclude=*"),
+                "Excludes-all-else must come AFTER the includes so they win.")
+    }
+
+    @Test
+    func stagingDestEndsWithTrailingSlash() {
+        // rsync semantics: trailing slash on the source mirrors the
+        // *contents*, not the directory itself. Same convention on
+        // dest avoids the "VideoScan/VideoScan/" mistake.
+        let sync = makeViewer()
+        let staging = URL(fileURLWithPath: "/tmp/staging")
+        let args = sync.rsyncArguments(stagingDir: staging)
+        #expect(args.last == "/tmp/staging/")
+    }
+}

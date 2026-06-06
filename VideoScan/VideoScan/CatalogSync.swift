@@ -377,9 +377,24 @@ final class CatalogSync: ObservableObject {
     /// rsync arguments built from the include/exclude rules in the brief.
     /// Source ends in `/` so rsync mirrors the *contents* of the master's
     /// VideoScan dir, not the dir itself.
+    ///
+    /// Path-escape gotcha: Apple ships `openrsync` (protocol 29) on newer
+    /// macOS rather than GNU rsync. openrsync's remote-path parser
+    /// space-splits the source argument the way the remote shell would,
+    /// so a literal space in "Application Support" gets treated as two
+    /// separate source paths and both fail with "No such file or
+    /// directory" — manifesting in the UI as "master offline." The fix
+    /// is to backslash-escape spaces in the remote root so the parser
+    /// (and the remote shell) preserve them as one path.
+    /// Verified 2026-06-05 by Rick + Claude: with `Application\ Support`
+    /// the rsync from M5 to M4.local succeeds; without it the empty-
+    /// file-list error fires before catalog transfer can start.
     func rsyncArguments(stagingDir: URL) -> [String] {
         let remoteRoot = "/Users/\(remoteUser)/Library/Application Support/VideoScan/"
-        let source = "\(remoteUser)@\(masterHostname):\(remoteRoot)"
+        // Escape spaces so openrsync + the remote shell both see a
+        // single source path, not two split at the space.
+        let escapedRoot = remoteRoot.replacingOccurrences(of: " ", with: "\\ ")
+        let source = "\(remoteUser)@\(masterHostname):\(escapedRoot)"
         return [
             "-a",                                       // archive — preserve times/perms
             "--delete",                                  // mirror semantics
