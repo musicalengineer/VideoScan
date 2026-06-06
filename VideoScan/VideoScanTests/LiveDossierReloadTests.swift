@@ -135,8 +135,11 @@ struct LiveDossierReloadTests {
         #expect(mem.dossierProcessedAt == nil)
     }
 
-    @Test("snapshot record without a matching in-memory path is dropped silently")
-    func missingPathDropped() {
+    @Test("snapshot record without a matching in-memory path is appended as new")
+    func missingPathAppendedAsNew() {
+        // Changed 2026-06-06: brand-new records are now appended to
+        // model.records instead of dropped. Existing rows still
+        // preserved with their identity.
         let model = VideoScanModel()
         let mem = makeRecord(path: "/known")
         model.records = [mem]
@@ -146,8 +149,49 @@ struct LiveDossierReloadTests {
             dossierAt: Date()
         )
         let n = model.mergeDossierFields(from: [snap])
-        #expect(n == 0)
-        #expect(mem.sceneCaptions.isEmpty)
+        #expect(n == 1, "the new record at /ghost should be appended")
+        #expect(model.records.count == 2)
+        #expect(model.records.last?.fullPath == "/ghost")
+        #expect(mem.sceneCaptions.isEmpty, "the existing /known record must not be touched")
+    }
+
+    @Test("brand-new records on disk are appended to model.records")
+    func brandNewRecordsAppended() {
+        let model = VideoScanModel()
+        let memA = makeRecord(path: "/a")
+        model.records = [memA]
+
+        let snapA = makeRecord(path: "/a", dossierAt: Date())          // existing
+        let snapB = makeRecord(path: "/new1", dossierAt: Date())       // new
+        let snapC = makeRecord(path: "/new2")                          // new, no dossier
+        let n = model.mergeDossierFields(from: [snapA, snapB, snapC])
+
+        // 2 appended + 1 merged in-place (the existing /a got dossier'd)
+        #expect(n == 3)
+        #expect(model.records.count == 3, "model.records must include the two new ones")
+        let paths = model.records.map(\.fullPath).sorted()
+        #expect(paths == ["/a", "/new1", "/new2"])
+    }
+
+    @Test("appending preserves @ObservedObject identity of existing rows")
+    func identityPreservedOnMergePass() {
+        // A record reference held by a SwiftUI view (Inspector, list row)
+        // must still be the SAME object after a sync merge — otherwise
+        // the view loses its selection / scroll position.
+        let model = VideoScanModel()
+        let memA = makeRecord(path: "/a")
+        memA.notes = "user typed this"
+        model.records = [memA]
+
+        let snapA = makeRecord(path: "/a",
+                               notes: "should-not-land",
+                               scenes: [SceneCaption(timestamp: 1, text: "scene")],
+                               dossierAt: Date())
+        _ = model.mergeDossierFields(from: [snapA])
+        // Same object reference, dossier fields updated, user fields untouched.
+        #expect(model.records[0] === memA, "Existing row must keep its identity")
+        #expect(memA.sceneCaptions.count == 1)
+        #expect(memA.notes == "user typed this")
     }
 
     @Test("merging onto many records updates exactly the matching ones")
@@ -165,10 +209,13 @@ struct LiveDossierReloadTests {
             makeRecord(path: "/no-match", dossierAt: now)
         ]
         let n = model.mergeDossierFields(from: snaps)
-        #expect(n == 2)
+        // 2 merged in-place (/a, /c) + 1 appended (/no-match)
+        #expect(n == 3)
         #expect(a.sceneCaptions.first?.text == "A")
-        #expect(b.sceneCaptions.isEmpty)
+        #expect(b.sceneCaptions.isEmpty, "/b had no matching snapshot, must be left alone")
         #expect(c.sceneCaptions.first?.text == "C")
+        #expect(model.records.contains { $0.fullPath == "/no-match" },
+                "the new path /no-match must be appended")
     }
 }
 
