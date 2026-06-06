@@ -274,6 +274,12 @@ struct CatalogToolbar<Dashboard: View>: View {
             .background(Color(NSColor.textBackgroundColor))
             .cornerRadius(6)
 
+            // Persistent dossier progress chip — small ring + N/M label.
+            // Click opens the full Dossier Dashboard (⌘⇧O). Always
+            // visible while in the catalog tab so Rick can monitor
+            // fleet progress without keeping the dashboard window open.
+            DossierToolbarChip(model: model)
+
             Menu {
                 ForEach(CatalogViewFilter.allCases, id: \.self) { filter in
                     Toggle(isOn: Binding(
