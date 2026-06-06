@@ -173,7 +173,9 @@ struct DossierDashboardView: View {
 
 // MARK: - Catalog coverage (pure value type)
 
-private struct CatalogCoverage {
+/// `internal` (not `private`) so unit tests in CatalogCoverageTests
+/// can exercise the channel-counting logic without spinning a window.
+struct CatalogCoverage {
     let total: Int
     let dossiered: Int
     let scenes: Int
