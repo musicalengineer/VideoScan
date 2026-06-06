@@ -124,8 +124,11 @@ extension VideoScanModel {
     /// "Updated" here means at least one dossier field changed. We
     /// short-circuit when the snapshot record's `dossierProcessedAt`
     /// matches the in-memory one (same vintage → already merged).
+    ///
+    /// `internal` (not `private`) so unit tests can drive this
+    /// directly without round-tripping through disk.
     @MainActor
-    private func mergeDossierFields(from snapshot: [VideoRecord]) -> Int {
+    func mergeDossierFields(from snapshot: [VideoRecord]) -> Int {
         // Index snapshot by fullPath for O(1) lookup.
         var byPath: [String: VideoRecord] = [:]
         byPath.reserveCapacity(snapshot.count)
