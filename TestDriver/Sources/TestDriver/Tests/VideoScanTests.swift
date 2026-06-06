@@ -12,7 +12,22 @@ enum VideoScanTests {
 
     static let bundleID = "Rick-Breen.VideoScan"
     static let runningProcessName = "VideoScan.app/Contents/MacOS/VideoScan"
-    static let projectDir = NSHomeDirectory() + "/dev/VideoScan"
+    static var projectDir: String {
+        if let configured = ProcessInfo.processInfo.environment["VIDEOSCAN_PROJECT_DIR"],
+           !configured.isEmpty {
+            return NSString(string: configured).expandingTildeInPath
+        }
+
+        let cwd = FileManager.default.currentDirectoryPath
+        if cwd.hasSuffix("/TestDriver") {
+            return (cwd as NSString).deletingLastPathComponent
+        }
+        if FileManager.default.fileExists(atPath: cwd + "/VideoScan/VideoScan.xcodeproj") {
+            return cwd
+        }
+
+        return NSHomeDirectory() + "/dev/VideoScan"
+    }
 
     /// Process-wide coverage request. Set by the UI/CLI from the
     /// `coverageEnabled` / `coverageIncludeAll` model toggles before each
