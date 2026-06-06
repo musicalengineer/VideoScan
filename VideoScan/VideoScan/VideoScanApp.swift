@@ -227,12 +227,22 @@ struct VideoScanApp: App {
                             // to verify against.
                             catalogSync.writeManifestIfMaster()
                         } else {
+                            // Initial sync at launch — pulls the
+                            // latest catalog from M4 if the master is
+                            // reachable. Auto-refresh below keeps it
+                            // current after that.
                             Task { await catalogSync.syncFromMaster() }
+                            catalogSync.startViewerAutoRefresh()
                         }
                         // Live dossier reload — picks up new dossier
                         // results written to catalog.json by external
                         // workers (scripts/dossier_batch.py + merger)
                         // without quitting the app. Polls every 30s.
+                        // On viewers, this composes with the auto-
+                        // refresh above: the rsync pulls a fresh
+                        // catalog.json, then this poll picks up the
+                        // dossier-channel changes from disk into
+                        // in-memory records.
                         catalogModel.startLiveDossierReload()
                     }
             }
