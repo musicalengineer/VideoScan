@@ -27,6 +27,7 @@ Safety:
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import shutil
@@ -64,6 +65,75 @@ def atomic_write_catalog(catalog: dict, path: Path):
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(catalog, indent=2, ensure_ascii=False))
     os.replace(tmp, path)
+
+
+# ---------------------------------------------------------------------------
+# Manifest writer — must stay in lock-step with the Swift master so viewers
+# can verify what we wrote. The Swift side computes the manifest in
+# CatalogSync.computeManifestLines (CatalogSync.swift:315):
+#
+#   - covers ["catalog.json", "catalog.json.prev", "POI"]
+#   - POI is walked recursively, regular files only
+#   - lines: "<sha256_hex>  <relpath>"  (two spaces, GNU shasum format)
+#   - sorted by relpath ASC
+#
+# Without this step, the viewer-side rsync succeeds but the manifest
+# verify fails ("sha256 mismatch: catalog.json") because the merger
+# updates catalog.json without re-stamping the manifest. Symptom Rick saw:
+# "MASTER OFFLINE" banner on M5/M1 even though the rsync itself worked.
+#
+# Verified fix 2026-06-06: with this step, viewer state transitions
+# from .failed("manifest verify failed") to .synced(at:).
+
+MANIFEST_ROOTS = ["catalog.json", "catalog.json.prev", "POI"]
+
+
+def sha256_hex_of_file(path: Path) -> str:
+    """Streaming SHA-256 — matches the Swift master's 1 MB chunked reader."""
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            chunk = f.read(1024 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def compute_manifest_lines(root_dir: Path) -> list[str]:
+    """Mirror of Swift CatalogSync.computeManifestLines. Returns lines
+    in '<hash>  <relpath>' format, sorted by relpath ascending."""
+    entries: list[tuple[str, str]] = []  # (relpath, hash)
+    for top in MANIFEST_ROOTS:
+        url = root_dir / top
+        if not url.exists():
+            continue
+        if url.is_dir():
+            # Walk regular files only, skip hidden (matches Swift's
+            # FileManager.enumerator with .skipsHiddenFiles).
+            for child in sorted(url.rglob("*")):
+                if child.name.startswith("."):
+                    continue
+                if not child.is_file():
+                    continue
+                rel = child.relative_to(root_dir).as_posix()
+                entries.append((rel, sha256_hex_of_file(child)))
+        else:
+            rel = url.relative_to(root_dir).as_posix()
+            entries.append((rel, sha256_hex_of_file(url)))
+    entries.sort(key=lambda e: e[0])
+    return [f"{h}  {rel}" for rel, h in entries]
+
+
+def write_manifest(root_dir: Path) -> int:
+    """Compute + atomically write manifest.sha256 next to catalog.json.
+    Returns the line count for logging."""
+    lines = compute_manifest_lines(root_dir)
+    manifest_path = root_dir / "manifest.sha256"
+    tmp = manifest_path.with_suffix(".sha256.tmp")
+    tmp.write_text("\n".join(lines) + "\n")
+    os.replace(tmp, manifest_path)
+    return len(lines)
 
 
 def read_new_deltas(delta_dir: Path, offsets: dict[str, int], log):
@@ -170,7 +240,15 @@ def main():
             if applied:
                 atomic_write_catalog(catalog, args.catalog)
                 save_offsets(args.offsets, offsets)
-                log(f"  applied {applied} delta(s) → catalog.json")
+                # Re-stamp manifest.sha256 so viewers can verify the
+                # freshly-written catalog. Otherwise the rsync succeeds
+                # but verifyManifest fails on the sha256 mismatch and
+                # the viewer shows "MASTER OFFLINE".
+                try:
+                    n_lines = write_manifest(args.catalog.parent)
+                    log(f"  applied {applied} delta(s) → catalog.json; manifest re-stamped ({n_lines} files)")
+                except Exception as e:
+                    log(f"  applied {applied} delta(s) → catalog.json; manifest re-stamp FAILED: {e}")
             else:
                 log(f"  no applicable deltas (read {len(deltas)})")
                 save_offsets(args.offsets, offsets)
