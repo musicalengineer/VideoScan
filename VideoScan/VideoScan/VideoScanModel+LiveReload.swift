@@ -118,59 +118,83 @@ extension VideoScanModel {
     }
 
     /// Apply dossier-channel fields from a freshly-loaded snapshot to
-    /// the in-memory records, matched by `fullPath`. Returns the count
-    /// of records updated.
+    /// the in-memory records, matched by `fullPath`. ALSO appends
+    /// records that exist on disk but not in memory — the case Rick
+    /// hit 2026-06-06: viewer (M5) had the app open during a sync,
+    /// the catalog file got fresh records via rsync, but model.records
+    /// stayed stale because this method only merged existing rows.
+    /// Now: existing rows get dossier-merged in-place (preserving any
+    /// user edits and the @ObservedObject identity); brand-new rows
+    /// are appended at the end, in disk order.
     ///
-    /// "Updated" here means at least one dossier field changed. We
-    /// short-circuit when the snapshot record's `dossierProcessedAt`
-    /// matches the in-memory one (same vintage → already merged).
+    /// Returns the count of in-memory records touched (merged + added).
     ///
     /// `internal` (not `private`) so unit tests can drive this
     /// directly without round-tripping through disk.
     @MainActor
     func mergeDossierFields(from snapshot: [VideoRecord]) -> Int {
-        // Index snapshot by fullPath for O(1) lookup.
-        var byPath: [String: VideoRecord] = [:]
-        byPath.reserveCapacity(snapshot.count)
-        for r in snapshot { byPath[r.fullPath] = r }
+        // Index in-memory records by fullPath so we can decide
+        // "merge onto existing" vs "this one is brand new, append it"
+        // in one O(snapshot) pass.
+        var existing: [String: VideoRecord] = [:]
+        existing.reserveCapacity(records.count)
+        for r in records { existing[r.fullPath] = r }
 
         var changed = 0
-        for record in records {
-            guard let fresh = byPath[record.fullPath] else { continue }
-            // Skip records the disk doesn't claim to have dossier'd —
-            // saves work and avoids resetting fields we already have.
+        var added = 0
+        var newRecords: [VideoRecord] = []
+
+        for fresh in snapshot {
+            guard let mem = existing[fresh.fullPath] else {
+                // Brand-new record — disk has it, memory doesn't. Add
+                // it as-is. The snapshot record already has every
+                // field populated by the decoder; we just take the
+                // whole object instead of cherry-picking a few.
+                // pairedWith back-refs are NOT resolved here (live
+                // reload skips that wiring per the loader contract);
+                // the next full launch will re-decode and rewire.
+                newRecords.append(fresh)
+                added += 1
+                continue
+            }
+            // Existing record — merge only the dossier-channel fields,
+            // preserving any in-memory user edits (people tags,
+            // dispositions, ratings, notes, etc.).
             guard fresh.dossierProcessedAt != nil else { continue }
-            // Already-current short-circuit — same dossier vintage.
-            if let myAt = record.dossierProcessedAt,
+            if let myAt = mem.dossierProcessedAt,
                let theirsAt = fresh.dossierProcessedAt,
                myAt == theirsAt {
                 continue
             }
 
             // Scene channel
-            record.sceneCaptions      = fresh.sceneCaptions
-            record.sceneCaptionModel  = fresh.sceneCaptionModel
-            record.sceneCaptionDate   = fresh.sceneCaptionDate
+            mem.sceneCaptions      = fresh.sceneCaptions
+            mem.sceneCaptionModel  = fresh.sceneCaptionModel
+            mem.sceneCaptionDate   = fresh.sceneCaptionDate
 
             // Whisper channel
-            record.audioTranscript      = fresh.audioTranscript
-            record.audioTranscriptModel = fresh.audioTranscriptModel
-            record.audioTranscriptDate  = fresh.audioTranscriptDate
+            mem.audioTranscript      = fresh.audioTranscript
+            mem.audioTranscriptModel = fresh.audioTranscriptModel
+            mem.audioTranscriptDate  = fresh.audioTranscriptDate
 
             // OCR channels
-            record.ocrDateCandidates = fresh.ocrDateCandidates
-            record.ocrText           = fresh.ocrText
+            mem.ocrDateCandidates = fresh.ocrDateCandidates
+            mem.ocrText           = fresh.ocrText
 
             // Inferred date
-            record.inferredRecordDate     = fresh.inferredRecordDate
-            record.inferredDateConfidence = fresh.inferredDateConfidence
+            mem.inferredRecordDate     = fresh.inferredRecordDate
+            mem.inferredDateConfidence = fresh.inferredDateConfidence
 
             // Provenance
-            record.dossierProcessedAt = fresh.dossierProcessedAt
-            record.dossierProcessedBy = fresh.dossierProcessedBy
+            mem.dossierProcessedAt = fresh.dossierProcessedAt
+            mem.dossierProcessedBy = fresh.dossierProcessedBy
 
             changed += 1
         }
-        return changed
+        if !newRecords.isEmpty {
+            records.append(contentsOf: newRecords)
+            liveReloadLogger.info("Live reload: appended \(added, privacy: .public) new record(s) from disk snapshot")
+        }
+        return changed + added
     }
 }

@@ -1,4 +1,5 @@
 import SwiftUI
+import Combine
 
 // MARK: - Dossier toolbar chip
 //
@@ -20,12 +21,21 @@ struct DossierToolbarChip: View {
     @ObservedObject var model: VideoScanModel
     @Environment(\.openWindow) private var openWindow
 
+    /// Tracks the dossier count over a sliding window so we can color
+    /// the ring green when the fleet is actively producing. Mirrors
+    /// the dashboard's RateTracker exactly — same window, same units.
+    @State private var rate: RateTracker = .init()
+
+    /// 5s tick. Mirrors the dashboard's refresh cadence. Keeps the
+    /// chip color in lock-step with the dial.
+    private let refreshTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
+
     var body: some View {
         Button {
             openWindow(id: "dossier")
         } label: {
             HStack(spacing: 6) {
-                MiniRing(progress: progress)
+                MiniRing(progress: progress, active: rate.perMinute >= 1)
                     .frame(width: 22, height: 22)
                 VStack(alignment: .leading, spacing: 0) {
                     Text(headlineCount)
@@ -47,7 +57,17 @@ struct DossierToolbarChip: View {
             )
         }
         .buttonStyle(.plain)
-        .help("Catalog dossier: \(headlineCount) (\(percentLabel)). Click for dashboard (⌘⇧O).")
+        .help("Catalog dossier: \(headlineCount) (\(percentLabel))\(rateHelp). Click for dashboard (⌘⇧O).")
+        .onAppear { rate.record(count: dossieredCount, at: Date()) }
+        .onReceive(refreshTimer) { _ in
+            rate.record(count: dossieredCount, at: Date())
+        }
+    }
+
+    /// Suffix the tooltip with the rate when it's meaningful. Empty
+    /// while we wait for the second sample.
+    private var rateHelp: String {
+        rate.hasEnoughSamples ? ". Rate \(rate.displayText)." : ""
     }
 
     // MARK: - Derived
@@ -85,6 +105,10 @@ struct DossierToolbarChip: View {
 /// label.
 private struct MiniRing: View {
     let progress: Double
+    /// True when the fleet is actively producing (rate >= 1/min).
+    /// Drives the stroke gradient — full color when active, muted
+    /// gray-on-gray when idle so the chip looks "asleep at a glance."
+    let active: Bool
 
     var body: some View {
         ZStack {
@@ -92,15 +116,24 @@ private struct MiniRing: View {
                 .stroke(Color.secondary.opacity(0.22), lineWidth: 3)
             Circle()
                 .trim(from: 0, to: max(0, min(progress, 1)))
-                .stroke(
-                    AngularGradient(
-                        gradient: Gradient(colors: [.blue, .indigo, .purple, .pink, .orange]),
-                        center: .center
-                    ),
-                    style: StrokeStyle(lineWidth: 3, lineCap: .round)
-                )
+                .stroke(strokeStyle, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                 .rotationEffect(.degrees(-90))
                 .animation(.easeOut(duration: 0.3), value: progress)
+                .animation(.easeOut(duration: 0.3), value: active)
         }
+    }
+
+    /// Active = the same blue→orange AngularGradient the big dial uses
+    /// (consistent fleet-color identity). Idle = a single muted gray
+    /// so the chip still shows progress %, just without the "alive"
+    /// signal.
+    private var strokeStyle: AnyShapeStyle {
+        if active {
+            return AnyShapeStyle(AngularGradient(
+                gradient: Gradient(colors: [.blue, .indigo, .purple, .pink, .orange]),
+                center: .center
+            ))
+        }
+        return AnyShapeStyle(Color.secondary.opacity(0.55))
     }
 }
