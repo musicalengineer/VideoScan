@@ -917,6 +917,17 @@ struct CatalogContent: View {
             }
             .width(min: 60, ideal: 80)
 
+            // Dossier channel-dots column — at-a-glance richness per
+            // record. Four dots = scene captions / audio transcript /
+            // OCR text / OCR dates. Sorts by total channel count so
+            // ascending → emptiest-first ("what's left to do") and
+            // descending → richest-first ("what's been captured").
+            TableColumn("Dossier", value: \.dossierChannelCount) { rec in
+                DossierChannelDots(record: rec)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
+            .width(min: 64, ideal: 72)
+
             TableColumn("Size", value: \.sizeBytes) { rec in
                 Text(rec.size)
                     .help("File size on disk")
