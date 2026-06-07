@@ -178,13 +178,17 @@ struct CatalogView: View {
     @State private var deleteTargetVolume: String = ""
     @State private var deleteTargetCount: Int = 0
     @State private var showDiscoverVolumes = false
-    @State private var showVolumeCompare = false
-    /// Lifted from VolumeCompareSheet so the rescue copy task survives
-    /// when the user clicks "Continue in Background" and the sheet
-    /// dismisses. ContentView (top-level) keeps it alive for the life
-    /// of the app. The chip / dashboard can observe this same instance
-    /// when we wire that polish.
-    @StateObject private var volumeRescue = VolumeRescueOperation()
+    // showVolumeCompare retired 2026-06-07 — Compare moved from a
+    // modal sheet to its own Window scene (id: "compare") to eliminate
+    // beachballing during multi-hour rescue copies. Button now calls
+    // openWindow(id: "compare").
+    //
+    // No `@EnvironmentObject volumeRescue` here — ContentView never
+    // reads from it, so a subscription would force a full ContentView
+    // body re-eval on every rescue tick. RescueToolbarChip subscribes
+    // at its own (much smaller) view scope via @EnvironmentObject.
+    // See project_bug_prevention_strategy: the
+    // env-object-subscribed-but-unread antipattern.
     /// Set by Archive tab navigation — filters catalog to specific record IDs.
     @State private var filterByIDs: Set<UUID> = []
     /// When `filterByIDs` was populated by Find A/V Pair, the candidate's score
@@ -487,9 +491,9 @@ struct CatalogView: View {
         .sheet(isPresented: $showDiscoverVolumes) {
             DiscoverVolumesSheet(model: model)
         }
-        .sheet(isPresented: $showVolumeCompare) {
-            VolumeCompareSheet(model: model, rescue: volumeRescue)
-        }
+        // .sheet for Compare retired 2026-06-07 — Compare is now its own
+        // Window scene (defined in VideoScanApp.swift, id: "compare").
+        // The Compare button uses openWindow(id: "compare") instead.
         .sheet(isPresented: $showCaptionProgress) {
             CaptionProgressSheet(
                 orchestrator: captionOrchestrator,
@@ -1177,18 +1181,20 @@ struct CatalogView: View {
 
                 ScanOptionsMenu(model: model)
 
-                Button(action: { showVolumeCompare = true }) {
+                Button(action: { openWindow(id: "compare") }) {
                     Label("Compare", systemImage: "arrow.triangle.2.circlepath")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
-                .help("Compare two volumes — show what's unique to the source volume (would be lost if it died). Read-only audit; rescue/copy happens from inside the sheet.")
+                .help("Compare two volumes — show what's unique to the source volume (would be lost if it died). Opens in its own window so a multi-hour rescue copy doesn't block the main UI.")
 
                 // Persistent rescue progress chip — only visible when
                 // a copy is in flight (or just finished, awaiting ack).
-                // Click re-opens Compare so Rick can monitor / cancel
-                // without losing his bearings.
-                RescueToolbarChip(rescue: volumeRescue, showCompareSheet: $showVolumeCompare)
+                // Click opens the Compare window. Chip subscribes to
+                // VolumeRescueOperation via @EnvironmentObject on its
+                // own scope so a rescue tick doesn't re-render
+                // ContentView's body.
+                RescueToolbarChip()
 
                 Spacer().frame(minWidth: 20)
 

@@ -17,12 +17,19 @@ import SwiftUI
 // without requiring a fresh comparison run.
 
 struct RescueToolbarChip: View {
-    @ObservedObject var rescue: VolumeRescueOperation
-    /// Binding to ContentView's `showVolumeCompare` flag — clicking the
-    /// chip toggles the sheet open. Same affordance as the Compare
-    /// toolbar button, but doesn't lose state because the @StateObject
-    /// rescue is owned by ContentView.
-    @Binding var showCompareSheet: Bool
+    /// Subscribed via environment so only the chip re-renders when
+    /// rescue state changes — NOT the entire ContentView. Lint hook
+    /// `scripts/lint_environment_objects.py` enforces that any view
+    /// declaring @EnvironmentObject actually reads from it; the body
+    /// below reads .isRunning / .isDone / .progress / .filesCopied so
+    /// the subscription is meaningful.
+    @EnvironmentObject var rescue: VolumeRescueOperation
+    /// Opens the standalone "Compare Volumes" window (defined in
+    /// VideoScanApp). The chip + the toolbar Compare button both go
+    /// through this same affordance; the window is single-instance
+    /// (Window not WindowGroup) so repeat clicks bring the existing
+    /// window to front rather than spawning new ones.
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         if rescue.isRunning {
@@ -45,7 +52,7 @@ struct RescueToolbarChip: View {
     @ViewBuilder
     private func chipShell(color: Color, icon: String, label: String) -> some View {
         Button {
-            showCompareSheet = true
+            openWindow(id: "compare")
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: icon)
