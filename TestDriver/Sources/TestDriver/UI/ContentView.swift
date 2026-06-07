@@ -130,10 +130,7 @@ final class TestDriverModel: ObservableObject {
             var entriesSkipped = 0
             var coveredLinesTotal = 0
             var executableLinesTotal = 0
-            // Without xccov's raw line counts at the call site we instead
-            // average per-entry percentages weighted by 1; if multiple
-            // coverage-collecting entries run we average their percents.
-            var coverageSamples: [Double] = []
+            var coverageSamples: [CoverageSample] = []
             for entry in toRun {
                 if Task.isCancelled {
                     TermLog.log("model", "runSelected cancelled before \(entry.name)")
@@ -187,7 +184,7 @@ final class TestDriverModel: ObservableObject {
                     symbol = "?"
                 }
                 if let cov = result.coveragePercent {
-                    coverageSamples.append(cov)
+                    coverageSamples.append(CoverageSample(entry: entry, percent: cov))
                     // Crude weighted average: re-derive line counts from
                     // the percentage. Not exact (xccov only gives us %),
                     // but consistent across reports.
@@ -214,9 +211,7 @@ final class TestDriverModel: ObservableObject {
                 parts.append("\(methodsFailed) failed")
                 if entriesSkipped > 0 { parts.append("\(entriesSkipped) skipped") }
                 self.summaryText = "Done — " + parts.joined(separator: ", ")
-                let coveragePct: Double? = coverageSamples.isEmpty
-                    ? nil
-                    : coverageSamples.reduce(0, +) / Double(coverageSamples.count)
+                let coveragePct = CoverageAggregation.representativePercent(from: coverageSamples)
                 self.lastCoveragePercent = coveragePct
                 let summary = RunSummary(
                     methodsPassed: methodsPassed,

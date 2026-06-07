@@ -58,7 +58,7 @@ enum CLI {
         var methodsPassed = 0
         var methodsFailed = 0
         var entriesSkipped = 0
-        var coverageSamples: [Double] = []
+        var coverageSamples: [CoverageSample] = []
         let started = Date()
         for (idx, entry) in entries.enumerated() {
             let prefix = "[\(idx + 1)/\(entries.count)]"
@@ -101,15 +101,14 @@ enum CLI {
                 break
             }
             if let cov = result.coveragePercent {
-                coverageSamples.append(cov)
+                coverageSamples.append(CoverageSample(entry: entry, percent: cov))
                 print(String(format: "    │ coverage: %.2f%%", cov))
             }
         }
 
         let total = Date().timeIntervalSince(started)
-        let coveragePct: Double? = coverageSamples.isEmpty
-            ? nil
-            : coverageSamples.reduce(0, +) / Double(coverageSamples.count)
+        let coveragePct = CoverageAggregation.representativePercent(from: coverageSamples)
+        let coverageSource = CoverageAggregation.representativeDescription(from: coverageSamples)
 
         // Build a RunSummary so MetricsPublisher's gates apply identically
         // to the UI path. opts.publish defaults to true; --no-publish
@@ -149,7 +148,8 @@ enum CLI {
         print(String(format: "%@   %d executed   %d passed   %d failed   %d skipped   (%.1fs)",
                      banner, summary.total, methodsPassed, methodsFailed, entriesSkipped, total))
         if let cov = coveragePct {
-            print(String(format: "Coverage: %.2f%%", cov))
+            let source = coverageSource.map { " (\($0))" } ?? ""
+            print(String(format: "Coverage: %.2f%%%@", cov, source))
         }
         print("Host:   \(opts.host.displayName)")
         print("Repo:   \(repo.oneLine)")
