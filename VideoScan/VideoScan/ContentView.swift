@@ -196,8 +196,8 @@ struct CatalogView: View {
     /// table by default. The user opts in with a small toggle near the table.
     /// `@AppStorage` ≈ a C++ singleton bool persisted via NSUserDefaults.
     @AppStorage("catalogShowUnscannedTargets") private var showUnscannedTargets: Bool = false
-    /// Whether the "Clean up unscanned…" confirmation alert is showing.
-    @State private var showCleanupUnscannedConfirm = false
+    // showCleanupUnscannedConfirm removed 2026-06-07 along with the
+    // toolbar button; the alert handler at .alert(...) is gone too.
     @State private var combinePairItem: CombinePairItem?
     /// Set of scan-target searchPaths whose records the user wants to see in
     /// the catalog table. Derived from `selectedVolumeIDs` so that selecting
@@ -497,16 +497,6 @@ struct CatalogView: View {
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("This will delete all \(model.records.count) catalog records across every volume. The probe cache is unaffected.\n\nAre you sure?")
-        }
-        .alert("Clean up unscanned scan targets?", isPresented: $showCleanupUnscannedConfirm) {
-            Button("Remove", role: .destructive) {
-                let removed = model.cleanupUnscannedTargets()
-                model.log("User confirmed cleanup of \(removed) unscanned scan target(s)")
-            }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            let count = model.unscannedTargetCount
-            Text("Remove \(count) scan target\(count == 1 ? "" : "s") that have never been scanned? You can always re-add them later via Add Scan Target. Existing catalog records are not affected.")
         }
         .alert("Delete Volume Catalog", isPresented: $showDeleteVolumeCatalogConfirm) {
             Button("Delete", role: .destructive) {
@@ -1118,33 +1108,15 @@ struct CatalogView: View {
                 .fixedSize()
                 .help("Filter which volumes appear in the list")
 
-                // Strict-catalog: hide-by-default + opt-in toggle. Pattern
-                // mirrors TriageView's "Online volumes only" switch — small
-                // control, AppStorage-backed, lives next to the table it
-                // governs.
-                Toggle(isOn: $showUnscannedTargets) {
-                    Label("Show unscanned", systemImage: "eye")
-                        .labelStyle(.titleAndIcon)
-                }
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .help("Show scan targets that haven't been scanned yet. Off by default — strict catalog view.")
-
-                // One-time cleanup affordance for users whose target list got
-                // polluted by the old auto-add-on-mount behavior. Only visible
-                // when there's actually something to clean up — mirrors the
-                // Delete Junk pattern that only surfaces when count > 0.
-                if model.unscannedTargetCount > 0 {
-                    Button(role: .destructive, action: {
-                        showCleanupUnscannedConfirm = true
-                    }) {
-                        Label("Clean up unscanned… (\(model.unscannedTargetCount))",
-                              systemImage: "trash.slash")
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .help("Remove scan targets that have never been scanned and aren't currently active. Doesn't touch catalog records.")
-                }
+                // "Show unscanned" toggle and "Clean up unscanned" button
+                // both removed from the toolbar 2026-06-07 per Rick's
+                // 14" M5 cleanup pass — they were eating toolbar width
+                // for actions Rick doesn't take daily. View → Online is
+                // his preferred filter; the underlying `showUnscannedTargets`
+                // AppStorage stays so the strict-catalog view persists
+                // (off by default), and `cleanupUnscannedTargets()` on
+                // the model is still callable from other surfaces if we
+                // ever want a "Tools" menu entry.
 
                 Menu {
                     Section("Scan") {
