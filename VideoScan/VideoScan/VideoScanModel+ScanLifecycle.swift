@@ -29,6 +29,12 @@ extension VideoScanModel {
         }
         // Clear any stale checkpoint — this is a fresh scan.
         ScanCheckpointStorage.delete(for: target.searchPath)
+        // Snapshot dossier + user-edit fields BEFORE we wipe records.
+        // The scan completion path applies them onto the new records
+        // so a routine rescan doesn't destroy hours of Qwen + Whisper
+        // work or manual people-tagging. Critical: snapshot must
+        // happen before removeAll. See VideoScanModel+RescanPreservation.
+        snapshotPreservedFieldsForRescan(of: target)
         // Clear any existing catalog records for this volume so a rescan
         // doesn't create duplicates. The cache is kept (probes are reused).
         records.removeAll { $0.fullPath.hasPrefix(target.searchPath) }

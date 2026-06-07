@@ -291,6 +291,14 @@ final class VideoScanModel: ObservableObject {
     /// re-merge what we just loaded) and on every successful merge.
     var lastLiveReloadMtime: Date?
 
+    /// Per-volume snapshot of dossier + user-edit fields, captured by
+    /// `snapshotPreservedFieldsForRescan` before the scan's removeAll
+    /// destroys them, applied by `applyPreservedFieldsAfterRescan`
+    /// when the new scan results are about to land. Keyed by the
+    /// target's searchPath so concurrent rescans don't collide.
+    /// See VideoScanModel+RescanPreservation.swift for the contract.
+    var pendingPreservedFields: [String: [String: RescanPreservedFields]] = [:]
+
     // Internal so VideoScanModel+ScanTargetPersistence can gate persistence
     // during XCTest runs.
     static var isRunningTests: Bool {

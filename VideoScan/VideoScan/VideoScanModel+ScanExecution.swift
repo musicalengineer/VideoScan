@@ -156,9 +156,23 @@ extension VideoScanModel {
         if Task.isCancelled {
             target.status = .stopped
             target.stopElapsedTimer()
+            // Drop the rescan snapshot so the map doesn't grow unbounded.
+            // Today this means a cancelled rescan loses the volume's
+            // records until next scan (pre-existing behavior — startTarget
+            // already removed them). A future improvement could re-insert
+            // originals from a full-record snapshot. For now: discard.
+            discardPreservedFieldsSnapshot(of: target)
             appLog.write("Cancelled catalog scan of volume \(volName) at \(completedCount)/\(discoveredCount) file(s)")
             updateGlobalScanState()
             return
+        }
+        // Restore dossier + user-edit fields snapshotted in startTarget
+        // before the rescan's removeAll. Without this, every rescan
+        // would silently destroy hours of Qwen + Whisper work and any
+        // manual people tags. Returns the count restored for logging.
+        let restored = applyPreservedFieldsAfterRescan(of: target, onto: targetRecords)
+        if restored > 0 {
+            appLog.write("Rescan preservation: restored dossier+user fields onto \(restored) of \(targetRecords.count) freshly-scanned records on \(volName)")
         }
         records.append(contentsOf: targetRecords)
         saveCatalogDebounced()
