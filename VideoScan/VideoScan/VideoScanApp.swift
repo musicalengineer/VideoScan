@@ -204,6 +204,12 @@ struct VideoScanApp: App {
     /// first `caption()` / `dossier()` call.
     @StateObject private var captionOrchestrator = CaptionOrchestrator()
 
+    /// Lifted to app level too — the Compare window scene needs to
+    /// observe the same running rescue task that the main window's
+    /// toolbar chip observes. Was on ContentView when Compare was a
+    /// modal sheet; promoted here once Compare became its own Window.
+    @StateObject private var volumeRescue = VolumeRescueOperation()
+
     var body: some Scene {
         WindowGroup(id: "main") {
             MainWindowCapture {
@@ -212,6 +218,7 @@ struct VideoScanApp: App {
                     .environmentObject(catalogModel.dashboard)
                     .environmentObject(catalogSync)
                     .environmentObject(captionOrchestrator)
+                    .environmentObject(volumeRescue)
                     .onAppear {
                         appDelegate.catalogModel = catalogModel
                         // Apply viewer-vs-master semantics to model + store.
@@ -321,6 +328,23 @@ struct VideoScanApp: App {
         }
         .windowResizability(.contentSize)
         .defaultPosition(.topTrailing)
+
+        // Compare Volumes — independent NSWindow rather than a modal sheet.
+        // Reason: sheets are macOS-modal, which throttles the parent
+        // window's event delivery and produces the beachball behavior Rick
+        // hit during a multi-hour rescue copy (2026-06-07). The window
+        // pattern matches Dossier Dashboard: non-modal, fully responsive,
+        // user can interact with the main window while a copy is in flight.
+        // `volumeRescue` is owned by ContentView's @StateObject so its
+        // running task survives whether this window is open, closed, or
+        // re-opened mid-copy.
+        Window("Compare Volumes", id: "compare") {
+            VolumeCompareSheet(model: catalogModel, rescue: volumeRescue)
+                .environmentObject(catalogModel)
+                .environmentObject(volumeRescue)
+        }
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
 
         Window("VideoScan Console", id: "console") {
             ConsoleWindow()

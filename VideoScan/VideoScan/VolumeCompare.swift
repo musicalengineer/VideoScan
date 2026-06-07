@@ -6,6 +6,9 @@
 import Foundation
 import SwiftUI
 import Combine
+import os
+
+private let rescueLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "rescue")
 
 // MARK: - Comparison Result
 
@@ -186,6 +189,9 @@ final class VolumeRescueOperation: ObservableObject {
         bytesWritten = 0
         errors = []
         currentProcess = nil
+        // Remember destination so post-completion UX can trigger a
+        // rescan of the volume that just received the files.
+        lastDestPath = destPath
 
         // Snapshot up front: VideoRecord is a class and capturing it across
         // an actor boundary trips strict-concurrency. Sendable snapshots
@@ -196,6 +202,9 @@ final class VolumeRescueOperation: ObservableObject {
         // the default so we never produce a path with a missing component.
         let trimmed = folderName.trimmingCharacters(in: .whitespacesAndNewlines)
         let safeFolder = trimmed.isEmpty ? Self.defaultRescueFolderName : trimmed
+        let started = Date()
+        let totalBytesPlanned = snapshots.reduce(Int64(0)) { $0 + $1.sizeBytes }
+        rescueLog.notice("Rescue start: \(total, privacy: .public) files, \(humanSize(totalBytesPlanned), privacy: .public) → \(destPath, privacy: .public)/\(safeFolder, privacy: .public) (mode=\(mode.rawValue, privacy: .public))")
         task = Task { [weak self] in
             let fm = FileManager.default
 
@@ -212,10 +221,13 @@ final class VolumeRescueOperation: ObservableObject {
             }
 
             await MainActor.run { [weak self] in
-                self?.progress = 1.0
-                self?.isRunning = false
-                self?.isDone = true
-                self?.currentFile = ""
+                guard let self else { return }
+                let elapsed = Date().timeIntervalSince(started)
+                rescueLog.notice("Rescue done: copied=\(self.filesCopied, privacy: .public) failed=\(self.filesFailed, privacy: .public) bytes=\(humanSize(self.bytesWritten), privacy: .public) elapsed=\(Int(elapsed), privacy: .public)s")
+                self.progress = 1.0
+                self.isRunning = false
+                self.isDone = true
+                self.currentFile = ""
             }
         }
     }
@@ -234,17 +246,25 @@ final class VolumeRescueOperation: ObservableObject {
         currentFile = ""
     }
 
+    /// Destination path the most-recent rescue wrote to. Used by the
+    /// post-rescue UX so we can offer (or auto-trigger) a rescan of
+    /// that destination volume to catalog the freshly-copied files.
+    /// nil before the first rescue.
+    @Published private(set) var lastDestPath: String?
+
     /// Stop a running copy as fast as possible. Calls Task.cancel() (which
     /// stops the loop between files) AND `terminate()` on the current
     /// rsync subprocess (which kills the in-flight transfer mid-file).
     /// Without the latter, cancel was effectively "stop after this file"
     /// which meant several minutes of "did it cancel?" UI for large MXFs.
     func cancel() {
+        let hadProc = currentProcess != nil
         task?.cancel()
         if let proc = currentProcess, proc.isRunning {
             proc.terminate()
         }
         currentProcess = nil
+        rescueLog.notice("Rescue cancel requested (hadProc=\(hadProc, privacy: .public))")
         // isRunning is flipped by the task's completion block once it
         // observes the cancellation. Leaving it true here keeps any
         // re-issued start() guard intact until cleanup lands.
@@ -539,12 +559,35 @@ struct VolumeCompareSheet: View {
 
             // File list (scrollable)
             if r.missingFiles.isEmpty {
-                HStack {
-                    Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
-                    Text("Every source file has a copy on: \(r.destLabel).")
+                // Big-green-everything-is-safe panel — mirrors the
+                // Migrate sheet's celebratory empty state so a Compare
+                // run after a successful rescue feels like a real "ok
+                // you're done" moment instead of a quiet one-line.
+                VStack(spacing: 10) {
+                    Image(systemName: "checkmark.shield.fill")
+                        .font(.system(size: 56))
+                        .foregroundColor(.green)
+                    Text("All Files Safe")
+                        .font(.title2.bold())
+                        .foregroundColor(.green)
+                    Text("Every file on \(URL(fileURLWithPath: r.sourcePath).lastPathComponent) has a verified copy on \(r.destLabel).")
                         .font(.callout)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                    Text("Source volume could fail and you'd lose nothing.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
-                .padding()
+                .frame(maxWidth: .infinity)
+                .padding(24)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.green.opacity(0.08))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(Color.green.opacity(0.35), lineWidth: 1)
+                )
             } else {
                 Text("Files with no copy on \(r.destLabel) (\(r.sourceOnly)):")
                     .font(.callout.bold())
@@ -979,23 +1022,7 @@ struct VolumeCompareSheet: View {
                     .buttonStyle(.bordered)
                     .help("Stop the copy. Rsync gets SIGTERM and aborts the current file within seconds.")
             } else if rescue.isDone {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(.green)
-                    .imageScale(.large)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Copy finished")
-                        .font(.callout.bold())
-                    Text("\(rescue.filesCopied) copied · \(rescue.filesFailed) failed · \(humanSize(rescue.bytesWritten))")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                Spacer()
-                Button("Dismiss") {
-                    // Reset the operation so the banner disappears.
-                    // rescue stays alive on ContentView; just clears UI state.
-                    rescue.acknowledgeCompletion()
-                }
-                .buttonStyle(.bordered)
+                doneBannerBody
             }
         }
         .padding(10)
@@ -1008,6 +1035,50 @@ struct VolumeCompareSheet: View {
                 .stroke(rescue.isRunning ? Color.blue.opacity(0.35) : Color.green.opacity(0.35),
                         lineWidth: 0.5)
         )
+    }
+
+    /// Done-state branch of the rescue banner — extracted because the
+    /// inline conditional was tripping SwiftUI's type-check timeout
+    /// when combined with the running-state branch.
+    @ViewBuilder
+    private var doneBannerBody: some View {
+        Image(systemName: "checkmark.circle.fill")
+            .foregroundColor(.green)
+            .imageScale(.large)
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Copy finished")
+                .font(.callout.bold())
+            Text("\(rescue.filesCopied) copied · \(rescue.filesFailed) failed · \(humanSize(rescue.bytesWritten))")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        Spacer()
+        // Catalog gap: the rescue wrote files to disk but the catalog
+        // doesn't know about them until the destination volume is
+        // scanned. One-click trigger for that scan so Rick doesn't
+        // have to remember it. Uses the standard startTarget() entry
+        // point so the volume status flips to "Scanning" in the table.
+        if let destTarget = rescanDestTarget {
+            Button("Re-scan destination") {
+                rescueLog.notice("Post-rescue rescan triggered for \(destTarget.searchPath, privacy: .public)")
+                model.startTarget(destTarget)
+            }
+            .buttonStyle(.borderedProminent)
+            .help("Scan the destination volume so the freshly-copied files get cataloged. Status appears in the Scan Volumes table.")
+        }
+        Button("Dismiss") {
+            rescue.acknowledgeCompletion()
+        }
+        .buttonStyle(.bordered)
+    }
+
+    /// Lookup helper — the destination volume target if it's currently
+    /// in the model's scan-target list. nil if the destination isn't a
+    /// known scan target (rare; user could have removed it between
+    /// start and finish).
+    private var rescanDestTarget: CatalogScanTarget? {
+        guard let destPath = rescue.lastDestPath else { return nil }
+        return model.scanTargets.first { $0.searchPath == destPath }
     }
 
     // MARK: - Compare
