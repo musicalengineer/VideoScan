@@ -68,7 +68,15 @@ extension VideoScanModel {
             Task { await target.pauseGate.resume() }
             target.status = .scanning
             log("--- Resumed \(URL(fileURLWithPath: target.searchPath).lastPathComponent) ---")
-        } else if target.status == .scanning {
+        } else if target.status.isActive {
+            // Was previously `== .scanning` only, which silently no-op'd
+            // when the user paused during the .discovering phase
+            // (initial file enumeration). The probe loop's pauseGate
+            // checkpoint works regardless of which phase we're in;
+            // gating the toggle on .isActive (scanning / discovering /
+            // waitingForVolume) makes Pause actually responsive throughout
+            // a scan. Rick 2026-06-07: rescan via 'Update Catalog' would
+            // not pause because it was still discovering.
             Task { await target.pauseGate.pause() }
             target.status = .paused
             log("--- Paused \(URL(fileURLWithPath: target.searchPath).lastPathComponent) ---")
@@ -116,7 +124,12 @@ extension VideoScanModel {
     }
 
     func pauseAllTargets() {
-        for target in scanTargets where target.status == .scanning {
+        // Match togglePauseTarget's broader guard — any active state
+        // (scanning / discovering / waitingForVolume) can be paused.
+        // The narrower .scanning-only guard was the same bug as in
+        // togglePauseTarget: silent no-op during the discovery phase.
+        for target in scanTargets
+            where target.status.isActive && target.status != .paused {
             togglePauseTarget(target)
         }
     }
