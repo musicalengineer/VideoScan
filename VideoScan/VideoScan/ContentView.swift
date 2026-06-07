@@ -1200,11 +1200,11 @@ struct CatalogView: View {
                 ScanOptionsMenu(model: model)
 
                 Button(action: { showVolumeCompare = true }) {
-                    Label("Compare & Rescue", systemImage: "arrow.triangle.2.circlepath")
+                    Label("Compare", systemImage: "arrow.triangle.2.circlepath")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
-                .help("Compare two volumes and copy unique media files from old drives to new ones")
+                .help("Compare two volumes — show what's unique to the source volume (would be lost if it died). Read-only audit; rescue/copy happens from inside the sheet.")
 
                 Spacer().frame(minWidth: 20)
 
