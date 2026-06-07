@@ -346,7 +346,7 @@ struct VolumeCompareSheet: View {
             HStack {
                 Image(systemName: "arrow.triangle.2.circlepath")
                     .font(.title2).foregroundColor(.accentColor)
-                Text("Volume Compare & Rescue")
+                Text("Compare Volumes")
                     .font(.headline)
                 Spacer()
                 Button("Done") { dismiss() }
