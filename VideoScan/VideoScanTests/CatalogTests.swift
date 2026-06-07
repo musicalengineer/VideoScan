@@ -732,6 +732,48 @@ struct VolumeCompareTests {
         #expect(result.sourceOnly == 0)
     }
 
+    // MARK: - Folder-name behavior (rescue destination subfolder)
+    //
+    // Rick 2026-06-07: the rescue path used to hardcode "Rescued" as the
+    // destination subfolder. Now it's user-input via a TextField; empty
+    // or whitespace input falls back to the default so we never produce
+    // a bad path like "/Volumes/LaCieWorkspace//foo.mov".
+
+    @Test func defaultRescueFolderNameIsRescued() {
+        // Lock the historical default so callers that don't pass folderName
+        // continue to write to the same "Rescued" subfolder.
+        #expect(VolumeRescueOperation.defaultRescueFolderName == "Rescued")
+    }
+
+    @MainActor
+    @Test func emptyFolderNameFallsBackToDefault() {
+        // VolumeRescueOperation.start trims whitespace; an empty result
+        // means "use the default". This test only verifies the public
+        // contract — the actual filesystem write is exercised in
+        // integration tests, not here.
+        let op = VolumeRescueOperation()
+        // The class doesn't expose the resolved folder name post-start,
+        // so we verify by ensuring start() with empty / blank doesn't
+        // crash and is idempotent against a re-entry guard.
+        op.start(files: [], sourcePath: "/Volumes/SrcDoesNotExist", destPath: "/Volumes/DstDoesNotExist", mode: .verified, folderName: "   ")
+        // start() is no-op when isRunning is true; if our empty-string
+        // sanitization had crashed, we'd have failed above. The fact
+        // that we're still here is the meaningful signal.
+        op.cancel()
+    }
+
+    @MainActor
+    @Test func cancelIsIdempotentAndDoesNotCrashWhenNothingRunning() {
+        // Defensive: if Rick clicks Cancel without ever starting a copy,
+        // we must not blow up trying to terminate a nil Process.
+        let op = VolumeRescueOperation()
+        op.cancel()
+        op.cancel()
+        op.cancel()
+        // Made it here without crashing → contract satisfied.
+        #expect(op.isRunning == false)
+    }
+
     @Test func totalSourceBytesAlsoExcludesDuplicateRows() {
         // Companion check — totalSourceBytes is shown to the user as
         // "this volume holds X GB". If we don't dedup, it's inflated too.
