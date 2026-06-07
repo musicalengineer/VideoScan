@@ -660,4 +660,91 @@ struct VolumeCompareTests {
         #expect(result.missingFiles.first?.filename == "C.mov")
         #expect(result.alreadySafeCount == 2)
     }
+
+    // MARK: - Catalog-duplicate-records resilience
+    //
+    // Rick + Claude 2026-06-07: the catalog has, for historical scan-import
+    // reasons, multiple records per fullPath (~1262 paths affected at the
+    // time of discovery). Compare must not double-count those rows or the
+    // user sees an inflated "missing GB" figure and overestimates how much
+    // would be lost to a drive failure.
+    //
+    // Live data when the bug was caught:
+    //   reported missing: 1352 records / 712 GB
+    //   actual unique paths: 676 / ~356 GB
+    //   2× inflation — directly traceable to no source-side fullPath dedup.
+
+    @Test func duplicateCatalogRowsForSameFullPathCountAsOneFile() {
+        // Two catalog records for the EXACT same fullPath — same content,
+        // same hash, same size. The catalog has them because of a historical
+        // double-scan import. Compare must treat them as one file.
+        let src = [
+            makeRecord(filename: "dup.mov", path: "/Volumes/Old/dup.mov", md5: "aaa", size: 5000),
+            makeRecord(filename: "dup.mov", path: "/Volumes/Old/dup.mov", md5: "aaa", size: 5000)
+        ]
+        let result = VolumeComparer.compare(
+            sourceRecords: src, destRecords: [],
+            sourcePath: "/Volumes/Old", destPath: "/Volumes/New"
+        )
+
+        #expect(result.sourceOnly == 1,
+                "Two catalog rows for the same fullPath must count as one missing file, not two")
+        #expect(result.missingBytes == 5000,
+                "Bytes must not be double-counted across duplicate rows; 2 rows × 5000 ≠ 10000")
+        #expect(result.missingFiles.count == 1,
+                "missingFiles must be path-unique so the rescue copy never tries the same file twice")
+    }
+
+    @Test func mixOfDuplicatesAndUniquesCountsCorrectly() {
+        // /a appears 3 times (catalog triple-dup), /b once, /c twice.
+        // Expected: 3 unique paths → 3 missing files, 100+200+300 = 600 bytes.
+        let src = [
+            makeRecord(filename: "a.mov", path: "/Volumes/Old/a.mov", md5: "a", size: 100),
+            makeRecord(filename: "a.mov", path: "/Volumes/Old/a.mov", md5: "a", size: 100),
+            makeRecord(filename: "a.mov", path: "/Volumes/Old/a.mov", md5: "a", size: 100),
+            makeRecord(filename: "b.mov", path: "/Volumes/Old/b.mov", md5: "b", size: 200),
+            makeRecord(filename: "c.mov", path: "/Volumes/Old/c.mov", md5: "c", size: 300),
+            makeRecord(filename: "c.mov", path: "/Volumes/Old/c.mov", md5: "c", size: 300)
+        ]
+        let result = VolumeComparer.compare(
+            sourceRecords: src, destRecords: [],
+            sourcePath: "/Volumes/Old", destPath: "/Volumes/New"
+        )
+        #expect(result.sourceOnly == 3)
+        #expect(result.missingBytes == 600)
+    }
+
+    @Test func duplicatePathOnDestSideStillMatchesSource() {
+        // If the DESTINATION catalog has multiple rows for the same file
+        // (same dupe-row problem on the rescue target), the source record
+        // must still match — we can't false-positive a source row because
+        // its twin on dest happened to be listed twice.
+        let src = [makeRecord(filename: "x.mov", path: "/Volumes/Old/x.mov", md5: "xx", size: 4000)]
+        let dst = [
+            makeRecord(filename: "x.mov", path: "/Volumes/New/x.mov", md5: "xx", size: 4000),
+            makeRecord(filename: "x.mov", path: "/Volumes/New/x.mov", md5: "xx", size: 4000)
+        ]
+        let result = VolumeComparer.compare(
+            sourceRecords: src, destRecords: dst,
+            sourcePath: "/Volumes/Old", destPath: "/Volumes/New"
+        )
+        #expect(result.alreadySafeCount == 1)
+        #expect(result.sourceOnly == 0)
+    }
+
+    @Test func totalSourceBytesAlsoExcludesDuplicateRows() {
+        // Companion check — totalSourceBytes is shown to the user as
+        // "this volume holds X GB". If we don't dedup, it's inflated too.
+        let src = [
+            makeRecord(filename: "a.mov", path: "/Volumes/Old/a.mov", md5: "a", size: 1000),
+            makeRecord(filename: "a.mov", path: "/Volumes/Old/a.mov", md5: "a", size: 1000),  // dupe row
+            makeRecord(filename: "b.mov", path: "/Volumes/Old/b.mov", md5: "b", size: 2000)
+        ]
+        let result = VolumeComparer.compare(
+            sourceRecords: src, destRecords: [],
+            sourcePath: "/Volumes/Old", destPath: "/Volumes/New"
+        )
+        #expect(result.totalSourceBytes == 3000,
+                "totalSourceBytes must dedup by fullPath; 2 rows for /a × 1000 ≠ 4000")
+    }
 }
