@@ -169,6 +169,17 @@ final class VolumeRescueOperation: ObservableObject {
     /// preserved underneath.
     static let defaultRescueFolderName = "Rescued"
 
+    /// Pure sanitizer for the user-entered rescue folder name. Trims
+    /// whitespace, falls back to the default when empty. Exposed as
+    /// static + `nonisolated` so tests (which run off the main actor)
+    /// can pin the edge cases (empty / whitespace / already-trimmed)
+    /// without standing up a VolumeRescueOperation. Used by
+    /// `start(folderName:)` before constructing rescueDir.
+    nonisolated static func sanitizeRescueFolderName(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? defaultRescueFolderName : trimmed
+    }
+
     /// Copy missing files from source volume to a destination folder.
     /// Preserves relative directory structure under the volume root.
     ///
@@ -198,10 +209,9 @@ final class VolumeRescueOperation: ObservableObject {
         // carry every field these copy paths read.
         let snapshots = files.snapshots()
         let total = snapshots.count
-        // Sanitize the folder name — empty or whitespace falls back to
-        // the default so we never produce a path with a missing component.
-        let trimmed = folderName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let safeFolder = trimmed.isEmpty ? Self.defaultRescueFolderName : trimmed
+        // Sanitize the folder name via the public helper so tests
+        // exercise the same code path that the runtime does.
+        let safeFolder = Self.sanitizeRescueFolderName(folderName)
         let started = Date()
         let totalBytesPlanned = snapshots.reduce(Int64(0)) { $0 + $1.sizeBytes }
         rescueLog.notice("Rescue start: \(total, privacy: .public) files, \(humanSize(totalBytesPlanned), privacy: .public) → \(destPath, privacy: .public)/\(safeFolder, privacy: .public) (mode=\(mode.rawValue, privacy: .public))")
