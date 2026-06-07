@@ -35,6 +35,19 @@ enum VolumeComparer {
     /// Pass `isAuditMode: true` when `destRecords` is the union of *many* volumes
     /// (i.e., "does this file exist anywhere else in the catalog?") so the result
     /// can flag that copy isn't available (no single target path).
+    ///
+    /// Source-side dedup contract: the catalog has, for historical scan-import
+    /// reasons, multiple records per fullPath. The COMPARE OUTPUT must treat
+    /// those rows as a single physical file — otherwise users see inflated
+    /// "missing GB" totals and overestimate what would be lost if the source
+    /// volume failed. Specifically:
+    ///   - `missingFiles` is path-deduped (one VideoRecord per fullPath)
+    ///   - `missingBytes` / `totalSourceBytes` are summed over path-deduped rows
+    ///   - `alreadySafe` is also path-deduped so the rescue UI doesn't show
+    ///     two rows for the same file
+    /// Verified 2026-06-07: without this, Rick's MyBook3Terabytes compare was
+    /// reporting 1352 records / 712 GB when the true at-risk surface was
+    /// 676 paths / ~356 GB — exactly 2× inflated.
     static func compare(
         sourceRecords: [VideoRecord],
         destRecords: [VideoRecord],
@@ -43,6 +56,16 @@ enum VolumeComparer {
         destLabel: String? = nil,
         isAuditMode: Bool = false
     ) -> VolumeCompareResult {
+        // Dedup source by fullPath up-front — collapse historical
+        // catalog-duplicate rows down to one record per physical file.
+        // Keep the FIRST occurrence so the result preserves the catalog
+        // order users see in the table.
+        var seenPaths = Set<String>()
+        seenPaths.reserveCapacity(sourceRecords.count)
+        let dedupedSource = sourceRecords.filter { rec in
+            seenPaths.insert(rec.fullPath).inserted
+        }
+
         // Build destination lookup indices
         var destByHash: Set<String> = []       // "md5|size"
         var destByNameSize: Set<String> = []   // "filename|size"
@@ -59,7 +82,7 @@ enum VolumeComparer {
         var missingBytes: Int64 = 0
         var totalBytes: Int64 = 0
 
-        for rec in sourceRecords {
+        for rec in dedupedSource {
             totalBytes += rec.sizeBytes
 
             // Check by hash first (strongest match)
