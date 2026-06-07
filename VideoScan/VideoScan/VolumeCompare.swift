@@ -150,9 +150,33 @@ final class VolumeRescueOperation: ObservableObject {
 
     private var task: Task<Void, Never>?
 
+    /// Currently-running rsync (or future subprocess) so `cancel()` can
+    /// `terminate()` it mid-file. Without this, cancel was "soft" — it
+    /// marked the Task cancelled but `proc.waitUntilExit()` blocked until
+    /// the in-flight multi-GB rsync finished, which felt like a hung app.
+    /// Rick force-quit the app 2026-06-07 trying to cancel a copy.
+    /// `nonisolated(unsafe)` because we set it on the rsync helper actor
+    /// boundary and read it on MainActor cancel — single producer / single
+    /// reader, manual sync via task-cancellation semantics.
+    nonisolated(unsafe) private var currentProcess: Process?
+
+    /// Default subfolder name on the destination. Used as the placeholder
+    /// in the Compare UI's "Folder name" TextField. The folder is created
+    /// under destPath, then the source's relative directory structure
+    /// preserved underneath.
+    static let defaultRescueFolderName = "Rescued"
+
     /// Copy missing files from source volume to a destination folder.
     /// Preserves relative directory structure under the volume root.
-    func start(files: [VideoRecord], sourcePath: String, destPath: String, mode: RescueCopyMode = .verified) {
+    ///
+    /// `folderName` is the subfolder created under `destPath`. Default
+    /// preserves the historical "Rescued" name for back-compat; the UI
+    /// now lets Rick pick.
+    func start(files: [VideoRecord],
+               sourcePath: String,
+               destPath: String,
+               mode: RescueCopyMode = .verified,
+               folderName: String = VolumeRescueOperation.defaultRescueFolderName) {
         guard !isRunning else { return }
         isRunning = true
         isDone = false
@@ -161,17 +185,22 @@ final class VolumeRescueOperation: ObservableObject {
         filesFailed = 0
         bytesWritten = 0
         errors = []
+        currentProcess = nil
 
         // Snapshot up front: VideoRecord is a class and capturing it across
         // an actor boundary trips strict-concurrency. Sendable snapshots
         // carry every field these copy paths read.
         let snapshots = files.snapshots()
         let total = snapshots.count
+        // Sanitize the folder name — empty or whitespace falls back to
+        // the default so we never produce a path with a missing component.
+        let trimmed = folderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let safeFolder = trimmed.isEmpty ? Self.defaultRescueFolderName : trimmed
         task = Task { [weak self] in
             let fm = FileManager.default
 
             // Create destination root if needed
-            let rescueDir = (destPath as NSString).appendingPathComponent("Rescued")
+            let rescueDir = (destPath as NSString).appendingPathComponent(safeFolder)
             try? fm.createDirectory(atPath: rescueDir, withIntermediateDirectories: true)
 
             if mode == .verified {
@@ -191,9 +220,20 @@ final class VolumeRescueOperation: ObservableObject {
         }
     }
 
+    /// Stop a running copy as fast as possible. Calls Task.cancel() (which
+    /// stops the loop between files) AND `terminate()` on the current
+    /// rsync subprocess (which kills the in-flight transfer mid-file).
+    /// Without the latter, cancel was effectively "stop after this file"
+    /// which meant several minutes of "did it cancel?" UI for large MXFs.
     func cancel() {
         task?.cancel()
-        isRunning = false
+        if let proc = currentProcess, proc.isRunning {
+            proc.terminate()
+        }
+        currentProcess = nil
+        // isRunning is flipped by the task's completion block once it
+        // observes the cancellation. Leaving it true here keeps any
+        // re-issued start() guard intact until cleanup lands.
     }
 
     // MARK: - Fast Copy (FileManager)
@@ -300,9 +340,21 @@ final class VolumeRescueOperation: ObservableObject {
             let errPipe = Pipe()
             proc.standardError = errPipe
 
+            // Hand the running process to the actor so cancel() can kill
+            // it mid-transfer (rsync responds to SIGTERM by aborting the
+            // current chunk, which is what the user expects when they
+            // click Cancel on a multi-GB file).
+            await MainActor.run { [weak self] in
+                self?.currentProcess = proc
+            }
             do {
                 try proc.run()
                 proc.waitUntilExit()
+                await MainActor.run { [weak self] in
+                    if self?.currentProcess === proc {
+                        self?.currentProcess = nil
+                    }
+                }
 
                 if proc.terminationStatus == 0 {
                     await MainActor.run { [weak self] in
@@ -319,6 +371,9 @@ final class VolumeRescueOperation: ObservableObject {
                 }
             } catch {
                 await MainActor.run { [weak self] in
+                    if self?.currentProcess === proc {
+                        self?.currentProcess = nil
+                    }
                     self?.filesFailed += 1
                     self?.errors.append("\(relative) — \(error.localizedDescription)")
                 }
@@ -348,10 +403,18 @@ struct VolumeCompareSheet: View {
     @State private var selectedDests: Set<String> = []
     @State private var result: VolumeCompareResult?
     @State private var isComparing = false
-    @StateObject private var rescue = VolumeRescueOperation()
+    /// Rescue operation lifted to the parent (ContentView) so the copy
+    /// task survives when the user dismisses the sheet via "Continue in
+    /// Background". @StateObject here would die with the sheet view and
+    /// take the running Task with it. @ObservedObject lets the parent
+    /// keep ownership; dismissing the sheet just hides the UI.
+    @ObservedObject var rescue: VolumeRescueOperation
     @State private var copyMode: RescueCopyMode = .verified
     @State private var showCopyConfirm = false
     @State private var detailFile: VideoRecord?
+    /// User-editable destination subfolder name. Defaults to "Rescued"
+    /// for back-compat with the pre-2026-06-07 hardcoded behavior.
+    @State private var rescueFolderName: String = VolumeRescueOperation.defaultRescueFolderName
 
     private var volumes: [(label: String, path: String)] {
         var vols: [(String, String)] = []
@@ -406,15 +469,28 @@ struct VolumeCompareSheet: View {
             missingFileDetail(rec)
         }
         .alert("Copy Missing Files?", isPresented: $showCopyConfirm) {
+            // Folder name input lives inside the alert so Rick can change
+            // it from the default "Rescued" before kicking off a multi-hour
+            // copy. Empty / whitespace falls back to the default in
+            // VolumeRescueOperation.start so we never produce a bad path.
+            TextField("Folder name", text: $rescueFolderName)
             Button("Copy", role: .destructive) {
                 if let r = result {
-                    rescue.start(files: r.missingFiles, sourcePath: r.sourcePath, destPath: r.destPath, mode: copyMode)
+                    rescue.start(
+                        files: r.missingFiles,
+                        sourcePath: r.sourcePath,
+                        destPath: r.destPath,
+                        mode: copyMode,
+                        folderName: rescueFolderName
+                    )
                 }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
             if let r = result {
-                Text("This will copy \(r.sourceOnly) file(s) (\(r.missingHumanSize)) from \(URL(fileURLWithPath: r.sourcePath).lastPathComponent) to \(URL(fileURLWithPath: r.destPath).lastPathComponent)/Rescued/\n\nDirectory structure is preserved. Existing files are skipped.")
+                let folderDisplay = rescueFolderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? VolumeRescueOperation.defaultRescueFolderName : rescueFolderName
+                Text("This will copy \(r.sourceOnly) file(s) (\(r.missingHumanSize)) from \(URL(fileURLWithPath: r.sourcePath).lastPathComponent) to \(URL(fileURLWithPath: r.destPath).lastPathComponent)/\(folderDisplay)/\n\nDirectory structure is preserved. Existing files are skipped.")
             }
         }
     }
@@ -499,8 +575,19 @@ struct VolumeCompareSheet: View {
                             Text(rescue.currentFile).font(.caption).foregroundColor(.secondary).lineLimit(1)
                         }
                     }
+                    // "Continue in Background" — dismisses the sheet so
+                    // Rick can use the rest of the app while the copy
+                    // (which can take hours for a TB-class transfer) keeps
+                    // running. Reopening Compare shows the live progress
+                    // again. The task survives because @StateObject rescue
+                    // is owned by the sheet view, which stays in memory
+                    // even when the sheet is hidden.
+                    Button("Continue in Background") { dismiss() }
+                        .buttonStyle(.bordered)
+                        .help("Hide this dialog and keep copying. Reopen Compare to check progress or cancel.")
                     Button("Cancel") { rescue.cancel() }
                         .buttonStyle(.bordered)
+                        .help("Stop the copy now. In-flight files will be aborted (rsync gets SIGTERM); partial copies are kept under the destination folder for resume.")
                 } else if rescue.isDone {
                     HStack {
                         Image(systemName: "checkmark.circle.fill").foregroundColor(.green)

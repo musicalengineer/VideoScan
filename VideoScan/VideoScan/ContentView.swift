@@ -179,6 +179,12 @@ struct CatalogView: View {
     @State private var deleteTargetCount: Int = 0
     @State private var showDiscoverVolumes = false
     @State private var showVolumeCompare = false
+    /// Lifted from VolumeCompareSheet so the rescue copy task survives
+    /// when the user clicks "Continue in Background" and the sheet
+    /// dismisses. ContentView (top-level) keeps it alive for the life
+    /// of the app. The chip / dashboard can observe this same instance
+    /// when we wire that polish.
+    @StateObject private var volumeRescue = VolumeRescueOperation()
     /// Set by Archive tab navigation — filters catalog to specific record IDs.
     @State private var filterByIDs: Set<UUID> = []
     /// When `filterByIDs` was populated by Find A/V Pair, the candidate's score
@@ -482,7 +488,7 @@ struct CatalogView: View {
             DiscoverVolumesSheet(model: model)
         }
         .sheet(isPresented: $showVolumeCompare) {
-            VolumeCompareSheet(model: model)
+            VolumeCompareSheet(model: model, rescue: volumeRescue)
         }
         .sheet(isPresented: $showCaptionProgress) {
             CaptionProgressSheet(
