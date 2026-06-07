@@ -774,6 +774,139 @@ struct VolumeCompareTests {
         #expect(op.isRunning == false)
     }
 
+    // MARK: - Folder-name sanitization (pure helper)
+    //
+    // Added 2026-06-07 — the sanitization moved out of start()'s body
+    // into a static helper so the edge cases are pinnable without
+    // exercising the whole rescue Task.
+
+    @Test func sanitizeFolderName_passesThroughCleanInput() {
+        #expect(VolumeRescueOperation.sanitizeRescueFolderName("Rescued") == "Rescued")
+        #expect(VolumeRescueOperation.sanitizeRescueFolderName("My-Backup-2026") == "My-Backup-2026")
+    }
+
+    @Test func sanitizeFolderName_trimsLeadingAndTrailingWhitespace() {
+        #expect(VolumeRescueOperation.sanitizeRescueFolderName("  Rescued  ") == "Rescued")
+        #expect(VolumeRescueOperation.sanitizeRescueFolderName("\tBackup\n") == "Backup")
+    }
+
+    @Test func sanitizeFolderName_emptyOrWhitespaceFallsBackToDefault() {
+        #expect(VolumeRescueOperation.sanitizeRescueFolderName("") == "Rescued")
+        #expect(VolumeRescueOperation.sanitizeRescueFolderName("   ") == "Rescued")
+        #expect(VolumeRescueOperation.sanitizeRescueFolderName("\n\t  \n") == "Rescued")
+    }
+
+    @Test func sanitizeFolderName_preservesInteriorWhitespace() {
+        // "My Backup Folder" is a perfectly valid macOS filename; we
+        // only trim the edges, not the inside.
+        #expect(VolumeRescueOperation.sanitizeRescueFolderName("My Backup Folder") == "My Backup Folder")
+    }
+
+    // MARK: - acknowledgeCompletion
+    //
+    // After a rescue finishes, the UI shows a green "Copy finished"
+    // banner with a Dismiss button. Clicking Dismiss calls
+    // acknowledgeCompletion() which clears the published counters so
+    // the banner + toolbar chip collapse. The method has three
+    // contracts worth pinning:
+    //   1. when isDone → resets counters + isDone
+    //   2. when not isDone (idle) → no-op
+    //   3. when isRunning → no-op (we'd corrupt UI state otherwise)
+
+    @MainActor
+    @Test func acknowledgeCompletion_resetsCountersWhenDone() {
+        let op = VolumeRescueOperation()
+        // Synthesize a finished state without running a copy.
+        op.isDone = true
+        op.progress = 1.0
+        op.filesCopied = 100
+        op.filesFailed = 3
+        op.bytesWritten = 12345
+        op.currentFile = "last.mov"
+
+        op.acknowledgeCompletion()
+
+        #expect(op.isDone == false)
+        #expect(op.progress == 0)
+        #expect(op.filesCopied == 0)
+        #expect(op.filesFailed == 0)
+        #expect(op.bytesWritten == 0)
+        #expect(op.currentFile == "")
+    }
+
+    @MainActor
+    @Test func acknowledgeCompletion_isNoOpWhenIdle() {
+        let op = VolumeRescueOperation()
+        // Never started, never finished.
+        op.acknowledgeCompletion()
+        #expect(op.isDone == false)
+        #expect(op.isRunning == false)
+        #expect(op.filesCopied == 0)
+    }
+
+    @MainActor
+    @Test func acknowledgeCompletion_isNoOpWhenStillRunning() {
+        let op = VolumeRescueOperation()
+        // Pretend a copy is in flight; counters are mid-update.
+        op.isRunning = true
+        op.isDone = false  // running != done
+        op.filesCopied = 42
+        op.progress = 0.4
+
+        op.acknowledgeCompletion()
+
+        // Counters preserved — must not let a stray click during a
+        // running copy nuke the UI state.
+        #expect(op.isRunning == true)
+        #expect(op.filesCopied == 42)
+        #expect(op.progress == 0.4)
+    }
+
+    // MARK: - lastDestPath
+    //
+    // Captured at start() so the post-rescue banner's "Re-scan
+    // destination" button knows which volume to scan. Survives
+    // acknowledgeCompletion (which only clears in-flight UI state).
+
+    @MainActor
+    @Test func lastDestPath_isCapturedWhenStartIsCalled() {
+        let op = VolumeRescueOperation()
+        #expect(op.lastDestPath == nil, "Fresh operation has no last destination")
+        op.start(files: [],
+                 sourcePath: "/Volumes/Source",
+                 destPath: "/Volumes/Dest",
+                 mode: .fast,
+                 folderName: "TestRescue")
+        // start() flips isRunning even with empty files, then the task
+        // completes async; we just need to know the destPath was
+        // captured at the synchronous start() boundary.
+        #expect(op.lastDestPath == "/Volumes/Dest")
+        op.cancel()
+    }
+
+    @MainActor
+    @Test func lastDestPath_persistsAcrossAcknowledge() {
+        let op = VolumeRescueOperation()
+        // Use the public start() path to set lastDestPath (the @Published
+        // has private(set), as it should — tests should drive it the
+        // way the runtime does).
+        op.start(files: [], sourcePath: "/Volumes/Source",
+                 destPath: "/Volumes/Dest", mode: .fast)
+        // Synthesize completion (start() with empty files is async so
+        // it may or may not have flipped isDone yet — set explicitly).
+        op.cancel()
+        op.isDone = true
+        op.filesCopied = 5
+
+        op.acknowledgeCompletion()
+
+        // Counters reset, but lastDestPath survives so a later Compare
+        // run can still find the most-recently-rescued destination.
+        #expect(op.lastDestPath == "/Volumes/Dest")
+        #expect(op.isDone == false)
+        #expect(op.filesCopied == 0)
+    }
+
     @Test func totalSourceBytesAlsoExcludesDuplicateRows() {
         // Companion check — totalSourceBytes is shown to the user as
         // "this volume holds X GB". If we don't dedup, it's inflated too.
