@@ -1184,6 +1184,12 @@ struct CatalogView: View {
                 .controlSize(.large)
                 .help("Compare two volumes — show what's unique to the source volume (would be lost if it died). Read-only audit; rescue/copy happens from inside the sheet.")
 
+                // Persistent rescue progress chip — only visible when
+                // a copy is in flight (or just finished, awaiting ack).
+                // Click re-opens Compare so Rick can monitor / cancel
+                // without losing his bearings.
+                RescueToolbarChip(rescue: volumeRescue, showCompareSheet: $showVolumeCompare)
+
                 Spacer().frame(minWidth: 20)
 
                 backupStatusBadge

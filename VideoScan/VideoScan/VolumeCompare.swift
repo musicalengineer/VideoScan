@@ -220,6 +220,20 @@ final class VolumeRescueOperation: ObservableObject {
         }
     }
 
+    /// Acknowledge that the user has SEEN the completion banner so it
+    /// can collapse out of the UI. Doesn't touch the running-task state
+    /// (there isn't one — we're already `isDone`). Resets the published
+    /// counters so a subsequent start() shows fresh numbers.
+    func acknowledgeCompletion() {
+        guard isDone else { return }
+        isDone = false
+        progress = 0
+        filesCopied = 0
+        filesFailed = 0
+        bytesWritten = 0
+        currentFile = ""
+    }
+
     /// Stop a running copy as fast as possible. Calls Task.cancel() (which
     /// stops the loop between files) AND `terminate()` on the current
     /// rsync subprocess (which kills the in-flight transfer mid-file).
@@ -437,6 +451,22 @@ struct VolumeCompareSheet: View {
                 Spacer()
                 Button("Done") { dismiss() }
                     .keyboardShortcut(.cancelAction)
+            }
+
+            // Persistent rescue status banner.
+            //
+            // Shown whenever a copy is in flight regardless of whether
+            // the user has run a fresh comparison this sheet open. Solves
+            // the case Rick hit 2026-06-07: clicked "Continue in
+            // Background", re-opened Compare, and saw the volume picker
+            // again rather than his running copy. The progress UI inside
+            // resultView wasn't reachable because `result` is sheet-local
+            // @State that resets when the sheet is dismissed and reopened.
+            // The shared rescue (ObservedObject from ContentView) is the
+            // source of truth — surface it at the top so it's always
+            // visible.
+            if rescue.isRunning || rescue.isDone {
+                runningRescueBanner
             }
 
             if volumes.count < 2 {
@@ -909,6 +939,74 @@ struct VolumeCompareSheet: View {
                     selectedDests.remove(path)
                 }
             }
+        )
+    }
+
+    // MARK: - Rescue status banner
+    //
+    // Persistent at the top of the sheet so an in-flight (or just-
+    // finished) copy is visible regardless of the sheet's local
+    // result/select state. Restores progress visibility for the case
+    // where Rick clicks 'Continue in Background', does other work, and
+    // reopens Compare to monitor or cancel.
+
+    @ViewBuilder
+    private var runningRescueBanner: some View {
+        HStack(spacing: 12) {
+            if rescue.isRunning {
+                Image(systemName: "doc.on.doc.fill")
+                    .foregroundColor(.blue)
+                    .imageScale(.large)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack {
+                        Text("Copying…")
+                            .font(.callout.bold())
+                        Spacer()
+                        Text("\(rescue.filesCopied) files · \(humanSize(rescue.bytesWritten))")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    ProgressView(value: rescue.progress)
+                    if !rescue.currentFile.isEmpty {
+                        Text(rescue.currentFile)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                Button("Cancel") { rescue.cancel() }
+                    .buttonStyle(.bordered)
+                    .help("Stop the copy. Rsync gets SIGTERM and aborts the current file within seconds.")
+            } else if rescue.isDone {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(.green)
+                    .imageScale(.large)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Copy finished")
+                        .font(.callout.bold())
+                    Text("\(rescue.filesCopied) copied · \(rescue.filesFailed) failed · \(humanSize(rescue.bytesWritten))")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer()
+                Button("Dismiss") {
+                    // Reset the operation so the banner disappears.
+                    // rescue stays alive on ContentView; just clears UI state.
+                    rescue.acknowledgeCompletion()
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(rescue.isRunning ? Color.blue.opacity(0.08) : Color.green.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(rescue.isRunning ? Color.blue.opacity(0.35) : Color.green.opacity(0.35),
+                        lineWidth: 0.5)
         )
     }
 
