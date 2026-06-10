@@ -1,42 +1,40 @@
 import SwiftUI
 
-/// Floating window showing live progress for all Combine & Render jobs.
-struct CombineWindow: View {
+/// The "Combining" section of the Media File Operations window.
+///
+/// Formerly the standalone "Combine & Render" window body. The window
+/// chrome (header, empty state, footer with Pause All / Stop All)
+/// moved to `MediaFileOperationsWindow`; this section keeps the
+/// combine queue's job rows EXACTLY as they were — same
+/// `CombineJobStatus` model from DashboardState, same per-job
+/// pause/resume via `model.toggleJobPause`, same phase rendering.
+/// Phase 1 of the operations window deliberately leaves combine on its
+/// own machinery and renders it as a sibling section beside the
+/// new-style `MediaFileOperationJob` rows.
+struct CombineJobsSection: View {
     @EnvironmentObject var model: VideoScanModel
     @EnvironmentObject var dashboard: DashboardState
     @State private var selectedJob: UUID?
 
     var body: some View {
-        VStack(spacing: 0) {
-            headerBar
-            Divider()
-            if dashboard.combineJobs.isEmpty && !model.isCombining {
-                emptyState
-            } else {
-                jobList
-            }
-            Divider()
-            footerBar
-        }
-        .frame(minWidth: 640, idealWidth: 720, minHeight: 340, idealHeight: 520)
-        .onAppear {
-            DispatchQueue.main.async {
-                for window in NSApp.windows where window.title.contains("Combine") {
-                    window.level = .floating
-                    window.isMovableByWindowBackground = true
-                }
+        VStack(spacing: 1) {
+            sectionHeader
+            ForEach(dashboard.combineJobs) { job in
+                jobRow(job)
+                    .onTapGesture {
+                        selectedJob = (selectedJob == job.id) ? nil : job.id
+                    }
             }
         }
     }
 
-    // MARK: - Header
+    // MARK: - Section header (was the window's header bar)
 
-    private var headerBar: some View {
+    private var sectionHeader: some View {
         HStack {
-            Image(systemName: "film.stack")
-                .foregroundColor(.blue)
-            Text("Combine & Render")
-                .font(.headline)
+            Text("Combining")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(.secondary)
 
             Spacer()
 
@@ -44,13 +42,13 @@ struct CombineWindow: View {
                 overallProgress
             } else if dashboard.combineTotal > 0 {
                 Text("Complete")
-                    .font(.subheadline.weight(.medium))
+                    .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.green)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial)
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 2)
     }
 
     private var overallProgress: some View {
@@ -68,46 +66,15 @@ struct CombineWindow: View {
         }
     }
 
-    // MARK: - Empty State
-
-    private var emptyState: some View {
-        VStack(spacing: 8) {
-            Spacer()
-            Image(systemName: "film.stack")
-                .font(.system(size: 36))
-                .foregroundColor(.secondary.opacity(0.4))
-            Text("No combine jobs running")
-                .font(.subheadline)
-                .foregroundColor(.secondary)
-            Text("Start a combine from Catalog → Correlate → Combine")
-                .font(.caption)
-                .foregroundColor(.secondary.opacity(0.7))
-            Spacer()
-        }
-        .frame(maxWidth: .infinity)
-    }
-
-    // MARK: - Job List
-
-    private var jobList: some View {
-        ScrollView {
-            LazyVStack(spacing: 1) {
-                ForEach(dashboard.combineJobs) { job in
-                    jobRow(job)
-                        .onTapGesture {
-                            selectedJob = (selectedJob == job.id) ? nil : job.id
-                        }
-                }
-            }
-            .padding(.vertical, 4)
-        }
-    }
+    // MARK: - Job rows (unchanged combine internals)
 
     private func jobRow(_ job: CombineJobStatus) -> some View {
         let isSelected = selectedJob == job.id
 
         return VStack(spacing: 0) {
             HStack(spacing: 10) {
+                MediaFileOperationBadge(kind: .combine)
+
                 phaseIcon(job.phase)
                     .frame(width: 22)
 
@@ -288,60 +255,6 @@ struct CombineWindow: View {
                   : (isActivePhase(job.phase)
                      ? Color.accentColor.opacity(0.04)
                      : Color.clear))
-    }
-
-    // MARK: - Footer
-
-    private var footerBar: some View {
-        HStack {
-            if dashboard.combineSucceeded > 0 {
-                HStack(spacing: 3) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.green)
-                        .font(.system(size: 13))
-                    Text("\(dashboard.combineSucceeded) verified")
-                        .font(.system(size: 13, design: .monospaced))
-                        .foregroundColor(.green)
-                }
-            }
-            if dashboard.combineSkipped > 0 {
-                HStack(spacing: 3) {
-                    Image(systemName: "arrow.right.circle")
-                        .foregroundColor(.secondary)
-                        .font(.system(size: 13))
-                    Text("\(dashboard.combineSkipped) already combined")
-                        .font(.system(size: 13, design: .monospaced))
-                        .foregroundColor(.secondary)
-                }
-            }
-            if dashboard.combineFailed > 0 {
-                HStack(spacing: 3) {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.red)
-                        .font(.system(size: 13))
-                    Text("\(dashboard.combineFailed) failed")
-                        .font(.system(size: 13, design: .monospaced))
-                        .foregroundColor(.red)
-                }
-            }
-
-            Spacer()
-
-            if model.isCombining {
-                Button(model.isCombinePaused ? "Resume All" : "Pause All") {
-                    if model.isCombinePaused {
-                        model.resumeCombine()
-                    } else {
-                        model.pauseCombine()
-                    }
-                }
-                Button("Stop All") { model.stopCombine() }
-                    .foregroundColor(.red)
-            }
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(.ultraThinMaterial)
     }
 
     // MARK: - Helpers
