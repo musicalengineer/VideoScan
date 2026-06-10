@@ -519,6 +519,11 @@ struct CatalogContent: View {
     @StateObject private var frameRipper = FrameRipper()
     @State private var showFrameRipperSheet = false
 
+    /// "Compare These Two Files…" quick check. Non-nil presents the
+    /// sheet via `.sheet(item:)`; the comparison Task is owned by the
+    /// sheet's `.task` and is cancelled automatically on dismiss.
+    @State private var pairComparePayload: PairComparePayload?
+
     private var selectedRecord: VideoRecord? {
         guard let id = selectedIDs.first else { return nil }
         return records.first(where: { $0.id == id })
@@ -752,6 +757,12 @@ struct CatalogContent: View {
         .sheet(isPresented: $showFrameRipperSheet) {
             FrameRipperSheet(ripper: frameRipper,
                              isPresented: $showFrameRipperSheet)
+        }
+        // Quick two-file check — `.sheet(item:)` so a single
+        // Identifiable payload drives present/dismiss (avoids the
+        // chained-isPresented sheet race this project has hit before).
+        .sheet(item: $pairComparePayload) { payload in
+            MediaPairCompareSheet(payload: payload)
         }
     }
 
@@ -1229,6 +1240,27 @@ struct CatalogContent: View {
                                         }
                                     }
                                 }
+                            }
+
+                            // Quick two-file check — Rick spots two rows of
+                            // the same size that look suspiciously similar
+                            // and wants a direct answer: exact copies, same
+                            // movie in a different wrapper, or genuinely
+                            // different? Shown only when exactly two rows
+                            // are selected. Distinct from the volume-level
+                            // Compare & Rescue feature.
+                            if selectedRecs.count == 2,
+                               let fileA = selectedRecs.first,
+                               let fileB = selectedRecs.last {
+                                Divider()
+                                Button("Compare These Two Files…") {
+                                    pairComparePayload = PairComparePayload(
+                                        recordA: fileA, recordB: fileB)
+                                }
+                                .disabled(!VolumeReachability.isReachable(path: fileA.fullPath)
+                                          || !VolumeReachability.isReachable(path: fileB.fullPath))
+                                .help("Check whether these two files are exact copies, the same movie in a different wrapper, or genuinely different.")
+                                .accessibilityIdentifier("catalog.row.compareTwoFiles")
                             }
 
                             if rec.streamType.needsCorrelation {
