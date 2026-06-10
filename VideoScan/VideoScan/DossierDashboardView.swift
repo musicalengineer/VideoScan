@@ -1,5 +1,12 @@
 import SwiftUI
 import Combine
+import os
+
+/// File-scope (not a View static) so the detached fleet-load task can
+/// log without touching main-actor-isolated state. Per-tick duration
+/// lands at .debug so the off-main fix is verifiable from `log stream`.
+private let dashboardLog = Logger(subsystem: "Rick-Breen.VideoScan",
+                                  category: "dossierDashboard")
 
 // MARK: - Dossier Dashboard
 //
@@ -34,6 +41,16 @@ struct DossierDashboardView: View {
     /// Per-worker JSONL stats. Refreshed by the timer below; never
     /// blocking the main thread on its read.
     @State private var fleet: FleetStats = .empty
+
+    /// Per-file (mtime, size) → parsed-result cache from the previous
+    /// tick. Workers append slowly relative to the 5s tick, so most
+    /// ticks see unchanged files and skip the read entirely.
+    @State private var fleetCache: [WorkerHost: FleetStats.CachedEntry] = [:]
+
+    /// Re-entrancy guard for the async fleet load. If Crucial2TB is
+    /// asleep or an SMB hiccup makes one tick slow, we skip subsequent
+    /// ticks instead of stacking up loads.
+    @State private var refreshInFlight = false
 
     /// Sliding-window rate of records added to the catalog. Driven
     /// by the same refresh tick as the fleet stats — each 5s tick
@@ -188,12 +205,35 @@ struct DossierDashboardView: View {
 
     // MARK: - Fleet refresh
 
+    // The load runs OFF the main actor — the JSONL deltas have grown to
+    // tens of MB and the old synchronous read+split was costing ~2s of
+    // contiguous main-thread work per 5s tick (measured 2026-06-10,
+    // 64% of main-thread samples). C++ analogy: this is "post the work
+    // to a background thread pool, marshal a value-type snapshot back
+    // to the UI thread" — Task.detached is the pool submit, MainActor.run
+    // is the dispatch-to-UI-thread.
     private func refreshFleet() {
+        guard !refreshInFlight else {
+            dashboardLog.debug("fleet refresh: previous tick still in flight — skipping")
+            return
+        }
+        refreshInFlight = true
         let dir = URL(fileURLWithPath: "/Volumes/Crucial2TB/dossier-deltas")
-        fleet = FleetStats.load(from: dir)
-        // Sample the dossier count alongside the fleet read so the
-        // rate display moves on the same cadence as the dial.
-        rate.record(count: coverage.dossiered, at: Date())
+        let cacheIn = fleetCache
+        Task.detached(priority: .utility) {
+            let t0 = Date()
+            let (stats, cacheOut) = FleetStats.load(from: dir, cache: cacheIn)
+            let ms = Date().timeIntervalSince(t0) * 1000
+            dashboardLog.debug("fleet refresh tick: \(ms, format: .fixed(precision: 1)) ms (off-main)")
+            await MainActor.run {
+                fleet = stats
+                fleetCache = cacheOut
+                // Sample the dossier count alongside the fleet read so the
+                // rate display moves on the same cadence as the dial.
+                rate.record(count: coverage.dossiered, at: Date())
+                refreshInFlight = false
+            }
+        }
     }
 }
 
@@ -446,6 +486,17 @@ struct FleetStats {
                                     fileBytes: 0, sentinel: nil)
     }
 
+    /// Parsed result from a previous tick, keyed by the file's stat()
+    /// identity (mtime + size). If neither changed, the bytes didn't
+    /// either — workers only ever append — so the previous line count
+    /// and sentinel are still valid and we skip the read entirely.
+    struct CachedEntry: Equatable {
+        let mtime: Date?
+        let size: Int64
+        let recordCount: Int
+        let sentinel: HostStat.Sentinel?
+    }
+
     var byHost: [WorkerHost: HostStat]
 
     subscript(host: WorkerHost) -> HostStat {
@@ -458,12 +509,30 @@ struct FleetStats {
 
     static let empty = FleetStats(byHost: [:])
 
+    /// Convenience overload — uncached load. Kept for existing callers
+    /// and tests; the dashboard tick uses the cached variant below.
+    static func load(from dir: URL) -> FleetStats {
+        load(from: dir, cache: [:]).stats
+    }
+
     /// Load per-host stats from JSONL files in `dir`. Each file's line
     /// count is the worker's record count; the file's mtime is its
-    /// last-write time. Doesn't parse the JSONL contents — line count
-    /// alone is enough for the dashboard.
-    static func load(from dir: URL) -> FleetStats {
+    /// last-write time.
+    ///
+    /// Cost discipline (these files are now ~tens of MB — the old
+    /// "kilobytes-to-low-MB" assumption is dead):
+    ///   - stat() every tick (cheap)
+    ///   - if (mtime, size) match the previous tick's cache → reuse the
+    ///     parsed result, zero reads
+    ///   - if changed → count 0x0A over raw bytes in chunked reads
+    ///     (never via String — grapheme-aware splitting of a 28 MB file
+    ///     was the measured beachball), and parse the sentinel from a
+    ///     small FileHandle tail read instead of the whole file.
+    static func load(from dir: URL,
+                     cache: [WorkerHost: CachedEntry])
+        -> (stats: FleetStats, cache: [WorkerHost: CachedEntry]) {
         var out: [WorkerHost: HostStat] = [:]
+        var newCache: [WorkerHost: CachedEntry] = [:]
         let fm = FileManager.default
         for host in WorkerHost.allCases {
             let file = dir.appendingPathComponent(host.jsonlBasename)
@@ -474,56 +543,125 @@ struct FleetStats {
             let attrs = (try? fm.attributesOfItem(atPath: file.path)) ?? [:]
             let mtime = attrs[FileAttributeKey.modificationDate] as? Date
             let size = (attrs[FileAttributeKey.size] as? NSNumber)?.int64Value ?? 0
-            // Line count via simple read. Files are kilobytes-to-low-MB;
-            // synchronous read is fine here. For files into the
-            // hundreds of MB we'd want a streamed line counter.
-            let count: Int
-            let data = try? Data(contentsOf: file)
-            if let data {
-                count = data.lazy.filter { $0 == 0x0A }.count  // count of \n
+
+            let recordCount: Int
+            let sentinel: HostStat.Sentinel?
+            if let hit = cache[host], hit.mtime == mtime, hit.size == size {
+                // Unchanged since last tick — no I/O beyond the stat.
+                recordCount = hit.recordCount
+                sentinel = hit.sentinel
             } else {
-                count = 0
+                let lineCount = Self.countNewlines(at: file)
+                // The `_status` sentinel, when present, is the file's
+                // LAST line (workers append it on clean exit). A small
+                // tail read finds it without touching the rest.
+                sentinel = Self.readTail(of: file)
+                    .flatMap(Self.lastLine(ofTail:))
+                    .flatMap(Self.parseSentinel(line:))
+                // Don't count the sentinel line as a record — it's not a delta.
+                recordCount = sentinel != nil ? max(0, lineCount - 1) : lineCount
             }
-            // Parse the most recent `_status` sentinel line, if any.
-            // Workers emit one when they exit cleanly from their paths
-            // file — its presence promotes the dashboard state from
-            // heuristic "done?" to factual "done".
-            let sentinel = Self.parseSentinel(data: data)
-            // Don't count the sentinel line as a record — it's not a delta.
-            let recordCount = sentinel != nil ? max(0, count - 1) : count
+            newCache[host] = CachedEntry(mtime: mtime, size: size,
+                                         recordCount: recordCount,
+                                         sentinel: sentinel)
             out[host] = HostStat(recordCount: recordCount,
                                  lastWrite: mtime,
                                  fileBytes: size,
                                  sentinel: sentinel)
         }
-        return FleetStats(byHost: out)
+        return (FleetStats(byHost: out), newCache)
     }
 
-    /// Scan a JSONL file's bytes for the most recent `_status` sentinel
-    /// line and decode it. Returns nil if no sentinel is present (which
-    /// is the steady state for a currently-running worker, or for a
-    /// worker that crashed before reaching clean exit).
-    fileprivate static func parseSentinel(data: Data?) -> HostStat.Sentinel? {
-        guard let data,
-              let text = String(data: data, encoding: .utf8) else { return nil }
-        // Walk lines back-to-front — sentinel will be last if present.
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
-        for line in lines.reversed() where line.contains("\"_status\"") {
-            guard let lineData = line.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
-                  let status = obj["_status"] as? String else { continue }
-            let exitDate = (obj["exitedAt"] as? String).flatMap {
-                ISO8601DateFormatter().date(from: $0)
-            }
-            return HostStat.Sentinel(
-                status: status,
-                processedOk: obj["processedOk"] as? Int ?? 0,
-                processedFailed: obj["processedFailed"] as? Int ?? 0,
-                targetsTotal: obj["targetsTotal"] as? Int ?? 0,
-                exitedAt: exitDate
-            )
+    // MARK: - Byte-level helpers (pure pieces are unit-tested)
+
+    /// How many bytes of file tail to read when hunting the sentinel.
+    /// Sentinel lines are a few hundred bytes; 4 KB is generous slack.
+    static let tailWindowBytes = 4096
+
+    /// Read up to `maxBytes` from the END of `url` via seek — never the
+    /// whole file. Returns nil if the file can't be opened/read.
+    static func readTail(of url: URL, maxBytes: Int = FleetStats.tailWindowBytes) -> Data? {
+        guard maxBytes > 0, let fh = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? fh.close() }
+        guard let end = try? fh.seekToEnd() else { return nil }
+        let offset = end > UInt64(maxBytes) ? end - UInt64(maxBytes) : 0
+        guard (try? fh.seek(toOffset: offset)) != nil else { return nil }
+        return (try? fh.readToEnd()) ?? Data()
+    }
+
+    /// Extract the last complete line from a tail-of-file byte window.
+    /// Pure function over Data so it's testable without I/O.
+    ///
+    /// Trailing newlines are stripped, then everything after the last
+    /// remaining 0x0A is the candidate line. Because 0x0A never occurs
+    /// inside a multi-byte UTF-8 sequence, any slice that starts right
+    /// after a newline is valid UTF-8 (if the file is). If the window
+    /// contains NO newline before the candidate (seek landed mid-line,
+    /// possibly mid-character), UTF-8 decoding may fail — we return nil
+    /// rather than a garbled partial line.
+    static func lastLine(ofTail tail: Data) -> String? {
+        var bytes = tail[...]
+        while bytes.last == 0x0A { bytes = bytes.dropLast() }
+        guard !bytes.isEmpty else { return nil }
+        let start: Data.Index
+        if let nl = bytes.lastIndex(of: 0x0A) {
+            start = bytes.index(after: nl)
+        } else {
+            start = bytes.startIndex
         }
-        return nil
+        return String(data: bytes[start...], encoding: .utf8)
+    }
+
+    /// Count 0x0A bytes in a Data chunk. Pure, raw-byte — deliberately
+    /// NOT String-based: Swift's Character is a grapheme cluster, so
+    /// String splitting walks Unicode segmentation over every byte.
+    /// (C++ analogy: this is memchr-in-a-loop, not std::getline.)
+    static func newlineCount(in data: Data) -> Int {
+        data.withUnsafeBytes { (buf: UnsafeRawBufferPointer) -> Int in
+            var n = 0
+            for byte in buf where byte == 0x0A { n += 1 }
+            return n
+        }
+    }
+
+    /// Streamed newline count over a file in `chunkSize` reads, each
+    /// inside an autoreleasepool so Foundation's transient buffers
+    /// don't accumulate (memory-pressure discipline for media-size files).
+    static func countNewlines(at url: URL, chunkSize: Int = 1 << 20) -> Int {
+        guard let fh = try? FileHandle(forReadingFrom: url) else { return 0 }
+        defer { try? fh.close() }
+        var total = 0
+        var done = false
+        while !done {
+            autoreleasepool {
+                guard let chunk = try? fh.read(upToCount: chunkSize), !chunk.isEmpty else {
+                    done = true
+                    return
+                }
+                total += newlineCount(in: chunk)
+            }
+        }
+        return total
+    }
+
+    /// Decode a single JSONL line as a `_status` sentinel. Returns nil
+    /// for ordinary delta lines (the steady state for a running worker)
+    /// or for truncated/partial lines that don't parse.
+    static func parseSentinel(line: String) -> HostStat.Sentinel? {
+        guard line.contains("\"_status\""),
+              let lineData = line.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+              let status = obj["_status"] as? String else { return nil }
+        let exitDate = (obj["exitedAt"] as? String).flatMap {
+            ISO8601DateFormatter().date(from: $0)
+        }
+        return HostStat.Sentinel(
+            status: status,
+            processedOk: obj["processedOk"] as? Int ?? 0,
+            processedFailed: obj["processedFailed"] as? Int ?? 0,
+            targetsTotal: obj["targetsTotal"] as? Int ?? 0,
+            exitedAt: exitDate
+        )
     }
 }
 
