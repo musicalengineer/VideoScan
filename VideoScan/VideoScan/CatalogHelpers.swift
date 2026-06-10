@@ -90,16 +90,22 @@ struct CatalogToolbar<Dashboard: View>: View {
         }
     }
 
-    /// Live match count for the catalog search bar. Routes through the
-    /// model's CatalogSearchIndex so the per-keystroke cost is just
-    /// `haystack.contains(token)` per record (no re-lowercasing or
-    /// re-concatenation). Uses the DEBOUNCED query so the badge doesn't
-    /// recompute on every character typed — only ~250ms after the user
-    /// pauses.
-    private var catalogSearchHitCount: Int {
-        guard !debouncedSearchText.isEmpty else { return 0 }
-        return model.searchIndex.count(records: model.records,
-                                       query: debouncedSearchText)
+    /// Memoized badge count for the catalog search bar. A @State cache,
+    /// NOT a computed property: this toolbar sits in a nested hosting
+    /// view whose constraint passes re-evaluate `body` constantly, and
+    /// post-dossier haystacks are multi-KB transcripts. Computing the
+    /// scan in `body` (twice — text + color) was 87% of main-thread
+    /// time in the 2026-06-10 beachball. Recomputed only when the
+    /// debounced query or the record set changes.
+    @State private var searchHitCount: Int = 0
+
+    private func recomputeSearchHitCount() {
+        guard !debouncedSearchText.isEmpty else {
+            searchHitCount = 0
+            return
+        }
+        searchHitCount = model.searchIndex.count(records: model.records,
+                                                 query: debouncedSearchText)
     }
 
     private var canCombine: Bool {
@@ -302,6 +308,12 @@ struct CatalogToolbar<Dashboard: View>: View {
                             }
                         }
                     }
+                    .onChange(of: debouncedSearchText) { _, _ in
+                        recomputeSearchHitCount()
+                    }
+                    .onChange(of: model.records.count) { _, _ in
+                        recomputeSearchHitCount()
+                    }
                 if !searchText.isEmpty {
                     Button(action: {
                         searchText = ""
@@ -318,16 +330,14 @@ struct CatalogToolbar<Dashboard: View>: View {
             .background(Color(NSColor.textBackgroundColor))
             .cornerRadius(6)
             // Match count badge — visible only while there's a query.
-            // Computes hits live against the full record set so the count
-            // reflects pre-filter results (i.e. before View-menu filters
-            // like Online/Has Family further narrow). Linear scan of 15k
-            // records per keystroke is milliseconds — no debounce needed.
-            // Rick 2026-06-08: surfaces the natural-language query power
-            // ("mark dan grampa" → 10 matches) immediately.
+            // Counts against the full record set so the badge reflects
+            // pre-filter results (i.e. before View-menu filters like
+            // Online/Has Family further narrow). Reads the memoized
+            // searchHitCount — never scan records inside body.
             if !searchText.isEmpty {
-                Text("\(catalogSearchHitCount) of \(model.records.count)")
+                Text("\(searchHitCount) of \(model.records.count)")
                     .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(catalogSearchHitCount == 0 ? .red : .secondary)
+                    .foregroundColor(searchHitCount == 0 ? .red : .secondary)
                     .help("Search hits across filename, people tags, captions, transcripts, and OCR text. Each whitespace-separated word must match somewhere on the record (AND). Year shorthand: 1990s · 199x.")
             }
 
