@@ -11,13 +11,14 @@
 // "volume root" is /private — see VolumeReachability.cacheKey) and a
 // known-mounted `/Volumes/X` if one is available.
 //
-// SWR update (2026-06-10): isReachable is now stale-while-revalidate — the
-// first query for an UNKNOWN volume returns an optimistic `true` and the
-// real (stat-based) answer lands via a background probe. Tests that assert
-// `false` for unmounted volumes therefore query → await the probe → re-query
-// (with a short retry loop, since parallel suites may invalidate the shared
-// cache between steps). The `true` assertions are unaffected: optimistic
-// default and probed answer agree.
+// SWR update (2026-06-10): isReachable is stale-while-revalidate. Unknown
+// /Volumes paths are answered HONESTLY from the kernel mount table on first
+// query (regression fix — the first SWR cut answered optimistic-true and
+// startup showed every volume as connected); unknown non-/Volumes paths
+// stay optimistic-true until the background probe lands. Tests that assert
+// `false` for probed answers query → await the probe → re-query (with a
+// short retry loop, since parallel suites may invalidate the shared cache
+// between steps).
 
 import Testing
 import Foundation
@@ -84,18 +85,49 @@ struct VolumeReachabilityMountStateTests {
         #expect(settledReachability(path: bogus) == false)
     }
 
-    @Test func unknownVolumeFirstQueryIsOptimisticallyTrue() {
-        // Pin the SWR contract: an unknown volume's FIRST answer is `true`
-        // (UI attempts the file op and fails gracefully, exactly as it did
-        // when records pointed at a path that vanished mid-render) — the
-        // honest answer arrives via the background probe, asserted above.
-        // NOTE: not 100% airtight under parallel suites (another suite could
-        // in principle have probed this unique path — impossible since the
-        // UUID is fresh — or invalidated the cache, which only re-arms the
-        // optimistic default this test expects).
+    @Test func unknownVolumeFirstQueryIsHonestFromMountTable() {
+        // Regression pin (2026-06-10): the first SWR version answered
+        // unknown /Volumes paths with an optimistic `true` and nothing
+        // repainted when the probe corrected it — at app start every volume
+        // ever scanned showed as connected. The contract is now: an unknown
+        // /Volumes path is answered HONESTLY from the kernel mount table on
+        // the very first query, still without any disk I/O on the caller's
+        // thread. A fresh-UUID volume is definitionally not mounted → false
+        // immediately, no probe wait needed.
         let bogus = "/Volumes/__VideoScanTest_FreshUnknown_\(UUID().uuidString)"
+        #expect(VolumeReachability.isReachable(path: bogus) == false,
+                "Unknown /Volumes path must answer honestly (mount table) on first query")
+    }
+
+    @Test func unknownNonVolumesPathFirstQueryIsOptimisticallyTrue() {
+        // Non-/Volumes paths keep the optimistic-true first answer (internal
+        // disk; probe corrects in ms; mount table can't answer per-file).
+        let bogus = "/tmp/__VideoScanTest_FreshUnknown_\(UUID().uuidString)"
         #expect(VolumeReachability.isReachable(path: bogus) == true,
-                "Unknown volume must answer optimistically without blocking on a stat")
+                "Unknown internal path keeps the optimistic default")
+    }
+
+    // MARK: - Mount-table defaults (pure + syscall sanity)
+
+    @Test func defaultReachabilityUsesMountTableForVolumesKeys() {
+        let roots: Set<String> = ["/", "/Volumes/LaCie8TB", "/System/Volumes/Data"]
+        #expect(VolumeReachability.defaultReachability(
+            forKey: "/Volumes/LaCie8TB", mountedRoots: roots) == true)
+        #expect(VolumeReachability.defaultReachability(
+            forKey: "/Volumes/MyBook3Terabytes", mountedRoots: roots) == false)
+        // Non-/Volumes keys stay optimistic regardless of the table.
+        #expect(VolumeReachability.defaultReachability(
+            forKey: "/Users/rickb/Movies/x.mov", mountedRoots: roots) == true)
+        #expect(VolumeReachability.defaultReachability(
+            forKey: "/Users/rickb/Movies/x.mov", mountedRoots: []) == true)
+    }
+
+    @Test func kernelMountTableAlwaysContainsRoot() {
+        // getmntinfo(MNT_NOWAIT) sanity: "/" is always mounted. If this
+        // fails, the syscall wrapper is broken and every /Volumes default
+        // would read unmounted.
+        let roots = VolumeReachability.currentMountedRoots()
+        #expect(roots.contains("/"))
     }
 
     @Test func bugReproSubpathDoesNotPoisonVolumeBit() {

@@ -188,4 +188,49 @@ struct SWRProbeCacheTests {
         cache.awaitPendingProbes()
         #expect(counter.count == 1, "Cached nil is fresh — no re-probe within TTL")
     }
+
+    // MARK: - onChange (repaint hook — 2026-06-10 startup-reachability regression)
+
+    @Test func onChangeFiresOnFirstFillAndOnValueChangeOnly() {
+        // Script: first probe true, second probe true (no change), third false.
+        let probe = ScriptedProbe([true, true, false])
+        let changes = ChangeRecorder()
+        let cache = SWRProbeCache<Bool>(
+            label: "test.swr.onchange.\(UUID().uuidString)",
+            ttl: 0,   // every hit is immediately stale → each query re-probes
+            valuesEqual: { $0 == $1 },
+            onChange: { changes.record($0) },
+            probe: { probe.probe($0) }
+        )
+
+        // 1st query: miss → default served, probe fills (nil→true) → fires.
+        _ = cache.value(forKey: "/Volumes/X", missDefault: false)
+        cache.awaitPendingProbes()
+        #expect(changes.count == 1, "First fill must fire onChange (default may have lied)")
+
+        // 2nd query: stale → re-probe lands equal value (true→true) → silent.
+        _ = cache.value(forKey: "/Volumes/X", missDefault: false)
+        cache.awaitPendingProbes()
+        #expect(changes.count == 1, "Equal re-probe must NOT fire onChange")
+
+        // 3rd query: stale → re-probe lands different value (true→false) → fires.
+        _ = cache.value(forKey: "/Volumes/X", missDefault: false)
+        cache.awaitPendingProbes()
+        #expect(changes.count == 2, "Changed value must fire onChange")
+        #expect(changes.keys == ["/Volumes/X", "/Volumes/X"])
+    }
+}
+
+/// Thread-safe onChange recorder (fires on the cache's background queue).
+private final class ChangeRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private(set) var keys: [String] = []
+    func record(_ key: String) {
+        lock.lock(); defer { lock.unlock() }
+        keys.append(key)
+    }
+    var count: Int {
+        lock.lock(); defer { lock.unlock() }
+        return keys.count
+    }
 }
