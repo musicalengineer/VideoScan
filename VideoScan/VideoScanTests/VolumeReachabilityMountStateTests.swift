@@ -10,10 +10,31 @@
 // These tests use /tmp (always mounted, /tmp is on the boot volume so its
 // "volume root" is /private — see VolumeReachability.cacheKey) and a
 // known-mounted `/Volumes/X` if one is available.
+//
+// SWR update (2026-06-10): isReachable is now stale-while-revalidate — the
+// first query for an UNKNOWN volume returns an optimistic `true` and the
+// real (stat-based) answer lands via a background probe. Tests that assert
+// `false` for unmounted volumes therefore query → await the probe → re-query
+// (with a short retry loop, since parallel suites may invalidate the shared
+// cache between steps). The `true` assertions are unaffected: optimistic
+// default and probed answer agree.
 
 import Testing
 import Foundation
 @testable import VideoScan
+
+/// Query until the background probe's answer is visible. Retries because
+/// another (parallel) suite may call invalidateCache() between our probe
+/// landing and our re-query — eviction re-arms the optimistic default.
+private func settledReachability(path: String, attempts: Int = 50) -> Bool {
+    var result = VolumeReachability.isReachable(path: path)   // kicks the probe
+    for _ in 0..<attempts {
+        VolumeReachability.awaitPendingProbesForTesting()
+        result = VolumeReachability.isReachable(path: path)
+        if result == false { break }   // bogus-path callers converge on false
+    }
+    return result
+}
 
 @Suite("VolumeReachability Mount-State Semantics")
 struct VolumeReachabilityMountStateTests {
@@ -52,16 +73,29 @@ struct VolumeReachabilityMountStateTests {
     }
 
     @Test func unmountedVolumeReturnsFalse() {
-        // Synthesise an obviously-unmounted volume path.
+        // Synthesise an obviously-unmounted volume path. With SWR the first
+        // answer is optimistic; the settled answer must be false.
         let bogus = "/Volumes/__VideoScanTest_DefinitelyNotMounted_\(UUID().uuidString)"
-        let result = VolumeReachability.isReachable(path: bogus)
-        #expect(result == false)
+        #expect(settledReachability(path: bogus) == false)
     }
 
     @Test func unmountedVolumeWithSubpathReturnsFalse() {
         let bogus = "/Volumes/__VideoScanTest_DefinitelyNotMounted_\(UUID().uuidString)/sub/dir/file.mov"
-        let result = VolumeReachability.isReachable(path: bogus)
-        #expect(result == false)
+        #expect(settledReachability(path: bogus) == false)
+    }
+
+    @Test func unknownVolumeFirstQueryIsOptimisticallyTrue() {
+        // Pin the SWR contract: an unknown volume's FIRST answer is `true`
+        // (UI attempts the file op and fails gracefully, exactly as it did
+        // when records pointed at a path that vanished mid-render) — the
+        // honest answer arrives via the background probe, asserted above.
+        // NOTE: not 100% airtight under parallel suites (another suite could
+        // in principle have probed this unique path — impossible since the
+        // UUID is fresh — or invalidated the cache, which only re-arms the
+        // optimistic default this test expects).
+        let bogus = "/Volumes/__VideoScanTest_FreshUnknown_\(UUID().uuidString)"
+        #expect(VolumeReachability.isReachable(path: bogus) == true,
+                "Unknown volume must answer optimistically without blocking on a stat")
     }
 
     @Test func bugReproSubpathDoesNotPoisonVolumeBit() {
@@ -92,8 +126,8 @@ struct VolumeReachabilityMountStateTests {
     }
 
     @Test func nonVolumesMissingPathReturnsFalse() {
-        let result = VolumeReachability.isReachable(path: "/tmp/__VideoScanTest_DoesNotExist_\(UUID().uuidString)")
-        #expect(result == false)
+        let bogus = "/tmp/__VideoScanTest_DoesNotExist_\(UUID().uuidString)"
+        #expect(settledReachability(path: bogus) == false)
     }
 
     @Test func emptyPathReturnsFalse() {

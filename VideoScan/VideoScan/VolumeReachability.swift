@@ -4,18 +4,121 @@
 //
 // VideoScanModel observes NSWorkspace mount/unmount notifications and refreshes
 // per-target reachability — see VideoScanModel.installVolumeMountObservers().
+//
+// Threading model (perf fix 2026-06-10 — stale-while-revalidate):
+// `isReachable(path:)` and `displayLabel(forPath:)` are called per-row from
+// SwiftUI cell builders on the MAIN thread. The old design did the
+// FileManager stat / URLResourceValues disk hit synchronously on a cache
+// miss — a sleeping HDD or stale SMB mount blocked the main thread for
+// seconds, recurring every TTL while scrolling (the file's own history
+// documents a 60 s beachball). The synchronous API now NEVER touches the
+// filesystem:
+//   - fresh cache hit  → return it
+//   - stale cache hit  → return the stale value, refresh in the background
+//   - unknown key      → return an optimistic default (reachable = true,
+//                        matching the UI's attempt-and-fail-gracefully
+//                        behavior), refresh in the background
+// Background probes are coalesced per key, so a hung SMB stat blocks one
+// utility-queue lane once — never the UI, and never twice concurrently.
 
 import Foundation
 import os.lock
 
+// MARK: - SWRProbeCache
+
+/// Generic stale-while-revalidate cache around a blocking probe.
+///
+/// `// In C++ terms: a thread-safe memoizer whose get() never blocks on the
+/// expensive recompute — it serves the last known value (or a default) and
+/// schedules the recompute on a worker pool.`
+///
+/// Semantics (the state machine the unit tests pin down):
+///   - `value(forKey:missDefault:)` with a FRESH entry → cached value, no probe.
+///   - With a STALE entry → cached value returned immediately; ONE background
+///     probe is scheduled (coalesced — concurrent calls for the same key while
+///     a probe is in flight do not stack probes).
+///   - With NO entry → `missDefault` returned immediately; probe scheduled.
+///   - `invalidateAll()` → next query for any key behaves like NO entry.
+///
+/// Instantiable (rather than static) so unit tests can construct their own
+/// engine with an injected probe closure and a tiny TTL — no real volumes,
+/// no shared static state to poison parallel test suites.
+final class SWRProbeCache<Value>: @unchecked Sendable {
+    private var entries: [String: (value: Value, expiresAt: CFAbsoluteTime)] = [:]
+    private var inFlight = Set<String>()
+    private let lock = OSAllocatedUnfairLock()
+    private let queue: DispatchQueue
+    private let ttl: CFAbsoluteTime
+    private let probe: (String) -> Value
+
+    /// - Parameters:
+    ///   - label: dispatch queue label (diagnostics).
+    ///   - ttl: seconds a probed value stays fresh.
+    ///   - probe: the blocking check. Runs on a background utility queue,
+    ///     NEVER on the caller's thread. May block for seconds (hung SMB) —
+    ///     the queue is concurrent so one hung volume doesn't starve others.
+    init(label: String, ttl: CFAbsoluteTime, probe: @escaping (String) -> Value) {
+        self.ttl = ttl
+        self.probe = probe
+        self.queue = DispatchQueue(label: label, qos: .utility, attributes: .concurrent)
+    }
+
+    /// Synchronous, non-blocking lookup. Returns the cached value (stale OK)
+    /// or `missDefault` for unknown keys. Schedules a coalesced background
+    /// refresh when the entry is missing or expired.
+    func value(forKey key: String, missDefault: Value) -> Value {
+        let now = CFAbsoluteTimeGetCurrent()
+        let snapshot: (value: Value?, needsRefresh: Bool) = lock.withLockUnchecked {
+            guard let hit = entries[key] else { return (nil, true) }
+            return (hit.value, hit.expiresAt <= now)
+        }
+        if snapshot.needsRefresh {
+            scheduleRefresh(forKey: key)
+        }
+        // `.some(probedValue)` beats the default even when Value is itself
+        // an Optional and the probed value is nil — a *failed* probe result
+        // is still a cached fact, distinct from "never probed".
+        return snapshot.value ?? missDefault
+    }
+
+    /// Drop all entries. Next query per key returns `missDefault` and
+    /// re-probes. (In-flight probes still land; they just repopulate.)
+    func invalidateAll() {
+        lock.withLockUnchecked { entries.removeAll() }
+    }
+
+    /// Test seam: block until every in-flight probe has landed. A barrier
+    /// on the concurrent probe queue — safe to call from tests; never used
+    /// in production paths.
+    func awaitPendingProbes() {
+        queue.sync(flags: .barrier) {}
+    }
+
+    private func scheduleRefresh(forKey key: String) {
+        // Coalesce: only the first caller per key starts a probe; everyone
+        // else rides on it.
+        let shouldStart = lock.withLockUnchecked { inFlight.insert(key).inserted }
+        guard shouldStart else { return }
+        queue.async { [self] in
+            let probed = probe(key)            // may block — background only
+            let expires = CFAbsoluteTimeGetCurrent() + ttl
+            lock.withLockUnchecked {
+                entries[key] = (probed, expires)
+                _ = inFlight.remove(key)
+            }
+        }
+    }
+}
+
 enum VolumeReachability {
-    // MARK: - Per-volume reachability cache (issue #87)
+    // MARK: - Per-volume reachability cache (issue #87 + SWR fix 2026-06-10)
     //
     // The catalog Table renders one row per file, and each row's cell builder
     // calls `isReachable(path:)` synchronously inside the layout closure. With
     // a slow / sleeping / network-mounted volume, FileManager.fileExists() can
     // block the main thread for many seconds — observed beachball up to 60s
-    // with 3-4 Person Finder scans driving frequent table redraws.
+    // with 3-4 Person Finder scans driving frequent table redraws. The probe
+    // therefore runs strictly in the background (see SWRProbeCache header).
     //
     // The semantics are deliberately "is the VOLUME mounted?", not "does this
     // specific file exist?":
@@ -31,17 +134,57 @@ enum VolumeReachability {
     //   - TTL is short (5s) so a yanked drive flips to offline quickly. Mount/
     //     unmount notifications still call `invalidateCache()` for immediate
     //     propagation.
+    //   - First-ever query for a volume returns an optimistic `true` while the
+    //     background probe fills the cache — matching the UI's existing
+    //     behavior of attempting the file op and failing gracefully. The
+    //     honest answer arrives within milliseconds for local paths.
     //
     // For paths NOT under /Volumes (internal disk, e.g. /Users/rickb/...),
     // fall back to caching/stat'ing by full path — internal paths don't have
     // the multi-file-on-one-mount aggregation problem.
-    nonisolated(unsafe) private static var cache: [String: (reachable: Bool, expiresAt: CFAbsoluteTime)] = [:]
-    private static let cacheLock = OSAllocatedUnfairLock()
-    private static let cacheTTL: CFAbsoluteTime = 5.0
+    private static let reachabilityCache = SWRProbeCache<Bool>(
+        label: "Rick-Breen.VideoScan.volumeReachability.reachable",
+        ttl: 5.0,
+        probe: { statTarget in
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: statTarget, isDirectory: &isDir) {
+                return true
+            }
+            // checkResourceIsReachable handles a few cases fileExists doesn't,
+            // particularly bookmarked URLs and quick-existence checks on /Volumes.
+            return (try? URL(fileURLWithPath: statTarget).checkResourceIsReachable()) ?? false
+        }
+    )
+
+    /// Resolved (OS-reported) volume names, keyed like the reachability
+    /// cache. `URLResourceValues(forKeys: [.volumeNameKey])` is a disk hit —
+    /// it was being paid PER RENDER via `displayLabel(forPath:)` in the
+    /// catalog's Volume column. Names effectively never change while mounted,
+    /// so the TTL is long; mount/unmount invalidation handles renames-on-
+    /// remount. Value is `String?`: nil means "probe ran and failed"
+    /// (offline volume) — callers fall back to the path-string heuristic.
+    private static let volumeNameCache = SWRProbeCache<String?>(
+        label: "Rick-Breen.VideoScan.volumeReachability.volumeName",
+        ttl: 60.0,
+        probe: { key in
+            guard let vals = try? URL(fileURLWithPath: key).resourceValues(forKeys: [.volumeNameKey]),
+                  let name = vals.volumeName, !name.isEmpty else { return nil }
+            return name
+        }
+    )
 
     /// Drop all cached entries. Call after volume mount/unmount notifications.
     static func invalidateCache() {
-        cacheLock.withLock { cache.removeAll() }
+        reachabilityCache.invalidateAll()
+        volumeNameCache.invalidateAll()
+    }
+
+    /// Test seam: block until all in-flight background probes (reachability
+    /// AND volume-name) have landed, so tests can assert post-refresh state
+    /// deterministically.
+    internal static func awaitPendingProbesForTesting() {
+        reachabilityCache.awaitPendingProbes()
+        volumeNameCache.awaitPendingProbes()
     }
 
     /// True if the volume containing `path` is currently mounted. For paths
@@ -50,38 +193,18 @@ enum VolumeReachability {
     /// (not under /Volumes) it falls back to a per-path existence check, which
     /// is the right answer when there's no separable "volume" to ask about.
     ///
-    /// Backed by a 5-second cache (see comment on `cache` above). First call
-    /// for a volume pays the stat cost; repeats within the TTL return instantly.
+    /// NEVER touches the filesystem on the caller's thread — see the
+    /// stale-while-revalidate notes on `reachabilityCache`. Answers may be up
+    /// to TTL+probe-time stale; for an unknown volume the first answer is an
+    /// optimistic `true`.
     ///
     /// Note: if you need "does this specific file exist?", use
     /// `FileManager.default.fileExists(atPath:)` directly — that's a different
     /// question from this one.
     static func isReachable(path: String) -> Bool {
         guard !path.isEmpty else { return false }
-
         let key = cacheKey(forPath: path)
-        let now = CFAbsoluteTimeGetCurrent()
-        if let hit = cacheLock.withLock({ cache[key] }), hit.expiresAt > now {
-            return hit.reachable
-        }
-
-        // Cache miss — stat the right target. For /Volumes paths, stat the
-        // volume root; for everything else, stat the original path.
-        // `key` already IS the volume root for /Volumes paths, so we can
-        // reuse it as the stat target.
-        let statTarget = key
-        var isDir: ObjCBool = false
-        let exists = FileManager.default.fileExists(atPath: statTarget, isDirectory: &isDir)
-        let reachable: Bool
-        if exists {
-            reachable = true
-        } else {
-            // checkResourceIsReachable handles a few cases fileExists doesn't,
-            // particularly bookmarked URLs and quick-existence checks on /Volumes.
-            reachable = (try? URL(fileURLWithPath: statTarget).checkResourceIsReachable()) ?? false
-        }
-        cacheLock.withLock { cache[key] = (reachable, now + cacheTTL) }
-        return reachable
+        return reachabilityCache.value(forKey: key, missDefault: true)
     }
 
     /// Cache key (and, for /Volumes paths, the stat target) for `isReachable`.
@@ -245,13 +368,16 @@ enum VolumeReachability {
 
     /// Volume name from URLResourceValues when available, with fallback to
     /// the path-string heuristic. Used by `displayLabel(forPath:)`.
+    ///
+    /// Cached stale-while-revalidate (see `volumeNameCache`) — this used to
+    /// hit the disk per render via `displayLabel`, which beachballed on
+    /// sleeping HDDs exactly like `isReachable` did. Unknown or
+    /// unresolvable volumes use the path heuristic until/unless the
+    /// background probe produces an OS name.
     private static func resolvedVolumeName(forPath path: String) -> String {
         guard !path.isEmpty else { return "" }
-        let url = URL(fileURLWithPath: path)
-        if let vals = try? url.resourceValues(forKeys: [.volumeNameKey]),
-           let name = vals.volumeName, !name.isEmpty {
-            return name
-        }
-        return volumeName(forPath: path)
+        let key = cacheKey(forPath: path)
+        let resolved = volumeNameCache.value(forKey: key, missDefault: nil)
+        return resolved ?? volumeName(forPath: path)
     }
 }
