@@ -27,6 +27,7 @@ extension VideoScanModel {
     @MainActor
     func handleVolumeMounted(at volumeURL: URL?) {
         VolumeReachability.invalidateCache()
+        VolumeStatsCache.invalidate()   // volume-size memo (preview pane)
         refreshTargetReachability()
         if let url = volumeURL {
             let volumeRoot = url.path
@@ -67,6 +68,7 @@ extension VideoScanModel {
                 // Same cache invalidation as the mount handler — a yanked
                 // drive needs to flip to offline immediately, not after TTL.
                 VolumeReachability.invalidateCache()
+                VolumeStatsCache.invalidate()
                 self?.refreshTargetReachability()
                 self?.notifyTargetsChanged()
             }
