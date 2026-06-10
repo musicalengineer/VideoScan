@@ -236,6 +236,12 @@ struct CatalogView: View {
     /// thread, racing NSTableView's selection visuals and producing
     /// the "highlight sometimes appears, sometimes doesn't" lag.
     @State private var volumeAggregateCache: [UUID: VolumeAggregate] = [:]
+    /// Memoized toolbar badge counts (video-only / audio-only). The
+    /// toolbar used to run two full `records.filter{}.count` passes per
+    /// body re-eval (~54K iterations per arrow-key step). Recomputed in
+    /// recomputeVolumeAggregates(), which is already wired to every
+    /// records-change trigger — same pattern as volumeAggregateCache.
+    @State private var streamTypeCounts = CatalogStreamTypeCounts()
     /// Sort order for the Scan Volumes table. Defaults to volume-name
     /// ascending, which matches the historical implicit ordering. Bound
     /// to the Table via `Table(_:selection:sortOrder:)` so column-header
@@ -277,8 +283,8 @@ struct CatalogView: View {
                 isAnalyzingDuplicates: model.isAnalyzingDuplicates,
                 correlateStatus: model.correlateStatus,
                 duplicateStatus: model.duplicateStatus,
-                videoOnlyCount: model.records.filter { $0.streamType == .videoOnly }.count,
-                audioOnlyCount: model.records.filter { $0.streamType == .audioOnly }.count,
+                videoOnlyCount: streamTypeCounts.videoOnly,
+                audioOnlyCount: streamTypeCounts.audioOnly,
                 hasRecords: !model.records.isEmpty,
                 hasCorrelatedPairs: !model.correlatedPairs.isEmpty,
                 outputCSVPath: model.outputCSVPath,
@@ -364,19 +370,22 @@ struct CatalogView: View {
                 showInspector: $showInspector,
                 onSort: { model.records.sort(using: $0) },
                 onSelect: { id in
-                    if let rec = model.records.first(where: { $0.id == id }),
+                    // record(forID:) is the O(1) index lookup — this fires
+                    // on EVERY arrow-key step, so no linear scans here.
+                    if let id, let rec = model.record(forID: id),
                        rec.streamType == .videoOnly || rec.streamType == .videoAndAudio {
-                        model.generateThumbnail(for: rec)
+                        // Debounced (200 ms): holding an arrow key no longer
+                        // opens one media file per traversed row. Cache hits
+                        // still swap instantly inside the model.
+                        model.requestThumbnailDebounced(for: rec)
                     } else {
-                        model.previewImage = nil
-                        model.previewFilename = ""
-                        model.previewOfflineVolumeName = nil
+                        // clearPreview also cancels any pending debounce so
+                        // a stale generation can't repopulate the pane.
+                        model.clearPreview()
                     }
                 },
                 onClearPreview: {
-                    model.previewImage = nil
-                    model.previewFilename = ""
-                    model.previewOfflineVolumeName = nil
+                    model.clearPreview()
                 },
                 onCombinePair: { video, audio in
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
@@ -405,9 +414,10 @@ struct CatalogView: View {
                 }
             )
             .onChange(of: selectedIDs) {
-                // Update volume highlight when table selection changes
+                // Update volume highlight when table selection changes.
+                // O(1) index lookup — runs per arrow-key step.
                 if let id = selectedIDs.first,
-                   let rec = model.records.first(where: { $0.id == id }) {
+                   let rec = model.record(forID: id) {
                     let path = rec.fullPath
                     highlightedTargetPath = model.scanTargets
                         .first(where: { !$0.searchPath.isEmpty && path.hasPrefix($0.searchPath) })?
@@ -427,6 +437,16 @@ struct CatalogView: View {
             }
             .onChange(of: selectedVolumeIDs) {
                 if !selectedVolumeIDs.isEmpty { filterByIDs = []; focusMatchScore = nil; model.focusedMediaIDs = [] }
+                // Part 3 (perf batch 2026-06-10): prewarm the thumbnail
+                // cache for the clicked volume's rows in the background.
+                startThumbnailPrecache()
+            }
+            // A scan competes for the same disks — stop any prewarm the
+            // moment one starts. (Prewarm resumes on the next volume click.)
+            .onChange(of: model.isScanning) {
+                if model.isScanning {
+                    model.thumbnailPrecacher.cancel(reason: "scan started")
+                }
             }
                 }  // end bottom VStack
             }  // end VerticalSplitView
@@ -619,11 +639,65 @@ struct CatalogView: View {
         focusMatchScore = nil
         selectedIDs = ids
         model.focusedMediaIDs = model.focusSet(for: id)
-        // Generate thumbnail
-        if let rec = model.records.first(where: { $0.id == id }),
+        // Generate thumbnail — deliberate one-shot navigation, so the
+        // immediate (non-debounced) path is correct here.
+        if let rec = model.record(forID: id),
            rec.streamType == .videoOnly || rec.streamType == .videoAndAudio {
             model.generateThumbnail(for: rec)
         }
+    }
+
+    // MARK: - Thumbnail Prewarm (Part 3, perf batch 2026-06-10)
+
+    /// Kick a background thumbnail prewarm for the currently selected
+    /// volume(s). Candidate building is the pure
+    /// `ThumbnailPrecachePlanner.orderedCandidates` (dossier-complete
+    /// rows first, then current table-sort order; cached/unreachable
+    /// rows excluded). Empty selection or an active scan cancels instead.
+    private func startThumbnailPrecache() {
+        let targets = selectedVolumeIDs.compactMap { target(for: $0) }
+            .filter { !$0.searchPath.isEmpty }
+        guard !targets.isEmpty, !model.isScanning else {
+            model.thumbnailPrecacher.cancel(reason: targets.isEmpty
+                ? "volume selection cleared"
+                : "scan in progress")
+            return
+        }
+
+        let prefixes = targets.map(\.searchPath)
+        let volumeRecords = model.records.filter { rec in
+            prefixes.contains(where: { rec.fullPath.hasPrefix($0) })
+        }
+
+        let cache = model.thumbnailCache
+        let candidates = ThumbnailPrecachePlanner.orderedCandidates(
+            records: volumeRecords,
+            sortOrder: sortOrder,
+            isCached: { cache.object(forKey: $0 as NSString) != nil },
+            // Non-blocking since the SWR fix in 109cc36 — safe per record.
+            isReachable: { VolumeReachability.isReachable(path: $0) }
+        )
+
+        // Per-disk pacing (HDD=1, SSD=4, internal=8) from the target's
+        // mediaTech classification; multi-volume selections take the most
+        // conservative bound so a lone HDD in the set isn't hammered.
+        let bound = targets.map { t in
+            ThumbnailPrecachePlanner.concurrencyBound(
+                mediaTech: t.mediaTech,
+                isInternalPath: !t.searchPath.hasPrefix("/Volumes/")
+            )
+        }.min() ?? 4
+
+        let label = targets
+            .map { VolumeReachability.displayLabel(forPath: $0.searchPath) }
+            .joined(separator: ", ")
+
+        model.thumbnailPrecacher.start(
+            volumeLabel: label,
+            candidates: candidates,
+            concurrency: bound,
+            model: model
+        )
     }
 
     private func restoreFocusedMedia() {
@@ -958,6 +1032,9 @@ struct CatalogView: View {
     /// counted those records on the source volume even after migration
     /// — so we preserve the double-count.
     private func recomputeVolumeAggregates() {
+        // Toolbar badge counts ride the same triggers — one extra O(n)
+        // pass here instead of two per render.
+        streamTypeCounts = CatalogStreamTypeCounts.compute(model.records)
         let targets = model.scanTargets
         guard !targets.isEmpty else {
             volumeAggregateCache = [:]

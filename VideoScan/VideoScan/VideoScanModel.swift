@@ -185,7 +185,38 @@ final class VideoScanModel: ObservableObject {
 
     /// Thumbnail cache — keyed by fullPath, avoids regenerating from video file on re-click.
     /// Internal so VideoScanModel+Thumbnail.generateThumbnail can read/write it.
-    let thumbnailCache = NSCache<NSString, NSImage>()
+    /// Byte-cost-limited (8 GB — see ThumbnailCachePolicy) so the volume-click
+    /// prewarm can fill it aggressively without unbounded growth; NSCache also
+    /// evicts under system memory pressure, and the .memoryPressureAutoPause
+    /// observer in init clears it outright when scans hit the RAM floor.
+    let thumbnailCache: NSCache<NSString, NSImage> = VideoScanModel.makeThumbnailCache()
+
+    /// Pending debounced thumbnail generation (see requestThumbnailDebounced
+    /// in VideoScanModel+Thumbnail). Cancelled and replaced on every
+    /// selection step; only the row the user rests on pays for generation.
+    var thumbnailDebounceTask: Task<Void, Never>?
+
+    /// fullPath of the most recent preview request. Guards against a slow,
+    /// stale generation completing AFTER a newer selection and clobbering
+    /// its preview. Set by requestThumbnailDebounced/generateThumbnail.
+    var previewRequestPath: String?
+
+    /// Volume-click thumbnail prewarmer (Part 3 of the 2026-06-10 perf
+    /// batch). Owned here so the catalog view and scan lifecycle share one
+    /// instance — a new volume selection or a scan start cancels the run.
+    let thumbnailPrecacher = ThumbnailPrecacher()
+
+    /// O(1) id → record lookup over `records`. Lazily rebuilt when the
+    /// array's count changes; see RecordIDIndex (CatalogPerfMemo.swift)
+    /// for the staleness contract. Private — go through record(forID:).
+    private let recordIndex = RecordIDIndex()
+
+    /// Fast selected-record resolution for views. Replaces the
+    /// `records.first(where: { $0.id == id })` linear scans that ran
+    /// several times per arrow-key step.
+    func record(forID id: UUID) -> VideoRecord? {
+        recordIndex.record(forID: id, in: records)
+    }
 
     /// Drop any cached thumbnail under `path`. Called from the rename path
     /// (VideoScanModel+Rename) so a renamed record doesn't leak a stale
@@ -335,6 +366,20 @@ final class VideoScanModel: ObservableObject {
             self?.saveCatalogDebounced()
             self?.objectWillChange.send()
         }
+        // When scans hit the RAM floor (MemoryPressureMonitor auto-pause),
+        // drop the thumbnail cache wholesale — it's pure derived data and
+        // the cheapest several GB we can hand back. NSCache would shed
+        // entries on its own eventually; this makes it immediate. Also
+        // stop any in-flight prewarm so it doesn't refill what we just
+        // freed.
+        NotificationCenter.default.addObserver(
+            forName: .memoryPressureAutoPause,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.thumbnailCache.removeAllObjects()
+            self?.thumbnailPrecacher.cancel(reason: "memory pressure")
+        }
         restoreScanTargets()
         // Restore previously-scanned records so the user can browse the
         // catalog even when source volumes are offline.
@@ -389,6 +434,9 @@ final class VideoScanModel: ObservableObject {
         // assembled (restored + backfilled). All subsequent search
         // operations route through this index — see searchIndex above.
         searchIndex.rebuild(records: records)
+        // Seed the memoized probe-cache count so the toolbar's first
+        // render doesn't show 0 for 10 seconds.
+        refreshCacheCountSoon()
     }
 
     // Internal (not private) so VideoScanModel+VolumeLifecycle can mutate it.
@@ -478,6 +526,9 @@ final class VideoScanModel: ObservableObject {
         let before = metadataCache.count
         metadataCache.clearAll()
         let after = metadataCache.count
+        // We just paid for the authoritative COUNT(*) — seed the memo
+        // directly instead of scheduling a refresh.
+        cacheCountMemo = (value: after, fetchedAt: Date())
         log("━━ Metadata cache cleared: \(before) → \(after) entries (DB VACUUM done) ━━")
         return before
     }
@@ -491,6 +542,12 @@ final class VideoScanModel: ObservableObject {
         let dropped = metadataCache.clearForPathPrefix(path)
         if dropped > 0 {
             log("  Dropped \(dropped) cached probe entries under \(path)")
+            // Memoized count is now wrong — adjust in place (exact: we
+            // know how many rows were dropped) and let the TTL refresh
+            // reconcile any drift.
+            if let memo = cacheCountMemo {
+                cacheCountMemo = (value: max(0, memo.value - dropped), fetchedAt: memo.fetchedAt)
+            }
         }
     }
 
@@ -501,5 +558,49 @@ final class VideoScanModel: ObservableObject {
         records.removeAll { $0.fullPath.hasPrefix(target.searchPath) }
     }
 
-    var cacheCount: Int { metadataCache.count }
+    // MARK: - Probe-cache count (memoized)
+    //
+    // `metadataCache.count` is a synchronous SQLite COUNT(*) under the
+    // cache's shared NSLock. The toolbar read it PER RENDER — every
+    // arrow-key step paid a lock acquisition that probe writers also
+    // contend on (audit 2026-06-10). Now the value is memoized with a
+    // coarse TTL; the refresh runs off the main thread and only nudges
+    // the UI when the number actually changed.
+
+    /// (value, fetchedAt) memo. Internal-by-fileprivate contract: only
+    /// cacheCount / refreshCacheCountSoon / clearCache paths touch it.
+    var cacheCountMemo: (value: Int, fetchedAt: Date)?
+    private var cacheCountRefreshInFlight = false
+    private let cacheCountTTL: TimeInterval = 10
+
+    /// Memoized probe-cache row count. Reading a stale value schedules a
+    /// background refresh (stale-while-revalidate, same idea as
+    /// SWRProbeCache) — the getter itself never touches SQLite.
+    var cacheCount: Int {
+        if let memo = cacheCountMemo,
+           Date().timeIntervalSince(memo.fetchedAt) < cacheCountTTL {
+            return memo.value
+        }
+        refreshCacheCountSoon()
+        return cacheCountMemo?.value ?? 0
+    }
+
+    /// Schedule an off-main-thread COUNT(*) refresh; coalesced so render
+    /// storms can't stack queries. Safe to call from a view body — it only
+    /// mutates non-@Published bookkeeping synchronously.
+    func refreshCacheCountSoon() {
+        guard !cacheCountRefreshInFlight else { return }
+        cacheCountRefreshInFlight = true
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
+            let fresh = self.metadataCache.count   // nonisolated, lock inside
+            await MainActor.run {
+                let changed = self.cacheCountMemo?.value != fresh
+                self.cacheCountMemo = (value: fresh, fetchedAt: Date())
+                self.cacheCountRefreshInFlight = false
+                // Only poke SwiftUI when the displayed number moved.
+                if changed { self.objectWillChange.send() }
+            }
+        }
+    }
 }

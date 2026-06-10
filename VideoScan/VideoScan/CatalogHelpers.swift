@@ -524,16 +524,51 @@ struct CatalogContent: View {
     /// sheet's `.task` and is cancelled automatically on dismiss.
     @State private var pairComparePayload: PairComparePayload?
 
-    private var selectedRecord: VideoRecord? {
-        guard let id = selectedIDs.first else { return nil }
-        return records.first(where: { $0.id == id })
+    /// Memo boxes for per-render derivations (perf batch 2026-06-10).
+    /// RenderMemo is a CLASS held by @State — mutating it during body
+    /// does not trigger a view update, which is exactly what a render-
+    /// time memo needs. See CatalogPerfMemo.swift.
+    @State private var duplicateGroupMemo = RenderMemo<DuplicateGroupMemoKey, [VideoRecord]>()
+    @State private var mediaOnVolumeMemo = RenderMemo<MediaOnVolumeMemoKey, Int64>()
+
+    private struct DuplicateGroupMemoKey: Equatable {
+        let selectedID: UUID
+        let version: RecordsVersion
+        let analyzing: Bool
     }
 
-    /// All records sharing the selected record's duplicate group (excluding the selected record itself)
+    private struct MediaOnVolumeMemoKey: Equatable {
+        let path: String
+        let version: RecordsVersion
+    }
+
+    /// Composite records "version" — count catches add/remove, the model's
+    /// volumeAggregatesRevision catches bulk in-place mutations.
+    private var recordsVersion: RecordsVersion {
+        RecordsVersion(count: records.count, revision: model.volumeAggregatesRevision)
+    }
+
+    private var selectedRecord: VideoRecord? {
+        guard let id = selectedIDs.first else { return nil }
+        // O(1) via the model's id index — this is evaluated several times
+        // per body, and the old linear scan was ~27K iterations each.
+        return model.record(forID: id)
+    }
+
+    /// All records sharing the selected record's duplicate group (excluding the selected record itself).
+    /// Memoized on (selected id, records version, analysis-active flag) — the
+    /// O(n) filter used to run on every body re-eval while the inspector was open.
     private var duplicateGroupMembers: [VideoRecord] {
         guard let rec = selectedRecord,
               let groupID = rec.duplicateGroupID else { return [] }
-        return records.filter { $0.duplicateGroupID == groupID && $0.id != rec.id }
+        let key = DuplicateGroupMemoKey(
+            selectedID: rec.id,
+            version: recordsVersion,
+            analyzing: model.isAnalyzingDuplicates   // flip → recompute once analysis lands
+        )
+        return duplicateGroupMemo.value(for: key) {
+            records.filter { $0.duplicateGroupID == groupID && $0.id != rec.id }
+        }
     }
 
     private func volumeRoot(for path: String) -> String {
@@ -545,14 +580,24 @@ struct CatalogContent: View {
     }
 
     private func volumeDiskSize(path: String) -> String {
-        guard let attrs = try? FileManager.default.attributesOfFileSystem(forPath: path),
-              let total = attrs[.systemSize] as? Int64, total > 0 else { return "" }
+        // Was a statfs PER RENDER (blocking syscall — beachballs on
+        // sleeping HDDs). Now stale-while-revalidate via VolumeStatsCache,
+        // same engine as the VolumeReachability fix in 109cc36; mount/
+        // unmount events invalidate it. First-ever query renders "" for
+        // one frame while the background probe fills in.
+        guard let total = VolumeStatsCache.diskSizeBytes.value(forKey: path, missDefault: nil)
+        else { return "" }
         return formatBytes(total)
     }
 
     private func mediaOnVolume(path: String) -> String {
-        let bytes = records.filter { $0.fullPath.hasPrefix(path) }
-            .reduce(into: Int64(0)) { $0 += $1.sizeBytes }
+        // O(n) reduce memoized per (volume root, records version) — was
+        // re-walking the full catalog on every body re-eval.
+        let key = MediaOnVolumeMemoKey(path: path, version: recordsVersion)
+        let bytes = mediaOnVolumeMemo.value(for: key) {
+            records.filter { $0.fullPath.hasPrefix(path) }
+                .reduce(into: Int64(0)) { $0 += $1.sizeBytes }
+        }
         guard bytes > 0 else { return "0 MB" }
         return formatBytes(bytes)
     }
