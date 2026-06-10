@@ -70,6 +70,7 @@
             "Bash(xcodebuild -showBuildSettings:*)",
             "Bash(xcodebuild test:*)",
             "Bash(xcodebuild build:*)",
+            "Bash(xcodebuild:*)",
             "Bash(ffprobe:*)",
             "Bash(ffmpeg -version)",
             "Bash(ffmpeg -hide_banner -h:*)",
