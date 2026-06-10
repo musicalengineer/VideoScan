@@ -525,15 +525,9 @@ struct CatalogContent: View {
     /// ForEach.IDGenerator with an out-of-bounds subscript).
     @State private var tableData: [VideoRecord] = []
 
-    /// "Extract Frames…" frame-ripper. Created when the user picks
-    /// the menu item; the sheet observes its @Published state and
-    /// dismisses on close. State (running, scanned, saved, etc.) lives
-    /// on the FrameRipper instance so we can show progress while the
-    /// rip runs in a background Task. Rick 2026-06-09: built for
-    /// Donna's birthday-print project. (Migration into the Media File
-    /// Operations window is phase 2.)
-    @StateObject private var frameRipper = FrameRipper()
-    @State private var showFrameRipperSheet = false
+    // "Extract Frames…" (Rick 2026-06-09, Donna's birthday-print
+    // project) runs as an ExtractFramesJob in the Media File
+    // Operations window since phase 2 — no view-local ripper state.
 
     /// Memo boxes for per-render derivations (perf batch 2026-06-10).
     /// RenderMemo is a CLASS held by @State — mutating it during body
@@ -809,16 +803,13 @@ struct CatalogContent: View {
         .sheet(item: $fileJourneyPayload) { payload in
             FileJourneySheet(journey: payload)
         }
-        // "Extract Frames…" progress + result sheet.
-        .sheet(isPresented: $showFrameRipperSheet) {
-            FrameRipperSheet(ripper: frameRipper,
-                             isPresented: $showFrameRipperSheet)
-        }
     }
 
     /// User picked "Extract Frames…" — show a folder picker, then
-    /// kick off the frame ripper. Sheet observes the ripper's
-    /// @Published state.
+    /// hand the rip to the Media File Operations center and open its
+    /// window (same pattern as "Compare These Two Files…"). The job
+    /// owns the run Task, so it survives this view and the window
+    /// closing.
     private func startFrameRip(for rec: VideoRecord) {
         let panel = NSOpenPanel()
         panel.title = "Save extracted frames into…"
@@ -829,9 +820,8 @@ struct CatalogContent: View {
         panel.allowsMultipleSelection = false
         panel.prompt = "Select"
         guard panel.runModal() == .OK, let dest = panel.url else { return }
-        showFrameRipperSheet = true
-        frameRipper.rip(videoURL: URL(fileURLWithPath: rec.fullPath),
-                        intoParent: dest)
+        fileOpsCenter.startExtract(record: rec, destinationParent: dest)
+        openWindow(id: "combine")
     }
 
     private func performRename() {
@@ -1198,12 +1188,14 @@ struct CatalogContent: View {
                         // portrait frames from this video as lossless PNGs.
                         // Rick 2026-06-09: built for Donna's Aug 4 birthday
                         // print. Disabled when the file is offline (we'd
-                        // have nothing to read frames from).
+                        // have nothing to read frames from). Runs as a job
+                        // in the Media File Operations window (phase 2), so
+                        // several extracts may queue at once — the center's
+                        // per-volume gates pace the reads.
                         Button("Extract Frames…") {
                             startFrameRip(for: rec)
                         }
-                        .disabled(!VolumeReachability.isReachable(path: rec.fullPath)
-                                  || frameRipper.isRunning)
+                        .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
 
                         if pureActive {
                             Divider()

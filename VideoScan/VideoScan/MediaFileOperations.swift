@@ -156,6 +156,22 @@ enum MediaVolumeGatePolicy {
     }
 }
 
+// MARK: - Volume gate (shared by all job types)
+
+/// One volume gate a job must hold while it reads. `root` is the
+/// dedupe/sort key; `label` is the friendly volume name for the
+/// "Waiting for…" subtitle. Built per-job by
+/// `MediaFileOperationsCenter.gatePlan` — the shared `semaphore` per
+/// volume root is what serializes HDD reads across jobs.
+///
+/// Phase 2: hoisted out of PairCompareJob (where phase 1 nested it) so
+/// ExtractFramesJob and future verbs share the same type.
+struct MediaVolumeGate {
+    let root: String
+    let label: String
+    let semaphore: AsyncSemaphore
+}
+
 // MARK: - Center (app-level registry)
 
 /// Owns every new-style operation job, newest-first. Created once in
@@ -253,12 +269,30 @@ final class MediaFileOperationsCenter: ObservableObject {
         return job
     }
 
+    /// Kick off a best-frames extraction (phase 2). Same ownership
+    /// model as compare: the job owns its run Task, so the rip keeps
+    /// going when the operations window closes; the caller just opens
+    /// the window to watch it. Reads gate on the source file's volume
+    /// (a rip is a long sequential decode — same HDD-thrash concern as
+    /// compare).
+    @discardableResult
+    func startExtract(record: VideoRecord, destinationParent: URL) -> ExtractFramesJob {
+        let gates = gatePlan(forPaths: [record.fullPath])
+        let job = ExtractFramesJob(record: record,
+                                   destinationParent: destinationParent,
+                                   gates: gates)
+        add(job)
+        job.start()
+        fileOpsLog.info("extract started: \(record.filename, privacy: .public) → \(destinationParent.path, privacy: .public) (gates: \(gates.count))")
+        return job
+    }
+
     /// Build the ordered list of volume gates a job must hold while it
     /// reads. Deduped per volume root; sorted by root so every job
     /// acquires in the same order (≈ the classic lock-ordering rule —
     /// no deadlocks). Volumes whose policy is unrestricted get no gate.
-    private func gatePlan(forPaths paths: [String]) -> [PairCompareJob.Gate] {
-        var plan: [PairCompareJob.Gate] = []
+    private func gatePlan(forPaths paths: [String]) -> [MediaVolumeGate] {
+        var plan: [MediaVolumeGate] = []
         var seenRoots = Set<String>()
         for path in paths {
             let root = MediaVolumeGatePolicy.volumeRoot(forPath: path)
@@ -275,7 +309,7 @@ final class MediaFileOperationsCenter: ObservableObject {
                 volumeGates[root] = gate
                 fileOpsLog.info("volume gate created for \(root, privacy: .public): \(slots) slot(s) (\(tech.rawValue, privacy: .public))")
             }
-            plan.append(PairCompareJob.Gate(
+            plan.append(MediaVolumeGate(
                 root: root,
                 label: VolumeReachability.displayLabel(forPath: path),
                 semaphore: gate))

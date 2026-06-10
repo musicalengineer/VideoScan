@@ -4,14 +4,15 @@ import SwiftUI
 // MARK: - Media File Operations window
 //
 // ONE non-modal window for every file-by-file operation — combine,
-// compare, extract-frames (phase 2), and future verbs. Evolved from
+// compare, extract-frames, and future verbs. Evolved from
 // the old "Combine & Render" window (same scene id "combine", same
 // ⌘⇧R shortcut) rather than built fresh, because the combine queue
 // already had the multi-job + pause/resume machinery.
 //
 // Phase-1 layout: two sections in one list.
 //   - "Checks & Tools"  — new-style `MediaFileOperationJob` rows from
-//     `MediaFileOperationsCenter` (compare today, extract in phase 2).
+//     `MediaFileOperationsCenter` (compare since phase 1, extract
+//     since phase 2).
 //   - "Combining"       — the existing combine rows, rendered by their
 //     original views (`CombineJobsSection`), behavior untouched.
 // Visual unity first; type unity (combine conforming to the job
@@ -306,10 +307,24 @@ struct MediaFileOperationRow: View {
                 .font(.system(size: 11))
                 .buttonStyle(.bordered)
                 .disabled(job.state == .cancelling)
-            case .finished:
+            case .finished(let summary):
                 if let compare = job as? PairCompareJob,
                    let verdict = compare.comparator.verdict {
                     PairCompareVerdictChip(verdict: verdict)
+                } else if let extract = job as? ExtractFramesJob,
+                          let dest = extract.ripper.completedDestination {
+                    // Verdict in-row, like compare's chip: frame count
+                    // + jump straight to the PNGs (the affordance the
+                    // retired FrameRipperSheet had).
+                    Text(summary)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.green)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(Color.green.opacity(0.15)))
+                        .lineLimit(1)
+                        .fixedSize()
+                    revealButton(dest)
                 } else {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(.green)
@@ -326,6 +341,13 @@ struct MediaFileOperationRow: View {
                 Text("Stopped")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.secondary)
+                // A cancelled extract keeps its already-saved frames —
+                // offer Reveal on the partial output too.
+                if let extract = job as? ExtractFramesJob,
+                   extract.ripper.framesSaved > 0,
+                   let dest = extract.ripper.completedDestination {
+                    revealButton(dest)
+                }
             }
 
             // Relative start time, live-updating ("2 min ago" style).
@@ -333,6 +355,18 @@ struct MediaFileOperationRow: View {
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(.secondary)
         }
+    }
+
+    /// "Reveal in Finder" for extract rows — selects the output folder.
+    private func revealButton(_ url: URL) -> some View {
+        Button {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } label: {
+            Label("Reveal", systemImage: "folder")
+                .font(.system(size: 11))
+        }
+        .buttonStyle(.bordered)
+        .help(url.path)
     }
 
     private var rowBackground: some View {
