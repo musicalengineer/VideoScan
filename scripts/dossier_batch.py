@@ -336,6 +336,7 @@ def main():
     started = time.time()
     ok = 0
     failed = 0
+    interrupted = False
     for n, (idx, rec) in enumerate(targets, 1):
         path = Path(rec["fullPath"])
         log(f"\n[{n}/{len(targets)}] index={idx}")
@@ -360,6 +361,7 @@ def main():
                 failed += 1
         except KeyboardInterrupt:
             log("interrupted — saving partial progress")
+            interrupted = True
             break
         except Exception as e:
             log(f"  EXC: {e}")
@@ -372,7 +374,31 @@ def main():
             atomic_write_catalog(catalog, CATALOG)
             log(f"  [checkpoint saved at {n}/{len(targets)}]")
 
+    # Closure sentinel — appended in JSONL mode only. The dashboard
+    # (DossierDashboardView::FleetStats) reads this to render a
+    # FACTUAL "done" state for the node, rather than the heuristic
+    # "quiet for >1hr → probably done" fallback. A crashed or killed
+    # worker writes no sentinel, leaves the dashboard in the
+    # heuristic regime — which is the honest truth: we don't know
+    # if it finished or died.
+    #
+    # `outcome` distinguishes:
+    #   "done"        — paths file exhausted, normal completion
+    #   "interrupted" — Ctrl-C / SIGINT received mid-run
     if jsonl_fh:
+        outcome = "interrupted" if interrupted else "done"
+        try:
+            jsonl_fh.write(json.dumps({
+                "_status": outcome,
+                "host": args.host,
+                "processedOk": ok,
+                "processedFailed": failed,
+                "targetsTotal": len(targets),
+                "exitedAt": datetime.now(timezone.utc).isoformat(),
+            }) + "\n")
+            jsonl_fh.flush()
+        except Exception as e:
+            log(f"  WARN: could not write closure sentinel: {e}")
         jsonl_fh.close()
     else:
         atomic_write_catalog(catalog, CATALOG)

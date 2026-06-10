@@ -24,9 +24,11 @@ from merge_dossier_jsonl import (  # noqa: E402
     atomic_write_catalog,
     compute_manifest_lines,
     load_offsets,
+    migrate_legacy_offsets,
     read_new_deltas,
     save_offsets,
     sha256_hex_of_file,
+    validate_delta_fields,
     write_manifest,
 )
 
@@ -389,6 +391,397 @@ class TestManifestWriter(unittest.TestCase):
             lines_v2 = compute_manifest_lines(root)
             self.assertNotEqual(lines_v1, lines_v2,
                                 "Manifest must reflect the catalog change")
+
+
+class TestDisasterRecoveryViaOffsetReset(unittest.TestCase):
+    """Regression for Rick 2026-06-07: rescan of LaCieWorkspace wiped
+    the dossier fields off ~4,690 catalog records (dial dropped from
+    28% → <1%). Recovery was: stop the merger, delete the offsets file
+    so it replays JSONLs from byte 0, restart it. Catalog went from
+    2 → 3,834 dossier records in one merger pass.
+
+    The Swift-side fix (RescanPreservedFields) prevents the wipe at
+    its source. THIS test pins the recovery channel so a future change
+    to merge_dossier_jsonl.py can't silently break our ability to
+    rebuild catalog from JSONL deltas — that's the only durable
+    record of weeks of Qwen + Whisper compute across three nodes.
+
+    The scenario is the disaster, end-to-end:
+      1. JSONLs exist on disk (workers have been emitting them).
+      2. Catalog records exist with matching fullPath but blank
+         dossier fields (rescan just blew them away).
+      3. Offsets file is missing/empty (operator deleted it to force
+         replay).
+      4. One merger pass MUST restore every dossier field that has a
+         matching catalog record."""
+
+    def _make_jsonl(self, dir_path: Path, name: str, lines: list[dict]) -> Path:
+        p = dir_path / name
+        with p.open("w") as f:
+            for d in lines:
+                f.write(json.dumps(d) + "\n")
+        return p
+
+    def test_offset_reset_replays_all_deltas_onto_wiped_catalog(self):
+        # The complete disaster-recovery cycle. If this test ever goes
+        # red, the merger has lost its ability to recover from a
+        # dossier wipe — investigate immediately, that's the safety net.
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+
+            # 1. Three workers have been emitting deltas (m4 / m1 / m5).
+            self._make_jsonl(d, "m4.jsonl", [
+                {"fullPath": "/Volumes/LaCieWorkspace/clipA.mov",
+                 "fields": {"sceneCaptions": [{"timestamp": 1.0, "text": "birthday cake"}],
+                            "dossierProcessedAt": "2026-06-05T10:00:00+00:00",
+                            "dossierProcessedBy": "qwen+whisper"}},
+                {"fullPath": "/Volumes/LaCieWorkspace/clipB.mov",
+                 "fields": {"audioTranscript": "happy birthday Matt",
+                            "dossierProcessedAt": "2026-06-05T10:05:00+00:00"}},
+            ])
+            self._make_jsonl(d, "m1.jsonl", [
+                {"fullPath": "/Volumes/LaCieWorkspace/clipC.mov",
+                 "fields": {"ocrText": [{"timestamp": 0.5, "text": "JUN 1991"}],
+                            "dossierProcessedAt": "2026-06-05T11:00:00+00:00"}},
+            ])
+            self._make_jsonl(d, "m5.jsonl", [
+                {"fullPath": "/Volumes/LaCieWorkspace/clipD.mov",
+                 "fields": {"inferredRecordDate": "1991-06-21T12:00:00+00:00",
+                            "inferredDateConfidence": 0.95,
+                            "dossierProcessedAt": "2026-06-05T12:00:00+00:00"}},
+            ])
+
+            # 2. Catalog has the matching records (same fullPath) but
+            #    dossier fields were wiped by the rescan bug — they
+            #    exist but carry nothing.
+            wiped_catalog = {
+                "version": 6,
+                "records": [
+                    {"fullPath": "/Volumes/LaCieWorkspace/clipA.mov", "filename": "clipA.mov",
+                     "sceneCaptions": [], "dossierProcessedAt": None,
+                     "detectedPeople": ["Matt"]},   # user edits unrelated to dossier
+                    {"fullPath": "/Volumes/LaCieWorkspace/clipB.mov", "filename": "clipB.mov",
+                     "audioTranscript": None, "dossierProcessedAt": None},
+                    {"fullPath": "/Volumes/LaCieWorkspace/clipC.mov", "filename": "clipC.mov",
+                     "ocrText": [], "dossierProcessedAt": None},
+                    {"fullPath": "/Volumes/LaCieWorkspace/clipD.mov", "filename": "clipD.mov",
+                     "inferredRecordDate": None, "dossierProcessedAt": None},
+                ],
+            }
+
+            # 3. Offsets file does not exist — operator deleted it to
+            #    force full replay. load_offsets returns {}.
+            offsets_path = d / "dossier-merger-offsets.json"
+            self.assertFalse(offsets_path.exists())
+            offsets = load_offsets(offsets_path)
+            self.assertEqual(offsets, {})
+
+            # 4. Merger pass: read ALL deltas from byte 0, apply to catalog.
+            deltas, new_offsets = read_new_deltas(d, offsets, _noop_log)
+            self.assertEqual(len(deltas), 4,
+                             "Replay from offset 0 must read every JSONL line.")
+            applied = apply_deltas(wiped_catalog, deltas, _noop_log)
+            self.assertEqual(applied, 4,
+                             "Every delta with a matching catalog record must apply.")
+
+            by_path = {r["fullPath"]: r for r in wiped_catalog["records"]}
+
+            # clipA — dossier RESTORED, unrelated user edit (detectedPeople) UNTOUCHED.
+            recA = by_path["/Volumes/LaCieWorkspace/clipA.mov"]
+            self.assertEqual(len(recA["sceneCaptions"]), 1)
+            self.assertEqual(recA["sceneCaptions"][0]["text"], "birthday cake")
+            self.assertEqual(recA["dossierProcessedAt"], "2026-06-05T10:00:00+00:00")
+            self.assertEqual(recA["dossierProcessedBy"], "qwen+whisper")
+            self.assertEqual(recA["detectedPeople"], ["Matt"],
+                             "User edits not in the delta must survive replay.")
+
+            # clipB
+            recB = by_path["/Volumes/LaCieWorkspace/clipB.mov"]
+            self.assertEqual(recB["audioTranscript"], "happy birthday Matt")
+            self.assertEqual(recB["dossierProcessedAt"], "2026-06-05T10:05:00+00:00")
+
+            # clipC
+            recC = by_path["/Volumes/LaCieWorkspace/clipC.mov"]
+            self.assertEqual(recC["ocrText"][0]["text"], "JUN 1991")
+
+            # clipD
+            recD = by_path["/Volumes/LaCieWorkspace/clipD.mov"]
+            self.assertEqual(recD["inferredDateConfidence"], 0.95)
+            self.assertEqual(recD["inferredRecordDate"], "1991-06-21T12:00:00+00:00")
+
+            # Offsets now non-zero for every JSONL — second pass would no-op.
+            self.assertEqual(set(new_offsets.keys()), {"m4.jsonl", "m1.jsonl", "m5.jsonl"})
+            for k, v in new_offsets.items():
+                self.assertGreater(v, 0, f"{k} offset must advance past byte 0.")
+
+    def test_replay_is_idempotent_apply_twice_same_result(self):
+        # Running the merger pass twice in a row (e.g. operator resets
+        # offsets twice, or two merger processes race) must produce the
+        # same final catalog state — apply_deltas writes fields by key,
+        # not by accumulation. Without this, a duplicate replay could
+        # corrupt list-valued fields (sceneCaptions, ocrText) by appending.
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            self._make_jsonl(d, "m4.jsonl", [
+                {"fullPath": "/a.mov", "fields": {
+                    "sceneCaptions": [{"timestamp": 1.0, "text": "cake"},
+                                      {"timestamp": 2.0, "text": "candle"}],
+                    "ocrText": [{"timestamp": 0.5, "text": "1991"}],
+                    "dossierProcessedAt": "2026-06-05T10:00:00+00:00",
+                }},
+            ])
+            catalog = {"version": 6, "records": [
+                {"fullPath": "/a.mov", "filename": "a.mov",
+                 "sceneCaptions": [], "ocrText": []},
+            ]}
+
+            # First pass.
+            deltas, _ = read_new_deltas(d, {}, _noop_log)
+            apply_deltas(catalog, deltas, _noop_log)
+            first_state = json.loads(json.dumps(catalog))   # deep copy
+
+            # Second pass from offset 0 again (simulating offset reset
+            # after the operator forced another replay).
+            deltas2, _ = read_new_deltas(d, {}, _noop_log)
+            apply_deltas(catalog, deltas2, _noop_log)
+
+            self.assertEqual(catalog, first_state,
+                             "Replay must be idempotent — same JSONL applied twice "
+                             "must not duplicate, accumulate, or otherwise diverge.")
+            # Specifically: list fields stay at their original size.
+            self.assertEqual(len(catalog["records"][0]["sceneCaptions"]), 2)
+            self.assertEqual(len(catalog["records"][0]["ocrText"]), 1)
+
+    def test_replay_matches_records_by_fullPath_even_after_record_rebuild(self):
+        # The Swift-side wipe destroys VideoRecord instances and the
+        # rescan re-creates them. The new instances have the SAME
+        # fullPath (it's just the file's location on disk). The
+        # merger must match on fullPath, NOT identity / object pointer
+        # / row index — otherwise recovery is impossible after a wipe.
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            self._make_jsonl(d, "m4.jsonl", [
+                {"fullPath": "/Volumes/X/clip.mov",
+                 "fields": {"sceneCaptions": [{"timestamp": 0.0, "text": "found"}],
+                            "dossierProcessedAt": "2026-06-05T10:00:00+00:00"}},
+            ])
+            # Rebuild scenario: same path, brand-new record dict with
+            # different/extra technical fields (sizeBytes, codec) that
+            # the rescan refreshed from current disk state. The merger
+            # should still find this record by fullPath alone.
+            rebuilt_catalog = {"version": 6, "records": [
+                {"fullPath": "/Volumes/X/clip.mov", "filename": "clip.mov",
+                 "sizeBytes": 999_999, "videoCodec": "hevc-NEW",  # rescan refreshed
+                 "sceneCaptions": [], "dossierProcessedAt": None},
+            ]}
+            deltas, _ = read_new_deltas(d, {}, _noop_log)
+            applied = apply_deltas(rebuilt_catalog, deltas, _noop_log)
+            self.assertEqual(applied, 1)
+            rec = rebuilt_catalog["records"][0]
+            self.assertEqual(rec["sceneCaptions"][0]["text"], "found")
+            # Rescan-refreshed technical fields are NOT clobbered.
+            self.assertEqual(rec["sizeBytes"], 999_999)
+            self.assertEqual(rec["videoCodec"], "hevc-NEW")
+
+
+class TestSchemaValidation(unittest.TestCase):
+    """Schema validation in apply_deltas — Rick 2026-06-07 audit
+    identified the 'buggy worker silently corrupts records' weak link.
+    apply_deltas now type-checks each known field; bad fields are
+    dropped (with rest-of-delta still applying), and a delta whose
+    every field is rejected counts as schema-rejected.
+
+    Unknown field names pass through — forward-compat hook so workers
+    can introduce new dossier channels without a merger update."""
+
+    def test_validate_accepts_well_formed_dossier_fields(self):
+        good = {
+            "sceneCaptions": [{"timestamp": 1.0, "text": "cake"}],
+            "audioTranscript": "happy birthday",
+            "ocrText": [{"timestamp": 0.5, "text": "1991"}],
+            "ocrDateCandidates": [{"timestamp": 0.5, "text": "JUN 1991"}],
+            "inferredRecordDate": "1991-06-21T12:00:00Z",
+            "inferredDateConfidence": 0.95,
+            "dossierProcessedAt": "2026-06-05T10:00:00+00:00",
+            "dossierProcessedBy": "qwen+whisper",
+        }
+        kept, rejected = validate_delta_fields(good)
+        self.assertEqual(kept, good)
+        self.assertEqual(rejected, [])
+
+    def test_validate_rejects_bad_iso_date_string(self):
+        # The bug the validator exists to prevent: a worker writes
+        # "not a date" into dossierProcessedAt and corrupts the record.
+        kept, rejected = validate_delta_fields({
+            "dossierProcessedAt": "not a date",
+        })
+        self.assertEqual(kept, {})
+        self.assertEqual(len(rejected), 1)
+        self.assertEqual(rejected[0][0], "dossierProcessedAt")
+
+    def test_validate_rejects_wrong_type_for_caption_list(self):
+        # sceneCaptions must be list-of-dicts; a worker passing the
+        # raw caption string would silently corrupt the record without
+        # this gate.
+        kept, rejected = validate_delta_fields({
+            "sceneCaptions": "this is not a list",
+        })
+        self.assertEqual(kept, {})
+        self.assertEqual(len(rejected), 1)
+
+    def test_validate_rejects_caption_list_with_wrong_inner_shape(self):
+        # Inner item missing required 'text' key — must be rejected
+        # because the Swift decoder will crash on it later.
+        kept, rejected = validate_delta_fields({
+            "ocrText": [{"timestamp": 1.0, "no_text_key": "oops"}],
+        })
+        self.assertEqual(kept, {})
+        self.assertEqual(len(rejected), 1)
+
+    def test_validate_accepts_null_for_nullable_fields(self):
+        # Workers may legitimately clear a field by writing null.
+        good = {
+            "audioTranscript": None,
+            "dossierProcessedAt": None,
+            "inferredDateConfidence": None,
+        }
+        kept, rejected = validate_delta_fields(good)
+        self.assertEqual(kept, good)
+        self.assertEqual(rejected, [])
+
+    def test_validate_rejects_bool_disguised_as_number(self):
+        # Python booleans are ints under the hood; we must NOT accept
+        # True as a valid confidence value (it would round-trip as
+        # `true` and the Swift Float? decoder would reject the whole
+        # record).
+        kept, rejected = validate_delta_fields({
+            "inferredDateConfidence": True,
+        })
+        self.assertEqual(kept, {})
+        self.assertEqual(len(rejected), 1)
+
+    def test_validate_passes_unknown_fields_through(self):
+        # Forward-compat: a worker adding a new dossier channel
+        # ("musicSignature") should be accepted without a merger
+        # update. The Swift decoder is the final gate.
+        kept, rejected = validate_delta_fields({
+            "musicSignature": {"genre": "pop", "tempo": 120},
+            "futureChannel123": [1, 2, 3],
+        })
+        self.assertEqual(kept,
+                         {"musicSignature": {"genre": "pop", "tempo": 120},
+                          "futureChannel123": [1, 2, 3]})
+        self.assertEqual(rejected, [])
+
+    def test_validate_mixes_kept_and_rejected_fields(self):
+        # Realistic: a delta has 5 fields, 1 is bad — keep the 4 good
+        # ones, log the bad one. The record gets partial dossier data
+        # instead of being silently corrupted by the bad field.
+        kept, rejected = validate_delta_fields({
+            "audioTranscript": "good",
+            "sceneCaptions": [{"timestamp": 0.0, "text": "good"}],
+            "dossierProcessedAt": "bad-date",     # rejected
+            "dossierProcessedBy": "qwen+whisper",
+            "inferredDateConfidence": 0.9,
+        })
+        self.assertEqual(set(kept.keys()), {
+            "audioTranscript", "sceneCaptions",
+            "dossierProcessedBy", "inferredDateConfidence"
+        })
+        self.assertEqual(len(rejected), 1)
+        self.assertEqual(rejected[0][0], "dossierProcessedAt")
+
+    def test_apply_deltas_skips_bad_fields_but_applies_rest(self):
+        # End-to-end: a delta with mixed good+bad fields lands the
+        # good fields on the record and skips the bad one.
+        catalog = {"version": 6, "records": [
+            {"fullPath": "/a", "filename": "a",
+             "audioTranscript": None, "dossierProcessedAt": None,
+             "sceneCaptions": []},
+        ]}
+        deltas = [
+            ("m4.jsonl", {"fullPath": "/a", "fields": {
+                "audioTranscript": "good transcript",
+                "dossierProcessedAt": "not a date",     # rejected
+                "sceneCaptions": [{"timestamp": 1.0, "text": "good caption"}],
+            }})
+        ]
+        applied = apply_deltas(catalog, deltas, _noop_log)
+        self.assertEqual(applied, 1, "Delta with at least one good field still counts as applied.")
+        rec = catalog["records"][0]
+        self.assertEqual(rec["audioTranscript"], "good transcript")
+        self.assertEqual(rec["sceneCaptions"][0]["text"], "good caption")
+        # The bad field was NOT applied — record keeps its prior None.
+        self.assertIsNone(rec["dossierProcessedAt"])
+
+    def test_apply_deltas_skips_whole_delta_when_all_fields_rejected(self):
+        # Defensive: a delta where every field is bad must not silently
+        # touch the record. Counts as "not applied" so the merger log
+        # surfaces the upstream worker bug.
+        catalog = {"version": 6, "records": [
+            {"fullPath": "/a", "filename": "a",
+             "audioTranscript": "untouched", "dossierProcessedAt": None},
+        ]}
+        deltas = [
+            ("m4.jsonl", {"fullPath": "/a", "fields": {
+                "audioTranscript": 12345,                # not a string
+                "dossierProcessedAt": "garbage",         # bad date
+            }})
+        ]
+        applied = apply_deltas(catalog, deltas, _noop_log)
+        self.assertEqual(applied, 0, "All-bad delta must not count as applied.")
+        rec = catalog["records"][0]
+        self.assertEqual(rec["audioTranscript"], "untouched",
+                         "Record must be untouched when every field was rejected.")
+
+
+class TestOffsetMigration(unittest.TestCase):
+    """Rick 2026-06-07: the legacy /tmp offsets path is volatile across
+    reboots. The new default lives under Application Support and a
+    migration shim copies the legacy file over on first run if the new
+    path doesn't exist. Idempotent and silent when there's nothing to
+    do."""
+
+    def test_migrate_copies_legacy_offsets_when_new_path_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy = Path(tmp) / "tmp-offsets.json"
+            new = Path(tmp) / "appsupport" / "offsets.json"
+            legacy.write_text('{"m4.jsonl": 4711}')
+            self.assertFalse(new.exists())
+            self.assertTrue(migrate_legacy_offsets(new, legacy_path=legacy))
+            self.assertTrue(new.exists())
+            self.assertEqual(load_offsets(new), {"m4.jsonl": 4711})
+
+    def test_migrate_no_op_when_new_path_already_exists(self):
+        # If the new path has offsets, leave them alone — don't clobber
+        # with the legacy file (which may be older / wrong after a
+        # reboot).
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy = Path(tmp) / "tmp-offsets.json"
+            new = Path(tmp) / "appsupport" / "offsets.json"
+            new.parent.mkdir(parents=True, exist_ok=True)
+            legacy.write_text('{"m4.jsonl": 1}')
+            new.write_text('{"m4.jsonl": 9999}')
+            self.assertFalse(migrate_legacy_offsets(new, legacy_path=legacy))
+            self.assertEqual(load_offsets(new), {"m4.jsonl": 9999})
+
+    def test_migrate_no_op_when_legacy_path_missing(self):
+        # Normal steady-state: no legacy file, nothing to do.
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy = Path(tmp) / "tmp-offsets.json"
+            new = Path(tmp) / "appsupport" / "offsets.json"
+            self.assertFalse(migrate_legacy_offsets(new, legacy_path=legacy))
+            self.assertFalse(new.exists())
+
+    def test_migrate_creates_parent_dir(self):
+        # On a fresh Application Support setup, the parent dir may not
+        # exist yet — migration must create it.
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy = Path(tmp) / "tmp-offsets.json"
+            new = Path(tmp) / "deeply" / "nested" / "appsupport" / "offsets.json"
+            legacy.write_text('{"m4.jsonl": 5}')
+            self.assertTrue(migrate_legacy_offsets(new, legacy_path=legacy))
+            self.assertTrue(new.exists())
 
 
 if __name__ == "__main__":
