@@ -83,7 +83,7 @@ final class CatalogSearchIndex {
     /// (preserving order). Otherwise tokenizes via the canonical
     /// `pfTokenizeSearchQuery` and applies per-token AND semantics.
     func filter(records: [VideoRecord], query: String) -> [VideoRecord] {
-        let tokens = pfTokenizeSearchQuery(query)
+        let tokens = Self.prepareTokens(pfTokenizeSearchQuery(query))
         if tokens.isEmpty { return records }
         return records.filter { rec in matches(rec, tokens: tokens) }
     }
@@ -91,11 +91,23 @@ final class CatalogSearchIndex {
     /// Count-only filter. Same semantics as `filter` but skips array
     /// allocation when only the count is needed (toolbar badge).
     func count(records: [VideoRecord], query: String) -> Int {
-        let tokens = pfTokenizeSearchQuery(query)
+        let tokens = Self.prepareTokens(pfTokenizeSearchQuery(query))
         if tokens.isEmpty { return records.count }
         var n = 0
         for rec in records where matches(rec, tokens: tokens) { n += 1 }
         return n
+    }
+
+    /// Normalize substring needles ONCE per query (not per record):
+    /// lowercased + NFC, matching `buildHaystack`'s normalization, so
+    /// `matches` can use a byte-literal search.
+    nonisolated static func prepareTokens(_ tokens: [SearchToken]) -> [SearchToken] {
+        tokens.map { token in
+            if case .substring(let needle) = token {
+                return .substring(needle.lowercased().precomposedStringWithCanonicalMapping)
+            }
+            return token
+        }
     }
 
     /// Check a single record against pre-tokenized query.
@@ -117,8 +129,11 @@ final class CatalogSearchIndex {
         for token in tokens {
             switch token {
             case .substring(let needle):
-                let n = needle.lowercased()
-                if !haystack().contains(n) {
+                // needle arrives pre-lowercased + NFC via prepareTokens.
+                // Byte-literal search, NOT Foundation's contains: canonical
+                // Unicode comparison on multi-KB transcript haystacks was
+                // 87% of main-thread time in the 2026-06-10 beachball.
+                if !Self.literalContains(haystack: haystack(), needle: needle) {
                     return false
                 }
             case .yearRange, .field:
@@ -160,6 +175,26 @@ final class CatalogSearchIndex {
         if let t = rec.audioTranscript { parts.append(t) }
         for hit in rec.ocrDateCandidates { parts.append(hit.text) }
         for hit in rec.ocrText { parts.append(hit.text) }
+        // NFC-normalize: macOS filenames are NFD-decomposed ("é" = e+◌́)
+        // while typed queries are NFC. Both sides get NFC so the
+        // byte-literal search in `matches` stays correct for accents.
         return parts.joined(separator: " ").lowercased()
+            .precomposedStringWithCanonicalMapping
+    }
+
+    /// Byte-level substring search via memmem. Both sides MUST already
+    /// be lowercased + NFC (see prepareTokens / buildHaystack).
+    nonisolated static func literalContains(haystack: String, needle: String) -> Bool {
+        if needle.isEmpty { return true }
+        var h = haystack
+        var n = needle
+        return h.withUTF8 { hb in
+            n.withUTF8 { nb in
+                guard nb.count <= hb.count,
+                      let hBase = hb.baseAddress,
+                      let nBase = nb.baseAddress else { return false }
+                return memmem(hBase, hb.count, nBase, nb.count) != nil
+            }
+        }
     }
 }
