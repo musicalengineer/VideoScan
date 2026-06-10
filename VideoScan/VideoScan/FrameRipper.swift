@@ -42,7 +42,8 @@ private let frameRipperLog = Logger(subsystem: "Rick-Breen.VideoScan",
 @MainActor
 final class FrameRipper: ObservableObject {
 
-    // MARK: - Published state (drives the progress sheet)
+    // MARK: - Published state (drives the operations-window row via
+    // ExtractFramesJob's change forwarding)
 
     /// True while a rip is in flight. UI binds to this for spinner +
     /// cancel button enabled state.
@@ -81,10 +82,6 @@ final class FrameRipper: ObservableObject {
     /// Drives the cancel-button label ("Cancelling…").
     @Published var isCancelling = false
 
-    // MARK: - Internals
-
-    private var currentTask: Task<Void, Never>?
-
     // MARK: - Options
     //
     // Rick's v1 spec: "always use the very best options to generate the
@@ -105,16 +102,17 @@ final class FrameRipper: ObservableObject {
 
     // MARK: - Entry point
 
-    func cancel() {
-        isCancelling = true
-        currentTask?.cancel()
-    }
-
-    /// Kick off a rip. UI is responsible for showing the sheet that
-    /// observes our @Published state.
-    func rip(videoURL: URL, intoParent parentDir: URL, options: Options = Options()) {
-        // Defend against double-start (shouldn't happen but cheap to guard).
-        currentTask?.cancel()
+    /// Run a rip inline in the caller's task. Phase 2 of the Media
+    /// File Operations window: `ExtractFramesJob` owns the run Task
+    /// (so the rip survives window close) and awaits this to know when
+    /// to release its volume gates. Cancellation arrives via the
+    /// caller's Task being cancelled — the sampling and saving loops
+    /// below check `Task.isCancelled` once per frame, so cancel lands
+    /// within one decode. Frames already written stay on disk.
+    ///
+    /// (Replaces the sheet-era fire-and-forget `rip()` + internal
+    /// `currentTask` + `cancel()` trio, retired with FrameRipperSheet.)
+    func run(videoURL: URL, intoParent parentDir: URL, options: Options = Options()) async {
         isRunning = true
         isCancelling = false
         statusText = "Preparing…"
@@ -125,10 +123,7 @@ final class FrameRipper: ObservableObject {
         lastError = nil
         completedDestination = nil
 
-        let opts = options
-        currentTask = Task { [weak self] in
-            await self?.runRip(videoURL: videoURL, parentDir: parentDir, options: opts)
-        }
+        await runRip(videoURL: videoURL, parentDir: parentDir, options: options)
     }
 
     private func runRip(videoURL: URL, parentDir: URL, options: Options) async {

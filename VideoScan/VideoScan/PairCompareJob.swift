@@ -31,14 +31,11 @@ private let fileOpsLog = Logger(subsystem: "Rick-Breen.VideoScan",
 // which is exactly how the window uses them.
 final class PairCompareJob: @MainActor MediaFileOperationJob {
 
-    /// One volume gate this job must hold while reading. `root` is the
-    /// dedupe/sort key; `label` is the friendly volume name for the
-    /// "Waiting for…" subtitle.
-    struct Gate {
-        let root: String
-        let label: String
-        let semaphore: AsyncSemaphore
-    }
+    /// One volume gate this job must hold while reading. Phase 2
+    /// hoisted the concrete type to `MediaVolumeGate` (shared with
+    /// ExtractFramesJob); the nested alias keeps phase-1 call sites
+    /// and tests reading naturally.
+    typealias Gate = MediaVolumeGate
 
     let id = UUID()
     let kind: MediaFileOperationKind = .compare
