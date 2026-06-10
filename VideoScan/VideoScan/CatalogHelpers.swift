@@ -67,6 +67,18 @@ struct CatalogToolbar<Dashboard: View>: View {
     @State private var junkResult: VideoScanModel.JunkDeletionResult?
     @State private var junkResultMode: VideoScanModel.JunkDeletionMode = .toTrash
     @State private var junkResultBytesSucceeded: Int64 = 0
+    /// Search-syntax help popover toggled by the `?` button next to
+    /// the catalog search field. Local UI state — no need to persist.
+    @State private var showSearchHelp = false
+    /// Debounced mirror of `searchText`. Updated 250ms after the last
+    /// keystroke so the toolbar hit-count badge doesn't recompute on
+    /// every character typed. Rick 2026-06-09: this + the CatalogSearch-
+    /// Index were the two-part fix for sluggish search typing.
+    @State private var debouncedSearchText: String = ""
+    /// Cancellable task that fires 250ms after the last keystroke and
+    /// propagates `searchText` → `debouncedSearchText`. Reset each
+    /// keystroke so only the trailing edge ever lands.
+    @State private var searchDebounceTask: Task<Void, Never>? = nil
 
     /// Active (non-purged) records currently marked .confirmedJunk. This is
     /// the same query the model exposes via `confirmedJunkRecords`; we read
@@ -76,6 +88,18 @@ struct CatalogToolbar<Dashboard: View>: View {
         model.records.filter {
             $0.mediaDisposition == .confirmedJunk && $0.purgedAt == nil
         }
+    }
+
+    /// Live match count for the catalog search bar. Routes through the
+    /// model's CatalogSearchIndex so the per-keystroke cost is just
+    /// `haystack.contains(token)` per record (no re-lowercasing or
+    /// re-concatenation). Uses the DEBOUNCED query so the badge doesn't
+    /// recompute on every character typed — only ~250ms after the user
+    /// pauses.
+    private var catalogSearchHitCount: Int {
+        guard !debouncedSearchText.isEmpty else { return 0 }
+        return model.searchIndex.count(records: model.records,
+                                       query: debouncedSearchText)
     }
 
     private var canCombine: Bool {
@@ -257,12 +281,32 @@ struct CatalogToolbar<Dashboard: View>: View {
             HStack(spacing: 4) {
                 Image(systemName: "magnifyingglass")
                     .foregroundColor(.secondary)
-                TextField("Search names, people, captions, speech…", text: $searchText)
+                TextField("Try: donna 1990s · mark dan grampa · cape cod beach",
+                          text: $searchText)
                     .textFieldStyle(.plain)
-                    .frame(width: 260)
+                    .frame(width: 320)
                     .accessibilityIdentifier("catalog.searchField")
+                    .onChange(of: searchText) { _, newValue in
+                        // Cancel any pending debounce so only the trailing
+                        // edge of typing lands on debouncedSearchText.
+                        searchDebounceTask?.cancel()
+                        if newValue.isEmpty {
+                            // Empty-clear is instant — no point waiting.
+                            debouncedSearchText = ""
+                            return
+                        }
+                        searchDebounceTask = Task { @MainActor in
+                            try? await Task.sleep(nanoseconds: 250_000_000)
+                            if !Task.isCancelled {
+                                debouncedSearchText = newValue
+                            }
+                        }
+                    }
                 if !searchText.isEmpty {
-                    Button(action: { searchText = "" }) {
+                    Button(action: {
+                        searchText = ""
+                        debouncedSearchText = ""
+                    }) {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(.secondary)
                     }
@@ -273,6 +317,36 @@ struct CatalogToolbar<Dashboard: View>: View {
             .padding(.vertical, 4)
             .background(Color(NSColor.textBackgroundColor))
             .cornerRadius(6)
+            // Match count badge — visible only while there's a query.
+            // Computes hits live against the full record set so the count
+            // reflects pre-filter results (i.e. before View-menu filters
+            // like Online/Has Family further narrow). Linear scan of 15k
+            // records per keystroke is milliseconds — no debounce needed.
+            // Rick 2026-06-08: surfaces the natural-language query power
+            // ("mark dan grampa" → 10 matches) immediately.
+            if !searchText.isEmpty {
+                Text("\(catalogSearchHitCount) of \(model.records.count)")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(catalogSearchHitCount == 0 ? .red : .secondary)
+                    .help("Search hits across filename, people tags, captions, transcripts, and OCR text. Each whitespace-separated word must match somewhere on the record (AND). Year shorthand: 1990s · 199x.")
+            }
+
+            // Help popover — surfaces the field-prefix grammar so users
+            // don't have to read a docs file to discover `people:donna`
+            // / `year:1989..1995` / `caption:beach`. Added 2026-06-08
+            // alongside the field-prefix feature itself; without this
+            // the feature is invisible.
+            Button {
+                showSearchHelp.toggle()
+            } label: {
+                Image(systemName: "questionmark.circle")
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Search syntax reference")
+            .popover(isPresented: $showSearchHelp, arrowEdge: .bottom) {
+                CatalogSearchHelpPopover()
+            }
 
             // Persistent dossier progress chip — small ring + N/M label.
             // Click opens the full Dossier Dashboard (⌘⇧O). Always
@@ -436,6 +510,15 @@ struct CatalogContent: View {
     /// ForEach.IDGenerator with an out-of-bounds subscript).
     @State private var tableData: [VideoRecord] = []
 
+    /// "Convert to images…" frame-ripper. Created when the user picks
+    /// the menu item; the sheet observes its @Published state and
+    /// dismisses on close. State (running, scanned, saved, etc.) lives
+    /// on the FrameRipper instance so we can show progress while the
+    /// rip runs in a background Task. Rick 2026-06-09: built for
+    /// Donna's birthday-print project.
+    @StateObject private var frameRipper = FrameRipper()
+    @State private var showFrameRipperSheet = false
+
     private var selectedRecord: VideoRecord? {
         guard let id = selectedIDs.first else { return nil }
         return records.first(where: { $0.id == id })
@@ -514,13 +597,14 @@ struct CatalogContent: View {
             }
         }
         if !searchText.isEmpty {
-            // Filename + person-tag search. Matches what the user typed against
-            // the file's name AND its detectedPeople / suspectedPeople tags so
-            // typing "donna" finds both files named *donna* and files tagged
-            // with Donna. Path, directory, codec, notes are intentionally NOT
-            // searched here (those live in universal search) — keeps the
-            // always-on search bar predictable per the Finder-like heuristic.
-            out = out.filter { pfRecordFilenameOrPersonMatch($0, query: searchText) }
+            // Search routes through the model's CatalogSearchIndex so the
+            // per-keystroke cost is haystack.contains() per record — no
+            // re-lowercasing or re-concatenation of every audio transcript
+            // and OCR field. Correctness is identical to the canonical
+            // pfRecordFilenameOrPersonMatch (pinned by index unit tests).
+            // Rick 2026-06-09: this is the fast path that made search
+            // feel instant on 15k-record catalogs.
+            out = model.searchIndex.filter(records: out, query: searchText)
         }
         if showPairsOnly {
             // Only show records that have a correlated partner
@@ -664,6 +748,29 @@ struct CatalogContent: View {
         .sheet(item: $fileJourneyPayload) { payload in
             FileJourneySheet(journey: payload)
         }
+        // "Convert to images…" progress + result sheet.
+        .sheet(isPresented: $showFrameRipperSheet) {
+            FrameRipperSheet(ripper: frameRipper,
+                             isPresented: $showFrameRipperSheet)
+        }
+    }
+
+    /// User picked "Convert to images…" — show a folder picker, then
+    /// kick off the frame ripper. Sheet observes the ripper's
+    /// @Published state.
+    private func startFrameRip(for rec: VideoRecord) {
+        let panel = NSOpenPanel()
+        panel.title = "Save extracted frames into…"
+        panel.message = "Pick the parent folder. A subfolder named \"<video>-frames\" will be created inside."
+        panel.canCreateDirectories = true
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Select"
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        showFrameRipperSheet = true
+        frameRipper.rip(videoURL: URL(fileURLWithPath: rec.fullPath),
+                        intoParent: dest)
     }
 
     private func performRename() {
@@ -1025,6 +1132,17 @@ struct CatalogContent: View {
                                 )
                             }
                         }
+
+                        // Convert to images — extract the highest-quality
+                        // portrait frames from this video as lossless PNGs.
+                        // Rick 2026-06-09: built for Donna's Aug 4 birthday
+                        // print. Disabled when the file is offline (we'd
+                        // have nothing to read frames from).
+                        Button("Convert to images…") {
+                            startFrameRip(for: rec)
+                        }
+                        .disabled(!VolumeReachability.isReachable(path: rec.fullPath)
+                                  || frameRipper.isRunning)
 
                         if pureActive {
                             Divider()
@@ -1915,6 +2033,13 @@ struct InspectorPanel: View {
             if !lines.isEmpty { lines.append("") }
             lines.append("[\(title)]")
         }
+        // Local copy of InspectorDossierView's formatter — keeps the
+        // m:ss formatting consistent between the inspector panel and
+        // the copied metadata text.
+        func formatTimestamp(_ seconds: Double) -> String {
+            let s = max(0, Int(seconds))
+            return String(format: "%d:%02d", s / 60, s % 60)
+        }
 
         // Header
         lines.append(rec.filename)
@@ -1979,6 +2104,71 @@ struct InspectorPanel: View {
         if !rec.notes.isEmpty {
             section("Notes")
             lines.append("  \(rec.notes)")
+        }
+
+        // Dossier — scene captions, audio transcript, OCR. Rick 2026-06-09:
+        // these are the most copy-worthy fields once the record is dossier'd
+        // (handy for sharing a clip's content with someone else, or for
+        // pasting into a notes app). Section is omitted when there's nothing
+        // worth showing to keep the output tight for non-dossier'd records.
+        let hasDossierContent =
+            !rec.sceneCaptions.isEmpty
+            || !(rec.audioTranscript ?? "").isEmpty
+            || !rec.ocrText.isEmpty
+            || !rec.ocrDateCandidates.isEmpty
+            || rec.inferredRecordDate != nil
+        if hasDossierContent {
+            section("Dossier")
+            if let inferred = rec.inferredRecordDate {
+                let fmt = DateFormatter()
+                fmt.dateStyle = .medium
+                fmt.timeStyle = .none
+                var line = "  Inferred Record Date: \(fmt.string(from: inferred))"
+                if let conf = rec.inferredDateConfidence {
+                    line += " (confidence \(String(format: "%.2f", conf)))"
+                }
+                lines.append(line)
+            }
+            if let by = rec.dossierProcessedBy, !by.isEmpty,
+               let at = rec.dossierProcessedAt {
+                let fmt = DateFormatter()
+                fmt.dateStyle = .short
+                fmt.timeStyle = .short
+                lines.append("  Processed: \(by) on \(fmt.string(from: at))")
+            }
+            if !rec.sceneCaptions.isEmpty {
+                lines.append("")
+                lines.append("  Scene Captions (\(rec.sceneCaptions.count)):")
+                for cap in rec.sceneCaptions {
+                    let ts = formatTimestamp(cap.timestamp)
+                    lines.append("    [\(ts)] \(cap.text)")
+                }
+            }
+            if let transcript = rec.audioTranscript, !transcript.isEmpty {
+                lines.append("")
+                lines.append("  Audio Transcript:")
+                // Preserve as a single block — keeps the natural flow for
+                // pasting elsewhere. Indent with 4 spaces.
+                for textLine in transcript.split(separator: "\n", omittingEmptySubsequences: false) {
+                    lines.append("    \(textLine)")
+                }
+            }
+            if !rec.ocrText.isEmpty {
+                lines.append("")
+                lines.append("  OCR Text (\(rec.ocrText.count)):")
+                for hit in rec.ocrText {
+                    let ts = formatTimestamp(hit.timestamp)
+                    lines.append("    [\(ts)] \(hit.text)")
+                }
+            }
+            if !rec.ocrDateCandidates.isEmpty {
+                lines.append("")
+                lines.append("  OCR Date Candidates (\(rec.ocrDateCandidates.count)):")
+                for hit in rec.ocrDateCandidates {
+                    let ts = formatTimestamp(hit.timestamp)
+                    lines.append("    [\(ts)] \(hit.text)")
+                }
+            }
         }
 
         // Location
@@ -2456,5 +2646,105 @@ enum MediaOpener {
         NSWorkspace.shared.open(urls,
                                 withApplicationAt: qtURL,
                                 configuration: NSWorkspace.OpenConfiguration())
+    }
+}
+
+// MARK: - Catalog search help popover
+//
+// Added 2026-06-08 alongside the field-prefix grammar (Phase B of the
+// Google-like search). The grammar is useless if users can't discover
+// it — a `?` button next to the search field shows this card with
+// concrete examples. Keep examples narrow and copy-paste-ready;
+// no big tables, no theory.
+
+private struct CatalogSearchHelpPopover: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.tint)
+                Text("Search syntax")
+                    .font(.headline)
+            }
+
+            Group {
+                Text("Plain words — match anywhere on the record")
+                    .font(.subheadline.weight(.medium))
+                CatalogSearchExampleRow(query: "donna",
+                                        meaning: "any record mentioning donna")
+                CatalogSearchExampleRow(query: "mark dan grampa",
+                                        meaning: "all three names somewhere on the record (AND)")
+                CatalogSearchExampleRow(query: "cape cod 1990s",
+                                        meaning: "cape, cod, and a 1990s year signal")
+            }
+
+            Divider()
+
+            Group {
+                Text("Year shorthand")
+                    .font(.subheadline.weight(.medium))
+                CatalogSearchExampleRow(query: "1990s",
+                                        meaning: "decade 1990–1999")
+                CatalogSearchExampleRow(query: "199x",
+                                        meaning: "same — decade wildcard")
+            }
+
+            Divider()
+
+            Group {
+                Text("Field-prefix grammar")
+                    .font(.subheadline.weight(.medium))
+                CatalogSearchExampleRow(query: "people:donna",
+                                        meaning: "donna in the people tags only (not paths/captions)")
+                CatalogSearchExampleRow(query: "transcript:birthday",
+                                        meaning: "birthday in the audio transcript")
+                CatalogSearchExampleRow(query: "caption:guitar",
+                                        meaning: "guitar in scene captions")
+                CatalogSearchExampleRow(query: "ocr:1991",
+                                        meaning: "1991 in burned-in text / OCR")
+                CatalogSearchExampleRow(query: "name:cape",
+                                        meaning: "cape in the filename (not path)")
+                CatalogSearchExampleRow(query: "notes:keeper",
+                                        meaning: "your notes (otherwise excluded)")
+                CatalogSearchExampleRow(query: "year:1991",
+                                        meaning: "single year")
+                CatalogSearchExampleRow(query: "year:1989..1995",
+                                        meaning: "year range")
+                CatalogSearchExampleRow(query: "decade:1990s",
+                                        meaning: "decade")
+            }
+
+            Divider()
+
+            Text("Field-prefix tokens compose with plain words. Every token must match (AND).")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .frame(maxWidth: 360, alignment: .leading)
+        }
+        .padding(16)
+        .frame(width: 420)
+    }
+}
+
+private struct CatalogSearchExampleRow: View {
+    let query: String
+    let meaning: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(query)
+                .font(.system(size: 12, design: .monospaced))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.secondary.opacity(0.12))
+                )
+                .frame(minWidth: 140, alignment: .leading)
+            Text(meaning)
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+            Spacer(minLength: 0)
+        }
     }
 }
