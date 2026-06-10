@@ -97,12 +97,20 @@ extension VideoScanModel {
             }
             let alert = NSAlert()
             alert.messageText = "Exported Everything"
+            let deltaLines = m.counts.dossierDeltaLines ?? 0
+            let deltaBytes = m.sizes.dossierDeltaBytes ?? 0
+            let deltaLine: String
+            if deltaLines > 0 {
+                deltaLine = "\n• \(deltaLines) dossier delta line(s) (\(BundleSize.human(deltaBytes))) — JSONL backup of expensive compute"
+            } else {
+                deltaLine = "\n• Dossier delta JSONLs: not bundled (delta dir unavailable — bundle still has catalog dossier fields)"
+            }
             alert.informativeText = """
             \(missingProfileBanner)Saved \(url.lastPathComponent)
 
             • \(m.counts.records) catalog record(s)
             • \(m.counts.volumes) volume(s)
-            • \(m.counts.people) person profile(s) with \(m.counts.referencePhotos) reference photo(s)
+            • \(m.counts.people) person profile(s) with \(m.counts.referencePhotos) reference photo(s)\(deltaLine)
             • Total size: \(BundleSize.human(m.sizes.totalBytes)) (photos: \(BundleSize.human(m.sizes.referencePhotoBytes)))\(warningsBlurb)
             """
             alert.addButton(withTitle: "OK")
