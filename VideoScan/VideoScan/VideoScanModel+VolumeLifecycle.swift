@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import Combine
 import UniformTypeIdentifiers
 
 // MARK: - Volume Lifecycle
@@ -73,7 +74,21 @@ extension VideoScanModel {
                 self?.notifyTargetsChanged()
             }
         }
-        mountObservers = [mount, unmount]
+        // Background reachability probes never block the UI, which means
+        // rows can render before the truth lands. When a probe CHANGES an
+        // answer, repaint so stale offline/online indicators get corrected
+        // (2026-06-10 regression: defaults rendered once, never refreshed).
+        let probeChange = NotificationCenter.default.addObserver(
+            forName: VolumeReachability.reachabilityDidChange,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.refreshTargetReachability()
+                self?.objectWillChange.send()
+            }
+        }
+        mountObservers = [mount, unmount, probeChange]
     }
 
     /// Re-check whether each scan target's path is currently mounted.

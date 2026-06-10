@@ -15,11 +15,14 @@
 // filesystem:
 //   - fresh cache hit  → return it
 //   - stale cache hit  → return the stale value, refresh in the background
-//   - unknown key      → return an optimistic default (reachable = true,
-//                        matching the UI's attempt-and-fail-gracefully
-//                        behavior), refresh in the background
+//   - unknown key      → /Volumes paths: HONEST answer from the kernel mount
+//                        table (no disk I/O); other paths: optimistic true.
+//                        Background probe scheduled either way.
 // Background probes are coalesced per key, so a hung SMB stat blocks one
 // utility-queue lane once — never the UI, and never twice concurrently.
+// Probes that CHANGE an answer post `reachabilityDidChange` so the UI
+// re-renders with the truth (2026-06-10 regression fix: at startup every
+// volume ever scanned showed connected — optimistic defaults, no repaint).
 
 import Foundation
 import os.lock
@@ -50,15 +53,31 @@ final class SWRProbeCache<Value>: @unchecked Sendable {
     private let queue: DispatchQueue
     private let ttl: CFAbsoluteTime
     private let probe: (String) -> Value
+    private let valuesEqual: ((Value, Value) -> Bool)?
+    private let onChange: (@Sendable (String) -> Void)?
 
     /// - Parameters:
     ///   - label: dispatch queue label (diagnostics).
     ///   - ttl: seconds a probed value stays fresh.
+    ///   - valuesEqual: equality for change detection (generic Value isn't
+    ///     Equatable). Required for `onChange` to suppress no-op refreshes.
+    ///   - onChange: called (on the probe queue) when a probe lands with a
+    ///     value DIFFERENT from the previous entry — or fills a key that had
+    ///     no entry. Lets callers repaint UI that rendered with a default
+    ///     before the truth arrived (the 2026-06-10 "every volume shows
+    ///     connected at startup" regression: probes corrected the cache but
+    ///     nothing told SwiftUI to re-render).
     ///   - probe: the blocking check. Runs on a background utility queue,
     ///     NEVER on the caller's thread. May block for seconds (hung SMB) —
     ///     the queue is concurrent so one hung volume doesn't starve others.
-    init(label: String, ttl: CFAbsoluteTime, probe: @escaping (String) -> Value) {
+    init(label: String,
+         ttl: CFAbsoluteTime,
+         valuesEqual: ((Value, Value) -> Bool)? = nil,
+         onChange: (@Sendable (String) -> Void)? = nil,
+         probe: @escaping (String) -> Value) {
         self.ttl = ttl
+        self.valuesEqual = valuesEqual
+        self.onChange = onChange
         self.probe = probe
         self.queue = DispatchQueue(label: label, qos: .utility, attributes: .concurrent)
     }
@@ -102,10 +121,15 @@ final class SWRProbeCache<Value>: @unchecked Sendable {
         queue.async { [self] in
             let probed = probe(key)            // may block — background only
             let expires = CFAbsoluteTimeGetCurrent() + ttl
-            lock.withLockUnchecked {
+            let changed: Bool = lock.withLockUnchecked {
+                let previous = entries[key]?.value
                 entries[key] = (probed, expires)
                 _ = inFlight.remove(key)
+                guard let previous else { return true }   // first fill
+                guard let eq = valuesEqual else { return false }
+                return !eq(previous, probed)
             }
+            if changed { onChange?(key) }      // outside the lock
         }
     }
 }
@@ -134,17 +158,38 @@ enum VolumeReachability {
     //   - TTL is short (5s) so a yanked drive flips to offline quickly. Mount/
     //     unmount notifications still call `invalidateCache()` for immediate
     //     propagation.
-    //   - First-ever query for a volume returns an optimistic `true` while the
-    //     background probe fills the cache — matching the UI's existing
-    //     behavior of attempting the file op and failing gracefully. The
-    //     honest answer arrives within milliseconds for local paths.
+    //   - First-ever query for a /Volumes path is answered HONESTLY from the
+    //     kernel mount table (getmntinfo MNT_NOWAIT — reads in-kernel state,
+    //     never touches the disk, microseconds). Regression fix 2026-06-10:
+    //     the first SWR version answered unknown volumes with an optimistic
+    //     `true` and nothing repainted when the probe corrected it — at app
+    //     start every volume ever scanned showed as connected. Non-/Volumes
+    //     paths (internal disk) still default optimistic-true; their probes
+    //     resolve in milliseconds and the disk doesn't sleep.
+    //   - When a background probe CHANGES an answer, `reachabilityDidChange`
+    //     is posted so the UI re-renders with the truth (see onChange).
     //
     // For paths NOT under /Volumes (internal disk, e.g. /Users/rickb/...),
     // fall back to caching/stat'ing by full path — internal paths don't have
     // the multi-file-on-one-mount aggregation problem.
+
+    /// Posted (on the main queue) whenever a background probe changes a
+    /// reachability or volume-name answer. VideoScanModel observes this and
+    /// triggers a re-render so rows drawn with a default get corrected.
+    static let reachabilityDidChange =
+        Notification.Name("VideoScanVolumeReachabilityDidChange")
+
+    private static func postReachabilityDidChange() {
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: reachabilityDidChange, object: nil)
+        }
+    }
+
     private static let reachabilityCache = SWRProbeCache<Bool>(
         label: "Rick-Breen.VideoScan.volumeReachability.reachable",
         ttl: 5.0,
+        valuesEqual: { $0 == $1 },
+        onChange: { _ in postReachabilityDidChange() },
         probe: { statTarget in
             var isDir: ObjCBool = false
             if FileManager.default.fileExists(atPath: statTarget, isDirectory: &isDir) {
@@ -166,6 +211,8 @@ enum VolumeReachability {
     private static let volumeNameCache = SWRProbeCache<String?>(
         label: "Rick-Breen.VideoScan.volumeReachability.volumeName",
         ttl: 60.0,
+        valuesEqual: { $0 == $1 },
+        onChange: { _ in postReachabilityDidChange() },
         probe: { key in
             guard let vals = try? URL(fileURLWithPath: key).resourceValues(forKeys: [.volumeNameKey]),
                   let name = vals.volumeName, !name.isEmpty else { return nil }
@@ -173,8 +220,54 @@ enum VolumeReachability {
         }
     )
 
-    /// Drop all cached entries. Call after volume mount/unmount notifications.
+    // MARK: - Kernel mount table (honest, disk-free defaults)
+
+    /// Snapshot of currently mounted filesystem roots ("/", "/Volumes/X", …).
+    /// Refreshed at first use and on every mount/unmount invalidation.
+    /// `getmntinfo(MNT_NOWAIT)` reads the kernel's in-memory mount list —
+    /// it does NOT statfs the filesystems, so it can never spin up a
+    /// sleeping HDD or hang on a dead SMB mount. (C++ analogy: reading
+    /// /proc/mounts, not touching the devices.)
+    nonisolated(unsafe) private static var mountedRoots: Set<String> = currentMountedRoots()
+    private static let mountedRootsLock = OSAllocatedUnfairLock()
+
+    /// Read the kernel mount table. Internal so tests can sanity-check it
+    /// ("/" must always be present) without faking mounts.
+    static func currentMountedRoots() -> Set<String> {
+        var mntPtr: UnsafeMutablePointer<statfs>?
+        let count = getmntinfo(&mntPtr, MNT_NOWAIT)
+        guard count > 0, let mntPtr else { return [] }
+        var roots = Set<String>()
+        for i in 0..<Int(count) {
+            var fs = mntPtr[i]
+            let mountPoint = withUnsafePointer(to: &fs.f_mntonname) {
+                $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) {
+                    String(cString: $0)
+                }
+            }
+            roots.insert(mountPoint)
+        }
+        // getmntinfo's buffer is reused static storage owned by libc — never freed.
+        return roots
+    }
+
+    /// The honest no-cache-entry answer. Pure — unit-tested directly.
+    /// For /Volumes keys the kernel mount table IS the truth for "is this
+    /// volume mounted". Non-/Volumes keys (internal disk paths) default
+    /// optimistic-true: their probes resolve in milliseconds and a wrong
+    /// `true` for one frame matches the UI's attempt-and-fail behavior.
+    static func defaultReachability(forKey key: String, mountedRoots: Set<String>) -> Bool {
+        if key.hasPrefix("/Volumes/") {
+            return mountedRoots.contains(key)
+        }
+        return true
+    }
+
+    /// Drop all cached entries and re-snapshot the kernel mount table.
+    /// Call after volume mount/unmount notifications.
     static func invalidateCache() {
+        let fresh = currentMountedRoots()
+        mountedRootsLock.withLockUnchecked { mountedRoots = fresh }
         reachabilityCache.invalidateAll()
         volumeNameCache.invalidateAll()
     }
@@ -193,10 +286,10 @@ enum VolumeReachability {
     /// (not under /Volumes) it falls back to a per-path existence check, which
     /// is the right answer when there's no separable "volume" to ask about.
     ///
-    /// NEVER touches the filesystem on the caller's thread — see the
+    /// NEVER touches the disk on the caller's thread — see the
     /// stale-while-revalidate notes on `reachabilityCache`. Answers may be up
-    /// to TTL+probe-time stale; for an unknown volume the first answer is an
-    /// optimistic `true`.
+    /// to TTL+probe-time stale; an unknown /Volumes path is answered honestly
+    /// from the kernel mount table (microseconds, no disk I/O).
     ///
     /// Note: if you need "does this specific file exist?", use
     /// `FileManager.default.fileExists(atPath:)` directly — that's a different
@@ -204,7 +297,10 @@ enum VolumeReachability {
     static func isReachable(path: String) -> Bool {
         guard !path.isEmpty else { return false }
         let key = cacheKey(forPath: path)
-        return reachabilityCache.value(forKey: key, missDefault: true)
+        let mounted = mountedRootsLock.withLockUnchecked { mountedRoots }
+        return reachabilityCache.value(
+            forKey: key,
+            missDefault: defaultReachability(forKey: key, mountedRoots: mounted))
     }
 
     /// Cache key (and, for /Volumes paths, the stat target) for `isReachable`.
