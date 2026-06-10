@@ -307,6 +307,17 @@ def main():
         targets = [(i, r) for i, r in targets if not r.get("dossierProcessedAt")]
         log(f"  skip already-processed: {before - len(targets)} → {len(targets)} to do")
 
+    # Rick 2026-06-10: confirmedJunk records are stuff the user has
+    # already decided to throw out. Wasting Qwen + Whisper on them is
+    # pure burn. Always filter these out, even with --force (force
+    # is for re-running the dossier on legitimate records — never an
+    # excuse to dossier known trash).
+    before = len(targets)
+    targets = [(i, r) for i, r in targets if r.get("mediaDisposition") != "confirmedJunk"]
+    junk_skipped = before - len(targets)
+    if junk_skipped:
+        log(f"  skip confirmedJunk records: {junk_skipped} → {len(targets)} to do")
+
     if args.limit and args.limit > 0:
         targets = targets[:args.limit]
         log(f"  --limit applied → {len(targets)} to do")
