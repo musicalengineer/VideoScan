@@ -68,15 +68,23 @@ struct DossierDashboardView: View {
                 .frame(width: 270, height: 270)
 
                 VStack(alignment: .leading, spacing: 10) {
-                    StatRow(label: "Dossiered", value: "\(coverage.dossiered)", color: .green)
+                    StatRow(label: "Media Files", value: "\(coverage.total)", color: .primary)
+                    StatRow(label: "Analyzed", value: "\(coverage.dossiered)", color: .green)
                     StatRow(label: "Remaining", value: "\(coverage.remaining)", color: .secondary)
-                    StatRow(label: "Catalog", value: "\(coverage.total)", color: .primary)
+                    
                     Divider().frame(width: 160)
                     // Live throughput — sliding 5-minute window so the
                     // number reflects what's actually happening now,
                     // not lifetime average. Refreshed alongside the
                     // fleet panel every 5s.
                     StatRow(label: "Rate", value: rate.displayText, color: rate.color)
+                    // Rough ETA — derived from rolling rate × records
+                    // remaining. Shows "—" until we have ≥2 samples or
+                    // when the rate is too low to be meaningful (worker
+                    // crash, paused fleet). Rick 2026-06-09 ask.
+                    StatRow(label: "ETA",
+                            value: rate.etaDisplayText(remaining: coverage.remaining),
+                            color: rate.hasEnoughSamples ? .primary : .secondary)
                     StatRow(label: "OCR dates", value: "\(coverage.ocrDates)", color: .purple)
                     StatRow(label: "Strong dates", value: "\(coverage.strongDates)", color: .green)
                 }
@@ -86,8 +94,8 @@ struct DossierDashboardView: View {
             // MARK: Per-host fleet panel
             GroupBox(label:
                 HStack(spacing: 4) {
-                    Text("Fleet").font(.headline)
-                    Spacer()
+                    Text("Participating Computers").font(.headline)
+                    Spacer() 
                     Text("from JSONL deltas — refreshed every 5s")
                         .font(.caption2)
                         .foregroundColor(.secondary)
@@ -300,6 +308,47 @@ struct RateTracker: Equatable {
         if perMinute >= 1 { return .green }
         return .gray
     }
+
+    // MARK: - ETA
+    //
+    // Rick 2026-06-09: "estimated time to completion, just a rough
+    // guess." Computed from the rolling rate × remaining records.
+    // Caveats baked into the display string so the user trusts it:
+    //   - Returns nil if rate is 0 (would be ∞) or if we don't have
+    //     enough samples yet — the dashboard then shows "—".
+    //   - Rounds aggressively: "~3h", "~45m" — not "3 hours 14 minutes
+    //     22 seconds" which would just be misleading precision.
+
+    /// Estimated wall-clock time to dossier `remaining` more records,
+    /// at the current rolling rate. Nil when the rate is too low to
+    /// be meaningful or when there's nothing left to do.
+    func eta(remaining: Int) -> TimeInterval? {
+        guard remaining > 0, hasEnoughSamples else { return nil }
+        let rateMin = perMinute
+        guard rateMin > 0.1 else { return nil }  // <0.1/min ≈ "forever"
+        let minutes = Double(remaining) / rateMin
+        return minutes * 60   // seconds
+    }
+
+    /// User-facing rough ETA string. Bands chosen so the precision
+    /// matches the uncertainty:
+    ///   <  1 m  → "<1m"
+    ///   <  1 h  → "~Nm"
+    ///   <  1 d  → "~Nh"  (1h granularity is enough; we don't know
+    ///                     to the minute over hours-long horizons)
+    ///   ≥  1 d  → "~Nd Mh"
+    /// Returns "—" for nil ETA (rate too low or nothing left).
+    func etaDisplayText(remaining: Int) -> String {
+        guard let secs = eta(remaining: remaining) else { return "—" }
+        let mins = secs / 60
+        if mins < 1 { return "<1m" }
+        if mins < 60 { return "~\(Int(mins.rounded()))m" }
+        let hours = mins / 60
+        if hours < 24 { return "~\(Int(hours.rounded()))h" }
+        let days = Int(hours / 24)
+        let leftover = Int(hours.rounded()) - days * 24
+        return leftover > 0 ? "~\(days)d \(leftover)h" : "~\(days)d"
+    }
 }
 
 // MARK: - Fleet stats
@@ -341,26 +390,60 @@ struct FleetStats {
         let recordCount: Int
         let lastWrite: Date?
         let fileBytes: Int64
+        /// Closure sentinel — present when the worker wrote a `_status`
+        /// line as its final JSONL entry. Absent for a crashed/killed
+        /// worker (the honest signal: we don't know if it finished).
+        let sentinel: Sentinel?
 
+        struct Sentinel: Equatable {
+            /// "done" = paths file exhausted cleanly.
+            /// "interrupted" = SIGINT mid-run (Ctrl-C).
+            let status: String
+            let processedOk: Int
+            let processedFailed: Int
+            let targetsTotal: Int
+            let exitedAt: Date?
+        }
+
+        /// Four-state user-facing label, ranked by certainty.
+        ///   sentinel present                → "done" or "stopped"  (factual)
+        ///   wrote in last 2 min             → "running"            (factual)
+        ///   wrote 2 min – 1 hr ago          → "stale"              (factual)
+        ///   quiet >1 hr AND has records     → "done?"              (heuristic)
+        ///   never wrote / no records        → "idle"               (factual)
         var aliveLabel: String {
-            guard let lastWrite else { return "no JSONL" }
+            if let s = sentinel {
+                return s.status == "done" ? "done" : "stopped"
+            }
+            guard let lastWrite else {
+                return recordCount > 0 ? "done?" : "idle"
+            }
             let age = Date().timeIntervalSince(lastWrite)
-            if age < 120 { return "active" }       // wrote in last 2 min
-            if age < 600 { return "warm" }         // last 10 min
-            if age < 3600 { return "idle" }        // last hour
-            return "stale"
+            if age < 120 { return "running" }
+            if age < 3600 { return "stale" }
+            return recordCount > 0 ? "done?" : "idle"
         }
 
+        /// Color map keyed to the label above. Green is reserved for
+        /// "done" (factual or heuristic). Cyan = active processing.
+        /// Orange = stale (alive but quiet). Gray = idle / not yet
+        /// touched. This separates "currently working" from "finished
+        /// working" visually — a request from Rick 2026-06-07.
         var aliveColor: Color {
-            guard let lastWrite else { return .gray }
+            if let s = sentinel {
+                return s.status == "done" ? .green : .orange
+            }
+            guard let lastWrite else {
+                return recordCount > 0 ? .green.opacity(0.65) : .gray
+            }
             let age = Date().timeIntervalSince(lastWrite)
-            if age < 120 { return .green }
-            if age < 600 { return .yellow }
+            if age < 120 { return .cyan }
             if age < 3600 { return .orange }
-            return .red
+            return recordCount > 0 ? .green.opacity(0.65) : .gray
         }
 
-        static let empty = HostStat(recordCount: 0, lastWrite: nil, fileBytes: 0)
+        static let empty = HostStat(recordCount: 0, lastWrite: nil,
+                                    fileBytes: 0, sentinel: nil)
     }
 
     var byHost: [WorkerHost: HostStat]
@@ -395,14 +478,52 @@ struct FleetStats {
             // synchronous read is fine here. For files into the
             // hundreds of MB we'd want a streamed line counter.
             let count: Int
-            if let data = try? Data(contentsOf: file) {
+            let data = try? Data(contentsOf: file)
+            if let data {
                 count = data.lazy.filter { $0 == 0x0A }.count  // count of \n
             } else {
                 count = 0
             }
-            out[host] = HostStat(recordCount: count, lastWrite: mtime, fileBytes: size)
+            // Parse the most recent `_status` sentinel line, if any.
+            // Workers emit one when they exit cleanly from their paths
+            // file — its presence promotes the dashboard state from
+            // heuristic "done?" to factual "done".
+            let sentinel = Self.parseSentinel(data: data)
+            // Don't count the sentinel line as a record — it's not a delta.
+            let recordCount = sentinel != nil ? max(0, count - 1) : count
+            out[host] = HostStat(recordCount: recordCount,
+                                 lastWrite: mtime,
+                                 fileBytes: size,
+                                 sentinel: sentinel)
         }
         return FleetStats(byHost: out)
+    }
+
+    /// Scan a JSONL file's bytes for the most recent `_status` sentinel
+    /// line and decode it. Returns nil if no sentinel is present (which
+    /// is the steady state for a currently-running worker, or for a
+    /// worker that crashed before reaching clean exit).
+    fileprivate static func parseSentinel(data: Data?) -> HostStat.Sentinel? {
+        guard let data,
+              let text = String(data: data, encoding: .utf8) else { return nil }
+        // Walk lines back-to-front — sentinel will be last if present.
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: true)
+        for line in lines.reversed() where line.contains("\"_status\"") {
+            guard let lineData = line.data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: lineData) as? [String: Any],
+                  let status = obj["_status"] as? String else { continue }
+            let exitDate = (obj["exitedAt"] as? String).flatMap {
+                ISO8601DateFormatter().date(from: $0)
+            }
+            return HostStat.Sentinel(
+                status: status,
+                processedOk: obj["processedOk"] as? Int ?? 0,
+                processedFailed: obj["processedFailed"] as? Int ?? 0,
+                targetsTotal: obj["targetsTotal"] as? Int ?? 0,
+                exitedAt: exitDate
+            )
+        }
+        return nil
     }
 }
 
@@ -424,17 +545,25 @@ private struct FleetRow: View {
                 .font(.system(size: 12, design: .monospaced))
                 .frame(width: 110, alignment: .leading)
                 .foregroundColor(.secondary)
-            HStack(spacing: 4) {
+            HStack(spacing: 6) {
                 Circle()
                     .fill(stat.aliveColor)
-                    .frame(width: 7, height: 7)
+                    .frame(width: 10, height: 10)
                 Text(stat.aliveLabel)
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(stat.aliveColor)
+            }
+            .frame(width: 110, alignment: .leading)
+            Spacer()
+            // Sentinel summary when worker has exited cleanly:
+            // "542 ok, 3 failed". Replaces the relative-time hint, which
+            // is the more useful info during a run but redundant once
+            // the worker is done.
+            if let s = stat.sentinel {
+                Text("\(s.processedOk) ok, \(s.processedFailed) failed")
                     .font(.caption)
                     .foregroundColor(.secondary)
-            }
-            .frame(width: 70, alignment: .leading)
-            Spacer()
-            if let last = stat.lastWrite {
+            } else if let last = stat.lastWrite {
                 Text(relativeTime(last))
                     .font(.caption)
                     .foregroundColor(.secondary)

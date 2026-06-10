@@ -151,7 +151,7 @@ final class CaptionOrchestrator: ObservableObject {
         }
 
         captionOrchLog.info("CaptionOrchestrator starting: target=\(targetPrefix, privacy: .public), candidates=\(candidates.count), engine=\(runner.modelID, privacy: .public), force=\(force)")
-        appLog.write("Caption Videos: starting \(candidates.count) candidate(s) on \(VolumeReachability.displayLabel(forPath: targetPrefix)) with \(runner.modelID)")
+        appLog.write("Analyzing volume: starting \(candidates.count) candidate(s) on \(VolumeReachability.displayLabel(forPath: targetPrefix)) with \(runner.modelID)")
 
         activeTask = Task { [weak self] in
             await self?.runBatch(
@@ -193,7 +193,7 @@ final class CaptionOrchestrator: ObservableObject {
 
         let reachable = model.scanTargets.filter { $0.isReachable && !$0.searchPath.isEmpty }
         captionOrchLog.info("Catalog-wide caption: \(reachable.count) reachable target(s)")
-        appLog.write("Caption Catalog: starting across \(reachable.count) reachable volume(s)")
+        appLog.write("Analyzing catalog: starting across \(reachable.count) reachable volume(s)")
 
         guard !reachable.isEmpty else {
             currentStatus = .finished(captioned: 0, skipped: 0, failed: 0)
@@ -214,7 +214,7 @@ final class CaptionOrchestrator: ObservableObject {
             }
         }
 
-        appLog.write("Caption Catalog: completed sweep across \(reachable.count) volume(s)")
+        appLog.write("Analyzing catalog: completed sweep across \(reachable.count) volume(s)")
         currentStatus = .finished(captioned: 0, skipped: 0, failed: 0)
     }
 
@@ -458,7 +458,7 @@ final class CaptionOrchestrator: ObservableObject {
         // the progress sheet closes cleanly.
         guard total > 0 else {
             captionOrchLog.info("CaptionOrchestrator: zero candidates, nothing to do")
-            appLog.write("Caption Videos: no eligible videos under target")
+            appLog.write("Analyzing volume: no eligible videos under target")
             currentStatus = .finished(captioned: 0, skipped: 0, failed: 0)
             return
         }
@@ -473,7 +473,7 @@ final class CaptionOrchestrator: ObservableObject {
             // for the next file yet.
             if Task.isCancelled {
                 captionOrchLog.notice("CaptionOrchestrator: cancelled at file \(idx) of \(total)")
-                appLog.write("Caption Videos: cancelled at file \(idx) of \(total) (captioned \(captioned), skipped \(skipped), failed \(failed))")
+                appLog.write("Analyzing volume: cancelled at file \(idx) of \(total) (analyzed \(captioned), skipped \(skipped), failed \(failed))")
                 currentStatus = .finished(captioned: captioned, skipped: skipped, failed: failed)
                 return
             }
@@ -534,7 +534,7 @@ final class CaptionOrchestrator: ObservableObject {
                 // Cancellation surfaced from inside the runner's
                 // frame loop. Don't count this file — just exit.
                 captionOrchLog.notice("CaptionOrchestrator: runner observed cancellation at \(filename, privacy: .public)")
-                appLog.write("Caption Videos: cancelled mid-file \(filename) (captioned \(captioned), skipped \(skipped), failed \(failed))")
+                appLog.write("Analyzing volume: cancelled mid-file \(filename) (analyzed \(captioned), skipped \(skipped), failed \(failed))")
                 currentStatus = .finished(captioned: captioned, skipped: skipped, failed: failed)
                 return
             } catch let err as CaptionRunnerError {

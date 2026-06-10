@@ -34,9 +34,9 @@ struct CaptionProgressSheet: View {
     /// when the target's path is opaque (mounted at /Volumes/...).
     private var titleLabel: String {
         if let t = orchestrator.currentTarget {
-            return "Captioning " + VolumeReachability.displayLabel(forPath: t.searchPath)
+            return "Analyzing " + VolumeReachability.displayLabel(forPath: t.searchPath)
         }
-        return "Captioning"
+        return "Analyzing"
     }
 
     /// Pulls a 0..1 fraction out of the current status, or 0 if we're
@@ -126,7 +126,7 @@ struct CaptionProgressSheet: View {
                     .foregroundStyle(.primary)
                 Text("·")
                     .foregroundStyle(.tertiary)
-                Text("captioned \(orchestrator.liveCaptioned)")
+                Text("analyzed \(orchestrator.liveCaptioned)")
                     .foregroundStyle(.green)
                 Text("·")
                     .foregroundStyle(.tertiary)
