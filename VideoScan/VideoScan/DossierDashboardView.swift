@@ -254,6 +254,14 @@ struct CatalogCoverage {
     init(records: [VideoRecord]) {
         var t = 0, d = 0, s = 0, o = 0, x = 0, sd = 0
         for r in records {
+            // Skip records that are out of scope for dossier work.
+            // Rick 2026-06-10: confirmedJunk records are stuff the user
+            // has already decided to delete — counting them inflates the
+            // "Remaining" pool and tricks the dial into looking stuck.
+            // Purged records are tombstones from prior removals; they
+            // shouldn't count toward active progress either.
+            if r.mediaDisposition == .confirmedJunk { continue }
+            if r.purgedAt != nil { continue }
             t += 1
             if r.dossierProcessedAt != nil { d += 1 }
             if !r.sceneCaptions.isEmpty { s += 1 }
