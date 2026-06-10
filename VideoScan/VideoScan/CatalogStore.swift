@@ -4,8 +4,17 @@
 // relaunch the app and still see results from offline volumes.
 //
 // Save policy: debounced 2s after the last mutation, plus a synchronous
-// save() on app termination via the AppDelegate. The store deliberately
-// runs off the main actor for I/O.
+// save() on app termination via the AppDelegate.
+//
+// Threading (perf fix 2026-06-10): catalog.json is ~73 MB with dossier
+// transcripts/captions inline, so encode+write must NOT run on the main
+// actor (it was a multi-second beachball per tag/rating/note edit).
+// Debounced saves now snapshot the record graph on the main actor (cheap
+// deep copy — tens of ms for ~13.5K records) and encode+write the snapshot
+// on a serial background queue. All file writes are serialized through
+// that one queue so a terminal `saveNow` (queue.sync) always lands LAST
+// and the freshest content wins. See `deepCopySnapshot` for why the copy
+// is required for race-freedom.
 //
 // Crash-safety: writes are atomic (temp file + rename via Data's atomic
 // option, which writes to a sibling tmp and posix-renames into place);
@@ -14,6 +23,11 @@
 // CatalogStoreHardeningTests for the locked-down contract.
 
 import Foundation
+import os
+
+/// File-scope so the nonisolated background encode path can log without
+/// touching @MainActor state. Logger is Sendable.
+private let catalogStoreLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "catalogStore")
 
 // MARK: - CatalogLoadError
 //
@@ -134,6 +148,29 @@ final class CatalogStore {
     private let fileURL: URL
     private let backupURL: URL
     private var debounceTask: Task<Void, Never>?
+
+    /// Serial queue that owns ALL writes to catalog.json. Debounced saves
+    /// hop onto it async; the terminal `saveNow` hops on sync — so writes
+    /// are strictly ordered and a terminal save always lands last.
+    /// `// In C++ terms: a single dedicated writer thread fed by a FIFO.`
+    private let writeQueue = DispatchQueue(label: "Rick-Breen.VideoScan.catalogStore.write",
+                                           qos: .utility)
+
+    /// True while a background encode+write is running. Guarded by the
+    /// main actor (all mutations happen there).
+    private var saveInFlight = false
+
+    /// Records re-marked dirty while a save was in flight. The follow-up
+    /// save starts the moment the in-flight one finishes — a second edit
+    /// during a save is never lost. Holds the LATEST array reference only;
+    /// intermediate ones are superseded (same coalescing the debounce does).
+    private var pendingRecords: [VideoRecord]?
+
+    /// Test seam: artificial delay (seconds) applied on the write queue
+    /// before encoding. Lets tests deterministically create the
+    /// "save in flight" window for coalescing / snapshot-independence
+    /// assertions. Always 0 in production.
+    internal var testWriteDelay: TimeInterval = 0
 
     /// Belt-and-suspenders read-only guard for the viewer (non-master) Macs.
     /// When `true`, saveNow / scheduleSave early-return and log instead of
@@ -288,6 +325,12 @@ final class CatalogStore {
 
     /// Save synchronously. Use from `applicationWillTerminate` so the file
     /// is flushed before the process exits.
+    ///
+    /// Ordering vs in-flight async saves: this hops onto `writeQueue` with
+    /// `sync`, which FIFO-serializes behind any background write already
+    /// running — so the terminal save's (freshest) content always lands
+    /// last. Any coalesced follow-up is cleared first: this save supersedes
+    /// it.
     func saveNow(records: [VideoRecord]) {
         if Self.isRunningTests && self === CatalogStore.shared { return }
         if isReadOnly {
@@ -296,7 +339,16 @@ final class CatalogStore {
         }
         debounceTask?.cancel()
         debounceTask = nil
-        writeToDisk(records: records)
+        pendingRecords = nil  // superseded by this synchronous save
+        let payload = Self.makePayload(records: records)
+        let box = SnapshotBox(payload: payload)
+        var ok = false
+        writeQueue.sync {
+            ok = Self.encodeAndWrite(payload: box.payload, to: fileURL)
+        }
+        if ok {
+            observer?.catalogStoreDidWrite(self)
+        }
     }
 
     /// Schedule a save 2 seconds after the most recent call. Repeated calls
@@ -308,39 +360,148 @@ final class CatalogStore {
             return
         }
         debounceTask?.cancel()
-        let snapshot = records  // capture the array reference; elements are classes
+        let captured = records  // capture the array reference; elements are classes
         debounceTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             if Task.isCancelled { return }
-            self?.writeToDisk(records: snapshot)
+            self?.saveAsync(records: captured)
         }
     }
 
-    private func writeToDisk(records: [VideoRecord]) {
-        let snapshot = CatalogSnapshot(
+    /// Off-main save: snapshot on the main actor, encode+write on
+    /// `writeQueue`. Internal (not private) so tests can drive the async
+    /// path without waiting out the 2 s debounce.
+    ///
+    /// Coalescing: if a save is already in flight, remember the latest
+    /// records array and run a follow-up save the moment the in-flight one
+    /// completes. A dirty mark during a save is therefore never lost.
+    func saveAsync(records: [VideoRecord]) {
+        if Self.isRunningTests && self === CatalogStore.shared { return }
+        if isReadOnly {
+            NSLog("VideoScan: CatalogStore.saveAsync refused — read-only viewer mode")
+            return
+        }
+        if saveInFlight {
+            pendingRecords = records
+            return
+        }
+        saveInFlight = true
+
+        // Snapshot ON the main actor — see deepCopySnapshot for why.
+        let t0 = CFAbsoluteTimeGetCurrent()
+        let payload = Self.makePayload(records: records)
+        let snapshotMs = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+        catalogStoreLog.debug("catalog save: snapshot of \(records.count) records took \(snapshotMs, format: .fixed(precision: 1)) ms")
+
+        let box = SnapshotBox(payload: payload)
+        let dest = fileURL
+        let delay = testWriteDelay
+        writeQueue.async {
+            if delay > 0 { Thread.sleep(forTimeInterval: delay) }
+            let ok = Self.encodeAndWrite(payload: box.payload, to: dest)
+            Task { @MainActor [weak self] in
+                self?.asyncSaveDidFinish(success: ok)
+            }
+        }
+    }
+
+    /// Back on the main actor after a background write. Fires the observer
+    /// and, if anything went dirty while we were writing, starts the
+    /// follow-up save.
+    private func asyncSaveDidFinish(success: Bool) {
+        saveInFlight = false
+        if success {
+            // Notify the observer (CatalogSync on the master) so it can
+            // refresh manifest.sha256. Skipped for the test singleton —
+            // tests construct their own CatalogStore(directory:) and can
+            // wire an observer if they need to assert the callback.
+            observer?.catalogStoreDidWrite(self)
+        }
+        if let pending = pendingRecords {
+            pendingRecords = nil
+            saveAsync(records: pending)
+        }
+    }
+
+    /// Build the on-disk payload from a RACE-FREE deep copy of the live
+    /// records. Must run on the main actor (it reads live mutable state).
+    private static func makePayload(records: [VideoRecord]) -> CatalogSnapshot {
+        CatalogSnapshot(
             version: CatalogSnapshot.currentVersion,
             savedAt: Date(),
-            records: records,
+            records: deepCopySnapshot(records: records),
             savedFromHost: CatalogHost.currentName
         )
+    }
+
+    /// Deep-copy the record graph so the background encoder never reads an
+    /// object the main actor can mutate. VideoRecord is a mutable class —
+    /// encoding the LIVE array off-main would race with tag/note/rescan
+    /// mutations (torn reads, or worse, crashes inside JSONEncoder).
+    ///
+    /// Two passes, mirroring `decode`'s pendingPairedWithID resolution:
+    ///   1. `snapshotClone()` every record (field-by-field copy; String/
+    ///      Array CoW makes the copies immutable views — see Models.swift).
+    ///   2. Rewire `pairedWith` so each clone points at its partner's CLONE.
+    ///      A partner missing from the array (shouldn't happen, but be
+    ///      defensive) gets an id-only stub — `encode` only reads
+    ///      `pairedWith?.id`.
+    ///
+    /// Internal so tests can assert clone parity + rewiring directly.
+    static func deepCopySnapshot(records: [VideoRecord]) -> [VideoRecord] {
+        let clones = records.map { $0.snapshotClone() }
+        var cloneByID = [UUID: VideoRecord](minimumCapacity: clones.count)
+        for clone in clones { cloneByID[clone.id] = clone }
+        for (original, clone) in zip(records, clones) {
+            guard let partner = original.pairedWith else { continue }
+            if let mapped = cloneByID[partner.id] {
+                clone.pairedWith = mapped
+            } else {
+                let stub = VideoRecord()
+                stub.id = partner.id
+                clone.pairedWith = stub
+            }
+        }
+        return clones
+    }
+
+    /// Encode + atomically write. Runs OFF the main actor (writeQueue) for
+    /// debounced saves; runs synchronously via writeQueue.sync for the
+    /// terminal saveNow. Returns true on success.
+    ///
+    /// Encoding is compact — no .prettyPrinted / .sortedKeys. At ~73 MB
+    /// pretty-printed, indentation alone was ~30-40% of the file; every
+    /// downstream consumer (Python merge/dossier scripts, LiveReload,
+    /// CatalogSync) parses JSON and never diffs the text form.
+    nonisolated private static func encodeAndWrite(payload: CatalogSnapshot, to fileURL: URL) -> Bool {
+        let t0 = CFAbsoluteTimeGetCurrent()
         do {
             let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             encoder.dateEncodingStrategy = .iso8601
-            let data = try encoder.encode(snapshot)
+            let data = try encoder.encode(payload)
             // Atomic write so a crash mid-write doesn't truncate the file.
             // Foundation implements this as: write to a sibling tmp file,
             // fsync, then `rename(2)` into place — POSIX rename is atomic
             // within a filesystem, so readers see either the old file or
             // the new file, never a partial.
             try data.write(to: fileURL, options: Data.WritingOptions.atomic)
-            // Notify the observer (CatalogSync on the master) so it can
-            // refresh manifest.sha256. Skipped for the test singleton —
-            // tests construct their own CatalogStore(directory:) and can
-            // wire an observer if they need to assert the callback.
-            observer?.catalogStoreDidWrite(self)
+            let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+            catalogStoreLog.debug("catalog save: encode+write of \(data.count) bytes took \(ms, format: .fixed(precision: 1)) ms")
+            return true
         } catch {
             NSLog("VideoScan: failed to save catalog snapshot: %@", String(describing: error))
+            catalogStoreLog.error("catalog save failed: \(String(describing: error), privacy: .public)")
+            return false
         }
     }
+}
+
+/// Transport box for handing the snapshot payload to the write queue.
+/// `@unchecked Sendable` is justified because the boxed records are the
+/// deep copies produced by `deepCopySnapshot` — after construction they are
+/// exclusively owned by the save pipeline; no other thread holds a
+/// reference, and nothing mutates them. (The live records the UI mutates
+/// are different objects.)
+private struct SnapshotBox: @unchecked Sendable {
+    let payload: CatalogSnapshot
 }
