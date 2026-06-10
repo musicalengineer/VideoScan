@@ -174,6 +174,15 @@ final class VideoScanModel: ObservableObject {
     /// so updates don't trigger re-render of the main Table view.
     let dashboard = DashboardState()
 
+    /// In-memory search accelerator. Built after catalog load, updated
+    /// on dossier live-reload merges, cleared on full reset. Toolbar
+    /// hit-count badge and the catalog table both filter through it
+    /// instead of running raw `pfRecordsMatchingQuery` over `records`.
+    /// See CatalogSearchIndex.swift for the design + invariants.
+    /// Rick 2026-06-09: per-keystroke lowercase + concat of 50 MB of
+    /// dossier text was the bottleneck behind sluggish typing.
+    let searchIndex = CatalogSearchIndex()
+
     /// Thumbnail cache — keyed by fullPath, avoids regenerating from video file on re-click.
     /// Internal so VideoScanModel+Thumbnail.generateThumbnail can read/write it.
     let thumbnailCache = NSCache<NSString, NSImage>()
@@ -376,6 +385,10 @@ final class VideoScanModel: ObservableObject {
         detectResumableTargets()
         installVolumeMountObservers()
         refreshTargetReachability()
+        // Build the per-record haystack cache once the catalog is fully
+        // assembled (restored + backfilled). All subsequent search
+        // operations route through this index — see searchIndex above.
+        searchIndex.rebuild(records: records)
     }
 
     // Internal (not private) so VideoScanModel+VolumeLifecycle can mutate it.
@@ -401,6 +414,7 @@ final class VideoScanModel: ObservableObject {
         }
         let count = records.count
         records.removeAll()
+        searchIndex.clear()
         // Records the banner was tracking are gone — drop it so the user
         // doesn't see a now-meaningless "Undo" affordance after a wipe.
         clearPurgeUndoState()

@@ -9,24 +9,87 @@ import Foundation
 
 /// A single search token. Most are plain substrings, but year ranges
 /// like "1990s" / "199x" are first-class so the user can type them
-/// naturally.
+/// naturally. Field-prefix tokens like `people:donna` restrict the
+/// match to a specific record field — useful when a name collides
+/// with a place ("matt" the person vs "Matthew" the directory).
 enum SearchToken: Equatable {
-    case substring(String)              // case-insensitive contains
-    case yearRange(ClosedRange<Int>)    // e.g. 1990...1999 for "1990s"
+    case substring(String)                          // case-insensitive contains, any field
+    case yearRange(ClosedRange<Int>)                // e.g. 1990...1999 for "1990s"
+    case field(name: SearchField, value: String)    // e.g. people:donna
+}
+
+/// Field-prefix names recognised by the tokenizer. Keep this enum and
+/// the per-field match logic in `pfFieldTokenMatches` in lock-step.
+enum SearchField: String, Equatable {
+    case people       // detected + suspected + confirmed
+    case transcript   // audioTranscript
+    case caption      // sceneCaptions[].text
+    case ocr          // ocrText + ocrDateCandidates
+    case filename     // filename only (not path/dir)
+    case notes        // user-written notes (only via field prefix; never via plain substring on catalog bar)
+
+    static func parse(_ raw: String) -> SearchField? {
+        switch raw.lowercased() {
+        case "people", "person", "who":     return .people
+        case "transcript", "audio", "said": return .transcript
+        case "caption", "captions", "scene": return .caption
+        case "ocr", "text":                 return .ocr
+        case "filename", "name", "file":    return .filename
+        case "notes", "note":               return .notes
+        default:                            return nil
+        }
+    }
 }
 
 /// Split a search query into tokens. Whitespace separates tokens; each
-/// token is recognised as a year shorthand if it matches `YYYYs` or
-/// `YYYx`, otherwise treated as a substring.
+/// token is then recognised in order:
+///
+///   1. **Field-prefix** like `people:donna` / `year:1991` / `year:1989..1995`
+///      / `transcript:beach`. The field name comes from `SearchField.parse`.
+///   2. **Decade shorthand** `1990s` / `199x` → year range.
+///   3. **Plain substring** (default).
+///
+/// Examples:
 ///
 ///     "donna 1990s holiday"
 ///       → [.substring("donna"), .yearRange(1990...1999), .substring("holiday")]
+///     "people:donna year:1991..1995 caption:beach"
+///       → [.field(.people,"donna"), .yearRange(1991...1995), .field(.caption,"beach")]
 nonisolated func pfTokenizeSearchQuery(_ query: String) -> [SearchToken] {
     let parts = query.split(whereSeparator: \.isWhitespace).map(String.init)
     return parts.compactMap { part in
         let trimmed = part.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty { return nil }
-        // Year decade shorthand: "1990s", "1990S"
+        // 1. Field-prefix: key:value (year:... handled specially as a range)
+        if let colonIdx = trimmed.firstIndex(of: ":") {
+            let rawKey = String(trimmed[..<colonIdx])
+            let value = String(trimmed[trimmed.index(after: colonIdx)...])
+            if value.isEmpty { return .substring(trimmed) }
+            // year:1991 → yearRange(1991...1991)
+            // year:1989..1995 → yearRange(1989...1995)
+            // decade:1990 / decade:1990s → yearRange(1990...1999)
+            let lk = rawKey.lowercased()
+            if lk == "year" {
+                if let range = pfParseYearRangeValue(value) {
+                    return .yearRange(range)
+                }
+                // year:gibberish — fall through to substring of the whole token
+                return .substring(trimmed)
+            }
+            if lk == "decade" {
+                if let range = pfParseDecadeValue(value) {
+                    return .yearRange(range)
+                }
+                return .substring(trimmed)
+            }
+            if let field = SearchField.parse(rawKey) {
+                return .field(name: field, value: value)
+            }
+            // Unknown field prefix — fall back to substring so "URL:foo"
+            // still finds files literally containing "URL:foo".
+            return .substring(trimmed)
+        }
+        // 2. Year decade shorthand: "1990s", "1990S"
         if trimmed.count == 5,
            let prefix = Int(trimmed.dropLast()),
            trimmed.last?.lowercased() == "s",
@@ -34,7 +97,7 @@ nonisolated func pfTokenizeSearchQuery(_ query: String) -> [SearchToken] {
            prefix % 10 == 0 {
             return .yearRange(prefix...(prefix + 9))
         }
-        // Year wildcard: "199x", "200x"
+        // 2b. Year wildcard: "199x", "200x"
         if trimmed.count == 4,
            trimmed.last?.lowercased() == "x",
            let prefix = Int(trimmed.dropLast()),
@@ -42,8 +105,50 @@ nonisolated func pfTokenizeSearchQuery(_ query: String) -> [SearchToken] {
             let base = prefix * 10
             return .yearRange(base...(base + 9))
         }
+        // 3. Plain substring
         return .substring(trimmed)
     }
+}
+
+/// Parse a year range value: "1991" → 1991...1991, "1989..1995" → 1989...1995,
+/// "1990s" → 1990...1999. Returns nil if the value isn't a recognised form.
+nonisolated func pfParseYearRangeValue(_ value: String) -> ClosedRange<Int>? {
+    // Range form: "1989..1995"
+    if let dotdot = value.range(of: "..") {
+        let lo = Int(value[..<dotdot.lowerBound])
+        let hi = Int(value[dotdot.upperBound...])
+        if let lo, let hi, (1900...2099).contains(lo), (1900...2099).contains(hi), lo <= hi {
+            return lo...hi
+        }
+        return nil
+    }
+    // Decade form: "1990s"
+    if value.lowercased().hasSuffix("s"),
+       let n = Int(value.dropLast()),
+       (1900...2099).contains(n), n % 10 == 0 {
+        return n...(n + 9)
+    }
+    // Single year
+    if let y = Int(value), (1900...2099).contains(y) {
+        return y...y
+    }
+    return nil
+}
+
+/// Parse a decade value: "1990", "1990s", "199" all → 1990...1999.
+nonisolated func pfParseDecadeValue(_ value: String) -> ClosedRange<Int>? {
+    let trimmed = value.lowercased().hasSuffix("s") ? String(value.dropLast()) : value
+    if let n = Int(trimmed) {
+        // Accept "1990" or "199" (3-digit shorthand).
+        if n >= 1900 && n <= 2099 && n % 10 == 0 {
+            return n...(n + 9)
+        }
+        if n >= 190 && n <= 209 {
+            let base = n * 10
+            return base...(base + 9)
+        }
+    }
+    return nil
 }
 
 /// Extract any 4-digit years (1900–2099) found in a catalog record's
@@ -82,9 +187,39 @@ nonisolated func pfYearsFromRecord(_ rec: VideoRecord) -> Set<Int> {
     return years
 }
 
+/// Match a `.field(name, value)` token against `rec`'s specific field.
+/// Substring, case-insensitive. Field-prefix tokens behave the same in
+/// both universal and catalog matchers — they're already explicit about
+/// what to look at, so there's no narrow-vs-broad ambiguity to resolve.
+nonisolated func pfFieldTokenMatches(_ field: SearchField, _ value: String, _ rec: VideoRecord) -> Bool {
+    let n = value.lowercased()
+    switch field {
+    case .people:
+        if rec.detectedPeople.contains(where: { $0.lowercased().contains(n) }) { return true }
+        if rec.suspectedPeople.contains(where: { $0.lowercased().contains(n) }) { return true }
+        if rec.confirmedByUserPeople.contains(where: { $0.name.lowercased().contains(n) }) { return true }
+        return false
+    case .transcript:
+        if let t = rec.audioTranscript, t.lowercased().contains(n) { return true }
+        return false
+    case .caption:
+        return rec.sceneCaptions.contains { $0.text.lowercased().contains(n) }
+    case .ocr:
+        if rec.ocrText.contains(where: { $0.text.lowercased().contains(n) }) { return true }
+        if rec.ocrDateCandidates.contains(where: { $0.text.lowercased().contains(n) }) { return true }
+        return false
+    case .filename:
+        return rec.filename.lowercased().contains(n)
+    case .notes:
+        return rec.notes.lowercased().contains(n)
+    }
+}
+
 /// Return true if `token` matches any field on `record`.
 nonisolated func pfTokenMatches(_ token: SearchToken, _ rec: VideoRecord) -> Bool {
     switch token {
+    case .field(let field, let value):
+        return pfFieldTokenMatches(field, value, rec)
     case .substring(let needle):
         let n = needle.lowercased()
         if rec.filename.lowercased().contains(n) { return true }
@@ -132,44 +267,98 @@ nonisolated func pfRecordsMatchingQuery(_ records: [VideoRecord], query: String)
     return records.filter { rec in tokens.allSatisfy { pfTokenMatches($0, rec) } }
 }
 
-// MARK: - Catalog search (filename + person tags)
+// MARK: - Catalog search (content-only — filename / people / dossier text)
 //
-// Powers the Catalog tab's search bar. Matches filenames (Finder-style
-// behavior the user expects) AND person tags on the record. Path,
-// directory, codec, notes, etc. are intentionally NOT searched here
-// — those live in the universal search (pfRecordMatchesQuery) which
-// is too broad for the always-on catalog search bar. Typing "matt"
-// should find files named *matt* and files tagged with Matt, not
-// every file in a "Matthew" directory.
+// Powers the Catalog tab's search bar. Matches the "what's in this
+// video" fields (filename, people tags, captions, transcript, OCR).
+// Path, directory, codec, lifecycle, notes are intentionally NOT
+// searched here — those belong to universal search
+// (pfRecordMatchesQuery), which is too broad for the always-on
+// catalog bar. Typing "matt" should find files named *matt* and
+// files tagged with Matt, not every file in a "Matthew" directory.
+//
+// Token semantics (Rick 2026-06-08): the query string is split on
+// whitespace and EVERY token must match somewhere on the record (AND
+// semantics across tokens, OR semantics across fields per-token). So
+// typing "mark dan grampa" finds family clips whose audio transcript
+// mentions all three names — the natural-language semantic search
+// surface Rick was after. Year shorthand ("1990s", "199x") is
+// year-range matched against any year embedded in filename/path or
+// date-modified/created, sharing the universal-search tokenizer.
+// Pre-existing universal-search tokens that only make sense over
+// path/codec/notes (e.g. a substring matching only a directory name)
+// still won't fire here because this match uses the narrower field
+// set below.
 
-/// Case-insensitive substring match against filename + detectedPeople
-/// + suspectedPeople. Returns true on empty query so callers don't
-/// need their own short-circuit.
+/// Match one tokenised search term against the catalog's narrow
+/// (content-only) field set. Same per-token semantics as the
+/// universal `pfTokenMatches` but excludes path/directory/codec/notes.
+nonisolated func pfCatalogTokenMatches(_ token: SearchToken, _ rec: VideoRecord) -> Bool {
+    switch token {
+    case .field(let field, let value):
+        // Field-prefix tokens explicitly name the field, so they're
+        // safe to honor in the catalog bar too — even fields the bar
+        // would otherwise exclude (notes). The user opted in by typing
+        // the prefix.
+        return pfFieldTokenMatches(field, value, rec)
+    case .substring(let needle):
+        let n = needle.lowercased()
+        if rec.filename.lowercased().contains(n) { return true }
+        if rec.detectedPeople.contains(where: { $0.lowercased().contains(n) }) { return true }
+        if rec.suspectedPeople.contains(where: { $0.lowercased().contains(n) }) { return true }
+        // User-confirmed names match the same as algorithm-detected names
+        // for catalog search — both are valid "this video has X" tags.
+        // rejectedPeople is intentionally NOT searched here: a record where
+        // Rick said "not Anna" should never surface for "anna" queries,
+        // which is the whole point of that field.
+        if rec.confirmedByUserPeople.contains(where: { $0.name.lowercased().contains(n) }) { return true }
+        // Semantic content tags — captions and audio transcripts describe
+        // what's IN the video. Composes with people-tag matches: typing
+        // "donna guitar" finds clips tagged with Donna AND whose caption
+        // mentions guitar — the original two-signal AND demo from the
+        // 2026-06-07 brainstorm.
+        if rec.sceneCaptions.contains(where: { $0.text.lowercased().contains(n) }) { return true }
+        if let t = rec.audioTranscript, t.lowercased().contains(n) { return true }
+        // Dossier OCR fields — date burn-ins and on-screen text are the
+        // same kind of "what's in the frame" content as captions. Typing
+        // "1991" should find a record whose burn-in shows JUN 1991 even
+        // when the file mtime says 2024 (transcode date).
+        if rec.ocrDateCandidates.contains(where: { $0.text.lowercased().contains(n) }) { return true }
+        if rec.ocrText.contains(where: { $0.text.lowercased().contains(n) }) { return true }
+        return false
+    case .yearRange(let range):
+        // Year shorthand fires on filename-embedded years (e.g. "Cape
+        // Cod 1990 or earlier") AND on dossier-inferred dates so
+        // typing "1990s" finds clips dated to that decade by ANY
+        // signal — file metadata, path year, or OCR-derived dates.
+        let years = pfYearsFromRecord(rec)
+        if years.contains(where: { range.contains($0) }) { return true }
+        // Inferred record date from dossier (multi-signal triangulation).
+        // Highest-confidence year signal we have; honor it for decade
+        // queries even when filename/path carry no year hint.
+        if let inf = rec.inferredRecordDate {
+            let y = Calendar(identifier: .gregorian).component(.year, from: inf)
+            if range.contains(y) { return true }
+        }
+        return false
+    }
+}
+
+/// Tokenised AND match against the catalog's narrow field set.
+/// Empty query matches every record so callers don't need a short-
+/// circuit. Examples:
+///
+///     ""                  → all records
+///     "donna"             → records mentioning donna in any
+///                           content field
+///     "mark dan grampa"   → records with ALL three substrings,
+///                           each in any content field (the original
+///                           jq demo, now native)
+///     "donna 1990s"       → donna AND a 1990s year signal
 nonisolated func pfRecordFilenameOrPersonMatch(_ rec: VideoRecord, query: String) -> Bool {
-    if query.isEmpty { return true }
-    let q = query.lowercased()
-    if rec.filename.lowercased().contains(q) { return true }
-    if rec.detectedPeople.contains(where: { $0.lowercased().contains(q) }) { return true }
-    if rec.suspectedPeople.contains(where: { $0.lowercased().contains(q) }) { return true }
-    // User-confirmed names match the same as algorithm-detected names
-    // for catalog search — both are valid "this video has X" tags.
-    // rejectedPeople is intentionally NOT searched here: a record where
-    // Rick said "not Anna" should never surface for "anna" queries,
-    // which is the whole point of that field.
-    if rec.confirmedByUserPeople.contains(where: { $0.name.lowercased().contains(q) }) { return true }
-    // Semantic content tags — captions and audio transcripts describe
-    // what's IN the video, so they belong with people tags as
-    // "content-style" fields. Distinct from path/directory above which
-    // describe where the file lives and are intentionally excluded.
-    if rec.sceneCaptions.contains(where: { $0.text.lowercased().contains(q) }) { return true }
-    if let t = rec.audioTranscript, t.lowercased().contains(q) { return true }
-    // Dossier OCR fields — date burn-ins and on-screen text are the
-    // same kind of "what's in the frame" content as captions. Typing
-    // "1991" should find a record whose burn-in shows JUN 1991 even
-    // when the file mtime says 2024 (transcode date).
-    if rec.ocrDateCandidates.contains(where: { $0.text.lowercased().contains(q) }) { return true }
-    if rec.ocrText.contains(where: { $0.text.lowercased().contains(q) }) { return true }
-    return false
+    let tokens = pfTokenizeSearchQuery(query)
+    if tokens.isEmpty { return true }
+    return tokens.allSatisfy { pfCatalogTokenMatches($0, rec) }
 }
 
 // MARK: - Family tagging predicates (Step 5)
