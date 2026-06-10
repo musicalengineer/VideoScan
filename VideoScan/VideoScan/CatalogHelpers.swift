@@ -453,6 +453,11 @@ struct CatalogToolbar<Dashboard: View>: View {
 
 struct CatalogContent: View {
     @EnvironmentObject var model: VideoScanModel
+    /// Media File Operations registry — "Compare These Two Files…" hands
+    /// the pair to the center and opens the operations window; the job
+    /// runs there (non-modal), not in a sheet.
+    @EnvironmentObject var fileOpsCenter: MediaFileOperationsCenter
+    @Environment(\.openWindow) private var openWindow
     let records: [VideoRecord]
     @Binding var selectedIDs: Set<UUID>
     @Binding var sortOrder: [KeyPathComparator<VideoRecord>]
@@ -510,19 +515,15 @@ struct CatalogContent: View {
     /// ForEach.IDGenerator with an out-of-bounds subscript).
     @State private var tableData: [VideoRecord] = []
 
-    /// "Convert to images…" frame-ripper. Created when the user picks
+    /// "Extract Frames…" frame-ripper. Created when the user picks
     /// the menu item; the sheet observes its @Published state and
     /// dismisses on close. State (running, scanned, saved, etc.) lives
     /// on the FrameRipper instance so we can show progress while the
     /// rip runs in a background Task. Rick 2026-06-09: built for
-    /// Donna's birthday-print project.
+    /// Donna's birthday-print project. (Migration into the Media File
+    /// Operations window is phase 2.)
     @StateObject private var frameRipper = FrameRipper()
     @State private var showFrameRipperSheet = false
-
-    /// "Compare These Two Files…" quick check. Non-nil presents the
-    /// sheet via `.sheet(item:)`; the comparison Task is owned by the
-    /// sheet's `.task` and is cancelled automatically on dismiss.
-    @State private var pairComparePayload: PairComparePayload?
 
     /// Memo boxes for per-render derivations (perf batch 2026-06-10).
     /// RenderMemo is a CLASS held by @State — mutating it during body
@@ -798,20 +799,14 @@ struct CatalogContent: View {
         .sheet(item: $fileJourneyPayload) { payload in
             FileJourneySheet(journey: payload)
         }
-        // "Convert to images…" progress + result sheet.
+        // "Extract Frames…" progress + result sheet.
         .sheet(isPresented: $showFrameRipperSheet) {
             FrameRipperSheet(ripper: frameRipper,
                              isPresented: $showFrameRipperSheet)
         }
-        // Quick two-file check — `.sheet(item:)` so a single
-        // Identifiable payload drives present/dismiss (avoids the
-        // chained-isPresented sheet race this project has hit before).
-        .sheet(item: $pairComparePayload) { payload in
-            MediaPairCompareSheet(payload: payload)
-        }
     }
 
-    /// User picked "Convert to images…" — show a folder picker, then
+    /// User picked "Extract Frames…" — show a folder picker, then
     /// kick off the frame ripper. Sheet observes the ripper's
     /// @Published state.
     private func startFrameRip(for rec: VideoRecord) {
@@ -1189,12 +1184,12 @@ struct CatalogContent: View {
                             }
                         }
 
-                        // Convert to images — extract the highest-quality
+                        // Extract Frames — extract the highest-quality
                         // portrait frames from this video as lossless PNGs.
                         // Rick 2026-06-09: built for Donna's Aug 4 birthday
                         // print. Disabled when the file is offline (we'd
                         // have nothing to read frames from).
-                        Button("Convert to images…") {
+                        Button("Extract Frames…") {
                             startFrameRip(for: rec)
                         }
                         .disabled(!VolumeReachability.isReachable(path: rec.fullPath)
@@ -1293,14 +1288,17 @@ struct CatalogContent: View {
                             // movie in a different wrapper, or genuinely
                             // different? Shown only when exactly two rows
                             // are selected. Distinct from the volume-level
-                            // Compare & Rescue feature.
+                            // Compare & Rescue feature. Runs as a job in
+                            // the Media File Operations window (non-modal,
+                            // survives window close, per-volume HDD gated).
                             if selectedRecs.count == 2,
                                let fileA = selectedRecs.first,
                                let fileB = selectedRecs.last {
                                 Divider()
                                 Button("Compare These Two Files…") {
-                                    pairComparePayload = PairComparePayload(
+                                    fileOpsCenter.startCompare(
                                         recordA: fileA, recordB: fileB)
+                                    openWindow(id: "combine")
                                 }
                                 .disabled(!VolumeReachability.isReachable(path: fileA.fullPath)
                                           || !VolumeReachability.isReachable(path: fileB.fullPath))

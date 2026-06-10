@@ -71,6 +71,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// snapshot synchronously on Cmd-Q.
     weak var catalogModel: VideoScanModel?
 
+    /// Set by VideoScanApp at launch — the quit guard below consults it
+    /// so a Cmd-Q can't silently kill in-flight file operations.
+    weak var fileOpsCenter: MediaFileOperationsCenter?
+
     /// True when the app is launched as a test host (unit tests).
     static var isRunningTests: Bool {
         NSClassFromString("XCTestCase") != nil
@@ -111,6 +115,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainWindowHelper.shared.openMainWindow()
         }
         return true
+    }
+
+    /// Quit guard: if Media File Operations jobs are still running,
+    /// confirm before quitting, then cancel them so any ffmpeg children
+    /// die (ProcessRunner's cancellation handler terminates them).
+    /// Extends — doesn't replace — the existing willTerminate cleanup.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !Self.isRunningTests else { return .terminateNow }
+        // Delegate callbacks arrive on the main thread; assumeIsolated
+        // lets us touch the MainActor-bound center and NSAlert without
+        // an async hop (same pattern as applicationWillTerminate).
+        return MainActor.assumeIsolated {
+            guard let center = fileOpsCenter, center.runningCount > 0 else {
+                return .terminateNow
+            }
+            let running = center.runningCount
+
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = running == 1
+                ? "A file operation is still running"
+                : "\(running) file operations are still running"
+            alert.informativeText = "Quitting now will stop the work in progress. Anything already finished is safe."
+            alert.addButton(withTitle: "Quit Anyway")
+            alert.addButton(withTitle: "Keep Working")
+
+            if alert.runModal() == .alertFirstButtonReturn {
+                center.cancelAll()
+                return .terminateNow
+            }
+            return .terminateCancel
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -210,6 +246,12 @@ struct VideoScanApp: App {
     /// modal sheet; promoted here once Compare became its own Window.
     @StateObject private var volumeRescue = VolumeRescueOperation()
 
+    /// Registry for the Media File Operations window's new-style jobs
+    /// (compare today, extract in phase 2). App-level so the catalog
+    /// context menu, the operations window, and the quit guard all see
+    /// the same instance — jobs survive the window closing.
+    @StateObject private var fileOpsCenter = MediaFileOperationsCenter()
+
     var body: some Scene {
         WindowGroup(id: "main") {
             MainWindowCapture {
@@ -219,8 +261,21 @@ struct VideoScanApp: App {
                     .environmentObject(catalogSync)
                     .environmentObject(captionOrchestrator)
                     .environmentObject(volumeRescue)
+                    .environmentObject(fileOpsCenter)
                     .onAppear {
                         appDelegate.catalogModel = catalogModel
+                        appDelegate.fileOpsCenter = fileOpsCenter
+                        // Volume classification for per-volume read
+                        // gating (HDD = one compare at a time): longest
+                        // matching scan-target prefix wins; no match →
+                        // .unknown (gate allows 2).
+                        fileOpsCenter.mediaTechForPath = { [weak catalogModel] path in
+                            guard let model = catalogModel else { return .unknown }
+                            return model.scanTargets
+                                .filter { !$0.searchPath.isEmpty && path.hasPrefix($0.searchPath) }
+                                .max(by: { $0.searchPath.count < $1.searchPath.count })?
+                                .mediaTech ?? .unknown
+                        }
                         // Apply viewer-vs-master semantics to model + store.
                         catalogModel.applyReadOnlyMode(catalogSync.isReadOnly)
                         // On the master, install the observer that
@@ -364,13 +419,19 @@ struct VideoScanApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: 720, height: 560)
 
-        Window("Combine & Render", id: "combine") {
-            CombineWindow()
+        // Media File Operations — the one window for every file-by-file
+        // verb (combine, compare, extract-frames…). Evolved from the old
+        // "Combine & Render" window; keeps the scene id "combine" so
+        // existing openWindow(id:) call sites and the ⌘⇧R shortcut
+        // keep working.
+        Window("Media File Operations", id: "combine") {
+            MediaFileOperationsWindow()
                 .environmentObject(catalogModel)
                 .environmentObject(catalogModel.dashboard)
+                .environmentObject(fileOpsCenter)
         }
         .windowResizability(.contentMinSize)
-        .defaultSize(width: 640, height: 420)
+        .defaultSize(width: 720, height: 480)
         .defaultPosition(.center)
 
         Window("Settings", id: "settings") {
@@ -433,7 +494,7 @@ struct WindowMenuItems: View {
         }
         .keyboardShortcut("c", modifiers: [.command, .shift])
 
-        Button("Combine & Render") {
+        Button("Media File Operations") {
             openWindow(id: "combine")
         }
         .keyboardShortcut("r", modifiers: [.command, .shift])
@@ -462,7 +523,7 @@ final class MainWindowHelper {
     var openWindowAction: OpenWindowAction?
 
     /// Known auxiliary window titles — anything else is the main window.
-    private let auxiliaryTitles = ["Dashboard", "Console", "About", "Realtime", "Combine"]
+    private let auxiliaryTitles = ["Dashboard", "Console", "About", "Realtime", "Media File Operations"]
 
     func openMainWindow() {
         // First try to find and unhide an existing main window

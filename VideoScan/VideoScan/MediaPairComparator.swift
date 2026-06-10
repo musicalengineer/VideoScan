@@ -240,11 +240,11 @@ enum PairCompareError: LocalizedError {
 // MARK: - Comparator (I/O orchestration)
 
 /// Runs the tiered comparison off the main thread and publishes
-/// progress for the sheet. Owned per-presentation by
-/// `MediaPairCompareSheet`; the sheet's `.task` drives `run(...)`, so
-/// SwiftUI's automatic task cancellation on dismiss propagates into
-/// the hash loop (per-chunk check) and into ffmpeg (ProcessRunner's
-/// cancellation handler terminates the child process).
+/// progress for the UI. Owned one-per-job by `PairCompareJob` (Media
+/// File Operations window); the job's run Task drives `run(...)`, so
+/// cancelling that task propagates into the hash loop (per-chunk
+/// check) and into ffmpeg (ProcessRunner's cancellation handler
+/// terminates the child process).
 ///
 /// `@MainActor` ≈ "all members touched only on the UI thread" — the
 /// heavy lifting happens in `nonisolated static` helpers below, which
