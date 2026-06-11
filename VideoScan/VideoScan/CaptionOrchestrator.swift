@@ -191,7 +191,7 @@ final class CaptionOrchestrator: ObservableObject {
             return
         }
 
-        let reachable = model.scanTargets.filter { $0.isReachable && !$0.searchPath.isEmpty }
+        let reachable = model.scanTargets.filter { $0.isReachable && !$0.searchPath.isEmpty && !$0.isRetired }
         captionOrchLog.info("Catalog-wide caption: \(reachable.count) reachable target(s)")
         appLog.write("Analyzing catalog: starting across \(reachable.count) reachable volume(s)")
 
@@ -282,7 +282,7 @@ final class CaptionOrchestrator: ObservableObject {
         }()
 
         let reachablePaths = model.scanTargets
-            .filter { $0.isReachable && !$0.searchPath.isEmpty }
+            .filter { $0.isReachable && !$0.searchPath.isEmpty && !$0.isRetired }
             .map { $0.searchPath }
         let base = pfCatalogWideMetadataCandidates(
             records: model.records,

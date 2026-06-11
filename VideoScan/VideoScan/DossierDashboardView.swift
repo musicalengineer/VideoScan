@@ -158,20 +158,20 @@ struct DossierDashboardView: View {
                 .frame(maxWidth: .infinity)
             }
 
-            // MARK: In-app sweep controls (separate from fleet workers)
+            // MARK: Local analysis controls
             HStack(spacing: 12) {
                 Button {
                     Task { await captionOrchestrator.startCatalogWideDossier(model: model) }
                 } label: {
-                    Label("In-app Sweep", systemImage: "play.fill")
+                    Label("Analyze Local Media", systemImage: "play.fill")
                 }
                 .disabled(captionOrchestrator.currentStatus.isActive)
-                .help("Start a dossier sweep from within the app (separate from the external fleet workers).")
+                .help("Run dossier analysis on all reachable local media files.")
 
                 Button(role: .destructive) {
                     captionOrchestrator.cancel()
                 } label: {
-                    Label("Stop In-app", systemImage: "stop.fill")
+                    Label("Stop Analyzing", systemImage: "stop.fill")
                 }
                 .disabled(!captionOrchestrator.currentStatus.isActive)
 
