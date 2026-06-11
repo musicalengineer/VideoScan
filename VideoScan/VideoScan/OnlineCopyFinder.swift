@@ -46,8 +46,10 @@ struct OnlineCopyFinder {
         byUMID = Dictionary(grouping: active.filter { !$0.materialPackageUMID.isEmpty }) {
             Self.umidKey($0)
         }
-        byDupGroup = Dictionary(grouping: active.filter { $0.duplicateGroupID != nil }) {
-            $0.duplicateGroupID!
+        byDupGroup = active.reduce(into: [:]) { dict, rec in
+            if let group = rec.duplicateGroupID {
+                dict[group, default: []].append(rec)
+            }
         }
     }
 
