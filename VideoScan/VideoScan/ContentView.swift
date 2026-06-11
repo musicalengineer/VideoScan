@@ -194,6 +194,13 @@ struct CatalogView: View {
     /// When `filterByIDs` was populated by Find A/V Pair, the candidate's score
     /// (0–14) so the focus banner can show a Best/Better/Good/Maybe label.
     @State private var focusMatchScore: Int?
+    /// Focus-banner caption — set alongside filterByIDs by whichever
+    /// verb created the focus ("A/V Pair focus", "Online copies",
+    /// "Not migrated from <volume>").
+    @State private var focusLabel = "A/V Pair focus"
+    /// Non-nil presents the volume migration report sheet
+    /// ("Show Migrated…" on an offline/retired volume).
+    @State private var migrationReportItem: VolumeMigrationItem?
     // Volume pane height is now managed by NSSplitView (VerticalSplitView)
     @State private var showPairsOnly = false
     @State private var catalogViewFilters: Set<CatalogViewFilter> = []
@@ -364,6 +371,7 @@ struct CatalogView: View {
                 showRemoved: showRemoved,
                 filterByIDs: filterByIDs,
                 focusMatchScore: focusMatchScore,
+                focusLabel: focusLabel,
                 previewImage: model.previewImage,
                 previewFilename: model.previewFilename,
                 previewOfflineVolumeName: model.previewOfflineVolumeName,
@@ -399,6 +407,7 @@ struct CatalogView: View {
                     filterByIDs = [id1, id2]
                     selectedIDs = [id1, id2]
                     focusMatchScore = nil
+                    focusLabel = "A/V Pair focus"
                 },
                 onFindAVPair: { rec in
                     findAVPairFocus(for: rec)
@@ -411,6 +420,15 @@ struct CatalogView: View {
                     model.focusedMediaIDs = model.focusSet(for: rec.id)
                     model.pendingArchiveSelection = rec.id
                     selectedTab = 2
+                },
+                onShowOnlineCopies: { focusIDs, selectID in
+                    searchText = ""
+                    selectedVolumeIDs = []
+                    showPairsOnly = false
+                    filterByIDs = focusIDs
+                    selectedIDs = [selectID]
+                    focusMatchScore = nil
+                    focusLabel = "Online copies"
                 }
             )
             .onChange(of: selectedIDs) {
@@ -499,6 +517,21 @@ struct CatalogView: View {
         }
         .sheet(item: $combinePairItem) { item in
             CombinePairSheet(originalVideo: item.video, originalAudio: item.audio)
+        }
+        // "Show Migrated…" on an offline/retired volume — per-volume
+        // migration report (which files have copies elsewhere, where,
+        // and which don't).
+        .sheet(item: $migrationReportItem) { item in
+            VolumeMigrationSheet(item: item) { unmigratedIDs in
+                migrationReportItem = nil
+                searchText = ""
+                selectedVolumeIDs = []
+                showPairsOnly = false
+                filterByIDs = Set(unmigratedIDs)
+                selectedIDs = Set(unmigratedIDs)
+                focusMatchScore = nil
+                focusLabel = "Not migrated from \(item.volumeName)"
+            }
         }
         .alert("Delete Duplicates", isPresented: $showDeleteDuplicatesConfirm) {
             Button("Delete \(deleteTargetCount) Files", role: .destructive) {
@@ -619,6 +652,7 @@ struct CatalogView: View {
         focusMatchScore = score
         filterByIDs = ids
         selectedIDs = [rec.id]
+        focusLabel = "A/V Pair focus"
     }
 
     // MARK: - Archive → Catalog Navigation
@@ -637,6 +671,7 @@ struct CatalogView: View {
         let ids = VideoScanModel.catalogFilterIDs(for: id, pairMode: pairMode, in: model.records)
         filterByIDs = ids
         focusMatchScore = nil
+        focusLabel = "A/V Pair focus"
         selectedIDs = ids
         model.focusedMediaIDs = model.focusSet(for: id)
         // Generate thumbnail — deliberate one-shot navigation, so the
@@ -708,6 +743,7 @@ struct CatalogView: View {
         showPairsOnly = false
         filterByIDs = model.focusedMediaIDs
         focusMatchScore = nil
+        focusLabel = "A/V Pair focus"
         selectedIDs = model.focusedMediaIDs
     }
 
@@ -1546,6 +1582,22 @@ struct CatalogView: View {
         .font(.system(size: 14))
     }
 
+    /// Build the migration report for one offline/retired volume and
+    /// present the sheet. Pure index-build + lookups over ~16k records
+    /// (a few ms) — fine to run synchronously on the menu action.
+    private func showMigrationReport(for target: CatalogScanTarget) {
+        guard !target.searchPath.isEmpty else { return }
+        let report = OnlineCopyFinder(records: model.records).migrationReport(
+            volumePathPrefix: target.searchPath,
+            isOnline: { VolumeReachability.isReachable(path: $0) },
+            volumeLabel: { VolumeReachability.displayLabel(forPath: $0) }
+        )
+        migrationReportItem = VolumeMigrationItem(
+            volumeName: VolumeReachability.displayLabel(forPath: target.searchPath),
+            report: report
+        )
+    }
+
     /// Open the Volumes editor window with the given scan target pre-selected.
     /// Mirrors the Volume Roles & Archive… context-menu action (volumeContextVolumeSection)
     /// and the VolumeBadge double-click in ArchiveView. Safe if the id no longer
@@ -1598,6 +1650,17 @@ struct CatalogView: View {
                     Label("Verify Catalog", systemImage: "checkmark.shield")
                 }
                 .disabled(!first.status.isIdle)
+            }
+            // Show Migrated — offline/retired volumes only: the verb
+            // answers "this disk is gone/parked; is its content safe
+            // somewhere else?" An online volume's files ARE the online
+            // version, so the report would be noise there.
+            if single, first.isRetired || !first.isReachable {
+                Button(action: { showMigrationReport(for: first) }) {
+                    Label("Show Migrated…",
+                          systemImage: "externaldrive.badge.checkmark")
+                }
+                .help("Report which of this volume's cataloged files have copies on other volumes, and which have no copy anywhere else.")
             }
             if single {
                 // Caption Videos — sibling per-target action to "Find
