@@ -525,9 +525,15 @@ struct CatalogContent: View {
     /// ForEach.IDGenerator with an out-of-bounds subscript).
     @State private var tableData: [VideoRecord] = []
 
-    // "Extract Frames…" (Rick 2026-06-09, Donna's birthday-print
-    // project) runs as an ExtractFramesJob in the Media File
+    // "Extract Facial Frames…" (Rick 2026-06-09, Donna's birthday-
+    // print project) runs as an ExtractFramesJob in the Media File
     // Operations window since phase 2 — no view-local ripper state.
+
+    /// "Extract Frames…" (ffmpeg-only, verb split 2026-06-10) — the
+    /// right-clicked record awaiting its sampling-options sheet.
+    /// Non-nil drives the sheet; the job itself lives in the Media
+    /// File Operations center once the user confirms.
+    @State private var ripAllFramesTarget: VideoRecord?
 
     /// Memo boxes for per-render derivations (perf batch 2026-06-10).
     /// RenderMemo is a CLASS held by @State — mutating it during body
@@ -803,16 +809,25 @@ struct CatalogContent: View {
         .sheet(item: $fileJourneyPayload) { payload in
             FileJourneySheet(journey: payload)
         }
+        // "Extract Frames…" options sheet (sampling + disk estimate).
+        // .sheet(item:) per the chained-sheet antipattern memo —
+        // VideoRecord is Identifiable, so the binding drives the
+        // present/dismiss cycle directly.
+        .sheet(item: $ripAllFramesTarget) { rec in
+            RipAllFramesSheet(record: rec)
+        }
     }
 
-    /// User picked "Extract Frames…" — show a folder picker, then
-    /// hand the rip to the Media File Operations center and open its
-    /// window (same pattern as "Compare These Two Files…"). The job
-    /// owns the run Task, so it survives this view and the window
-    /// closing.
+    /// User picked "Extract Facial Frames…" — show a folder picker,
+    /// then hand the rip to the Media File Operations center and open
+    /// its window (same pattern as "Compare These Two Files…"). The
+    /// job owns the run Task, so it survives this view and the window
+    /// closing. (The ffmpeg-only "Extract Frames…" verb goes through
+    /// RipAllFramesSheet instead — it needs sampling options and a
+    /// disk-usage estimate before start.)
     private func startFrameRip(for rec: VideoRecord) {
         let panel = NSOpenPanel()
-        panel.title = "Save extracted frames into…"
+        panel.title = "Save extracted facial frames into…"
         panel.message = "Pick the parent folder. A subfolder named \"<video>-frames\" will be created inside."
         panel.canCreateDirectories = true
         panel.canChooseDirectories = true
@@ -1216,13 +1231,26 @@ struct CatalogContent: View {
                             .help("Check whether these two files are exact copies, the same movie in a different wrapper, or genuinely different.")
                             .accessibilityIdentifier("catalog.row.compareTwoFiles")
                         }
-                        // Extract Frames — best portrait frames as lossless
-                        // PNGs (Donna's Aug 4 birthday print). Disabled when
-                        // the file is offline.
-                        Button("Extract Frames…") {
+                        // Extract Facial Frames — best portrait frames as
+                        // lossless PNGs, Vision face-quality ranked (Donna's
+                        // Aug 4 birthday print). Disabled when the file is
+                        // offline. (Renamed from "Extract Frames…" when the
+                        // ffmpeg-only verb below was added, 2026-06-10.)
+                        Button("Extract Facial Frames…") {
                             startFrameRip(for: rec)
                         }
                         .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
+                        .accessibilityIdentifier("catalog.row.extractFacialFrames")
+                        // Extract Frames — ffmpeg-only frame export (every
+                        // frame / every Nth / N per second), no Vision.
+                        // Opens an options sheet first: this verb can write
+                        // tens of thousands of PNGs, so the user sees the
+                        // frame-count + disk estimate before anything runs.
+                        Button("Extract Frames…") {
+                            ripAllFramesTarget = rec
+                        }
+                        .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
+                        .accessibilityIdentifier("catalog.row.extractFrames")
 
                         if pureActive {
                             Divider()

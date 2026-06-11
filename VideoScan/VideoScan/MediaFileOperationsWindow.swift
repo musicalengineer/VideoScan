@@ -316,14 +316,13 @@ struct MediaFileOperationRow: View {
                     // Verdict in-row, like compare's chip: frame count
                     // + jump straight to the PNGs (the affordance the
                     // retired FrameRipperSheet had).
-                    Text(summary)
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(.green)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Capsule().fill(Color.green.opacity(0.15)))
-                        .lineLimit(1)
-                        .fixedSize()
+                    finishedChip(summary)
+                    revealButton(dest)
+                } else if let rip = job as? RipAllFramesJob,
+                          let dest = rip.ripper.completedDestination {
+                    // Same finished treatment for the ffmpeg-only frame
+                    // export — count + size chip, Reveal to the PNGs.
+                    finishedChip(summary)
                     revealButton(dest)
                 } else {
                     Image(systemName: "checkmark.circle.fill")
@@ -342,10 +341,15 @@ struct MediaFileOperationRow: View {
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(.secondary)
                 // A cancelled extract keeps its already-saved frames —
-                // offer Reveal on the partial output too.
+                // offer Reveal on the partial output too. Both frame
+                // verbs behave the same way here.
                 if let extract = job as? ExtractFramesJob,
                    extract.ripper.framesSaved > 0,
                    let dest = extract.ripper.completedDestination {
+                    revealButton(dest)
+                } else if let rip = job as? RipAllFramesJob,
+                          rip.ripper.framesWritten > 0,
+                          let dest = rip.ripper.completedDestination {
                     revealButton(dest)
                 }
             }
@@ -355,6 +359,19 @@ struct MediaFileOperationRow: View {
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(.secondary)
         }
+    }
+
+    /// Green summary capsule for finished extract-style rows (shared
+    /// by both frame verbs so they read identically in the list).
+    private func finishedChip(_ summary: String) -> some View {
+        Text(summary)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundColor(.green)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(Capsule().fill(Color.green.opacity(0.15)))
+            .lineLimit(1)
+            .fixedSize()
     }
 
     /// "Reveal in Finder" for extract rows — selects the output folder.
@@ -381,8 +398,8 @@ struct MediaFileOperationRow: View {
 
 // MARK: - Verb badge
 
-/// Colored verb capsule: COMBINE green, COMPARE blue, EXTRACT orange —
-/// small caps bold.
+/// Colored verb capsule: COMBINE green, COMPARE blue, FACES orange,
+/// FRAMES purple — small caps bold.
 struct MediaFileOperationBadge: View {
     let kind: MediaFileOperationKind
 
@@ -403,6 +420,7 @@ extension MediaFileOperationKind {
         case .combine: return .green
         case .compare: return .blue
         case .extract: return .orange
+        case .ripFrames: return .purple
         }
     }
 }

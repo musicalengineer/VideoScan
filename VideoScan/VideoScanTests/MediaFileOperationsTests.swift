@@ -335,13 +335,17 @@ struct MediaFileOperationKindTests {
     @Test func badgeTextMapping() {
         #expect(MediaFileOperationKind.combine.badgeText == "Combine")
         #expect(MediaFileOperationKind.compare.badgeText == "Compare")
-        #expect(MediaFileOperationKind.extract.badgeText == "Extract")
+        // Verb split 2026-06-10: .extract (Vision facial rip) says
+        // "Faces" so it reads distinctly next to .ripFrames "Frames".
+        #expect(MediaFileOperationKind.extract.badgeText == "Faces")
+        #expect(MediaFileOperationKind.ripFrames.badgeText == "Frames")
     }
 
     @Test func badgeColorMapping() {
         #expect(MediaFileOperationKind.combine.badgeColor == .green)
         #expect(MediaFileOperationKind.compare.badgeColor == .blue)
         #expect(MediaFileOperationKind.extract.badgeColor == .orange)
+        #expect(MediaFileOperationKind.ripFrames.badgeColor == .purple)
     }
 
     // The verdict chip colors must keep matching the retired sheet's
