@@ -177,7 +177,7 @@ enum PerceptualHash {
                 if bytes[base + x] > bytes[base + x + 1] {
                     hash |= bit
                 }
-                bit &<<= 1   // `&<<` = wrapping shift (≈ C++ <<; Swift's plain << traps on overflow)
+                bit &<<= 1   // `&<<` masks the shift AMOUNT; plain << also just discards shifted-out bits (≈ C++ <<)
             }
         }
         return hash
@@ -234,6 +234,10 @@ enum PerceptualHash {
 
         // Coincidence bound: C(n,m) · p^m, in log10 space. m = 0 ⇒
         // bound is 1 ⇒ log10 = 0 (no evidence either way).
+        // Display-only honesty notes (verdict gates don't use this):
+        // picking the best of 5 alignment offsets costs ~log10(5) ≈ 0.7
+        // decades, and dHash bits of real frames aren't fully
+        // independent — treat the figure as an order-of-magnitude bound.
         var log10P = 0.0
         if m > 0 {
             log10P = log10Choose(n, m) + Double(m) * log10PerFrameCoincidence
@@ -244,7 +248,7 @@ enum PerceptualHash {
                                      bestOffset: bestOffset,
                                      framesCompared: n,
                                      matchedFrames: m,
-                                     medianDistance: median(bestDistances),
+                                     medianDistance: bestMedian,
                                      matchFraction: fraction,
                                      log10CoincidenceProbability: log10P)
     }

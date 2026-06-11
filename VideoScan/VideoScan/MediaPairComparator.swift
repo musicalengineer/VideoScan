@@ -455,6 +455,11 @@ final class MediaPairComparator: ObservableObject {
                 statusText = "Comparing visual content…"
                 // The earlier tiers already walked the bar to ~1.0; the
                 // perceptual pass owns a fresh 0…1 sweep (file A then B).
+                // Bump the generation FIRST: Tier-2 fraction callbacks
+                // hop here via unstructured Tasks, so one enqueued just
+                // before this reset could land after it and snap the
+                // bar back to ~1.0. Stale-generation updates are dropped.
+                fractionGeneration += 1
                 fraction = 0
                 isIndeterminate = false
                 do {
@@ -529,12 +534,21 @@ final class MediaPairComparator: ObservableObject {
         }
     }
 
-    /// Tier-2 (0…1 per file) fraction → published overall fraction.
+    /// Monotonic token for progress-bar ownership. Each tier that
+    /// resets the bar bumps this; sinks created earlier carry the old
+    /// value and their late-arriving updates are ignored (the hops are
+    /// unstructured Tasks, so ordering isn't guaranteed otherwise).
+    private var fractionGeneration = 0
+
+    /// Per-tier (0…1 per file) fraction → published overall fraction.
+    /// Captures the CURRENT generation; stale sinks no-op.
     private func fractionSink(base: Double, span: Double) -> @Sendable (Double) -> Void {
-        { [weak self] f in
+        let gen = fractionGeneration
+        return { [weak self] f in
             let overall = base + span * min(1.0, max(0, f))
             Task { @MainActor in
-                self?.fraction = min(1.0, overall)
+                guard let self, self.fractionGeneration == gen else { return }
+                self.fraction = min(1.0, overall)
             }
         }
     }
