@@ -36,7 +36,10 @@ import time
 from pathlib import Path
 
 DEFAULT_CATALOG = Path("~/Library/Application Support/VideoScan/catalog.json").expanduser()
-DEFAULT_OFFSETS = Path("/tmp/dossier-merger-offsets.json")
+# Persistent location — survives reboot. The legacy /tmp path is migrated
+# automatically on first run via migrate_legacy_offsets().
+DEFAULT_OFFSETS = Path("~/Library/Application Support/VideoScan/dossier-merger-offsets.json").expanduser()
+LEGACY_OFFSETS = Path("/tmp/dossier-merger-offsets.json")
 LOG_DIR = Path("~/Library/Logs/VideoScan/dossier-merger").expanduser()
 
 
@@ -51,6 +54,34 @@ def load_offsets(path: Path) -> dict[str, int]:
         return json.loads(path.read_text())
     except Exception:
         return {}
+
+
+def migrate_legacy_offsets(new_path: Path,
+                           legacy_path: Path = LEGACY_OFFSETS) -> bool:
+    """If a legacy `/tmp` offsets file exists and the new persistent path
+    has no offsets yet, copy the legacy file into the new location.
+
+    Rationale: pre-2026-06-07 the merger stored offsets in `/tmp` which
+    macOS may wipe on reboot. The new default lives under Application
+    Support and survives. This shim is idempotent and safe to call
+    every run.
+
+    Returns True if a migration actually happened (for logging). Never
+    raises — a migration failure means we fall through to "no
+    offsets," which triggers a full idempotent replay. That's
+    safe (every JSONL line re-applied is a no-op) but the user-facing
+    cost is a few extra minutes of merge work on next start.
+    """
+    if not legacy_path.exists():
+        return False
+    if new_path.exists():
+        return False
+    try:
+        new_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(legacy_path, new_path)
+        return True
+    except Exception:
+        return False
 
 
 def save_offsets(path: Path, offsets: dict[str, int]):
@@ -168,11 +199,118 @@ def read_new_deltas(delta_dir: Path, offsets: dict[str, int], log):
     return new_deltas, offsets
 
 
+# ---------------------------------------------------------------------------
+# Schema validation for incoming deltas.
+#
+# Rick 2026-06-07 audit identified the "buggy worker silently corrupts
+# records" weakness: apply_deltas previously copied any value through
+# without type-checking, so a worker emitting `dossierProcessedAt:
+# "not a date"` would silently land in catalog.json and the manifest
+# would re-stamp the corruption as verified. This pass type-checks each
+# known field; bad fields are skipped (the rest of the delta still
+# applies) and counted in the result.
+#
+# Known fields are validated strictly. UNKNOWN fields pass through —
+# forward-compat hook so workers can introduce new dossier channels
+# without a merger update. The cost of permissiveness here is bounded
+# because the catalog round-trips through the Swift JSONDecoder on next
+# launch and rejects truly malformed records.
+
+# Field name → validator predicate (value → bool). None means "anything
+# is allowed except outright wrong-shape JSON values" (str/dict-as-bool
+# etc.) — handled by the universal `_is_sane_json_value` check.
+def _is_iso_string_or_null(v):
+    if v is None:
+        return True
+    if not isinstance(v, str):
+        return False
+    # ISO 8601 dates are at minimum 10 chars (YYYY-MM-DD) and start with
+    # a digit. Don't try to fully parse — workers emit a few variants
+    # (with/without TZ, with/without millis) and the Swift decoder is
+    # the final arbiter. We just reject obviously wrong shapes (empty
+    # string, non-digit start).
+    if len(v) < 10 or not v[0].isdigit():
+        return False
+    return True
+
+
+def _is_str_or_null(v):
+    return v is None or isinstance(v, str)
+
+
+def _is_num_or_null(v):
+    return v is None or isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _is_caption_list(v):
+    """List of {timestamp, text} dicts (with optional extra keys)."""
+    if not isinstance(v, list):
+        return False
+    for item in v:
+        if not isinstance(item, dict):
+            return False
+        if "timestamp" not in item or "text" not in item:
+            return False
+        if not isinstance(item["timestamp"], (int, float)):
+            return False
+        if not isinstance(item["text"], str):
+            return False
+    return True
+
+
+DOSSIER_FIELD_VALIDATORS = {
+    "sceneCaptions":         _is_caption_list,
+    "sceneCaptionModel":     _is_str_or_null,
+    "sceneCaptionDate":      _is_iso_string_or_null,
+    "audioTranscript":       _is_str_or_null,
+    "audioTranscriptModel":  _is_str_or_null,
+    "audioTranscriptDate":   _is_iso_string_or_null,
+    "ocrDateCandidates":     _is_caption_list,
+    "ocrText":               _is_caption_list,
+    "inferredRecordDate":    _is_iso_string_or_null,
+    "inferredDateConfidence": _is_num_or_null,
+    "dossierProcessedAt":    _is_iso_string_or_null,
+    "dossierProcessedBy":    _is_str_or_null,
+}
+
+
+def validate_delta_fields(fields: dict, log=None) -> tuple[dict, list[tuple[str, str]]]:
+    """Filter `fields` to those that pass schema validation.
+
+    Returns (kept_fields, rejected) where `rejected` is a list of
+    (field_name, reason) tuples for the caller to log/quarantine.
+    Unknown field names pass through unchanged — forward-compat for
+    future dossier channels.
+    """
+    kept = {}
+    rejected: list[tuple[str, str]] = []
+    for k, v in fields.items():
+        validator = DOSSIER_FIELD_VALIDATORS.get(k)
+        if validator is None:
+            # Unknown field — accept (forward-compat). The Swift
+            # decoder is the final type gate.
+            kept[k] = v
+            continue
+        if validator(v):
+            kept[k] = v
+        else:
+            type_name = type(v).__name__
+            rejected.append((k, f"schema reject: {type_name} not valid for {k}"))
+    return kept, rejected
+
+
 def apply_deltas(catalog: dict, deltas: list, log):
-    """Apply parsed delta dicts to catalog records. Returns count applied."""
+    """Apply parsed delta dicts to catalog records. Returns count applied.
+
+    Schema-validates each delta's fields per DOSSIER_FIELD_VALIDATORS.
+    Invalid fields are skipped (with a logged reason); the rest of the
+    delta still applies. A delta whose every field is rejected counts
+    as schema-rejected (not applied)."""
     by_path = {r["fullPath"]: r for r in catalog["records"]}
     applied = 0
     skipped_no_record = 0
+    schema_rejected_fields = 0
+    schema_rejected_whole_deltas = 0
     for _, delta in deltas:
         path = delta.get("fullPath")
         fields = delta.get("fields", {})
@@ -182,11 +320,23 @@ def apply_deltas(catalog: dict, deltas: list, log):
         if not rec:
             skipped_no_record += 1
             continue
-        for k, v in fields.items():
+        kept, rejected = validate_delta_fields(fields, log=log)
+        if rejected:
+            for k, reason in rejected:
+                log(f"  schema-reject {path} field={k}: {reason}")
+                schema_rejected_fields += 1
+        if not kept:
+            # Every field was rejected — nothing to apply.
+            schema_rejected_whole_deltas += 1
+            continue
+        for k, v in kept.items():
             rec[k] = v
         applied += 1
     if skipped_no_record:
         log(f"  skipped {skipped_no_record} delta(s) with no matching catalog record")
+    if schema_rejected_fields:
+        log(f"  schema rejected {schema_rejected_fields} field(s) " +
+            f"across {schema_rejected_whole_deltas} fully-rejected delta(s)")
     return applied
 
 
@@ -220,11 +370,57 @@ def main():
     log(f"offsets:   {args.offsets}")
     log(f"interval:  {args.interval}s ({'once' if args.once else 'daemon'})")
 
+    # One-shot migration: if the legacy `/tmp` offsets file exists and
+    # the persistent path doesn't, copy it over so the merger picks up
+    # where the previous /tmp-based run left off (instead of replaying
+    # from byte 0). Idempotent and silent when there's nothing to do.
+    if migrate_legacy_offsets(args.offsets):
+        log(f"  migrated legacy offsets {LEGACY_OFFSETS} → {args.offsets}")
+
     if not delta_dir.exists():
         delta_dir.mkdir(parents=True, exist_ok=True)
         log(f"created delta dir")
 
+    # Periodic bundle metadata extraction. Rick 2026-06-09: we agreed
+    # this should be automatic rather than button-driven — the operation
+    # is read-only, fast, idempotent (skips records with an existing
+    # inferredRecordDate). Runs once at merger startup, then every
+    # BUNDLE_EXTRACT_EVERY_CYCLES cycles thereafter (default 360 ×
+    # 60s = ~6 hours). Provenance lives in the bundle-meta.jsonl
+    # delta file for forensic lookup; we deliberately don't add a
+    # Swift catalog field for it (keeps Codable surface stable).
+    bundle_extractor = Path(__file__).resolve().parent / "extract_bundle_metadata.py"
+    BUNDLE_EXTRACT_EVERY_CYCLES = 360
+    cycle = 0
+
+    def run_bundle_extract():
+        """Shell out to the bundle metadata extractor. Failures are
+        logged but never crash the merger — bundle metadata is a
+        belt-and-suspenders source, not load-bearing."""
+        if not bundle_extractor.exists():
+            return
+        try:
+            import subprocess
+            t0 = time.time()
+            result = subprocess.run(
+                [sys.executable, str(bundle_extractor)],
+                capture_output=True, text=True, timeout=1800,  # 30-min cap
+            )
+            # Surface the last 3 lines of script output (contains
+            # the "wrote N delta(s)" summary).
+            tail = "\n    ".join(result.stdout.strip().splitlines()[-3:])
+            log(f"  bundle-extract done in {time.time() - t0:.1f}s:\n    {tail}")
+        except Exception as e:
+            log(f"  bundle-extract failed: {e} — continuing")
+
+    # Run once at startup so a fresh merger immediately has bundle
+    # data available rather than waiting 6 hours for the first cycle.
+    log("  initial bundle-meta extraction (runs on startup + every "
+        f"{BUNDLE_EXTRACT_EVERY_CYCLES * args.interval / 3600:.1f}h)")
+    run_bundle_extract()
+
     while True:
+        cycle += 1
         offsets = load_offsets(args.offsets)
         deltas, offsets = read_new_deltas(delta_dir, offsets, log)
         if deltas:
@@ -256,6 +452,11 @@ def main():
             log(f"  no new deltas")
         if args.once:
             break
+        # Periodic re-extract — catches newly mounted volumes (e.g. Rick
+        # plugs in an old drive) without requiring a merger restart.
+        if cycle % BUNDLE_EXTRACT_EVERY_CYCLES == 0:
+            log(f"  periodic bundle-meta extraction (cycle {cycle})")
+            run_bundle_extract()
         time.sleep(args.interval)
 
     log(f"=== merger stop ===")

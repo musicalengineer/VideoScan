@@ -94,7 +94,7 @@ struct DossierToolbarChip: View {
     }
 
     private var subText: String {
-        "dossiered · \(percentLabel)"
+        "completed · \(percentLabel)"
     }
 }
 
