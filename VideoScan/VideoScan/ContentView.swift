@@ -1698,7 +1698,7 @@ struct CatalogView: View {
             let reachableCaptionable = pfCatalogWideCaptionCandidates(
                 pfCatalogWideMetadataCandidates(
                     records: model.records,
-                    reachableVolumePaths: model.scanTargets.filter { $0.isReachable && !$0.searchPath.isEmpty }.map { $0.searchPath }
+                    reachableVolumePaths: model.scanTargets.filter { $0.isReachable && !$0.searchPath.isEmpty && !$0.isRetired }.map { $0.searchPath }
                 )
             ).count
             Button(action: {
