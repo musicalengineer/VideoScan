@@ -1184,14 +1184,41 @@ struct CatalogContent: View {
                             }
                         }
 
-                        // Extract Frames — extract the highest-quality
-                        // portrait frames from this video as lossless PNGs.
-                        // Rick 2026-06-09: built for Donna's Aug 4 birthday
-                        // print. Disabled when the file is offline (we'd
-                        // have nothing to read frames from). Runs as a job
-                        // in the Media File Operations window (phase 2), so
-                        // several extracts may queue at once — the center's
-                        // per-volume gates pace the reads.
+                        Divider()
+
+                        // File operations — every verb that runs as a job
+                        // in the Media File Operations window lives in this
+                        // ONE section, alphabetized (Rick 2026-06-10). New
+                        // verbs (merge, analyze, …) join here, in order.
+                        if pureActive, let partner = rec.pairedWith {
+                            Button("Combine This Pair…") {
+                                let video = rec.streamType == .videoOnly ? rec : partner
+                                let audio = rec.streamType == .audioOnly ? rec : partner
+                                onCombinePair?(video, audio)
+                            }
+                            .accessibilityIdentifier("catalog.row.combineThisPair")
+                        }
+                        if pureActive, selectedRecs.count == 2,
+                           let fileA = selectedRecs.first,
+                           let fileB = selectedRecs.last {
+                            // Quick two-file check — exact copies, same
+                            // movie in a different wrapper, or genuinely
+                            // different? Only with exactly two rows
+                            // selected. Distinct from the volume-level
+                            // Compare & Rescue feature.
+                            Button("Compare These Two Files…") {
+                                fileOpsCenter.startCompare(
+                                    recordA: fileA, recordB: fileB)
+                                openWindow(id: "combine")
+                            }
+                            .disabled(!VolumeReachability.isReachable(path: fileA.fullPath)
+                                      || !VolumeReachability.isReachable(path: fileB.fullPath))
+                            .help("Check whether these two files are exact copies, the same movie in a different wrapper, or genuinely different.")
+                            .accessibilityIdentifier("catalog.row.compareTwoFiles")
+                        }
+                        // Extract Frames — best portrait frames as lossless
+                        // PNGs (Donna's Aug 4 birthday print). Disabled when
+                        // the file is offline.
                         Button("Extract Frames…") {
                             startFrameRip(for: rec)
                         }
@@ -1284,29 +1311,10 @@ struct CatalogContent: View {
                                 }
                             }
 
-                            // Quick two-file check — Rick spots two rows of
-                            // the same size that look suspiciously similar
-                            // and wants a direct answer: exact copies, same
-                            // movie in a different wrapper, or genuinely
-                            // different? Shown only when exactly two rows
-                            // are selected. Distinct from the volume-level
-                            // Compare & Rescue feature. Runs as a job in
-                            // the Media File Operations window (non-modal,
-                            // survives window close, per-volume HDD gated).
-                            if selectedRecs.count == 2,
-                               let fileA = selectedRecs.first,
-                               let fileB = selectedRecs.last {
-                                Divider()
-                                Button("Compare These Two Files…") {
-                                    fileOpsCenter.startCompare(
-                                        recordA: fileA, recordB: fileB)
-                                    openWindow(id: "combine")
-                                }
-                                .disabled(!VolumeReachability.isReachable(path: fileA.fullPath)
-                                          || !VolumeReachability.isReachable(path: fileB.fullPath))
-                                .help("Check whether these two files are exact copies, the same movie in a different wrapper, or genuinely different.")
-                                .accessibilityIdentifier("catalog.row.compareTwoFiles")
-                            }
+                            // ("Compare These Two Files…" moved to the
+                            // file-operations section near the top of this
+                            // menu — Rick 2026-06-10: all fileops verbs
+                            // grouped + alphabetized.)
 
                             if rec.streamType.needsCorrelation {
                                 Divider()
@@ -1315,14 +1323,8 @@ struct CatalogContent: View {
                                 }
                                 .help("Show this file's best matching pair in the catalog, including any online duplicates of either side.")
                             }
-                            if let partner = rec.pairedWith {
-                                Button("Combine This Pair…") {
-                                    let video = rec.streamType == .videoOnly ? rec : partner
-                                    let audio = rec.streamType == .audioOnly ? rec : partner
-                                    onCombinePair?(video, audio)
-                                }
-                                .accessibilityIdentifier("catalog.row.combineThisPair")
-                            }
+                            // ("Combine This Pair…" likewise lives in the
+                            // file-operations section now.)
                             Divider()
                             Button {
                                 onShowInArchive?(rec)
