@@ -104,8 +104,13 @@ final class ScanJob: ObservableObject, Identifiable {
     var compilationTask: Task<Void, Never>?
 
     /// Raw recognition results preserved for on-demand compilation.
-    nonisolated(unsafe) var recognitionResults: [pfVideoResult] = []
-    nonisolated(unsafe) var recognitionOutputDir: String = ""
+    /// Plain @MainActor storage (was nonisolated(unsafe)): every writer
+    /// runs inside MainActor.run (JobLifecycle) and every reader is a
+    /// @MainActor method (startCompilation snapshots these into values
+    /// before hopping to its detached task), so the escape hatch was
+    /// unnecessary — 2026-06-11 concurrency-hygiene pass.
+    var recognitionResults: [pfVideoResult] = []
+    var recognitionOutputDir: String = ""
 
     // Live frame preview — three values that always change together,
     // packed into one @Published so each per-frame update fires a single
@@ -123,8 +128,19 @@ final class ScanJob: ObservableObject, Identifiable {
 
     /// Display rate for live preview — adjustable in realtime from UI.
     /// Read by the scan loop each frame; not part of the snapshot settings.
-    /// nonisolated(unsafe): Int reads are atomic on ARM64; written from MainActor, read from scan loop.
-    nonisolated(unsafe) var previewRate: Int = 5
+    /// Lock-backed (was nonisolated(unsafe) leaning on ARM64 atomicity —
+    /// Swift's data-race model needs real synchronization regardless of
+    /// ISA): written from MainActor UI, read from the scan loop's
+    /// @Sendable previewRateFn closures off-main.
+    /// OSAllocatedUnfairLock ≈ a C++ member `std::mutex` guarding one int,
+    /// with `withLock` ≈ std::lock_guard — non-reentrant, no allocation
+    /// per access. `nonisolated` opts these out of the class's @MainActor
+    /// so any thread may touch them; safety comes from the lock itself.
+    private nonisolated let _previewRate = OSAllocatedUnfairLock(initialState: 5)
+    nonisolated var previewRate: Int {
+        get { _previewRate.withLock { $0 } }
+        set { _previewRate.withLock { $0 = newValue } }
+    }
 
     var scanTask: Task<Void, Never>?
     var timerTask: Task<Void, Never>?
@@ -153,7 +169,11 @@ final class ScanJob: ObservableObject, Identifiable {
     let pauseGate = PauseGate()
 
     /// Persistent log file for this scan job — crash-safe, immediate writes.
-    nonisolated(unsafe) var persistentLog: PersistentLog?
+    /// Plain @MainActor storage (was nonisolated(unsafe)): assigned in
+    /// runJob (MainActor) and read only by appendLog (MainActor); the
+    /// scan loop reaches it via the async logFn closure, which awaits
+    /// onto the main actor first — 2026-06-11 concurrency-hygiene pass.
+    var persistentLog: PersistentLog?
 
     init(searchPath: String, id: UUID = UUID()) {
         self.id = id
