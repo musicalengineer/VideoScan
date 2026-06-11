@@ -407,6 +407,9 @@ struct MediaFileOperationBadge: View {
         Text(kind.badgeText)
             .font(Font.system(size: 10, weight: .bold).smallCaps())
             .foregroundColor(.white)
+            // Uniform capsule width so the four verbs line up in the
+            // job list ("Combine" is the widest at this font size).
+            .frame(minWidth: 52)
             .padding(.horizontal, 7)
             .padding(.vertical, 2)
             .background(Capsule().fill(kind.badgeColor))
