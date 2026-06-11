@@ -19,7 +19,9 @@ import os
 // reads, the job acquires one slot per spinning volume root it touches
 // (gates are built and shared by MediaFileOperationsCenter). While
 // queued behind another compare, the row shows "Waiting for <volume>…".
-// Gating lives in this wrapper, NOT in the comparator.
+// Gating lives in this wrapper, NOT in the comparator. The perceptual
+// tier (Tier 3) runs inside the same gate scope — it's just more
+// sequential reading of the same two files.
 
 /// File-scope logger — the job's detached run task logs through this.
 private let fileOpsLog = Logger(subsystem: "Rick-Breen.VideoScan",
@@ -133,7 +135,9 @@ final class PairCompareJob: @MainActor MediaFileOperationJob {
         case .failed(let message):
             return message
         case .finished:
-            return comparator.verdict?.detail ?? "Done"
+            // finishedSubtitle, not verdict.detail: the perceptual
+            // verdict leads with its statistics ("31/32 frames agree …").
+            return comparator.finishedSubtitle ?? "Done"
         case .cancelled:
             return "Stopped"
         case .cancelling:

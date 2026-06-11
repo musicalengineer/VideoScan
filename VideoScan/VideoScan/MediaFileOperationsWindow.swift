@@ -449,11 +449,15 @@ struct PairCompareVerdictChip: View {
 }
 
 extension PairCompareVerdict {
-    /// Banner/chip color — lifted unchanged from the old sheet.
+    /// Banner/chip color — lifted unchanged from the old sheet. Teal
+    /// for the perceptual verdict: semantically between blue ("same
+    /// packets, different wrapper") and orange ("different") — same
+    /// pictures, weaker-than-packet-level proof.
     var displayColor: Color {
         switch self {
         case .exactDuplicates: return .green
         case .sameContentDifferentContainer: return .blue
+        case .samePerceptualContent: return .teal
         case .differentMedia: return .orange
         case .sameFile: return .yellow
         }
@@ -463,6 +467,7 @@ extension PairCompareVerdict {
         switch self {
         case .exactDuplicates: return "doc.on.doc.fill"
         case .sameContentDifferentContainer: return "equal.circle.fill"
+        case .samePerceptualContent: return "sparkles.tv.fill"
         case .differentMedia: return "circle.grid.cross"
         case .sameFile: return "doc.fill"
         }
@@ -511,6 +516,17 @@ struct PairCompareDetailView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                // Perceptual-tier statistics whenever the tier ran —
+                // also under a differentMedia verdict, where "12/32
+                // frames agree" tells Rick how close the call was.
+                if let stats = job.comparator.perceptualStats {
+                    Text(verdict == .samePerceptualContent
+                         ? stats.summary
+                         : "Visual check: \(stats.summary)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .padding(10)

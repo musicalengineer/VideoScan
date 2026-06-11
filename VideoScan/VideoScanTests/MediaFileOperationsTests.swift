@@ -349,10 +349,13 @@ struct MediaFileOperationKindTests {
     }
 
     // The verdict chip colors must keep matching the retired sheet's
-    // palette (green/blue/orange/yellow).
+    // palette (green/blue/orange/yellow), plus teal for the perceptual
+    // verdict — meaning-wise it sits between blue (packet-identical)
+    // and orange (different).
     @Test func verdictChipColors() {
         #expect(PairCompareVerdict.exactDuplicates.displayColor == .green)
         #expect(PairCompareVerdict.sameContentDifferentContainer.displayColor == .blue)
+        #expect(PairCompareVerdict.samePerceptualContent.displayColor == .teal)
         #expect(PairCompareVerdict.differentMedia.displayColor == .orange)
         #expect(PairCompareVerdict.sameFile.displayColor == .yellow)
     }
