@@ -3,23 +3,62 @@ import SQLite3
 
 /// Persistent SQLite cache of ffprobe metadata.
 /// Keyed by (path, fileSize, modDate) — if a file hasn't changed, we skip ffprobe entirely.
-/// Stored at ~/Library/Application Support/VideoScan/metadata_cache.sqlite.
+/// Stored at ~/Library/Application Support/VideoScan/metadata_cache.sqlite
+/// in production; under unit tests the default redirects to a per-process
+/// temp sandbox (see `defaultPath`), and tests can inject any path.
 /// Thread-safe: NSLock serializes all SQLite access so probeFile can run off the main thread.
 final class MetadataCache {
     private var db: OpaquePointer?
     private let lock = NSLock()
 
-    private static var dbPath: String {
-        let appSupport = FileManager.default.urls(
-            for: .applicationSupportDirectory, in: .userDomainMask
-        ).first ?? FileManager.default.temporaryDirectory
-        let dir = appSupport.appendingPathComponent("VideoScan", isDirectory: true)
+    /// Where this instance's database actually lives. Read-only; exposed so
+    /// tests can assert isolation and diagnostics can report the location.
+    let dbPath: String
+
+    /// True when this process is a unit-test host. Multi-signal because
+    /// Swift Testing doesn't necessarily link XCTest, so a single env-var
+    /// check isn't reliable. Mirrors `CatalogStore.isRunningTests` /
+    /// `ScanJobsStorage.isRunningTests`.
+    private static var isRunningTests: Bool {
+        if NSClassFromString("XCTestCase") != nil { return true }
+        let env = ProcessInfo.processInfo.environment
+        if env["XCTestConfigurationFilePath"] != nil { return true }
+        if env["XCTestBundlePath"] != nil { return true }
+        if env["SWIFT_TESTING_ENABLED"] != nil { return true }
+        if Bundle.allBundles.contains(where: { $0.bundlePath.hasSuffix(".xctest") }) {
+            return true
+        }
+        return false
+    }
+
+    /// Default database location. In production this is the user's real
+    /// Application Support cache (unchanged behavior). Under a unit-test
+    /// host it redirects to a per-process temp sandbox so the ~200 test
+    /// call sites that construct `VideoScanModel()` can never read or
+    /// write the real probe cache (same failure class as the Settings
+    /// pollution incident). Narrow gate: only this DEFAULT is redirected —
+    /// `MetadataCache(path:)` with an explicit path gets exactly that path.
+    static var defaultPath: String {
+        let base: URL
+        if isRunningTests {
+            base = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent(
+                    "VideoScanTests-\(ProcessInfo.processInfo.processIdentifier)",
+                    isDirectory: true
+                )
+        } else {
+            base = FileManager.default.urls(
+                for: .applicationSupportDirectory, in: .userDomainMask
+            ).first ?? FileManager.default.temporaryDirectory
+        }
+        let dir = base.appendingPathComponent("VideoScan", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("metadata_cache.sqlite").path
     }
 
-    init() {
-        guard sqlite3_open(Self.dbPath, &db) == SQLITE_OK else {
+    init(path: String = MetadataCache.defaultPath) {
+        self.dbPath = path
+        guard sqlite3_open(path, &db) == SQLITE_OK else {
             db = nil
             return
         }

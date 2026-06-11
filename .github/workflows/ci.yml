@@ -87,6 +87,12 @@ jobs:
         run: |
           echo "## Unit Tests — Pure-Logic Suites" >> $GITHUB_STEP_SUMMARY
           START=$(date +%s)
+          # TEST_RUNNER_ prefix: xcodebuild strips it and injects the var
+          # into the test host process. CICanaryTests.mustFail is gated on
+          # GITHUB_ACTIONS (CI-only since 2026-06-09 — it polluted local
+          # full-suite totals); without this the host never sees the var
+          # and the canary check below would hard-fail as GHOST-PASS.
+          TEST_RUNNER_GITHUB_ACTIONS=true \
           xcodebuild test-without-building \
             -project VideoScan/VideoScan.xcodeproj \
             -scheme VideoScan \

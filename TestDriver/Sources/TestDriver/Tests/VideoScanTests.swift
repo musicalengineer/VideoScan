@@ -620,27 +620,52 @@ enum VideoScanTests {
     /// recorded-issue marker (which can fire multiple times for one
     /// failing test). Skipped tests use a distinct ➜ marker.
     private static func parseTestCounts(from stdout: String) -> (passed: Int, failed: Int, skipped: Int) {
-        // XCTest format (legacy).
-        let xcPassed = stdout.components(separatedBy: " passed on ").count - 1
-        let xcFailed = stdout.components(separatedBy: " failed on ").count - 1
-
-        // Swift Testing — line-oriented so we can exclude the run-summary
-        // and recorded-issue noise.
+        // Every pattern below is ANCHORED at line start. The old version
+        // counted " passed on " / " failed on " substrings anywhere in
+        // stdout, so arbitrary app logging could masquerade as results —
+        // real incident 2026-06-09: a `[caption-orchestrator] Dossier:
+        // whisper failed on <file>` os_log line made TestDriver report a
+        // phantom "1 failed of 5" for a suite whose 4 tests all passed
+        // (xcodebuild exit 0). Anchoring excludes timestamp-prefixed
+        // log lines while keeping both xcodebuild result formats.
+        var xcPassed = 0
+        var xcFailed = 0
         var stPassed = 0
         var stFailed = 0
         var stSkipped = 0
         for raw in stdout.split(separator: "\n", omittingEmptySubsequences: false) {
+            // Xcode 26's Swift Testing prefixes every marker line with a
+            // ZERO WIDTH SPACE (U+200B) — invisible, not in .whitespaces,
+            // and it defeats hasPrefix anchoring (verified by hexdump
+            // 2026-06-09: `e2 80 8b` before ➜/◇/✔/✘). Xcode 16.4 output
+            // has no ZWSP; stripping is a no-op there.
             let line = String(raw)
+                .replacingOccurrences(of: "\u{200B}", with: "")
+                .trimmingCharacters(in: .whitespaces)
+
+            // XCTest — classic ("Test Case '-[X y]' passed (0.01 seconds).")
+            // and parallel-destination ("Test case 'X()' passed on 'My Mac'")
+            // formats. "Test Suite" lines intentionally don't match.
+            if line.hasPrefix("Test Case") || line.hasPrefix("Test case") {
+                if line.contains("' passed") {
+                    xcPassed += 1
+                } else if line.contains("' failed") {
+                    xcFailed += 1
+                }
+                continue
+            }
+
             // Skip the test-run-wide summary so it doesn't double-count.
             if line.contains("Test run with ") { continue }
-            if line.contains("✔ Test "), line.contains(" passed after ") {
+            if line.hasPrefix("✔ Test "), line.contains(" passed after ") {
                 stPassed += 1
-            } else if line.contains("✘ Test "), line.contains(" failed after ") {
+            } else if line.hasPrefix("✘ Test "), line.contains(" failed after ") {
                 // `failed after` only appears on the per-test summary line,
                 // not on `recorded an issue at …` lines. So this counts
-                // each failing test exactly once.
+                // each failing test exactly once. (`✘ Suite … failed after`
+                // lines don't match the prefix — no suite double-count.)
                 stFailed += 1
-            } else if line.contains("➜ Test "), line.contains(" skipped") {
+            } else if line.hasPrefix("➜ Test "), line.contains(" skipped") {
                 // `.disabled(if:)`, `.disabled("reason")`, and `.disabled(if: !env)`
                 // all emit one ➜ marker per gated @Test method. A suite whose
                 // every test is disabled produces a successful xcodebuild
