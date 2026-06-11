@@ -96,7 +96,23 @@ class TestComputeTagDeltas(unittest.TestCase):
         records = [self._r("Animated Gradient 01.dv")]
         deltas = compute_tag_deltas(records)
         self.assertEqual(len(deltas), 1)
-        self.assertEqual(deltas[0]["fields"]["mediaDisposition"], "confirmedJunk")
+        # The Swift enum case is `confirmedJunk` but its RAW VALUE is
+        # "Confirmed Junk" (case-sensitive, space-separated). The Swift
+        # JSONDecoder silently falls back to .unreviewed on raw-value
+        # mismatch, so this assertion is the regression sensor for the
+        # 2026-06-10 corruption (132 records written with case name
+        # instead of raw value).
+        self.assertEqual(deltas[0]["fields"]["mediaDisposition"], "Confirmed Junk")
+
+    def test_writes_swift_enum_raw_value(self):
+        # Defensive pin: regardless of the records, the delta payload
+        # MUST use the Swift enum's RAW VALUE for mediaDisposition. If
+        # someone "cleans up" the string to the Swift case name, this
+        # test fires before bad data reaches the catalog. Keep this in
+        # lock-step with VideoScanTests/MediaDispositionRawValueContractTests.
+        deltas = compute_tag_deltas([self._r("Push.dv")])
+        self.assertEqual(deltas[0]["fields"]["mediaDisposition"], "Confirmed Junk",
+                         "raw value must match MediaDisposition.confirmedJunk.rawValue in Models.swift")
 
     def test_non_stock_asset_skipped(self):
         records = [self._r("Clip 06.dv")]

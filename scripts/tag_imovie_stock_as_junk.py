@@ -131,7 +131,18 @@ def compute_tag_deltas(records: list[dict]) -> list[dict]:
             "host": "junk-tagger",
             "ts": now,
             "fields": {
-                "mediaDisposition": "confirmedJunk",
+                # MUST be the Swift enum's RAW VALUE ("Confirmed Junk"),
+                # not the case name ("confirmedJunk"). The Swift decoder
+                # silently falls back to .unreviewed on raw-value mismatch,
+                # so a typo here corrupts every record this script touches
+                # WITHOUT raising. Rick 2026-06-10: this very bug landed
+                # 132 broken records in catalog.json — see
+                # scripts/repair_catalog_mediadisposition.py for the repair.
+                # The matching constant is MediaDisposition.confirmedJunk
+                # in Models.swift line 887. Pinned by Python test
+                # test_writes_swift_enum_raw_value AND Swift test
+                # MediaDispositionRawValueContractTests.
+                "mediaDisposition": "Confirmed Junk",
                 "notes": new_notes,
             },
         })
