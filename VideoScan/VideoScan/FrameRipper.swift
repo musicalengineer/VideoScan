@@ -8,8 +8,11 @@ import os
 
 // MARK: - FrameRipper
 //
-// "Convert to images…" — extract the best portrait-worthy frames from
-// a video as lossless PNGs, ranked by Apple's own face-quality model.
+// "Extract Facial Frames…" — extract the best portrait-worthy frames
+// from a video as lossless PNGs, ranked by Apple's own face-quality
+// model. (Menu verb renamed from "Extract Frames…" 2026-06-10 when the
+// ffmpeg-only every-frame exporter — AllFramesRipper — took that name.
+// This pipeline is unchanged.)
 //
 // Rick 2026-06-09: "I'd like to give Donna a printable Renoir-style
 // portrait for her Aug 4 birthday. Can VS pull the best frames from

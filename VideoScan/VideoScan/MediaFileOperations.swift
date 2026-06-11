@@ -33,18 +33,30 @@ private let fileOpsLog = Logger(subsystem: "Rick-Breen.VideoScan",
 // MARK: - Kind
 
 /// Which verb a job performs. Drives the colored badge capsule in the
-/// operations window ("Combine" green, "Compare" blue, "Extract" orange).
+/// operations window ("Combine" green, "Compare" blue, "Faces" orange,
+/// "Frames" purple).
 enum MediaFileOperationKind: String, CaseIterable {
     case combine
     case compare
+    /// Vision-scored best-portrait-frames rip ("Extract Facial
+    /// Frames…"). The case name predates the verb split — kept as
+    /// `.extract` so persisted/test references don't churn; only the
+    /// badge text changed.
     case extract
+    /// ffmpeg-only frame export ("Extract Frames…") — every frame, or
+    /// sampled every-Nth / N-per-second. No Vision involved.
+    case ripFrames
 
     /// Badge text — rendered in small caps by the row view.
+    /// `.extract` says "Faces" (not "Extract") since the verb split:
+    /// with two extract-style rows in the window, the badge is what
+    /// tells them apart at a glance.
     var badgeText: String {
         switch self {
         case .combine: return "Combine"
         case .compare: return "Compare"
-        case .extract: return "Extract"
+        case .extract: return "Faces"
+        case .ripFrames: return "Frames"
         }
     }
 }
@@ -284,6 +296,25 @@ final class MediaFileOperationsCenter: ObservableObject {
         add(job)
         job.start()
         fileOpsLog.info("extract started: \(record.filename, privacy: .public) → \(destinationParent.path, privacy: .public) (gates: \(gates.count))")
+        return job
+    }
+
+    /// Kick off an ffmpeg-only frame export ("Extract Frames…", verb
+    /// split 2026-06-10). Same ownership/gating model as the facial
+    /// extract above — one long sequential read of the source file.
+    /// `options` carries the sampling choice from RipAllFramesSheet.
+    @discardableResult
+    func startRipAllFrames(record: VideoRecord,
+                           destinationParent: URL,
+                           options: AllFramesRipper.Options) -> RipAllFramesJob {
+        let gates = gatePlan(forPaths: [record.fullPath])
+        let job = RipAllFramesJob(record: record,
+                                  destinationParent: destinationParent,
+                                  gates: gates,
+                                  options: options)
+        add(job)
+        job.start()
+        fileOpsLog.info("ripFrames started: \(record.filename, privacy: .public) → \(destinationParent.path, privacy: .public) (\(options.sampling.logDescription, privacy: .public), gates: \(gates.count))")
         return job
     }
 
