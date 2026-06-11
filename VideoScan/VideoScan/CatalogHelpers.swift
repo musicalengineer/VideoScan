@@ -486,6 +486,10 @@ struct CatalogContent: View {
     /// the score so the focus banner can show a Best/Better/Good/Maybe label.
     /// nil for filters from other sources (Archive, already-paired).
     var focusMatchScore: Int?
+    /// Focus-banner caption — what put the table into filterByIDs mode.
+    /// Default preserves the historical wording; "Find Online Version"
+    /// passes "Online copies" so the banner doesn't claim a pair focus.
+    var focusLabel: String = "A/V Pair focus"
     let previewImage: NSImage?
     let previewFilename: String
     let previewOfflineVolumeName: String?
@@ -498,6 +502,10 @@ struct CatalogContent: View {
     var onFindAVPair: ((VideoRecord) -> Void)?
     var onClearFilter: (() -> Void)?
     var onShowInArchive: ((VideoRecord) -> Void)?
+    /// "Find Online Version" found mounted copies — parent focuses the
+    /// catalog on (originalID + online copy IDs) and selects the best
+    /// copy. Mirrors onShowPair's contract.
+    var onShowOnlineCopies: ((_ focusIDs: Set<UUID>, _ selectID: UUID) -> Void)?
 
     @State private var player: AVPlayer?
     @State private var isPlaying = false
@@ -534,6 +542,12 @@ struct CatalogContent: View {
     /// Non-nil drives the sheet; the job itself lives in the Media
     /// File Operations center once the user confirms.
     @State private var ripAllFramesTarget: VideoRecord?
+
+    /// "Find Online Version" came up empty — non-nil drives an alert
+    /// explaining where copies exist (all offline) or that this is the
+    /// only cataloged copy. The success path never touches this; it
+    /// goes straight to onShowOnlineCopies.
+    @State private var findOnlineNotice: String?
 
     /// Memo boxes for per-render derivations (perf batch 2026-06-10).
     /// RenderMemo is a CLASS held by @State — mutating it during body
@@ -816,6 +830,45 @@ struct CatalogContent: View {
         .sheet(item: $ripAllFramesTarget) { rec in
             RipAllFramesSheet(record: rec)
         }
+        .alert(
+            "Find Online Version",
+            isPresented: Binding(
+                get: { findOnlineNotice != nil },
+                set: { if !$0 { findOnlineNotice = nil } }
+            ),
+            presenting: findOnlineNotice
+        ) { _ in
+            Button("OK", role: .cancel) { findOnlineNotice = nil }
+        } message: { msg in
+            Text(msg)
+        }
+    }
+
+    /// User picked "Find Online Version" on an offline record. Strict
+    /// same-content match (hash+size / UMID / dup-group — see
+    /// OnlineCopyFinder), then: mounted copy found → focus the catalog
+    /// on the copy group via onShowOnlineCopies; copies exist but all
+    /// offline → alert naming their volumes; no copies → alert saying
+    /// this is the only cataloged one.
+    private func findOnlineVersion(for rec: VideoRecord) {
+        let copies = OnlineCopyFinder(records: records).sameContentCopies(of: rec)
+        let online = copies.filter { VolumeReachability.isReachable(path: $0.fullPath) }
+        if let best = online.first {
+            onShowOnlineCopies?(Set([rec.id] + online.map(\.id)), best.id)
+        } else if copies.isEmpty {
+            findOnlineNotice = """
+                No other copy of “\(rec.filename)” is in the catalog. \
+                The only known copy is on \(VolumeReachability.displayLabel(forPath: rec.fullPath)) (offline).
+                """
+        } else {
+            let vols = Set(copies.map { VolumeReachability.displayLabel(forPath: $0.fullPath) })
+                .sorted()
+            findOnlineNotice = """
+                \(copies.count) cop\(copies.count == 1 ? "y" : "ies") of “\(rec.filename)” \
+                exist\(copies.count == 1 ? "s" : "") — on \(vols.joined(separator: ", ")) — \
+                but none of those volumes is mounted right now.
+                """
+        }
     }
 
     /// User picked "Extract Facial Frames…" — show a folder picker,
@@ -873,7 +926,7 @@ struct CatalogContent: View {
         HStack(spacing: 8) {
             Image(systemName: "line.horizontal.3.decrease.circle.fill")
                 .foregroundColor(.accentColor)
-            Text("A/V Pair focus (\(filterByIDs.count) file\(filterByIDs.count == 1 ? "" : "s"))")
+            Text("\(focusLabel) (\(filterByIDs.count) file\(filterByIDs.count == 1 ? "" : "s"))")
                 .font(.system(size: 12, weight: .medium))
 
             if let score = focusMatchScore {
@@ -1353,6 +1406,23 @@ struct CatalogContent: View {
                             }
                             // ("Combine This Pair…" likewise lives in the
                             // file-operations section now.)
+
+                            // Find Online Version — only offered when the
+                            // file itself is unreachable (the verb answers
+                            // "this one's offline, what CAN I use?").
+                            // Strict identity match, never the fuzzy
+                            // duplicate scorer — see OnlineCopyFinder.
+                            if !VolumeReachability.isReachable(path: rec.fullPath) {
+                                Divider()
+                                Button {
+                                    findOnlineVersion(for: rec)
+                                } label: {
+                                    Label("Find Online Version",
+                                          systemImage: "externaldrive.badge.checkmark")
+                                }
+                                .help("Locate a copy of this file on a volume that is mounted right now and show it in the catalog.")
+                                .accessibilityIdentifier("catalog.row.findOnlineVersion")
+                            }
                             Divider()
                             Button {
                                 onShowInArchive?(rec)
