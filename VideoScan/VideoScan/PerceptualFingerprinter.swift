@@ -79,10 +79,10 @@ enum PerceptualFingerprinter {
     /// probability (~3.9e-5) gives astronomically strong evidence when
     /// most frames agree — see the model in PerceptualHash.swift.
     static let frameCount = 32
-    /// Require at least this many decoded frames to proceed (matches
-    /// PerceptualHash.minFramesForVerdict — short clips still work,
-    /// 2-second stingers don't pretend to).
-    static let minimumFrames = 10
+    /// Require at least this many decoded frames to proceed — defined
+    /// AS the verdict gate so the two can't silently drift apart
+    /// (short clips still work, 2-second stingers don't pretend to).
+    static let minimumFrames = PerceptualHash.minFramesForVerdict
     /// Fraction of the duration trimmed off EACH end before sampling.
     static let trimFraction = 0.05
 
@@ -174,9 +174,16 @@ enum PerceptualFingerprinter {
         guard result.exitCode == 0 else {
             // Last non-progress stderr line is usually ffmpeg's actual
             // complaint (ProcessRunner already caps stderr capture).
+            // Exclude only `key=value` progress lines (frame=, speed=…)
+            // — real error messages often contain '=' mid-sentence and
+            // must survive this filter.
             let tail = result.stderr
                 .split(separator: "\n")
-                .last(where: { !$0.hasPrefix("out_time") && !$0.contains("=") })
+                .last(where: { line in
+                    guard let eq = line.firstIndex(of: "=") else { return true }
+                    let key = line[line.startIndex..<eq]
+                    return key.isEmpty || !key.allSatisfy { $0.isLetter || $0 == "_" }
+                })
                 .map(String.init) ?? ""
             throw PerceptualFingerprintError.ffmpegFailed(file: path, detail: tail)
         }

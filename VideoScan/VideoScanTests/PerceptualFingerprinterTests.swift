@@ -88,6 +88,16 @@ struct PerceptualFingerprinterArgsTests {
         #expect(PerceptualFingerprinter.sampledSpan(durationSeconds: 100) == 90)
         #expect(PerceptualFingerprinter.sampledSpan(durationSeconds: 0) == 0.001)
     }
+
+    // Pin the production constants: the statistical comments and the
+    // verdict gates are written for n = 32, and minimumFrames must
+    // track the verdict gate so the fingerprinter never hands compare()
+    // a sequence it would refuse to judge.
+    @Test func productionConstantsPinned() {
+        #expect(PerceptualFingerprinter.frameCount == 32)
+        #expect(PerceptualFingerprinter.minimumFrames == PerceptualHash.minFramesForVerdict)
+        #expect(PerceptualFingerprinter.trimFraction == 0.05)
+    }
 }
 
 // MARK: - Env-gated integration (real ffmpeg)
