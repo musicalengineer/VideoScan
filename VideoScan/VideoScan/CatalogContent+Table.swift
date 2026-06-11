@@ -1,0 +1,608 @@
+// CatalogContent+Table.swift
+// The catalog results Table, its row context menus, and the per-column
+// cell builders — extracted verbatim from CatalogContent's body in
+// CatalogHelpers.swift (refactor 2026-06-11). A cross-file `extension`
+// can't see `private` members, so the handful of CatalogContent stored
+// properties/helpers this code touches were widened to internal in
+// CatalogHelpers.swift (single-module app — same visibility in practice).
+// (Swift extension ≈ C++ partial class via free member functions: no new
+// stored state allowed, methods share the same `self`; `private` here
+// means file-private to THIS file.)
+
+import SwiftUI
+
+extension CatalogContent {
+
+    /// Right-click menu shown when one or more purged rows is selected.
+    /// Per spec, this is intentionally minimal: Restore + Reveal in Finder.
+    /// Everything else (Combine, Correlate, Tag, Notes, ...) is suppressed —
+    /// purged records are inert until restored.
+    @ViewBuilder
+    private func purgedRowContextMenu(rec: VideoRecord, selectedRecs: [VideoRecord]) -> some View {
+        let purgedSelection = selectedRecs.filter { $0.isPurged }
+        Button {
+            for r in purgedSelection {
+                _ = model.restoreRecord(id: r.id)
+            }
+        } label: {
+            Label(purgedSelection.count > 1
+                  ? "Restore \(purgedSelection.count) to Catalog"
+                  : "Restore to Catalog",
+                  systemImage: "arrow.uturn.backward.circle")
+        }
+        if VolumeReachability.isReachable(path: rec.fullPath) {
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.selectFile(rec.fullPath, inFileViewerRootedAtPath: "")
+            }
+        }
+    }
+
+    // MARK: - Results Table
+
+    // Internal (not private): the view body in CatalogHelpers.swift embeds
+    // this table in the left pane.
+    var catalogTable: some View {
+        Table(tableData, selection: $selectedIDs, sortOrder: $sortOrder) {
+            TableColumn("Filename", value: \.filename) { rec in
+                let offline = !VolumeReachability.isReachable(path: rec.fullPath)
+                let purged = rec.isPurged
+                HStack(spacing: 4) {
+                    if purged {
+                        // Trash-slash icon makes the "removed" state obvious
+                        // at a glance — even if the user's row colors are
+                        // partially overridden by a high-contrast theme.
+                        Image(systemName: "trash.slash")
+                            .font(.system(size: 10))
+                            .foregroundColor(.orange)
+                    } else if showPairsOnly && rec.pairedWith != nil {
+                        Image(systemName: rec.streamType == .videoOnly ? "film" : "waveform")
+                            .font(.system(size: 10))
+                            .foregroundColor(rec.streamType == .videoOnly ? .blue : .green)
+                    }
+                    Text(rec.filename)
+                        .font(.system(.body, design: .monospaced))
+                        // Italic when offline OR purged — both signal "not the
+                        // active default state". Purge color (orange) wins over
+                        // both offline-secondary and pair-blue/green when set.
+                        .italic(offline || purged)
+                        .foregroundColor(purged ? .orange
+                            : (offline ? .secondary
+                                : (showPairsOnly && rec.pairedWith != nil
+                                   ? (rec.streamType == .videoOnly ? .blue : .green)
+                                   : rec.filenameColor)))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 2)
+                .help(purged ? "\(rec.directory) (removed from catalog)"
+                      : (offline ? "\(rec.directory) (offline)" : rec.directory))
+            }
+            .width(min: 180, ideal: 260)
+
+            // Sort by `displayVolumeLabel` so folder-scoped scans of the same
+            // folder name (e.g. multiple "Movies" subfolders across volumes)
+            // sort together under their owning volume. The label embeds the
+            // volume name as the prefix, so this preserves volume grouping.
+            TableColumn("Volume", value: \.displayVolumeLabel) { rec in
+                Text(rec.displayVolumeLabel)
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .help(rec.fullPath)
+            }
+            .width(min: 80, ideal: 160)
+
+            TableColumn("Stream", value: \.streamTypeRaw) { rec in
+                let unpaired = rec.streamType.needsCorrelation && rec.pairedWith == nil
+                let display = rec.streamType == .ffprobeFailed
+                    ? rec.isPlayable
+                    : rec.streamTypeRaw
+                Text(display)
+                    .foregroundColor(unpaired ? .orange : streamTypeColor(rec.streamType))
+                    .bold(rec.streamType.needsCorrelation)
+                    .help(unpaired
+                          ? (rec.streamType == .videoOnly ? "No audio pair found" : "No video pair found")
+                          : "V+A = video and audio, V-only/A-only = single stream, or file status if damaged")
+            }
+            .width(min: 90, ideal: 130)
+
+            TableColumn("Duration", value: \.durationSeconds) { rec in
+                Text(rec.duration)
+                    .help("Playback duration (HH:MM:SS)")
+            }
+            .width(min: 65, ideal: 75)
+
+            TableColumn("Resolution", value: \.pixelCount) { rec in
+                Text(rec.resolution)
+                    .help("Video frame size (width x height)")
+            }
+            .width(min: 80, ideal: 95)
+
+            TableColumn("Codec", value: \.videoCodec) { rec in
+                Text(rec.videoCodec.isEmpty ? "—" : rec.videoCodec)
+                    .foregroundColor(rec.videoCodec.isEmpty ? .secondary : .primary)
+                    .help("Video codec (e.g. h264, prores, mpeg2video)")
+            }
+            .width(min: 60, ideal: 80)
+
+            // Dossier channel-dots column — at-a-glance richness per
+            // record. Four dots = scene captions / audio transcript /
+            // OCR text / OCR dates. Sorts by total channel count so
+            // ascending → emptiest-first ("what's left to do") and
+            // descending → richest-first ("what's been captured").
+            TableColumn("Dossier", value: \.dossierChannelCount) { rec in
+                DossierChannelDots(record: rec)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
+            .width(min: 64, ideal: 72)
+
+            TableColumn("Size", value: \.sizeBytes) { rec in
+                Text(rec.size)
+                    .help("File size on disk")
+            }
+            .width(min: 60, ideal: 75)
+
+            TableColumn("Created", value: \.dateCreatedSortKey) { rec in
+                Text(rec.dateCreated.isEmpty ? "—" : rec.dateCreated)
+                    .foregroundColor(rec.dateCreated.isEmpty ? .secondary : .primary)
+                    .font(.system(size: 11))
+                    .help("File creation date from filesystem metadata")
+            }
+            .width(min: 80, ideal: 100)
+
+            // Last three columns wrapped in Group to stay under the 10-child
+            // limit of Swift's @TableColumnBuilder. The People column (Step 5)
+            // is the 11th, so we group People + Tag + Duplicate.
+            //
+            // People column: confirmed names in blue, suspected (borderline)
+            // names italic + secondary with a leading "?". Em-dash when both
+            // arrays are empty — the "junk candidate" signal the user filters
+            // on with .untaggedOnly. Sortable via peopleSortKey: confirmed
+            // alphabetical first, suspected after (~ prefix), untagged last.
+            Group {
+                TableColumn("People", value: \.peopleSortKey) { rec in
+                    peopleColumnCell(for: rec)
+                }
+                .width(min: 90, ideal: 140)
+
+                TableColumn("Tag") { rec in
+                    tagColumnCell(for: rec)
+                }
+                .width(min: 70, ideal: 120)
+
+                TableColumn("Duplicate") { rec in
+                    DuplicateDispositionCell(record: rec)
+                        .help(rec.duplicateDisposition == .none
+                              ? "Run Duplicates analysis to check for copies"
+                              : "Total copies across catalog. Color: green = Keep (best copy), orange = Review (check manually), red = Extra copy (safe to remove)")
+                }
+                .width(min: 80, ideal: 95)
+            }
+        }
+        .onChange(of: sortOrder) {
+            onSort(sortOrder)
+            tableData.sort(using: sortOrder)
+        }
+        .contextMenu(forSelectionType: UUID.self) { ids in
+            let selectedRecs = ids.compactMap { id in records.first { $0.id == id } }
+            // Mixed-selection split. Each predicate is computed once so the
+            // Restore / Remove menu items use the same record set their
+            // actions operate on (label counts == operated-on counts).
+            // Swift's `.filter` ≈ C++ std::copy_if into a new vector.
+            let activeRecs = selectedRecs.filter { !$0.isPurged }
+            let purgedRecs = selectedRecs.filter { $0.isPurged }
+            if let id = ids.first,
+               let rec = records.first(where: { $0.id == id }) {
+                // Pure-purged selection: minimal menu (Restore + Reveal).
+                // Mixed selection: show the full active menu PLUS a Restore
+                // item for the purged subset; row-targeted active actions
+                // (Combine, Rename, Tag, etc.) are gated on
+                // `purgedRecs.isEmpty` so a multi-select that pulled in any
+                // purged row doesn't silently apply destructive ops to it.
+                // Spec: "active-only row actions must be gated on
+                // purgedRecs.isEmpty".
+                if !activeRecs.isEmpty || rec.isPurged {
+                    if rec.isPurged && activeRecs.isEmpty {
+                        purgedRowContextMenu(rec: rec, selectedRecs: selectedRecs)
+                    } else {
+                        // Active or mixed selection — show the full menu,
+                        // gating active-row actions on purgedRecs.isEmpty.
+                        let pureActive = purgedRecs.isEmpty
+                        Button(VolumeReachability.isReachable(path: rec.fullPath)
+                               ? "Reveal in Finder"
+                               : "Reveal in Finder (offline)") {
+                            if VolumeReachability.isReachable(path: rec.fullPath) {
+                                NSWorkspace.shared.selectFile(rec.fullPath, inFileViewerRootedAtPath: "")
+                            } else {
+                                let alert = NSAlert()
+                                alert.messageText = "File Offline"
+                                alert.informativeText = "The volume containing this file is not mounted.\n\n\(rec.fullPath)"
+                                alert.alertStyle = .informational
+                                alert.addButton(withTitle: "OK")
+                                alert.runModal()
+                            }
+                        }
+                        Button("Open in QuickTime Player") {
+                            if let qtURL = NSWorkspace.shared.urlForApplication(
+                                withBundleIdentifier: "com.apple.QuickTimePlayerX"
+                            ) {
+                                NSWorkspace.shared.open(
+                                    [URL(fileURLWithPath: rec.fullPath)],
+                                    withApplicationAt: qtURL,
+                                    configuration: NSWorkspace.OpenConfiguration()
+                                )
+                            }
+                        }
+
+                        Divider()
+
+                        // File operations — every verb that runs as a job
+                        // in the Media File Operations window lives in this
+                        // ONE section, alphabetized (Rick 2026-06-10). New
+                        // verbs (merge, analyze, …) join here, in order.
+                        if pureActive, let partner = rec.pairedWith {
+                            Button("Combine This Pair…") {
+                                let video = rec.streamType == .videoOnly ? rec : partner
+                                let audio = rec.streamType == .audioOnly ? rec : partner
+                                onCombinePair?(video, audio)
+                            }
+                            .accessibilityIdentifier("catalog.row.combineThisPair")
+                        }
+                        if pureActive, selectedRecs.count == 2,
+                           let fileA = selectedRecs.first,
+                           let fileB = selectedRecs.last {
+                            // Quick two-file check — exact copies, same
+                            // movie in a different wrapper, or genuinely
+                            // different? Only with exactly two rows
+                            // selected. Distinct from the volume-level
+                            // Compare & Rescue feature.
+                            Button("Compare These Two Files…") {
+                                fileOpsCenter.startCompare(
+                                    recordA: fileA, recordB: fileB)
+                                openWindow(id: "combine")
+                            }
+                            .disabled(!VolumeReachability.isReachable(path: fileA.fullPath)
+                                      || !VolumeReachability.isReachable(path: fileB.fullPath))
+                            .help("Check whether these two files are exact copies, the same movie in a different wrapper, or genuinely different.")
+                            .accessibilityIdentifier("catalog.row.compareTwoFiles")
+                        }
+                        // Extract Facial Frames — best portrait frames as
+                        // lossless PNGs, Vision face-quality ranked (Donna's
+                        // Aug 4 birthday print). Disabled when the file is
+                        // offline. (Renamed from "Extract Frames…" when the
+                        // ffmpeg-only verb below was added, 2026-06-10.)
+                        Button("Extract Facial Frames…") {
+                            startFrameRip(for: rec)
+                        }
+                        .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
+                        .accessibilityIdentifier("catalog.row.extractFacialFrames")
+                        // Extract Frames — ffmpeg-only frame export (every
+                        // frame / every Nth / N per second), no Vision.
+                        // Opens an options sheet first: this verb can write
+                        // tens of thousands of PNGs, so the user sees the
+                        // frame-count + disk estimate before anything runs.
+                        Button("Extract Frames…") {
+                            ripAllFramesTarget = rec
+                        }
+                        .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
+                        .accessibilityIdentifier("catalog.row.extractFrames")
+
+                        if pureActive {
+                            Divider()
+
+                            Button("Rename…") {
+                                renameTarget = rec
+                                renameText = (rec.filename as NSString).deletingPathExtension
+                                showRenameSheet = true
+                            }
+
+                            Divider()
+
+                            Menu("Tag") {
+                                Button {
+                                    for r in selectedRecs { r.mediaDisposition = .important }
+                                    model.saveCatalogDebounced()
+                                } label: {
+                                    Label("Important", systemImage: "star.fill")
+                                }
+                                Button {
+                                    for r in selectedRecs { r.mediaDisposition = .recoverable }
+                                    model.saveCatalogDebounced()
+                                } label: {
+                                    Label("Recoverable", systemImage: "wrench.and.screwdriver.fill")
+                                }
+
+                                Divider()
+
+                                Button {
+                                    for r in selectedRecs { r.mediaDisposition = .suspectedJunk }
+                                    model.saveCatalogDebounced()
+                                } label: {
+                                    Label("Suspected Junk", systemImage: "exclamationmark.triangle")
+                                }
+                                Button {
+                                    for r in selectedRecs { r.mediaDisposition = .confirmedJunk }
+                                    model.saveCatalogDebounced()
+                                } label: {
+                                    Label("Junk", systemImage: "xmark.circle.fill")
+                                }
+
+                                Divider()
+
+                                Button {
+                                    for r in selectedRecs { r.mediaDisposition = .unreviewed }
+                                    model.saveCatalogDebounced()
+                                } label: {
+                                    Label("Clear Tag", systemImage: "arrow.counterclockwise")
+                                }
+                            }
+
+                            Button("Notes\u{2026}") {
+                                notesTarget = rec
+                                notesText = rec.notes
+                                showNotesSheet = true
+                            }
+
+                            // Show duplicate group matches
+                            let groupMatches = records.filter {
+                                $0.id != rec.id && $0.duplicateGroupID != nil && $0.duplicateGroupID == rec.duplicateGroupID
+                            }
+                            if !groupMatches.isEmpty {
+                                let onlineMatches = groupMatches.filter {
+                                    VolumeReachability.isReachable(path: $0.fullPath)
+                                }
+
+                                if !onlineMatches.isEmpty {
+                                    // Extracted to a dedicated method so Xcode 16.4 has a tiny,
+                                    // isolated type-check context for the Menu→ForEach→Section→
+                                    // ForEach chain. Inline, the compiler was leaking
+                                    // ChartContentBuilder candidates into overload resolution.
+                                    onlineCopyMenu(onlineMatches: onlineMatches)
+                                }
+
+                                Menu("All Matches (\(groupMatches.count))") {
+                                    ForEach(groupMatches) { dup in
+                                        let online = VolumeReachability.isReachable(path: dup.fullPath)
+                                        Button {
+                                            selectedIDs = [dup.id]
+                                            onSelect(dup.id)
+                                        } label: {
+                                            let vol = VolumeReachability.displayLabel(forPath: dup.fullPath)
+                                            Text("\(dup.filename) — \(vol)\(online ? "" : " (offline)")")
+                                        }
+                                    }
+                                }
+                            }
+
+                            // ("Compare These Two Files…" moved to the
+                            // file-operations section near the top of this
+                            // menu — Rick 2026-06-10: all fileops verbs
+                            // grouped + alphabetized.)
+
+                            if rec.streamType.needsCorrelation {
+                                Divider()
+                                Button("Find A/V Pair") {
+                                    onFindAVPair?(rec)
+                                }
+                                .help("Show this file's best matching pair in the catalog, including any online duplicates of either side.")
+                            }
+                            // ("Combine This Pair…" likewise lives in the
+                            // file-operations section now.)
+
+                            // Find Online Version — only offered when the
+                            // file itself is unreachable (the verb answers
+                            // "this one's offline, what CAN I use?").
+                            // Strict identity match, never the fuzzy
+                            // duplicate scorer — see OnlineCopyFinder.
+                            if !VolumeReachability.isReachable(path: rec.fullPath) {
+                                Divider()
+                                Button {
+                                    findOnlineVersion(for: rec)
+                                } label: {
+                                    Label("Find Online Version",
+                                          systemImage: "externaldrive.badge.checkmark")
+                                }
+                                .help("Locate a copy of this file on a volume that is mounted right now and show it in the catalog.")
+                                .accessibilityIdentifier("catalog.row.findOnlineVersion")
+                            }
+                            Divider()
+                            Button {
+                                onShowInArchive?(rec)
+                            } label: {
+                                Label("Show in Archive", systemImage: "archivebox")
+                            }
+                            // §2 Provenance & Audit Trail — surface the
+                            // File Journey timeline for this record. Works
+                            // on every active row, including ones with no
+                            // relocate history (the timeline just shows
+                            // Origin → Current). Active-only — purged
+                            // rows don't need it.
+                            Button {
+                                fileJourneyPayload = model.makeFileJourney(for: rec)
+                            } label: {
+                                Label("Show this file's journey",
+                                      systemImage: "mappin.and.ellipse")
+                            }
+                            .accessibilityIdentifier("catalog.row.showJourney")
+                            Button("Copy Path") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(rec.fullPath, forType: .string)
+                            }
+                        } // end pureActive
+
+                        Divider()
+
+                        // Remove from Catalog — visible when the selection
+                        // contains at least one active row. The label and the
+                        // action both operate on `activeRecs` exclusively, so
+                        // a mixed selection's purged rows are never
+                        // double-stamped and the count in the label matches
+                        // the count actually mutated.
+                        if !activeRecs.isEmpty {
+                            Button(role: .destructive) {
+                                let targetIDs = Set(activeRecs.map { $0.id })
+                                _ = model.purgeRecords(ids: targetIDs)
+                            } label: {
+                                Label(activeRecs.count > 1
+                                      ? "Remove \(activeRecs.count) from Catalog"
+                                      : "Remove from Catalog",
+                                      systemImage: "trash.slash")
+                            }
+                            .help("Hide these records from the default view. The files on disk are not deleted; toggle Show Removed in the toolbar to recover.")
+                        }
+
+                        // Restore to Catalog — visible when the selection
+                        // contains at least one purged row. Symmetric with
+                        // Remove: label count == operated-on count.
+                        if !purgedRecs.isEmpty {
+                            Button {
+                                for r in purgedRecs { _ = model.restoreRecord(id: r.id) }
+                            } label: {
+                                Label(purgedRecs.count > 1
+                                      ? "Restore \(purgedRecs.count) to Catalog"
+                                      : "Restore to Catalog",
+                                      systemImage: "arrow.uturn.backward.circle")
+                            }
+                            .help("Clear the removed marker on the selected rows.")
+                        }
+                    }
+                }
+            }
+        } primaryAction: { ids in
+            // Double-click / Return on row(s) → open in QuickTime.
+            let recs = ids.compactMap { id in records.first { $0.id == id } }
+            MediaOpener.openInQuickTime(recs)
+        }
+        .onAppear { tableData = computeFiltered() }
+        .onChange(of: records.count) { tableData = computeFiltered() }
+        .onChange(of: searchText) { tableData = computeFiltered() }
+        .onChange(of: filterTargetPaths) { tableData = computeFiltered() }
+        .onChange(of: showPairsOnly) { tableData = computeFiltered() }
+        .onChange(of: filterByIDs) { tableData = computeFiltered() }
+        .onChange(of: viewFilters) { tableData = computeFiltered() }
+        .onChange(of: showRemoved) { tableData = computeFiltered() }
+        // Re-compute when purge state flips on any record (purge, undo, restore).
+        // We key off lastPurgedBatch so mutations from the model are observed.
+        .onChange(of: model.lastPurgedBatch) { tableData = computeFiltered() }
+    }
+
+    /// Extracted "Find Online Copy" submenu for the active-row context
+    /// menu. Inlining `Menu { ForEach { Section { ForEach { Button } } } }`
+    /// inside the row's context menu confused Xcode 16.4's overload
+    /// resolution — Charts' `ChartContentBuilder` was leaking into the
+    /// candidate set for the nested Section/ForEach combinations,
+    /// producing "result builder 'ChartContentBuilder' does not implement
+    /// any 'buildBlock'" errors. Encapsulating the menu in a dedicated
+    /// `@ViewBuilder` function gives the compiler a small, isolated
+    /// type-check context where the SwiftUI ViewBuilder candidates win.
+    /// Same root cause as `tagColumnCell` below — see commit history.
+    @ViewBuilder
+    private func onlineCopyMenu(onlineMatches: [VideoRecord]) -> some View {
+        // Flatten to a single (label, match) list and prefix the volume name
+        // onto each button. We previously grouped with Section, but on
+        // Xcode 16.4 Charts contributes a `Section`/`ForEach` overload
+        // pair whose result-builder context (ChartContentBuilder) wins
+        // overload resolution and breaks the build. Flattening sidesteps
+        // the whole problem — one ForEach, one Button per row, no Section.
+        // UX cost is small: instead of grouped submenu sections we get
+        // "Volume — filename" labels in a single list.
+        let byVolume = Dictionary(grouping: onlineMatches) {
+            VolumeReachability.displayLabel(forPath: $0.fullPath)
+        }
+        let flat: [(id: UUID, label: String, path: String)] =
+            byVolume.keys.sorted().flatMap { vol -> [(UUID, String, String)] in
+                (byVolume[vol] ?? []).map { match in
+                    (match.id, "\(vol) — \(match.filename)", match.fullPath)
+                }
+            }
+        Menu("Find Online Copy (\(onlineMatches.count))") {
+            ForEach(flat, id: \.id) { entry in
+                Button(entry.label) {
+                    NSWorkspace.shared.selectFile(
+                        entry.path,
+                        inFileViewerRootedAtPath: ""
+                    )
+                }
+            }
+        }
+    }
+
+    /// Extracted Tag-column cell. Moved out of the Table body to keep
+    /// the @TableColumnBuilder's type inference manageable — when the
+    /// People column pushed this Table from 10 → 11 columns, type-check
+    /// timed out on the larger expression.
+    @ViewBuilder
+    private func tagColumnCell(for rec: VideoRecord) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: rec.mediaDisposition.icon)
+                .foregroundColor(rec.mediaDisposition.color)
+            if rec.mediaDisposition != .unreviewed {
+                Text(rec.mediaDisposition.rawValue)
+                    .font(.system(size: 11))
+                    .foregroundColor(rec.mediaDisposition.color)
+            }
+            if !rec.notes.isEmpty {
+                Image(systemName: "note.text")
+                    .font(.system(size: 9))
+                    .foregroundColor(.secondary)
+            }
+            if rec.archiveHealth != .notApplicable {
+                Image(systemName: rec.archiveHealth.icon)
+                    .font(.system(size: 9))
+                    .foregroundColor(rec.archiveHealth.color)
+            }
+        }
+        .help(rec.notes.isEmpty
+              ? rec.mediaDisposition.rawValue
+              : "\(rec.mediaDisposition.rawValue) — \(rec.notes)")
+    }
+
+    /// Render the family-tag column for one record. Confirmed names blue,
+    /// suspected names italic + secondary with a leading "?", joined by
+    /// " · ". Em-dash when both arrays are empty (junk-triage signal).
+    /// Tooltip lists names with tier annotations.
+    @ViewBuilder
+    private func peopleColumnCell(for rec: VideoRecord) -> some View {
+        if rec.detectedPeople.isEmpty && rec.suspectedPeople.isEmpty {
+            Text("—")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+                .help("No family detected — junk-triage candidate")
+        } else {
+            let confirmedText = Text(rec.detectedPeople.joined(separator: ", "))
+                .foregroundColor(.blue)
+            let suspectedJoined = rec.suspectedPeople
+                .map { "?\($0)" }
+                .joined(separator: ", ")
+            let suspectedText = Text(suspectedJoined)
+                .italic()
+                .foregroundColor(.secondary)
+            let separator = (!rec.detectedPeople.isEmpty
+                             && !rec.suspectedPeople.isEmpty) ? " · " : ""
+            (confirmedText + Text(separator) + suspectedText)
+                .font(.system(size: 12))
+                .lineLimit(1)
+                .help(peopleColumnHelp(for: rec))
+        }
+    }
+
+    private func peopleColumnHelp(for rec: VideoRecord) -> String {
+        var lines: [String] = []
+        if !rec.detectedPeople.isEmpty {
+            lines.append("Detected: \(rec.detectedPeople.joined(separator: ", "))")
+        }
+        if !rec.suspectedPeople.isEmpty {
+            lines.append("Suspected: \(rec.suspectedPeople.joined(separator: ", "))")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func streamTypeColor(_ st: StreamType) -> Color {
+        switch st {
+        case .videoOnly:     return .orange
+        case .audioOnly:     return .yellow
+        case .ffprobeFailed: return .red
+        default:             return .primary
+        }
+    }
+}
+
