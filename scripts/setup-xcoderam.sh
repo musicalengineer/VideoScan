@@ -13,7 +13,7 @@
 #   setup-xcoderam.sh --size 6 --name ProjectXRAM
 set -euo pipefail
 
-SIZE_GB=4
+SIZE_GB=8
 NAME="XcodeRAM"
 
 while [ $# -gt 0 ]; do
