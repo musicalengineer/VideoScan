@@ -22,6 +22,18 @@ import os
 //            (`-c copy`, no decode — demux cost only). Matching
 //            stream-hash sets ⇒ "Same content, different wrapper"
 //            (e.g. the same DV essence rewrapped from .mov to .mxf).
+//   Tier 3 — PERCEPTUAL (escalation only): when Tiers 0–2 conclude
+//            "different" and both files carry video, sample 32 frames
+//            per file as 64-bit dHashes and compare them statistically
+//            (model documented in PerceptualHash.swift). A strong
+//            frame-level match ⇒ "Same content (re-encoded)" — the DV
+//            original vs its H.264 re-encode case, which shares zero
+//            bytes and zero packet hashes. A fingerprint failure here
+//            (undecodable video, e.g. Avid RGBA MXF) deliberately
+//            falls BACK to "Genuinely different files" instead of
+//            erroring — Tiers 0–2 already proved both files readable,
+//            and this tier must never make the feature less robust
+//            than it was before the tier existed.
 //   Otherwise ⇒ "Genuinely different files".
 //
 // Layering (deliberate, for the testing agent):
@@ -51,6 +63,12 @@ enum PairCompareVerdict: Equatable {
     /// Audio/video packet content is identical; only the container
     /// wrapper or its metadata differs (rewrap, remux, retagged copy).
     case sameContentDifferentContainer
+    /// The frames LOOK the same but the encodings differ — one file is
+    /// a re-encode of the other (different codec / resolution /
+    /// bitrate / container). Established statistically by the
+    /// perceptual tier; the supporting numbers live in
+    /// `MediaPairComparator.perceptualStats`.
+    case samePerceptualContent
     /// The media content itself doesn't match.
     case differentMedia
     /// Both catalog rows resolve to the same path on disk — there is
@@ -64,6 +82,8 @@ enum PairCompareVerdict: Equatable {
             return "Exact duplicates"
         case .sameContentDifferentContainer:
             return "Same movie, different wrapper"
+        case .samePerceptualContent:
+            return "Same content (re-encoded)"
         case .differentMedia:
             return "Genuinely different files"
         case .sameFile:
@@ -78,6 +98,8 @@ enum PairCompareVerdict: Equatable {
             return "These two files are byte-for-byte identical — the same data on disk. Only the names or folder dates differ."
         case .sameContentDifferentContainer:
             return "The picture and sound inside are identical — only the file container or its metadata differs."
+        case .samePerceptualContent:
+            return "The pictures match frame for frame, but the files use different encodings — one is a converted copy of the other."
         case .differentMedia:
             return "The picture or sound content doesn't match — these are two different recordings."
         case .sameFile:
@@ -158,15 +180,22 @@ enum PairCompareLogic {
 
     /// Fold the tier evidence into a verdict. `nil` means "that tier
     /// didn't run" (Tier 1 skipped on size mismatch; Tier 2 skipped
-    /// when Tier 1 already proved byte equality).
+    /// when Tier 1 already proved byte equality; Tier 3 — perceptual —
+    /// skipped unless Tiers 0–2 said "different" AND both files have
+    /// video). Strongest claim wins: byte identity > packet identity >
+    /// perceptual identity.
     static func verdict(sizesMatch: Bool,
                         bytesMatch: Bool?,
-                        streamsMatch: Bool?) -> PairCompareVerdict {
+                        streamsMatch: Bool?,
+                        perceptualMatch: Bool? = nil) -> PairCompareVerdict {
         if sizesMatch && bytesMatch == true {
             return .exactDuplicates
         }
         if streamsMatch == true {
             return .sameContentDifferentContainer
+        }
+        if perceptualMatch == true {
+            return .samePerceptualContent
         }
         return .differentMedia
     }
@@ -276,6 +305,23 @@ final class MediaPairComparator: ObservableObject {
     /// sheet shows an indeterminate bar instead of a frozen one.
     @Published var isIndeterminate = false
 
+    /// Tier-3 statistics. Non-nil whenever the perceptual tier ran to
+    /// completion — INCLUDING when it did NOT find a match (the
+    /// "inconclusive zone" stats stay visible under a differentMedia
+    /// verdict so Rick can see how close the call was).
+    @Published var perceptualStats: PerceptualMatchResult?
+
+    /// What the finished row's subtitle should say. For the perceptual
+    /// verdict the stats line IS the story ("31/32 frames agree …");
+    /// every other verdict keeps its plain-language detail.
+    var finishedSubtitle: String? {
+        guard let verdict else { return nil }
+        if verdict == .samePerceptualContent, let stats = perceptualStats {
+            return stats.summary
+        }
+        return verdict.detail
+    }
+
     /// Bar span owned by Tier 1 when it runs.
     private static let tier1Span = 0.7
     /// Read chunk for full-file hashing. 8 MB balances syscall overhead
@@ -298,10 +344,21 @@ final class MediaPairComparator: ObservableObject {
         lastError = nil
         fraction = 0
         isIndeterminate = false
+        perceptualStats = nil
         statusText = "Checking file sizes…"
 
         let pathA = recordA.fullPath
         let pathB = recordB.fullPath
+        // Tier-3 gate inputs, read off the records up front like the
+        // paths (catalog metadata only — never re-probed here). The
+        // perceptual tier needs per-file durations for its sampling
+        // rate and only makes sense when both files carry a picture.
+        let durationA = recordA.durationSeconds
+        let durationB = recordB.durationSeconds
+        let aHasVideo = recordA.streamType == .videoAndAudio
+            || recordA.streamType == .videoOnly
+        let bHasVideo = recordB.streamType == .videoAndAudio
+            || recordB.streamType == .videoOnly
 
         // Two catalog rows can point at one file on disk (duplicate
         // entries). Comparing a file with itself would read it twice
@@ -385,9 +442,56 @@ final class MediaPairComparator: ObservableObject {
             let streamsMatch = PairCompareLogic.streamContentMatches(hashesA, hashesB)
             pairCompareLog.info("tier 2: streamsA=\(hashesA.count) streamsB=\(hashesB.count) match=\(streamsMatch)")
 
+            // MARK: Tier 3 — perceptual frame comparison (escalation only)
+            //
+            // Runs only when the packet tier said "different" and both
+            // files actually carry video with a known duration. The
+            // sequential ffmpeg reads happen under the same volume
+            // gates the job already holds for Tiers 1–2 — this is just
+            // more of the same one-reader-at-a-time disk traffic.
+            var perceptualMatch: Bool?
+            if !streamsMatch, aHasVideo, bHasVideo,
+               durationA > 0, durationB > 0 {
+                statusText = "Comparing visual content…"
+                // The earlier tiers already walked the bar to ~1.0; the
+                // perceptual pass owns a fresh 0…1 sweep (file A then B).
+                fraction = 0
+                isIndeterminate = false
+                do {
+                    let fpA = try await PerceptualFingerprinter.fingerprint(
+                        ffmpegPath: ffmpeg,
+                        path: pathA,
+                        durationSeconds: durationA,
+                        onFraction: fractionSink(base: 0, span: 0.5)
+                    )
+                    let fpB = try await PerceptualFingerprinter.fingerprint(
+                        ffmpegPath: ffmpeg,
+                        path: pathB,
+                        durationSeconds: durationB,
+                        onFraction: fractionSink(base: 0.5, span: 0.5)
+                    )
+                    let stats = PerceptualHash.compare(fpA, fpB)
+                    perceptualStats = stats
+                    perceptualMatch = stats.isMatch
+                    pairCompareLog.info("tier 3: \(stats.matchedFrames)/\(stats.framesCompared) frames ≤ \(PerceptualHash.perFrameBitThreshold) bits, median=\(stats.medianDistance) offset=\(stats.bestOffset) log10P=\(stats.log10CoincidenceProbability) match=\(stats.isMatch)")
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    // Robustness contract (see header): a Tier-3 failure
+                    // must not be louder than not having Tier 3 at all.
+                    // The earlier tiers already read both files, so this
+                    // is "couldn't decode", not "couldn't reach" — keep
+                    // the differentMedia verdict and log the why.
+                    pairCompareLog.error("tier 3 skipped after error: \(error.localizedDescription, privacy: .public)")
+                }
+            } else if !streamsMatch {
+                pairCompareLog.info("tier 3 skipped: video A=\(aHasVideo) B=\(bHasVideo) durations \(durationA)/\(durationB)")
+            }
+
             finish(with: PairCompareLogic.verdict(sizesMatch: sizesMatch,
                                                   bytesMatch: bytesMatch,
-                                                  streamsMatch: streamsMatch))
+                                                  streamsMatch: streamsMatch,
+                                                  perceptualMatch: perceptualMatch))
         } catch is CancellationError {
             pairCompareLog.info("pair compare cancelled")
             statusText = "Cancelled"
