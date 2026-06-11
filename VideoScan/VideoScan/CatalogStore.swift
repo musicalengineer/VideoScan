@@ -130,20 +130,9 @@ final class CatalogStore {
     /// pull in the user's real catalog and an `importCatalog` test doesn't
     /// overwrite `~/Library/Application Support/VideoScan/catalog.json`.
     ///
-    /// Check both XCTest (legacy) and Swift Testing signals — Swift Testing
-    /// tests don't necessarily link XCTest.
-    private static var isRunningTests: Bool {
-        if NSClassFromString("XCTestCase") != nil { return true }
-        let env = ProcessInfo.processInfo.environment
-        if env["XCTestConfigurationFilePath"] != nil { return true }
-        if env["XCTestBundlePath"] != nil { return true }
-        if env["SWIFT_TESTING_ENABLED"] != nil { return true }
-        // Fallback: detect an .xctest bundle loaded into the process.
-        if Bundle.allBundles.contains(where: { $0.bundlePath.hasSuffix(".xctest") }) {
-            return true
-        }
-        return false
-    }
+    /// Detection itself lives in TestEnvironment so CatalogSync and any
+    /// future startup subsystem share ONE definition of "test host".
+    private static var isRunningTests: Bool { TestEnvironment.isTestHost }
 
     private let fileURL: URL
     private let backupURL: URL

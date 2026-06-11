@@ -220,6 +220,14 @@ final class CatalogSync: ObservableObject {
     // MARK: Init
 
     /// Production initializer — uses the system everything.
+    ///
+    /// Inert under a test host: the app target IS the test host, so
+    /// `xcodebuild test` runs this startup path for real. Without the
+    /// gate a test run writes the master manifest — and on a viewer-mode
+    /// machine syncFromMaster() would pull the master catalog over local
+    /// data. Narrow gate: ONLY production() is affected; tests that
+    /// construct CatalogSync directly with mocks exercise the real logic
+    /// (same pattern as CatalogStore.shared).
     static func production() -> CatalogSync {
         let masterHost = UserDefaults.standard.string(
             forKey: CatalogSyncDefaultsKey.masterHostname
@@ -231,6 +239,7 @@ final class CatalogSync: ObservableObject {
             rsyncRunner: SystemRsyncRunner(),
             masterHostname: masterHost,
             remoteUser: NSUserName(),
+            isInert: TestEnvironment.isTestHost,
             log: { line in
                 NSLog("VideoScan: %@", line)
                 appLog.write(line)
@@ -238,12 +247,17 @@ final class CatalogSync: ObservableObject {
         )
     }
 
+    /// When true, all mutating entry points (manifest write, sync pull,
+    /// viewer auto-refresh) are no-ops. Set by production() in test hosts.
+    let isInert: Bool
+
     init(
         paths: CatalogSyncPaths,
         hostnameSource: HostnameSource,
         rsyncRunner: RsyncRunner,
         masterHostname: String,
         remoteUser: String,
+        isInert: Bool = false,
         log: @escaping (String) -> Void
     ) {
         self.paths = paths
@@ -251,7 +265,11 @@ final class CatalogSync: ObservableObject {
         self.rsyncRunner = rsyncRunner
         self.masterHostname = masterHostname
         self.remoteUser = remoteUser
+        self.isInert = isInert
         self.log = log
+        if isInert {
+            log("CatalogSync: inert — test host detected; sync disabled")
+        }
 
         // Hostname-based mode detection. Both the canonical "<name>.local"
         // form and the bare "<name>" form match — `localizedName` returns
@@ -297,6 +315,7 @@ final class CatalogSync: ObservableObject {
     /// Best-effort: a write failure is logged but doesn't propagate. The
     /// viewer will simply see a stale or missing manifest and refuse to swap.
     func writeManifestIfMaster() {
+        if isInert { return }
         guard mode == .master else { return }
         do {
             let lines = try Self.computeManifestLines(rootDir: paths.liveDir)
@@ -435,6 +454,7 @@ final class CatalogSync: ObservableObject {
     /// up noticeably, slow enough that we don't thrash SSH+rsync.
     @MainActor
     func startViewerAutoRefresh(intervalSeconds: Double = 90) {
+        if isInert { return }
         guard mode == .viewer else { return }
         guard autoRefreshTask == nil else { return }
         log("CatalogSync: starting viewer auto-refresh (\(Int(intervalSeconds))s interval)")
@@ -459,6 +479,7 @@ final class CatalogSync: ObservableObject {
     ///
     /// On the master, this is a no-op.
     func syncFromMaster() async {
+        if isInert { return }
         guard mode == .viewer else { return }
         if case .syncing = state.phase {
             log("CatalogSync: sync already in flight; ignoring duplicate request")
