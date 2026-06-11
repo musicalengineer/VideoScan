@@ -189,10 +189,19 @@ extension VideoScanModel {
             mem.dossierProcessedAt = fresh.dossierProcessedAt
             mem.dossierProcessedBy = fresh.dossierProcessedBy
 
+            // Search-index update: dossier fields just changed, so the
+            // record's haystack needs a refresh or the new caption /
+            // transcript text won't be searchable until the next full
+            // catalog rebuild. O(record-fields), cheap.
+            searchIndex.update(mem)
+
             changed += 1
         }
         if !newRecords.isEmpty {
             records.append(contentsOf: newRecords)
+            // Same: append each new record to the search index so it's
+            // immediately searchable.
+            for rec in newRecords { searchIndex.update(rec) }
             liveReloadLogger.info("Live reload: appended \(added, privacy: .public) new record(s) from disk snapshot")
         }
         return changed + added

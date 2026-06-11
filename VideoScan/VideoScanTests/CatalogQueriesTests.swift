@@ -609,3 +609,441 @@ struct TriageQueueTests {
         #expect(counts.total == 5)
     }
 }
+
+// MARK: - Catalog search: tokenize + AND (Rick 2026-06-08)
+//
+// Pre-2026-06-08 the catalog search bar did a SINGLE-string substring
+// match across the content fields. Typing "mark dan grampa" looked
+// for that literal phrase and found nothing — even on records whose
+// transcript contained all three names. After this fix, the same
+// query is tokenized on whitespace and every token must match
+// somewhere on the record (AND semantics), so the catalog can
+// answer natural-language queries like the jq demo from the
+// previous evening.
+//
+// These tests pin the new contract on `pfRecordFilenameOrPersonMatch`
+// AND verify that the design boundary (no path / directory / codec
+// / notes matching from the catalog bar) is preserved.
+
+@Suite("Catalog search: tokenize + AND")
+struct CatalogSearchTokenizeAndTests {
+
+    private func record(
+        filename: String = "clip.mov",
+        path: String = "/Volumes/X/clip.mov",
+        directory: String = "/Volumes/X",
+        people: [String] = [],
+        suspected: [String] = [],
+        confirmed: [String] = [],
+        captions: [String] = [],
+        transcript: String? = nil,
+        ocrText: [String] = [],
+        ocrDates: [String] = [],
+        notes: String = "",
+        videoCodec: String = "h264",
+        inferredYear: Int? = nil
+    ) -> VideoRecord {
+        let r = VideoRecord()
+        r.filename = filename
+        r.fullPath = path
+        r.directory = directory
+        r.detectedPeople = people
+        r.suspectedPeople = suspected
+        r.confirmedByUserPeople = confirmed.map { ConfirmedTag(name: $0, confirmedAt: Date()) }
+        r.sceneCaptions = captions.map { SceneCaption(timestamp: 0, text: $0) }
+        r.audioTranscript = transcript
+        r.ocrText = ocrText.map { SceneCaption(timestamp: 0, text: $0) }
+        r.ocrDateCandidates = ocrDates.map { SceneCaption(timestamp: 0, text: $0) }
+        r.notes = notes
+        r.videoCodec = videoCodec
+        if let y = inferredYear {
+            var c = DateComponents()
+            c.year = y
+            c.month = 6
+            c.day = 15
+            r.inferredRecordDate = Calendar(identifier: .gregorian).date(from: c)
+        }
+        return r
+    }
+
+    // MARK: - Tokenize + AND semantics
+
+    @Test func multiTokenAND_allMustMatchSomewhereOnRecord() {
+        // The original jq demo: "Mark AND Dan AND Grampa" → only the
+        // family clip whose transcript has all three should match.
+        let family = record(transcript: "Mark and Dan, say hi to Grampa")
+        let onlyMark = record(transcript: "Mark is at the beach")
+        let onlyDan = record(captions: ["Dan playing in the yard"])
+        let onlyGrampa = record(captions: ["Grampa fishing"])
+
+        #expect(pfRecordFilenameOrPersonMatch(family, query: "Mark Dan Grampa") == true)
+        #expect(pfRecordFilenameOrPersonMatch(onlyMark, query: "Mark Dan Grampa") == false)
+        #expect(pfRecordFilenameOrPersonMatch(onlyDan, query: "Mark Dan Grampa") == false)
+        #expect(pfRecordFilenameOrPersonMatch(onlyGrampa, query: "Mark Dan Grampa") == false)
+    }
+
+    @Test func tokensCanMatchAcrossDifferentFields() {
+        // "donna guitar" → Donna in people tags, "guitar" in captions.
+        // Per-token OR across fields, per-query AND across tokens.
+        let r = record(
+            people: ["Donna"],
+            captions: ["A woman playing a guitar by the campfire"]
+        )
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "donna guitar") == true)
+    }
+
+    @Test func emptyQueryMatchesEveryRecord() {
+        let r = record()
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "") == true)
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "   ") == true)
+    }
+
+    @Test func caseInsensitive() {
+        let r = record(people: ["Donna"], captions: ["Beach picnic"])
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "DONNA BEACH") == true)
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "dOnNa BeAcH") == true)
+    }
+
+    @Test func partialSubstringMatchesPerToken() {
+        // "matt" matches "Matthew" — substring, not whole-word.
+        let r = record(people: ["Matthew"])
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "matt") == true)
+    }
+
+    @Test func transcriptIsSearchable() {
+        let r = record(transcript: "happy birthday Matt")
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "birthday") == true)
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "matt happy") == true)
+    }
+
+    @Test func ocrTextAndDatesAreSearchable() {
+        let r = record(
+            ocrText: ["HAPPY BIRTHDAY"],
+            ocrDates: ["JUN 21 1991"]
+        )
+        // OCR'd dates appear as substrings too — typing the year hits
+        // them even when the file metadata has no 1991.
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "happy") == true)
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "1991") == true)
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "happy 1991") == true)
+    }
+
+    @Test func confirmedByUserPeopleSearchable() {
+        let r = record(confirmed: ["Donna"])
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "donna") == true)
+    }
+
+    @Test func suspectedPeopleSearchable() {
+        let r = record(suspected: ["Donna"])
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "donna") == true)
+    }
+
+    @Test func filenameSearchable() {
+        let r = record(filename: "Donna_at_beach.mov")
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "donna beach") == true)
+    }
+
+    // MARK: - Design boundary: catalog bar must NOT match path/dir/codec/notes
+
+    @Test func pathIsNOTSearched_preventsMatthewDirectoryFalsePositive() {
+        // The whole reason the catalog bar uses the narrow field set
+        // instead of universal search: typing "matt" should NOT find
+        // EVERY file in a /Matthew/ directory. This test pins that
+        // intentional design boundary.
+        let r = record(
+            filename: "random_file.mov",
+            path: "/Volumes/X/Matthew/Vacation/random_file.mov",
+            directory: "/Volumes/X/Matthew/Vacation"
+        )
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "matthew") == false)
+    }
+
+    @Test func codecIsNOTSearched() {
+        let r = record(videoCodec: "hevc")
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "hevc") == false)
+    }
+
+    @Test func notesAreNOTSearched_inCatalogBar() {
+        // Notes are searchable in universal search but NOT in the
+        // catalog bar — keeping the catalog bar focused on "what's
+        // in the video" content fields.
+        let r = record(notes: "Need to delete this clip eventually")
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "delete") == false)
+    }
+
+    // MARK: - Year tokens compose with substrings
+
+    @Test func decadeShorthand_matchesFilenameYear() {
+        let r = record(filename: "Cape Cod 1991.mov")
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "1990s") == true)
+    }
+
+    @Test func decadeShorthand_matchesInferredRecordDate() {
+        // Even when the filename carries no year and the path has
+        // none, an inferred record date from dossier triangulation
+        // should make decade queries land. Rick 2026-06-08: this is
+        // the payoff of the multi-signal date inference work.
+        let r = record(
+            filename: "clip.mov",
+            path: "/Volumes/X/clip.mov",
+            directory: "/Volumes/X",
+            inferredYear: 1991
+        )
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "1990s") == true)
+    }
+
+    @Test func decadeShorthand_composesWithSubstring() {
+        let r = record(
+            people: ["Donna"],
+            captions: ["Family beach trip"],
+            inferredYear: 1995
+        )
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "donna 1990s beach") == true)
+        // Wrong decade should fail even with all substrings present.
+        let r2 = record(
+            people: ["Donna"],
+            captions: ["Family beach trip"],
+            inferredYear: 2008
+        )
+        #expect(pfRecordFilenameOrPersonMatch(r2, query: "donna 1990s beach") == false)
+    }
+
+    // MARK: - Failure modes
+
+    @Test func noMatchAcrossAnyField_returnsFalse() {
+        let r = record(filename: "vacation.mov", captions: ["mountains"])
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "donna beach") == false)
+    }
+
+    @Test func tokenWithNoFieldHit_failsTheWholeQuery() {
+        // "donna" matches but "xyzzy" doesn't — AND semantics drops it.
+        let r = record(people: ["Donna"])
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "donna xyzzy") == false)
+    }
+}
+
+// MARK: - Phase B: field-prefix grammar (Rick 2026-06-08)
+//
+// "Google-like" search syntax: typing `people:donna` restricts the
+// match to people fields, `caption:beach` to scene captions, etc.
+// Plus year-range support: `year:1991`, `year:1989..1995`, `decade:1990s`.
+// Field-prefix and plain substring tokens compose freely under AND.
+
+@Suite("Search field-prefix grammar")
+struct SearchFieldPrefixTokenizerTests {
+
+    @Test func peoplePrefix() {
+        #expect(pfTokenizeSearchQuery("people:donna") == [.field(name: .people, value: "donna")])
+    }
+
+    @Test func personAliasPrefix() {
+        // "person:" and "who:" both alias to .people for ergonomic typing.
+        #expect(pfTokenizeSearchQuery("person:donna") == [.field(name: .people, value: "donna")])
+        #expect(pfTokenizeSearchQuery("who:donna") == [.field(name: .people, value: "donna")])
+    }
+
+    @Test func transcriptPrefixAndAlias() {
+        #expect(pfTokenizeSearchQuery("transcript:beach") == [.field(name: .transcript, value: "beach")])
+        #expect(pfTokenizeSearchQuery("said:beach") == [.field(name: .transcript, value: "beach")])
+    }
+
+    @Test func captionPrefix() {
+        #expect(pfTokenizeSearchQuery("caption:guitar") == [.field(name: .caption, value: "guitar")])
+        #expect(pfTokenizeSearchQuery("scene:guitar") == [.field(name: .caption, value: "guitar")])
+    }
+
+    @Test func ocrPrefix() {
+        #expect(pfTokenizeSearchQuery("ocr:1991") == [.field(name: .ocr, value: "1991")])
+    }
+
+    @Test func filenamePrefix() {
+        #expect(pfTokenizeSearchQuery("filename:cape") == [.field(name: .filename, value: "cape")])
+        #expect(pfTokenizeSearchQuery("name:cape") == [.field(name: .filename, value: "cape")])
+    }
+
+    @Test func notesPrefix() {
+        #expect(pfTokenizeSearchQuery("notes:delete") == [.field(name: .notes, value: "delete")])
+    }
+
+    @Test func yearSingleValue() {
+        #expect(pfTokenizeSearchQuery("year:1991") == [.yearRange(1991...1991)])
+    }
+
+    @Test func yearRangeValue() {
+        #expect(pfTokenizeSearchQuery("year:1989..1995") == [.yearRange(1989...1995)])
+    }
+
+    @Test func yearDecadeValue() {
+        #expect(pfTokenizeSearchQuery("year:1990s") == [.yearRange(1990...1999)])
+    }
+
+    @Test func decadePrefix() {
+        #expect(pfTokenizeSearchQuery("decade:1990") == [.yearRange(1990...1999)])
+        #expect(pfTokenizeSearchQuery("decade:1990s") == [.yearRange(1990...1999)])
+        #expect(pfTokenizeSearchQuery("decade:199") == [.yearRange(1990...1999)])
+    }
+
+    @Test func unknownPrefixFallsBackToSubstring() {
+        // "blah:foo" isn't a known field — preserve the literal so the
+        // user can still find a file/text that contains "blah:foo".
+        #expect(pfTokenizeSearchQuery("blah:foo") == [.substring("blah:foo")])
+    }
+
+    @Test func badYearValueFallsBackToSubstring() {
+        // year:gibberish should NOT silently become an empty range.
+        // Falls back to substring so the user notices their typo
+        // (the count will likely show 0).
+        #expect(pfTokenizeSearchQuery("year:nineties") == [.substring("year:nineties")])
+    }
+
+    @Test func emptyValueAfterColonFallsBackToSubstring() {
+        // "people:" alone has no value — treat as literal so it doesn't
+        // silently match everything.
+        #expect(pfTokenizeSearchQuery("people:") == [.substring("people:")])
+    }
+
+    @Test func mixedTokensComposeCleanly() {
+        let toks = pfTokenizeSearchQuery("people:donna year:1990s caption:guitar")
+        #expect(toks == [
+            .field(name: .people, value: "donna"),
+            .yearRange(1990...1999),
+            .field(name: .caption, value: "guitar"),
+        ])
+    }
+
+    @Test func caseInsensitiveFieldNames() {
+        #expect(pfTokenizeSearchQuery("PEOPLE:donna") == [.field(name: .people, value: "donna")])
+        #expect(pfTokenizeSearchQuery("People:donna") == [.field(name: .people, value: "donna")])
+    }
+}
+
+@Suite("Search field-prefix matching")
+struct SearchFieldPrefixMatchingTests {
+
+    private func record(
+        filename: String = "clip.mov",
+        path: String = "/Volumes/X/clip.mov",
+        directory: String = "/Volumes/X",
+        people: [String] = [],
+        suspected: [String] = [],
+        confirmed: [String] = [],
+        captions: [String] = [],
+        transcript: String? = nil,
+        ocrText: [String] = [],
+        ocrDates: [String] = [],
+        notes: String = ""
+    ) -> VideoRecord {
+        let r = VideoRecord()
+        r.filename = filename
+        r.fullPath = path
+        r.directory = directory
+        r.detectedPeople = people
+        r.suspectedPeople = suspected
+        r.confirmedByUserPeople = confirmed.map { ConfirmedTag(name: $0, confirmedAt: Date()) }
+        r.sceneCaptions = captions.map { SceneCaption(timestamp: 0, text: $0) }
+        r.audioTranscript = transcript
+        r.ocrText = ocrText.map { SceneCaption(timestamp: 0, text: $0) }
+        r.ocrDateCandidates = ocrDates.map { SceneCaption(timestamp: 0, text: $0) }
+        r.notes = notes
+        return r
+    }
+
+    @Test func peoplePrefixMatchesAllThreePeopleArrays() {
+        // detected / suspected / confirmed all count as "people".
+        let detected = record(people: ["Donna"])
+        let suspected = record(suspected: ["Donna"])
+        let confirmed = record(confirmed: ["Donna"])
+        for r in [detected, suspected, confirmed] {
+            #expect(pfRecordFilenameOrPersonMatch(r, query: "people:donna") == true)
+        }
+    }
+
+    @Test func peoplePrefixDoesNotLeakToOtherFields() {
+        // "donna" in caption but not in any people array → NOT a people: hit.
+        let r = record(captions: ["A woman named Donna"])
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "people:donna") == false)
+        // Plain "donna" (no prefix) DOES find it.
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "donna") == true)
+    }
+
+    @Test func transcriptPrefixIsolatesAudioField() {
+        let r = record(people: ["Donna"], transcript: "happy birthday Matt")
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "transcript:matt") == true)
+        // Donna is in people, not in transcript — prefix excludes it.
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "transcript:donna") == false)
+    }
+
+    @Test func captionPrefixIsolatesSceneCaptions() {
+        let r = record(captions: ["beach picnic"], transcript: "no mention of beach in audio")
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "caption:picnic") == true)
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "caption:audio") == false)
+    }
+
+    @Test func ocrPrefixMatchesBothOcrFields() {
+        let textOnly = record(ocrText: ["HAPPY BIRTHDAY"])
+        let dateOnly = record(ocrDates: ["JUN 1991"])
+        #expect(pfRecordFilenameOrPersonMatch(textOnly, query: "ocr:happy") == true)
+        #expect(pfRecordFilenameOrPersonMatch(dateOnly, query: "ocr:1991") == true)
+    }
+
+    @Test func filenamePrefixDoesNotMatchPath() {
+        // "name:matt" should match a file CALLED matt.mov but NOT a file
+        // sitting in /Matthew/random.mov — the whole reason the prefix
+        // exists.
+        let inMatthewDir = record(filename: "random.mov",
+                                  path: "/Volumes/X/Matthew/random.mov",
+                                  directory: "/Volumes/X/Matthew")
+        let namedMatt = record(filename: "matt.mov",
+                               path: "/Volumes/X/matt.mov",
+                               directory: "/Volumes/X")
+        #expect(pfRecordFilenameOrPersonMatch(inMatthewDir, query: "name:matt") == false)
+        #expect(pfRecordFilenameOrPersonMatch(namedMatt, query: "name:matt") == true)
+    }
+
+    @Test func notesPrefixOptsInToNotesField() {
+        // Plain catalog search excludes notes by design. The notes:
+        // prefix is the user explicitly opting in.
+        let r = record(notes: "Need to delete this clip eventually")
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "delete") == false)        // plain → no
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "notes:delete") == true)   // prefix → yes
+    }
+
+    @Test func yearPrefixSingleValueMatchesInferredDate() {
+        let cal = Calendar(identifier: .gregorian)
+        var c = DateComponents(); c.year = 1991; c.month = 6; c.day = 15
+        let r = record()
+        r.inferredRecordDate = cal.date(from: c)
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "year:1991") == true)
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "year:1992") == false)
+    }
+
+    @Test func yearPrefixRangeMatchesInferredDate() {
+        let cal = Calendar(identifier: .gregorian)
+        var c = DateComponents(); c.year = 1993; c.month = 6; c.day = 15
+        let r = record()
+        r.inferredRecordDate = cal.date(from: c)
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "year:1989..1995") == true)
+        #expect(pfRecordFilenameOrPersonMatch(r, query: "year:2000..2010") == false)
+    }
+
+    @Test func fullComposedQuery() {
+        // The realistic "Google-like" query Rick had in mind from yesterday:
+        // people:donna decade:1990 caption:guitar → must satisfy all three.
+        let cal = Calendar(identifier: .gregorian)
+        var c = DateComponents(); c.year = 1995; c.month = 8; c.day = 4
+        let match = record(
+            people: ["Donna"],
+            captions: ["Donna playing the guitar at the picnic"]
+        )
+        match.inferredRecordDate = cal.date(from: c)
+        #expect(pfRecordFilenameOrPersonMatch(match, query: "people:donna decade:1990 caption:guitar") == true)
+
+        // Missing the guitar caption — composed query should fail.
+        let missGuitar = record(
+            people: ["Donna"],
+            captions: ["Donna and the dog"]
+        )
+        missGuitar.inferredRecordDate = cal.date(from: c)
+        #expect(pfRecordFilenameOrPersonMatch(missGuitar, query: "people:donna decade:1990 caption:guitar") == false)
+    }
+}

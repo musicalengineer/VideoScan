@@ -64,6 +64,10 @@ struct BundleManifest: Codable {
         var volumes: Int
         var people: Int
         var referencePhotos: Int
+        /// Total non-blank lines across all bundled dossier JSONL files.
+        /// Optional for back-compat: bundles from before 2026-06-07 don't
+        /// have this field and decode it as nil.
+        var dossierDeltaLines: Int? = nil
     }
 
     struct Sizes: Codable {
@@ -71,6 +75,9 @@ struct BundleManifest: Codable {
         var totalBytes: Int64
         /// Bytes occupied by reference photos (the bulky part).
         var referencePhotoBytes: Int64
+        /// Bytes occupied by the bundled dossier JSONL deltas. Optional
+        /// for back-compat (see Counts.dossierDeltaLines).
+        var dossierDeltaBytes: Int64? = nil
     }
 }
 
@@ -215,6 +222,32 @@ private let referencePhotoExts: Set<String> = [
     "jpg", "jpeg", "png", "heic", "heif", "tiff", "tif", "bmp"
 ]
 
+// MARK: - Dossier delta location (testable indirection)
+
+/// Source location of the dossier JSONL deltas that workers append to.
+/// Wrapped in a namespace so tests can stub the directory; production
+/// always reads from `/Volumes/Crucial2TB/dossier-deltas/`.
+///
+/// The deltas are the write-ahead log behind catalog.json's dossier
+/// fields — see docs/database_design.md. Bundling them belt-and-suspenders
+/// covers the case where catalog.json itself is corrupt at restore time.
+enum DossierDeltaPaths {
+    /// Live source directory in production. Tests override via
+    /// `BundleExporter.writeBundle(..., dossierDeltaDirOverride:)`.
+    static let liveDir = URL(fileURLWithPath: "/Volumes/Crucial2TB/dossier-deltas",
+                             isDirectory: true)
+
+    /// On-disk path of the integrity manifest the merger keeps in lock-step
+    /// with catalog.json. Optional: a missing file is skipped quietly
+    /// (some installs don't have one yet).
+    static let liveManifestSha256: URL = {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory,
+                                                  in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
+        return appSupport.appendingPathComponent("VideoScan/manifest.sha256")
+    }()
+}
+
 // MARK: - Exporter
 
 enum BundleExporter {
@@ -255,7 +288,9 @@ enum BundleExporter {
     @MainActor
     static func writeBundle(records inputRecords: [VideoRecord],
                             scanTargets: [CatalogScanTarget],
-                            to bundleURL: URL) throws -> Summary {
+                            to bundleURL: URL,
+                            dossierDeltaDirOverride: URL? = nil,
+                            catalogManifestOverride: URL? = nil) throws -> Summary {
         guard bundleURL.pathExtension == "videoscanbundle" else {
             throw BundleError.badExtension
         }
@@ -346,7 +381,24 @@ enum BundleExporter {
             }
         }
 
-        // 5. Manifest — written last so a partial bundle without manifest.json
+        // 5. Dossier JSONL deltas — the worker write-ahead log. catalog.json
+        //    already carries the dossier fields, but the deltas are the
+        //    durable source-of-truth that survives a corrupted catalog.
+        //    See docs/database_design.md for the recovery story. Resilient:
+        //    if the source dir is missing (Crucial2TB unmounted), the export
+        //    still succeeds — Rick gets a warning, not a thrown error.
+        let deltaSrcDir = dossierDeltaDirOverride ?? DossierDeltaPaths.liveDir
+        let deltaSummary = copyDossierDeltas(from: deltaSrcDir,
+                                             into: bundleURL,
+                                             warnings: &warnings)
+
+        // 6. Catalog integrity manifest (manifest.sha256). Optional: a
+        //    missing file is skipped silently — some installs predate the
+        //    merger's manifest writer.
+        let manifestSrc = catalogManifestOverride ?? DossierDeltaPaths.liveManifestSha256
+        copyCatalogManifestIfPresent(from: manifestSrc, into: bundleURL)
+
+        // 7. Manifest — written last so a partial bundle without manifest.json
         //    is unambiguously detectable on import.
         let totalBytes = directorySize(bundleURL)
         let manifest = BundleManifest(
@@ -359,9 +411,12 @@ enum BundleExporter {
                 records: records.count,
                 volumes: volumeSnapshots.count,
                 people: poiFolders.count,
-                referencePhotos: photoCount
+                referencePhotos: photoCount,
+                dossierDeltaLines: deltaSummary.lineCount
             ),
-            sizes: .init(totalBytes: totalBytes, referencePhotoBytes: photoBytes)
+            sizes: .init(totalBytes: totalBytes,
+                         referencePhotoBytes: photoBytes,
+                         dossierDeltaBytes: deltaSummary.byteCount)
         )
         try encoder.encode(manifest)
             .write(to: bundleURL.appendingPathComponent("manifest.json"), options: .atomic)
@@ -391,6 +446,127 @@ enum BundleExporter {
             return Summary.missingProfileJSONReason + " (file did not decode)"
         }
         return nil
+    }
+
+    /// Summary returned by `copyDossierDeltas`. Drives manifest counters
+    /// and the post-export alert. `lineCount` is the total non-blank
+    /// JSONL lines successfully copied (0 if no deltas were available);
+    /// `byteCount` is on-disk bytes inside the bundle's deltas/ subdir.
+    struct DossierDeltaSummary {
+        var lineCount: Int
+        var byteCount: Int64
+    }
+
+    /// Copy the worker dossier JSONL deltas from `srcDir` into
+    /// `bundleURL/deltas/`. Returns counts for the manifest. Failures
+    /// are surfaced as bundle export warnings, NEVER as thrown errors —
+    /// the catalog.json already carries the dossier fields, so a missing
+    /// delta dir reduces redundancy but doesn't lose data.
+    ///
+    /// `nonisolated` static — pure file IO, callable from tests off the
+    /// main actor.
+    nonisolated static func copyDossierDeltas(
+        from srcDir: URL,
+        into bundleURL: URL,
+        warnings: inout [(String, String)]
+    ) -> DossierDeltaSummary {
+        let fm = FileManager.default
+
+        // Source dir missing (Crucial2TB unmounted, or fresh install): warn
+        // and return empty. The bundle still has catalog.json with dossier
+        // fields embedded; this just means no belt for the suspenders.
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: srcDir.path, isDirectory: &isDir), isDir.boolValue else {
+            warnings.append(("deltas/",
+                             "dossier delta dir not available at \(srcDir.path) — " +
+                             "bundle ships catalog only; no JSONL belt for the suspenders"))
+            return DossierDeltaSummary(lineCount: 0, byteCount: 0)
+        }
+
+        // Destination dir inside the bundle.
+        let destDir = bundleURL.appendingPathComponent("deltas", isDirectory: true)
+        do {
+            try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+        } catch {
+            warnings.append(("deltas/",
+                             "could not create deltas/ in bundle: \(error.localizedDescription)"))
+            return DossierDeltaSummary(lineCount: 0, byteCount: 0)
+        }
+
+        // Enumerate *.jsonl files at the top level only — workers don't
+        // create subdirs. Sorted for deterministic copy order (eases test
+        // assertions and audit log scanning).
+        let entries: [URL]
+        do {
+            let kids = try fm.contentsOfDirectory(at: srcDir,
+                                                  includingPropertiesForKeys: [.isRegularFileKey])
+            entries = kids
+                .filter { $0.pathExtension.lowercased() == "jsonl" }
+                .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        } catch {
+            warnings.append(("deltas/",
+                             "could not enumerate \(srcDir.path): \(error.localizedDescription)"))
+            return DossierDeltaSummary(lineCount: 0, byteCount: 0)
+        }
+
+        var totalLines = 0
+        var totalBytes: Int64 = 0
+        for src in entries {
+            let dest = destDir.appendingPathComponent(src.lastPathComponent)
+            do {
+                try fm.copyItem(at: src, to: dest)
+            } catch {
+                warnings.append(("deltas/\(src.lastPathComponent)",
+                                 "copy failed: \(error.localizedDescription)"))
+                continue
+            }
+            // Count lines for the manifest. Streaming line count avoids
+            // loading huge JSONLs into RAM (Rick's m4.jsonl was 18 MB at
+            // first audit and grows).
+            if let lc = countJSONLLines(at: dest) {
+                totalLines += lc
+            }
+            if let v = try? dest.resourceValues(forKeys: [.fileSizeKey]),
+               let bytes = v.fileSize {
+                totalBytes += Int64(bytes)
+            }
+        }
+
+        return DossierDeltaSummary(lineCount: totalLines, byteCount: totalBytes)
+    }
+
+    /// Streaming non-blank line count for a JSONL file. Returns nil if
+    /// the file can't be opened.
+    nonisolated static func countJSONLLines(at url: URL) -> Int? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        var count = 0
+        var leftover = ""
+        let chunkSize = 64 * 1024
+        while let chunk = try? handle.read(upToCount: chunkSize), !chunk.isEmpty {
+            let text = leftover + (String(data: chunk, encoding: .utf8) ?? "")
+            let parts = text.split(separator: "\n", omittingEmptySubsequences: false)
+            for piece in parts.dropLast() {
+                if !piece.trimmingCharacters(in: .whitespaces).isEmpty {
+                    count += 1
+                }
+            }
+            leftover = String(parts.last ?? "")
+        }
+        if !leftover.trimmingCharacters(in: .whitespaces).isEmpty {
+            count += 1
+        }
+        return count
+    }
+
+    /// Copy `~/Library/Application Support/VideoScan/manifest.sha256`
+    /// into the bundle as `catalog-manifest.sha256` if it exists. Silent
+    /// on failure — this is a nice-to-have, not load-bearing.
+    nonisolated static func copyCatalogManifestIfPresent(from src: URL, into bundleURL: URL) {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: src.path) else { return }
+        let dest = bundleURL.appendingPathComponent("catalog-manifest.sha256")
+        try? fm.copyItem(at: src, to: dest)
     }
 
     /// Recursively sum file sizes under `url`. Used for the manifest size
