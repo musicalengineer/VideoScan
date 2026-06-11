@@ -46,17 +46,17 @@ struct MediaDispositionRawValueContractTests {
         // starts passing the WRONG way, MediaDisposition gained a
         // lenient codable and the regression sensor is disarmed.
         struct Wrap: Decodable { let mediaDisposition: MediaDisposition }
-        let bad = #"{"mediaDisposition":"confirmedJunk"}"#.data(using: .utf8)!
+        let bad = Data(#"{"mediaDisposition":"confirmedJunk"}"#.utf8)
         #expect(throws: DecodingError.self) {
             _ = try JSONDecoder().decode(Wrap.self, from: bad)
         }
     }
 
-    @Test func swiftDecoderAcceptsCorrectRawValue() {
+    @Test func swiftDecoderAcceptsCorrectRawValue() throws {
         // Positive control: the value the fixed script writes round-trips.
         struct Wrap: Decodable { let mediaDisposition: MediaDisposition }
-        let good = #"{"mediaDisposition":"Confirmed Junk"}"#.data(using: .utf8)!
-        let decoded = try! JSONDecoder().decode(Wrap.self, from: good)
+        let good = Data(#"{"mediaDisposition":"Confirmed Junk"}"#.utf8)
+        let decoded = try JSONDecoder().decode(Wrap.self, from: good)
         #expect(decoded.mediaDisposition == .confirmedJunk)
     }
 }

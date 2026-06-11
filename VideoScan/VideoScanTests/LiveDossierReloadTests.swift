@@ -348,13 +348,15 @@ struct FleetStatsTests {
         #expect(stats[.m1].recordCount == 0)
     }
 
-    @Test("freshly-written file shows 'active' liveness label")
+    @Test("freshly-written file shows 'running' liveness label")
     func activeLabel() throws {
         let dir = makeFixtureDir(m4Lines: 5)
         defer { try? FileManager.default.removeItem(at: dir) }
         let stats = FleetStats.load(from: dir)
-        // mtime just now → age < 120s → "active"
-        #expect(stats[.m4].aliveLabel == "active")
+        // mtime just now → age < 120s → "running"
+        // (Rick 2026-06-09 verb-rename pass a71b105 changed "active" →
+        // "running"; this test wasn't updated and went stale.)
+        #expect(stats[.m4].aliveLabel == "running")
     }
 
     @Test("HostStat.empty has nil lastWrite and zero counts")
@@ -362,6 +364,8 @@ struct FleetStatsTests {
         let empty = FleetStats.HostStat.empty
         #expect(empty.recordCount == 0)
         #expect(empty.lastWrite == nil)
-        #expect(empty.aliveLabel == "no JSONL")
+        // Same a71b105 verb-rename: empty stat now reports "idle"
+        // (sentinel nil + lastWrite nil + recordCount 0 → idle).
+        #expect(empty.aliveLabel == "idle")
     }
 }
