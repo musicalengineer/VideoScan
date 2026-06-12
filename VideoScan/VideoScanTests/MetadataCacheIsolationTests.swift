@@ -60,6 +60,12 @@ struct MetadataCacheIsolationTests {
     @Test("default-init MetadataCache never writes to the real Application Support sqlite")
     func defaultInitDoesNotWriteRealDB() throws {
         let realPath = Self.realDBPath
+        // Drain any WAL the real app left behind BEFORE baselining mtime:
+        // realDBRowCount's read-write connection checkpoints a pending WAL
+        // into the main db file on close, which moved the mtime and failed
+        // this test (2026-06-11) even though no test wrote anything. After
+        // this throwaway drain, only a genuine write can change the mtime.
+        _ = Self.realDBRowCount(forPath: "/nonexistent-wal-drain-probe")
         let mtimeBefore = (try? FileManager.default
             .attributesOfItem(atPath: realPath)[.modificationDate]) as? Date
 
