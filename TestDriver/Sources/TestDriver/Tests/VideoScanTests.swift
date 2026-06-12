@@ -161,7 +161,7 @@ enum VideoScanTests {
             group: .smoke,
             module: "Source-level invariants",
             name: "VolumeReachability cache code present",
-            description: "Source mentions invalidateCache/cacheTTL/cacheLock — issue #87 fix landed"
+            description: "Source mentions invalidateCache/SWRProbeCache — issue #87 fix landed"
         ) { _, log in
             let started = Date()
             let path = projectDir + "/VideoScan/VideoScan/VolumeReachability.swift"
@@ -170,7 +170,10 @@ enum VideoScanTests {
             guard let content = try? String(contentsOfFile: path) else {
                 return .failed("Couldn't read source file", duration: elapsed)
             }
-            let needles = ["invalidateCache", "cacheTTL", "cacheLock"]
+            // cacheTTL/cacheLock were folded into SWRProbeCache by the
+            // stale-while-revalidate refactor (2026-06-10); the invariant
+            // tracks the invalidate hook plus the cache type itself.
+            let needles = ["invalidateCache", "SWRProbeCache"]
             let missing = needles.filter { !content.contains($0) }
             if !missing.isEmpty {
                 return .failed("Source missing: \(missing.joined(separator: ", "))",
