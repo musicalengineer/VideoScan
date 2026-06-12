@@ -319,9 +319,22 @@ final class CaptionOrchestrator: ObservableObject {
         await activeTask?.value
     }
 
-    /// Dossier batch loop. Sibling to runBatch (the single-prompt
-    /// captioning loop). Each iteration: skip-or-run, dossier (VLM
-    /// 3-prompt), transcribe (Whisper), writeback via applyDossier.
+    /// VLM result ready for the Whisper consumer stage.
+    private struct DossierVLMResult: Sendable {
+        let extraction: DossierExtraction
+        let fullPath: String
+        let filename: String
+        let vlmModelID: String
+        let idx: Int
+    }
+
+    /// Pipelined dossier batch: VLM and Whisper overlap across files.
+    ///
+    /// While the Whisper subprocess transcribes file N, the VLM actor
+    /// runs dossier extraction on file N+1. An AsyncStream with
+    /// capacity 1 connects the two stages — the VLM producer suspends
+    /// when the buffer is full (backpressure), so at most two files
+    /// are in flight at once.
     private func runDossierBatch(
         runner: CaptionRunner,
         transcriber: AudioTranscriber?,
@@ -335,38 +348,170 @@ final class CaptionOrchestrator: ObservableObject {
         resetLiveCounts()
         liveTotal = total
 
-        // The provenance string we'd stamp if we processed a record —
-        // also the skip key. Matches applyDossier's stackID construction.
         let stackID: String = transcriber.map { "\(runner.modelID)+\($0.modelID)" } ?? runner.modelID
+        let vlmModelID = runner.modelID
 
-        var captioned = 0
-        var skipped = 0
-        var failed = 0
+        // No transcriber → fall back to the serial path (no overlap benefit).
+        guard transcriber != nil else {
+            await runDossierBatchSerial(
+                runner: runner, transcriber: nil,
+                candidates: candidates, framesPerFile: framesPerFile,
+                force: force, model: model, stackID: stackID, started: started
+            )
+            return
+        }
+        let transcriber = transcriber!
+        let whisperModelID = transcriber.modelID
+
+        let (stream, continuation) = AsyncStream.makeStream(
+            of: DossierVLMResult.self,
+            bufferingPolicy: .bufferingOldest(1)
+        )
+
+        await withTaskGroup(of: Void.self) { group in
+
+            // --- VLM Producer ---
+            group.addTask { @MainActor [weak self] in
+                guard let self else { continuation.finish(); return }
+
+                for (idx, record) in candidates.enumerated() {
+                    if Task.isCancelled {
+                        captionOrchLog.notice("Dossier: VLM cancelled at file \(idx) of \(total)")
+                        break
+                    }
+
+                    let path = record.fullPath
+                    let filename = record.filename
+
+                    if !force,
+                       record.dossierProcessedAt != nil,
+                       record.dossierProcessedBy == stackID {
+                        liveSkipped += 1
+                        publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
+                        continue
+                    }
+
+                    if !FileManager.default.fileExists(atPath: path) {
+                        liveFailed += 1
+                        captionOrchLog.warning("Dossier: missing on disk: \(path, privacy: .public)")
+                        publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
+                        continue
+                    }
+
+                    publishProgress(idx: idx, total: total, currentFile: filename, started: started)
+
+                    let dur = max(0.5, record.durationSeconds)
+                    let timestamps = framesEvenlySpaced(framesPerFile: framesPerFile, durationSec: dur)
+
+                    do {
+                        let extraction = try await runner.dossier(
+                            videoPath: path,
+                            atTimestamps: timestamps
+                        )
+                        continuation.yield(DossierVLMResult(
+                            extraction: extraction,
+                            fullPath: path,
+                            filename: filename,
+                            vlmModelID: vlmModelID,
+                            idx: idx
+                        ))
+                    } catch is CancellationError {
+                        captionOrchLog.notice("Dossier: VLM cancellation at \(filename, privacy: .public)")
+                        break
+                    } catch {
+                        liveFailed += 1
+                        captionOrchLog.warning("Dossier: VLM error on \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                        publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
+                    }
+                }
+                continuation.finish()
+            }
+
+            // --- Whisper Consumer ---
+            group.addTask { @MainActor [weak self] in
+                guard let self else { return }
+
+                for await result in stream {
+                    if Task.isCancelled { break }
+
+                    var transcript: String?
+                    do {
+                        transcript = try await transcriber.transcribe(videoPath: result.fullPath)
+                    } catch is CancellationError {
+                        _ = model.applyDossier(
+                            result.extraction,
+                            to: result.fullPath,
+                            vlmModel: result.vlmModelID,
+                            transcript: nil,
+                            whisperModel: nil
+                        )
+                        liveCaptioned += 1
+                        break
+                    } catch {
+                        captionOrchLog.warning("Dossier: whisper failed on \(result.filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                        transcript = nil
+                    }
+
+                    _ = model.applyDossier(
+                        result.extraction,
+                        to: result.fullPath,
+                        vlmModel: result.vlmModelID,
+                        transcript: transcript,
+                        whisperModel: transcript != nil ? whisperModelID : nil
+                    )
+                    liveCaptioned += 1
+                    publishProgress(idx: result.idx + 1, total: total, currentFile: result.filename, started: started)
+                }
+            }
+        }
+
+        let elapsed = CFAbsoluteTimeGetCurrent() - started
+        let captioned = liveCaptioned
+        let skipped = liveSkipped
+        let failed = liveFailed
+        captionOrchLog.info("Dossier batch done: captioned=\(captioned), skipped=\(skipped), failed=\(failed) in \(String(format: "%.1f", elapsed))s")
+        appLog.write(String(format: "Dossier: done — %d processed, %d skipped, %d failed in %.1fs (%@)",
+                            captioned, skipped, failed, elapsed, stackID))
+        if Task.isCancelled {
+            appLog.write("Dossier: cancelled (done \(captioned), skipped \(skipped), failed \(failed))")
+        }
+        currentStatus = .finished(captioned: captioned, skipped: skipped, failed: failed)
+    }
+
+    /// Serial fallback when no transcriber is configured (no overlap benefit).
+    private func runDossierBatchSerial(
+        runner: CaptionRunner,
+        transcriber: AudioTranscriber?,
+        candidates: [VideoRecord],
+        framesPerFile: Int,
+        force: Bool,
+        model: VideoScanModel,
+        stackID: String,
+        started: CFAbsoluteTime
+    ) async {
+        let total = candidates.count
 
         for (idx, record) in candidates.enumerated() {
             if Task.isCancelled {
                 captionOrchLog.notice("Dossier: cancelled at file \(idx) of \(total)")
-                appLog.write("Dossier: cancelled at file \(idx) of \(total) (done \(captioned), skipped \(skipped), failed \(failed))")
-                currentStatus = .finished(captioned: captioned, skipped: skipped, failed: failed)
+                appLog.write("Dossier: cancelled at file \(idx) of \(total) (done \(liveCaptioned), skipped \(liveSkipped), failed \(liveFailed))")
+                currentStatus = .finished(captioned: liveCaptioned, skipped: liveSkipped, failed: liveFailed)
                 return
             }
 
             let path = record.fullPath
             let filename = record.filename
 
-            // Idempotent skip — same key as the eventual writeback.
             if !force,
                record.dossierProcessedAt != nil,
                record.dossierProcessedBy == stackID {
-                skipped += 1
-                liveSkipped = skipped
+                liveSkipped += 1
                 publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
                 continue
             }
 
             if !FileManager.default.fileExists(atPath: path) {
-                failed += 1
-                liveFailed = failed
+                liveFailed += 1
                 captionOrchLog.warning("Dossier: missing on disk: \(path, privacy: .public)")
                 publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
                 continue
@@ -378,15 +523,10 @@ final class CaptionOrchestrator: ObservableObject {
             let timestamps = framesEvenlySpaced(framesPerFile: framesPerFile, durationSec: dur)
 
             do {
-                // VLM dossier first — failing here means we never paid
-                // Whisper's cost on a busted file.
                 let extraction = try await runner.dossier(
-                    videoPath: path,
-                    atTimestamps: timestamps
+                    videoPath: path, atTimestamps: timestamps
                 )
 
-                // Whisper next. Per-file failure here just means we
-                // skip the audio channel — VLM signals still flush.
                 var transcript: String?
                 if let transcriber {
                     do {
@@ -395,42 +535,35 @@ final class CaptionOrchestrator: ObservableObject {
                         throw CancellationError()
                     } catch {
                         captionOrchLog.warning("Dossier: whisper failed on \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                        transcript = nil
                     }
                 }
 
                 _ = model.applyDossier(
-                    extraction,
-                    to: path,
+                    extraction, to: path,
                     vlmModel: runner.modelID,
                     transcript: transcript,
                     whisperModel: transcript != nil ? transcriber?.modelID : nil
                 )
-                captioned += 1
-                liveCaptioned = captioned
+                liveCaptioned += 1
             } catch is CancellationError {
-                captionOrchLog.notice("Dossier: runner observed cancellation at \(filename, privacy: .public)")
-                appLog.write("Dossier: cancelled mid-file \(filename) (done \(captioned), skipped \(skipped), failed \(failed))")
-                currentStatus = .finished(captioned: captioned, skipped: skipped, failed: failed)
+                captionOrchLog.notice("Dossier: cancelled at \(filename, privacy: .public)")
+                appLog.write("Dossier: cancelled mid-file \(filename) (done \(liveCaptioned), skipped \(liveSkipped), failed \(liveFailed))")
+                currentStatus = .finished(captioned: liveCaptioned, skipped: liveSkipped, failed: liveFailed)
                 return
-            } catch let err as CaptionRunnerError {
-                failed += 1
-                liveFailed = failed
-                captionOrchLog.warning("Dossier: CaptionRunnerError on \(filename, privacy: .public): \(String(describing: err), privacy: .public)")
             } catch {
-                failed += 1
-                liveFailed = failed
-                captionOrchLog.warning("Dossier: unknown error on \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                liveFailed += 1
+                captionOrchLog.warning("Dossier: error on \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
 
             publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
         }
 
         let elapsed = CFAbsoluteTimeGetCurrent() - started
-        captionOrchLog.info("Dossier batch done: captioned=\(captioned), skipped=\(skipped), failed=\(failed) in \(String(format: "%.1f", elapsed))s")
+        let c = self.liveCaptioned, s = self.liveSkipped, f = self.liveFailed
+        captionOrchLog.info("Dossier batch done: captioned=\(c), skipped=\(s), failed=\(f) in \(String(format: "%.1f", elapsed))s")
         appLog.write(String(format: "Dossier: done — %d processed, %d skipped, %d failed in %.1fs (%@)",
-                            captioned, skipped, failed, elapsed, stackID))
-        currentStatus = .finished(captioned: captioned, skipped: skipped, failed: failed)
+                            c, s, f, elapsed, stackID))
+        currentStatus = .finished(captioned: c, skipped: s, failed: f)
     }
 
     // MARK: - Batch loop

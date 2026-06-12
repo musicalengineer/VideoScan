@@ -37,6 +37,7 @@ struct DossierDashboardView: View {
 
     @EnvironmentObject var captionOrchestrator: CaptionOrchestrator
     @EnvironmentObject var model: VideoScanModel
+    @AppStorage("DossierAutoResume") private var autoResume: Bool = false
 
     /// Per-worker JSONL stats. Refreshed by the timer below; never
     /// blocking the main thread on its read.
@@ -174,6 +175,10 @@ struct DossierDashboardView: View {
                     Label("Stop Analyzing", systemImage: "stop.fill")
                 }
                 .disabled(!captionOrchestrator.currentStatus.isActive)
+
+                Toggle("Resume on Launch", isOn: $autoResume)
+                    .toggleStyle(.checkbox)
+                    .help("Automatically start dossier analysis when the app launches.")
 
                 Spacer()
 

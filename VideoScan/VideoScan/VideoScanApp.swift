@@ -306,6 +306,16 @@ struct VideoScanApp: App {
                         // dossier-channel changes from disk into
                         // in-memory records.
                         catalogModel.startLiveDossierReload()
+
+                        if !TestEnvironment.isTestHost,
+                           !catalogSync.isReadOnly,
+                           UserDefaults.standard.bool(forKey: "DossierAutoResume") {
+                            Task {
+                                try? await Task.sleep(for: .seconds(3))
+                                guard !Task.isCancelled else { return }
+                                await captionOrchestrator.startCatalogWideDossier(model: catalogModel)
+                            }
+                        }
                     }
             }
         }

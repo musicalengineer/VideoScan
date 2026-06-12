@@ -351,10 +351,7 @@ actor MLXVLMCaptionRunner: CaptionRunner {
     private func ensureContainer() async throws -> ModelContainer {
         if let cached = cachedContainer { return cached }
         captionLogger.info("MLXVLMCaptionRunner: loading model container (first call this session)")
-        // GPU memory cache cap — keeps the model from ballooning if
-        // the host machine is shared with other GPU workloads (FD
-        // pipeline running at the same time, e.g.).
-        MLX.GPU.set(cacheLimit: 20 * 1024 * 1024) // 20 MB
+        MLX.GPU.set(cacheLimit: 512 * 1024 * 1024) // 512 MB — M4 Max has 128 GB unified; 20 MB forced constant realloc across 3 prompts/frame
         do {
             let container = try await runMLX {
                 try await VLMModelFactory.shared.loadContainer(
