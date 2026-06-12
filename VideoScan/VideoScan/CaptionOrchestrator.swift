@@ -404,10 +404,13 @@ final class CaptionOrchestrator: ObservableObject {
                     let timestamps = framesEvenlySpaced(framesPerFile: framesPerFile, durationSec: dur)
 
                     do {
+                        let vlmStart = CFAbsoluteTimeGetCurrent()
                         let extraction = try await runner.dossier(
                             videoPath: path,
                             atTimestamps: timestamps
                         )
+                        let vlmSec = CFAbsoluteTimeGetCurrent() - vlmStart
+                        appLog.write(String(format: "Pipeline VLM done: %@ — %.1fs", filename, vlmSec))
                         continuation.yield(DossierVLMResult(
                             extraction: extraction,
                             fullPath: path,
@@ -434,6 +437,8 @@ final class CaptionOrchestrator: ObservableObject {
                 for await result in stream {
                     if Task.isCancelled { break }
 
+                    appLog.write("Pipeline Whisper start: \(result.filename)")
+                    let whisperStart = CFAbsoluteTimeGetCurrent()
                     var transcript: String?
                     do {
                         transcript = try await transcriber.transcribe(videoPath: result.fullPath)
@@ -459,6 +464,8 @@ final class CaptionOrchestrator: ObservableObject {
                         transcript: transcript,
                         whisperModel: transcript != nil ? whisperModelID : nil
                     )
+                    let whisperSec = CFAbsoluteTimeGetCurrent() - whisperStart
+                    appLog.write(String(format: "Pipeline Whisper done: %@ — %.1fs", result.filename, whisperSec))
                     liveCaptioned += 1
                     publishProgress(idx: result.idx + 1, total: total, currentFile: result.filename, started: started)
                 }

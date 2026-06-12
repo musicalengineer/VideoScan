@@ -59,6 +59,7 @@ struct DossierDashboardView: View {
     /// trimmed to the last 5 minutes inside RateTracker. Public
     /// surface is just `rate.perMinute` for display.
     @State private var rate: RateTracker = .init()
+    @State private var refreshTick: UInt = 0
 
     /// Tick the UI every 5s so the dial / counters / fleet panel
     /// stay current. Matches the merger's 60s catalog write cadence —
@@ -188,7 +189,11 @@ struct DossierDashboardView: View {
         .padding(20)
         .frame(minWidth: 700, minHeight: 700)
         .onAppear { refreshFleet() }
-        .onReceive(refreshTimer) { _ in refreshFleet() }
+        .onReceive(refreshTimer) { _ in
+            refreshTick &+= 1
+            rate.record(count: coverage.dossiered, at: Date())
+            refreshFleet()
+        }
     }
 
     // MARK: - Catalog-wide coverage
@@ -233,9 +238,6 @@ struct DossierDashboardView: View {
             await MainActor.run {
                 fleet = stats
                 fleetCache = cacheOut
-                // Sample the dossier count alongside the fleet read so the
-                // rate display moves on the same cadence as the dial.
-                rate.record(count: coverage.dossiered, at: Date())
                 refreshInFlight = false
             }
         }
@@ -254,7 +256,14 @@ struct CatalogCoverage {
     let transcripts: Int
     let strongDates: Int
 
+    static let empty = CatalogCoverage()
     var remaining: Int { max(0, total - dossiered) }
+
+    init(total: Int = 0, dossiered: Int = 0, scenes: Int = 0,
+         ocrDates: Int = 0, transcripts: Int = 0, strongDates: Int = 0) {
+        self.total = total; self.dossiered = dossiered; self.scenes = scenes
+        self.ocrDates = ocrDates; self.transcripts = transcripts; self.strongDates = strongDates
+    }
 
     init(records: [VideoRecord]) {
         var t = 0, d = 0, s = 0, o = 0, x = 0, sd = 0
