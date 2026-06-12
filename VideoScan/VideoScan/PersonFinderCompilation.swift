@@ -244,23 +244,23 @@ private func pfProbeCompatKey(path: String) async -> CompatKey? {
     guard let ffprobePath = ToolLocator.firstExecutable(in: ToolLocator.ffprobeCandidates) else { return nil }
     guard fm.fileExists(atPath: path) else { return nil }
 
-    let proc = Process()
-    proc.executableURL = URL(fileURLWithPath: ffprobePath)
-    proc.arguments = [
-        "-v", "error",
-        "-print_format", "json",
-        "-show_streams",
-        "-show_format",
-        path
-    ]
-    let outPipe = Pipe()
-    proc.standardOutput = outPipe
-    proc.standardError = FileHandle.nullDevice
-    do { try proc.run() } catch { return nil }
-    proc.waitUntilExit()
-    guard proc.terminationStatus == 0 else { return nil }
+    // ProcessRunner (codex finding #3): drains stdout continuously instead of
+    // reading after waitUntilExit (which blocked a cooperative thread AND
+    // could deadlock if the JSON outgrew the 64KB pipe buffer).
+    let result = await ProcessRunner.runProcess(
+        executable: ffprobePath,
+        arguments: [
+            "-v", "error",
+            "-print_format", "json",
+            "-show_streams",
+            "-show_format",
+            path
+        ]
+    )
+    guard result.exitCode == 0,
+          let stdout = result.stdout,
+          let data = stdout.data(using: .utf8) else { return nil }
 
-    let data = outPipe.fileHandleForReading.readDataToEndOfFile()
     guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let streams = root["streams"] as? [[String: Any]] else { return nil }
 
@@ -425,50 +425,37 @@ private func pfStreamCopyConcat(
 
     if fm.fileExists(atPath: outputPath) { try? fm.removeItem(atPath: outputPath) }
 
-    let proc = Process()
-    proc.executableURL = URL(fileURLWithPath: ffmpegPath)
-    proc.arguments = [
-        "-hide_banner", "-nostdin",
-        "-f", "concat", "-safe", "0", "-i", listPath,
-        "-map", "0:v?", "-map", "0:a?",
-        "-c", "copy",
-        "-movflags", "+faststart",
-        "-y", outputPath
-    ]
-    proc.standardOutput = FileHandle.nullDevice
-    let stderrPipe = Pipe()
-    proc.standardError = stderrPipe
+    // ProcessRunner (codex finding #3): keeps the continuous stderr drain
+    // (mixed-input archives emit floods of warnings) and adds cancellation
+    // awareness — cancelling the compilation task now terminates ffmpeg
+    // instead of letting it run to completion.
+    let result = await ProcessRunner.runProcess(
+        executable: ffmpegPath,
+        arguments: [
+            "-hide_banner", "-nostdin",
+            "-f", "concat", "-safe", "0", "-i", listPath,
+            "-map", "0:v?", "-map", "0:a?",
+            "-c", "copy",
+            "-movflags", "+faststart",
+            "-y", outputPath
+        ],
+        stderrLimitBytes: nil   // full transcript, matching pre-refactor pfStderrBox
+    )
+    try? fm.removeItem(atPath: listPath)
 
-    // Drain stderr to prevent the 64KB pipe buffer from deadlocking ffmpeg
-    // when it emits many warnings (mixed-input archives produce a lot).
-    let stderrBox = pfStderrBox()
-    stderrPipe.fileHandleForReading.readabilityHandler = { handle in
-        let chunk = handle.availableData
-        if !chunk.isEmpty { stderrBox.append(chunk) }
-    }
-
-    do { try proc.run() } catch {
-        await logFn("  ⚠ Could not launch ffmpeg: \(error.localizedDescription)")
-        try? fm.removeItem(atPath: listPath)
+    // Launch failure: stdout nil + synthetic -1 (vs. a real ffmpeg exit code).
+    if result.exitCode == -1, result.stdout == nil, result.stderr != "cancelled" {
+        await logFn("  ⚠ Could not launch ffmpeg: \(result.stderr)")
         return nil
     }
 
-    await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-        proc.terminationHandler = { _ in cont.resume() }
-        if !proc.isRunning { cont.resume() }
-    }
-    stderrPipe.fileHandleForReading.readabilityHandler = nil
-    try? fm.removeItem(atPath: listPath)
-
-    if proc.terminationStatus == 0 {
+    if result.exitCode == 0 {
         await logFn("    ✓ \((outputPath as NSString).lastPathComponent)")
         return outputPath
     } else {
-        await logFn("    ⚠ ffmpeg exited with code \(proc.terminationStatus)")
-        if let errStr = String(data: stderrBox.data, encoding: .utf8), !errStr.isEmpty {
-            for line in errStr.components(separatedBy: .newlines).suffix(8) where !line.isEmpty {
-                await logFn("      stderr: \(line)")
-            }
+        await logFn("    ⚠ ffmpeg exited with code \(result.exitCode)")
+        for line in result.stderr.components(separatedBy: .newlines).suffix(8) where !line.isEmpty {
+            await logFn("      stderr: \(line)")
         }
         return nil
     }
@@ -555,43 +542,13 @@ func pfMergeBucketsToSingleFile(
     return ok && fm.fileExists(atPath: outputPath)
 }
 
-/// Run ffmpeg synchronously (in an async context) with the given args.
-/// Returns true if exit status was 0. Drains stderr to avoid pipe deadlock.
+/// Run ffmpeg with the given args. Returns true if exit status was 0.
+/// ProcessRunner drains both pipes (avoiding the 64KB pipe-buffer deadlock)
+/// and terminates ffmpeg on task cancellation (codex finding #3 — previously
+/// a cancelled merge let ffmpeg run to completion unattended).
 private func pfRunFFmpeg(ffmpegPath: String, args: [String]) async -> Bool {
-    let proc = Process()
-    proc.executableURL = URL(fileURLWithPath: ffmpegPath)
-    proc.arguments = args
-    proc.standardOutput = FileHandle.nullDevice
-    let stderrPipe = Pipe()
-    proc.standardError = stderrPipe
-    let stderrBox = pfStderrBox()
-    stderrPipe.fileHandleForReading.readabilityHandler = { handle in
-        let chunk = handle.availableData
-        if !chunk.isEmpty { stderrBox.append(chunk) }
-    }
-    do {
-        try proc.run()
-    } catch {
-        stderrPipe.fileHandleForReading.readabilityHandler = nil
-        return false
-    }
-    await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-        DispatchQueue.global(qos: .userInitiated).async {
-            proc.waitUntilExit()
-            stderrPipe.fileHandleForReading.readabilityHandler = nil
-            cont.resume()
-        }
-    }
-    return proc.terminationStatus == 0
-}
-
-/// Tiny reference-type box so the readabilityHandler closure can append
-/// without tripping Swift 6 sendable-capture diagnostics.
-private final class pfStderrBox: @unchecked Sendable {
-    private let lock = NSLock()
-    private var buffer = Data()
-    func append(_ chunk: Data) { lock.lock(); buffer.append(chunk); lock.unlock() }
-    var data: Data { lock.lock(); defer { lock.unlock() }; return buffer }
+    let result = await ProcessRunner.runProcess(executable: ffmpegPath, arguments: args)
+    return result.exitCode == 0
 }
 
 private func pfFileSize(at path: String) -> Int64 {
