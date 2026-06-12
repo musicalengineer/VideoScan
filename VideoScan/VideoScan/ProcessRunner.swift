@@ -165,12 +165,28 @@ enum ProcessRunner {
     /// This is the safe default for ffmpeg/ffprobe/Python subprocesses: a child
     /// that writes more than the OS pipe buffer cannot block waiting for us to
     /// read after termination.
+    ///
+    /// - Parameters:
+    ///   - stdoutLine: optional per-line callback for stdout (complete lines,
+    ///     trimmed, delivered in order). Used by callers that parse progress
+    ///     streams (e.g. ffmpeg `-progress pipe:1`).
+    ///   - stderrLine: same, for stderr.
+    ///   - stdoutLimitBytes / stderrLimitBytes: cap on the *collected* copy
+    ///     returned in `Result`. `nil` = unbounded. Line callbacks always see
+    ///     the full stream regardless of the cap.
+    ///   - terminationGraceSeconds: on task cancellation we send SIGTERM; if
+    ///     the child is still alive after this grace period we escalate to
+    ///     SIGKILL. (C analogy: kill(pid, SIGTERM) then kill(pid, SIGKILL)
+    ///     after a timeout — some tools trap TERM mid-write and linger.)
     static func runProcess(
         executable: String,
         arguments: [String],
         environment: [String: String]? = nil,
+        stdoutLine: (@Sendable (String) -> Void)? = nil,
         stderrLine: (@Sendable (String) -> Void)? = nil,
-        stderrLimitBytes: Int = 256 * 1024
+        stdoutLimitBytes: Int? = nil,
+        stderrLimitBytes: Int? = 256 * 1024,
+        terminationGraceSeconds: Double = 5.0
     ) async -> Result {
         guard !Task.isCancelled else {
             return Result(stdout: nil, stderr: "cancelled", exitCode: -1)
@@ -186,8 +202,9 @@ enum ProcessRunner {
         proc.standardOutput = stdoutPipe
         proc.standardError  = stderrPipe
 
-        let stdoutCollector = DataCollector()
+        let stdoutCollector = DataCollector(limitBytes: stdoutLimitBytes)
         let stderrCollector = DataCollector(limitBytes: stderrLimitBytes)
+        let stdoutStreamer = LineStreamer(lineHandler: stdoutLine)
         let stderrStreamer = LineStreamer(lineHandler: stderrLine)
         let completion = CompletionBox<Result>()
         let launchState = ProcessLaunchState()
@@ -196,7 +213,10 @@ enum ProcessRunner {
         let stderrHandle = stderrPipe.fileHandleForReading
         stdoutHandle.readabilityHandler = { handle in
             let data = handle.availableData
-            if !data.isEmpty { stdoutCollector.append(data) }
+            if !data.isEmpty {
+                stdoutCollector.append(data)
+                stdoutStreamer.append(data)
+            }
         }
         stderrHandle.readabilityHandler = { handle in
             let data = handle.availableData
@@ -214,7 +234,11 @@ enum ProcessRunner {
                     stderrHandle.readabilityHandler = nil
 
                     let remainingOut = stdoutHandle.readDataToEndOfFile()
-                    if !remainingOut.isEmpty { stdoutCollector.append(remainingOut) }
+                    if !remainingOut.isEmpty {
+                        stdoutCollector.append(remainingOut)
+                        stdoutStreamer.append(remainingOut)
+                    }
+                    stdoutStreamer.finish()
 
                     let remainingErr = stderrHandle.readDataToEndOfFile()
                     if !remainingErr.isEmpty {
@@ -258,6 +282,15 @@ enum ProcessRunner {
             launchState.markCancelled()
             if proc.isRunning {
                 proc.terminate()
+                // Escalate SIGTERM → SIGKILL if the child lingers past the
+                // grace period. `isRunning` is re-checked at fire time so a
+                // child that exited cleanly is never signalled again.
+                let grace = max(0.1, terminationGraceSeconds)
+                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + grace) {
+                    if proc.isRunning {
+                        kill(proc.processIdentifier, SIGKILL)
+                    }
+                }
             }
         }
     }
