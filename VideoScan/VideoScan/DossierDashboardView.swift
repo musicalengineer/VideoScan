@@ -59,7 +59,12 @@ struct DossierDashboardView: View {
     /// trimmed to the last 5 minutes inside RateTracker. Public
     /// surface is just `rate.perMinute` for display.
     @State private var rate: RateTracker = .init()
-    @State private var refreshTick: UInt = 0
+    @State private var dossieredCount: Int = 0
+    @State private var totalCount: Int = 0
+    @State private var scenesCount: Int = 0
+    @State private var ocrDatesCount: Int = 0
+    @State private var strongDatesCount: Int = 0
+    @State private var transcriptsCount: Int = 0
 
     /// Tick the UI every 5s so the dial / counters / fleet panel
     /// stay current. Matches the merger's 60s catalog write cadence —
@@ -87,25 +92,17 @@ struct DossierDashboardView: View {
                 .frame(width: 270, height: 270)
 
                 VStack(alignment: .leading, spacing: 10) {
-                    StatRow(label: "Media Files", value: "\(coverage.total)", color: .primary)
-                    StatRow(label: "Analyzed", value: "\(coverage.dossiered)", color: .green)
-                    StatRow(label: "Remaining", value: "\(coverage.remaining)", color: .secondary)
-                    
+                    StatRow(label: "Media Files", value: "\(totalCount)", color: .primary)
+                    StatRow(label: "Analyzed", value: "\(dossieredCount)", color: .green)
+                    StatRow(label: "Remaining", value: "\(max(0, totalCount - dossieredCount))", color: .secondary)
+
                     Divider().frame(width: 160)
-                    // Live throughput — sliding 5-minute window so the
-                    // number reflects what's actually happening now,
-                    // not lifetime average. Refreshed alongside the
-                    // fleet panel every 5s.
                     StatRow(label: "Rate", value: rate.displayText, color: rate.color)
-                    // Rough ETA — derived from rolling rate × records
-                    // remaining. Shows "—" until we have ≥2 samples or
-                    // when the rate is too low to be meaningful (worker
-                    // crash, paused fleet). Rick 2026-06-09 ask.
                     StatRow(label: "ETA",
-                            value: rate.etaDisplayText(remaining: coverage.remaining),
+                            value: rate.etaDisplayText(remaining: max(0, totalCount - dossieredCount)),
                             color: rate.hasEnoughSamples ? .primary : .secondary)
-                    StatRow(label: "OCR dates", value: "\(coverage.ocrDates)", color: .purple)
-                    StatRow(label: "Strong dates", value: "\(coverage.strongDates)", color: .green)
+                    StatRow(label: "OCR dates", value: "\(ocrDatesCount)", color: .purple)
+                    StatRow(label: "Strong dates", value: "\(strongDatesCount)", color: .green)
                 }
                 Spacer()
             }
@@ -140,19 +137,19 @@ struct DossierDashboardView: View {
                     ChannelStat(
                         icon: "text.bubble.fill",
                         label: "Scene captions",
-                        value: coverage.scenes,
+                        value: scenesCount,
                         color: .indigo
                     )
                     ChannelStat(
                         icon: "calendar.badge.clock",
                         label: "OCR dates",
-                        value: coverage.ocrDates,
+                        value: ocrDatesCount,
                         color: .purple
                     )
                     ChannelStat(
                         icon: "waveform.circle.fill",
                         label: "Transcripts",
-                        value: coverage.transcripts,
+                        value: transcriptsCount,
                         color: .teal
                     )
                 }
@@ -188,28 +185,34 @@ struct DossierDashboardView: View {
         }
         .padding(20)
         .frame(minWidth: 700, minHeight: 700)
-        .onAppear { refreshFleet() }
+        .onAppear { refreshCounts(); refreshFleet() }
         .onReceive(refreshTimer) { _ in
-            refreshTick &+= 1
-            rate.record(count: coverage.dossiered, at: Date())
+            refreshCounts()
             refreshFleet()
         }
     }
 
     // MARK: - Catalog-wide coverage
 
-    private var coverage: CatalogCoverage {
-        CatalogCoverage(records: model.records)
+    private func refreshCounts() {
+        let c = CatalogCoverage(records: model.records)
+        dossieredCount = c.dossiered
+        totalCount = c.total
+        scenesCount = c.scenes
+        ocrDatesCount = c.ocrDates
+        strongDatesCount = c.strongDates
+        transcriptsCount = c.transcripts
+        rate.record(count: c.dossiered, at: Date())
     }
 
     private var dialProgress: Double {
-        guard coverage.total > 0 else { return 0 }
-        return Double(coverage.dossiered) / Double(coverage.total)
+        guard totalCount > 0 else { return 0 }
+        return Double(dossieredCount) / Double(totalCount)
     }
 
     private var dialCenterLabel: String {
         let pct = dialProgress * 100
-        if pct < 1 && coverage.dossiered > 0 { return "<1%" }
+        if pct < 1 && dossieredCount > 0 { return "<1%" }
         return "\(Int(pct))%"
     }
 
