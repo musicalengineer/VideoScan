@@ -127,10 +127,16 @@ enum CombineVerifier {
 
     // MARK: - FFProbe
 
-    static func runFFProbe(url: URL, ffprobePath: String) async -> (output: FFProbeOutput?, stderr: String) {
+    /// `timeoutSeconds` (optional) is a hard deadline on the ffprobe
+    /// subprocess itself (SIGTERM → SIGKILL → abandon, see ProcessRunner).
+    /// The scan path passes its per-file probe timeout here so an ffprobe
+    /// wedged on dead-volume I/O can't outlive the timeout that's supposed
+    /// to bound it.
+    static func runFFProbe(url: URL, ffprobePath: String, timeoutSeconds: Double? = nil) async -> (output: FFProbeOutput?, stderr: String) {
         let args = ["-v", "warning", "-probesize", "50M", "-analyzeduration", "10M",
                     "-print_format", "json", "-show_format", "-show_streams", url.path]
-        let result = await ProcessRunner.runCapturingStderr(executable: ffprobePath, arguments: args)
+        let result = await ProcessRunner.runCapturingStderr(executable: ffprobePath, arguments: args,
+                                                            deadlineSeconds: timeoutSeconds)
         guard let json = result.stdout, let data = json.data(using: .utf8) else {
             return (nil, result.stderr)
         }

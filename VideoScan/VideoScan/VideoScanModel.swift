@@ -226,7 +226,12 @@ final class VideoScanModel: ObservableObject {
         thumbnailCache.removeObject(forKey: path as NSString)
     }
 
-    let ffprobePath = ToolLocator.ffprobePath
+    /// Resolved ffprobe path. `var` (not `let`) purely as a test seam so the
+    /// probe-timeout regression tests can inject a fake stuck ffprobe;
+    /// production code never reassigns it. nonisolated(unsafe) because
+    /// nonisolated probe code reads it and writes only happen before probing
+    /// starts (tests).
+    nonisolated(unsafe) var ffprobePath = ToolLocator.ffprobePath
 
     let videoExtensions: Set<String> = [
         "mov", "mp4", "m4v", "avi", "mkv", "mxf", "mts", "m2ts", "ts", "mpg", "mpeg",
@@ -294,7 +299,10 @@ final class VideoScanModel: ObservableObject {
     /// SMB mounts on sleepy external drives — a too-short timeout was flagging
     /// healthy network volumes as "stalled" when they just needed to spin up.
     /// Internal so VideoScanModel+ProbeEngine can race against it.
-    let probeTimeoutSeconds: UInt64 = 300
+    /// `var` as a test seam (regression tests inject a short timeout so the
+    /// stuck-ffprobe repro runs in seconds, not 300s); production never
+    /// reassigns it. nonisolated(unsafe) for the same reason as ffprobePath.
+    nonisolated(unsafe) var probeTimeoutSeconds: UInt64 = 300
 
     // Internal so VideoScanModel+ScanTargetPersistence can reference them.
     static let savedTargetsKey = "VideoScan.scanTargetPaths"

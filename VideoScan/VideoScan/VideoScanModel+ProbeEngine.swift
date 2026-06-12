@@ -402,7 +402,19 @@ extension VideoScanModel {
             ramPath: ramPath
         )
 
-        let probeResult = await CombineVerifier.runFFProbe(url: probeURL, ffprobePath: ffprobePath)
+        // The subprocess gets its own deadline equal to the probe timeout.
+        // The task-group race in probeFileWithTimeout alone cannot bound a
+        // stuck ffprobe: throwing out of a task group still AWAITS child
+        // cleanup, and cancellation only SIGTERMs the child — a process
+        // wedged in uninterruptible I/O on a dead volume never exits, so the
+        // group (and the whole scan) used to hang forever. The deadline
+        // escalates SIGTERM → SIGKILL → abandon inside ProcessRunner, making
+        // the blocking work itself bounded.
+        let probeResult = await CombineVerifier.runFFProbe(
+            url: probeURL,
+            ffprobePath: ffprobePath,
+            timeoutSeconds: Double(probeTimeoutSeconds)
+        )
         let stderrTrimmed = probeResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
 
         ScanEngine.applyProbeOrFallback(rec: rec, url: url, path: path,

@@ -1,4 +1,9 @@
+import Darwin
 import Foundation
+import os
+
+private let processRunnerLog = Logger(subsystem: "Rick-Breen.VideoScan",
+                                      category: "process-runner")
 
 /// Resolves filesystem paths for external command-line tools (ffmpeg, ffprobe,
 /// Python) that VideoScan shells out to. Single source of truth so hard-coded
@@ -156,10 +161,22 @@ enum ProcessRunner {
 
     /// Run an executable and return (stdout, stderr) as strings.
     /// Returns nil stdout on failure or cancellation; stderr is best-effort.
-    static func runCapturingStderr(executable: String, arguments: [String]) async -> (stdout: String?, stderr: String) {
-        let result = await runProcess(executable: executable, arguments: arguments)
+    /// `deadlineSeconds` (optional) bounds the subprocess itself — see
+    /// `runProcess` for the SIGTERM → SIGKILL → abandon escalation.
+    static func runCapturingStderr(
+        executable: String,
+        arguments: [String],
+        deadlineSeconds: Double? = nil
+    ) async -> (stdout: String?, stderr: String) {
+        let result = await runProcess(executable: executable, arguments: arguments,
+                                      deadlineSeconds: deadlineSeconds)
         return (result.stdout, result.stderr)
     }
+
+    /// Default SIGTERM → SIGKILL grace period for deadline/cancellation
+    /// escalation. Long enough for ffmpeg/ffprobe to flush and exit cleanly
+    /// on SIGTERM; short enough that a wedged child can't stall a scan.
+    static let defaultKillGraceSeconds: Double = 5.0
 
     /// Run an executable while draining stdout and stderr continuously.
     /// This is the safe default for ffmpeg/ffprobe/Python subprocesses: a child
@@ -174,10 +191,20 @@ enum ProcessRunner {
     ///   - stdoutLimitBytes / stderrLimitBytes: cap on the *collected* copy
     ///     returned in `Result`. `nil` = unbounded. Line callbacks always see
     ///     the full stream regardless of the cap.
-    ///   - terminationGraceSeconds: on task cancellation we send SIGTERM; if
-    ///     the child is still alive after this grace period we escalate to
-    ///     SIGKILL. (C analogy: kill(pid, SIGTERM) then kill(pid, SIGKILL)
-    ///     after a timeout — some tools trap TERM mid-write and linger.)
+    ///   - deadlineSeconds: optional bound on the *subprocess itself*, not
+    ///     just the awaiting task. Task cancellation alone only sends SIGTERM
+    ///     — a child blocked in uninterruptible kernel I/O (the classic case:
+    ///     ffprobe stuck reading a dead SMB volume) ignores or never receives
+    ///     it, its terminationHandler never fires, and the caller awaits
+    ///     forever. The deadline escalates: SIGTERM at the deadline, SIGKILL
+    ///     after `killGraceSeconds`, and if even SIGKILL can't reap the
+    ///     child, the process is abandoned and the caller resumed with a
+    ///     timed-out Result.
+    ///   - killGraceSeconds: SIGTERM → SIGKILL (→ abandon) grace period.
+    ///     One escalation path serves BOTH triggers — task cancellation and
+    ///     `deadlineSeconds`. (C analogy: kill(pid, SIGTERM) then
+    ///     kill(pid, SIGKILL) after a timeout — some tools trap TERM
+    ///     mid-write and linger.)
     static func runProcess(
         executable: String,
         arguments: [String],
@@ -186,7 +213,8 @@ enum ProcessRunner {
         stderrLine: (@Sendable (String) -> Void)? = nil,
         stdoutLimitBytes: Int? = nil,
         stderrLimitBytes: Int? = 256 * 1024,
-        terminationGraceSeconds: Double = 5.0
+        deadlineSeconds: Double? = nil,
+        killGraceSeconds: Double = ProcessRunner.defaultKillGraceSeconds
     ) async -> Result {
         guard !Task.isCancelled else {
             return Result(stdout: nil, stderr: "cancelled", exitCode: -1)
@@ -269,8 +297,25 @@ enum ProcessRunner {
                 }
                 do {
                     try proc.run()
+                    if let deadlineSeconds {
+                        scheduleDeadline(
+                            afterSeconds: deadlineSeconds,
+                            killGraceSeconds: killGraceSeconds,
+                            proc: proc,
+                            executable: executable,
+                            stdoutHandle: stdoutHandle,
+                            stderrHandle: stderrHandle,
+                            completion: completion
+                        )
+                    }
                     if launchState.isCancelled, proc.isRunning {
                         proc.terminate()
+                        escalateAfterTerminate(
+                            proc: proc, executable: executable,
+                            killGraceSeconds: killGraceSeconds,
+                            stdoutHandle: stdoutHandle, stderrHandle: stderrHandle,
+                            completion: completion, reason: "cancelled"
+                        )
                     }
                 } catch {
                     stdoutHandle.readabilityHandler = nil
@@ -282,15 +327,82 @@ enum ProcessRunner {
             launchState.markCancelled()
             if proc.isRunning {
                 proc.terminate()
-                // Escalate SIGTERM → SIGKILL if the child lingers past the
-                // grace period. `isRunning` is re-checked at fire time so a
-                // child that exited cleanly is never signalled again.
-                let grace = max(0.1, terminationGraceSeconds)
-                DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + grace) {
-                    if proc.isRunning {
-                        kill(proc.processIdentifier, SIGKILL)
-                    }
-                }
+                // Escalate SIGTERM → SIGKILL (→ abandon) if the child lingers
+                // past the grace period. `isRunning` is re-checked at fire
+                // time so a child that exited cleanly is never signalled again.
+                escalateAfterTerminate(
+                    proc: proc, executable: executable,
+                    killGraceSeconds: killGraceSeconds,
+                    stdoutHandle: stdoutHandle, stderrHandle: stderrHandle,
+                    completion: completion, reason: "cancelled"
+                )
+            }
+        }
+    }
+
+    // MARK: - Deadline / kill escalation
+
+    /// Fire the subprocess deadline: SIGTERM, then escalate. No-op if the
+    /// process already exited (`isRunning` guard) — normal completions never
+    /// see any of this.
+    private static func scheduleDeadline(
+        afterSeconds: Double,
+        killGraceSeconds: Double,
+        proc: Process,
+        executable: String,
+        stdoutHandle: FileHandle,
+        stderrHandle: FileHandle,
+        completion: CompletionBox<Result>
+    ) {
+        let tool = (executable as NSString).lastPathComponent
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + afterSeconds) {
+            guard proc.isRunning else { return }
+            processRunnerLog.warning("\(tool, privacy: .public) pid \(proc.processIdentifier) exceeded \(afterSeconds, format: .fixed(precision: 0), privacy: .public)s deadline — sending SIGTERM")
+            proc.terminate()
+            escalateAfterTerminate(
+                proc: proc, executable: executable,
+                killGraceSeconds: killGraceSeconds,
+                stdoutHandle: stdoutHandle, stderrHandle: stderrHandle,
+                completion: completion, reason: "deadline \(Int(afterSeconds))s"
+            )
+        }
+    }
+
+    /// After SIGTERM has been sent: SIGKILL once the grace period lapses, and
+    /// if the child survives even SIGKILL (stuck in uninterruptible kernel
+    /// I/O — e.g. a read against a dead SMB mount, where the kernel can't
+    /// deliver any signal until the I/O returns), abandon it: detach the pipe
+    /// handlers and resume the caller with a failed Result. Without the
+    /// abandon step, terminationHandler never fires and the awaiting task —
+    /// and the whole scan behind it — hangs forever.
+    ///
+    /// PID-reuse safety: SIGKILL is only sent while `proc.isRunning` is true,
+    /// i.e. while Foundation still owns the unreaped child, so the pid cannot
+    /// yet have been recycled (modulo a microsecond TOCTOU window that is
+    /// inherent to kill(2) and accepted here).
+    private static func escalateAfterTerminate(
+        proc: Process,
+        executable: String,
+        killGraceSeconds: Double,
+        stdoutHandle: FileHandle,
+        stderrHandle: FileHandle,
+        completion: CompletionBox<Result>,
+        reason: String
+    ) {
+        let tool = (executable as NSString).lastPathComponent
+        let queue = DispatchQueue.global(qos: .utility)
+        queue.asyncAfter(deadline: .now() + killGraceSeconds) {
+            guard proc.isRunning else { return }
+            processRunnerLog.warning("\(tool, privacy: .public) pid \(proc.processIdentifier) ignored SIGTERM (\(reason, privacy: .public)) — sending SIGKILL")
+            kill(proc.processIdentifier, SIGKILL)
+            queue.asyncAfter(deadline: .now() + killGraceSeconds) {
+                guard proc.isRunning else { return }
+                processRunnerLog.error("\(tool, privacy: .public) pid \(proc.processIdentifier) survived SIGKILL (uninterruptible I/O?) — abandoning process and resuming caller")
+                stdoutHandle.readabilityHandler = nil
+                stderrHandle.readabilityHandler = nil
+                completion.resume(Result(stdout: nil,
+                                         stderr: "timed out (\(reason)); process unkillable, abandoned",
+                                         exitCode: -1))
             }
         }
     }

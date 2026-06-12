@@ -110,7 +110,7 @@ struct ProcessRunnerConsolidationTests {
                 executable: shellPath,
                 arguments: ["-c", "trap '' TERM; echo ready; sleep 30 </dev/null >/dev/null 2>&1"],
                 stdoutLine: { box.append($0) },
-                terminationGraceSeconds: 0.5
+                killGraceSeconds: 0.5
             )
         }
         // Wait until the child confirms it's alive with TERM trapped.
@@ -136,7 +136,7 @@ struct ProcessRunnerConsolidationTests {
                 executable: shellPath,
                 arguments: ["-c", "echo ready; sleep 30"],
                 stdoutLine: { box.append($0) },
-                terminationGraceSeconds: 5.0
+                killGraceSeconds: 5.0
             )
         }
         for _ in 0..<200 where !box.lines.contains("ready") {
