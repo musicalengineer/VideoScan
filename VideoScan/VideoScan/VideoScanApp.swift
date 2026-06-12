@@ -7,6 +7,11 @@
 
 import SwiftUI
 import AppKit
+import os
+
+/// Quit-path diagnostics — `log stream --predicate 'subsystem ==
+/// "Rick-Breen.VideoScan" && category == "shutdown"'` to watch a quit.
+private let shutdownLogger = Logger(subsystem: "Rick-Breen.VideoScan", category: "shutdown")
 
 // MARK: - App Lifecycle Log (DI via LogSink)
 //
@@ -75,6 +80,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// so a Cmd-Q can't silently kill in-flight file operations.
     weak var fileOpsCenter: MediaFileOperationsCenter?
 
+    /// Set by VideoScanApp at launch — the quit path drains in-flight
+    /// VLM (MLX) inference before letting termination proceed, so
+    /// `exit()` never tears down Metal underneath running GPU work.
+    /// See MLXShutdown.swift for the full crash story.
+    weak var captionOrchestrator: CaptionOrchestrator?
+
+    /// Max seconds applicationShouldTerminate waits for the VLM batch
+    /// to drain. A single Qwen2.5-VL generation step is sub-second;
+    /// the cooperative cancel usually lands within one frame's
+    /// inference, so 5s is generous without making Cmd-Q feel hung.
+    static let vlmDrainDeadline: TimeInterval = 5.0
+
+    /// True when the quit-time VLM drain hit its deadline. willTerminate
+    /// then SKIPS the MLX stream synchronize (it would block behind the
+    /// still-running generation) and relies on the `_exit` backstop.
+    private var vlmDrainTimedOut = false
+
     /// True when the app is launched as a test host (unit tests).
     static var isRunningTests: Bool {
         NSClassFromString("XCTestCase") != nil
@@ -117,9 +139,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
-    /// Quit guard: if Media File Operations jobs are still running,
-    /// confirm before quitting, then cancel them so any ffmpeg children
-    /// die (ProcessRunner's cancellation handler terminates them).
+    /// Quit guard, two stages:
+    ///   1. If Media File Operations jobs are still running, confirm
+    ///      before quitting, then cancel them so any ffmpeg children
+    ///      die (ProcessRunner's cancellation handler terminates them).
+    ///   2. If a dossier/VLM (MLX) batch is in flight, return
+    ///      `.terminateLater`, cancel the batch, and drain it with a
+    ///      bounded wait before replying. We use `.terminateLater`
+    ///      rather than a synchronous wait in willTerminate because the
+    ///      batch task hops through the MainActor for status writes —
+    ///      blocking the main thread on the drain would deadlock it.
+    ///      `.terminateLater` keeps the runloop alive while the drain
+    ///      awaits; the reply is guaranteed within `vlmDrainDeadline`.
     /// Extends — doesn't replace — the existing willTerminate cleanup.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !Self.isRunningTests else { return .terminateNow }
@@ -127,25 +158,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // lets us touch the MainActor-bound center and NSAlert without
         // an async hop (same pattern as applicationWillTerminate).
         return MainActor.assumeIsolated {
-            guard let center = fileOpsCenter, center.runningCount > 0 else {
-                return .terminateNow
-            }
-            let running = center.runningCount
+            if let center = fileOpsCenter, center.runningCount > 0 {
+                let running = center.runningCount
 
-            let alert = NSAlert()
-            alert.alertStyle = .warning
-            alert.messageText = running == 1
-                ? "A file operation is still running"
-                : "\(running) file operations are still running"
-            alert.informativeText = "Quitting now will stop the work in progress. Anything already finished is safe."
-            alert.addButton(withTitle: "Quit Anyway")
-            alert.addButton(withTitle: "Keep Working")
+                let alert = NSAlert()
+                alert.alertStyle = .warning
+                alert.messageText = running == 1
+                    ? "A file operation is still running"
+                    : "\(running) file operations are still running"
+                alert.informativeText = "Quitting now will stop the work in progress. Anything already finished is safe."
+                alert.addButton(withTitle: "Quit Anyway")
+                alert.addButton(withTitle: "Keep Working")
 
-            if alert.runModal() == .alertFirstButtonReturn {
-                center.cancelAll()
-                return .terminateNow
+                if alert.runModal() == .alertFirstButtonReturn {
+                    center.cancelAll()
+                } else {
+                    return .terminateCancel
+                }
             }
-            return .terminateCancel
+
+            // Quit is committed past this point (fileops either idle
+            // or cancelled). Latch the orchestrator's shutdown flag
+            // NOW, even if no batch is active — a fast Cmd-Q during
+            // the DossierAutoResume launch delay would otherwise take
+            // the .terminateNow path with the latch unset, and the
+            // deferred auto-resume could start fresh VLM inference
+            // mid-teardown. drainForShutdown latches too; this covers
+            // the nothing-active path.
+            captionOrchestrator?.beginShutdown()
+
+            // VLM drain: cancel + bounded wait so MLX stops dispatching
+            // GPU work before AppKit tears Metal down around it
+            // (crash variant VideoScan-2026-06-11-232946.ips).
+            if let orch = captionOrchestrator, orch.currentStatus.isActive {
+                shutdownLogger.notice("quit requested with VLM batch active — draining (max \(Self.vlmDrainDeadline, format: .fixed(precision: 1))s)")
+                appLog.write("shutdown: cancelling dossier/VLM batch, draining in-flight inference")
+                Task { @MainActor [weak self] in
+                    let drained = await orch.drainForShutdown(deadline: Self.vlmDrainDeadline)
+                    self?.vlmDrainTimedOut = !drained
+                    appLog.write(drained
+                        ? "shutdown: VLM drain completed"
+                        : "shutdown: VLM drain deadline expired — proceeding, _exit backstop covers teardown")
+                    NSApp.reply(toApplicationShouldTerminate: true)
+                }
+                return .terminateLater
+            }
+            return .terminateNow
         }
     }
 
@@ -153,9 +211,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let quitLine = "app quitting — \(BuildInfo.summary)"
         NSLog("VideoScan: %@", quitLine)
         appLog.write(quitLine)
-        // Flush the catalog snapshot first so the user's records survive
-        // an offline-volume relaunch.
         MainActor.assumeIsolated {
+            // Belt-and-suspenders: a termination path that skipped
+            // applicationShouldTerminate (rare) could still have a VLM
+            // batch active. We can't block on a drain here (MainActor
+            // deadlock — see applicationShouldTerminate), so request
+            // cancellation and treat it as a timed-out drain: skip the
+            // stream synchronize, rely on the _exit backstop.
+            captionOrchestrator?.beginShutdown()
+            if let orch = captionOrchestrator, orch.currentStatus.isActive {
+                shutdownLogger.error("willTerminate with VLM batch still active — cancelling, deferring to _exit backstop")
+                orch.cancel()
+                vlmDrainTimedOut = true
+            }
+            // Flush the catalog snapshot first so the user's records
+            // survive an offline-volume relaunch.
             catalogModel?.saveCatalogNow()
         }
         // Synchronous on purpose — Cmd-Q must not return before the RAM disk
@@ -163,6 +233,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let detached = RAMDisk.cleanupStaleMounts()
         if !detached.isEmpty {
             NSLog("VideoScan: detached %d RAM disk(s) on exit", detached.count)
+        }
+
+        // MLX teardown (see MLXShutdown.swift). Only when in-process
+        // VLM inference actually ran this session.
+        if mlxInferenceWasUsed() && !Self.isRunningTests {
+            if !vlmDrainTimedOut {
+                // Flush queued GPU work while Metal is still healthy.
+                synchronizeMLXForShutdown()
+            }
+            shutdownLogger.notice("MLX used this session — bypassing C++ static destructors via _exit(0)")
+            appLog.write("app exit (clean, MLX static-dtor bypass)")
+            appLog.flush()
+            // MLX's static Scheduler destructor segfaults in
+            // __cxa_finalize (Metal waitUntilCompleted after teardown)
+            // — see crash reports 2026-06-11/12. All persistence above
+            // is explicit (saveCatalogNow is synchronous, appLog is
+            // write-through, UserDefaults lives in cfprefsd), so
+            // skipping ALL static destructors is safe here.
+            _exit(0)
         }
     }
 }
@@ -265,6 +354,9 @@ struct VideoScanApp: App {
                     .onAppear {
                         appDelegate.catalogModel = catalogModel
                         appDelegate.fileOpsCenter = fileOpsCenter
+                        // Quit path drains in-flight VLM inference —
+                        // see AppDelegate.applicationShouldTerminate.
+                        appDelegate.captionOrchestrator = captionOrchestrator
                         // Volume classification for per-volume read
                         // gating (HDD = one compare at a time): longest
                         // matching scan-target prefix wins; no match →

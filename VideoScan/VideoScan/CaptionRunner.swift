@@ -351,6 +351,12 @@ actor MLXVLMCaptionRunner: CaptionRunner {
     private func ensureContainer() async throws -> ModelContainer {
         if let cached = cachedContainer { return cached }
         captionLogger.info("MLXVLMCaptionRunner: loading model container (first call this session)")
+        // Every VLM caption/dossier call funnels through here, so this
+        // is the one place to flag "MLX inference ran this session" —
+        // AppDelegate's quit path uses it to synchronize the GPU stream
+        // and bypass MLX's segfaulting static destructor. See
+        // MLXShutdown.swift.
+        noteMLXInferenceUsed()
         MLX.GPU.set(cacheLimit: 512 * 1024 * 1024) // 512 MB — M4 Max has 128 GB unified; 20 MB forced constant realloc across 3 prompts/frame
         do {
             let container = try await runMLX {

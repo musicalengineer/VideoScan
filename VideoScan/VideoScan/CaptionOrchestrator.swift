@@ -33,6 +33,7 @@ import os
 // the orchestrator's working set at each boundary.
 
 private let captionOrchLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "caption-orchestrator")
+private let shutdownLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "shutdown")
 
 // MARK: - Status
 
@@ -106,6 +107,17 @@ final class CaptionOrchestrator: ObservableObject {
     /// without touching MLX.
     var runnerFactory: () -> CaptionRunner
 
+    /// Latched true by `drainForShutdown()` when the app is quitting.
+    /// Every start* entry point bails when set. Without this latch the
+    /// catalog-wide sweep loops (startCatalogWideCaptioning /
+    /// startCatalogWideDossier) would start the NEXT volume's batch
+    /// after the quit-time cancel kills the current one — those loops
+    /// run in view-owned Tasks that `cancel()` cannot reach, and fresh
+    /// VLM inference dispatching GPU work during app teardown is
+    /// exactly the mid-inference exit crash
+    /// (VideoScan-2026-06-11-232946.ips).
+    private(set) var isShuttingDown = false
+
     init(runnerFactory: (() -> CaptionRunner)? = nil) {
         self.framesPerFile = 3
         self.runnerFactory = runnerFactory ?? { MLXVLMCaptionRunner() }
@@ -122,6 +134,13 @@ final class CaptionOrchestrator: ObservableObject {
     /// `sceneCaptionModel == runner.modelID` are skipped unless `force`
     /// is true.
     func startCaptioning(target: CatalogScanTarget, model: VideoScanModel) async {
+        // App is quitting — refuse to start a new batch. See
+        // isShuttingDown's doc comment for why this matters for the
+        // catalog-wide sweep loops.
+        guard !isShuttingDown else {
+            captionOrchLog.notice("startCaptioning refused — app is shutting down")
+            return
+        }
         // Guard against double-start. Mirrors PersonFinderModel.startJob's
         // `guard !job.status.isActive` pattern.
         guard !currentStatus.isActive else {
@@ -186,6 +205,10 @@ final class CaptionOrchestrator: ObservableObject {
     /// docs/family-tagging-and-search-roadmap.md and
     /// `pfCatalogWideMetadataCandidates`.
     func startCatalogWideCaptioning(model: VideoScanModel) async {
+        guard !isShuttingDown else {
+            captionOrchLog.notice("startCatalogWideCaptioning refused — app is shutting down")
+            return
+        }
         guard !currentStatus.isActive else {
             captionOrchLog.warning("startCatalogWideCaptioning called while already \(String(describing: self.currentStatus))")
             return
@@ -229,6 +252,78 @@ final class CaptionOrchestrator: ObservableObject {
         activeTask?.cancel()
     }
 
+    /// Quit-time drain. Latches `isShuttingDown` (so no new batch can
+    /// start — including the next volume in a catalog-wide sweep),
+    /// cancels the active batch, and waits for the in-flight task to
+    /// settle, bounded by `deadline`.
+    ///
+    /// Returns `true` if the batch fully drained (or nothing was
+    /// running), `false` if the deadline expired with inference still
+    /// in flight. On `false` the caller must NOT touch MLX (no stream
+    /// synchronize — it could block behind the running generation);
+    /// the `_exit` backstop in applicationWillTerminate covers teardown.
+    ///
+    /// Unfinished captions are simply not written back — per-file
+    /// writeback means everything completed before the cancel is
+    /// already persisted, and the idempotent skip resumes the batch on
+    /// next launch exactly where it left off.
+    ///
+    /// Must be awaited off the main thread's *blocking* path: the batch
+    /// task hops through the MainActor for status writes, so a
+    /// synchronous wait on the main thread would deadlock. AppDelegate
+    /// uses `.terminateLater` + `NSApp.reply` to keep the runloop alive
+    /// while this awaits.
+    /// Synchronously latch `isShuttingDown` WITHOUT draining. For quit
+    /// paths where no batch is active yet — most importantly a fast
+    /// Cmd-Q during the DossierAutoResume launch delay (VideoScanApp
+    /// schedules startCatalogWideDossier ~3s after launch): with
+    /// nothing active, applicationShouldTerminate skips the drain, so
+    /// without this latch the deferred auto-resume task could still
+    /// start fresh VLM inference while AppKit tears down. ≈ C++
+    /// `std::atomic<bool> g_shutting_down` set in the quit handler;
+    /// here MainActor isolation replaces the atomic.
+    func beginShutdown() {
+        isShuttingDown = true
+    }
+
+    @discardableResult
+    func drainForShutdown(deadline: TimeInterval = 5.0) async -> Bool {
+        isShuttingDown = true
+        guard currentStatus.isActive, let task = activeTask else { return true }
+        shutdownLog.notice("drainForShutdown: cancelling active VLM batch, waiting up to \(String(format: "%.1f", deadline))s")
+        currentStatus = .cancelling
+        task.cancel()
+
+        // Race batch completion against the deadline with two
+        // unstructured tasks + a once-latch. Deliberately NOT a
+        // `withTaskGroup` race: the group awaits ALL children before
+        // returning, and `await task.value` on a non-throwing Task is
+        // not cancellation-responsive — so a group would block until
+        // the batch actually finished, defeating the bound (caught by
+        // CaptionOrchestratorShutdownTests' stubborn-engine test).
+        // If the deadline wins, the orphaned waiter just finishes
+        // silently whenever the batch does; the latch makes its
+        // continuation-resume a no-op.
+        let drained = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            let once = DrainOnceLatch()
+            let timer = Task {
+                try? await Task.sleep(nanoseconds: UInt64(deadline * 1_000_000_000))
+                if once.tryClaim() { cont.resume(returning: false) }
+            }
+            Task {
+                await task.value
+                timer.cancel()  // stop the deadline clock; sleep throws out
+                if once.tryClaim() { cont.resume(returning: true) }
+            }
+        }
+        if drained {
+            shutdownLog.notice("drainForShutdown: batch drained cleanly")
+        } else {
+            shutdownLog.error("drainForShutdown: deadline expired — inference may still be dispatching GPU work")
+        }
+        return drained
+    }
+
     // MARK: - Catalog-wide dossier
     //
     // Steroids mode (Rick's word, 2026-06-04). Instead of the single-prompt
@@ -262,6 +357,10 @@ final class CaptionOrchestrator: ObservableObject {
         transcriber: AudioTranscriber? = nil,
         force: Bool = false
     ) async {
+        guard !isShuttingDown else {
+            captionOrchLog.notice("startCatalogWideDossier refused — app is shutting down")
+            return
+        }
         guard !currentStatus.isActive else {
             captionOrchLog.warning("startCatalogWideDossier called while already \(String(describing: self.currentStatus))")
             return
@@ -755,6 +854,25 @@ final class CaptionOrchestrator: ObservableObject {
         liveFailed = 0
         liveCurrentIndex = 0
         liveTotal = 0
+    }
+}
+
+// MARK: - Drain race latch
+
+/// Thread-safe claim-once flag for the drain's completion-vs-deadline
+/// race — whichever side claims first resumes the continuation; the
+/// loser's claim fails and it does nothing. ≈ C++ `std::call_once`
+/// guarding a promise's set_value.
+private final class DrainOnceLatch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var claimed = false
+
+    func tryClaim() -> Bool {
+        lock.withLock {
+            if claimed { return false }
+            claimed = true
+            return true
+        }
     }
 }
 
