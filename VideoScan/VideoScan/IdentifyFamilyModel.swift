@@ -59,15 +59,22 @@ final class IdentifyFamilyModel: ObservableObject {
 
     // MARK: - Paths
 
+    // MARK: - test-internal — subprocess injection seam
+    /// Overrides so IdentifyFamilyLaunchTests can drive the launch/stream/
+    /// terminate path with a fake /bin/sh script instead of the real Python
+    /// pipeline. Production code never sets these.
+    var testPythonOverride: URL?
+    var testScriptOverride: URL?
+
     /// Use python3.12 explicitly: the venv's `python` symlink points at 3.14
     /// after a Homebrew upgrade, but every torch/facenet/hdbscan package is
     /// installed under the 3.12 site-packages. The script's shebang is
     /// `#!/usr/bin/env python3.12` for the same reason.
     private var pythonPath: URL {
-        URL(fileURLWithPath: ToolLocator.python312Path)
+        testPythonOverride ?? URL(fileURLWithPath: ToolLocator.python312Path)
     }
     private var scriptPath: URL {
-        URL(fileURLWithPath: NSHomeDirectory())
+        testScriptOverride ?? URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("dev/VideoScan/scripts/cluster_faces.py")
     }
     private var outputRoot: URL {
