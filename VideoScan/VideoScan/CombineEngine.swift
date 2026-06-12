@@ -16,7 +16,12 @@ enum CombineEngine {
 
     /// Run ffmpeg to combine video+audio. Returns result with success/failure and stderr.
     /// Supports progress reporting via `-progress pipe:1` when a progress callback is provided.
-    /// Cancellation-aware: terminates ffmpeg immediately when task is cancelled.
+    /// Cancellation-aware: terminates ffmpeg immediately when task is cancelled
+    /// (with SIGKILL escalation via ProcessRunner if ffmpeg ignores SIGTERM).
+    ///
+    /// Subprocess plumbing consolidated onto ProcessRunner (codex finding #3):
+    /// same arguments, same stderr→log routing, same exit-code semantics —
+    /// only the pipe/termination machinery is shared now.
     static func runFFMpeg(
         videoPath: String,
         audioPath: String,
@@ -26,92 +31,47 @@ enum CombineEngine {
         onProgress: (@Sendable (Double) -> Void)? = nil,
         log: @escaping @Sendable (String) -> Void
     ) async -> CombineResult {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: ffmpegPath)
-        proc.arguments = buildArgs(
-            videoPath: videoPath,
-            audioPath: audioPath,
-            outputPath: outputPath,
-            technique: technique,
-            withProgress: onProgress != nil
+        // Parse `-progress pipe:1` key=value lines (out_time_us=<microsecs>).
+        var progressLine: (@Sendable (String) -> Void)?
+        if let onProgress, durationSeconds > 0 {
+            progressLine = { line in
+                if line.hasPrefix("out_time_us="), let us = Double(line.dropFirst(12)) {
+                    let seconds = us / 1_000_000
+                    let frac = min(seconds / durationSeconds, 1.0)
+                    onProgress(frac)
+                }
+            }
+        }
+
+        let result = await ProcessRunner.runProcess(
+            executable: ffmpegPath,
+            arguments: buildArgs(
+                videoPath: videoPath,
+                audioPath: audioPath,
+                outputPath: outputPath,
+                technique: technique,
+                withProgress: onProgress != nil
+            ),
+            stdoutLine: progressLine,
+            stderrLine: { line in DispatchQueue.main.async { log(line) } },
+            stderrLimitBytes: nil   // callers keep the full transcript (pre-refactor behavior)
         )
 
-        let errPipe = Pipe()
-        let outPipe = Pipe()
-        proc.standardError = errPipe
-        proc.standardOutput = outPipe
-
-        let collected = StderrCollector()
-
-        errPipe.fileHandleForReading.readabilityHandler = { handle in
-            if let text = String(data: handle.availableData, encoding: .utf8), !text.isEmpty {
-                let trimmed = text.trimmingCharacters(in: .newlines)
-                collected.append(trimmed)
-                DispatchQueue.main.async { log(trimmed) }
-            }
+        // Launch failure (stdout nil + synthetic -1, not user cancellation):
+        // preserve the historical message prefix that callers/logs expect.
+        if result.exitCode == -1, result.stdout == nil, result.stderr != "cancelled" {
+            return CombineResult(
+                success: false,
+                stderr: "Failed to launch ffmpeg: \(result.stderr)",
+                exitCode: -1
+            )
         }
 
-        if let onProgress, durationSeconds > 0 {
-            outPipe.fileHandleForReading.readabilityHandler = { handle in
-                if let text = String(data: handle.availableData, encoding: .utf8), !text.isEmpty {
-                    for line in text.components(separatedBy: .newlines) {
-                        if line.hasPrefix("out_time_us="), let us = Double(line.dropFirst(12)) {
-                            let seconds = us / 1_000_000
-                            let frac = min(seconds / durationSeconds, 1.0)
-                            onProgress(frac)
-                        }
-                    }
-                }
-            }
-        }
-
-        return await withTaskCancellationHandler {
-            await withCheckedContinuation { continuation in
-                proc.terminationHandler = { p in
-                    errPipe.fileHandleForReading.readabilityHandler = nil
-                    outPipe.fileHandleForReading.readabilityHandler = nil
-                    let remaining = errPipe.fileHandleForReading.readDataToEndOfFile()
-                    if let text = String(data: remaining, encoding: .utf8), !text.isEmpty {
-                        let trimmed = text.trimmingCharacters(in: .newlines)
-                        collected.append(trimmed)
-                        DispatchQueue.main.async { log(trimmed) }
-                    }
-                    let result = CombineResult(
-                        success: p.terminationStatus == 0,
-                        stderr: collected.text,
-                        exitCode: p.terminationStatus
-                    )
-                    continuation.resume(returning: result)
-                }
-                do { try proc.run() } catch {
-                    continuation.resume(returning: CombineResult(
-                        success: false,
-                        stderr: "Failed to launch ffmpeg: \(error.localizedDescription)",
-                        exitCode: -1
-                    ))
-                }
-            }
-        } onCancel: {
-            if proc.isRunning { proc.terminate() }
-        }
-    }
-
-    /// Thread-safe stderr collector.
-    private final class StderrCollector: @unchecked Sendable {
-        private let lock = NSLock()
-        private var lines: [String] = []
-
-        func append(_ line: String) {
-            lock.lock()
-            lines.append(line)
-            lock.unlock()
-        }
-
-        var text: String {
-            lock.lock()
-            defer { lock.unlock() }
-            return lines.joined(separator: "\n")
-        }
+        return CombineResult(
+            success: result.exitCode == 0,
+            stderr: result.stderr,
+            exitCode: result.exitCode
+        )
     }
 
     // MARK: - Argument Construction
