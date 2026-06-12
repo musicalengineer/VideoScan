@@ -52,10 +52,11 @@ final class IdentifyFamilyModel: ObservableObject {
 
     // MARK: - Subprocess plumbing
 
-    private var process: Process?
-    private var stdoutPipe: Pipe?
-    private var stderrPipe: Pipe?
-    private var stdoutBuffer = ""
+    /// The structured-concurrency handle for the running cluster_faces.py
+    /// subprocess (via ProcessRunner). Cancelling this task SIGTERMs the
+    /// child, escalating to SIGKILL if it lingers. C++ analogy: a future
+    /// whose cancellation also signals the worker.
+    private var runTask: Task<Void, Never>?
 
     // MARK: - Paths
 
@@ -129,8 +130,8 @@ final class IdentifyFamilyModel: ObservableObject {
     }
 
     func cancel() {
-        process?.terminate()
-        process = nil
+        runTask?.cancel()   // ProcessRunner terminates the child (TERM→KILL)
+        runTask = nil
         stopElapsedTimer()
         phase = .idle
         appLog.write("Cancelled identify run (\(runName))")
@@ -211,9 +212,8 @@ final class IdentifyFamilyModel: ObservableObject {
             return
         }
 
-        let proc = Process()
-        proc.executableURL = pythonPath
-        proc.arguments = [
+        let executable = pythonPath.path
+        let arguments = [
             "-u",                 // unbuffered stdout/stderr — without this, Python
             scriptPath.path,      // line-buffers when piped to a non-TTY subprocess
             folder.path,          // and Swift sees nothing for ~8KB at a time, which
@@ -230,46 +230,36 @@ final class IdentifyFamilyModel: ObservableObject {
         env["PATH"] = augmentedPathWithHomebrew(
             inheriting: ProcessInfo.processInfo.environment["PATH"]
         )
-        proc.environment = env
-        let outPipe = Pipe()
-        let errPipe = Pipe()
-        proc.standardOutput = outPipe
-        proc.standardError = errPipe
 
-        outPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-            Task { @MainActor in self?.absorbStdout(text) }
-        }
-        errPipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-            Task { @MainActor in self?.appendConsole(text) }
-        }
-
-        proc.terminationHandler = { [weak self] p in
-            outPipe.fileHandleForReading.readabilityHandler = nil
-            errPipe.fileHandleForReading.readabilityHandler = nil
-            Task { @MainActor in self?.handleTermination(status: p.terminationStatus) }
-        }
-
-        process = proc
-        stdoutPipe = outPipe
-        stderrPipe = errPipe
-
-        do {
-            try proc.run()
-        } catch {
-            phase = .failed("Failed to launch: \(error.localizedDescription)")
-        }
-    }
-
-    private func absorbStdout(_ text: String) {
-        stdoutBuffer += text
-        while let range = stdoutBuffer.range(of: "\n") {
-            let line = String(stdoutBuffer[..<range.lowerBound])
-            stdoutBuffer.removeSubrange(..<range.upperBound)
-            handleStdoutLine(line)
+        // ProcessRunner (codex finding #3): handles pipe draining, line
+        // assembly, and TERM→KILL cancellation. We only consume the line
+        // callbacks here; the collected stdout copy is capped because the
+        // progress stream can run for hours and nobody reads the aggregate.
+        runTask = Task { [weak self] in
+            let result = await ProcessRunner.runProcess(
+                executable: executable,
+                arguments: arguments,
+                environment: env,
+                stdoutLine: { line in
+                    Task { @MainActor [weak self] in self?.handleStdoutLine(line) }
+                },
+                stderrLine: { line in
+                    Task { @MainActor [weak self] in self?.appendConsole(line) }
+                },
+                stdoutLimitBytes: 256 * 1024
+            )
+            guard let self else { return }
+            // Synthetic -1 with nil stdout = never launched. "cancelled"
+            // means cancel() already reset the UI; anything else is a real
+            // spawn failure (preserves the historical message).
+            if result.exitCode == -1, result.stdout == nil {
+                if result.stderr != "cancelled" {
+                    self.stopElapsedTimer()
+                    self.phase = .failed("Failed to launch: \(result.stderr)")
+                }
+                return
+            }
+            self.handleTermination(status: result.exitCode)
         }
     }
 
@@ -330,7 +320,7 @@ final class IdentifyFamilyModel: ObservableObject {
     }
 
     private func handleTermination(status: Int32) {
-        process = nil
+        runTask = nil
         stopElapsedTimer()
         if status == 0 {
             loadClusters()
