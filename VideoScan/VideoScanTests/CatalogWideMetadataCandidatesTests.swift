@@ -19,7 +19,9 @@ struct CatalogWideMetadataCandidatesTests {
         path: String = "/v/clip.mov",
         stage: LifecycleStage = .cataloged,
         purgedAt: Date? = nil,
-        streamType: StreamType = .videoAndAudio
+        streamType: StreamType = .videoAndAudio,
+        mediaDisposition: MediaDisposition = .unreviewed,
+        drmProtected: Bool = false
     ) -> VideoRecord {
         let r = VideoRecord()
         r.fullPath = path
@@ -27,6 +29,8 @@ struct CatalogWideMetadataCandidatesTests {
         r.lifecycleStage = stage
         r.purgedAt = purgedAt
         r.streamTypeRaw = streamType.rawValue
+        r.mediaDisposition = mediaDisposition
+        r.drmProtected = drmProtected
         return r
     }
 
@@ -62,6 +66,40 @@ struct CatalogWideMetadataCandidatesTests {
     @Test func excludesPurgedRecords() {
         let purged = record(path: "/Volumes/Lacie/a.mov", purgedAt: Date())
         let out = pfCatalogWideMetadataCandidates(records: [purged], reachableVolumePaths: ["/Volumes/Lacie"])
+        #expect(out.isEmpty)
+    }
+
+    // MARK: junk gate (Rick 2026-06-13)
+    //
+    // confirmedJunk is a deliberate "do not analyze, awaiting cull"
+    // state. Before this filter, the dossier orchestrator would
+    // re-analyze them every batch and waste Whisper time.
+
+    @Test func excludesConfirmedJunkRecords() {
+        let junk = record(path: "/Volumes/Lacie/a.mov", mediaDisposition: .confirmedJunk)
+        let out = pfCatalogWideMetadataCandidates(records: [junk], reachableVolumePaths: ["/Volumes/Lacie"])
+        #expect(out.isEmpty)
+    }
+
+    @Test func includesSuspectedJunkRecords() {
+        // suspected ≠ confirmed; we still process so the dossier can
+        // help the user decide.
+        let suspect = record(path: "/Volumes/Lacie/a.mov", mediaDisposition: .suspectedJunk)
+        let out = pfCatalogWideMetadataCandidates(records: [suspect], reachableVolumePaths: ["/Volumes/Lacie"])
+        #expect(out.count == 1)
+    }
+
+    // MARK: DRM gate (Rick 2026-06-13)
+    //
+    // Encrypted files (FairPlay m4v/m4p from defunct iTunes accounts)
+    // can't be decoded — Whisper would burn hours on ciphertext.
+    // The orchestrator probes lazily via AVAsset.hasProtectedContent
+    // on first encounter and persists drmProtected=true; this filter
+    // makes the subsequent runs cheap.
+
+    @Test func excludesDRMProtectedRecords() {
+        let drm = record(path: "/Volumes/Lacie/a.m4v", drmProtected: true)
+        let out = pfCatalogWideMetadataCandidates(records: [drm], reachableVolumePaths: ["/Volumes/Lacie"])
         #expect(out.isEmpty)
     }
 

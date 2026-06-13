@@ -325,6 +325,21 @@ class VideoRecord: Identifiable, Codable {
     /// return after a null check.
     var isPurged: Bool { purgedAt != nil }
 
+    /// True when the file is DRM-protected (e.g. iTunes FairPlay-encrypted
+    /// m4v / m4p purchases from long-defunct user accounts). Detected via
+    /// AVAsset.hasProtectedContent during ffprobe or during the orchestrator's
+    /// per-file gate. Persisted so we don't repeatedly probe known-protected
+    /// files. The candidate filter excludes these — we can't dossier audio
+    /// we can't decrypt.
+    ///
+    /// Rick 2026-06-13: BT album files from a vintage iTunes Store account
+    /// were eating Whisper time. Detection short-circuits that.
+    ///
+    /// Codable note: decoded via decodeIfPresent so legacy catalog.json
+    /// files round-trip as false (unprotected, will be tested on next
+    /// orchestrator pass).
+    var drmProtected: Bool = false
+
     /// Provenance captured at scan time: which machine ran the scan, what
     /// kind of volume the file lived on (local/smb/nfs/afp), the volume's
     /// stable UUID if available, and the remote server name for network
@@ -494,6 +509,7 @@ class VideoRecord: Identifiable, Codable {
         case sourceHost
         case scanContext
         case purgedAt
+        case drmProtected
     }
 
     required init(from decoder: Decoder) throws {
@@ -596,6 +612,11 @@ class VideoRecord: Identifiable, Codable {
         // trip cleanly as active records rather than throwing. Regression
         // covered by CatalogPurgeTests.testDecodingLegacyCatalogJsonYieldsNilPurgedAt.
         purgedAt                    = try c.decodeIfPresent(Date.self, forKey: .purgedAt)
+        // decodeIfPresent so legacy catalogs (no key) come back as false —
+        // i.e. unknown DRM status. The orchestrator probes on first
+        // encounter and persists the result, so this becomes a one-time
+        // cost per legacy record.
+        drmProtected                = try c.decodeIfPresent(Bool.self, forKey: .drmProtected) ?? false
         // Relocate provenance. Legacy catalogs (no keys) decode as nil and
         // remain treated as "never relocated." Once set on first migration
         // these keys are encoded on every subsequent write.
@@ -722,6 +743,12 @@ class VideoRecord: Identifiable, Codable {
         // for the (vast majority) of records that are never purged, and means
         // un-purging a record makes its JSON byte-identical to before purge.
         try c.encodeIfPresent(purgedAt, forKey: .purgedAt)
+        // Only write drmProtected when true — same rationale as purgedAt: most
+        // records are unprotected and writing `false` everywhere would inflate
+        // catalog.json without changing any decoder behavior.
+        if drmProtected {
+            try c.encode(drmProtected, forKey: .drmProtected)
+        }
         // Relocate provenance: only written for records that have been
         // migrated. For un-relocated records (the vast majority pre-rollout)
         // these add zero bytes to catalog.json.
@@ -848,6 +875,7 @@ class VideoRecord: Identifiable, Codable {
         c.combinedFromPairID = combinedFromPairID
         c.sourceHost = sourceHost
         c.purgedAt = purgedAt
+        c.drmProtected = drmProtected
         c.scanContext = scanContext
         return c
     }

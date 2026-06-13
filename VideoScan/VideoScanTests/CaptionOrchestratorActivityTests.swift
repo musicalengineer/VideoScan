@@ -289,6 +289,76 @@ struct CaptionOrchestratorActivityTests {
         }
     }
 
+    // MARK: - Cancellation actually kills a real subprocess
+    //
+    // The fix for "right-click Skip didn't kill Python whisper" was to
+    // wrap AudioTranscriber's subprocess in withTaskCancellationHandler.
+    // The prior implementation used `Task { ... }` with a Task.isCancelled
+    // poll, which silently never trips because Task.init creates a
+    // sibling task that does NOT inherit cancellation (Apple docs).
+    //
+    // This test exercises the EXACT primitive that fix relies on — a
+    // real Process, the withTaskCancellationHandler pattern, the
+    // onCancel kill(pid, SIGTERM) — against /bin/sleep so it has zero
+    // dependency on Python or Whisper. If this test passes, the same
+    // pattern wired into PythonSubprocessAudioTranscriber will also
+    // kill the real whisper subprocess on skipLane.
+    //
+    // Rick 2026-06-13: prior "skip works" tests only exercised
+    // StubAudioTranscriber (whose Task.sleep cooperates with
+    // cancellation natively, so they couldn't have caught the bug).
+
+    @Test("Real Process: cancelling parent task SIGTERMs child within a few seconds")
+    func realSubprocessKilledOnCancellation() async {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        proc.arguments = ["60"]  // long enough that natural exit can't mask a fix failure
+        do {
+            try proc.run()
+        } catch {
+            Issue.record("Failed to launch /bin/sleep: \(error)")
+            return
+        }
+        let pid = proc.processIdentifier
+        let started = Date()
+
+        // Inner task mirrors AudioTranscriber.transcribe's structure:
+        // operation awaits the subprocess; onCancel kills the PID.
+        // proc is non-Sendable so we use Task.detached for the wait
+        // (the detached task is allowed to capture proc by reference;
+        // onCancel only captures pid, which is Int32-Sendable).
+        let task: Task<Void, Never> = Task {
+            await withTaskCancellationHandler {
+                await Task.detached {
+                    proc.waitUntilExit()
+                }.value
+            } onCancel: {
+                kill(pid, SIGTERM)
+                Task.detached {
+                    try? await Task.sleep(for: .seconds(2))
+                    kill(pid, SIGKILL)  // escalate; no-op if already reaped
+                }
+            }
+        }
+
+        // Give /bin/sleep time to actually be running.
+        try? await Task.sleep(for: .milliseconds(200))
+        #expect(proc.isRunning, "Sanity: /bin/sleep should be running before we cancel")
+
+        task.cancel()
+        await task.value
+
+        let elapsed = Date().timeIntervalSince(started)
+        #expect(!proc.isRunning,
+                "Subprocess must be dead after parent task cancellation; pid=\(pid)")
+        // Generous wall-clock budget: 200ms warmup + ~immediate SIGTERM
+        // delivery + Python-style cleanup. /bin/sleep itself exits on
+        // SIGTERM in milliseconds. If we ever blow past 5s, the
+        // cancellation handler is no longer working.
+        #expect(elapsed < 5.0,
+                "Cancellation→kill should complete within 5s; took \(elapsed)s")
+    }
+
     // MARK: - Stage names are data-driven
 
     @Test("stage display names derive from modelIDs and pass unknown stages through")

@@ -586,6 +586,27 @@ final class CaptionOrchestrator: ObservableObject {
                 continue
             }
 
+            // DRM gate. Cached short-circuit; otherwise inline probe via
+            // AVAsset.hasProtectedContent (fast — metadata only, no decode).
+            // Encrypted m4v/m4p files (vintage iTunes purchases from
+            // forgotten user accounts) would otherwise eat hours of
+            // Whisper time grinding ciphertext. We mark + skip; the
+            // candidate filter excludes on subsequent runs.
+            if record.drmProtected {
+                liveSkipped += 1
+                captionOrchLog.notice("Dossier: skip DRM-protected (cached): \(filename, privacy: .public)")
+                publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
+                continue
+            }
+            if await Self.isDRMProtected(path: path) {
+                record.drmProtected = true
+                liveSkipped += 1
+                captionOrchLog.notice("Dossier: skip DRM-protected (probed): \(filename, privacy: .public)")
+                appLog.write("Dossier: skip DRM-protected: \(filename)")
+                publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
+                continue
+            }
+
             publishProgress(idx: idx, total: total, currentFile: filename, started: started)
 
             let dur = max(0.5, record.durationSeconds)
@@ -896,6 +917,22 @@ final class CaptionOrchestrator: ObservableObject {
             if !FileManager.default.fileExists(atPath: path) {
                 liveFailed += 1
                 captionOrchLog.warning("Dossier: missing on disk: \(path, privacy: .public)")
+                publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
+                continue
+            }
+
+            // DRM gate — same semantics as the pipelined path.
+            if record.drmProtected {
+                liveSkipped += 1
+                captionOrchLog.notice("Dossier: skip DRM-protected (cached): \(filename, privacy: .public)")
+                publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
+                continue
+            }
+            if await Self.isDRMProtected(path: path) {
+                record.drmProtected = true
+                liveSkipped += 1
+                captionOrchLog.notice("Dossier: skip DRM-protected (probed): \(filename, privacy: .public)")
+                appLog.write("Dossier: skip DRM-protected: \(filename)")
                 publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
                 continue
             }
@@ -1287,6 +1324,24 @@ final class CaptionOrchestrator: ObservableObject {
     /// scrolling; also the memory bound (a handful of small structs —
     /// worst case well under 8 KB).
     static let recentActivityCap = 8
+
+    /// Cheap DRM probe via AVAsset. Loads only protected-content
+    /// metadata (no decode, no audio extraction) — typically tens of
+    /// milliseconds even on a slow disk. On any error (file gone,
+    /// permission denied, AVFoundation choke) we return false so a
+    /// transient miss falls through to the regular VLM/Whisper path
+    /// instead of incorrectly marking the record drmProtected forever.
+    ///
+    /// Static + nonisolated so it doesn't pull the MainActor while
+    /// AVAsset's metadata work runs on its own queue.
+    nonisolated static func isDRMProtected(path: String) async -> Bool {
+        let asset = AVURLAsset(url: URL(fileURLWithPath: path))
+        do {
+            return try await asset.load(.hasProtectedContent)
+        } catch {
+            return false
+        }
+    }
 
     /// Map an engine modelID to a short stage family name for the lane
     /// header. Unknown engines fall through to their raw modelID, so a

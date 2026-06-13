@@ -53,6 +53,13 @@ nonisolated func pfCatalogWideMetadataCandidates(
         // Remaining count with files that should never be on the work
         // list to begin with.
         guard rec.mediaDisposition != .confirmedJunk else { return false }
+        // DRM-protected files (e.g. FairPlay m4v/m4p iTunes purchases
+        // from vintage accounts) cannot be decoded without authorization
+        // — Whisper would just chew through ciphertext for hours. The
+        // orchestrator sets drmProtected on first encounter via
+        // AVAsset.hasProtectedContent; subsequent runs skip via this
+        // filter without paying the probe cost.
+        guard !rec.drmProtected else { return false }
         // Reachable volume.
         return prefixes.contains { rec.fullPath.hasPrefix($0) }
     }
