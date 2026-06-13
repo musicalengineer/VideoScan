@@ -750,16 +750,32 @@ struct CatalogCoverage {
             if r.mediaDisposition == .confirmedJunk { continue }
             if r.purgedAt != nil { continue }
             t += 1
-            // Eligibility mirrors pfCatalogWideMetadataCandidates'
-            // additional gates beyond junk/purged — currently just
-            // DRM. Lifecycle gate is handled by the orchestrator's
-            // candidate filter and isn't a per-record concern here.
-            if r.drmProtected {
-                drm += 1
-            } else {
+            // `eligible` mirrors the FULL orchestrator candidate
+            // filter (pfCatalogWideMetadataCandidates), not just
+            // junk/purged. Three additional gates:
+            //   - lifecycleStage in {cataloged, workbench} —
+            //     archived / deletedPermanently / trashed / inTriage
+            //     records have already been dispositioned elsewhere
+            //     and aren't part of the dossier pool.
+            //   - drmProtected: the pipeline can't decrypt them.
+            //   - (reachability is handled at refreshCounts time
+            //     via the prefix filter — paths outside the volume
+            //     never enter `records` here.)
+            //
+            // dossiered only counts eligible records — otherwise
+            // a record with dossierProcessedAt set but stage=archived
+            // would push dossiered > eligible and break the
+            // "Analyze Complete" check. Rick 2026-06-13.
+            let lifecycleOK = r.lifecycleStage == .cataloged
+                || r.lifecycleStage == .workbench
+            if r.drmProtected { drm += 1 }
+            if lifecycleOK && !r.drmProtected {
                 e += 1
+                if r.dossierProcessedAt != nil { d += 1 }
             }
-            if r.dossierProcessedAt != nil { d += 1 }
+            // Scene/OCR/transcript channels tally across the whole
+            // non-junk non-purged set so the Total Processed panel
+            // doesn't artificially shrink.
             if !r.sceneCaptions.isEmpty { s += 1 }
             if !r.ocrDateCandidates.isEmpty { o += 1 }
             if !(r.audioTranscript ?? "").isEmpty { x += 1 }
