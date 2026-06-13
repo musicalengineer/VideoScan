@@ -359,6 +359,66 @@ struct CaptionOrchestratorActivityTests {
                 "Cancellation→kill should complete within 5s; took \(elapsed)s")
     }
 
+    // MARK: - DRM → suspectedJunk flagging
+    //
+    // When the orchestrator probes a file via AVAsset.hasProtectedContent
+    // and it returns true, it routes through flagDRMSuspectJunk which:
+    //   - sets drmProtected = true (so the candidate filter excludes
+    //     on the NEXT run without paying the probe cost)
+    //   - bumps mediaDisposition to .suspectedJunk IF currently
+    //     .unreviewed (so Rick sees it in his triage flow)
+    //   - records "DRM-protected (no decryption key)" in junkReasons
+    //
+    // Preserves any stronger pre-existing disposition — the user's
+    // judgment wins. These are pure-function tests; the AVAsset probe
+    // itself can't be unit-tested without a real DRM fixture file.
+
+    @Test("flagDRMSuspectJunk: unreviewed → suspectedJunk")
+    func flagDRMOnUnreviewed() {
+        let r = VideoRecord()
+        r.fullPath = "/Volumes/Lacie/protected.m4v"
+        r.mediaDisposition = .unreviewed
+        CaptionOrchestrator.flagDRMSuspectJunk(r)
+        #expect(r.drmProtected == true)
+        #expect(r.mediaDisposition == .suspectedJunk)
+        #expect(r.junkReasons == [CaptionOrchestrator.drmSuspectJunkReason])
+    }
+
+    @Test("flagDRMSuspectJunk: confirmedJunk stays confirmedJunk (don't downgrade)")
+    func flagDRMOnConfirmedJunk() {
+        let r = VideoRecord()
+        r.mediaDisposition = .confirmedJunk
+        CaptionOrchestrator.flagDRMSuspectJunk(r)
+        #expect(r.drmProtected == true)
+        #expect(r.mediaDisposition == .confirmedJunk,
+                "User already confirmed junk — don't downgrade to suspected")
+        #expect(r.junkReasons.contains(CaptionOrchestrator.drmSuspectJunkReason))
+    }
+
+    @Test("flagDRMSuspectJunk: important stays important (don't override user)")
+    func flagDRMOnImportant() {
+        let r = VideoRecord()
+        r.mediaDisposition = .important
+        CaptionOrchestrator.flagDRMSuspectJunk(r)
+        #expect(r.drmProtected == true)
+        #expect(r.mediaDisposition == .important,
+                "User flagged this important — DRM detection must not override")
+        #expect(r.junkReasons.contains(CaptionOrchestrator.drmSuspectJunkReason),
+                "Reason still logs even when disposition isn't bumped — diagnostic trail")
+    }
+
+    @Test("flagDRMSuspectJunk: idempotent — re-flagging doesn't multiply junkReasons")
+    func flagDRMIdempotent() {
+        let r = VideoRecord()
+        r.mediaDisposition = .unreviewed
+        CaptionOrchestrator.flagDRMSuspectJunk(r)
+        CaptionOrchestrator.flagDRMSuspectJunk(r)
+        CaptionOrchestrator.flagDRMSuspectJunk(r)
+        #expect(r.junkReasons.count == 1,
+                "junkReasons must dedupe — repeated runs shouldn't multiply the entry")
+        #expect(r.mediaDisposition == .suspectedJunk)
+    }
+
     // MARK: - Stage names are data-driven
 
     @Test("stage display names derive from modelIDs and pass unknown stages through")

@@ -599,10 +599,10 @@ final class CaptionOrchestrator: ObservableObject {
                 continue
             }
             if await Self.isDRMProtected(path: path) {
-                record.drmProtected = true
+                Self.flagDRMSuspectJunk(record)
                 liveSkipped += 1
-                captionOrchLog.notice("Dossier: skip DRM-protected (probed): \(filename, privacy: .public)")
-                appLog.write("Dossier: skip DRM-protected: \(filename)")
+                captionOrchLog.notice("Dossier: skip DRM-protected (probed, → suspectedJunk): \(filename, privacy: .public)")
+                appLog.write("Dossier: skip DRM-protected: \(filename) (flagged suspectedJunk)")
                 publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
                 continue
             }
@@ -929,10 +929,10 @@ final class CaptionOrchestrator: ObservableObject {
                 continue
             }
             if await Self.isDRMProtected(path: path) {
-                record.drmProtected = true
+                Self.flagDRMSuspectJunk(record)
                 liveSkipped += 1
-                captionOrchLog.notice("Dossier: skip DRM-protected (probed): \(filename, privacy: .public)")
-                appLog.write("Dossier: skip DRM-protected: \(filename)")
+                captionOrchLog.notice("Dossier: skip DRM-protected (probed, → suspectedJunk): \(filename, privacy: .public)")
+                appLog.write("Dossier: skip DRM-protected: \(filename) (flagged suspectedJunk)")
                 publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
                 continue
             }
@@ -1340,6 +1340,31 @@ final class CaptionOrchestrator: ObservableObject {
             return try await asset.load(.hasProtectedContent)
         } catch {
             return false
+        }
+    }
+
+    /// Marker that goes into junkReasons when DRM detection flags a
+    /// record. Constant so tests and any future UI surface can match
+    /// on it without duplicating the string. Keep "DRM" capitalized
+    /// so a future per-reason filter / chip can group on it.
+    static let drmSuspectJunkReason = "DRM-protected (no decryption key)"
+
+    /// Mark a record as drm-protected and propose suspectedJunk so it
+    /// lands in Rick's triage flow for confirmation. Preserves any
+    /// stronger pre-existing disposition — once the user has decided
+    /// (important / recoverable / confirmedJunk) we don't second-guess
+    /// them. Idempotent on junkReasons so re-flagging across multiple
+    /// runs doesn't multiply the entry.
+    ///
+    /// Rick 2026-06-13: "auto-detect any DRM and skip it and even
+    /// flag it as suspected Junk, and later I can confirm it as junk."
+    static func flagDRMSuspectJunk(_ record: VideoRecord) {
+        record.drmProtected = true
+        if record.mediaDisposition == .unreviewed {
+            record.mediaDisposition = .suspectedJunk
+        }
+        if !record.junkReasons.contains(drmSuspectJunkReason) {
+            record.junkReasons.append(drmSuspectJunkReason)
         }
     }
 
