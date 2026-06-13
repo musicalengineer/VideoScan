@@ -418,22 +418,23 @@ final class CaptionOrchestrator: ObservableObject {
         await activeTask?.value
     }
 
-    /// VLM result ready for the Whisper consumer stage.
-    private struct DossierVLMResult: Sendable {
-        let extraction: DossierExtraction
-        let fullPath: String
-        let filename: String
-        let vlmModelID: String
-        let idx: Int
-    }
-
     /// Pipelined dossier batch: VLM and Whisper overlap across files.
     ///
-    /// While the Whisper subprocess transcribes file N, the VLM actor
-    /// runs dossier extraction on file N+1. An AsyncStream with
-    /// capacity 1 connects the two stages — the VLM producer suspends
-    /// when the buffer is full (backpressure), so at most two files
-    /// are in flight at once.
+    /// While the Whisper subprocess transcribes file N-1, the VLM
+    /// runs dossier extraction on file N. Backpressure comes from a
+    /// chained task: before dispatching Whisper for file N we
+    /// `await pendingWhisper?.value` for file N-1, so at most one
+    /// Whisper task is ever outstanding (at most two files in flight)
+    /// and no VLM result can be dropped.
+    ///
+    /// (The previous implementation connected the stages with an
+    /// AsyncStream using .bufferingOldest(1), on the mistaken belief
+    /// that yield suspends when the buffer is full. It does not —
+    /// AsyncStream.Continuation.yield never suspends — so whenever
+    /// Whisper was mid-transcription with one result already buffered,
+    /// further VLM results were silently discarded and never reached
+    /// applyDossier. C++ analogy: it was a lossy ring buffer of size 1,
+    /// not a blocking bounded queue.)
     private func runDossierBatch(
         runner: CaptionRunner,
         transcriber: AudioTranscriber?,
@@ -462,114 +463,119 @@ final class CaptionOrchestrator: ObservableObject {
         let transcriber = transcriber!
         let whisperModelID = transcriber.modelID
 
-        let (stream, continuation) = AsyncStream.makeStream(
-            of: DossierVLMResult.self,
-            bufferingPolicy: .bufferingOldest(1)
-        )
+        // Whisper task for the previous file. Awaited before the next
+        // Whisper dispatch (backpressure) and once after the loop so
+        // the summary below sees final counts.
+        var pendingWhisper: Task<Void, Never>?
 
-        await withTaskGroup(of: Void.self) { group in
-
-            // --- VLM Producer ---
-            group.addTask { @MainActor [weak self] in
-                guard let self else { continuation.finish(); return }
-
-                for (idx, record) in candidates.enumerated() {
-                    if Task.isCancelled {
-                        captionOrchLog.notice("Dossier: VLM cancelled at file \(idx) of \(total)")
-                        break
-                    }
-
-                    let path = record.fullPath
-                    let filename = record.filename
-
-                    if !force,
-                       record.dossierProcessedAt != nil,
-                       record.dossierProcessedBy == stackID {
-                        liveSkipped += 1
-                        publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
-                        continue
-                    }
-
-                    if !FileManager.default.fileExists(atPath: path) {
-                        liveFailed += 1
-                        captionOrchLog.warning("Dossier: missing on disk: \(path, privacy: .public)")
-                        publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
-                        continue
-                    }
-
-                    publishProgress(idx: idx, total: total, currentFile: filename, started: started)
-
-                    let dur = max(0.5, record.durationSeconds)
-                    let timestamps = framesEvenlySpaced(framesPerFile: framesPerFile, durationSec: dur)
-
-                    do {
-                        let vlmStart = CFAbsoluteTimeGetCurrent()
-                        let extraction = try await runner.dossier(
-                            videoPath: path,
-                            atTimestamps: timestamps
-                        )
-                        let vlmSec = CFAbsoluteTimeGetCurrent() - vlmStart
-                        appLog.write(String(format: "Pipeline VLM done: %@ — %.1fs", filename, vlmSec))
-                        continuation.yield(DossierVLMResult(
-                            extraction: extraction,
-                            fullPath: path,
-                            filename: filename,
-                            vlmModelID: vlmModelID,
-                            idx: idx
-                        ))
-                    } catch is CancellationError {
-                        captionOrchLog.notice("Dossier: VLM cancellation at \(filename, privacy: .public)")
-                        break
-                    } catch {
-                        liveFailed += 1
-                        captionOrchLog.warning("Dossier: VLM error on \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                        publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
-                    }
-                }
-                continuation.finish()
+        for (idx, record) in candidates.enumerated() {
+            if Task.isCancelled {
+                captionOrchLog.notice("Dossier: VLM cancelled at file \(idx) of \(total)")
+                break
             }
 
-            // --- Whisper Consumer ---
-            group.addTask { @MainActor [weak self] in
-                guard let self else { return }
+            let path = record.fullPath
+            let filename = record.filename
 
-                for await result in stream {
-                    if Task.isCancelled { break }
+            if !force,
+               record.dossierProcessedAt != nil,
+               record.dossierProcessedBy == stackID {
+                liveSkipped += 1
+                publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
+                continue
+            }
 
-                    appLog.write("Pipeline Whisper start: \(result.filename)")
+            if !FileManager.default.fileExists(atPath: path) {
+                liveFailed += 1
+                captionOrchLog.warning("Dossier: missing on disk: \(path, privacy: .public)")
+                publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
+                continue
+            }
+
+            publishProgress(idx: idx, total: total, currentFile: filename, started: started)
+
+            let dur = max(0.5, record.durationSeconds)
+            let timestamps = framesEvenlySpaced(framesPerFile: framesPerFile, durationSec: dur)
+
+            do {
+                let vlmStart = CFAbsoluteTimeGetCurrent()
+                let extraction = try await runner.dossier(
+                    videoPath: path,
+                    atTimestamps: timestamps
+                )
+                let vlmSec = CFAbsoluteTimeGetCurrent() - vlmStart
+                appLog.write(String(format: "Pipeline VLM done: %@ — %.1fs", filename, vlmSec))
+
+                // Backpressure: wait for the previous file's Whisper to
+                // finish before dispatching this one. At most one Whisper
+                // outstanding; every VLM result is handed off, never dropped.
+                await pendingWhisper?.value
+                pendingWhisper = nil
+
+                if Task.isCancelled {
+                    // Cancelled while waiting on the previous Whisper:
+                    // still bank this file's VLM result, sans transcript.
+                    _ = model.applyDossier(
+                        extraction, to: path,
+                        vlmModel: vlmModelID,
+                        transcript: nil,
+                        whisperModel: nil
+                    )
+                    liveCaptioned += 1
+                    break
+                }
+
+                pendingWhisper = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    appLog.write("Pipeline Whisper start: \(filename)")
                     let whisperStart = CFAbsoluteTimeGetCurrent()
                     var transcript: String?
                     do {
-                        transcript = try await transcriber.transcribe(videoPath: result.fullPath)
+                        transcript = try await transcriber.transcribe(videoPath: path)
                     } catch is CancellationError {
+                        // Cancelled mid-transcription: apply VLM-only so
+                        // the extraction isn't lost.
                         _ = model.applyDossier(
-                            result.extraction,
-                            to: result.fullPath,
-                            vlmModel: result.vlmModelID,
+                            extraction, to: path,
+                            vlmModel: vlmModelID,
                             transcript: nil,
                             whisperModel: nil
                         )
                         liveCaptioned += 1
-                        break
+                        return
                     } catch {
-                        captionOrchLog.warning("Dossier: whisper failed on \(result.filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                        captionOrchLog.warning("Dossier: whisper failed on \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
                         transcript = nil
                     }
 
                     _ = model.applyDossier(
-                        result.extraction,
-                        to: result.fullPath,
-                        vlmModel: result.vlmModelID,
+                        extraction, to: path,
+                        vlmModel: vlmModelID,
                         transcript: transcript,
                         whisperModel: transcript != nil ? whisperModelID : nil
                     )
                     let whisperSec = CFAbsoluteTimeGetCurrent() - whisperStart
-                    appLog.write(String(format: "Pipeline Whisper done: %@ — %.1fs", result.filename, whisperSec))
+                    appLog.write(String(format: "Pipeline Whisper done: %@ — %.1fs", filename, whisperSec))
                     liveCaptioned += 1
-                    publishProgress(idx: result.idx + 1, total: total, currentFile: result.filename, started: started)
+                    publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
                 }
+            } catch is CancellationError {
+                captionOrchLog.notice("Dossier: VLM cancellation at \(filename, privacy: .public)")
+                break
+            } catch {
+                liveFailed += 1
+                captionOrchLog.warning("Dossier: VLM error on \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
             }
         }
+
+        // pendingWhisper is unstructured, so cancellation of the batch
+        // task doesn't propagate automatically — forward it explicitly
+        // so a cancelled batch doesn't block shutdown on a long
+        // transcription (the task's CancellationError path still applies
+        // the VLM result).
+        if Task.isCancelled { pendingWhisper?.cancel() }
+        await pendingWhisper?.value
 
         let elapsed = CFAbsoluteTimeGetCurrent() - started
         let captioned = liveCaptioned

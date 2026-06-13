@@ -75,14 +75,27 @@ actor StubDossierRunner: CaptionRunner {
 struct StubAudioTranscriber: AudioTranscriber {
     let modelID: String
     let transcriptText: String
+    /// Optional artificial transcription latency. Defaults to zero so
+    /// existing tests are unaffected; the pipelining regression test
+    /// uses a non-zero delay to keep the Whisper stage busy while the
+    /// (fast) stub VLM races ahead.
+    let delay: Duration
 
-    init(modelID: String = "stub-whisper-1", transcriptText: String = "stub transcript") {
+    init(
+        modelID: String = "stub-whisper-1",
+        transcriptText: String = "stub transcript",
+        delay: Duration = .zero
+    ) {
         self.modelID = modelID
         self.transcriptText = transcriptText
+        self.delay = delay
     }
 
     func transcribe(videoPath: String) async throws -> String {
-        transcriptText
+        if delay > .zero {
+            try await Task.sleep(for: delay)
+        }
+        return transcriptText
     }
 }
 
@@ -244,6 +257,60 @@ struct CaptionOrchestratorDossierTests {
         #expect(captioned >= 1)
         #expect(rec.sceneCaptions.count == 3)
         #expect(rec.ocrDateCandidates.count == 3)
+    }
+
+    // MARK: - Pipelining must not drop VLM results (data-loss regression)
+    //
+    // Regression test for the AsyncStream .bufferingOldest(1) bug:
+    // AsyncStream.Continuation.yield never suspends, so when the
+    // Whisper consumer was mid-transcription with one result already
+    // buffered, every further VLM yield was silently discarded — the
+    // dropped records never reached applyDossier and were never
+    // stamped with dossierProcessedAt. A fast VLM stub plus a slow
+    // transcriber reproduces the drop deterministically.
+
+    @Test("pipelined dossier applies every VLM result when transcriber is slow")
+    func testPipelinedDossierAppliesEveryVLMResultWhenTranscriberIsSlow() async {
+        let model = VideoScanModel()
+        let tmp = NSTemporaryDirectory()
+
+        var paths: [String] = []
+        var recs: [VideoRecord] = []
+        for i in 0..<8 {
+            let p = tmp + "vs-dossier-slowwhisper-\(i).mp4"
+            FileManager.default.createFile(atPath: p, contents: Data("x".utf8))
+            paths.append(p)
+            recs.append(makeDossierRecord(fullPath: p))
+        }
+        defer { for p in paths { try? FileManager.default.removeItem(atPath: p) } }
+
+        model.records = recs
+        model.scanTargets = [makeReachableTarget(at: tmp)]
+
+        let stub = StubDossierRunner(modelID: "stub-d-slow")
+        let orch = CaptionOrchestrator(runnerFactory: { stub })
+        // Slow Whisper, instant VLM: the worst case for the pipeline.
+        let transcriber = StubAudioTranscriber(
+            modelID: "stub-w-slow",
+            transcriptText: "slow hello",
+            delay: .milliseconds(80)
+        )
+
+        await orch.startCatalogWideDossier(model: model, transcriber: transcriber)
+
+        guard case .finished(let captioned, let skipped, let failed) = orch.currentStatus else {
+            Issue.record("Expected .finished, got \(orch.currentStatus)")
+            return
+        }
+        #expect(captioned == recs.count, "Every VLM result must reach applyDossier — none may be dropped")
+        #expect(skipped == 0)
+        #expect(failed == 0)
+        for rec in recs {
+            #expect(
+                rec.dossierProcessedAt != nil,
+                "\(rec.filename) was never stamped — its VLM result was dropped between stages"
+            )
+        }
     }
 
     // MARK: - Reachability filter
