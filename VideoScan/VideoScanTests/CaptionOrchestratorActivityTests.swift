@@ -152,7 +152,7 @@ struct CaptionOrchestratorActivityTests {
 
     // MARK: - Serial path (no transcriber)
 
-    @Test("serial path records entries with nil whisperSeconds and the no-transcript note")
+    @Test("serial path records entries with nil whisperSeconds and the no-transcriber note")
     func serialPathNoTranscript() async {
         let model = VideoScanModel()
         let (paths, recs) = makeActivityFixtures(count: 2, tag: "serial")
@@ -189,7 +189,8 @@ struct CaptionOrchestratorActivityTests {
         for entry in orch.recentActivity {
             #expect(entry.vlmSeconds != nil)
             #expect(entry.whisperSeconds == nil)
-            #expect(entry.note == "no transcript")
+            #expect(entry.note == "no transcriber",
+                    "Serial path with no transcriber must tag as 'no transcriber' so we can distinguish that case from 'no audio' (file has no audio stream) and 'transcript failed' (whisper threw).")
         }
     }
 

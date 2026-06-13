@@ -47,11 +47,21 @@ struct DossierDashboardView: View {
     @State private var strongDatesCount: Int = 0
     @State private var transcriptsCount: Int = 0
 
-    /// Tick the UI every 5s so the dial / counters stay current.
-    /// (The activity panels don't need this — they observe the
-    /// orchestrator's @Published lanes directly and run their own
-    /// 1s TimelineView clock for the elapsed/relative readouts.)
-    private let refreshTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
+    /// Tick the UI every 1s so the dial / counters move in near-real
+    /// time. Rick 2026-06-13: 5s felt static — files complete every few
+    /// seconds on a healthy run, and a 5s sample window means the rate
+    /// tracker stays on "—" for 5 seconds after the first completion.
+    /// Polling 15k records per second is a few hundred microseconds on
+    /// M-series silicon — cheap enough that we don't need to subscribe
+    /// to model.objectWillChange and risk a render storm during heavy
+    /// dossier writeback.
+    private let refreshTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    /// Hard cap on rows shown under "Now Analyzing". Rick 2026-06-13:
+    /// more than 5 makes the window too tall. Excess lanes still tick
+    /// through the pipeline; they're collapsed into a "+ N more"
+    /// trailing line so the user knows the cap is active.
+    static let activeLanesVisibleCap = 5
 
     var body: some View {
         VStack(alignment: .center, spacing: 18) {
@@ -108,10 +118,20 @@ struct DossierDashboardView: View {
                         .padding(.vertical, 6)
                         .padding(.horizontal, 4)
                 } else {
+                    // Rick 2026-06-13: cap visible lanes at 5. The pipeline
+                    // itself only runs a handful in flight, but the cap
+                    // also bounds window height if a future change widens
+                    // concurrency. `prefix(5)` is taken before iterating
+                    // so the slice itself is the @Published-driven input.
                     TimelineView(.periodic(from: .now, by: 1)) { context in
                         VStack(alignment: .leading, spacing: 10) {
-                            ForEach(captionOrchestrator.activeLanes) { lane in
+                            ForEach(Array(captionOrchestrator.activeLanes.prefix(Self.activeLanesVisibleCap))) { lane in
                                 ActiveLaneRow(lane: lane, now: context.date)
+                            }
+                            if captionOrchestrator.activeLanes.count > Self.activeLanesVisibleCap {
+                                Text("+ \(captionOrchestrator.activeLanes.count - Self.activeLanesVisibleCap) more in flight")
+                                    .font(.system(size: 11))
+                                    .foregroundColor(.secondary)
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -145,8 +165,8 @@ struct DossierDashboardView: View {
                 }
             }
 
-            // MARK: Channel totals (catalog-wide, across both fleet and in-app sweep)
-            GroupBox(label: Text("Channel coverage").font(.headline)) {
+            // MARK: Total processed (catalog-wide, across both fleet and in-app sweep)
+            GroupBox(label: Text("Total Processed").font(.headline)) {
                 HStack(spacing: 24) {
                     ChannelStat(
                         icon: "text.bubble.fill",
@@ -235,38 +255,121 @@ struct DossierDashboardView: View {
 
 // MARK: - Live activity rows
 
-/// One in-flight pipeline stage: spinner, filename, stage line with a
-/// live elapsed readout. `now` comes from the enclosing TimelineView's
-/// 1s clock so the "(Ns)" ticks without any per-row timers.
+/// One in-flight FILE row (not stage). Shows: spinner + filename, a
+/// stage badge ([Whisper]/[MLXVLM]), the present-tense verb with the
+/// live elapsed readout, then per-channel indicators on the trailing
+/// edge. `now` comes from the enclosing TimelineView's 1s clock so
+/// the "(Ns)" ticks without any per-row timers.
+///
+/// Indicator semantics:
+///   - Audio Transcript: gray dash for `isVideoOnly`; green ✓ when
+///     `hasTranscript`; red ✗ when `transcriptFailed` or not yet.
+///   - Captions: green ✓ when `hasCaptions`; red ✗ otherwise.
 private struct ActiveLaneRow: View {
     let lane: PipelineLane
     let now: Date
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .center, spacing: 10) {
             SpinningRing(color: .cyan, size: 16)
-                .padding(.top, 2)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(lane.filename)
-                    .font(.system(size: 13, weight: .medium))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Text("\(lane.stageName) — \(lane.verb)  (\(elapsedSeconds)s)")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-            }
-            Spacer(minLength: 0)
+            Text(lane.filename)
+                .font(.system(size: 13, weight: .medium))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: 280, alignment: .leading)
+            StageBadge(stage: lane.stageName)
+            Text("\(lane.verb)  (\(elapsedSeconds)s)")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            ChannelIndicator(label: "Audio Transcript", state: transcriptState)
+            ChannelIndicator(label: "Captions", state: captionsState)
         }
     }
 
     private var elapsedSeconds: Int {
         max(0, Int(now.timeIntervalSince(lane.startedAt)))
     }
+
+    private var transcriptState: ChannelIndicator.State {
+        if lane.isVideoOnly { return .notApplicable }
+        if lane.hasTranscript { return .ok }
+        return .missing  // not yet OR transcriptFailed — both render as red ✗
+    }
+
+    private var captionsState: ChannelIndicator.State {
+        lane.hasCaptions ? .ok : .missing
+    }
 }
 
-/// One completed file: checkmark, filename, per-stage timing summary,
-/// relative "how long ago" on the trailing edge (live via the same
-/// TimelineView clock as the lanes).
+/// Stage name in a small rounded chip, e.g. `[Whisper]`. Color tracks
+/// the engine family so the dashboard reads at a glance.
+private struct StageBadge: View {
+    let stage: String
+
+    var body: some View {
+        Text(stage)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundColor(.white)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(color)
+            )
+    }
+
+    private var color: Color {
+        let lower = stage.lowercased()
+        if lower.contains("whisper") { return .teal }
+        if lower.contains("mlxvlm") || lower.contains("vlm") || lower.contains("qwen") { return .indigo }
+        return .gray
+    }
+}
+
+/// Per-channel checkmark used both on the active-row trailing edge.
+/// Three states: green ✓, red ✗, gray — for "n/a" (e.g. video-only file
+/// for the Audio Transcript channel).
+private struct ChannelIndicator: View {
+    enum State { case ok, missing, notApplicable }
+
+    let label: String
+    let state: State
+
+    var body: some View {
+        HStack(spacing: 4) {
+            icon
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var icon: some View {
+        switch state {
+        case .ok:
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundColor(.green)
+                .font(.system(size: 13))
+        case .missing:
+            Image(systemName: "xmark.circle.fill")
+                .foregroundColor(.red)
+                .font(.system(size: 13))
+        case .notApplicable:
+            Image(systemName: "minus.circle.fill")
+                .foregroundColor(.gray)
+                .font(.system(size: 13))
+        }
+    }
+}
+
+/// One completed file: checkmark, filename, per-stage timing summary.
+/// Rick 2026-06-13: we deliberately do NOT show "how long ago" — only
+/// "how long it took". The `now: Date` argument is unused but kept so
+/// the enclosing TimelineView can still trigger redraws without a
+/// signature change to every callsite.
 private struct CompletedActivityRow: View {
     let item: CompletedActivity
     let now: Date
@@ -286,15 +389,13 @@ private struct CompletedActivityRow: View {
                 .foregroundColor(.secondary)
                 .lineLimit(1)
             Spacer(minLength: 8)
-            Text(relativeAge)
-                .font(.system(size: 12))
-                .foregroundColor(.secondary)
         }
     }
 
     /// "VLM 11.2s · Whisper 6.4s · Synced" — segments drop out when a
-    /// stage didn't run, and the note ("no transcript") slots in where
-    /// the missing stage's timing would have been.
+    /// stage didn't run, and the note ("no audio", "transcript failed",
+    /// "no transcriber") slots in where the missing stage's timing
+    /// would have been.
     private var summary: String {
         var parts: [String] = []
         if let v = item.vlmSeconds {
@@ -308,15 +409,6 @@ private struct CompletedActivityRow: View {
         }
         parts.append("Synced")
         return parts.joined(separator: " · ")
-    }
-
-    private var relativeAge: String {
-        let age = now.timeIntervalSince(item.syncedAt)
-        if age < 5 { return "just now" }
-        if age < 60 { return "\(Int(age))s ago" }
-        if age < 3600 { return "\(Int(age / 60))m ago" }
-        if age < 86400 { return "\(Int(age / 3600))h ago" }
-        return "\(Int(age / 86400))d ago"
     }
 }
 
@@ -801,7 +893,12 @@ private struct DialRing: View {
                 // preference. Rounded font reads well at this size.
                 Text(centerLabel)
                     .font(.system(size: 56, weight: .semibold, design: .rounded))
-                Text("dossiered")
+                    // numericText() animates digit changes (a brief
+                    // scroll/flip) so the % readout glides instead of
+                    // popping when the catalog ticks up.
+                    .contentTransition(.numericText())
+                    .animation(.easeOut(duration: 0.3), value: centerLabel)
+                Text("Analyzed")
                     .font(.system(size: 13))
                     .foregroundColor(.secondary)
             }
@@ -826,6 +923,12 @@ private struct StatRow: View {
                 .font(.system(.body, design: .monospaced))
                 .frame(minWidth: 60, alignment: .trailing)
                 .foregroundColor(color)
+                // Number-aware transition: each digit change scrolls
+                // briefly rather than popping. Rate/ETA also pass
+                // through here — a "—" → "1.2/min" transition still
+                // animates because contentTransition handles both.
+                .contentTransition(.numericText())
+                .animation(.easeOut(duration: 0.3), value: value)
         }
     }
 }
@@ -843,6 +946,8 @@ private struct ChannelStat: View {
                 .foregroundColor(color)
             Text("\(value)")
                 .font(.system(.title3, design: .monospaced))
+                .contentTransition(.numericText())
+                .animation(.easeOut(duration: 0.3), value: value)
             Text(label)
                 .font(.caption2)
                 .foregroundColor(.secondary)

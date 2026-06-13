@@ -14,9 +14,12 @@ extension VideoScanModel {
     //
     // Re-dossiering REPLACES wholesale. We don't merge dossiers from
     // different model stacks because the consensus inference would mix
-    // model biases. The dossierProcessedBy field records which stack
-    // produced the current dossier so the UI can offer "re-dossier with
-    // current stack" if the engine version drifts.
+    // model biases. The dossierProcessedBy field is pure provenance:
+    // it records which stack produced the current dossier, but it is
+    // NOT part of the orchestrator's idempotent-skip predicate (a
+    // non-nil dossierProcessedAt is enough). The UI can offer "re-
+    // dossier with current stack" via force=true if the engine
+    // version drifts and the user wants a fresh pass.
 
     /// Apply a fresh dossier extraction (and optional Whisper transcript)
     /// to a single catalog record by path. Triangulates the record's

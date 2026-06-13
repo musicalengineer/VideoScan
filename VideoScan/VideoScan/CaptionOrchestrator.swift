@@ -77,19 +77,43 @@ enum CaptionJobStatus: Equatable {
 // (FancyAlg2/3...) show up on the dashboard just by reporting in with
 // their own name. No dashboard change needed when a stage is added.
 
-/// One in-flight pipeline stage working on one file. At most one lane
-/// exists per stage at a time (the pipeline keeps at most one file in
-/// VLM and one in Whisper).
+/// One in-flight file. A lane is opened when the file enters the
+/// pipeline and closed when it finishes (success, failure, or skip).
+/// Stage transitions (VLM → Whisper) mutate `stageName`/`verb` in
+/// place rather than spawning a new lane — that way the dashboard
+/// shows one row per file and per-channel checkmarks (`hasCaptions`,
+/// `hasTranscript`) light up as each stage banks its result.
 struct PipelineLane: Identifiable, Equatable {
     let id: UUID
+    /// Absolute path — used as the dedup key (one lane per path).
+    let path: String
     let filename: String
-    /// Short stage family, e.g. "MLXVLM", "Whisper".
-    let stageName: String
+    /// Short stage family currently running on this file, e.g.
+    /// "MLXVLM", "Whisper". Mutates as the pipeline advances.
+    var stageName: String
     /// Present-tense action for the stage line, e.g. "extracting scenes…".
-    let verb: String
-    /// When the stage started on this file — the dashboard derives the
-    /// live "(Ns)" elapsed readout from this.
+    var verb: String
+    /// When THIS file entered the pipeline — the dashboard derives the
+    /// live "(Ns)" elapsed readout from this. Deliberately NOT reset on
+    /// stage transitions so the elapsed counter shows total time on the
+    /// file, not just time in the current stage.
     let startedAt: Date
+    /// True when the file's stream type is video-only (no audio stream).
+    /// The dashboard renders the Audio Transcript indicator as a gray
+    /// dash when this is set, regardless of `hasTranscript`/`transcriptFailed`.
+    let isVideoOnly: Bool
+    /// True once the VLM successfully extracted scene captions for this
+    /// file. The dashboard shows a green check; otherwise a red X.
+    var hasCaptions: Bool
+    /// True once Whisper successfully produced a transcript. Mutually
+    /// exclusive in practice with `transcriptFailed`. Gray dash overrides
+    /// both when `isVideoOnly`.
+    var hasTranscript: Bool
+    /// True when Whisper was attempted and threw. Distinguishes "we
+    /// tried and failed" (red X) from "not yet" (also red X today but
+    /// could become a spinner later) and from "no audio at all"
+    /// (gray dash via `isVideoOnly`).
+    var transcriptFailed: Bool
 }
 
 /// A file that finished the full pipeline and was synced to the catalog.
@@ -373,11 +397,16 @@ final class CaptionOrchestrator: ObservableObject {
     // startCatalogWideCaptioning's shape but talks to runner.dossier()
     // and AudioTranscriber.
     //
-    // Idempotent skip key is `dossierProcessedBy == currentStackID` —
-    // distinct from sceneCaptionModel because a record may have been
-    // captioned by an older single-prompt pass and still need a dossier
-    // pass (which would add ocrDates + ocrText fields the caption pass
-    // didn't fill).
+    // Idempotent skip key is `dossierProcessedAt != nil` — a record that
+    // already has a dossier of ANY stack is not re-run unless force=true.
+    // The dossierProcessedBy field stays around as pure provenance (which
+    // stack produced this dossier) but is not part of the skip predicate.
+    // Earlier code required `dossierProcessedBy == currentStackID` too,
+    // which broke when the external worker fleet's stackID didn't match
+    // the in-app stackID exactly — thousands of records re-ran every
+    // launch, the dashboard "Analyzed" count never moved, and the user
+    // saw Whisper firing on already-dossiered files. Deliberate
+    // re-dossier-with-a-new-stack is what force=true is for.
 
     /// Catalog-wide dossier extraction. Iterates every reachable
     /// caption candidate, runs the 3-prompt VLM dossier + Whisper
@@ -517,9 +546,14 @@ final class CaptionOrchestrator: ObservableObject {
             let path = record.fullPath
             let filename = record.filename
 
-            if !force,
-               record.dossierProcessedAt != nil,
-               record.dossierProcessedBy == stackID {
+            // Idempotent skip: any record that already carries a dossier
+            // timestamp is left alone. The previous predicate also
+            // required dossierProcessedBy == stackID, which silently
+            // re-ran thousands of records whenever the external fleet
+            // and in-app stackIDs differed (e.g. "...whisper-medium-mlx-q4"
+            // vs "...python-whisper-medium-mlx-q4"). force=true is the
+            // explicit escape hatch for re-dossier-with-current-stack.
+            if !force, record.dossierProcessedAt != nil {
                 liveSkipped += 1
                 publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
                 continue
@@ -537,11 +571,23 @@ final class CaptionOrchestrator: ObservableObject {
             let dur = max(0.5, record.durationSeconds)
             let timestamps = framesEvenlySpaced(framesPerFile: framesPerFile, durationSec: dur)
 
-            // Dashboard lane: this file is now in the VLM stage.
-            let vlmLaneID = beginLane(
+            // Capture the file's stream type up-front: videoOnly records
+            // cannot have audio, so the pipeline must NOT dispatch
+            // Whisper for them. We still preserve chronological completion
+            // order by awaiting the previous file's pendingWhisper before
+            // banking the no-audio VLM-only result (see below).
+            let hasNoAudio = (record.streamType == .videoOnly)
+
+            // Open this file's dashboard lane. ONE lane per file across
+            // both stages — VLM and Whisper transitions mutate it in
+            // place so the user sees one row tick through the pipeline
+            // with the per-channel ✓/✗/— indicators lighting up.
+            let laneID = beginLane(
+                path: path,
+                filename: filename,
+                isVideoOnly: hasNoAudio,
                 stage: Self.stageDisplayName(forModelID: vlmModelID),
-                verb: "extracting scenes…",
-                filename: filename
+                verb: "extracting scenes…"
             )
 
             do {
@@ -551,7 +597,20 @@ final class CaptionOrchestrator: ObservableObject {
                     atTimestamps: timestamps
                 )
                 let vlmSec = CFAbsoluteTimeGetCurrent() - vlmStart
-                endLane(vlmLaneID)
+                // VLM banked → captions ✓. Transition the lane to the
+                // Whisper stage (or "waiting" if there's a previous
+                // Whisper still in flight). For video-only files we
+                // keep the lane on the VLM stage label until banking.
+                if hasNoAudio {
+                    updateLane(laneID, hasCaptions: true)
+                } else {
+                    updateLane(
+                        laneID,
+                        stage: Self.stageDisplayName(forModelID: whisperModelID),
+                        verb: pendingWhisper == nil ? "transcribing audio…" : "waiting for prior transcript…",
+                        hasCaptions: true
+                    )
+                }
                 appLog.write(String(format: "Pipeline VLM done: %@ — %.1fs", filename, vlmSec))
 
                 // Backpressure: wait for the previous file's Whisper to
@@ -559,6 +618,12 @@ final class CaptionOrchestrator: ObservableObject {
                 // outstanding; every VLM result is handed off, never dropped.
                 await pendingWhisper?.value
                 pendingWhisper = nil
+                // Whisper slot just freed — flip the verb so the user
+                // sees the lane move from "waiting" to "transcribing"
+                // even before the subprocess actually starts.
+                if !hasNoAudio {
+                    updateLane(laneID, verb: "transcribing audio…")
+                }
 
                 if Task.isCancelled {
                     // Cancelled while waiting on the previous Whisper:
@@ -569,20 +634,36 @@ final class CaptionOrchestrator: ObservableObject {
                         transcript: nil,
                         whisperModel: nil
                     )
+                    endLane(laneID)
                     recordCompletion(filename: filename, vlmSeconds: vlmSec,
-                                     whisperSeconds: nil, note: "no transcript")
+                                     whisperSeconds: nil,
+                                     note: hasNoAudio ? "no audio" : "transcript failed")
                     liveCaptioned += 1
                     break
+                }
+
+                // Video-only record: skip Whisper entirely. Apply the
+                // dossier inline VLM-only so banking still happens in
+                // VLM-stage order. pendingWhisper stays nil — the NEXT
+                // file's loop iteration will await it as a no-op.
+                if hasNoAudio {
+                    _ = model.applyDossier(
+                        extraction, to: path,
+                        vlmModel: vlmModelID,
+                        transcript: nil,
+                        whisperModel: nil
+                    )
+                    endLane(laneID)
+                    recordCompletion(filename: filename, vlmSeconds: vlmSec,
+                                     whisperSeconds: nil, note: "no audio")
+                    liveCaptioned += 1
+                    publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
+                    continue
                 }
 
                 pendingWhisper = Task { @MainActor [weak self] in
                     guard let self else { return }
                     appLog.write("Pipeline Whisper start: \(filename)")
-                    let whisperLaneID = self.beginLane(
-                        stage: Self.stageDisplayName(forModelID: whisperModelID),
-                        verb: "transcribing audio…",
-                        filename: filename
-                    )
                     let whisperStart = CFAbsoluteTimeGetCurrent()
                     var transcript: String?
                     do {
@@ -596,14 +677,16 @@ final class CaptionOrchestrator: ObservableObject {
                             transcript: nil,
                             whisperModel: nil
                         )
-                        self.endLane(whisperLaneID)
+                        self.updateLane(laneID, transcriptFailed: true)
+                        self.endLane(laneID)
                         self.recordCompletion(filename: filename, vlmSeconds: vlmSec,
-                                              whisperSeconds: nil, note: "no transcript")
+                                              whisperSeconds: nil, note: "transcript failed")
                         liveCaptioned += 1
                         return
                     } catch {
                         captionOrchLog.warning("Dossier: whisper failed on \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
                         transcript = nil
+                        self.transcriptFailures += 1
                     }
 
                     _ = model.applyDossier(
@@ -614,22 +697,36 @@ final class CaptionOrchestrator: ObservableObject {
                     )
                     let whisperSec = CFAbsoluteTimeGetCurrent() - whisperStart
                     appLog.write(String(format: "Pipeline Whisper done: %@ — %.1fs", filename, whisperSec))
-                    self.endLane(whisperLaneID)
+                    if transcript != nil {
+                        self.updateLane(laneID, hasTranscript: true)
+                    } else {
+                        self.updateLane(laneID, transcriptFailed: true)
+                    }
+                    self.endLane(laneID)
+                    // Note semantics in the pipelined path:
+                    //   nil                → transcript obtained
+                    //   "transcript failed" → whisper threw (the only way
+                    //                         to reach transcript == nil
+                    //                         here — cancellation returned
+                    //                         early above, and "no audio"
+                    //                         bypasses Whisper before this
+                    //                         task is ever created).
+                    let note: String? = transcript != nil ? nil : "transcript failed"
                     self.recordCompletion(
                         filename: filename,
                         vlmSeconds: vlmSec,
                         whisperSeconds: transcript != nil ? whisperSec : nil,
-                        note: transcript != nil ? nil : "no transcript"
+                        note: note
                     )
                     liveCaptioned += 1
                     publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
                 }
             } catch is CancellationError {
-                endLane(vlmLaneID)
+                endLane(laneID)
                 captionOrchLog.notice("Dossier: VLM cancellation at \(filename, privacy: .public)")
                 break
             } catch {
-                endLane(vlmLaneID)
+                endLane(laneID)
                 liveFailed += 1
                 captionOrchLog.warning("Dossier: VLM error on \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
@@ -691,9 +788,12 @@ final class CaptionOrchestrator: ObservableObject {
             let path = record.fullPath
             let filename = record.filename
 
-            if !force,
-               record.dossierProcessedAt != nil,
-               record.dossierProcessedBy == stackID {
+            // Idempotent skip: a record that already has a dossier
+            // timestamp is left alone, regardless of which stack
+            // produced it. See the doc comment on
+            // startCatalogWideDossier for why dossierProcessedBy is
+            // no longer part of this predicate.
+            if !force, record.dossierProcessedAt != nil {
                 liveSkipped += 1
                 publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
                 continue
@@ -711,12 +811,17 @@ final class CaptionOrchestrator: ObservableObject {
             let dur = max(0.5, record.durationSeconds)
             let timestamps = framesEvenlySpaced(framesPerFile: framesPerFile, durationSec: dur)
 
-            // Dashboard lane: serial mode shows the VLM lane only —
-            // there is no overlapped Whisper stage to track.
-            let vlmLaneID = beginLane(
+            let hasNoAudio = (record.streamType == .videoOnly)
+
+            // One lane per file. Stage transitions VLM → Whisper happen
+            // in place via updateLane so the dashboard shows a single
+            // row per file with the per-channel indicators lighting up.
+            let laneID = beginLane(
+                path: path,
+                filename: filename,
+                isVideoOnly: hasNoAudio,
                 stage: Self.stageDisplayName(forModelID: runner.modelID),
-                verb: "extracting scenes…",
-                filename: filename
+                verb: "extracting scenes…"
             )
 
             do {
@@ -726,14 +831,32 @@ final class CaptionOrchestrator: ObservableObject {
                 )
                 let vlmSec = CFAbsoluteTimeGetCurrent() - vlmStart
 
+                // VLM banked → captions ✓. If a transcriber is wired and
+                // the file has audio, transition the lane to the Whisper
+                // stage; otherwise the lane closes at end-of-iteration
+                // with captions ✓ and audio transcript ✗ / —.
+                if let transcriber, !hasNoAudio {
+                    updateLane(
+                        laneID,
+                        stage: Self.stageDisplayName(forModelID: transcriber.modelID),
+                        verb: "transcribing audio…",
+                        hasCaptions: true
+                    )
+                } else {
+                    updateLane(laneID, hasCaptions: true)
+                }
+
                 var transcript: String?
-                if let transcriber {
+                var transcriptFailed = false
+                if let transcriber, !hasNoAudio {
                     do {
                         transcript = try await transcriber.transcribe(videoPath: path)
                     } catch is CancellationError {
                         throw CancellationError()
                     } catch {
                         captionOrchLog.warning("Dossier: whisper failed on \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                        transcriptFailed = true
+                        transcriptFailures += 1
                     }
                 }
 
@@ -743,12 +866,33 @@ final class CaptionOrchestrator: ObservableObject {
                     transcript: transcript,
                     whisperModel: transcript != nil ? transcriber?.modelID : nil
                 )
-                endLane(vlmLaneID)
+                if transcript != nil {
+                    updateLane(laneID, hasTranscript: true)
+                } else if transcriptFailed {
+                    updateLane(laneID, transcriptFailed: true)
+                }
+                endLane(laneID)
+                // Disambiguate the note:
+                //   nil              → transcript obtained (or empty
+                //                      string — Whisper ran)
+                //   "no audio"       → file has no audio stream by design
+                //   "transcript failed" → whisper threw
+                //   "no transcriber" → serial path, no transcriber wired
+                let note: String?
+                if transcript != nil {
+                    note = nil
+                } else if hasNoAudio {
+                    note = "no audio"
+                } else if transcriptFailed {
+                    note = "transcript failed"
+                } else {
+                    note = "no transcriber"
+                }
                 recordCompletion(
                     filename: filename,
                     vlmSeconds: vlmSec,
                     whisperSeconds: nil,
-                    note: transcript != nil ? nil : "no transcript"
+                    note: note
                 )
                 liveCaptioned += 1
             } catch is CancellationError {
@@ -758,7 +902,7 @@ final class CaptionOrchestrator: ObservableObject {
                 currentStatus = .finished(captioned: liveCaptioned, skipped: liveSkipped, failed: liveFailed)
                 return
             } catch {
-                endLane(vlmLaneID)
+                endLane(laneID)
                 liveFailed += 1
                 captionOrchLog.warning("Dossier: error on \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
@@ -950,6 +1094,15 @@ final class CaptionOrchestrator: ObservableObject {
     @Published var liveCurrentIndex: Int = 0
     @Published var liveTotal: Int = 0
 
+    /// Whisper-stage failures during the current batch. A whisper
+    /// failure still produces a valid VLM-only dossier — the file IS
+    /// captioned, not failed — so we deliberately do NOT roll this
+    /// into `liveFailed` (which is reserved for files that couldn't
+    /// be dossiered at all). Separate counter so the dashboard can
+    /// surface "transcribed N/M" honesty later. Reset alongside the
+    /// other live counts at the top of each batch.
+    @Published var transcriptFailures: Int = 0
+
     /// Reset for a fresh batch. Called from runBatch's start; tests
     /// can also call directly.
     func resetLiveCounts() {
@@ -958,6 +1111,7 @@ final class CaptionOrchestrator: ObservableObject {
         liveFailed = 0
         liveCurrentIndex = 0
         liveTotal = 0
+        transcriptFailures = 0
     }
 
     // MARK: - Live pipeline activity state
@@ -992,21 +1146,57 @@ final class CaptionOrchestrator: ObservableObject {
         return id
     }
 
-    /// Start (or restart) the lane for `stage`. Returns the lane id so
-    /// the caller can end exactly the lane it started.
+    /// Open a lane for a file entering the pipeline. Returns the lane
+    /// id so the caller can target it from `updateLane` / `endLane`.
+    /// Deduplicates by `path`: a stale lane for the same file (e.g.
+    /// from a previous abandoned attempt) is replaced.
     @discardableResult
-    func beginLane(stage: String, verb: String, filename: String) -> UUID {
+    func beginLane(
+        path: String,
+        filename: String,
+        isVideoOnly: Bool,
+        stage: String,
+        verb: String
+    ) -> UUID {
         let lane = PipelineLane(
-            id: UUID(), filename: filename,
-            stageName: stage, verb: verb, startedAt: Date()
+            id: UUID(),
+            path: path,
+            filename: filename,
+            stageName: stage,
+            verb: verb,
+            startedAt: Date(),
+            isVideoOnly: isVideoOnly,
+            hasCaptions: false,
+            hasTranscript: false,
+            transcriptFailed: false
         )
-        // One file per stage: replace any stale lane for the same stage.
-        activeLanes.removeAll { $0.stageName == stage }
+        activeLanes.removeAll { $0.path == path }
         activeLanes.append(lane)
         return lane.id
     }
 
-    /// End a specific lane. No-op if it was already replaced/cleared.
+    /// Patch fields on an active lane in place. Nil arguments leave the
+    /// field unchanged — call with only the bits that actually changed
+    /// (e.g. just `stage` + `verb` on a stage transition, or just
+    /// `hasCaptions: true` when VLM banks its result). No-op if the
+    /// lane has already ended.
+    func updateLane(
+        _ id: UUID,
+        stage: String? = nil,
+        verb: String? = nil,
+        hasCaptions: Bool? = nil,
+        hasTranscript: Bool? = nil,
+        transcriptFailed: Bool? = nil
+    ) {
+        guard let i = activeLanes.firstIndex(where: { $0.id == id }) else { return }
+        if let stage { activeLanes[i].stageName = stage }
+        if let verb { activeLanes[i].verb = verb }
+        if let hasCaptions { activeLanes[i].hasCaptions = hasCaptions }
+        if let hasTranscript { activeLanes[i].hasTranscript = hasTranscript }
+        if let transcriptFailed { activeLanes[i].transcriptFailed = transcriptFailed }
+    }
+
+    /// Close a lane. No-op if it was already cleared.
     func endLane(_ id: UUID) {
         activeLanes.removeAll { $0.id == id }
     }
