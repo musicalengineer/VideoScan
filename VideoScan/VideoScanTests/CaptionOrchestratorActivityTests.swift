@@ -419,6 +419,24 @@ struct CaptionOrchestratorActivityTests {
         #expect(r.mediaDisposition == .suspectedJunk)
     }
 
+    // MARK: - Missing-on-disk auto-purge
+
+    @Test("flagMissingOnDisk: sets purgedAt + records reason; idempotent")
+    func flagMissingOnDiskMarks() {
+        let r = VideoRecord()
+        r.fullPath = "/Volumes/Lacie/m29_combine/missing.mov"
+        CaptionOrchestrator.flagMissingOnDisk(r)
+        #expect(r.purgedAt != nil, "purgedAt must be set so the candidate filter and coverage exclude it")
+        #expect(r.junkReasons == [CaptionOrchestrator.missingOnDiskReason])
+
+        // Re-flagging the same record doesn't duplicate the reason or
+        // overwrite the original purge timestamp.
+        let originalDate = r.purgedAt!
+        CaptionOrchestrator.flagMissingOnDisk(r)
+        #expect(r.junkReasons.count == 1)
+        #expect(r.purgedAt == originalDate, "re-flag must preserve the original purge timestamp")
+    }
+
     // MARK: - Per-volume start + pause/resume (Phase 1)
 
     @Test("startAnalyzing(volumePrefix:) processes only files under that prefix")

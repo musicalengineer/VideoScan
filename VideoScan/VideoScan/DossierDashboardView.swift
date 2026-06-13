@@ -430,8 +430,12 @@ private struct DossierVolumeRow: View {
     }
 
     private var progressFraction: Double {
-        guard coverage.total > 0 else { return 0 }
-        return Double(coverage.dossiered) / Double(coverage.total)
+        // Use eligible as the denominator so 100% means
+        // "everything we CAN dossier IS dossiered" — Rick 2026-06-13.
+        // Total includes DRM-flagged records the orchestrator skips
+        // by design; counting them would lock the dial below 100%.
+        guard coverage.eligible > 0 else { return 0 }
+        return min(1.0, Double(coverage.dossiered) / Double(coverage.eligible))
     }
 
     private var percentLabel: String {
@@ -440,23 +444,30 @@ private struct DossierVolumeRow: View {
         return "\(Int(pct))%"
     }
 
+    /// "4228 / 4419" — denominator is eligible, not raw total.
     private var countsLabel: String {
-        "\(coverage.dossiered) / \(coverage.total)"
+        "\(coverage.dossiered) / \(coverage.eligible)"
     }
 
-    /// Status word matches the dot color.
+    /// Status word matches the dot color. The complete-state language
+    /// is deliberately affirmative ("Analyze Complete") so the user
+    /// knows everything the orchestrator could touch IS touched —
+    /// not just "idle, waiting."
     private var statusLabel: String {
         if isPaused { return "paused" }
         if isAnalyzing { return "analyzing" }
-        if coverage.total > 0 && coverage.dossiered == coverage.total { return "complete" }
+        if coverage.eligible > 0 && coverage.dossiered >= coverage.eligible {
+            return "Analyze Complete"
+        }
         return "idle"
     }
 
-    /// Dot + tint color, chosen to read at a glance.
     private var statusColor: Color {
         if isPaused { return .yellow }
         if isAnalyzing { return .blue }
-        if coverage.total > 0 && coverage.dossiered == coverage.total { return .green }
+        if coverage.eligible > 0 && coverage.dossiered >= coverage.eligible {
+            return .green
+        }
         return .gray
     }
 
@@ -697,42 +708,65 @@ private struct CompletedActivityRow: View {
 /// `internal` (not `private`) so unit tests in CatalogCoverageTests
 /// can exercise the channel-counting logic without spinning a window.
 struct CatalogCoverage {
+    /// All non-junk, non-purged records on this volume. Inflated by
+    /// DRM and missing-on-disk records — kept around because the
+    /// catalog still has metadata about them, but the orchestrator
+    /// CAN'T act on them. This number alone makes the dial look stuck.
     let total: Int
     let dossiered: Int
+    /// Records the orchestrator's candidate filter would actually
+    /// process: total minus DRM-flagged. (Junk + purged are already
+    /// excluded by `total`.) This is the honest denominator for
+    /// "are we done yet?" — when `dossiered == eligible` and
+    /// `missing == 0`, the volume is genuinely complete.
+    /// Rick 2026-06-13: switching the dashboard display to use this
+    /// so "4228 / 4419" doesn't read as "still 1355 to do."
+    let eligible: Int
     let scenes: Int
     let ocrDates: Int
     let transcripts: Int
     let strongDates: Int
+    /// DRM-flagged records (excluded from eligible).
+    let drmCount: Int
 
     static let empty = CatalogCoverage()
-    var remaining: Int { max(0, total - dossiered) }
+    var remaining: Int { max(0, eligible - dossiered) }
 
-    init(total: Int = 0, dossiered: Int = 0, scenes: Int = 0,
-         ocrDates: Int = 0, transcripts: Int = 0, strongDates: Int = 0) {
-        self.total = total; self.dossiered = dossiered; self.scenes = scenes
+    init(total: Int = 0, dossiered: Int = 0, eligible: Int = 0, scenes: Int = 0,
+         ocrDates: Int = 0, transcripts: Int = 0, strongDates: Int = 0,
+         drmCount: Int = 0) {
+        self.total = total; self.dossiered = dossiered; self.eligible = eligible
+        self.scenes = scenes
         self.ocrDates = ocrDates; self.transcripts = transcripts; self.strongDates = strongDates
+        self.drmCount = drmCount
     }
 
     init(records: [VideoRecord]) {
-        var t = 0, d = 0, s = 0, o = 0, x = 0, sd = 0
+        var t = 0, d = 0, e = 0, s = 0, o = 0, x = 0, sd = 0, drm = 0
         for r in records {
             // Skip records that are out of scope for dossier work.
-            // Rick 2026-06-10: confirmedJunk records are stuff the user
-            // has already decided to delete — counting them inflates the
-            // "Remaining" pool and tricks the dial into looking stuck.
-            // Purged records are tombstones from prior removals; they
-            // shouldn't count toward active progress either.
+            // confirmedJunk: user has already decided to delete.
+            // purgedAt: tombstones from prior removals.
             if r.mediaDisposition == .confirmedJunk { continue }
             if r.purgedAt != nil { continue }
             t += 1
+            // Eligibility mirrors pfCatalogWideMetadataCandidates'
+            // additional gates beyond junk/purged — currently just
+            // DRM. Lifecycle gate is handled by the orchestrator's
+            // candidate filter and isn't a per-record concern here.
+            if r.drmProtected {
+                drm += 1
+            } else {
+                e += 1
+            }
             if r.dossierProcessedAt != nil { d += 1 }
             if !r.sceneCaptions.isEmpty { s += 1 }
             if !r.ocrDateCandidates.isEmpty { o += 1 }
             if !(r.audioTranscript ?? "").isEmpty { x += 1 }
             if let conf = r.inferredDateConfidence, conf >= 0.85 { sd += 1 }
         }
-        total = t; dossiered = d; scenes = s
-        ocrDates = o; transcripts = x; strongDates = sd
+        total = t; dossiered = d; eligible = e; scenes = s
+        ocrDates = o; transcripts = x; strongDates = sd; drmCount = drm
     }
 }
 

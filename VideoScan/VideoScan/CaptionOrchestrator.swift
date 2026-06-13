@@ -758,8 +758,18 @@ final class CaptionOrchestrator: ObservableObject {
             }
 
             if !FileManager.default.fileExists(atPath: path) {
-                liveFailed += 1
-                captionOrchLog.warning("Dossier: missing on disk: \(path, privacy: .public)")
+                // Auto-purge: candidate filter only passed records whose
+                // volume IS reachable. So if the file is missing, the
+                // volume is mounted but the entry is stale (Combine
+                // engine output that moved, prior cleanup didn't update
+                // the catalog, etc.). Soft-purge so the row's eligible
+                // count drops by one and "Analyze Complete" can finally
+                // become true. Reversible via the catalog's restore
+                // action. Rick 2026-06-13.
+                Self.flagMissingOnDisk(record)
+                liveSkipped += 1
+                captionOrchLog.notice("Dossier: missing on disk → auto-purged: \(path, privacy: .public)")
+                appLog.write("Dossier: auto-purged missing on disk: \(filename)")
                 publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
                 continue
             }
@@ -1121,8 +1131,18 @@ final class CaptionOrchestrator: ObservableObject {
             }
 
             if !FileManager.default.fileExists(atPath: path) {
-                liveFailed += 1
-                captionOrchLog.warning("Dossier: missing on disk: \(path, privacy: .public)")
+                // Auto-purge: candidate filter only passed records whose
+                // volume IS reachable. So if the file is missing, the
+                // volume is mounted but the entry is stale (Combine
+                // engine output that moved, prior cleanup didn't update
+                // the catalog, etc.). Soft-purge so the row's eligible
+                // count drops by one and "Analyze Complete" can finally
+                // become true. Reversible via the catalog's restore
+                // action. Rick 2026-06-13.
+                Self.flagMissingOnDisk(record)
+                liveSkipped += 1
+                captionOrchLog.notice("Dossier: missing on disk → auto-purged: \(path, privacy: .public)")
+                appLog.write("Dossier: auto-purged missing on disk: \(filename)")
                 publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
                 continue
             }
@@ -1585,6 +1605,29 @@ final class CaptionOrchestrator: ObservableObject {
         }
         if !record.junkReasons.contains(drmSuspectJunkReason) {
             record.junkReasons.append(drmSuspectJunkReason)
+        }
+    }
+
+    /// Marker that goes into junkReasons when the orchestrator
+    /// auto-purges a record because the file isn't on disk anymore.
+    /// Distinct from the DRM marker so the user (and future filters)
+    /// can tell them apart at triage time.
+    static let missingOnDiskReason = "auto-purged: missing on disk"
+
+    /// Soft-purge a record whose underlying file went missing while
+    /// the volume IS mounted. `purgedAt` excludes it from the
+    /// candidate filter and the eligible coverage count; the row's
+    /// "Analyze Complete" can then become true. junkReasons logs
+    /// WHY so a future un-purge UI can show context. Idempotent.
+    ///
+    /// Rick 2026-06-13: "4228/5883 give the impression it is not done."
+    /// Auto-purging missing-on-disk drops the denominator so it does.
+    static func flagMissingOnDisk(_ record: VideoRecord) {
+        if record.purgedAt == nil {
+            record.purgedAt = Date()
+        }
+        if !record.junkReasons.contains(missingOnDiskReason) {
+            record.junkReasons.append(missingOnDiskReason)
         }
     }
 
