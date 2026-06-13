@@ -638,21 +638,25 @@ final class CaptionOrchestrator: ObservableObject {
                     atTimestamps: timestamps
                 )
                 let vlmSec = CFAbsoluteTimeGetCurrent() - vlmStart
-                // VLM banked → captions ✓. Transition the lane to the
-                // Whisper stage (or "waiting" if there's a previous
-                // Whisper still in flight). For video-only files we
-                // keep the lane on the VLM stage label until banking.
+                // hasCaptions reflects whether we actually got usable
+                // scene captions, NOT just that VLM completed without
+                // error. Rick 2026-06-13: music videos returning
+                // "0 scenes, 0 dates, 0 text" were lighting up green ✓
+                // on the dashboard even though applyDossier would write
+                // an empty sceneCaptions array. Indicator now matches
+                // banked content — green only when scenes is non-empty.
+                let didExtractCaptions = !extraction.scenes.isEmpty
                 if hasNoAudio {
-                    updateLane(laneID, hasCaptions: true)
+                    updateLane(laneID, hasCaptions: didExtractCaptions)
                 } else {
                     updateLane(
                         laneID,
                         stage: Self.stageDisplayName(forModelID: whisperModelID),
                         verb: pendingWhisper == nil ? "transcribing audio…" : "waiting for prior transcript…",
-                        hasCaptions: true
+                        hasCaptions: didExtractCaptions
                     )
                 }
-                appLog.write(String(format: "Pipeline VLM done: %@ — %.1fs", filename, vlmSec))
+                appLog.write(String(format: "Pipeline VLM done: %@ — %.1fs (%d scene(s))", filename, vlmSec, extraction.scenes.count))
 
                 // Backpressure: wait for the previous file's Whisper to
                 // finish before dispatching this one. At most one Whisper
@@ -802,25 +806,34 @@ final class CaptionOrchestrator: ObservableObject {
                     )
                     let whisperSec = CFAbsoluteTimeGetCurrent() - whisperStart
                     appLog.write(String(format: "Pipeline Whisper done: %@ — %.1fs", filename, whisperSec))
-                    if transcript != nil {
+                    // hasTranscript reflects banked content. Empty /
+                    // whitespace-only transcripts (Whisper ran on
+                    // silent audio, found nothing) get filtered by
+                    // applyDossier — record.audioTranscript stays nil
+                    // — so the dashboard's ✓ must follow the same
+                    // truth. Otherwise the user sees a checkmark for
+                    // a file whose catalog row has no transcript.
+                    let bankedTranscript = transcript?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let didExtractTranscript = (bankedTranscript?.isEmpty == false)
+                    if didExtractTranscript {
                         self.updateLane(laneID, hasTranscript: true)
                     } else {
                         self.updateLane(laneID, transcriptFailed: true)
                     }
                     self.endLane(laneID)
                     // Note semantics in the pipelined path:
-                    //   nil                → transcript obtained
-                    //   "transcript failed" → whisper threw (the only way
-                    //                         to reach transcript == nil
-                    //                         here — cancellation returned
-                    //                         early above, and "no audio"
-                    //                         bypasses Whisper before this
-                    //                         task is ever created).
-                    let note: String? = transcript != nil ? nil : "transcript failed"
+                    //   nil                → transcript obtained AND non-empty
+                    //   "transcript failed" → whisper threw OR returned only
+                    //                         whitespace (cancellation
+                    //                         returned early above, and
+                    //                         "no audio" bypasses Whisper
+                    //                         before this task is ever
+                    //                         created).
+                    let note: String? = didExtractTranscript ? nil : "transcript failed"
                     self.recordCompletion(
                         filename: filename,
                         vlmSeconds: vlmSec,
-                        whisperSeconds: transcript != nil ? whisperSec : nil,
+                        whisperSeconds: didExtractTranscript ? whisperSec : nil,
                         note: note
                     )
                     liveCaptioned += 1
@@ -962,20 +975,20 @@ final class CaptionOrchestrator: ObservableObject {
                 )
                 let vlmSec = CFAbsoluteTimeGetCurrent() - vlmStart
 
-                // VLM banked → captions ✓. If a transcriber is wired and
-                // the file has audio, transition the lane to the Whisper
-                // stage; otherwise the lane closes at end-of-iteration
-                // with captions ✓ and audio transcript ✗ / —.
+                // hasCaptions reflects banked content (non-empty
+                // scene list), not just VLM-ran-successfully. See the
+                // pipelined-path comment for the rationale.
+                let didExtractCaptions = !extraction.scenes.isEmpty
                 let userSkipped = userSkippedLaneIDs.contains(laneID)
                 if let transcriber, !hasNoAudio, !userSkipped {
                     updateLane(
                         laneID,
                         stage: Self.stageDisplayName(forModelID: transcriber.modelID),
                         verb: "transcribing audio…",
-                        hasCaptions: true
+                        hasCaptions: didExtractCaptions
                     )
                 } else {
-                    updateLane(laneID, hasCaptions: true)
+                    updateLane(laneID, hasCaptions: didExtractCaptions)
                 }
 
                 var transcript: String?
@@ -1012,22 +1025,30 @@ final class CaptionOrchestrator: ObservableObject {
                     transcript: transcript,
                     whisperModel: transcript != nil ? transcriber?.modelID : nil
                 )
-                if transcript != nil {
+                // didExtractTranscript matches what applyDossier banks
+                // (empty / whitespace-only transcripts get filtered).
+                // hasTranscript ✓ must follow banked truth, not "we
+                // called Whisper" — same rationale as the captions
+                // gate above. Empty transcripts on audio files are
+                // common: Whisper on silent/music-only audio
+                // legitimately returns "" — the dashboard should mark
+                // that as "no useful content" (red ✗), not "got it ✓".
+                let didExtractTranscript = (transcript?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+                if didExtractTranscript {
                     updateLane(laneID, hasTranscript: true)
                 } else if transcriptFailed || transcriptTimedOut {
                     updateLane(laneID, transcriptFailed: true)
                 }
                 endLane(laneID)
                 // Disambiguate the note:
-                //   nil              → transcript obtained (or empty
-                //                      string — Whisper ran)
-                //   "no audio"       → file has no audio stream by design
-                //   "user skipped"   → user right-clicked Skip on the lane
-                //   "whisper timed out" → subprocess exceeded deadline
-                //   "transcript failed" → whisper threw
-                //   "no transcriber" → serial path, no transcriber wired
+                //   nil                → transcript obtained AND non-empty
+                //   "no audio"         → file has no audio stream by design
+                //   "user skipped"     → user right-clicked Skip on the lane
+                //   "whisper timed out"→ subprocess exceeded deadline
+                //   "transcript failed"→ whisper threw OR returned empty
+                //   "no transcriber"   → serial path, no transcriber wired
                 let note: String?
-                if transcript != nil {
+                if didExtractTranscript {
                     note = nil
                 } else if userSkipped {
                     note = "user skipped"
@@ -1037,6 +1058,8 @@ final class CaptionOrchestrator: ObservableObject {
                     note = "whisper timed out"
                 } else if transcriptFailed {
                     note = "transcript failed"
+                } else if transcriber != nil {
+                    note = "transcript failed"   // whisper returned empty
                 } else {
                     note = "no transcriber"
                 }
