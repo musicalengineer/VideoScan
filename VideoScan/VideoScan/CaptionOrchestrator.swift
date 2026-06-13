@@ -171,6 +171,22 @@ final class CaptionOrchestrator: ObservableObject {
     /// Target the running batch is operating on. nil when idle.
     @Published var currentTarget: CatalogScanTarget?
 
+    /// Volume-prefix the active per-volume batch is processing
+    /// (`startAnalyzing(volumePrefix:)`). nil for legacy
+    /// catalog-wide batches and when idle. The dashboard reads this
+    /// to render which volume row shows the "analyzing" status dot.
+    /// Rick 2026-06-13: dossier is now driven per-volume from the
+    /// dashboard's volume row.
+    @Published var currentVolumePrefix: String?
+
+    /// True while the user has the pipeline paused via the volume
+    /// row's Pause button. The batch loop checks before dispatching
+    /// each next file and awaits until cleared. The currently
+    /// in-flight VLM/Whisper task is NOT signaled — it runs to
+    /// completion. So Pause prevents NEW work; in-flight work
+    /// drains.
+    @Published var paused: Bool = false
+
     /// Number of frames per file to caption. Default 3 matches S6a's
     /// fixture pattern. Tunable later by the UI; constant for now.
     let framesPerFile: Int
@@ -352,6 +368,137 @@ final class CaptionOrchestrator: ObservableObject {
         captionOrchLog.notice("CaptionOrchestrator cancel requested")
         currentStatus = .cancelling
         activeTask?.cancel()
+    }
+
+    /// Start dossier processing for files under a single volume.
+    /// Rick 2026-06-13: replaces the global "Analyze Local Media"
+    /// button with per-volume Analyze actions. The orchestrator filters
+    /// the candidate list by `fullPath.hasPrefix(volumePrefix)` and
+    /// otherwise behaves like `startCatalogWideDossier` — same
+    /// idempotent skip, same DRM gate, same indicator pipeline.
+    ///
+    /// Phase 1 (today): only one volume can be analyzing at a time.
+    /// Calling while busy is a no-op (logged). Phase 2 will allow
+    /// concurrent per-volume batches with proper subprocess pooling.
+    ///
+    /// Persisted to `DossierActiveVolumes` so auto-resume can pick up
+    /// where we left off across launches.
+    func startAnalyzing(
+        volumePrefix: String,
+        model: VideoScanModel,
+        transcriber: AudioTranscriber? = nil,
+        force: Bool = false
+    ) async {
+        guard !isShuttingDown else {
+            captionOrchLog.notice("startAnalyzing refused — app is shutting down")
+            return
+        }
+        guard !currentStatus.isActive else {
+            captionOrchLog.warning("startAnalyzing(\(volumePrefix, privacy: .public)) refused — already \(String(describing: self.currentStatus))")
+            return
+        }
+        guard !volumePrefix.isEmpty else {
+            captionOrchLog.warning("startAnalyzing refused — empty volumePrefix")
+            return
+        }
+
+        let resolvedTranscriber: AudioTranscriber? = transcriber ?? {
+            let py = ToolLocator.mlxPythonPath
+            let sc = ToolLocator.whisperScriptPath
+            guard !py.isEmpty, !sc.isEmpty else { return nil }
+            return PythonSubprocessAudioTranscriber(pythonPath: py, scriptPath: sc)
+        }()
+
+        // Filter candidates to this volume only. We still go through
+        // pfCatalogWideMetadataCandidates because that's where junk /
+        // DRM / purge / reachability filtering lives.
+        let base = pfCatalogWideMetadataCandidates(
+            records: model.records,
+            reachableVolumePaths: [volumePrefix]
+        )
+        let candidates = pfCatalogWideCaptionCandidates(base)
+
+        captionOrchLog.info("Per-volume dossier: \(candidates.count) candidate(s) under \(volumePrefix, privacy: .public); transcriber=\(resolvedTranscriber?.modelID ?? "none", privacy: .public)")
+        appLog.write("Dossier: starting volume pass — \(candidates.count) eligible under \(VolumeReachability.displayLabel(forPath: volumePrefix))")
+
+        guard !candidates.isEmpty else {
+            captionOrchLog.info("Per-volume dossier: nothing to do under \(volumePrefix, privacy: .public)")
+            currentStatus = .finished(captioned: 0, skipped: 0, failed: 0)
+            return
+        }
+
+        currentTarget = nil
+        currentVolumePrefix = volumePrefix
+        rememberActiveVolume(volumePrefix)
+        currentStatus = .running(progress: 0.0, currentFile: "(loading model…)", etaSec: nil)
+        self.force = force
+
+        let runner = runnerFactory()
+        let frames = self.framesPerFile
+        let trans = resolvedTranscriber
+
+        activeTask = Task { [weak self] in
+            await self?.runDossierBatch(
+                runner: runner,
+                transcriber: trans,
+                candidates: candidates,
+                framesPerFile: frames,
+                force: force,
+                model: model
+            )
+        }
+        await activeTask?.value
+        currentVolumePrefix = nil
+        forgetActiveVolume(volumePrefix)
+    }
+
+    /// Halt new work without cancelling in-flight tasks. The loop
+    /// checks `paused` before dispatching the next file and awaits
+    /// until cleared (200ms poll — cheap enough for a UI gesture).
+    /// The currently-running VLM/Whisper task is NOT signaled so it
+    /// runs to completion, then the loop pauses before the next.
+    ///
+    /// Setting paused while idle is legal: the next batch start will
+    /// trip the gate on its first iteration. (Useful for tests and
+    /// for a "pause before resuming on launch" UX if we add it.)
+    func pause() {
+        guard !paused else { return }
+        captionOrchLog.notice("CaptionOrchestrator pause requested")
+        paused = true
+    }
+
+    /// Resume after `pause()`. The loop's await-while-paused exits and
+    /// the next file dispatches. No-op if not paused.
+    func resume() {
+        guard paused else { return }
+        captionOrchLog.notice("CaptionOrchestrator resume requested")
+        paused = false
+    }
+
+    // MARK: - Auto-resume persistence
+
+    /// UserDefaults key for the list of volume prefixes that had an
+    /// active dossier batch when the app last ran. On launch, the
+    /// VideoScanApp wiring reads this and (if DossierAutoResume is on)
+    /// queues them for sequential processing.
+    static let activeVolumesPrefsKey = "DossierActiveVolumes"
+
+    /// Volume prefixes currently registered as "in progress" for
+    /// auto-resume purposes. @Published so the UI can echo it; the
+    /// authoritative store is UserDefaults so it survives crash.
+    @Published private(set) var activeVolumePrefixes: Set<String> = {
+        let list = UserDefaults.standard.stringArray(forKey: CaptionOrchestrator.activeVolumesPrefsKey) ?? []
+        return Set(list)
+    }()
+
+    private func rememberActiveVolume(_ prefix: String) {
+        activeVolumePrefixes.insert(prefix)
+        UserDefaults.standard.set(Array(activeVolumePrefixes), forKey: Self.activeVolumesPrefsKey)
+    }
+
+    private func forgetActiveVolume(_ prefix: String) {
+        activeVolumePrefixes.remove(prefix)
+        UserDefaults.standard.set(Array(activeVolumePrefixes), forKey: Self.activeVolumesPrefsKey)
     }
 
     /// Quit-time drain. Latches `isShuttingDown` (so no new batch can
@@ -584,6 +731,15 @@ final class CaptionOrchestrator: ObservableObject {
                 captionOrchLog.notice("Dossier: VLM cancelled at file \(idx) of \(total)")
                 break
             }
+            // Pause gate: while paused, poll every 200ms. The
+            // currently-in-flight Whisper task (file N-1) keeps
+            // running — we only block dispatching the NEXT file's
+            // VLM. Honors Task.isCancelled so Stop still breaks
+            // through a paused state cleanly.
+            while paused && !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            if Task.isCancelled { break }
 
             let path = record.fullPath
             let filename = record.filename
@@ -937,6 +1093,14 @@ final class CaptionOrchestrator: ObservableObject {
             if Task.isCancelled {
                 captionOrchLog.notice("Dossier: cancelled at file \(idx) of \(total)")
                 appLog.write("Dossier: cancelled at file \(idx) of \(total) (done \(liveCaptioned), skipped \(liveSkipped), failed \(liveFailed))")
+                clearActiveLanes()
+                currentStatus = .finished(captioned: liveCaptioned, skipped: liveSkipped, failed: liveFailed)
+                return
+            }
+            while paused && !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            if Task.isCancelled {
                 clearActiveLanes()
                 currentStatus = .finished(captioned: liveCaptioned, skipped: liveSkipped, failed: liveFailed)
                 return

@@ -34,18 +34,17 @@ struct DossierDashboardView: View {
     @EnvironmentObject var model: VideoScanModel
     @AppStorage("DossierAutoResume") private var autoResume: Bool = false
 
-    /// Sliding-window rate of records added to the catalog. Driven
-    /// by the 5s refresh tick — each tick records (count, now) into
-    /// the window; the window itself is trimmed to the last 5 minutes
-    /// inside RateTracker. Public surface is just `rate.perMinute`
-    /// for display.
-    @State private var rate: RateTracker = .init()
-    @State private var dossieredCount: Int = 0
-    @State private var totalCount: Int = 0
-    @State private var scenesCount: Int = 0
-    @State private var ocrDatesCount: Int = 0
-    @State private var strongDatesCount: Int = 0
-    @State private var transcriptsCount: Int = 0
+    /// Per-volume coverage — keyed by `searchPath`. Refreshed by the
+    /// 1s tick. Each value mirrors what CatalogCoverage exposes for the
+    /// catalog as a whole, but restricted to records whose `fullPath`
+    /// starts with the volume's search path. Volumes without entries
+    /// render as empty in the row.
+    @State private var volumeCoverage: [String: CatalogCoverage] = [:]
+
+    /// Per-volume rate trackers — keyed by `searchPath`. Each row reads
+    /// rate / ETA from its own tracker so a single volume's progress
+    /// doesn't drag the global number.
+    @State private var volumeRates: [String: RateTracker] = [:]
 
     /// Tick the UI every 1s so the dial / counters move in near-real
     /// time. Rick 2026-06-13: 5s felt static — files complete every few
@@ -75,8 +74,13 @@ struct DossierDashboardView: View {
     /// spacing).
     static let activeLaneRowHeight: CGFloat = 28
 
+    /// Currently focused volume in the drill-down. Defaults to the
+    /// first analyzing volume, then the first reachable one. nil
+    /// before the first refresh.
+    @State private var selectedVolumePath: String?
+
     var body: some View {
-        VStack(alignment: .center, spacing: 18) {
+        VStack(alignment: .center, spacing: 14) {
 
             // Title
             Text("Catalog Dossier")
@@ -84,32 +88,52 @@ struct DossierDashboardView: View {
                 .fontWeight(.semibold)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            // MARK: Dial + headline coverage counters
-            HStack(alignment: .center, spacing: 36) {
-                // Big dial per Rick's preference for bigger graphics.
-                // Was 180 — bumped to 270 (50% larger) so the % readout
-                // is legible from across the room.
-                DialRing(
-                    progress: dialProgress,
-                    centerLabel: dialCenterLabel
-                )
-                .frame(width: 270, height: 270)
-
-                VStack(alignment: .leading, spacing: 10) {
-                    StatRow(label: "Media Files", value: "\(totalCount)", color: .primary)
-                    StatRow(label: "Analyzed", value: "\(dossieredCount)", color: .green)
-                    StatRow(label: "Remaining", value: "\(max(0, totalCount - dossieredCount))", color: .secondary)
-
-                    Divider().frame(width: 160)
-                    StatRow(label: "Rate", value: rate.displayText, color: rate.color)
-                    StatRow(label: "ETA",
-                            value: rate.etaDisplayText(remaining: max(0, totalCount - dossieredCount)),
-                            color: rate.hasEnoughSamples ? .primary : .secondary)
-                    StatRow(label: "OCR dates", value: "\(ocrDatesCount)", color: .purple)
-                    StatRow(label: "Strong dates", value: "\(strongDatesCount)", color: .green)
+            // MARK: Per-volume rows (Rick 2026-06-13: replaces the
+            // big dial + global counters with a row per reachable
+            // scanTarget — each volume gets its own Analyze /
+            // Pause / Stop, and clicking a row sets it as the
+            // drill-down focus below).
+            VStack(spacing: 6) {
+                ForEach(reachableVolumes, id: \.id) { vol in
+                    DossierVolumeRow(
+                        target: vol,
+                        coverage: volumeCoverage[vol.searchPath] ?? .empty,
+                        isAnalyzing: captionOrchestrator.currentVolumePrefix == vol.searchPath
+                            && captionOrchestrator.currentStatus.isActive,
+                        isPaused: captionOrchestrator.currentVolumePrefix == vol.searchPath
+                            && captionOrchestrator.paused,
+                        isSelected: selectedVolumePath == vol.searchPath,
+                        canStart: !captionOrchestrator.currentStatus.isActive,
+                        onSelect: { selectedVolumePath = vol.searchPath },
+                        onAnalyze: { Task { await captionOrchestrator.startAnalyzing(
+                            volumePrefix: vol.searchPath, model: model) } },
+                        onPause: { captionOrchestrator.pause() },
+                        onResume: { captionOrchestrator.resume() },
+                        onStop: { captionOrchestrator.cancel() }
+                    )
                 }
-                Spacer()
+                if reachableVolumes.isEmpty {
+                    Text("No reachable scan-target volumes — register volumes in the catalog tab.")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 6)
+                }
             }
+
+            // Drill-down header — what volume is the activity feed
+            // showing? Falls back to "all volumes" when nothing is
+            // selected (legacy view during transition).
+            HStack(spacing: 6) {
+                Text(drillDownLabel)
+                    .font(.headline)
+                Spacer()
+                Toggle("Resume on Launch", isOn: $autoResume)
+                    .toggleStyle(.checkbox)
+                    .font(.system(size: 11))
+                    .help("Auto-resume any volume that was analyzing when the app last quit.")
+            }
+            .padding(.top, 6)
 
             // MARK: Live pipeline activity
             //
@@ -122,32 +146,24 @@ struct DossierDashboardView: View {
             // tick without touching the rest of the window.
 
             GroupBox(label: Text("Now Analyzing").font(.headline)) {
-                // Fixed-height container: always reserves
-                // activeLanesVisibleCap rows worth of vertical space
-                // so the dashboard layout doesn't jitter as lanes
-                // appear and disappear. Empty slots render an invisible
-                // placeholder of the same height.
                 TimelineView(.periodic(from: .now, by: 1)) { context in
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(0..<Self.activeLanesVisibleCap, id: \.self) { i in
-                            if i < captionOrchestrator.activeLanes.count {
+                            if i < drillDownLanes.count {
                                 ActiveLaneRow(
-                                    lane: captionOrchestrator.activeLanes[i],
+                                    lane: drillDownLanes[i],
                                     now: context.date,
                                     onSkip: { lane in captionOrchestrator.skipLane(lane.id) }
                                 )
                                 .frame(height: Self.activeLaneRowHeight)
-                            } else if captionOrchestrator.activeLanes.isEmpty && i == 0 {
-                                Text("pipeline idle — press Analyze Local Media")
+                            } else if drillDownLanes.isEmpty && i == 0 {
+                                Text(idleLabel)
                                     .font(.system(size: 12))
                                     .foregroundColor(.secondary)
                                     .frame(maxWidth: .infinity,
                                            minHeight: Self.activeLaneRowHeight,
                                            alignment: .leading)
                             } else {
-                                // Invisible placeholder — preserves the
-                                // slot's height so the GroupBox stays
-                                // the same size across all states.
                                 Color.clear
                                     .frame(height: Self.activeLaneRowHeight)
                             }
@@ -160,8 +176,8 @@ struct DossierDashboardView: View {
             }
 
             GroupBox(label: Text("Recently Completed").font(.headline)) {
-                if captionOrchestrator.recentActivity.isEmpty {
-                    Text("no files analyzed yet this session")
+                if drillDownCompleted.isEmpty {
+                    Text("no files analyzed yet this session for this volume")
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -170,7 +186,7 @@ struct DossierDashboardView: View {
                 } else {
                     TimelineView(.periodic(from: .now, by: 1)) { context in
                         VStack(alignment: .leading, spacing: 6) {
-                            ForEach(captionOrchestrator.recentActivity) { item in
+                            ForEach(drillDownCompleted) { item in
                                 CompletedActivityRow(
                                     item: item,
                                     now: context.date,
@@ -182,61 +198,34 @@ struct DossierDashboardView: View {
                         .padding(.vertical, 6)
                         .padding(.horizontal, 4)
                     }
-                    // Subtle slide-in when a new row lands at the top.
-                    .animation(.default, value: captionOrchestrator.recentActivity)
+                    .animation(.default, value: drillDownCompleted)
                 }
             }
 
-            // MARK: Total processed (catalog-wide, across both fleet and in-app sweep)
+            // MARK: Total Processed — per-selected-volume channel counts.
             GroupBox(label: Text("Total Processed").font(.headline)) {
                 HStack(spacing: 24) {
                     ChannelStat(
                         icon: "text.bubble.fill",
                         label: "Scene captions",
-                        value: scenesCount,
+                        value: (volumeCoverage[selectedVolumePath ?? ""] ?? .empty).scenes,
                         color: .indigo
                     )
                     ChannelStat(
                         icon: "calendar.badge.clock",
                         label: "OCR dates",
-                        value: ocrDatesCount,
+                        value: (volumeCoverage[selectedVolumePath ?? ""] ?? .empty).ocrDates,
                         color: .purple
                     )
                     ChannelStat(
                         icon: "waveform.circle.fill",
                         label: "Transcripts",
-                        value: transcriptsCount,
+                        value: (volumeCoverage[selectedVolumePath ?? ""] ?? .empty).transcripts,
                         color: .teal
                     )
                 }
                 .padding(.vertical, 6)
                 .frame(maxWidth: .infinity)
-            }
-
-            // MARK: Local analysis controls
-            HStack(spacing: 12) {
-                Button {
-                    Task { await captionOrchestrator.startCatalogWideDossier(model: model) }
-                } label: {
-                    Label("Analyze Local Media", systemImage: "play.fill")
-                }
-                .disabled(captionOrchestrator.currentStatus.isActive)
-                .help("Run dossier analysis on all reachable local media files.")
-
-                Button(role: .destructive) {
-                    captionOrchestrator.cancel()
-                } label: {
-                    Label("Stop Analyzing", systemImage: "stop.fill")
-                }
-                .disabled(!captionOrchestrator.currentStatus.isActive)
-
-                Toggle("Resume on Launch", isOn: $autoResume)
-                    .toggleStyle(.checkbox)
-                    .help("Automatically start dossier analysis when the app launches.")
-
-                Spacer()
-
-                StatusBadge(status: captionOrchestrator.currentStatus)
             }
         }
         .padding(20)
@@ -250,28 +239,71 @@ struct DossierDashboardView: View {
         }
     }
 
-    // MARK: - Catalog-wide coverage
+    // MARK: - Per-volume coverage
 
+    /// The list of volumes shown as rows. Only reachable, non-retired,
+    /// non-empty scan targets — matches the candidate filter's gate so
+    /// what the user sees in a row matches what Analyze will queue.
+    private var reachableVolumes: [CatalogScanTarget] {
+        model.scanTargets.filter {
+            $0.isReachable && !$0.searchPath.isEmpty && !$0.isRetired
+        }
+    }
+
+    /// Refresh every per-volume coverage stat from the catalog. Cheap
+    /// on M-series: ~15k records × a few field reads = sub-millisecond.
+    /// Also nudges the per-volume rate tracker so rate/ETA tick along
+    /// with the analyzing volume.
     private func refreshCounts() {
-        let c = CatalogCoverage(records: model.records)
-        dossieredCount = c.dossiered
-        totalCount = c.total
-        scenesCount = c.scenes
-        ocrDatesCount = c.ocrDates
-        strongDatesCount = c.strongDates
-        transcriptsCount = c.transcripts
-        rate.record(count: c.dossiered, at: Date())
+        for vol in reachableVolumes {
+            let prefix = vol.searchPath
+            let subset = model.records.filter { $0.fullPath.hasPrefix(prefix) }
+            let cov = CatalogCoverage(records: subset)
+            volumeCoverage[prefix] = cov
+            var tracker = volumeRates[prefix] ?? RateTracker()
+            tracker.record(count: cov.dossiered, at: Date())
+            volumeRates[prefix] = tracker
+        }
+        // Default-select the currently-analyzing volume; fall back to
+        // the first volume so the drill-down always shows something.
+        if selectedVolumePath == nil ||
+           !reachableVolumes.contains(where: { $0.searchPath == selectedVolumePath }) {
+            selectedVolumePath = captionOrchestrator.currentVolumePrefix
+                ?? reachableVolumes.first?.searchPath
+        }
     }
 
-    private var dialProgress: Double {
-        guard totalCount > 0 else { return 0 }
-        return Double(dossieredCount) / Double(totalCount)
+    // MARK: - Drill-down derivation (depends on selectedVolumePath)
+
+    /// Header text above the activity feed: name of the selected
+    /// volume, or a fallback when nothing's selected.
+    private var drillDownLabel: String {
+        guard let sel = selectedVolumePath,
+              let vol = reachableVolumes.first(where: { $0.searchPath == sel })
+        else { return "Activity" }
+        return "Activity — \(VolumeReachability.displayLabel(forPath: vol.searchPath))"
     }
 
-    private var dialCenterLabel: String {
-        let pct = dialProgress * 100
-        if pct < 1 && dossieredCount > 0 { return "<1%" }
-        return "\(Int(pct))%"
+    /// Idle-state message inside the Now Analyzing box. Speaks in
+    /// terms of the selected volume so it's always actionable.
+    private var idleLabel: String {
+        guard let sel = selectedVolumePath,
+              let vol = reachableVolumes.first(where: { $0.searchPath == sel })
+        else { return "select a volume above to see analysis activity" }
+        return "\(VolumeReachability.displayLabel(forPath: vol.searchPath)): pipeline idle — press Analyze to start"
+    }
+
+    /// Active lanes filtered to the selected volume. When nothing is
+    /// selected, shows all lanes (rare edge case during transitions).
+    private var drillDownLanes: [PipelineLane] {
+        guard let sel = selectedVolumePath else { return captionOrchestrator.activeLanes }
+        return captionOrchestrator.activeLanes.filter { $0.path.hasPrefix(sel) }
+    }
+
+    /// Completed-activity filtered to the selected volume's prefix.
+    private var drillDownCompleted: [CompletedActivity] {
+        guard let sel = selectedVolumePath else { return captionOrchestrator.recentActivity }
+        return captionOrchestrator.recentActivity.filter { $0.path.hasPrefix(sel) }
     }
 
     /// Right-click → "Show in Catalog" on an active lane.
@@ -321,6 +353,160 @@ struct DossierDashboardView: View {
 /// still being analyzed. The trailing-edge slot now holds the per-row
 /// action (Cancel), which is visible rather than buried in a context
 /// menu. Show in Catalog moved to the completed row's context menu.
+// MARK: - Per-volume row
+//
+// Rick 2026-06-13: dashboard is now per-volume — each row drives its
+// own Analyze / Pause / Resume / Stop, and clicking the row sets it
+// as the drill-down focus for Now Analyzing / Recently Completed.
+
+/// One volume in the dashboard. Visible state at a glance:
+///   - colored dot — gray (idle), blue (analyzing), yellow (paused),
+///     green (100% done), red (error/cancelled — Phase 2)
+///   - filename count / % done
+///   - progress bar
+///   - status word ("idle" / "analyzing" / "paused")
+///   - action buttons appropriate to the state
+///
+/// Tap anywhere on the row body (not the buttons) to select it as the
+/// drill-down focus. The selected row gets a subtle border.
+private struct DossierVolumeRow: View {
+    @ObservedObject var target: CatalogScanTarget
+    let coverage: CatalogCoverage
+    let isAnalyzing: Bool
+    let isPaused: Bool
+    let isSelected: Bool
+    /// True when the orchestrator is idle (no batch running). Drives
+    /// the Analyze button's enabled state — Phase 1 caps concurrency
+    /// at one volume at a time.
+    let canStart: Bool
+
+    let onSelect: () -> Void
+    let onAnalyze: () -> Void
+    let onPause: () -> Void
+    let onResume: () -> Void
+    let onStop: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 10, height: 10)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text(VolumeReachability.displayLabel(forPath: target.searchPath))
+                        .font(.system(size: 13, weight: .semibold))
+                    Text(countsLabel)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                    Text(percentLabel)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(.secondary)
+                        .contentTransition(.numericText())
+                        .animation(.default, value: coverage.dossiered)
+                    Spacer()
+                    Text(statusLabel)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(statusColor)
+                }
+                ProgressView(value: progressFraction)
+                    .progressViewStyle(.linear)
+                    .tint(statusColor)
+            }
+            buttonStack
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(isSelected ? Color.accentColor.opacity(0.10) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .strokeBorder(isSelected ? Color.accentColor : Color.secondary.opacity(0.2),
+                              lineWidth: isSelected ? 1.5 : 1)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture { onSelect() }
+    }
+
+    private var progressFraction: Double {
+        guard coverage.total > 0 else { return 0 }
+        return Double(coverage.dossiered) / Double(coverage.total)
+    }
+
+    private var percentLabel: String {
+        let pct = progressFraction * 100
+        if pct < 1 && coverage.dossiered > 0 { return "<1%" }
+        return "\(Int(pct))%"
+    }
+
+    private var countsLabel: String {
+        "\(coverage.dossiered) / \(coverage.total)"
+    }
+
+    /// Status word matches the dot color.
+    private var statusLabel: String {
+        if isPaused { return "paused" }
+        if isAnalyzing { return "analyzing" }
+        if coverage.total > 0 && coverage.dossiered == coverage.total { return "complete" }
+        return "idle"
+    }
+
+    /// Dot + tint color, chosen to read at a glance.
+    private var statusColor: Color {
+        if isPaused { return .yellow }
+        if isAnalyzing { return .blue }
+        if coverage.total > 0 && coverage.dossiered == coverage.total { return .green }
+        return .gray
+    }
+
+    /// Action buttons on the trailing edge. Three states:
+    ///   - Idle: [Analyze] (disabled if another volume is busy)
+    ///   - Analyzing: [Pause] [Stop]
+    ///   - Paused: [Resume] [Stop]
+    @ViewBuilder
+    private var buttonStack: some View {
+        if isPaused {
+            Button { onResume() } label: {
+                Label("Resume", systemImage: "play.fill")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            Button(role: .destructive) { onStop() } label: {
+                Label("Stop", systemImage: "stop.fill")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        } else if isAnalyzing {
+            Button { onPause() } label: {
+                Label("Pause", systemImage: "pause.fill")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            Button(role: .destructive) { onStop() } label: {
+                Label("Stop", systemImage: "stop.fill")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        } else {
+            Button { onAnalyze() } label: {
+                Label("Analyze", systemImage: "play.fill")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(!canStart)
+            .help(canStart
+                  ? "Run dossier analysis on this volume's media"
+                  : "Another volume is currently analyzing — pause or stop it first")
+        }
+    }
+}
+
 private struct ActiveLaneRow: View {
     let lane: PipelineLane
     let now: Date
@@ -334,8 +520,10 @@ private struct ActiveLaneRow: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: 280, alignment: .leading)
-            StageBadge(stage: lane.stageName)
-            Text("\(lane.verb)  (\(elapsedSeconds)s)")
+            // Human verb — replaces the [Whisper] / [MLXVLM] badge.
+            // Rick 2026-06-13: stage names should read as actions,
+            // not engine families.
+            Text("\(humanStageVerb(for: lane.stageName))  (\(elapsedSeconds)s)")
                 .font(.system(size: 12))
                 .foregroundColor(.secondary)
                 .lineLimit(1)
@@ -357,9 +545,22 @@ private struct ActiveLaneRow: View {
     }
 }
 
-/// Stage name in a small rounded chip, e.g. `[Whisper]`. Color tracks
-/// the engine family so the dashboard reads at a glance.
-private struct StageBadge: View {
+/// Map the orchestrator's stage family ("Whisper", "MLXVLM", or any
+/// future engine name) to a user-facing verb phrase. Anything not
+/// recognized falls through so a brand-new stage shows its raw name
+/// rather than being silently hidden.
+private func humanStageVerb(for stageName: String) -> String {
+    switch stageName {
+    case "Whisper": return "Transcribing Audio"
+    case "MLXVLM":  return "Extracting Captions"
+    default:        return stageName
+    }
+}
+
+/// StageBadge is gone — Rick 2026-06-13 replaced the colored chip
+/// with the human verb directly inside the lane row's status line.
+/// Kept as a stub so future stages can rebuild the badge if needed.
+private struct StageBadge_Removed: View {
     let stage: String
 
     var body: some View {

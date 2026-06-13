@@ -419,6 +419,87 @@ struct CaptionOrchestratorActivityTests {
         #expect(r.mediaDisposition == .suspectedJunk)
     }
 
+    // MARK: - Per-volume start + pause/resume (Phase 1)
+
+    @Test("startAnalyzing(volumePrefix:) processes only files under that prefix")
+    func startAnalyzingFiltersByPrefix() async {
+        let model = VideoScanModel()
+        // Two volumes worth of fixtures. The orchestrator should only
+        // process the records whose fullPath has the target prefix.
+        let tmp = NSTemporaryDirectory()
+        let pathA = tmp + "vs-vol-a-clip.mp4"
+        let pathB = tmp + "vs-vol-b-clip.mp4"
+        FileManager.default.createFile(atPath: pathA, contents: Data("x".utf8))
+        FileManager.default.createFile(atPath: pathB, contents: Data("x".utf8))
+        defer {
+            try? FileManager.default.removeItem(atPath: pathA)
+            try? FileManager.default.removeItem(atPath: pathB)
+        }
+
+        let recA = makeActivityRecord(fullPath: pathA)
+        let recB = makeActivityRecord(fullPath: pathB)
+        model.records = [recA, recB]
+        // Both volumes reachable — the prefix filter alone must keep
+        // recB out of the candidate list.
+        model.scanTargets = [
+            makeReachableTarget(at: tmp + "vs-vol-a-"),
+            makeReachableTarget(at: tmp + "vs-vol-b-")
+        ]
+
+        let stub = StubDossierRunner(modelID: "stub-vlm-volA")
+        let orch = CaptionOrchestrator(runnerFactory: { stub })
+        let transcriber = StubAudioTranscriber(modelID: "stub-whisper-volA")
+
+        await orch.startAnalyzing(
+            volumePrefix: tmp + "vs-vol-a-",
+            model: model,
+            transcriber: transcriber
+        )
+
+        let processed = await stub.pathsCalled()
+        #expect(processed == [pathA],
+                "startAnalyzing must process only paths under the given prefix")
+        #expect(orch.currentVolumePrefix == nil,
+                "currentVolumePrefix should clear after the batch finishes")
+    }
+
+    @Test("pause halts new file dispatch; resume continues the batch")
+    func pauseResumeHoldsLoop() async {
+        let model = VideoScanModel()
+        let (paths, recs) = makeActivityFixtures(count: 3, tag: "pause")
+        defer { removeAll(paths) }
+
+        model.records = recs
+        model.scanTargets = [makeReachableTarget(at: NSTemporaryDirectory())]
+
+        let stub = StubDossierRunner(modelID: "stub-vlm-pause")
+        let orch = CaptionOrchestrator(runnerFactory: { stub })
+        // Small Whisper delay so the loop has visible per-file work.
+        let transcriber = StubAudioTranscriber(
+            modelID: "stub-whisper-pause",
+            delay: .milliseconds(50)
+        )
+
+        // Pause BEFORE starting — the loop's pause-gate will trip on
+        // the very first iteration. Then after 200ms we resume; the
+        // loop should drain all three files.
+        orch.pause()
+        let batch = Task { await orch.startCatalogWideDossier(model: model, transcriber: transcriber) }
+
+        // Confirm pause held: after 250ms no files should have been
+        // processed (stub's calledPaths still empty).
+        try? await Task.sleep(for: .milliseconds(250))
+        let stalledCount = await stub.pathsCalled().count
+        #expect(stalledCount == 0,
+                "pause must prevent any file dispatch; saw \(stalledCount) calls instead")
+
+        orch.resume()
+        await batch.value
+        let finalCount = await stub.pathsCalled().count
+        #expect(finalCount == 3, "after resume, all 3 files should have processed")
+        #expect(orch.paused == false, "paused state should remain cleared after batch end")
+    }
+
     // MARK: - Stage names are data-driven
 
     @Test("stage display names derive from modelIDs and pass unknown stages through")
