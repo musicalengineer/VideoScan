@@ -115,8 +115,18 @@ final class StubAudioTranscriber: AudioTranscriber, @unchecked Sendable {
         lock.withLock { _calledPaths }
     }
 
-    func transcribe(videoPath: String) async throws -> String {
+    func transcribe(videoPath: String, deadlineSeconds: Double?) async throws -> String {
         lock.withLock { _calledPaths.append(videoPath) }
+        // Honor the deadline so tests can exercise the timeout path
+        // without a real subprocess: if `delay` would exceed the
+        // deadline, we throw `.deadlineExceeded` after sleeping for
+        // the deadline window. Production semantics are identical
+        // (subprocess gets SIGTERMed at the deadline); the stub
+        // skips the actual signal mechanics.
+        if let dl = deadlineSeconds, delay > .seconds(dl) {
+            try? await Task.sleep(for: .seconds(dl))
+            throw AudioTranscriberError.deadlineExceeded(seconds: dl)
+        }
         if delay > .zero {
             try await Task.sleep(for: delay)
         }

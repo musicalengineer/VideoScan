@@ -708,13 +708,24 @@ final class CaptionOrchestrator: ObservableObject {
                 // matching pendingWhisperLaneID and finds the cancel
                 // target the moment we mirror pendingWhisperTask below.
                 self.pendingWhisperLaneID = laneID
+                // Per-file Whisper deadline. max(60s floor, 2× clip
+                // duration) so a 30s clip gets 60s, a 5-min clip gets
+                // 10min, a 30-min clip gets 60min. Whisper-medium-mlx-q4
+                // realistically runs at 5–15× realtime on M4 Max, so 2×
+                // is generous slack; anything past it is almost
+                // certainly hung (the symptom Rick hit on the BT music
+                // video that wedged the pipeline for 26+ minutes).
+                let whisperDeadlineSeconds = max(60.0, 2.0 * record.durationSeconds)
                 pendingWhisper = Task { @MainActor [weak self] in
                     guard let self else { return }
-                    appLog.write("Pipeline Whisper start: \(filename)")
+                    appLog.write(String(format: "Pipeline Whisper start: %@ (deadline %.0fs)", filename, whisperDeadlineSeconds))
                     let whisperStart = CFAbsoluteTimeGetCurrent()
                     var transcript: String?
                     do {
-                        transcript = try await transcriber.transcribe(videoPath: path)
+                        transcript = try await transcriber.transcribe(
+                            videoPath: path,
+                            deadlineSeconds: whisperDeadlineSeconds
+                        )
                     } catch is CancellationError {
                         // Cancelled mid-transcription: apply VLM-only so
                         // the extraction isn't lost. Note depends on who
@@ -732,6 +743,28 @@ final class CaptionOrchestrator: ObservableObject {
                         self.recordCompletion(filename: filename, vlmSeconds: vlmSec,
                                               whisperSeconds: nil,
                                               note: userSkipped ? "user skipped" : "transcript failed")
+                        liveCaptioned += 1
+                        return
+                    } catch AudioTranscriberError.deadlineExceeded(let secs) {
+                        // Auto-kill: subprocess exceeded its deadline.
+                        // VLM result still banks — captions are valid
+                        // even when the transcript path failed. Note
+                        // is distinct from "transcript failed" so the
+                        // dashboard can show "whisper timed out" and
+                        // we can later flag chronically-stuck files
+                        // (probably junk) for triage.
+                        captionOrchLog.warning("Dossier: whisper deadline (\(secs, format: .fixed(precision: 0), privacy: .public)s) exceeded on \(filename, privacy: .public)")
+                        _ = model.applyDossier(
+                            extraction, to: path,
+                            vlmModel: vlmModelID,
+                            transcript: nil,
+                            whisperModel: nil
+                        )
+                        self.updateLane(laneID, transcriptFailed: true)
+                        self.endLane(laneID)
+                        self.recordCompletion(filename: filename, vlmSeconds: vlmSec,
+                                              whisperSeconds: nil, note: "whisper timed out")
+                        self.transcriptFailures += 1
                         liveCaptioned += 1
                         return
                     } catch {
@@ -910,16 +943,25 @@ final class CaptionOrchestrator: ObservableObject {
 
                 var transcript: String?
                 var transcriptFailed = false
+                var transcriptTimedOut = false
                 // Serial path skip: if the user clicked Skip on this
                 // lane during the VLM phase, bypass Whisper entirely.
                 // We can't cancel an inline await mid-transcription
                 // without wrapping in a Task; the pipelined path is
                 // the place where mid-flight skip works.
                 if let transcriber, !hasNoAudio, !userSkipped {
+                    let whisperDeadlineSeconds = max(60.0, 2.0 * record.durationSeconds)
                     do {
-                        transcript = try await transcriber.transcribe(videoPath: path)
+                        transcript = try await transcriber.transcribe(
+                            videoPath: path,
+                            deadlineSeconds: whisperDeadlineSeconds
+                        )
                     } catch is CancellationError {
                         throw CancellationError()
+                    } catch AudioTranscriberError.deadlineExceeded(let secs) {
+                        captionOrchLog.warning("Dossier: whisper deadline (\(secs, format: .fixed(precision: 0), privacy: .public)s) exceeded on \(filename, privacy: .public)")
+                        transcriptTimedOut = true
+                        transcriptFailures += 1
                     } catch {
                         captionOrchLog.warning("Dossier: whisper failed on \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
                         transcriptFailed = true
@@ -935,7 +977,7 @@ final class CaptionOrchestrator: ObservableObject {
                 )
                 if transcript != nil {
                     updateLane(laneID, hasTranscript: true)
-                } else if transcriptFailed {
+                } else if transcriptFailed || transcriptTimedOut {
                     updateLane(laneID, transcriptFailed: true)
                 }
                 endLane(laneID)
@@ -944,6 +986,7 @@ final class CaptionOrchestrator: ObservableObject {
                 //                      string — Whisper ran)
                 //   "no audio"       → file has no audio stream by design
                 //   "user skipped"   → user right-clicked Skip on the lane
+                //   "whisper timed out" → subprocess exceeded deadline
                 //   "transcript failed" → whisper threw
                 //   "no transcriber" → serial path, no transcriber wired
                 let note: String?
@@ -953,6 +996,8 @@ final class CaptionOrchestrator: ObservableObject {
                     note = "user skipped"
                 } else if hasNoAudio {
                     note = "no audio"
+                } else if transcriptTimedOut {
+                    note = "whisper timed out"
                 } else if transcriptFailed {
                     note = "transcript failed"
                 } else {

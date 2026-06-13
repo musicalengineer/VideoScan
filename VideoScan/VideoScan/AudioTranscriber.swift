@@ -64,7 +64,22 @@ protocol AudioTranscriber: Sendable {
     /// out-of-memory, inability to open the file). Cancellation
     /// honored via `Task.checkCancellation()` between chunks so the
     /// orchestrator's "Cancel Transcription" can stop a run mid-file.
-    func transcribe(videoPath: String) async throws -> String
+    ///
+    /// `deadlineSeconds`, when non-nil, bounds the wall-clock time
+    /// spent on this file. On expiry the implementation must terminate
+    /// any subprocesses (SIGTERM then SIGKILL after a brief grace
+    /// period) and throw `AudioTranscriberError.deadlineExceeded`.
+    /// Default `nil` preserves backward compatibility for stubs.
+    func transcribe(videoPath: String, deadlineSeconds: Double?) async throws -> String
+}
+
+extension AudioTranscriber {
+    /// Default forwarding so existing call sites and stubs that don't
+    /// care about the deadline keep compiling. Concrete production
+    /// implementations override the deadlined form.
+    func transcribe(videoPath: String) async throws -> String {
+        try await transcribe(videoPath: videoPath, deadlineSeconds: nil)
+    }
 }
 
 // MARK: - Errors
@@ -96,6 +111,12 @@ enum AudioTranscriberError: Error, CustomStringConvertible {
     /// stderr tail is surfaced to help diagnose.
     case subprocessFailed(exitCode: Int32, stderrTail: String)
 
+    /// Subprocess exceeded the wall-clock deadline the caller passed
+    /// (auto-kill via SIGTERM → SIGKILL). Distinct from `subprocessFailed`
+    /// so the orchestrator can render "whisper timed out" instead of
+    /// "transcript failed" in the activity feed.
+    case deadlineExceeded(seconds: Double)
+
     /// Engine threw something unrecognized; preserves the underlying
     /// error for diagnostic logging.
     case underlying(Error)
@@ -112,6 +133,8 @@ enum AudioTranscriberError: Error, CustomStringConvertible {
             return "Transcription subprocess could not start: \(reason)"
         case .subprocessFailed(let exit, let tail):
             return "Transcription subprocess exited \(exit). stderr: \(tail)"
+        case .deadlineExceeded(let secs):
+            return "Transcription subprocess exceeded its \(Int(secs))s deadline and was killed."
         case .underlying(let err):
             return "Transcription engine error: \(err)"
         }
@@ -182,9 +205,10 @@ struct MLXWhisperTranscriber: AudioTranscriber {
 
     init() {}
 
-    func transcribe(videoPath: String) async throws -> String {
+    func transcribe(videoPath: String, deadlineSeconds: Double?) async throws -> String {
         let filename = (videoPath as NSString).lastPathComponent
         appLog.write("AudioTranscriber(MLXWhisper) stub for \(filename) — no Swift Whisper module in mlx-swift-examples 2.29.1; use PythonSubprocessAudioTranscriber")
+        _ = deadlineSeconds  // stub never runs; would honor the deadline if it did.
         throw AudioTranscriberError.notImplemented(engine: "MLXWhisper")
     }
 }
@@ -244,7 +268,7 @@ struct PythonSubprocessAudioTranscriber: AudioTranscriber {
         self.hfModel = hfModel
     }
 
-    func transcribe(videoPath: String) async throws -> String {
+    func transcribe(videoPath: String, deadlineSeconds: Double?) async throws -> String {
         let filename = (videoPath as NSString).lastPathComponent
         let started = CFAbsoluteTimeGetCurrent()
 
@@ -332,12 +356,47 @@ struct PythonSubprocessAudioTranscriber: AudioTranscriber {
             )
         }
 
-        // Honor cancellation: if the orchestrator's task gets cancelled
-        // while we're blocked on the subprocess, terminate it.
+        // Track which reason killed the subprocess. The cancelTask
+        // races between Swift-level cancellation (user clicks Skip /
+        // batch cancel / shutdown drain) and the wall-clock deadline,
+        // and we need to disambiguate after waitUntilExit so the
+        // caller throws the right typed error. `@unchecked Sendable`
+        // is fine here — we mutate it from one Task and read it
+        // exactly once after that Task has finished.
+        final class KillReason: @unchecked Sendable {
+            var deadlineHit = false
+        }
+        let killReason = KillReason()
+
+        // Honor cancellation AND the wall-clock deadline. Single poll
+        // loop checks both every 200ms. On either trip: SIGTERM, then
+        // a brief grace period, then SIGKILL if the subprocess
+        // ignored the soft signal. Same TERM→KILL escalation pattern
+        // as ProcessRunner (which we'll migrate this code onto later
+        // per docs/refactor_suggestions.md item #3).
+        let killGraceSeconds: Double = 2.0
         let cancelTask = Task {
             while proc.isRunning {
                 if Task.isCancelled {
+                    transcribeLogger.notice("whisper subprocess cancelled for \(filename, privacy: .public) — sending SIGTERM")
                     proc.terminate()
+                    try? await Task.sleep(for: .seconds(killGraceSeconds))
+                    if proc.isRunning {
+                        transcribeLogger.warning("whisper subprocess ignored SIGTERM for \(filename, privacy: .public) — sending SIGKILL")
+                        kill(proc.processIdentifier, SIGKILL)
+                    }
+                    return
+                }
+                if let deadline = deadlineSeconds,
+                   CFAbsoluteTimeGetCurrent() - started > deadline {
+                    killReason.deadlineHit = true
+                    transcribeLogger.warning("whisper subprocess exceeded \(deadline, format: .fixed(precision: 0), privacy: .public)s deadline for \(filename, privacy: .public) — sending SIGTERM")
+                    proc.terminate()
+                    try? await Task.sleep(for: .seconds(killGraceSeconds))
+                    if proc.isRunning {
+                        transcribeLogger.warning("whisper subprocess ignored SIGTERM (deadline) for \(filename, privacy: .public) — sending SIGKILL")
+                        kill(proc.processIdentifier, SIGKILL)
+                    }
                     return
                 }
                 try? await Task.sleep(for: .milliseconds(200))
@@ -373,6 +432,13 @@ struct PythonSubprocessAudioTranscriber: AudioTranscriber {
                     appLog.write("whisper[\(filename)]: \(trimmed)")
                 }
             }
+        }
+
+        // Deadline kill MUST be checked before the generic subprocessFailed
+        // branch — a TERM-killed Python exits with non-zero, but the
+        // semantic cause is "we asked for it," not engine failure.
+        if killReason.deadlineHit, let dl = deadlineSeconds {
+            throw AudioTranscriberError.deadlineExceeded(seconds: dl)
         }
 
         if exitCode != 0 {

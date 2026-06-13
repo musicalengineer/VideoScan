@@ -263,6 +263,32 @@ struct CaptionOrchestratorActivityTests {
                 "skip must tag the completion 'user skipped' so the dashboard distinguishes it from a Whisper failure")
     }
 
+    // MARK: - Whisper deadline auto-kills stuck transcription
+
+    /// Stub-level test: confirms StubAudioTranscriber throws
+    /// `.deadlineExceeded` when `delay > deadlineSeconds`. The
+    /// orchestrator's catch arm against the same typed error is
+    /// verified at compile time; running a 60s+ end-to-end deadline
+    /// here would dwarf the rest of the suite.
+    @Test("Whisper deadline: delay > deadline → .deadlineExceeded")
+    func whisperDeadlineTrips() async {
+        let (paths, _) = makeActivityFixtures(count: 1, tag: "deadline")
+        defer { removeAll(paths) }
+
+        let transcriber = StubAudioTranscriber(
+            modelID: "stub-whisper-deadline",
+            delay: .seconds(5)
+        )
+        do {
+            _ = try await transcriber.transcribe(videoPath: paths[0], deadlineSeconds: 0.1)
+            Issue.record("Expected deadlineExceeded, got success")
+        } catch AudioTranscriberError.deadlineExceeded(let secs) {
+            #expect(secs == 0.1, "Stub must echo the deadline it tripped on")
+        } catch {
+            Issue.record("Expected deadlineExceeded, got \(error)")
+        }
+    }
+
     // MARK: - Stage names are data-driven
 
     @Test("stage display names derive from modelIDs and pass unknown stages through")
