@@ -57,11 +57,23 @@ struct DossierDashboardView: View {
     /// dossier writeback.
     private let refreshTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
-    /// Hard cap on rows shown under "Now Analyzing". Rick 2026-06-13:
-    /// more than 5 makes the window too tall. Excess lanes still tick
-    /// through the pipeline; they're collapsed into a "+ N more"
-    /// trailing line so the user knows the cap is active.
-    static let activeLanesVisibleCap = 5
+    /// Number of reserved slots under "Now Analyzing". Rick 2026-06-13:
+    /// the area should NOT resize as lanes come and go (jitters the
+    /// layout) — instead reserve N rows worth of height up-front and
+    /// pad with placeholder rows when fewer lanes are in flight.
+    ///
+    /// 2 matches the real pipeline depth: VLM(N+1) || Whisper(N). The
+    /// strict backpressure (one Whisper outstanding) caps actual
+    /// concurrency at 2. A wider pipeline would lift this.
+    static let activeLanesVisibleCap = 2
+
+    /// Pinned height per active-lane row. Reading the system font's
+    /// metrics inline would be more correct but couples this view to
+    /// layout details we don't otherwise depend on — a measured
+    /// constant is simpler and matches the row's actual rendered size
+    /// (spinner + filename + badge + verb, 13pt font with 10pt VStack
+    /// spacing).
+    static let activeLaneRowHeight: CGFloat = 28
 
     var body: some View {
         VStack(alignment: .center, spacing: 18) {
@@ -110,39 +122,40 @@ struct DossierDashboardView: View {
             // tick without touching the rest of the window.
 
             GroupBox(label: Text("Now Analyzing").font(.headline)) {
-                if captionOrchestrator.activeLanes.isEmpty {
-                    Text("pipeline idle — press Analyze Local Media")
-                        .font(.system(size: 12))
-                        .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 4)
-                } else {
-                    // Rick 2026-06-13: cap visible lanes at 5. The pipeline
-                    // itself only runs a handful in flight, but the cap
-                    // also bounds window height if a future change widens
-                    // concurrency. `prefix(5)` is taken before iterating
-                    // so the slice itself is the @Published-driven input.
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        VStack(alignment: .leading, spacing: 10) {
-                            ForEach(Array(captionOrchestrator.activeLanes.prefix(Self.activeLanesVisibleCap))) { lane in
+                // Fixed-height container: always reserves
+                // activeLanesVisibleCap rows worth of vertical space
+                // so the dashboard layout doesn't jitter as lanes
+                // appear and disappear. Empty slots render an invisible
+                // placeholder of the same height.
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(0..<Self.activeLanesVisibleCap, id: \.self) { i in
+                            if i < captionOrchestrator.activeLanes.count {
                                 ActiveLaneRow(
-                                    lane: lane,
+                                    lane: captionOrchestrator.activeLanes[i],
                                     now: context.date,
-                                    onSkip: { lane in captionOrchestrator.skipLane(lane.id) },
-                                    onShowInCatalog: { lane in showInCatalog(path: lane.path) }
+                                    onSkip: { lane in captionOrchestrator.skipLane(lane.id) }
                                 )
-                            }
-                            if captionOrchestrator.activeLanes.count > Self.activeLanesVisibleCap {
-                                Text("+ \(captionOrchestrator.activeLanes.count - Self.activeLanesVisibleCap) more in flight")
-                                    .font(.system(size: 11))
+                                .frame(height: Self.activeLaneRowHeight)
+                            } else if captionOrchestrator.activeLanes.isEmpty && i == 0 {
+                                Text("pipeline idle — press Analyze Local Media")
+                                    .font(.system(size: 12))
                                     .foregroundColor(.secondary)
+                                    .frame(maxWidth: .infinity,
+                                           minHeight: Self.activeLaneRowHeight,
+                                           alignment: .leading)
+                            } else {
+                                // Invisible placeholder — preserves the
+                                // slot's height so the GroupBox stays
+                                // the same size across all states.
+                                Color.clear
+                                    .frame(height: Self.activeLaneRowHeight)
                             }
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 4)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 4)
                 }
             }
 
@@ -158,7 +171,11 @@ struct DossierDashboardView: View {
                     TimelineView(.periodic(from: .now, by: 1)) { context in
                         VStack(alignment: .leading, spacing: 6) {
                             ForEach(captionOrchestrator.recentActivity) { item in
-                                CompletedActivityRow(item: item, now: context.date)
+                                CompletedActivityRow(
+                                    item: item,
+                                    now: context.date,
+                                    onShowInCatalog: { item in showInCatalog(filename: item.filename) }
+                                )
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -277,30 +294,37 @@ struct DossierDashboardView: View {
         model.pendingCatalogSelection = rec.id
         MainWindowHelper.shared.openMainWindow()
     }
+
+    /// Filename-based fallback. CompletedActivity only stores the
+    /// filename (leaf path) — it doesn't preserve the full path because
+    /// the lane already has it. To navigate, we resolve filename → first
+    /// matching record. If duplicates exist (same name on multiple
+    /// volumes — common with AVCHD camera files like 00088.MTS), we pick
+    /// the first reachable hit; the user can dig into the others via
+    /// the catalog's regular search.
+    private func showInCatalog(filename: String) {
+        guard let rec = model.records.first(where: { $0.filename == filename }) else { return }
+        UserDefaults.standard.set(1, forKey: "selectedTab")
+        model.pendingCatalogSelection = rec.id
+        MainWindowHelper.shared.openMainWindow()
+    }
 }
 
 // MARK: - Live activity rows
 
 /// One in-flight FILE row (not stage). Shows: spinner + filename, a
 /// stage badge ([Whisper]/[MLXVLM]), the present-tense verb with the
-/// live elapsed readout, then per-channel indicators on the trailing
-/// edge. `now` comes from the enclosing TimelineView's 1s clock so
-/// the "(Ns)" ticks without any per-row timers.
+/// live elapsed readout, then a Cancel button on the trailing edge.
 ///
-/// Indicator semantics:
-///   - Audio Transcript: gray dash for `isVideoOnly`; green ✓ when
-///     `hasTranscript`; red ✗ when `transcriptFailed` or not yet.
-///   - Captions: green ✓ when `hasCaptions`; red ✗ otherwise.
-///
-/// Right-click opens a context menu with **Skip** (cancels the file's
-/// in-flight Whisper or marks for skip-after-VLM) and **Show in
-/// Catalog** (jumps the main window to the catalog tab and selects
-/// the record).
+/// Rick 2026-06-13: ✓/✗/— indicators moved to CompletedActivityRow —
+/// they belong with the post-mortem summary, not while the file is
+/// still being analyzed. The trailing-edge slot now holds the per-row
+/// action (Cancel), which is visible rather than buried in a context
+/// menu. Show in Catalog moved to the completed row's context menu.
 private struct ActiveLaneRow: View {
     let lane: PipelineLane
     let now: Date
     let onSkip: (PipelineLane) -> Void
-    let onShowInCatalog: (PipelineLane) -> Void
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
@@ -316,39 +340,20 @@ private struct ActiveLaneRow: View {
                 .foregroundColor(.secondary)
                 .lineLimit(1)
             Spacer(minLength: 8)
-            ChannelIndicator(label: "Audio Transcript", state: transcriptState)
-            ChannelIndicator(label: "Captions", state: captionsState)
-        }
-        // Whole-row hit target for the context menu — anywhere on the
-        // row's strip is right-clickable so the user doesn't have to
-        // aim for the filename text specifically.
-        .contentShape(Rectangle())
-        .contextMenu {
-            Button {
+            Button(role: .destructive) {
                 onSkip(lane)
             } label: {
-                Label("Skip this file", systemImage: "forward.end.fill")
+                Label("Cancel", systemImage: "xmark.circle.fill")
+                    .labelStyle(.titleAndIcon)
+                    .font(.system(size: 11, weight: .medium))
             }
-            Button {
-                onShowInCatalog(lane)
-            } label: {
-                Label("Show in Catalog", systemImage: "film.stack")
-            }
+            .buttonStyle(.borderless)
+            .help("Cancel processing on this file. Whisper subprocess is SIGTERMed; VLM result (if any) is preserved.")
         }
     }
 
     private var elapsedSeconds: Int {
         max(0, Int(now.timeIntervalSince(lane.startedAt)))
-    }
-
-    private var transcriptState: ChannelIndicator.State {
-        if lane.isVideoOnly { return .notApplicable }
-        if lane.hasTranscript { return .ok }
-        return .missing  // not yet OR transcriptFailed — both render as red ✗
-    }
-
-    private var captionsState: ChannelIndicator.State {
-        lane.hasCaptions ? .ok : .missing
     }
 }
 
@@ -414,7 +419,11 @@ private struct ChannelIndicator: View {
     }
 }
 
-/// One completed file: checkmark, filename, per-stage timing summary.
+/// One completed file: checkmark, filename, per-stage timing summary,
+/// per-channel ✓/✗/— indicators (moved here from ActiveLaneRow on
+/// 2026-06-13 — they belong with the post-mortem summary). Right-click
+/// opens Show in Catalog.
+///
 /// Rick 2026-06-13: we deliberately do NOT show "how long ago" — only
 /// "how long it took". The `now: Date` argument is unused but kept so
 /// the enclosing TimelineView can still trigger redraws without a
@@ -422,6 +431,7 @@ private struct ChannelIndicator: View {
 private struct CompletedActivityRow: View {
     let item: CompletedActivity
     let now: Date
+    let onShowInCatalog: (CompletedActivity) -> Void
 
     var body: some View {
         HStack(spacing: 10) {
@@ -438,7 +448,27 @@ private struct CompletedActivityRow: View {
                 .foregroundColor(.secondary)
                 .lineLimit(1)
             Spacer(minLength: 8)
+            ChannelIndicator(label: "Audio Transcript", state: transcriptState)
+            ChannelIndicator(label: "Captions", state: captionsState)
         }
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button {
+                onShowInCatalog(item)
+            } label: {
+                Label("Show in Catalog", systemImage: "film.stack")
+            }
+        }
+    }
+
+    private var transcriptState: ChannelIndicator.State {
+        if item.isVideoOnly { return .notApplicable }
+        if item.hasTranscript { return .ok }
+        return .missing  // transcriptFailed or never-extracted both → red ✗
+    }
+
+    private var captionsState: ChannelIndicator.State {
+        item.hasCaptions ? .ok : .missing
     }
 
     /// "VLM 11.2s · Whisper 6.4s · Synced" — segments drop out when a

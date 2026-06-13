@@ -131,6 +131,19 @@ struct CompletedActivity: Identifiable, Equatable {
     let note: String?
     /// When the result landed in the catalog (applyDossier).
     let syncedAt: Date
+    /// Per-channel indicator state. Moved off the active lane row
+    /// (Rick 2026-06-13: the indicators belong with the completed
+    /// summary, not while the file is still in flight) and mirrored
+    /// from the lane's final state at endLane time. Same three-state
+    /// semantics as the lane:
+    ///   - Captions: green ✓ when extraction.scenes was non-empty;
+    ///     red ✗ otherwise.
+    ///   - Audio Transcript: green ✓ when transcript trimmed to
+    ///     non-empty; gray — when isVideoOnly; red ✗ otherwise.
+    let isVideoOnly: Bool
+    let hasCaptions: Bool
+    let hasTranscript: Bool
+    let transcriptFailed: Bool
 }
 
 // MARK: - Orchestrator
@@ -681,10 +694,14 @@ final class CaptionOrchestrator: ObservableObject {
                         transcript: nil,
                         whisperModel: nil
                     )
-                    endLane(laneID)
-                    recordCompletion(filename: filename, vlmSeconds: vlmSec,
+                    // Snapshot indicator state BEFORE endLane so the
+                    // completion row reflects what VLM banked. Order
+                    // matters: recordCompletion(fromLane:) reads the
+                    // lane out of activeLanes; endLane removes it.
+                    recordCompletion(fromLane: laneID, vlmSeconds: vlmSec,
                                      whisperSeconds: nil,
                                      note: hasNoAudio ? "no audio" : "transcript failed")
+                    endLane(laneID)
                     liveCaptioned += 1
                     break
                 }
@@ -701,9 +718,9 @@ final class CaptionOrchestrator: ObservableObject {
                         transcript: nil,
                         whisperModel: nil
                     )
-                    endLane(laneID)
-                    recordCompletion(filename: filename, vlmSeconds: vlmSec,
+                    recordCompletion(fromLane: laneID, vlmSeconds: vlmSec,
                                      whisperSeconds: nil, note: "user skipped")
+                    endLane(laneID)
                     liveCaptioned += 1
                     publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
                     continue
@@ -720,9 +737,9 @@ final class CaptionOrchestrator: ObservableObject {
                         transcript: nil,
                         whisperModel: nil
                     )
-                    endLane(laneID)
-                    recordCompletion(filename: filename, vlmSeconds: vlmSec,
+                    recordCompletion(fromLane: laneID, vlmSeconds: vlmSec,
                                      whisperSeconds: nil, note: "no audio")
+                    endLane(laneID)
                     liveCaptioned += 1
                     publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
                     continue
@@ -764,10 +781,10 @@ final class CaptionOrchestrator: ObservableObject {
                         )
                         let userSkipped = self.userSkippedLaneIDs.contains(laneID)
                         self.updateLane(laneID, transcriptFailed: !userSkipped)
-                        self.endLane(laneID)
-                        self.recordCompletion(filename: filename, vlmSeconds: vlmSec,
+                        self.recordCompletion(fromLane: laneID, vlmSeconds: vlmSec,
                                               whisperSeconds: nil,
                                               note: userSkipped ? "user skipped" : "transcript failed")
+                        self.endLane(laneID)
                         liveCaptioned += 1
                         return
                     } catch AudioTranscriberError.deadlineExceeded(let secs) {
@@ -786,9 +803,9 @@ final class CaptionOrchestrator: ObservableObject {
                             whisperModel: nil
                         )
                         self.updateLane(laneID, transcriptFailed: true)
-                        self.endLane(laneID)
-                        self.recordCompletion(filename: filename, vlmSeconds: vlmSec,
+                        self.recordCompletion(fromLane: laneID, vlmSeconds: vlmSec,
                                               whisperSeconds: nil, note: "whisper timed out")
+                        self.endLane(laneID)
                         self.transcriptFailures += 1
                         liveCaptioned += 1
                         return
@@ -820,7 +837,9 @@ final class CaptionOrchestrator: ObservableObject {
                     } else {
                         self.updateLane(laneID, transcriptFailed: true)
                     }
-                    self.endLane(laneID)
+                    // Snapshot indicators FROM the lane via the fromLane
+                    // overload — order matters: read before endLane.
+                    //
                     // Note semantics in the pipelined path:
                     //   nil                → transcript obtained AND non-empty
                     //   "transcript failed" → whisper threw OR returned only
@@ -831,11 +850,12 @@ final class CaptionOrchestrator: ObservableObject {
                     //                         created).
                     let note: String? = didExtractTranscript ? nil : "transcript failed"
                     self.recordCompletion(
-                        filename: filename,
+                        fromLane: laneID,
                         vlmSeconds: vlmSec,
                         whisperSeconds: didExtractTranscript ? whisperSec : nil,
                         note: note
                     )
+                    self.endLane(laneID)
                     liveCaptioned += 1
                     publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
                 }
@@ -1039,7 +1059,6 @@ final class CaptionOrchestrator: ObservableObject {
                 } else if transcriptFailed || transcriptTimedOut {
                     updateLane(laneID, transcriptFailed: true)
                 }
-                endLane(laneID)
                 // Disambiguate the note:
                 //   nil                → transcript obtained AND non-empty
                 //   "no audio"         → file has no audio stream by design
@@ -1063,12 +1082,17 @@ final class CaptionOrchestrator: ObservableObject {
                 } else {
                     note = "no transcriber"
                 }
+                // Snapshot indicators via fromLane BEFORE endLane.
+                // Serial path doesn't track Whisper duration separately
+                // (it's inline awaited), so whisperSeconds stays nil
+                // — matches historical behavior.
                 recordCompletion(
-                    filename: filename,
+                    fromLane: laneID,
                     vlmSeconds: vlmSec,
                     whisperSeconds: nil,
                     note: note
                 )
+                endLane(laneID)
                 liveCaptioned += 1
             } catch is CancellationError {
                 captionOrchLog.notice("Dossier: cancelled at \(filename, privacy: .public)")
@@ -1462,21 +1486,60 @@ final class CaptionOrchestrator: ObservableObject {
     }
 
     /// Prepend a completed file to the history, enforcing the cap.
+    /// Indicator state is mirrored from the lane's final values; the
+    /// dashboard's "Recently Completed" rows render ✓/✗/— from these
+    /// (Rick 2026-06-13 — indicators moved off the in-flight lane).
     func recordCompletion(
         filename: String,
         vlmSeconds: Double?,
         whisperSeconds: Double?,
-        note: String?
+        note: String?,
+        isVideoOnly: Bool = false,
+        hasCaptions: Bool = false,
+        hasTranscript: Bool = false,
+        transcriptFailed: Bool = false
     ) {
         let entry = CompletedActivity(
             id: UUID(), filename: filename,
             vlmSeconds: vlmSeconds, whisperSeconds: whisperSeconds,
-            note: note, syncedAt: Date()
+            note: note, syncedAt: Date(),
+            isVideoOnly: isVideoOnly,
+            hasCaptions: hasCaptions,
+            hasTranscript: hasTranscript,
+            transcriptFailed: transcriptFailed
         )
         recentActivity.insert(entry, at: 0)
         if recentActivity.count > Self.recentActivityCap {
             recentActivity.removeLast(recentActivity.count - Self.recentActivityCap)
         }
+    }
+
+    /// Snapshot the lane's indicator state and forward to recordCompletion.
+    /// Callers should invoke BEFORE endLane(_:) so the lane is still in
+    /// activeLanes when we read it. No-op if the lane has already been
+    /// closed — the completion still records, just without indicators.
+    func recordCompletion(
+        fromLane laneID: UUID,
+        vlmSeconds: Double?,
+        whisperSeconds: Double?,
+        note: String?
+    ) {
+        guard let lane = activeLanes.first(where: { $0.id == laneID }) else {
+            // Defensive: lane already ended. Record without indicators.
+            recordCompletion(filename: "?", vlmSeconds: vlmSeconds,
+                             whisperSeconds: whisperSeconds, note: note)
+            return
+        }
+        recordCompletion(
+            filename: lane.filename,
+            vlmSeconds: vlmSeconds,
+            whisperSeconds: whisperSeconds,
+            note: note,
+            isVideoOnly: lane.isVideoOnly,
+            hasCaptions: lane.hasCaptions,
+            hasTranscript: lane.hasTranscript,
+            transcriptFailed: lane.transcriptFailed
+        )
     }
 }
 
