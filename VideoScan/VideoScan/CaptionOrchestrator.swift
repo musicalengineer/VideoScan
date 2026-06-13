@@ -69,6 +69,46 @@ enum CaptionJobStatus: Equatable {
     }
 }
 
+// MARK: - Live pipeline activity (dashboard feed)
+//
+// Feeds the Dossier Dashboard's "Now Analyzing" / "Recently Completed"
+// panels. Stage names are plain data-driven strings derived from the
+// engines' modelIDs — deliberately NOT an enum, so future stages
+// (FancyAlg2/3...) show up on the dashboard just by reporting in with
+// their own name. No dashboard change needed when a stage is added.
+
+/// One in-flight pipeline stage working on one file. At most one lane
+/// exists per stage at a time (the pipeline keeps at most one file in
+/// VLM and one in Whisper).
+struct PipelineLane: Identifiable, Equatable {
+    let id: UUID
+    let filename: String
+    /// Short stage family, e.g. "MLXVLM", "Whisper".
+    let stageName: String
+    /// Present-tense action for the stage line, e.g. "extracting scenes…".
+    let verb: String
+    /// When the stage started on this file — the dashboard derives the
+    /// live "(Ns)" elapsed readout from this.
+    let startedAt: Date
+}
+
+/// A file that finished the full pipeline and was synced to the catalog.
+struct CompletedActivity: Identifiable, Equatable {
+    let id: UUID
+    let filename: String
+    /// Wall-clock seconds the VLM dossier extraction took. nil only if
+    /// the stage didn't run (not the case today, but the field is
+    /// optional so future stages can report partial pipelines).
+    let vlmSeconds: Double?
+    /// Wall-clock seconds Whisper took. nil when no transcript was
+    /// produced (no transcriber, audio-less file, or Whisper failure).
+    let whisperSeconds: Double?
+    /// Inline caveat, e.g. "no transcript". nil for clean runs.
+    let note: String?
+    /// When the result landed in the catalog (applyDossier).
+    let syncedAt: Date
+}
+
 // MARK: - Orchestrator
 
 /// `@MainActor` so all status mutations cross the UI boundary safely
@@ -497,6 +537,13 @@ final class CaptionOrchestrator: ObservableObject {
             let dur = max(0.5, record.durationSeconds)
             let timestamps = framesEvenlySpaced(framesPerFile: framesPerFile, durationSec: dur)
 
+            // Dashboard lane: this file is now in the VLM stage.
+            let vlmLaneID = beginLane(
+                stage: Self.stageDisplayName(forModelID: vlmModelID),
+                verb: "extracting scenes…",
+                filename: filename
+            )
+
             do {
                 let vlmStart = CFAbsoluteTimeGetCurrent()
                 let extraction = try await runner.dossier(
@@ -504,6 +551,7 @@ final class CaptionOrchestrator: ObservableObject {
                     atTimestamps: timestamps
                 )
                 let vlmSec = CFAbsoluteTimeGetCurrent() - vlmStart
+                endLane(vlmLaneID)
                 appLog.write(String(format: "Pipeline VLM done: %@ — %.1fs", filename, vlmSec))
 
                 // Backpressure: wait for the previous file's Whisper to
@@ -521,6 +569,8 @@ final class CaptionOrchestrator: ObservableObject {
                         transcript: nil,
                         whisperModel: nil
                     )
+                    recordCompletion(filename: filename, vlmSeconds: vlmSec,
+                                     whisperSeconds: nil, note: "no transcript")
                     liveCaptioned += 1
                     break
                 }
@@ -528,6 +578,11 @@ final class CaptionOrchestrator: ObservableObject {
                 pendingWhisper = Task { @MainActor [weak self] in
                     guard let self else { return }
                     appLog.write("Pipeline Whisper start: \(filename)")
+                    let whisperLaneID = self.beginLane(
+                        stage: Self.stageDisplayName(forModelID: whisperModelID),
+                        verb: "transcribing audio…",
+                        filename: filename
+                    )
                     let whisperStart = CFAbsoluteTimeGetCurrent()
                     var transcript: String?
                     do {
@@ -541,6 +596,9 @@ final class CaptionOrchestrator: ObservableObject {
                             transcript: nil,
                             whisperModel: nil
                         )
+                        self.endLane(whisperLaneID)
+                        self.recordCompletion(filename: filename, vlmSeconds: vlmSec,
+                                              whisperSeconds: nil, note: "no transcript")
                         liveCaptioned += 1
                         return
                     } catch {
@@ -556,13 +614,22 @@ final class CaptionOrchestrator: ObservableObject {
                     )
                     let whisperSec = CFAbsoluteTimeGetCurrent() - whisperStart
                     appLog.write(String(format: "Pipeline Whisper done: %@ — %.1fs", filename, whisperSec))
+                    self.endLane(whisperLaneID)
+                    self.recordCompletion(
+                        filename: filename,
+                        vlmSeconds: vlmSec,
+                        whisperSeconds: transcript != nil ? whisperSec : nil,
+                        note: transcript != nil ? nil : "no transcript"
+                    )
                     liveCaptioned += 1
                     publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
                 }
             } catch is CancellationError {
+                endLane(vlmLaneID)
                 captionOrchLog.notice("Dossier: VLM cancellation at \(filename, privacy: .public)")
                 break
             } catch {
+                endLane(vlmLaneID)
                 liveFailed += 1
                 captionOrchLog.warning("Dossier: VLM error on \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
@@ -576,6 +643,9 @@ final class CaptionOrchestrator: ObservableObject {
         // the VLM result).
         if Task.isCancelled { pendingWhisper?.cancel() }
         await pendingWhisper?.value
+
+        // Batch settled — nothing is in flight. History stays.
+        clearActiveLanes()
 
         let elapsed = CFAbsoluteTimeGetCurrent() - started
         let captioned = liveCaptioned
@@ -591,7 +661,13 @@ final class CaptionOrchestrator: ObservableObject {
     }
 
     /// Serial fallback when no transcriber is configured (no overlap benefit).
-    private func runDossierBatchSerial(
+    ///
+    /// `internal` (not `private`) so CaptionOrchestratorActivityTests can
+    /// drive this path deterministically — the public entry point's
+    /// nil-transcriber fallback resolves ToolLocator, which on a dev box
+    /// with venv-mlx installed silently upgrades the run to the
+    /// pipelined path with a REAL Whisper subprocess.
+    func runDossierBatchSerial(
         runner: CaptionRunner,
         transcriber: AudioTranscriber?,
         candidates: [VideoRecord],
@@ -607,6 +683,7 @@ final class CaptionOrchestrator: ObservableObject {
             if Task.isCancelled {
                 captionOrchLog.notice("Dossier: cancelled at file \(idx) of \(total)")
                 appLog.write("Dossier: cancelled at file \(idx) of \(total) (done \(liveCaptioned), skipped \(liveSkipped), failed \(liveFailed))")
+                clearActiveLanes()
                 currentStatus = .finished(captioned: liveCaptioned, skipped: liveSkipped, failed: liveFailed)
                 return
             }
@@ -634,10 +711,20 @@ final class CaptionOrchestrator: ObservableObject {
             let dur = max(0.5, record.durationSeconds)
             let timestamps = framesEvenlySpaced(framesPerFile: framesPerFile, durationSec: dur)
 
+            // Dashboard lane: serial mode shows the VLM lane only —
+            // there is no overlapped Whisper stage to track.
+            let vlmLaneID = beginLane(
+                stage: Self.stageDisplayName(forModelID: runner.modelID),
+                verb: "extracting scenes…",
+                filename: filename
+            )
+
             do {
+                let vlmStart = CFAbsoluteTimeGetCurrent()
                 let extraction = try await runner.dossier(
                     videoPath: path, atTimestamps: timestamps
                 )
+                let vlmSec = CFAbsoluteTimeGetCurrent() - vlmStart
 
                 var transcript: String?
                 if let transcriber {
@@ -656,19 +743,30 @@ final class CaptionOrchestrator: ObservableObject {
                     transcript: transcript,
                     whisperModel: transcript != nil ? transcriber?.modelID : nil
                 )
+                endLane(vlmLaneID)
+                recordCompletion(
+                    filename: filename,
+                    vlmSeconds: vlmSec,
+                    whisperSeconds: nil,
+                    note: transcript != nil ? nil : "no transcript"
+                )
                 liveCaptioned += 1
             } catch is CancellationError {
                 captionOrchLog.notice("Dossier: cancelled at \(filename, privacy: .public)")
                 appLog.write("Dossier: cancelled mid-file \(filename) (done \(liveCaptioned), skipped \(liveSkipped), failed \(liveFailed))")
+                clearActiveLanes()
                 currentStatus = .finished(captioned: liveCaptioned, skipped: liveSkipped, failed: liveFailed)
                 return
             } catch {
+                endLane(vlmLaneID)
                 liveFailed += 1
                 captionOrchLog.warning("Dossier: error on \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
 
             publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
         }
+
+        clearActiveLanes()
 
         let elapsed = CFAbsoluteTimeGetCurrent() - started
         let c = self.liveCaptioned, s = self.liveSkipped, f = self.liveFailed
@@ -860,6 +958,80 @@ final class CaptionOrchestrator: ObservableObject {
         liveFailed = 0
         liveCurrentIndex = 0
         liveTotal = 0
+    }
+
+    // MARK: - Live pipeline activity state
+    //
+    // Drives the dashboard's "Now Analyzing" / "Recently Completed"
+    // panels. All mutation happens on the MainActor (the class is
+    // @MainActor — including the chained Whisper tasks, which are
+    // declared `Task { @MainActor in ... }`), so plain array writes
+    // are safe without locking.
+
+    /// In-flight stage lanes ("Now Analyzing"). Cleared when a batch
+    /// settles — finished OR cancelled.
+    @Published var activeLanes: [PipelineLane] = []
+
+    /// Completed-file history ("Recently Completed") — newest first,
+    /// capped at `recentActivityCap`. Deliberately NOT cleared at
+    /// batch end: history persists until the next app run.
+    @Published var recentActivity: [CompletedActivity] = []
+
+    /// Hard cap on the history list. 8 rows fit the dashboard without
+    /// scrolling; also the memory bound (a handful of small structs —
+    /// worst case well under 8 KB).
+    static let recentActivityCap = 8
+
+    /// Map an engine modelID to a short stage family name for the lane
+    /// header. Unknown engines fall through to their raw modelID, so a
+    /// new stage appears on the dashboard with zero UI changes.
+    static func stageDisplayName(forModelID id: String) -> String {
+        let lower = id.lowercased()
+        if lower.contains("whisper") { return "Whisper" }
+        if lower.contains("vlm") || lower.contains("qwen") { return "MLXVLM" }
+        return id
+    }
+
+    /// Start (or restart) the lane for `stage`. Returns the lane id so
+    /// the caller can end exactly the lane it started.
+    @discardableResult
+    func beginLane(stage: String, verb: String, filename: String) -> UUID {
+        let lane = PipelineLane(
+            id: UUID(), filename: filename,
+            stageName: stage, verb: verb, startedAt: Date()
+        )
+        // One file per stage: replace any stale lane for the same stage.
+        activeLanes.removeAll { $0.stageName == stage }
+        activeLanes.append(lane)
+        return lane.id
+    }
+
+    /// End a specific lane. No-op if it was already replaced/cleared.
+    func endLane(_ id: UUID) {
+        activeLanes.removeAll { $0.id == id }
+    }
+
+    /// Batch settled (finished or cancelled) — nothing is in flight.
+    func clearActiveLanes() {
+        activeLanes.removeAll()
+    }
+
+    /// Prepend a completed file to the history, enforcing the cap.
+    func recordCompletion(
+        filename: String,
+        vlmSeconds: Double?,
+        whisperSeconds: Double?,
+        note: String?
+    ) {
+        let entry = CompletedActivity(
+            id: UUID(), filename: filename,
+            vlmSeconds: vlmSeconds, whisperSeconds: whisperSeconds,
+            note: note, syncedAt: Date()
+        )
+        recentActivity.insert(entry, at: 0)
+        if recentActivity.count > Self.recentActivityCap {
+            recentActivity.removeLast(recentActivity.count - Self.recentActivityCap)
+        }
     }
 }
 

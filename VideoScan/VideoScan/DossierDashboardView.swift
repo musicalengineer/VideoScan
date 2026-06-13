@@ -1,12 +1,5 @@
 import SwiftUI
 import Combine
-import os
-
-/// File-scope (not a View static) so the detached fleet-load task can
-/// log without touching main-actor-isolated state. Per-tick duration
-/// lands at .debug so the off-main fix is verifiable from `log stream`.
-private let dashboardLog = Logger(subsystem: "Rick-Breen.VideoScan",
-                                  category: "dossierDashboard")
 
 // MARK: - Dossier Dashboard
 //
@@ -18,11 +11,13 @@ private let dashboardLog = Logger(subsystem: "Rick-Breen.VideoScan",
 //      records and per-channel coverage. Updated by both the in-app
 //      orchestrator's writeback AND the live-reload poller that
 //      ingests external worker JSONL deltas via the merger.
-//   2. The shared JSONL delta directory
-//      (/Volumes/Crucial2TB/dossier-deltas/*.jsonl) — per-host line
-//      counts and last-write timestamps so Rick can see which fleet
-//      members are alive and how many records each has produced this
-//      session.
+//   2. The orchestrator's live pipeline activity feed
+//      (`activeLanes` / `recentActivity`) — what each stage is
+//      working on right now, plus the trailing history of completed
+//      files with per-stage timings. This replaced the per-host
+//      "Participating Computers" fleet panel (2026-06-12); the
+//      FleetStats/WorkerHost machinery below is kept because the
+//      fleet may return and the parsing logic has unit tests.
 //
 // The dial reflects catalog-wide progress (dossier'd / total) rather
 // than the in-app sweep's per-batch progress, because in practice the
@@ -39,25 +34,11 @@ struct DossierDashboardView: View {
     @EnvironmentObject var model: VideoScanModel
     @AppStorage("DossierAutoResume") private var autoResume: Bool = false
 
-    /// Per-worker JSONL stats. Refreshed by the timer below; never
-    /// blocking the main thread on its read.
-    @State private var fleet: FleetStats = .empty
-
-    /// Per-file (mtime, size) → parsed-result cache from the previous
-    /// tick. Workers append slowly relative to the 5s tick, so most
-    /// ticks see unchanged files and skip the read entirely.
-    @State private var fleetCache: [WorkerHost: FleetStats.CachedEntry] = [:]
-
-    /// Re-entrancy guard for the async fleet load. If Crucial2TB is
-    /// asleep or an SMB hiccup makes one tick slow, we skip subsequent
-    /// ticks instead of stacking up loads.
-    @State private var refreshInFlight = false
-
     /// Sliding-window rate of records added to the catalog. Driven
-    /// by the same refresh tick as the fleet stats — each 5s tick
-    /// records (count, now) into the window; the window itself is
-    /// trimmed to the last 5 minutes inside RateTracker. Public
-    /// surface is just `rate.perMinute` for display.
+    /// by the 5s refresh tick — each tick records (count, now) into
+    /// the window; the window itself is trimmed to the last 5 minutes
+    /// inside RateTracker. Public surface is just `rate.perMinute`
+    /// for display.
     @State private var rate: RateTracker = .init()
     @State private var dossieredCount: Int = 0
     @State private var totalCount: Int = 0
@@ -66,9 +47,10 @@ struct DossierDashboardView: View {
     @State private var strongDatesCount: Int = 0
     @State private var transcriptsCount: Int = 0
 
-    /// Tick the UI every 5s so the dial / counters / fleet panel
-    /// stay current. Matches the merger's 60s catalog write cadence —
-    /// the dial updates well within a worker's per-file budget.
+    /// Tick the UI every 5s so the dial / counters stay current.
+    /// (The activity panels don't need this — they observe the
+    /// orchestrator's @Published lanes directly and run their own
+    /// 1s TimelineView clock for the elapsed/relative readouts.)
     private let refreshTimer = Timer.publish(every: 5, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -107,28 +89,60 @@ struct DossierDashboardView: View {
                 Spacer()
             }
 
-            // MARK: Per-host fleet panel
-            GroupBox(label:
-                HStack(spacing: 4) {
-                    Text("Participating Computers").font(.headline)
-                    Spacer() 
-                    Text("from JSONL deltas — refreshed every 5s")
-                        .font(.caption2)
+            // MARK: Live pipeline activity
+            //
+            // Mirrors what the log shows, cleaned up: one row per
+            // in-flight stage, plus the trailing completed-file
+            // history. Both lists come straight from the
+            // orchestrator's @Published activity feed; the 1s
+            // TimelineView clock below re-evaluates ONLY these
+            // subtrees so the elapsed "(Ns)" / "41s ago" readouts
+            // tick without touching the rest of the window.
+
+            GroupBox(label: Text("Now Analyzing").font(.headline)) {
+                if captionOrchestrator.activeLanes.isEmpty {
+                    Text("pipeline idle — press Analyze Local Media")
+                        .font(.system(size: 12))
                         .foregroundColor(.secondary)
-                }
-            ) {
-                VStack(spacing: 6) {
-                    ForEach(WorkerHost.allCases, id: \.self) { host in
-                        FleetRow(host: host, stat: fleet[host])
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 4)
+                } else {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(captionOrchestrator.activeLanes) { lane in
+                                ActiveLaneRow(lane: lane, now: context.date)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 4)
                     }
-                    if fleet.isEmpty {
-                        Text("No worker JSONLs found at /Volumes/Crucial2TB/dossier-deltas/")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .padding(.vertical, 4)
-                    }
                 }
-                .padding(.vertical, 4)
+            }
+
+            GroupBox(label: Text("Recently Completed").font(.headline)) {
+                if captionOrchestrator.recentActivity.isEmpty {
+                    Text("no files analyzed yet this session")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 4)
+                } else {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(captionOrchestrator.recentActivity) { item in
+                                CompletedActivityRow(item: item, now: context.date)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 4)
+                    }
+                    // Subtle slide-in when a new row lands at the top.
+                    .animation(.default, value: captionOrchestrator.recentActivity)
+                }
             }
 
             // MARK: Channel totals (catalog-wide, across both fleet and in-app sweep)
@@ -184,11 +198,13 @@ struct DossierDashboardView: View {
             }
         }
         .padding(20)
-        .frame(minWidth: 700, minHeight: 700)
-        .onAppear { refreshCounts(); refreshFleet() }
+        // minHeight grew 700 → 760: the two activity sections can run
+        // taller than the 3-row fleet panel they replaced (2 lanes +
+        // up to 8 history rows).
+        .frame(minWidth: 700, minHeight: 760)
+        .onAppear { refreshCounts() }
         .onReceive(refreshTimer) { _ in
             refreshCounts()
-            refreshFleet()
         }
     }
 
@@ -215,35 +231,92 @@ struct DossierDashboardView: View {
         if pct < 1 && dossieredCount > 0 { return "<1%" }
         return "\(Int(pct))%"
     }
+}
 
-    // MARK: - Fleet refresh
+// MARK: - Live activity rows
 
-    // The load runs OFF the main actor — the JSONL deltas have grown to
-    // tens of MB and the old synchronous read+split was costing ~2s of
-    // contiguous main-thread work per 5s tick (measured 2026-06-10,
-    // 64% of main-thread samples). C++ analogy: this is "post the work
-    // to a background thread pool, marshal a value-type snapshot back
-    // to the UI thread" — Task.detached is the pool submit, MainActor.run
-    // is the dispatch-to-UI-thread.
-    private func refreshFleet() {
-        guard !refreshInFlight else {
-            dashboardLog.debug("fleet refresh: previous tick still in flight — skipping")
-            return
-        }
-        refreshInFlight = true
-        let dir = URL(fileURLWithPath: "/Volumes/Crucial2TB/dossier-deltas")
-        let cacheIn = fleetCache
-        Task.detached(priority: .utility) {
-            let t0 = Date()
-            let (stats, cacheOut) = FleetStats.load(from: dir, cache: cacheIn)
-            let ms = Date().timeIntervalSince(t0) * 1000
-            dashboardLog.debug("fleet refresh tick: \(ms, format: .fixed(precision: 1)) ms (off-main)")
-            await MainActor.run {
-                fleet = stats
-                fleetCache = cacheOut
-                refreshInFlight = false
+/// One in-flight pipeline stage: spinner, filename, stage line with a
+/// live elapsed readout. `now` comes from the enclosing TimelineView's
+/// 1s clock so the "(Ns)" ticks without any per-row timers.
+private struct ActiveLaneRow: View {
+    let lane: PipelineLane
+    let now: Date
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            SpinningRing(color: .cyan, size: 16)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(lane.filename)
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text("\(lane.stageName) — \(lane.verb)  (\(elapsedSeconds)s)")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
             }
+            Spacer(minLength: 0)
         }
+    }
+
+    private var elapsedSeconds: Int {
+        max(0, Int(now.timeIntervalSince(lane.startedAt)))
+    }
+}
+
+/// One completed file: checkmark, filename, per-stage timing summary,
+/// relative "how long ago" on the trailing edge (live via the same
+/// TimelineView clock as the lanes).
+private struct CompletedActivityRow: View {
+    let item: CompletedActivity
+    let now: Date
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 14))
+                .foregroundColor(.green)
+            Text(item.filename)
+                .font(.system(size: 13, weight: .medium))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: 280, alignment: .leading)
+            Text(summary)
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 8)
+            Text(relativeAge)
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+        }
+    }
+
+    /// "VLM 11.2s · Whisper 6.4s · Synced" — segments drop out when a
+    /// stage didn't run, and the note ("no transcript") slots in where
+    /// the missing stage's timing would have been.
+    private var summary: String {
+        var parts: [String] = []
+        if let v = item.vlmSeconds {
+            parts.append(String(format: "VLM %.1fs", v))
+        }
+        if let w = item.whisperSeconds {
+            parts.append(String(format: "Whisper %.1fs", w))
+        }
+        if let note = item.note {
+            parts.append(note)
+        }
+        parts.append("Synced")
+        return parts.joined(separator: " · ")
+    }
+
+    private var relativeAge: String {
+        let age = now.timeIntervalSince(item.syncedAt)
+        if age < 5 { return "just now" }
+        if age < 60 { return "\(Int(age))s ago" }
+        if age < 3600 { return "\(Int(age / 60))m ago" }
+        if age < 86400 { return "\(Int(age / 3600))h ago" }
+        return "\(Int(age / 86400))d ago"
     }
 }
 
@@ -417,9 +490,14 @@ struct RateTracker: Equatable {
 }
 
 // MARK: - Fleet stats
+//
+// No longer rendered by the dashboard (the "Participating Computers"
+// panel was replaced by the live pipeline activity sections,
+// 2026-06-12). Kept because the JSONL parsing logic has unit tests
+// (FleetStatsTailTests) and the multi-machine fleet may return.
 
 /// Known worker hosts. Add an entry here when expanding the fleet
-/// (e.g. add Intel one day) — the dashboard's `ForEach` picks it up.
+/// (e.g. add Intel one day).
 enum WorkerHost: String, CaseIterable {
     case m4 = "RicksM4"
     case m5 = "RicksM5"
@@ -687,66 +765,6 @@ struct FleetStats {
             targetsTotal: obj["targetsTotal"] as? Int ?? 0,
             exitedAt: exitDate
         )
-    }
-}
-
-// MARK: - Fleet row
-
-private struct FleetRow: View {
-    let host: WorkerHost
-    let stat: FleetStats.HostStat
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(host.color)
-                .frame(width: 10, height: 10)
-            Text(host.displayName)
-                .font(.system(size: 12, weight: .medium))
-                .frame(width: 160, alignment: .leading)
-            Text("\(stat.recordCount) record(s)")
-                .font(.system(size: 12, design: .monospaced))
-                .frame(width: 110, alignment: .leading)
-                .foregroundColor(.secondary)
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(stat.aliveColor)
-                    .frame(width: 10, height: 10)
-                Text(stat.aliveLabel)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundColor(stat.aliveColor)
-            }
-            .frame(width: 110, alignment: .leading)
-            Spacer()
-            // Sentinel summary when worker has exited cleanly:
-            // "542 ok, 3 failed". Replaces the relative-time hint, which
-            // is the more useful info during a run but redundant once
-            // the worker is done.
-            if let s = stat.sentinel {
-                Text("\(s.processedOk) ok, \(s.processedFailed) failed")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            } else if let last = stat.lastWrite {
-                Text(relativeTime(last))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-        }
-    }
-
-    private func relativeTime(_ date: Date) -> String {
-        let age = Date().timeIntervalSince(date)
-        if age < 60 { return "\(Int(age))s ago" }
-        if age < 3600 {
-            let m = Int(age / 60)
-            return "\(m)m ago"
-        }
-        if age < 86400 {
-            let h = Int(age / 3600)
-            return "\(h)h ago"
-        }
-        let d = Int(age / 86400)
-        return "\(d)d ago"
     }
 }
 
