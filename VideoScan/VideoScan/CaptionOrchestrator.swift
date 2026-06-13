@@ -120,6 +120,15 @@ struct PipelineLane: Identifiable, Equatable {
 struct CompletedActivity: Identifiable, Equatable {
     let id: UUID
     let filename: String
+    /// Full path — the dedup key for Show in Catalog navigation.
+    /// Without this, filename-based lookup picks the first record
+    /// matching `filename`, which is wrong for duplicates (e.g.
+    /// `_combined.mov` files produced per-volume share the same leaf
+    /// name across drives). Rick 2026-06-13 caught this on a
+    /// `00005.V14D1BBE8B_combined.mov` whose Show in Catalog jumped
+    /// to a sibling with no captions, making the dashboard look like
+    /// it was lying.
+    let path: String
     /// Wall-clock seconds the VLM dossier extraction took. nil only if
     /// the stage didn't run (not the case today, but the field is
     /// optional so future stages can report partial pipelines).
@@ -1491,6 +1500,7 @@ final class CaptionOrchestrator: ObservableObject {
     /// (Rick 2026-06-13 — indicators moved off the in-flight lane).
     func recordCompletion(
         filename: String,
+        path: String,
         vlmSeconds: Double?,
         whisperSeconds: Double?,
         note: String?,
@@ -1500,7 +1510,7 @@ final class CaptionOrchestrator: ObservableObject {
         transcriptFailed: Bool = false
     ) {
         let entry = CompletedActivity(
-            id: UUID(), filename: filename,
+            id: UUID(), filename: filename, path: path,
             vlmSeconds: vlmSeconds, whisperSeconds: whisperSeconds,
             note: note, syncedAt: Date(),
             isVideoOnly: isVideoOnly,
@@ -1525,13 +1535,17 @@ final class CaptionOrchestrator: ObservableObject {
         note: String?
     ) {
         guard let lane = activeLanes.first(where: { $0.id == laneID }) else {
-            // Defensive: lane already ended. Record without indicators.
-            recordCompletion(filename: "?", vlmSeconds: vlmSeconds,
+            // Defensive: lane already ended. Record without indicators
+            // or path — the completion still shows in the history but
+            // Show in Catalog won't have a target.
+            recordCompletion(filename: "?", path: "",
+                             vlmSeconds: vlmSeconds,
                              whisperSeconds: whisperSeconds, note: note)
             return
         }
         recordCompletion(
             filename: lane.filename,
+            path: lane.path,
             vlmSeconds: vlmSeconds,
             whisperSeconds: whisperSeconds,
             note: note,

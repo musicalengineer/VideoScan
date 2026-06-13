@@ -174,7 +174,7 @@ struct DossierDashboardView: View {
                                 CompletedActivityRow(
                                     item: item,
                                     now: context.date,
-                                    onShowInCatalog: { item in showInCatalog(filename: item.filename) }
+                                    onShowInCatalog: { item in showInCatalog(path: item.path) }
                                 )
                             }
                         }
