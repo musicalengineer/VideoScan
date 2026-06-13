@@ -243,6 +243,19 @@ struct MLXWhisperTranscriber: AudioTranscriber {
 // and ordering contract are unchanged — see SubprocessEnv.swift for
 // the doc comment.
 
+/// Why the Whisper subprocess died. Set from inside the deadline
+/// Task (`deadlineHit`) or onCancel handler (`userCancelled`), read
+/// once after waitUntilExit. `@unchecked Sendable` is fine — each
+/// field is mutated by exactly one writer, then read after a
+/// happens-before barrier (proc exit / handler return).
+///
+/// File-scope (not nested in transcribe) so `finishTranscribe` can
+/// take it as a typed parameter.
+private final class KillReason: @unchecked Sendable {
+    var deadlineHit = false
+    var userCancelled = false
+}
+
 struct PythonSubprocessAudioTranscriber: AudioTranscriber {
 
     let modelID: String = "python-whisper-medium-mlx-q4"
@@ -356,68 +369,113 @@ struct PythonSubprocessAudioTranscriber: AudioTranscriber {
             )
         }
 
-        // Track which reason killed the subprocess. The cancelTask
-        // races between Swift-level cancellation (user clicks Skip /
-        // batch cancel / shutdown drain) and the wall-clock deadline,
-        // and we need to disambiguate after waitUntilExit so the
-        // caller throws the right typed error. `@unchecked Sendable`
-        // is fine here — we mutate it from one Task and read it
-        // exactly once after that Task has finished.
-        final class KillReason: @unchecked Sendable {
-            var deadlineHit = false
-        }
+        // See KillReason (file-scope) for why we hand-roll a small
+        // mutable record instead of returning multiple Bools through
+        // the cancellation handler.
         let killReason = KillReason()
 
-        // Honor cancellation AND the wall-clock deadline. Single poll
-        // loop checks both every 200ms. On either trip: SIGTERM, then
-        // a brief grace period, then SIGKILL if the subprocess
-        // ignored the soft signal. Same TERM→KILL escalation pattern
-        // as ProcessRunner (which we'll migrate this code onto later
-        // per docs/refactor_suggestions.md item #3).
+        // Capture the subprocess PID up front as a Sendable Int32 so
+        // the @Sendable onCancel closure can SIGTERM directly without
+        // capturing the non-Sendable Process reference. This is the
+        // KEY fix for Skip not working: a bare `Task { ... }` polling
+        // loop does NOT inherit the parent task's cancellation
+        // (per Apple docs — Task.init is sibling, not child), so
+        // checking Task.isCancelled inside an inner Task never sees
+        // a cancel of the orchestrator's pendingWhisperTask.
+        // withTaskCancellationHandler's onCancel fires synchronously
+        // when the parent is cancelled — that's how we plug
+        // skipLane → SIGTERM end-to-end.
+        let subprocessPID = proc.processIdentifier
         let killGraceSeconds: Double = 2.0
-        let cancelTask = Task {
+
+        // Deadline watcher: still a polling Task, but now its ONLY
+        // job is the wall-clock deadline. User cancellation goes via
+        // the handler below. Bounded loop — exits when proc dies OR
+        // deadline trips OR (via defer) when the function returns.
+        let deadlineTask = Task {
+            guard let deadline = deadlineSeconds else { return }
             while proc.isRunning {
-                if Task.isCancelled {
-                    transcribeLogger.notice("whisper subprocess cancelled for \(filename, privacy: .public) — sending SIGTERM")
-                    proc.terminate()
-                    try? await Task.sleep(for: .seconds(killGraceSeconds))
-                    if proc.isRunning {
-                        transcribeLogger.warning("whisper subprocess ignored SIGTERM for \(filename, privacy: .public) — sending SIGKILL")
-                        kill(proc.processIdentifier, SIGKILL)
-                    }
-                    return
-                }
-                if let deadline = deadlineSeconds,
-                   CFAbsoluteTimeGetCurrent() - started > deadline {
+                if CFAbsoluteTimeGetCurrent() - started > deadline {
                     killReason.deadlineHit = true
                     transcribeLogger.warning("whisper subprocess exceeded \(deadline, format: .fixed(precision: 0), privacy: .public)s deadline for \(filename, privacy: .public) — sending SIGTERM")
-                    proc.terminate()
+                    kill(subprocessPID, SIGTERM)
                     try? await Task.sleep(for: .seconds(killGraceSeconds))
                     if proc.isRunning {
                         transcribeLogger.warning("whisper subprocess ignored SIGTERM (deadline) for \(filename, privacy: .public) — sending SIGKILL")
-                        kill(proc.processIdentifier, SIGKILL)
+                        kill(subprocessPID, SIGKILL)
                     }
                     return
                 }
                 try? await Task.sleep(for: .milliseconds(200))
             }
         }
-        defer { cancelTask.cancel() }
+        defer { deadlineTask.cancel() }
 
-        // Drain stdout to the app log line-by-line so progress shows up
-        // alongside other engines' output. Same line-buffer trick the
-        // captioning runner uses.
-        let stdoutData = await Task.detached {
-            stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-        }.value
-        let stderrData = await Task.detached {
-            stderrPipe.fileHandleForReading.readDataToEndOfFile()
-        }.value
+        // Cancellation-aware run: onCancel fires the instant parent
+        // (orchestrator's pendingWhisperTask) is cancelled — which is
+        // exactly what skipLane does. We SIGTERM immediately so the
+        // subprocess exits and the blocking pipe reads unblock; the
+        // 2s SIGTERM → SIGKILL escalation happens in a detached
+        // fire-and-forget so onCancel can return immediately.
+        return try await withTaskCancellationHandler {
+            // Drain stdout to the app log line-by-line so progress
+            // shows up alongside other engines' output. These reads
+            // ARE blocking — but once proc.terminate() fires from
+            // onCancel, the pipes close and the reads return.
+            let stdoutData = await Task.detached {
+                stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+            }.value
+            let stderrData = await Task.detached {
+                stderrPipe.fileHandleForReading.readDataToEndOfFile()
+            }.value
 
-        proc.waitUntilExit()
-        try Task.checkCancellation()
+            proc.waitUntilExit()
+            // checkCancellation throws CancellationError if parent
+            // was cancelled — that's our signal to the orchestrator
+            // to bank VLM-only and tag "user skipped".
+            try Task.checkCancellation()
 
-        let exitCode = proc.terminationStatus
+            return try finishTranscribe(
+                filename: filename,
+                exitCode: proc.terminationStatus,
+                stdoutData: stdoutData,
+                stderrData: stderrData,
+                stderrCapMax: stderrCapMax,
+                outFile: outFile,
+                started: started,
+                killReason: killReason,
+                deadlineSeconds: deadlineSeconds
+            )
+        } onCancel: {
+            killReason.userCancelled = true
+            transcribeLogger.notice("whisper subprocess cancelled for \(filename, privacy: .public) — sending SIGTERM")
+            kill(subprocessPID, SIGTERM)
+            // 2s grace then SIGKILL if Python didn't exit. Detached
+            // because onCancel is synchronous; this fire-and-forget
+            // task escalates safely after the handler returns.
+            Task.detached {
+                try? await Task.sleep(for: .seconds(killGraceSeconds))
+                kill(subprocessPID, SIGKILL)  // no-op if PID already reaped
+            }
+        }
+    }
+
+    /// Post-exit accounting extracted into a helper so the inline
+    /// transcribe body stays readable inside the cancellation handler.
+    /// Threads everything via parameters — no implicit captures so it
+    /// composes cleanly with whatever isolation the caller is on.
+    private func finishTranscribe(
+        filename: String,
+        exitCode: Int32,
+        stdoutData: Data,
+        stderrData: Data,
+        stderrCapMax: Int,
+        outFile: URL,
+        started: CFAbsoluteTime,
+        killReason: KillReason,
+        deadlineSeconds: Double?
+    ) throws -> String {
+
         let stderrTail: String = {
             let bytes = stderrData.suffix(stderrCapMax)
             return String(data: bytes, encoding: .utf8) ?? ""

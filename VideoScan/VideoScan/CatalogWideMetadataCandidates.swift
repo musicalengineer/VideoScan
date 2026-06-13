@@ -11,6 +11,10 @@ import Foundation
 //     might still consume", not media already retired.
 //   - purgedAt == nil — never offer to re-process a record the user
 //     has explicitly removed.
+//   - mediaDisposition != .confirmedJunk — Rick 2026-06-13: junk is
+//     a deliberate "do not analyze, just waiting to be culled" state.
+//     Pre-rename it was being analyzed and wasting hours of Whisper
+//     time on files the user had already decided to delete.
 //   - file lives under a reachable scan target — only what we can
 //     actually open. Offline volumes queue automatically for the next
 //     run once they're mounted again.
@@ -43,6 +47,12 @@ nonisolated func pfCatalogWideMetadataCandidates(
         guard stage == .cataloged || stage == .workbench else { return false }
         // Never re-process a purged record.
         guard rec.purgedAt == nil else { return false }
+        // Junk is a "do not analyze" state — the user has already
+        // decided to cull these. Analyzing them wastes Whisper time
+        // (potentially hours on bad audio) and inflates the dial's
+        // Remaining count with files that should never be on the work
+        // list to begin with.
+        guard rec.mediaDisposition != .confirmedJunk else { return false }
         // Reachable volume.
         return prefixes.contains { rec.fullPath.hasPrefix($0) }
     }
