@@ -194,6 +194,75 @@ struct CaptionOrchestratorActivityTests {
         }
     }
 
+    // MARK: - User-initiated skip cancels in-flight Whisper
+
+    @Test("skipLane during a slow Whisper banks VLM-only with the 'user skipped' note")
+    func skipLaneCancelsInFlightWhisper() async {
+        let model = VideoScanModel()
+        let (paths, recs) = makeActivityFixtures(count: 1, tag: "skip")
+        defer { removeAll(paths) }
+
+        model.records = recs
+        model.scanTargets = [makeReachableTarget(at: NSTemporaryDirectory())]
+
+        // modelIDs MUST contain the family hint so stageDisplayName
+        // maps them to "MLXVLM" / "Whisper" — that's what the dashboard
+        // (and this test's polling loop) looks for. Pre-existing
+        // activity tests don't read stageName so they got away with
+        // arbitrary stub names; we can't.
+        let stub = StubDossierRunner(modelID: "stub-vlm-skip")
+        let orch = CaptionOrchestrator(runnerFactory: { stub })
+        // 30s synthetic Whisper. We never let it complete — the test
+        // calls skipLane and asserts the CancellationError path bails
+        // immediately. A short stub delay (e.g. 200ms) would be racy:
+        // the test's polling loop could miss the Whisper window.
+        let transcriber = StubAudioTranscriber(
+            modelID: "stub-whisper-skip",
+            delay: .seconds(30)
+        )
+
+        // Run the batch off-test-task so we can observe activeLanes
+        // and call skipLane while it's mid-flight.
+        let batch = Task { await orch.startCatalogWideDossier(model: model, transcriber: transcriber) }
+
+        // Spin until the Whisper lane shows up. Bounded retry: 5s at
+        // 25ms intervals = 200 attempts. If we never see Whisper the
+        // pipeline is broken; failing the test with a clear message is
+        // better than hanging indefinitely.
+        var whisperLaneID: UUID?
+        for _ in 0..<200 {
+            try? await Task.sleep(for: .milliseconds(25))
+            if let lane = orch.activeLanes.first(where: { $0.stageName == "Whisper" }) {
+                whisperLaneID = lane.id
+                break
+            }
+        }
+        guard let laneID = whisperLaneID else {
+            Issue.record("Whisper lane never appeared — pipeline never reached transcription stage")
+            batch.cancel()
+            return
+        }
+
+        orch.skipLane(laneID)
+        await batch.value
+
+        guard case .finished(let captioned, _, _) = orch.currentStatus else {
+            Issue.record("Expected .finished, got \(orch.currentStatus)")
+            return
+        }
+        // The file IS captioned (VLM result banked); we just dropped
+        // the transcript. liveCaptioned counts every file that landed
+        // a dossier — VLM-only is still a dossier.
+        #expect(captioned == 1)
+        #expect(orch.activeLanes.isEmpty, "lane must end after skip")
+        #expect(orch.recentActivity.count == 1)
+        let entry = orch.recentActivity[0]
+        #expect(entry.vlmSeconds != nil, "VLM should have completed and recorded its timing")
+        #expect(entry.whisperSeconds == nil, "Whisper was skipped, so it produced no timing")
+        #expect(entry.note == "user skipped",
+                "skip must tag the completion 'user skipped' so the dashboard distinguishes it from a Whisper failure")
+    }
+
     // MARK: - Stage names are data-driven
 
     @Test("stage display names derive from modelIDs and pass unknown stages through")

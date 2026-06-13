@@ -166,6 +166,22 @@ final class CaptionOrchestrator: ObservableObject {
     /// flips the runner out promptly.
     private var activeTask: Task<Void, Never>?
 
+    /// In-flight Whisper task (pipelined path only — at most one
+    /// outstanding by design). Lifted from a loop-local in
+    /// `runDossierBatchPipelined` to instance state so `skipLane(_:)`
+    /// can cancel it from the UI when the user clicks Skip on a stuck
+    /// transcription. Always set together with `pendingWhisperLaneID`.
+    private var pendingWhisperTask: Task<Void, Never>?
+    private var pendingWhisperLaneID: UUID?
+
+    /// Lane IDs the user explicitly skipped (right-click → Skip). The
+    /// pipelined loop checks this set BEFORE dispatching Whisper (so a
+    /// skip during the VLM phase short-circuits Whisper) and the
+    /// Whisper task's CancellationError branch checks it to use the
+    /// "user skipped" note instead of "transcript failed". Cleared at
+    /// the start of every batch — skips don't persist across runs.
+    private var userSkippedLaneIDs: Set<UUID> = []
+
     /// Injectable engine. Default builds an MLXVLMCaptionRunner. Tests
     /// can swap in a stub runner that returns deterministic captions
     /// without touching MLX.
@@ -534,7 +550,11 @@ final class CaptionOrchestrator: ObservableObject {
 
         // Whisper task for the previous file. Awaited before the next
         // Whisper dispatch (backpressure) and once after the loop so
-        // the summary below sees final counts.
+        // the summary below sees final counts. Always assigned together
+        // with `self.pendingWhisperTask` / `self.pendingWhisperLaneID`
+        // so `skipLane(_:)` can cancel exactly the right task from the
+        // UI — local-variable observers aren't a thing in Swift, so we
+        // mirror by hand at each assignment site.
         var pendingWhisper: Task<Void, Never>?
 
         for (idx, record) in candidates.enumerated() {
@@ -618,6 +638,8 @@ final class CaptionOrchestrator: ObservableObject {
                 // outstanding; every VLM result is handed off, never dropped.
                 await pendingWhisper?.value
                 pendingWhisper = nil
+                self.pendingWhisperTask = nil
+                self.pendingWhisperLaneID = nil
                 // Whisper slot just freed — flip the verb so the user
                 // sees the lane move from "waiting" to "transcribing"
                 // even before the subprocess actually starts.
@@ -642,6 +664,26 @@ final class CaptionOrchestrator: ObservableObject {
                     break
                 }
 
+                // User-initiated skip during the VLM phase: don't
+                // dispatch Whisper, bank VLM-only, tag "user skipped".
+                // We catch this BEFORE the video-only bypass so the
+                // user's intent wins over the auto-bypass and the note
+                // is correctly attributed.
+                if userSkippedLaneIDs.contains(laneID) {
+                    _ = model.applyDossier(
+                        extraction, to: path,
+                        vlmModel: vlmModelID,
+                        transcript: nil,
+                        whisperModel: nil
+                    )
+                    endLane(laneID)
+                    recordCompletion(filename: filename, vlmSeconds: vlmSec,
+                                     whisperSeconds: nil, note: "user skipped")
+                    liveCaptioned += 1
+                    publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
+                    continue
+                }
+
                 // Video-only record: skip Whisper entirely. Apply the
                 // dossier inline VLM-only so banking still happens in
                 // VLM-stage order. pendingWhisper stays nil — the NEXT
@@ -661,6 +703,11 @@ final class CaptionOrchestrator: ObservableObject {
                     continue
                 }
 
+                // Publish the lane ID BEFORE the task is created so a
+                // simultaneous skipLane(_:) call from the UI sees a
+                // matching pendingWhisperLaneID and finds the cancel
+                // target the moment we mirror pendingWhisperTask below.
+                self.pendingWhisperLaneID = laneID
                 pendingWhisper = Task { @MainActor [weak self] in
                     guard let self else { return }
                     appLog.write("Pipeline Whisper start: \(filename)")
@@ -670,17 +717,21 @@ final class CaptionOrchestrator: ObservableObject {
                         transcript = try await transcriber.transcribe(videoPath: path)
                     } catch is CancellationError {
                         // Cancelled mid-transcription: apply VLM-only so
-                        // the extraction isn't lost.
+                        // the extraction isn't lost. Note depends on who
+                        // pulled the cord — user via skipLane vs an
+                        // upstream task cancel (batch cancel / shutdown).
                         _ = model.applyDossier(
                             extraction, to: path,
                             vlmModel: vlmModelID,
                             transcript: nil,
                             whisperModel: nil
                         )
-                        self.updateLane(laneID, transcriptFailed: true)
+                        let userSkipped = self.userSkippedLaneIDs.contains(laneID)
+                        self.updateLane(laneID, transcriptFailed: !userSkipped)
                         self.endLane(laneID)
                         self.recordCompletion(filename: filename, vlmSeconds: vlmSec,
-                                              whisperSeconds: nil, note: "transcript failed")
+                                              whisperSeconds: nil,
+                                              note: userSkipped ? "user skipped" : "transcript failed")
                         liveCaptioned += 1
                         return
                     } catch {
@@ -721,6 +772,11 @@ final class CaptionOrchestrator: ObservableObject {
                     liveCaptioned += 1
                     publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
                 }
+                // Mirror the just-created task into instance state so
+                // skipLane(_:) can target it. Done OUTSIDE the closure
+                // so the reference is resolved (Swift forbids a Task's
+                // closure capturing the var being assigned to).
+                self.pendingWhisperTask = pendingWhisper
             } catch is CancellationError {
                 endLane(laneID)
                 captionOrchLog.notice("Dossier: VLM cancellation at \(filename, privacy: .public)")
@@ -740,6 +796,11 @@ final class CaptionOrchestrator: ObservableObject {
         // the VLM result).
         if Task.isCancelled { pendingWhisper?.cancel() }
         await pendingWhisper?.value
+        // Batch fully drained — clear the in-flight Whisper handles so
+        // a late skipLane(_:) call (e.g. UI race during shutdown) is a
+        // clean no-op rather than poking at a finished task.
+        self.pendingWhisperTask = nil
+        self.pendingWhisperLaneID = nil
 
         // Batch settled — nothing is in flight. History stays.
         clearActiveLanes()
@@ -835,7 +896,8 @@ final class CaptionOrchestrator: ObservableObject {
                 // the file has audio, transition the lane to the Whisper
                 // stage; otherwise the lane closes at end-of-iteration
                 // with captions ✓ and audio transcript ✗ / —.
-                if let transcriber, !hasNoAudio {
+                let userSkipped = userSkippedLaneIDs.contains(laneID)
+                if let transcriber, !hasNoAudio, !userSkipped {
                     updateLane(
                         laneID,
                         stage: Self.stageDisplayName(forModelID: transcriber.modelID),
@@ -848,7 +910,12 @@ final class CaptionOrchestrator: ObservableObject {
 
                 var transcript: String?
                 var transcriptFailed = false
-                if let transcriber, !hasNoAudio {
+                // Serial path skip: if the user clicked Skip on this
+                // lane during the VLM phase, bypass Whisper entirely.
+                // We can't cancel an inline await mid-transcription
+                // without wrapping in a Task; the pipelined path is
+                // the place where mid-flight skip works.
+                if let transcriber, !hasNoAudio, !userSkipped {
                     do {
                         transcript = try await transcriber.transcribe(videoPath: path)
                     } catch is CancellationError {
@@ -876,11 +943,14 @@ final class CaptionOrchestrator: ObservableObject {
                 //   nil              → transcript obtained (or empty
                 //                      string — Whisper ran)
                 //   "no audio"       → file has no audio stream by design
+                //   "user skipped"   → user right-clicked Skip on the lane
                 //   "transcript failed" → whisper threw
                 //   "no transcriber" → serial path, no transcriber wired
                 let note: String?
                 if transcript != nil {
                     note = nil
+                } else if userSkipped {
+                    note = "user skipped"
                 } else if hasNoAudio {
                     note = "no audio"
                 } else if transcriptFailed {
@@ -1112,6 +1182,43 @@ final class CaptionOrchestrator: ObservableObject {
         liveCurrentIndex = 0
         liveTotal = 0
         transcriptFailures = 0
+        // Stale user-skip flags from a prior batch must not leak into
+        // a fresh run — a lane ID is per-batch and never reused, but
+        // clearing the set keeps `userSkippedLaneIDs.contains(id)`
+        // semantics honest under repeated batches.
+        userSkippedLaneIDs.removeAll()
+    }
+
+    /// User-initiated skip on an in-flight file. Called from the
+    /// dashboard's right-click → Skip on an active lane row.
+    ///
+    /// Behavior depends on which stage the lane is currently in:
+    ///   - **Whisper stage** (most common — long subprocess): cancels
+    ///     the in-flight `pendingWhisperTask`. The existing
+    ///     CancellationError branch in the Whisper task banks VLM-only
+    ///     and tags the completion `"user skipped"`. The Swift Task
+    ///     cancellation propagates into AudioTranscriber's cancelTask
+    ///     poll, which calls `proc.terminate()` on the Python whisper
+    ///     subprocess.
+    ///   - **VLM stage**: VLM inference is GPU work that doesn't
+    ///     observe Swift cancellation cleanly, so we don't try to
+    ///     cancel mid-VLM. Instead we mark the lane as user-skipped;
+    ///     when the VLM finishes naturally the loop checks the set,
+    ///     skips Whisper dispatch entirely, banks VLM-only, and tags
+    ///     `"user skipped"`. Worst-case wait is one VLM duration —
+    ///     usually <30s on M4 Max.
+    ///
+    /// Idempotent: re-skipping a lane that already finished is a no-op.
+    func skipLane(_ id: UUID) {
+        userSkippedLaneIDs.insert(id)
+        // Whisper is the stuck case — if THIS lane is the one whose
+        // Whisper is in flight, kill it now. Cancelling a nil task is
+        // a no-op so the bookkeeping is safe even after the lane has
+        // moved on.
+        if pendingWhisperLaneID == id {
+            pendingWhisperTask?.cancel()
+        }
+        captionOrchLog.notice("skipLane: user skipped lane \(id, privacy: .public)")
     }
 
     // MARK: - Live pipeline activity state

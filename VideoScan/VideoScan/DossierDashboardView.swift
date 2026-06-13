@@ -126,7 +126,12 @@ struct DossierDashboardView: View {
                     TimelineView(.periodic(from: .now, by: 1)) { context in
                         VStack(alignment: .leading, spacing: 10) {
                             ForEach(Array(captionOrchestrator.activeLanes.prefix(Self.activeLanesVisibleCap))) { lane in
-                                ActiveLaneRow(lane: lane, now: context.date)
+                                ActiveLaneRow(
+                                    lane: lane,
+                                    now: context.date,
+                                    onSkip: { lane in captionOrchestrator.skipLane(lane.id) },
+                                    onShowInCatalog: { lane in showInCatalog(path: lane.path) }
+                                )
                             }
                             if captionOrchestrator.activeLanes.count > Self.activeLanesVisibleCap {
                                 Text("+ \(captionOrchestrator.activeLanes.count - Self.activeLanesVisibleCap) more in flight")
@@ -251,6 +256,27 @@ struct DossierDashboardView: View {
         if pct < 1 && dossieredCount > 0 { return "<1%" }
         return "\(Int(pct))%"
     }
+
+    /// Right-click → "Show in Catalog" on an active lane.
+    ///
+    /// 1) Look up the record by full path (the lane carries it).
+    /// 2) Switch the main window's `selectedTab` to the Catalog tab
+    ///    (index 1 in ContentView's tab order — @AppStorage so we can
+    ///    write through UserDefaults).
+    /// 3) Set `pendingCatalogSelection` — ContentView observes this
+    ///    via `.onChange` and routes the catalog table to focus +
+    ///    select that record.
+    /// 4) Bring the main window forward; the user's eyes follow the
+    ///    new focus.
+    ///
+    /// Silently no-ops if the record isn't in the catalog (e.g. a
+    /// lane for a file the merger has since purged).
+    private func showInCatalog(path: String) {
+        guard let rec = model.records.first(where: { $0.fullPath == path }) else { return }
+        UserDefaults.standard.set(1, forKey: "selectedTab")
+        model.pendingCatalogSelection = rec.id
+        MainWindowHelper.shared.openMainWindow()
+    }
 }
 
 // MARK: - Live activity rows
@@ -265,9 +291,16 @@ struct DossierDashboardView: View {
 ///   - Audio Transcript: gray dash for `isVideoOnly`; green ✓ when
 ///     `hasTranscript`; red ✗ when `transcriptFailed` or not yet.
 ///   - Captions: green ✓ when `hasCaptions`; red ✗ otherwise.
+///
+/// Right-click opens a context menu with **Skip** (cancels the file's
+/// in-flight Whisper or marks for skip-after-VLM) and **Show in
+/// Catalog** (jumps the main window to the catalog tab and selects
+/// the record).
 private struct ActiveLaneRow: View {
     let lane: PipelineLane
     let now: Date
+    let onSkip: (PipelineLane) -> Void
+    let onShowInCatalog: (PipelineLane) -> Void
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
@@ -285,6 +318,22 @@ private struct ActiveLaneRow: View {
             Spacer(minLength: 8)
             ChannelIndicator(label: "Audio Transcript", state: transcriptState)
             ChannelIndicator(label: "Captions", state: captionsState)
+        }
+        // Whole-row hit target for the context menu — anywhere on the
+        // row's strip is right-clickable so the user doesn't have to
+        // aim for the filename text specifically.
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button {
+                onSkip(lane)
+            } label: {
+                Label("Skip this file", systemImage: "forward.end.fill")
+            }
+            Button {
+                onShowInCatalog(lane)
+            } label: {
+                Label("Show in Catalog", systemImage: "film.stack")
+            }
         }
     }
 
