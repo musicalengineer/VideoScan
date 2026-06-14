@@ -496,7 +496,7 @@ struct VideoScanApp: App {
         .windowResizability(.contentSize)
         .defaultPosition(.topTrailing)
 
-        Window("Dossier Dashboard", id: "dossier") {
+        Window("Analyze Dashboard", id: "dossier") {
             DossierDashboardView()
                 .environmentObject(catalogModel)
                 .environmentObject(captionOrchestrator)
@@ -624,7 +624,7 @@ struct WindowMenuItems: View {
         }
         .keyboardShortcut("v", modifiers: [.command, .shift])
 
-        Button("Dossier Dashboard") {
+        Button("Analyze Dashboard") {
             openWindow(id: "dossier")
         }
         .keyboardShortcut("o", modifiers: [.command, .shift])
