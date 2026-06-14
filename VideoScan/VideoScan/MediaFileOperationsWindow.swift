@@ -226,6 +226,11 @@ struct MediaFileOperationRow: View {
     let isExpanded: Bool
     let onToggleExpand: () -> Void
 
+    /// For "Show in Catalog" on completed Reformat rows — same
+    /// pendingCatalogSelection mechanism the dashboard uses. Rick
+    /// 2026-06-14.
+    @EnvironmentObject var model: VideoScanModel
+
     /// Re-render driver: the job is an existential, so @ObservedObject
     /// can't watch it directly. We subscribe to its objectWillChange
     /// and flip this bit, which invalidates the view.
@@ -324,6 +329,14 @@ struct MediaFileOperationRow: View {
                     // export — count + size chip, Reveal to the PNGs.
                     finishedChip(summary)
                     revealButton(dest)
+                } else if let reformat = job as? ReformatJob {
+                    // Rick 2026-06-14: after a Reformat finishes the
+                    // user wants to see WHERE the output landed AND
+                    // jump straight to the new catalog row. Both
+                    // affordances inline on the finished row.
+                    finishedChip(summary)
+                    revealButton(reformat.outputURL)
+                    showInCatalogButton(reformat.outputURL)
                 } else {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(.green)
@@ -384,6 +397,28 @@ struct MediaFileOperationRow: View {
         }
         .buttonStyle(.bordered)
         .help(url.path)
+    }
+
+    /// "Show in Catalog" — jumps the main window to the Catalog tab
+    /// and selects the record matching the given file path. Used by
+    /// finished Reformat rows so the user can verify the new file
+    /// landed in the catalog. Silently no-ops if the catalog hasn't
+    /// indexed the file yet (auto-catalog after reformat is async; a
+    /// click immediately after completion may race).
+    private func showInCatalogButton(_ url: URL) -> some View {
+        Button {
+            guard let rec = model.records.first(where: { $0.fullPath == url.path }) else {
+                return
+            }
+            UserDefaults.standard.set(1, forKey: "selectedTab")
+            model.pendingCatalogSelection = rec.id
+            MainWindowHelper.shared.openMainWindow()
+        } label: {
+            Label("Show in Catalog", systemImage: "film.stack")
+                .font(.system(size: 11))
+        }
+        .buttonStyle(.bordered)
+        .help("Jump to this file's row in the Catalog tab")
     }
 
     private var rowBackground: some View {

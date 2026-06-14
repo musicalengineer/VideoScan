@@ -321,6 +321,23 @@ extension CatalogContent {
                                   || !VolumeReachability.isReachable(path: rec.fullPath))
                         .accessibilityIdentifier("catalog.row.reformatAndAnalyze")
 
+                        // Repair Audio — Rick 2026-06-14. For
+                        // video-only files: auto-find the highest-
+                        // confidence audio-only match via the same
+                        // CorrelationScorer that Find A/V Pair uses,
+                        // then pre-fill the existing Combine sheet
+                        // with the pair. Saves the user from manually
+                        // running Find A/V Pair → switching contexts →
+                        // picking the right partner.
+                        if rec.streamType == .videoOnly {
+                            Button("Repair Audio…") {
+                                repairAudio(for: rec)
+                                openWindow(id: "combine")
+                            }
+                            .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
+                            .accessibilityIdentifier("catalog.row.repairAudio")
+                        }
+
                         if pureActive {
                             Divider()
 
@@ -530,6 +547,41 @@ extension CatalogContent {
     /// `@ViewBuilder` function gives the compiler a small, isolated
     /// type-check context where the SwiftUI ViewBuilder candidates win.
     /// Same root cause as `tagColumnCell` below — see commit history.
+    /// "Repair Audio…" handler for video-only records. Uses the same
+    /// CorrelationScorer that Find A/V Pair does to identify the
+    /// best audio-only match across all volumes, then opens the
+    /// existing Combine sheet pre-filled with the pair. If no
+    /// candidate clears the score≥3 floor, shows an alert telling the
+    /// user how to proceed manually. Rick 2026-06-14.
+    private func repairAudio(for rec: VideoRecord) {
+        let durationTolerance: Double = 1.0
+        let timestampTolerance: TimeInterval = 5.0
+        guard let cand = CorrelationScorer.findBestPair(
+            for: rec,
+            in: model.records,
+            durationTolerance: durationTolerance,
+            timestampTolerance: timestampTolerance
+        ) else {
+            let alert = NSAlert()
+            alert.messageText = "No Audio Match Found"
+            alert.informativeText = """
+                No matching audio-only file scored highly enough against:
+
+                \(rec.filename)
+
+                Try "Find A/V Pair…" to explore correlation candidates, \
+                or add the audio source to the catalog first.
+                """
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+        // Pair found — open the existing Combine sheet pre-filled
+        // with the high-confidence match.
+        onCombinePair?(cand.video, cand.audio)
+    }
+
     @ViewBuilder
     private func onlineCopyMenu(onlineMatches: [VideoRecord]) -> some View {
         // Flatten to a single (label, match) list and prefix the volume name
