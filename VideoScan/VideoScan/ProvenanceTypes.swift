@@ -149,6 +149,13 @@ enum JourneyEventKind: String, Equatable {
     case retire
     case currentState
     case freeForm
+    /// Rick 2026-06-14: ReformatJob (and future "Improve via recipe"
+    /// jobs that produce a new file) write a Reformat event onto the
+    /// SOURCE record's journey ("Reformatted to HEVC as …") and an
+    /// origin-flavored event onto the DERIVED record's journey
+    /// ("Derived from <source> via Reformat"). Lets the timeline tell
+    /// the full rescue story.
+    case reformat
 
     var color: Color {
         switch self {
@@ -159,6 +166,7 @@ enum JourneyEventKind: String, Equatable {
         case .retire:       return .brown
         case .currentState: return .green
         case .freeForm:     return .secondary
+        case .reformat:     return .red
         }
     }
 
@@ -171,6 +179,7 @@ enum JourneyEventKind: String, Equatable {
         case .retire:       return "archivebox"
         case .currentState: return "mappin.and.ellipse"
         case .freeForm:     return "text.bubble"
+        case .reformat:     return "wand.and.stars"
         }
     }
 }

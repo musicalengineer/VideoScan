@@ -255,13 +255,32 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
         // Future UI (catalog disclosure-triangle grouping) reads this
         // to show "thanksgiving.mov → [vs.hevc derivative]" pairs.
         newRec.derivedFrom = record.id
+
+        // File Journey events on BOTH records so the user can see
+        // the rescue happen in the timeline. Rick 2026-06-14:
+        // "can we record, in This File's journey, if we reformat/
+        // convert a video, show that we did it… the journey when
+        // we add to catalog automatically?"
+        //
+        //   Source record gets:  Reformat <ISO>: Reformatted to HEVC as <newfile>
+        //   Derived record gets: Reformat <ISO>: Derived from <sourcefile> via Reformat (HEVC)
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let sourceNote = "Reformat \(stamp): Reformatted to HEVC as \(newURL.lastPathComponent)"
+        let derivedNote = "Reformat \(stamp): Derived from \(record.filename) via Reformat (HEVC)"
         await MainActor.run {
+            record.notes = record.notes.isEmpty
+                ? sourceNote
+                : "\(record.notes)\n\(sourceNote)"
+            newRec.notes = newRec.notes.isEmpty
+                ? derivedNote
+                : "\(newRec.notes)\n\(derivedNote)"
+
             if let existing = model.records.firstIndex(where: { $0.fullPath == newURL.path }) {
                 model.records[existing] = newRec
             } else {
                 model.records.append(newRec)
             }
-            reformatLog.info("reformat: catalogued \(newURL.lastPathComponent, privacy: .public) (\(model.records.count) records total)")
+            reformatLog.info("reformat: catalogued \(newURL.lastPathComponent, privacy: .public) (\(model.records.count) records total) — journey events added to source + derived")
         }
         // Queue analyze: kick the orchestrator on this single record's
         // volume prefix. The candidate filter will pick it up and the

@@ -63,6 +63,10 @@ extension VideoScanModel {
                 out.append(evt)
                 continue
             }
+            if let evt = parseReformatLine(line) {
+                out.append(evt)
+                continue
+            }
             // Free-form user note — keep it on the timeline so the user
             // can see their own notes in context. No timestamp.
             out.append(ParsedNoteEvent(
@@ -156,6 +160,25 @@ extension VideoScanModel {
             kind: .combine,
             icon: JourneyEventKind.combine.defaultIcon,
             sentence: "Combined audio and video into one file (\(body))."
+        )
+    }
+
+    /// `Reformat <ISO8601>: <body>` — produced by ReformatJob on both
+    /// the source record (after successful reformat) and the derived
+    /// record (as its origin-flavored event). Rick 2026-06-14.
+    nonisolated private static func parseReformatLine(_ line: String) -> ParsedNoteEvent? {
+        guard line.hasPrefix("Reformat ") else { return nil }
+        let afterPrefix = line.dropFirst("Reformat ".count)
+        guard let sepRange = afterPrefix.range(of: ": ") else { return nil }
+        let stamp = String(afterPrefix[..<sepRange.lowerBound])
+            .trimmingCharacters(in: .whitespaces)
+        let body = String(afterPrefix[sepRange.upperBound...])
+            .trimmingCharacters(in: .whitespaces)
+        return ParsedNoteEvent(
+            timestamp: parseISO8601(stamp),
+            kind: .reformat,
+            icon: JourneyEventKind.reformat.defaultIcon,
+            sentence: body
         )
     }
 
