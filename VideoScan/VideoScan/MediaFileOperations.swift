@@ -357,11 +357,13 @@ final class MediaFileOperationsCenter: ObservableObject {
     @discardableResult
     func startAnalyzeOne(record: VideoRecord,
                          model: VideoScanModel,
-                         orchestrator: CaptionOrchestrator) -> AnalyzeJob {
-        let job = AnalyzeJob(record: record, model: model, orchestrator: orchestrator)
+                         orchestrator: CaptionOrchestrator,
+                         stages: Set<AnalyzeStage> = AnalyzeStage.all) -> AnalyzeJob {
+        let job = AnalyzeJob(record: record, model: model,
+                             orchestrator: orchestrator, stages: stages)
         add(job)
         job.start()
-        fileOpsLog.info("analyze started: \(record.filename, privacy: .public)")
+        fileOpsLog.info("analyze started: \(record.filename, privacy: .public) stages=\(stages.map(\.rawValue).joined(separator: ","), privacy: .public)")
         return job
     }
 

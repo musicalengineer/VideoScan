@@ -100,10 +100,15 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
         // it — the older one was either better or worse, but keeping
         // multiple variants around without UX confuses the catalog.
         let srcURL = URL(fileURLWithPath: record.fullPath)
-        let stem = srcURL.deletingPathExtension().lastPathComponent
-        self.outputURL = srcURL
-            .deletingLastPathComponent()
-            .appendingPathComponent("\(stem)_reformatted.mp4")
+        // Standardized derived-URL convention (Rick 2026-06-14):
+        //   <stem>.vs.hevc.<YYYYMMDD-HHMMSS>.mp4
+        // beside the source. See DerivedFileNaming.swift. Every
+        // future recipe gets the format for free.
+        self.outputURL = derivedFileURL(
+            source: srcURL,
+            codec: "hevc",
+            ext: "mp4"
+        )
     }
 
     /// Start the reformat. Idempotent — a second call is a no-op.
@@ -246,10 +251,11 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
         // Probe synchronously (well, async-await) — same path the
         // catalog scan uses.
         let newRec = await model.probeFile(url: newURL)
+        // Lineage: tag the new record as a derivative of the source.
+        // Future UI (catalog disclosure-triangle grouping) reads this
+        // to show "thanksgiving.mov → [vs.hevc derivative]" pairs.
+        newRec.derivedFrom = record.id
         await MainActor.run {
-            // De-dup: if the catalog already has this path (e.g. an
-            // earlier reformat that was manually cataloged), update in
-            // place instead of double-inserting.
             if let existing = model.records.firstIndex(where: { $0.fullPath == newURL.path }) {
                 model.records[existing] = newRec
             } else {

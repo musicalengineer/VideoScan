@@ -35,6 +35,21 @@ import os
 private let analyzeJobLog = Logger(subsystem: "Rick-Breen.VideoScan",
                                    category: "fileOps")
 
+/// Which stages of the pipeline an AnalyzeJob runs. Rick 2026-06-14:
+/// Transcribe Audio and Generate Scene Captions are independent
+/// MFO verbs, with Analyze as the convenience verb that does both.
+/// AnalyzeJob takes a Set so a future Phase could add a third stage
+/// (e.g. "Identify Family") without changing the call surface.
+enum AnalyzeStage: String, Hashable, Sendable {
+    case captions   // VLM on video frames
+    case transcript // Whisper on audio
+
+    /// The "do everything" default — both stages, gated by the
+    /// record's stream type. AnalyzeJob's pre-flight prunes
+    /// inapplicable stages (e.g. transcript dropped on video-only).
+    static let all: Set<AnalyzeStage> = [.captions, .transcript]
+}
+
 @MainActor
 final class AnalyzeJob: @MainActor MediaFileOperationJob {
 
@@ -42,6 +57,10 @@ final class AnalyzeJob: @MainActor MediaFileOperationJob {
     let kind: MediaFileOperationKind = .analyze
     let startedAt = Date()
     let record: VideoRecord
+    /// Stages this job is responsible for. Set at init by the menu
+    /// item that kicked the job (Analyze = both; Transcribe Audio =
+    /// `[.transcript]`; Generate Scene Captions = `[.captions]`).
+    let stages: Set<AnalyzeStage>
 
     private weak var model: VideoScanModel?
     private weak var orchestrator: CaptionOrchestrator?
@@ -72,10 +91,12 @@ final class AnalyzeJob: @MainActor MediaFileOperationJob {
 
     init(record: VideoRecord,
          model: VideoScanModel,
-         orchestrator: CaptionOrchestrator) {
+         orchestrator: CaptionOrchestrator,
+         stages: Set<AnalyzeStage> = AnalyzeStage.all) {
         self.record = record
         self.model = model
         self.orchestrator = orchestrator
+        self.stages = stages
         // Subscribe to orchestrator changes so the row updates live.
         self.orchestratorForwarder = orchestrator.objectWillChange
             .receive(on: RunLoop.main)

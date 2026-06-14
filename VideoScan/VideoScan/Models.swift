@@ -359,6 +359,17 @@ class VideoRecord: Identifiable, Codable {
     /// via decodeIfPresent so legacy catalogs round-trip cleanly.
     var needsReformat: Bool = false
 
+    /// When this record was produced by an MFO recipe from another
+    /// catalog record, this is the parent record's id. nil for
+    /// originals. Rick 2026-06-14: enables future lineage display
+    /// (show derivatives grouped under their source). Auto-set by
+    /// ReformatJob / future RecipeJobs when they catalog the
+    /// derived output beside the source.
+    ///
+    /// Codable: encoded only when non-nil (minimize delta), decoded
+    /// via decodeIfPresent so legacy catalogs round-trip cleanly.
+    var derivedFrom: UUID?
+
     /// True when EITHER the stored needsReformat flag is set OR the
     /// codec strings match a known-problematic legacy codec. The
     /// catalog UI's red `!` badge reads this so already-cataloged
@@ -566,6 +577,7 @@ class VideoRecord: Identifiable, Codable {
         case purgedAt
         case drmProtected
         case needsReformat
+        case derivedFrom
     }
 
     required init(from decoder: Decoder) throws {
@@ -674,6 +686,7 @@ class VideoRecord: Identifiable, Codable {
         // cost per legacy record.
         drmProtected                = try c.decodeIfPresent(Bool.self, forKey: .drmProtected) ?? false
         needsReformat               = try c.decodeIfPresent(Bool.self, forKey: .needsReformat) ?? false
+        derivedFrom                 = try c.decodeIfPresent(UUID.self, forKey: .derivedFrom)
         // Relocate provenance. Legacy catalogs (no keys) decode as nil and
         // remain treated as "never relocated." Once set on first migration
         // these keys are encoded on every subsequent write.
@@ -806,6 +819,7 @@ class VideoRecord: Identifiable, Codable {
         if needsReformat {
             try c.encode(needsReformat, forKey: .needsReformat)
         }
+        try c.encodeIfPresent(derivedFrom, forKey: .derivedFrom)
         if drmProtected {
             try c.encode(drmProtected, forKey: .drmProtected)
         }
@@ -937,6 +951,7 @@ class VideoRecord: Identifiable, Codable {
         c.purgedAt = purgedAt
         c.drmProtected = drmProtected
         c.needsReformat = needsReformat
+        c.derivedFrom = derivedFrom
         c.scanContext = scanContext
         return c
     }

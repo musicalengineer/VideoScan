@@ -296,39 +296,10 @@ extension CatalogContent {
                         .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
                         .accessibilityIdentifier("catalog.row.extractFrames")
 
-                        // Reformat and Analyze — only enabled when the
-                        // record's codec is flagged as un-analyzable
-                        // (svq3 / qdm2 / etc., or marked dynamically
-                        // by the orchestrator). Rick 2026-06-14.
-                        // Transcodes via ffmpeg into modern H.264/AAC
-                        // mp4, auto-catalogs the output beside the
-                        // original, and queues it for the in-app
-                        // analyzer.
-                        Button("Reformat and Analyze…") {
-                            fileOpsCenter.startReformat(
-                                record: rec,
-                                model: model,
-                                orchestrator: captionOrchestrator
-                            )
-                            // Auto-open the Media File Operations
-                            // window so the user can watch progress
-                            // (matches Compare/Extract/Combine/RipFrames
-                            // pattern). Rick 2026-06-14: without this
-                            // the job runs invisibly behind the catalog.
-                            openWindow(id: "combine")
-                        }
-                        .disabled(!rec.isLikelyUnanalyzable
-                                  || !VolumeReachability.isReachable(path: rec.fullPath))
-                        .accessibilityIdentifier("catalog.row.reformatAndAnalyze")
-
-                        // Repair Audio — Rick 2026-06-14. For
-                        // video-only files: auto-find the highest-
-                        // confidence audio-only match via the same
-                        // CorrelationScorer that Find A/V Pair uses,
-                        // then pre-fill the existing Combine sheet
-                        // with the pair. Saves the user from manually
-                        // running Find A/V Pair → switching contexts →
-                        // picking the right partner.
+                        // Repair Audio — Rick 2026-06-14. Video-only
+                        // files only. Auto-finds the highest-confidence
+                        // audio-only match (same scorer Find A/V Pair
+                        // uses) and pre-fills the Combine sheet.
                         if rec.streamType == .videoOnly {
                             Button("Repair Audio…") {
                                 repairAudio(for: rec)
@@ -338,25 +309,46 @@ extension CatalogContent {
                             .accessibilityIdentifier("catalog.row.repairAudio")
                         }
 
-                        // Analyze This File — single-file VLM + Whisper
-                        // through the orchestrator. Disabled when the
-                        // orchestrator is busy on a volume batch
-                        // (Phase 1 serializes; the user can stop the
-                        // batch first if they want a one-off). Rick
-                        // 2026-06-14: per-file analyze in the
-                        // operations window; volume batches in the
-                        // Analyze Dashboard.
-                        Button("Analyze This File…") {
-                            fileOpsCenter.startAnalyzeOne(
-                                record: rec,
-                                model: model,
-                                orchestrator: captionOrchestrator
-                            )
-                            openWindow(id: "combine")
+                        // Analyze + Transcribe Audio + Generate Scene
+                        // Captions — three menu items routing through
+                        // a single requestAnalyze gate (Rick 2026-06-14:
+                        // "the verb should be Analyze; if the file
+                        // needs reformat first, pop a dialog and ask").
+                        // The gate inspects rec.videoCodec/audioCodec:
+                        // modern codecs go straight to AnalyzeJob;
+                        // legacy codecs (svq3, qdm2, …) prompt the
+                        // user to reformat first via a one-shot
+                        // confirm sheet. Stage filtering inside the
+                        // orchestrator is deferred (Phase 2); for
+                        // ship-first the stage set rides on the
+                        // AnalyzeJob row label so the user's intent
+                        // is visible even though both stages still
+                        // run internally.
+                        Button("Analyze") {
+                            requestAnalyze(for: rec, stages: AnalyzeStage.all)
                         }
                         .disabled(!VolumeReachability.isReachable(path: rec.fullPath)
                                   || captionOrchestrator.currentStatus.isActive)
-                        .accessibilityIdentifier("catalog.row.analyzeThisFile")
+                        .accessibilityIdentifier("catalog.row.analyze")
+
+                        let hasAudio = (rec.streamType == .videoAndAudio || rec.streamType == .audioOnly)
+                        let hasVideo = (rec.streamType == .videoAndAudio || rec.streamType == .videoOnly)
+                        if hasAudio {
+                            Button("Transcribe Audio") {
+                                requestAnalyze(for: rec, stages: [.transcript])
+                            }
+                            .disabled(!VolumeReachability.isReachable(path: rec.fullPath)
+                                      || captionOrchestrator.currentStatus.isActive)
+                            .accessibilityIdentifier("catalog.row.transcribeAudio")
+                        }
+                        if hasVideo {
+                            Button("Generate Scene Captions") {
+                                requestAnalyze(for: rec, stages: [.captions])
+                            }
+                            .disabled(!VolumeReachability.isReachable(path: rec.fullPath)
+                                      || captionOrchestrator.currentStatus.isActive)
+                            .accessibilityIdentifier("catalog.row.generateCaptions")
+                        }
 
                         if pureActive {
                             Divider()
@@ -567,6 +559,59 @@ extension CatalogContent {
     /// `@ViewBuilder` function gives the compiler a small, isolated
     /// type-check context where the SwiftUI ViewBuilder candidates win.
     /// Same root cause as `tagColumnCell` below — see commit history.
+    /// Single entry point for the Analyze / Transcribe / Captions
+    /// menu items. Inspects the record's codecs and routes:
+    ///   - Modern codec (AVFoundation-decodable) → AnalyzeJob directly.
+    ///   - Legacy codec (svq3/qdm2/cinepak/etc.) → one-shot confirm
+    ///     alert offering Reformat-then-Analyze. The reformat's
+    ///     existing auto-queue analyze hook takes over from there.
+    ///
+    /// Rick 2026-06-14 — collapses the prior "Reformat and Analyze"
+    /// + "Analyze This File" pair into a single verb with intent
+    /// captured in the stage set.
+    private func requestAnalyze(for rec: VideoRecord, stages: Set<AnalyzeStage>) {
+        if !hasUnplayableLegacyCodec(videoCodec: rec.videoCodec,
+                                     audioCodec: rec.audioCodec)
+            && !rec.needsReformat {
+            // Modern codec — analyze directly.
+            fileOpsCenter.startAnalyzeOne(
+                record: rec, model: model,
+                orchestrator: captionOrchestrator,
+                stages: stages
+            )
+            openWindow(id: "combine")
+            return
+        }
+        // Legacy codec — confirm reformat first.
+        let alert = NSAlert()
+        alert.messageText = "Reformat Required"
+        let codecBits = [rec.videoCodec, rec.audioCodec]
+            .filter { !$0.isEmpty }
+            .joined(separator: " / ")
+        let derived = derivedFileURL(
+            source: URL(fileURLWithPath: rec.fullPath),
+            codec: "hevc",
+            ext: "mp4"
+        ).lastPathComponent
+        alert.informativeText = """
+            \(rec.filename) uses the \(codecBits) codec, which the analyzer can't decode directly. \
+            macOS deprecated this codec in 2019.
+
+            Convert to HEVC first? A new file \"\(derived)\" will be created next to the original, \
+            then analyzed.
+            """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Reformat and Analyze")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            fileOpsCenter.startReformat(
+                record: rec, model: model,
+                orchestrator: captionOrchestrator
+            )
+            openWindow(id: "combine")
+        }
+    }
+
     /// "Repair Audio…" handler for video-only records. Uses the same
     /// CorrelationScorer that Find A/V Pair does to identify the
     /// best audio-only match across all volumes, then opens the
