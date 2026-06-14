@@ -8,27 +8,47 @@ struct AsyncSemaphoreQueueTests {
 
     // MARK: Zero-limit can't deadlock (Rick 2026-06-14 stuck-queue bug)
 
-    @Test("limit: 0 is clamped to 1 — does not deadlock")
-    func zeroLimitClampedToOne() async throws {
-        let sem = AsyncSemaphore(limit: 0)
-        // Without the clamp, the next withPermit would block forever.
-        // We bound the test on a wall-clock timeout: if it returns
-        // before the deadline, the clamp worked.
-        let start = Date()
-        try await sem.withPermit {
-            // body runs immediately under a clamped-to-1 semaphore.
+    /// Racing helper: starts the work AND a wall-clock timeout in
+    /// parallel; whichever finishes first wins. Guarantees the test
+    /// terminates within `timeout` seconds even if the work deadlocks.
+    /// Returns true if work completed first, false if it timed out.
+    private func raceForProgress(timeout: Duration,
+                                 work: @escaping @Sendable () async -> Void) async -> Bool {
+        await withTaskGroup(of: Bool.self) { group in
+            group.addTask {
+                await work()
+                return true
+            }
+            group.addTask {
+                try? await Task.sleep(for: timeout)
+                return false
+            }
+            let first = await group.next() ?? false
+            group.cancelAll()
+            return first
         }
-        let elapsed = Date().timeIntervalSince(start)
-        #expect(elapsed < 1.0,
-                "Zero-limit AsyncSemaphore must clamp to ≥1; took \(elapsed)s")
     }
 
-    @Test("negative limit also clamps to 1")
+    @Test("limit: 0 is clamped — withPermit progresses (does not deadlock)")
+    func zeroLimitClampedToOne() async throws {
+        let sem = AsyncSemaphore(limit: 0)
+        // Racing pattern: if the clamp is missing, withPermit deadlocks
+        // forever and the timeout wins. With the clamp, the work returns
+        // immediately under a permit-of-1 semaphore.
+        let progressed = await raceForProgress(timeout: .seconds(2)) {
+            try? await sem.withPermit { }
+        }
+        #expect(progressed,
+                "AsyncSemaphore(limit: 0) must clamp to ≥1 — without the clamp, withPermit deadlocks because count=0 and no signal ever arrives. Rick's stuck-Combine-queue regression test.")
+    }
+
+    @Test("negative limit also clamps — does not deadlock")
     func negativeLimitClampedToOne() async throws {
         let sem = AsyncSemaphore(limit: -5)
-        let start = Date()
-        try await sem.withPermit { }
-        #expect(Date().timeIntervalSince(start) < 1.0)
+        let progressed = await raceForProgress(timeout: .seconds(2)) {
+            try? await sem.withPermit { }
+        }
+        #expect(progressed)
     }
 
     // MARK: Normal-path queue progression
