@@ -154,15 +154,27 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
             return
         }
 
+        // Apple Silicon optimization (Rick 2026-06-14):
+        //   - hevc_videotoolbox encodes ~30-40% smaller than h264 for
+        //     equivalent quality, using the same M-series media engine
+        //     (no extra CPU/GPU cost on M4).
+        //   - "-tag:v hvc1" so QuickTime Player decodes natively on
+        //     macOS / iOS / AppleTV. Without this, the default "hev1"
+        //     tag forces software fallback on some Apple players even
+        //     though the bitstream is identical.
+        //   - aac_at uses Apple AudioToolbox's AAC encoder — slightly
+        //     better quality than libavcodec's aac at the same bitrate
+        //     and offloads to the audio coprocessor.
         let args: [String] = [
             "-hide_banner",
             "-nostdin",
             "-y",
             "-i", inputPath,
             "-vf", "bwdif=mode=send_field:parity=auto,hqdn3d=4:3:6:4.5",
-            "-c:v", "h264_videotoolbox",
+            "-c:v", "hevc_videotoolbox",
             "-q:v", "65",
-            "-c:a", "aac",
+            "-tag:v", "hvc1",
+            "-c:a", "aac_at",
             "-b:a", "192k",
             "-movflags", "+faststart",
             "-progress", "pipe:2",
