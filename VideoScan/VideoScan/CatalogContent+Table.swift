@@ -54,6 +54,15 @@ extension CatalogContent {
                         Image(systemName: "trash.slash")
                             .font(.system(size: 10))
                             .foregroundColor(.orange)
+                    } else if rec.isLikelyUnanalyzable {
+                        // Red "!" — file's video / audio codec was
+                        // deprecated by AVFoundation (svq3, qdm2,
+                        // cinepak, etc.) so the analyzer can't decode
+                        // it. Right-click → Reformat and Analyze to
+                        // convert via ffmpeg. Rick 2026-06-14.
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 10))
+                            .foregroundColor(.red)
                     } else if showPairsOnly && rec.pairedWith != nil {
                         Image(systemName: rec.streamType == .videoOnly ? "film" : "waveform")
                             .font(.system(size: 10))
@@ -74,7 +83,8 @@ extension CatalogContent {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 2)
                 .help(purged ? "\(rec.directory) (removed from catalog)"
-                      : (offline ? "\(rec.directory) (offline)" : rec.directory))
+                      : (rec.unanalyzableReason.map { "\(rec.directory)\n\n⚠️ \($0)" }
+                         ?? (offline ? "\(rec.directory) (offline)" : rec.directory)))
             }
             .width(min: 180, ideal: 260)
 

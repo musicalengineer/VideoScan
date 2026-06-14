@@ -340,6 +340,61 @@ class VideoRecord: Identifiable, Codable {
     /// orchestrator pass).
     var drmProtected: Bool = false
 
+    /// True when the analyzer pipeline determined this file's codec /
+    /// container can't be decoded by AVFoundation (the path the in-app
+    /// VLM uses). Set by the orchestrator when the VLM stage returns
+    /// 0 scenes in under a second — the unmistakable "couldn't decode"
+    /// signature. Also can be derived heuristically at read time via
+    /// `hasUnplayableLegacyCodec` (see below) so already-cataloged
+    /// records with codecs like svq3 / qdm2 / cinepak / indeo flag
+    /// without re-running the VLM.
+    ///
+    /// Rick 2026-06-14: surfaces the dossier "0-scene .mov" files
+    /// (Thanksgiving-Raw_Default.mov / Cache.mov / Timeline Movie.mov
+    /// etc.) as red `!` in the catalog so the user can choose to
+    /// reformat-and-analyze instead of leaving the file invisible to
+    /// search.
+    ///
+    /// Codable note: encoded only when true (minimize delta), decoded
+    /// via decodeIfPresent so legacy catalogs round-trip cleanly.
+    var needsReformat: Bool = false
+
+    /// True when EITHER the stored needsReformat flag is set OR the
+    /// codec strings match a known-problematic legacy codec. The
+    /// catalog UI's red `!` badge reads this so already-cataloged
+    /// files surface immediately, without waiting for the next VLM
+    /// run. See UnplayableLegacyCodecs.swift for the criteria.
+    var isLikelyUnanalyzable: Bool {
+        if needsReformat { return true }
+        return hasUnplayableLegacyCodec(videoCodec: videoCodec, audioCodec: audioCodec)
+    }
+
+    /// Tooltip text for the badge. nil when the file's codecs are
+    /// fine AND no failed-VLM marker is set.
+    var unanalyzableReason: String? {
+        if let codecReason = unplayableLegacyReason(videoCodec: videoCodec, audioCodec: audioCodec) {
+            return codecReason
+        }
+        if needsReformat {
+            return "The analyzer couldn't decode this file's video stream — needs reformat to be analyzed."
+        }
+        return nil
+    }
+
+    /// 0–100 heuristic for "how valuable is this file likely to be?"
+    /// Long old QuickTime files with audio score highest — the
+    /// signature of deliberately-digitized family footage. Used to
+    /// prioritize the reformat queue.
+    var analyzeValueScore: Int {
+        return VideoScan.analyzeValueScore(
+            durationSeconds: durationSeconds,
+            hasAudio: streamType == .videoAndAudio || streamType == .audioOnly,
+            hasLegacyCodec: hasUnplayableLegacyCodec(videoCodec: videoCodec, audioCodec: audioCodec),
+            container: container,
+            fileMTime: dateModifiedRaw
+        )
+    }
+
     /// Provenance captured at scan time: which machine ran the scan, what
     /// kind of volume the file lived on (local/smb/nfs/afp), the volume's
     /// stable UUID if available, and the remote server name for network
@@ -510,6 +565,7 @@ class VideoRecord: Identifiable, Codable {
         case scanContext
         case purgedAt
         case drmProtected
+        case needsReformat
     }
 
     required init(from decoder: Decoder) throws {
@@ -617,6 +673,7 @@ class VideoRecord: Identifiable, Codable {
         // encounter and persists the result, so this becomes a one-time
         // cost per legacy record.
         drmProtected                = try c.decodeIfPresent(Bool.self, forKey: .drmProtected) ?? false
+        needsReformat               = try c.decodeIfPresent(Bool.self, forKey: .needsReformat) ?? false
         // Relocate provenance. Legacy catalogs (no keys) decode as nil and
         // remain treated as "never relocated." Once set on first migration
         // these keys are encoded on every subsequent write.
@@ -746,6 +803,9 @@ class VideoRecord: Identifiable, Codable {
         // Only write drmProtected when true — same rationale as purgedAt: most
         // records are unprotected and writing `false` everywhere would inflate
         // catalog.json without changing any decoder behavior.
+        if needsReformat {
+            try c.encode(needsReformat, forKey: .needsReformat)
+        }
         if drmProtected {
             try c.encode(drmProtected, forKey: .drmProtected)
         }
@@ -876,6 +936,7 @@ class VideoRecord: Identifiable, Codable {
         c.sourceHost = sourceHost
         c.purgedAt = purgedAt
         c.drmProtected = drmProtected
+        c.needsReformat = needsReformat
         c.scanContext = scanContext
         return c
     }

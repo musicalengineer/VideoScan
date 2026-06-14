@@ -834,6 +834,24 @@ final class CaptionOrchestrator: ObservableObject {
                 // an empty sceneCaptions array. Indicator now matches
                 // banked content — green only when scenes is non-empty.
                 let didExtractCaptions = !extraction.scenes.isEmpty
+                // "0 scenes in <1s" is the unmistakable signature of
+                // the AVFoundation frame extractor bailing out because
+                // it can't decode the source codec (svq3, qdm2,
+                // cinepak, etc.). A real VLM run on a featureless or
+                // black video takes 5–15s because it actually
+                // processes frames. Flag the record so the catalog
+                // surfaces a red "!" and the user can right-click →
+                // Reformat and Analyze (Rick 2026-06-14).
+                //
+                // Static codec heuristic already catches known-bad
+                // codecs at catalog-read time via record.isLikelyUnanalyzable;
+                // this dynamic backstop catches unfamiliar codecs by
+                // their failure signature.
+                if !didExtractCaptions && vlmSec < 1.0 && !record.needsReformat {
+                    record.needsReformat = true
+                    captionOrchLog.notice("Dossier: VLM bailed in \(vlmSec, format: .fixed(precision: 2), privacy: .public)s with 0 scenes — flagging \(filename, privacy: .public) needsReformat")
+                    appLog.write(String(format: "Dossier: flagged needsReformat (codec couldn't be decoded): %@", filename))
+                }
                 if hasNoAudio {
                     updateLane(laneID, hasCaptions: didExtractCaptions)
                 } else {
