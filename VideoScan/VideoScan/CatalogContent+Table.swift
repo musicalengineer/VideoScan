@@ -296,6 +296,25 @@ extension CatalogContent {
                         .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
                         .accessibilityIdentifier("catalog.row.extractFrames")
 
+                        // Reformat and Analyze — only enabled when the
+                        // record's codec is flagged as un-analyzable
+                        // (svq3 / qdm2 / etc., or marked dynamically
+                        // by the orchestrator). Rick 2026-06-14.
+                        // Transcodes via ffmpeg into modern H.264/AAC
+                        // mp4, auto-catalogs the output beside the
+                        // original, and queues it for the in-app
+                        // analyzer.
+                        Button("Reformat and Analyze…") {
+                            fileOpsCenter.startReformat(
+                                record: rec,
+                                model: model,
+                                orchestrator: captionOrchestrator
+                            )
+                        }
+                        .disabled(!rec.isLikelyUnanalyzable
+                                  || !VolumeReachability.isReachable(path: rec.fullPath))
+                        .accessibilityIdentifier("catalog.row.reformatAndAnalyze")
+
                         if pureActive {
                             Divider()
 

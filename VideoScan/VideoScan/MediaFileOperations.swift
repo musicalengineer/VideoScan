@@ -46,6 +46,13 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// ffmpeg-only frame export ("Extract Frames…") — every frame, or
     /// sampled every-Nth / N-per-second. No Vision involved.
     case ripFrames
+    /// "Reformat and Analyze" — transcode a legacy-codec source
+    /// (svq3, qdm2, cinepak, etc.) into modern H.264/AAC mp4 with
+    /// conventional ffmpeg filters (bwdif deinterlace, hqdn3d
+    /// denoise). Auto-catalogs the output and queues it for analyze.
+    /// Rick 2026-06-14: lets the analyzer reach files AVFoundation
+    /// can't decode (Apple deprecated svq3/qdm2/etc. in macOS 10.15).
+    case reformat
 
     /// Badge text — rendered in small caps by the row view.
     /// `.extract` says "Faces" (not "Extract") since the verb split:
@@ -57,6 +64,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .compare: return "Compare"
         case .extract: return "Faces"
         case .ripFrames: return "Frames"
+        case .reformat: return "Reformat"
         }
     }
 }
@@ -315,6 +323,22 @@ final class MediaFileOperationsCenter: ObservableObject {
         add(job)
         job.start()
         fileOpsLog.info("ripFrames started: \(record.filename, privacy: .public) → \(destinationParent.path, privacy: .public) (\(options.sampling.logDescription, privacy: .public), gates: \(gates.count))")
+        return job
+    }
+
+    /// Kick off "Reformat and Analyze" on a single record — ffmpeg
+    /// transcodes the source's legacy-codec stream into modern
+    /// H.264/AAC mp4, auto-catalogs the output, and queues it for the
+    /// in-app analyzer. Rick 2026-06-14: lets svq3/qdm2/cinepak/etc.
+    /// files become analyzable.
+    @discardableResult
+    func startReformat(record: VideoRecord,
+                       model: VideoScanModel,
+                       orchestrator: CaptionOrchestrator?) -> ReformatJob {
+        let job = ReformatJob(record: record, model: model, orchestrator: orchestrator)
+        add(job)
+        job.start()
+        fileOpsLog.info("reformat started: \(record.filename, privacy: .public) → \(job.outputURL.lastPathComponent, privacy: .public)")
         return job
     }
 

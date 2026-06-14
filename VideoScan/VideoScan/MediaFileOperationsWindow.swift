@@ -424,6 +424,7 @@ extension MediaFileOperationKind {
         case .compare: return .blue
         case .extract: return .orange
         case .ripFrames: return .purple
+        case .reformat: return .red
         }
     }
 }

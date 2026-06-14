@@ -11,6 +11,11 @@ import AVKit
 
 struct CatalogContent: View {
     @EnvironmentObject var model: VideoScanModel
+    // Used in CatalogContent+Table.swift's "Reformat and Analyze…"
+    // context-menu button (Rick 2026-06-14). The lint hook is per-file
+    // so the use is invisible to it.
+    // vs-lint:disable-next vs-env-object-unused
+    @EnvironmentObject var captionOrchestrator: CaptionOrchestrator
     /// Media File Operations registry — "Compare These Two Files…" hands
     /// the pair to the center and opens the operations window; the job
     /// runs there (non-modal), not in a sheet.
