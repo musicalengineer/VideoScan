@@ -25,7 +25,16 @@ struct ScanPerformanceSettings {
         if d.object(forKey: "\(p)probesPerVolume") != nil { s.probesPerVolume = d.integer(forKey: "\(p)probesPerVolume") }
         if d.object(forKey: "\(p)ramDiskGB") != nil { s.ramDiskGB = d.integer(forKey: "\(p)ramDiskGB") }
         if d.object(forKey: "\(p)prefetchMB") != nil { s.prefetchMB = d.integer(forKey: "\(p)prefetchMB") }
-        if d.object(forKey: "\(p)combineConcurrency") != nil { s.combineConcurrency = d.integer(forKey: "\(p)combineConcurrency") }
+        if d.object(forKey: "\(p)combineConcurrency") != nil {
+            // Floor at 1 — a stored 0 (corrupt prefs / old migration /
+            // manual `defaults write`) would otherwise make
+            // AsyncSemaphore(limit: 0) deadlock the combine queue.
+            // Rick 2026-06-14 hit this in production. Belt-and-
+            // suspenders: AsyncSemaphore also clamps, but loading
+            // honest values here is cleaner.
+            let stored = d.integer(forKey: "\(p)combineConcurrency")
+            s.combineConcurrency = max(1, stored)
+        }
         if d.object(forKey: "\(p)memoryFloorGB") != nil { s.memoryFloorGB = d.integer(forKey: "\(p)memoryFloorGB") }
         return s
     }

@@ -12,9 +12,19 @@ actor AsyncSemaphore {
     private var count: Int
     private var waiters: [Waiter] = []
 
+    /// Rick 2026-06-14: discovered a Combine job that sat in "queued"
+    /// indefinitely because perfSettings.combineConcurrency had been
+    /// stored as 0 in UserDefaults (corrupt prefs from an old build,
+    /// or a manual `defaults write`). AsyncSemaphore(limit: 0) starts
+    /// with count=0 and no signal source — every wait() blocks forever.
+    ///
+    /// Treat ≤0 as a programmer error and clamp to 1. A single-permit
+    /// semaphore is still slow but progresses; a zero-permit one is
+    /// indistinguishable from a deadlock. Never deadlock silently.
     init(limit: Int) {
-        self.limit = limit
-        self.count = limit
+        let safeLimit = max(1, limit)
+        self.limit = safeLimit
+        self.count = safeLimit
     }
 
     func wait() async throws {
