@@ -199,10 +199,22 @@ ELAPSED=$((TEST_END - TEST_START))
 log "Tests completed in ${ELAPSED}s (rc=$TEST_RC)"
 
 # ── Parse results ───────────────────────────────────────────────────
-# Swift Testing markers
-PASSED=$(grep -cE '^(✔ Test |Test Case .*passed)' /tmp/nightly-test-output.log 2>/dev/null || echo 0)
-FAILED=$(grep -cE '^(✘ Test .*failed|Test Case .*failed)' /tmp/nightly-test-output.log 2>/dev/null || echo 0)
-SKIPPED=$(grep -cE '^(◇ Test .*skipped|Test Case .*skipped)' /tmp/nightly-test-output.log 2>/dev/null || echo 0)
+# Swift Testing markers.
+#
+# 2026-06-14: dropped the prior `grep -cE ... || echo 0` idiom. When
+# grep matched nothing it emitted "0" AND returned 1, so the `|| echo 0`
+# also fired, capturing "0\n0" into PASSED. The next line's $(( ))
+# arithmetic blew up with "syntax error in expression (error token is
+# '0')" and the script crashed BEFORE publishing a row — which is
+# exactly why the dashboard stayed stuck on 2026-06-09 for 5 days
+# despite the nightly running fine otherwise. Using `grep | wc -l`
+# instead always produces a single-line integer, even on empty input.
+PASSED=$(grep -cE '^(✔ Test |Test Case .*passed)' /tmp/nightly-test-output.log 2>/dev/null | head -1)
+FAILED=$(grep -cE '^(✘ Test .*failed|Test Case .*failed)' /tmp/nightly-test-output.log 2>/dev/null | head -1)
+SKIPPED=$(grep -cE '^(◇ Test .*skipped|Test Case .*skipped)' /tmp/nightly-test-output.log 2>/dev/null | head -1)
+PASSED=${PASSED:-0}
+FAILED=${FAILED:-0}
+SKIPPED=${SKIPPED:-0}
 TOTAL=$((PASSED + FAILED + SKIPPED))
 log "Results: ${PASSED}p / ${FAILED}f / ${SKIPPED}s (${TOTAL} total)"
 
