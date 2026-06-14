@@ -166,7 +166,8 @@ final class AnalyzeJob: @MainActor MediaFileOperationJob {
         // orchestrator API.
         await orchestrator.startAnalyzing(
             volumePrefix: record.fullPath,
-            model: model
+            model: model,
+            stages: stages
         )
 
         // After the orchestrator returns, the batch is complete. Pick

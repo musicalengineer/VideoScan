@@ -387,7 +387,8 @@ final class CaptionOrchestrator: ObservableObject {
         volumePrefix: String,
         model: VideoScanModel,
         transcriber: AudioTranscriber? = nil,
-        force: Bool = false
+        force: Bool = false,
+        stages: Set<AnalyzeStage> = AnalyzeStage.all
     ) async {
         guard !isShuttingDown else {
             captionOrchLog.notice("startAnalyzing refused — app is shutting down")
@@ -695,7 +696,8 @@ final class CaptionOrchestrator: ObservableObject {
         candidates: [VideoRecord],
         framesPerFile: Int,
         force: Bool,
-        model: VideoScanModel
+        model: VideoScanModel,
+        stages: Set<AnalyzeStage> = AnalyzeStage.all
     ) async {
         let started = CFAbsoluteTimeGetCurrent()
         let total = candidates.count
@@ -705,12 +707,25 @@ final class CaptionOrchestrator: ObservableObject {
         let stackID: String = transcriber.map { "\(runner.modelID)+\($0.modelID)" } ?? runner.modelID
         let vlmModelID = runner.modelID
 
-        // No transcriber → fall back to the serial path (no overlap benefit).
-        guard transcriber != nil else {
+        // Stage gating (Rick 2026-06-14): the menu items "Transcribe
+        // Audio" and "Generate Scene Captions" promised to do ONLY
+        // that thing. Honor the promise by skipping the irrelevant
+        // stage instead of running both and pretending. The pipelined
+        // path's overlap is only valuable when BOTH stages run; for
+        // single-stage batches the serial path is honest and simpler.
+        let runCaptions = stages.contains(.captions)
+        let runTranscript = stages.contains(.transcript)
+
+        // No transcriber, OR transcript-stage disabled, OR captions-
+        // stage disabled → serial path. The pipelined path is the
+        // VLM+Whisper backpressure optimization; it only beats serial
+        // when both stages run for every file.
+        guard transcriber != nil, runCaptions, runTranscript else {
             await runDossierBatchSerial(
-                runner: runner, transcriber: nil,
+                runner: runner, transcriber: transcriber,
                 candidates: candidates, framesPerFile: framesPerFile,
-                force: force, model: model, stackID: stackID, started: started
+                force: force, model: model, stackID: stackID, started: started,
+                stages: stages
             )
             return
         }
@@ -1113,7 +1128,8 @@ final class CaptionOrchestrator: ObservableObject {
         force: Bool,
         model: VideoScanModel,
         stackID: String,
-        started: CFAbsoluteTime
+        started: CFAbsoluteTime,
+        stages: Set<AnalyzeStage> = AnalyzeStage.all
     ) async {
         let total = candidates.count
 
@@ -1200,18 +1216,28 @@ final class CaptionOrchestrator: ObservableObject {
             )
 
             do {
+                // Stage gating (Rick 2026-06-14): skip VLM entirely
+                // when the caller asked for transcript-only. Empty
+                // extraction propagates "no captions" cleanly through
+                // applyDossier; vlmModel passed as nil so the record's
+                // provenance reflects what actually ran.
+                let runCaptions = stages.contains(.captions)
+                let runTranscript = stages.contains(.transcript)
+
                 let vlmStart = CFAbsoluteTimeGetCurrent()
-                let extraction = try await runner.dossier(
-                    videoPath: path, atTimestamps: timestamps
-                )
+                let extraction: DossierExtraction
+                if runCaptions {
+                    extraction = try await runner.dossier(
+                        videoPath: path, atTimestamps: timestamps
+                    )
+                } else {
+                    extraction = DossierExtraction.empty
+                }
                 let vlmSec = CFAbsoluteTimeGetCurrent() - vlmStart
 
-                // hasCaptions reflects banked content (non-empty
-                // scene list), not just VLM-ran-successfully. See the
-                // pipelined-path comment for the rationale.
                 let didExtractCaptions = !extraction.scenes.isEmpty
                 let userSkipped = userSkippedLaneIDs.contains(laneID)
-                if let transcriber, !hasNoAudio, !userSkipped {
+                if let transcriber, runTranscript, !hasNoAudio, !userSkipped {
                     updateLane(
                         laneID,
                         stage: Self.stageDisplayName(forModelID: transcriber.modelID),
@@ -1225,12 +1251,7 @@ final class CaptionOrchestrator: ObservableObject {
                 var transcript: String?
                 var transcriptFailed = false
                 var transcriptTimedOut = false
-                // Serial path skip: if the user clicked Skip on this
-                // lane during the VLM phase, bypass Whisper entirely.
-                // We can't cancel an inline await mid-transcription
-                // without wrapping in a Task; the pipelined path is
-                // the place where mid-flight skip works.
-                if let transcriber, !hasNoAudio, !userSkipped {
+                if let transcriber, runTranscript, !hasNoAudio, !userSkipped {
                     let whisperDeadlineSeconds = max(60.0, 2.0 * record.durationSeconds)
                     do {
                         transcript = try await transcriber.transcribe(

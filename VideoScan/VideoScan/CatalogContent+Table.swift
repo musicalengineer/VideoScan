@@ -331,24 +331,34 @@ extension CatalogContent {
                                   || captionOrchestrator.currentStatus.isActive)
                         .accessibilityIdentifier("catalog.row.analyze")
 
+                        // Rick 2026-06-14: grey out (don't hide) when
+                        // the file lacks the relevant stream. More
+                        // discoverable than absent — the user learns
+                        // "Transcribe Audio exists but this file has
+                        // no audio" instead of wondering where it went.
                         let hasAudio = (rec.streamType == .videoAndAudio || rec.streamType == .audioOnly)
                         let hasVideo = (rec.streamType == .videoAndAudio || rec.streamType == .videoOnly)
-                        if hasAudio {
-                            Button("Transcribe Audio") {
-                                requestAnalyze(for: rec, stages: [.transcript])
-                            }
-                            .disabled(!VolumeReachability.isReachable(path: rec.fullPath)
-                                      || captionOrchestrator.currentStatus.isActive)
-                            .accessibilityIdentifier("catalog.row.transcribeAudio")
+                        Button("Transcribe Audio") {
+                            requestAnalyze(for: rec, stages: [.transcript])
                         }
-                        if hasVideo {
-                            Button("Generate Scene Captions") {
-                                requestAnalyze(for: rec, stages: [.captions])
-                            }
-                            .disabled(!VolumeReachability.isReachable(path: rec.fullPath)
-                                      || captionOrchestrator.currentStatus.isActive)
-                            .accessibilityIdentifier("catalog.row.generateCaptions")
+                        .disabled(!hasAudio
+                                  || !VolumeReachability.isReachable(path: rec.fullPath)
+                                  || captionOrchestrator.currentStatus.isActive)
+                        .help(hasAudio
+                              ? "Run Whisper to produce a transcript of the audio track."
+                              : "This file has no audio stream to transcribe.")
+                        .accessibilityIdentifier("catalog.row.transcribeAudio")
+
+                        Button("Generate Scene Captions") {
+                            requestAnalyze(for: rec, stages: [.captions])
                         }
+                        .disabled(!hasVideo
+                                  || !VolumeReachability.isReachable(path: rec.fullPath)
+                                  || captionOrchestrator.currentStatus.isActive)
+                        .help(hasVideo
+                              ? "Run the VLM to extract scene descriptions + OCR text/dates from video frames."
+                              : "This file has no video stream to caption.")
+                        .accessibilityIdentifier("catalog.row.generateCaptions")
 
                         if pureActive {
                             Divider()
