@@ -600,7 +600,24 @@ async function loadData() {
   const tdRows = tdText ? parseJsonl(tdText) : [];
   tdRows.sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
   const tdLast = tdRows.length ? tdRows[tdRows.length - 1] : {};
-  const tdPrev = tdRows.length > 1 ? tdRows[tdRows.length - 2] : {};
+
+  // Apples-to-apples delta: only compare against the most recent prior
+  // row that shares the SAME `source`. The file mixes `nightly-local`
+  // (xcodebuild — ~1850 tests) and `testdriver` (TestDriver harness —
+  // ~4400 tests). Cross-source deltas are nonsense ("Passed -2535" is
+  // not a regression, it's a methodology change). 2026-06-14.
+  let tdPrev = {};
+  if (tdLast.source && tdRows.length > 1) {
+    for (let i = tdRows.length - 2; i >= 0; i--) {
+      if (tdRows[i].source === tdLast.source) {
+        tdPrev = tdRows[i];
+        break;
+      }
+    }
+  } else if (tdRows.length > 1) {
+    // Older rows without `source` field — fall back to immediate prior.
+    tdPrev = tdRows[tdRows.length - 2];
+  }
 
   // ---- Staleness banner ----
   // Show only if the freshest TestDriver row is older than the threshold.
@@ -618,7 +635,15 @@ async function loadData() {
     const lastDate = tdLast.ts ? new Date(tdLast.ts).toLocaleDateString("en-US", {
       month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"
     }) : "—";
-    const lastWho = `${lastDate} — ${tdLast.host || ""}`;
+    // Surface flags from the row so we don't have to guess at suspicious
+    // pass-count drops. `dirty=true` and `branch!=main` are tagged in the
+    // hostname line; status/reason go in the value.
+    const flags = [];
+    if (tdLast.dirty === true) flags.push("dirty");
+    if (tdLast.branch && tdLast.branch !== "main") flags.push(tdLast.branch);
+    if (tdLast.status && tdLast.status !== "ok") flags.push(tdLast.status);
+    const flagSuffix = flags.length ? ` [${flags.join(", ")}]` : "";
+    const lastWho = `${lastDate} — ${tdLast.host || ""}${flagSuffix}`;
     const avgDur = tdRows.reduce((acc, r) => acc + (parseFloat(r.elapsed_s) || 0), 0) / tdRows.length;
     tdCardsEl.appendChild(card("Last Run", lastWho, null, null, false, "var(--accent)"));
     tdCardsEl.appendChild(card("Passed (latest)",
@@ -633,10 +658,38 @@ async function loadData() {
 
     const tdLabels = dateLabels(tdRows);
     const tdCol = key => tdRows.map(r => r[key]);
-    drawLine("chart-td-pass-fail", tdLabels, [
-      { label: "passed", data: tdCol("passed"), ...lineStyle("#3fb950") },
-      { label: "failed", data: tdCol("failed"), ...lineStyle("#f85149") },
-    ]);
+    // Per-source pass-count lines so methodology changes (xcodebuild
+    // 1850-ish vs TestDriver 4400-ish) don't look like regressions on
+    // the chart. Each source gets its own series; rows from the other
+    // source are drawn as null so the line breaks rather than jumps.
+    const sources = Array.from(new Set(tdRows.map(r => r.source || "unknown")));
+    const seriesFor = (source, key) => tdRows.map(r => (r.source || "unknown") === source ? r[key] : null);
+    const passColors = { "nightly-local": "#3fb950", "testdriver": "#2da44e", "adhoc-m1": "#7ee787" };
+    const passDatasets = sources.map(s => ({
+      label: `passed (${s})`,
+      data: seriesFor(s, "passed"),
+      spanGaps: false,
+      ...lineStyle(passColors[s] || "#3fb950"),
+    }));
+    passDatasets.push({
+      label: "failed (any source)",
+      data: tdCol("failed"),
+      ...lineStyle("#f85149"),
+    });
+    // Use a one-off chart config so the legend is visible (default
+    // chartDefaults hides it). With multiple sources, the legend is the
+    // only way to tell the green lines apart.
+    new Chart(document.getElementById("chart-td-pass-fail"), {
+      type: "line",
+      data: { labels: tdLabels, datasets: passDatasets },
+      options: {
+        ...chartDefaults,
+        plugins: {
+          ...chartDefaults.plugins,
+          legend: { display: true, labels: { color: "#8b949e" } },
+        },
+      },
+    });
     if (tdRows.some(r => r.coverage_logic_pct != null)) {
       drawLine("chart-td-coverage", tdLabels,
         [{ label: "coverage %", data: tdCol("coverage_logic_pct"), ...lineStyle("#bc8cff") }]);
