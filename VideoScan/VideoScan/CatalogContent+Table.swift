@@ -310,6 +310,12 @@ extension CatalogContent {
                                 model: model,
                                 orchestrator: captionOrchestrator
                             )
+                            // Auto-open the Media File Operations
+                            // window so the user can watch progress
+                            // (matches Compare/Extract/Combine/RipFrames
+                            // pattern). Rick 2026-06-14: without this
+                            // the job runs invisibly behind the catalog.
+                            openWindow(id: "combine")
                         }
                         .disabled(!rec.isLikelyUnanalyzable
                                   || !VolumeReachability.isReachable(path: rec.fullPath))
