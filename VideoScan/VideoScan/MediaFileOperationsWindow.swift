@@ -337,6 +337,12 @@ struct MediaFileOperationRow: View {
                     finishedChip(summary)
                     revealButton(reformat.outputURL)
                     showInCatalogButton(reformat.outputURL)
+                } else if let analyze = job as? AnalyzeJob {
+                    // Same treatment for Analyze — the user wants to
+                    // verify the catalog row got captions + transcript
+                    // banked. Show in Catalog jumps straight there.
+                    finishedChip(summary)
+                    showInCatalogButtonByID(analyze.record.id)
                 } else {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(.green)
@@ -421,6 +427,22 @@ struct MediaFileOperationRow: View {
         .help("Jump to this file's row in the Catalog tab")
     }
 
+    /// Same as showInCatalogButton, but keyed by record UUID — used by
+    /// AnalyzeJob where the record is already in the catalog and we
+    /// don't need a path-based lookup.
+    private func showInCatalogButtonByID(_ id: UUID) -> some View {
+        Button {
+            UserDefaults.standard.set(1, forKey: "selectedTab")
+            model.pendingCatalogSelection = id
+            MainWindowHelper.shared.openMainWindow()
+        } label: {
+            Label("Show in Catalog", systemImage: "film.stack")
+                .font(.system(size: 11))
+        }
+        .buttonStyle(.bordered)
+        .help("Jump to this file's row in the Catalog tab")
+    }
+
     private var rowBackground: some View {
         RoundedRectangle(cornerRadius: 4)
             .fill(isExpanded
@@ -460,6 +482,7 @@ extension MediaFileOperationKind {
         case .extract: return .orange
         case .ripFrames: return .purple
         case .reformat: return .red
+        case .analyze: return .cyan
         }
     }
 }

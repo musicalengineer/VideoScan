@@ -338,6 +338,26 @@ extension CatalogContent {
                             .accessibilityIdentifier("catalog.row.repairAudio")
                         }
 
+                        // Analyze This File — single-file VLM + Whisper
+                        // through the orchestrator. Disabled when the
+                        // orchestrator is busy on a volume batch
+                        // (Phase 1 serializes; the user can stop the
+                        // batch first if they want a one-off). Rick
+                        // 2026-06-14: per-file analyze in the
+                        // operations window; volume batches in the
+                        // Analyze Dashboard.
+                        Button("Analyze This File…") {
+                            fileOpsCenter.startAnalyzeOne(
+                                record: rec,
+                                model: model,
+                                orchestrator: captionOrchestrator
+                            )
+                            openWindow(id: "combine")
+                        }
+                        .disabled(!VolumeReachability.isReachable(path: rec.fullPath)
+                                  || captionOrchestrator.currentStatus.isActive)
+                        .accessibilityIdentifier("catalog.row.analyzeThisFile")
+
                         if pureActive {
                             Divider()
 

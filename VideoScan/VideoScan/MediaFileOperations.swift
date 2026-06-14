@@ -53,6 +53,12 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// Rick 2026-06-14: lets the analyzer reach files AVFoundation
     /// can't decode (Apple deprecated svq3/qdm2/etc. in macOS 10.15).
     case reformat
+    /// "Analyze This File" — runs the orchestrator's VLM + Whisper
+    /// pipeline on a single record. Rick 2026-06-14: Media File
+    /// Operations window owns per-file operations; the Analyze
+    /// Dashboard owns batch volume-wide operations. Watching one
+    /// file's analyze tick along belongs here.
+    case analyze
 
     /// Badge text — rendered in small caps by the row view.
     /// `.extract` says "Faces" (not "Extract") since the verb split:
@@ -65,6 +71,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .extract: return "Faces"
         case .ripFrames: return "Frames"
         case .reformat: return "Reformat"
+        case .analyze: return "Analyze"
         }
     }
 }
@@ -339,6 +346,22 @@ final class MediaFileOperationsCenter: ObservableObject {
         add(job)
         job.start()
         fileOpsLog.info("reformat started: \(record.filename, privacy: .public) → \(job.outputURL.lastPathComponent, privacy: .public)")
+        return job
+    }
+
+    /// "Analyze This File" — runs VLM + Whisper on a single record
+    /// through the orchestrator (uses fullPath as the prefix so only
+    /// this one file enters the candidate set). Rick 2026-06-14:
+    /// per-file analyze belongs in the Media File Operations window;
+    /// volume-wide batches belong in the Analyze Dashboard.
+    @discardableResult
+    func startAnalyzeOne(record: VideoRecord,
+                         model: VideoScanModel,
+                         orchestrator: CaptionOrchestrator) -> AnalyzeJob {
+        let job = AnalyzeJob(record: record, model: model, orchestrator: orchestrator)
+        add(job)
+        job.start()
+        fileOpsLog.info("analyze started: \(record.filename, privacy: .public)")
         return job
     }
 
