@@ -166,20 +166,18 @@ final class CatalogSearchIndex {
         // and sceneCaptions (multiple ~200-300 char descriptions). Most
         // records have <5KB total searchable text.
         var parts: [String] = []
-        parts.reserveCapacity(10 + rec.sceneCaptions.count + rec.ocrText.count + rec.ocrDateCandidates.count)
+        parts.reserveCapacity(12 + rec.sceneCaptions.count + rec.ocrText.count + rec.ocrDateCandidates.count)
+        // Filename, directory, volumeName go through pathTokenize so
+        // typed queries match the way humans READ camelCase folders
+        // ("CapeCod1997.iMovieProject" → "cape cod 1997 i movie project").
+        // The original strings still join the haystack too so existing
+        // queries that lean on the raw path form keep matching.
         parts.append(rec.filename)
-        // Rick 2026-06-15: directory and volumeName are deliberately
-        // included so folder-based queries ("Cape Cod 1997", "Christmas
-        // 2005") match files organized by project folder even when their
-        // content fields (transcript, captions) don't mention the topic
-        // verbatim. Pre-2026-06-15 these were excluded per the
-        // "matt vs Matthew" concern (substring 'matt' shouldn't match
-        // every file in a 'Matthew' directory). Mitigations:
-        //   - Word-boundary matching for short tokens kills most of
-        //     the 'matt' → 'Matthew' false positives.
-        //   - AND across multiple tokens still narrows reliably.
+        parts.append(Self.pathTokenize(rec.filename))
         parts.append(rec.directory)
+        parts.append(Self.pathTokenize(rec.directory))
         parts.append(rec.volumeName)
+        parts.append(Self.pathTokenize(rec.volumeName))
         parts.append(contentsOf: rec.detectedPeople)
         parts.append(contentsOf: rec.suspectedPeople)
         parts.append(contentsOf: rec.confirmedByUserPeople.map { $0.name })
@@ -192,6 +190,54 @@ final class CatalogSearchIndex {
         // byte-literal search in `matches` stays correct for accents.
         return parts.joined(separator: " ").lowercased()
             .precomposedStringWithCanonicalMapping
+    }
+
+    /// Decompose a path-like string into space-separated word tokens by
+    /// injecting spaces at CamelCase transitions and letter↔digit
+    /// boundaries. Standard "search engine analyzer" preprocessing —
+    /// makes "CapeCod1997" findable as the words `cape`, `cod`, `1997`
+    /// without a smarter (and slower) word-boundary matcher.
+    ///
+    /// Examples:
+    ///   "CapeCod1997"      → "Cape Cod 1997"
+    ///   "iMovieProject"    → "i Movie Project"
+    ///   "Maxtor500FW"      → "Maxtor 500FW"   (FW stays joined — all-caps suffix)
+    ///   "USAFlag"          → "USA Flag"       (acronym→word split via lookahead)
+    ///
+    /// Pure / nonisolated so it's callable from the haystack build path
+    /// without an actor hop.
+    nonisolated static func pathTokenize(_ s: String) -> String {
+        if s.isEmpty { return s }
+        var out = ""
+        out.reserveCapacity(s.count + 8)
+        let chars = Array(s)
+        for i in 0..<chars.count {
+            let ch = chars[i]
+            if i > 0 {
+                let prev = chars[i - 1]
+                let next = i + 1 < chars.count ? chars[i + 1] : nil
+                // CamelCase split: lowercase|digit → uppercase
+                if ch.isUppercase, (prev.isLowercase || prev.isNumber) {
+                    out.append(" ")
+                }
+                // Acronym→word split: uppercase → uppercase but next is lowercase
+                // ("USAFlag" → "USA Flag"). Skip when next is nil (trailing
+                // uppercase) so "FW" doesn't get split into "F W".
+                else if ch.isUppercase, prev.isUppercase, let next, next.isLowercase {
+                    out.append(" ")
+                }
+                // Letter → digit split ("Cod1997" → "Cod 1997")
+                else if ch.isNumber, prev.isLetter {
+                    out.append(" ")
+                }
+                // Digit → letter split ("500FW" → "500 FW")
+                else if ch.isLetter, prev.isNumber {
+                    out.append(" ")
+                }
+            }
+            out.append(ch)
+        }
+        return out
     }
 
     /// Byte-level substring search via memmem. Both sides MUST already

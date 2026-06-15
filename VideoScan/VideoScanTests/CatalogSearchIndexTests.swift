@@ -375,6 +375,63 @@ struct CatalogSearchIndexTests {
                 "Volume name must be searchable so 'LaCieWorkspace' narrows to that volume's records")
     }
 
+    // MARK: - Phase 1B — Path decomposition (CamelCase + letter/digit splits)
+    //
+    // Rick organizes videos in CamelCase project folders ("CapeCod1997
+    // .iMovieProject", "Christmas2005.iMovieProject"). Without
+    // decomposition, "cape cod 1997" still finds them via raw substring,
+    // but "i movie" (with space) wouldn't and word-aware ranking can't
+    // see the word boundaries. The pathTokenize helper injects spaces at
+    // CamelCase transitions + letter↔digit boundaries so the haystack
+    // reads the way a human would say the folder name.
+
+    @Test func pathTokenize_camelCase() {
+        #expect(CatalogSearchIndex.pathTokenize("CapeCod1997") == "Cape Cod 1997")
+        #expect(CatalogSearchIndex.pathTokenize("iMovieProject") == "i Movie Project")
+        #expect(CatalogSearchIndex.pathTokenize("LaCieWorkspace") == "La Cie Workspace")
+    }
+
+    @Test func pathTokenize_letterDigitBoundaries() {
+        // Every letter↔digit boundary becomes a split. "Maxtor500FW"
+        // reads as brand / model / interface (FireWire) — three logical
+        // tokens, all separately findable.
+        #expect(CatalogSearchIndex.pathTokenize("Maxtor500FW") == "Maxtor 500 FW")
+        #expect(CatalogSearchIndex.pathTokenize("Christmas2005") == "Christmas 2005")
+        #expect(CatalogSearchIndex.pathTokenize("500Flag") == "500 Flag")
+    }
+
+    @Test func pathTokenize_acronymToWord() {
+        // "USAFlag" → "USA Flag": acronym→word boundary detected by
+        // lookahead (uppercase followed by lowercase).
+        #expect(CatalogSearchIndex.pathTokenize("USAFlag") == "USA Flag")
+        #expect(CatalogSearchIndex.pathTokenize("MyHTTPServer") == "My HTTP Server")
+    }
+
+    @Test func pathTokenize_emptyAndSingleChar() {
+        #expect(CatalogSearchIndex.pathTokenize("") == "")
+        #expect(CatalogSearchIndex.pathTokenize("a") == "a")
+        #expect(CatalogSearchIndex.pathTokenize("A") == "A")
+        #expect(CatalogSearchIndex.pathTokenize("/") == "/")
+    }
+
+    /// regression: with path decomposition in the haystack, a query
+    /// like "i movie" (two tokens) now matches a folder named
+    /// "iMovieProject" via the decomposed "i Movie Project" form.
+    @Test func decomposedHaystackEnablesMultiTokenFolderQuery() {
+        let r = makeRecord(path: "/Volumes/X/iMovieProject/Clip.mov")
+        r.directory = "/Volumes/X/iMovieProject"
+        let idx = CatalogSearchIndex()
+        idx.rebuild(records: [r])
+
+        // "movie project" — two tokens — pre-Phase-1B these would both
+        // match via substring of "iMovieProject", but the user reading
+        // the catalog expects multi-word folder names to compose
+        // naturally.
+        let hits = idx.filter(records: [r], query: "movie project")
+        #expect(hits.count == 1,
+                "Multi-token folder query must match decomposed CamelCase")
+    }
+
     /// regression: with directory in the haystack, the AND across tokens
     /// must still narrow correctly. "Cape Cod elevator" matches a record
     /// whose directory says "CapeCod1997" AND whose transcript says
