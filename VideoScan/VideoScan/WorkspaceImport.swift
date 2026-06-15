@@ -64,6 +64,121 @@ nonisolated func workspaceImportLineageCandidates(
     return Array(sorted.prefix(limit))
 }
 
+// MARK: - Derivative-suffix auto-detection
+
+/// Strips known derivative suffix tokens from a filename and returns
+/// the inferred parent stem, or nil if no known suffix matched.
+///
+/// Recognized derivative producers:
+///   - Topaz Video AI: `_denoise`, `_upscale`, `_<modelcode><digits>` for
+///     model codes like `thm`, `nyx`, `hyp`, `dio`, `art`, `prs`, `iri`,
+///     `rhe`, `tho`, `gaa` (chained, e.g. `_denoise_thm2_nyx3_hyp1`)
+///   - VideoScan Reformat: `_reformatted`
+///   - VideoScan Transcode: `.vs.edit`, `.vs.archive`
+///
+/// Example: `Thanksgiving-Raw_Default_denoise_thm2_nyx3_hyp1.mov` →
+/// `Thanksgiving-Raw_Default`.
+///
+/// Used by the Import sheet to pre-fill the lineage search box and
+/// auto-select the parent when the inferred stem uniquely identifies
+/// one catalog record.
+nonisolated func workspaceImportSuggestedParentStem(forFilename filename: String) -> String? {
+    var stem = (filename as NSString).deletingPathExtension
+    let original = stem
+
+    // VideoScan markers — single suffix, drop in one shot.
+    let vsSuffixes = [".vs.edit", ".vs.archive", "_reformatted"]
+    for sfx in vsSuffixes {
+        if stem.lowercased().hasSuffix(sfx) {
+            stem = String(stem.dropLast(sfx.count))
+            return stem.isEmpty ? nil : stem
+        }
+    }
+
+    // Topaz Video AI tokens. Operation names + 3-letter model codes
+    // (Topaz uses short codes like `thm2`, `nyx3`, `hyp1` to identify
+    // the chosen AI model variant). Long forms like `artemis` cover the
+    // older versions where Topaz wrote the full model name.
+    let topazTokens: [String] = [
+        // Operations
+        "denoise", "upscale", "interpolate", "stabilize", "deinterlace",
+        "sharpen", "enhance",
+        // 3-letter model codes (followed by 1+ digits)
+        "thm", "nyx", "hyp", "dio", "ths", "prs", "art", "iri",
+        "rhe", "tho", "gaa", "apo", "chr",
+        // Long model names
+        "artemis", "proteus", "theia", "iris", "dione", "gaia",
+        "hyperion", "chronos", "apollo", "rhea", "nyx"
+    ]
+
+    var changed = true
+    while changed {
+        changed = false
+        for tok in topazTokens {
+            let pattern = "_\(tok)\\d*$"
+            if let range = stem.range(of: pattern,
+                                      options: [.regularExpression, .caseInsensitive]) {
+                stem = String(stem[..<range.lowerBound])
+                changed = true
+                break
+            }
+        }
+    }
+
+    return stem == original || stem.isEmpty ? nil : stem
+}
+
+/// Looks for exactly one non-archived catalog record whose filename
+/// stem (basename minus extension) equals the inferred parent stem
+/// case-insensitively. Returns nil if zero or multiple matches —
+/// in those cases the user should pick from the narrowed list.
+nonisolated func workspaceImportFindExactStemMatch(
+    stem: String,
+    in records: [VideoRecord]
+) -> VideoRecord? {
+    let target = stem.lowercased()
+    let matches = records.filter { rec in
+        guard rec.lifecycleStage != .archived else { return false }
+        let recStem = (rec.filename as NSString).deletingPathExtension.lowercased()
+        return recStem == target
+    }
+    return matches.count == 1 ? matches.first : nil
+}
+
+/// Builds the Import-context banner text for a record carrying a
+/// codec AVFoundation can't decode. Differs from
+/// `unplayableLegacyReason` (which is phrased for the Reformat
+/// pre-flight) — here we emphasize that import still succeeds and
+/// point at the Transcode verb as the in-app fix.
+///
+/// Returns nil when neither codec is on the legacy list.
+nonisolated func workspaceImportLegacyCodecBanner(
+    videoCodec: String,
+    audioCodec: String
+) -> String? {
+    let v = videoCodec.lowercased().trimmingCharacters(in: .whitespaces)
+    let a = audioCodec.lowercased().trimmingCharacters(in: .whitespaces)
+    let badVideo = !v.isEmpty && unplayableLegacyVideoCodecs.contains(v)
+    let badAudio = !a.isEmpty && unplayableLegacyAudioCodecs.contains(a)
+
+    switch (badVideo, badAudio) {
+    case (false, false):
+        return nil
+    case (true, false):
+        return "Heads up: this file's video uses \(videoCodec), a codec macOS deprecated in 2019. " +
+               "It will import fine, but it can't be analyzed in-app or played in modern viewers. " +
+               "Run Transcode → For Editing on this file once it's in your workspace to fix this."
+    case (false, true):
+        return "Heads up: this file's audio uses \(audioCodec), a codec macOS deprecated in 2019. " +
+               "It will import fine, but the audio won't play in FCP and the dossier pipeline can't " +
+               "transcribe it. Run Transcode → For Editing on this file once it's in your workspace to fix this."
+    case (true, true):
+        return "Heads up: this file's video (\(videoCodec)) and audio (\(audioCodec)) use codecs macOS " +
+               "deprecated in 2019. It will import fine, but it can't be analyzed in-app or played in FCP. " +
+               "Run Transcode → For Editing on this file once it's in your workspace to fix both."
+    }
+}
+
 // MARK: - Lineage Picker Sheet View
 
 /// Sheet shown after probing a freshly imported file. Two paths:
@@ -80,16 +195,43 @@ struct WorkspaceImportLineageSheet: View {
     let onCommit: (UUID?) -> Void
     let onCancel: () -> Void
 
-    @State private var search: String = ""
-    @State private var selectedParentID: UUID? = nil
+    @State private var search: String
+    @State private var selectedParentID: UUID?
+
+    // Custom init seeds the search field + selection from the imported
+    // filename. If the filename matches a known derivative pattern
+    // (Topaz suffix, VS Reformat/Transcode markers), we pre-fill the
+    // search with the inferred parent stem and — when that stem maps
+    // to exactly one non-archived catalog record — pre-select it as
+    // the parent. The common case (Topaz output of a cataloged source)
+    // becomes "press Enter to commit" instead of "scroll a list of 50".
+    init(imported: VideoRecord,
+         catalogRecords: [VideoRecord],
+         onCommit: @escaping (UUID?) -> Void,
+         onCancel: @escaping () -> Void) {
+        self.imported = imported
+        self.catalogRecords = catalogRecords
+        self.onCommit = onCommit
+        self.onCancel = onCancel
+
+        let stem = workspaceImportSuggestedParentStem(forFilename: imported.filename)
+        _search = State(initialValue: stem ?? "")
+        if let stem,
+           let unique = workspaceImportFindExactStemMatch(stem: stem,
+                                                         in: catalogRecords) {
+            _selectedParentID = State(initialValue: unique.id)
+        } else {
+            _selectedParentID = State(initialValue: nil)
+        }
+    }
 
     private var candidates: [VideoRecord] {
         workspaceImportLineageCandidates(in: catalogRecords, matching: search)
     }
 
     private var deadCodecBanner: String? {
-        unplayableLegacyReason(videoCodec: imported.videoCodec,
-                               audioCodec: imported.audioCodec)
+        workspaceImportLegacyCodecBanner(videoCodec: imported.videoCodec,
+                                         audioCodec: imported.audioCodec)
     }
 
     var body: some View {
@@ -102,11 +244,29 @@ struct WorkspaceImportLineageSheet: View {
 
             Divider()
 
-            Text("Is this file derived from a file already in the catalog?")
-                .font(.system(size: 13, weight: .medium))
+            Text("If this file was created by processing another catalog file " +
+                 "(Topaz Video AI, FCP export, transcode, etc.), pick the source " +
+                 "here so the app can track lineage. Otherwise click \"Import (no parent).\"")
+                .font(.system(size: 12))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if selectedParentID != nil {
+                // Auto-detection succeeded — surface it so the user
+                // sees what we picked and can change it before committing.
+                HStack(spacing: 6) {
+                    Image(systemName: "wand.and.stars")
+                        .foregroundColor(.mint)
+                    Text("Suggested parent picked from filename.")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+            }
 
             // Search field + candidate list. Empty search shows the
-            // first 50 non-archived records; typing narrows it.
+            // first 50 non-archived records; typing narrows it. The
+            // init pre-fills search with the inferred parent stem when
+            // the imported filename matches a known derivative pattern.
             TextField("Search by filename", text: $search)
                 .textFieldStyle(.roundedBorder)
 

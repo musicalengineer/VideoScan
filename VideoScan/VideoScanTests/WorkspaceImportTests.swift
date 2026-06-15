@@ -168,4 +168,136 @@ struct WorkspaceImportTests {
         #expect(candidates.count == 10,
                 "Limit must cap the candidate list — UI responsiveness contract")
     }
+
+    // MARK: - 3. Suggested-parent stem detection
+
+    /// regression: Topaz Video AI chained suffix — denoise + 3 model
+    /// codes — should strip to the original stem. This is the real-world
+    /// case Rick hit on 2026-06-15.
+    @Test func suggestedStem_topazChainedSuffix() {
+        let stem = workspaceImportSuggestedParentStem(
+            forFilename: "Thanksgiving-Raw_Default_denoise_thm2_nyx3_hyp1.mov"
+        )
+        #expect(stem == "Thanksgiving-Raw_Default",
+                "Chained Topaz suffix should strip to the source stem")
+    }
+
+    /// VideoScan Reformat output convention.
+    @Test func suggestedStem_vsReformatted() {
+        let stem = workspaceImportSuggestedParentStem(
+            forFilename: "Thanksgiving-Raw_Default_reformatted.mp4"
+        )
+        #expect(stem == "Thanksgiving-Raw_Default",
+                "_reformatted suffix should strip to the source stem")
+    }
+
+    /// VideoScan Transcode (Pass C) output convention — .vs.edit and
+    /// .vs.archive markers.
+    @Test func suggestedStem_vsTranscode() {
+        let editStem = workspaceImportSuggestedParentStem(
+            forFilename: "BirthdayParty.vs.edit.mov"
+        )
+        #expect(editStem == "BirthdayParty",
+                ".vs.edit suffix should strip to the source stem")
+
+        let archiveStem = workspaceImportSuggestedParentStem(
+            forFilename: "BirthdayParty.vs.archive.mov"
+        )
+        #expect(archiveStem == "BirthdayParty",
+                ".vs.archive suffix should strip to the source stem")
+    }
+
+    /// Plain original (no recognized derivative suffix) — must return
+    /// nil so the sheet shows no auto-suggestion and the user types
+    /// to find a parent or commits as "no parent."
+    @Test func suggestedStem_plainOriginalReturnsNil() {
+        #expect(workspaceImportSuggestedParentStem(forFilename: "Christmas_1985_raw.mov") == nil)
+        #expect(workspaceImportSuggestedParentStem(forFilename: "IMG_4242.mov") == nil)
+    }
+
+    /// regression: exact-stem match must return the unique catalog
+    /// record. This is the auto-select path the sheet's init uses.
+    @Test func exactStemMatch_uniqueParent() {
+        let parent = makeRecord(name: "Thanksgiving-Raw_Default.mov",
+                                lifecycleStage: .cataloged)
+        let sibling = makeRecord(name: "Thanksgiving-Raw_Default_reformatted.mp4",
+                                 lifecycleStage: .cataloged)
+        let other = makeRecord(name: "Birthday.mov",
+                               lifecycleStage: .cataloged)
+
+        let match = workspaceImportFindExactStemMatch(
+            stem: "Thanksgiving-Raw_Default",
+            in: [parent, sibling, other]
+        )
+
+        #expect(match?.id == parent.id,
+                "Exact stem match must return only the record whose basename-minus-extension equals the stem")
+    }
+
+    /// regression: an archived candidate must be excluded from
+    /// auto-selection (same policy as the lineage candidate filter).
+    @Test func exactStemMatch_archivedExcluded() {
+        let archived = makeRecord(name: "Old.mov",
+                                  lifecycleStage: .archived)
+        let match = workspaceImportFindExactStemMatch(
+            stem: "Old",
+            in: [archived]
+        )
+        #expect(match == nil,
+                "Archived records must never be auto-selected as parents")
+    }
+
+    /// regression: ambiguity (two records share the same stem) must
+    /// return nil so the user picks manually.
+    @Test func exactStemMatch_ambiguousReturnsNil() {
+        let a = makeRecord(name: "Clip.mov", lifecycleStage: .cataloged)
+        let b = makeRecord(name: "Clip.mov", lifecycleStage: .cataloged)
+        let match = workspaceImportFindExactStemMatch(
+            stem: "Clip",
+            in: [a, b]
+        )
+        #expect(match == nil,
+                "Two records sharing a stem is ambiguous — let the user pick")
+    }
+
+    // MARK: - 4. Import-context legacy codec banner
+
+    /// regression: the import banner must mention Transcode → For
+    /// Editing as the in-app fix, since that's the next action the
+    /// user takes after committing the import. Different wording from
+    /// `unplayableLegacyReason` (which the Reformat dialog uses).
+    @Test func legacyCodecBanner_qdm2AudioMentionsTranscode() {
+        let banner = workspaceImportLegacyCodecBanner(
+            videoCodec: "prores",
+            audioCodec: "qdm2"
+        )
+        #expect(banner != nil,
+                "QDM2 audio must trigger the legacy-codec banner")
+        #expect(banner?.contains("Transcode") == true,
+                "Banner must point at the Transcode verb so the user knows the in-app fix")
+        #expect(banner?.contains("FCP") == true,
+                "Banner must mention FCP so the user understands the playback consequence")
+        #expect(banner?.contains("import fine") == true,
+                "Banner must reassure that the import itself succeeds (it's informational, not blocking)")
+    }
+
+    /// Both-codec case (svq3 video + qdm2 audio — the Thanksgiving
+    /// source) — banner mentions both codecs in one message.
+    @Test func legacyCodecBanner_bothCodecs() {
+        let banner = workspaceImportLegacyCodecBanner(
+            videoCodec: "svq3",
+            audioCodec: "qdm2"
+        )
+        #expect(banner?.contains("svq3") == true,
+                "Both-codec banner must name the video codec")
+        #expect(banner?.contains("qdm2") == true,
+                "Both-codec banner must name the audio codec")
+    }
+
+    /// Modern codecs → no banner.
+    @Test func legacyCodecBanner_modernCodecsReturnsNil() {
+        #expect(workspaceImportLegacyCodecBanner(videoCodec: "h264", audioCodec: "aac") == nil)
+        #expect(workspaceImportLegacyCodecBanner(videoCodec: "hevc", audioCodec: "aac") == nil)
+        #expect(workspaceImportLegacyCodecBanner(videoCodec: "prores", audioCodec: "pcm_s24le") == nil)
+    }
 }
