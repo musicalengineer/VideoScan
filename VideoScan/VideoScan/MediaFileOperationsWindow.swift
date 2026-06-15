@@ -340,6 +340,15 @@ struct MediaFileOperationRow: View {
                     finishedChip(summary)
                     revealButton(reformat.outputURL)
                     showInCatalogButton(reformat.outputURL)
+                } else if let transcode = job as? TranscodeJob {
+                    // Pass C (Rick 2026-06-14): same finished treatment
+                    // as Reformat — Reveal the new ProRes/HEVC file in
+                    // Finder + jump to its catalog row. Show in Catalog
+                    // is the affordance that proves the workspaceActive
+                    // + derivedFrom wiring took effect.
+                    finishedChip(summary)
+                    revealButton(transcode.outputURL)
+                    showInCatalogButton(transcode.outputURL)
                 } else if let analyze = job as? AnalyzeJob {
                     // Same treatment for Analyze — the user wants to
                     // verify the catalog row got captions + transcript
@@ -490,6 +499,11 @@ extension MediaFileOperationKind {
         case .ripFrames: return .purple
         case .reformat: return .red
         case .analyze: return .cyan
+        // Pass C — Transcode's mint badge matches the workspaceActive
+        // tint (mint hammer icon in the catalog filename column), so
+        // the user reads "transcode → workspace" as the same
+        // visual lineage.
+        case .transcode: return .mint
         }
     }
 }

@@ -45,6 +45,12 @@ enum TriageFilter: String, CaseIterable {
 
 struct TriageView: View {
     @EnvironmentObject var model: VideoScanModel
+    // Pass C (Rick 2026-06-14): MFO verbs are available from triage too —
+    // Rick explicitly called this out. Pull in the same env objects the
+    // catalog tab uses so the Transcode menu can dispatch a job and open
+    // the Media File Operations window.
+    @EnvironmentObject var fileOpsCenter: MediaFileOperationsCenter
+    @Environment(\.openWindow) private var openWindow
     @AppStorage("selectedTab") private var selectedTab: Int = 0
 
     @State private var selectedFilter: TriageFilter = .all
@@ -620,6 +626,51 @@ struct TriageView: View {
                 Label("Reset to Unreviewed", systemImage: "arrow.counterclockwise")
             }
         }
+
+        Divider()
+
+        // Transcode — Pass C (Rick 2026-06-14). MFO verbs work from
+        // triage too: two-preset faithful conversion for FCP edits or
+        // long-term archive. Single-row only (matches Show in Catalog
+        // / Reveal in Finder above — these are per-file operations).
+        // Disabled when the file is offline OR a transcode is already
+        // running for it.
+        let singleRec: VideoRecord? = (count == 1)
+            ? ids.first.flatMap { id in model.records.first { $0.id == id } }
+            : nil
+        let transcodeRunning: Bool = {
+            guard let r = singleRec else { return false }
+            return fileOpsCenter.jobs.contains { job in
+                guard job.state.isActive, let t = job as? TranscodeJob else { return false }
+                return t.record.id == r.id
+            }
+        }()
+        let transcodeBlocked = (singleRec == nil)
+            || !VolumeReachability.isReachable(path: singleRec?.fullPath ?? "")
+            || transcodeRunning
+
+        Menu {
+            Button("For Editing (ProRes 422 HQ)") {
+                if let r = singleRec {
+                    fileOpsCenter.startTranscode(record: r, preset: .editing, model: model)
+                    openWindow(id: "combine")
+                }
+            }
+            .disabled(transcodeBlocked)
+            .accessibilityIdentifier("catalog.row.transcodeEditing")
+
+            Button("For Archival (HEVC 10-bit)") {
+                if let r = singleRec {
+                    fileOpsCenter.startTranscode(record: r, preset: .archival, model: model)
+                    openWindow(id: "combine")
+                }
+            }
+            .disabled(transcodeBlocked)
+            .accessibilityIdentifier("catalog.row.transcodeArchival")
+        } label: {
+            Label("Transcode", systemImage: "wand.and.rays")
+        }
+        .disabled(transcodeBlocked)
 
         Divider()
 

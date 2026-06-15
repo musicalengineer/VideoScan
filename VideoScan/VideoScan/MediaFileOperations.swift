@@ -59,6 +59,12 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// Dashboard owns batch volume-wide operations. Watching one
     /// file's analyze tick along belongs here.
     case analyze
+    /// "Transcode" — two-preset faithful conversion to ProRes 422 HQ
+    /// (Editing) or HEVC 10-bit (Archival). Rick 2026-06-14 (Pass C):
+    /// produces FCP-editable copies and archive-grade copies without
+    /// leaving VideoScan. Unlike Reformat, NO deinterlace/denoise and
+    /// NO auto-queue Analyze.
+    case transcode
 
     /// Badge text — rendered in small caps by the row view.
     /// `.extract` says "Faces" (not "Extract") since the verb split:
@@ -72,6 +78,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .ripFrames: return "Frames"
         case .reformat: return "Reformat"
         case .analyze: return "Analyze"
+        case .transcode: return "Transcode"
         }
     }
 }
@@ -346,6 +353,23 @@ final class MediaFileOperationsCenter: ObservableObject {
         add(job)
         job.start()
         fileOpsLog.info("reformat started: \(record.filename, privacy: .public) → \(job.outputURL.lastPathComponent, privacy: .public)")
+        return job
+    }
+
+    /// Kick off a Transcode on a single record. Two-preset faithful
+    /// conversion — ProRes 422 HQ for FCP editing or HEVC 10-bit for
+    /// long-term archive. Catalogs the new derivative as
+    /// workspaceActive with `derivedFrom = record.id`, but does NOT
+    /// auto-queue Analyze (the user transcoded for a specific
+    /// workflow, not for analysis). Rick 2026-06-14 (Pass C).
+    @discardableResult
+    func startTranscode(record: VideoRecord,
+                        preset: TranscodePreset,
+                        model: VideoScanModel) -> TranscodeJob {
+        let job = TranscodeJob(record: record, preset: preset, model: model)
+        add(job)
+        job.start()
+        fileOpsLog.info("transcode started: \(record.filename, privacy: .public) preset=\(preset.rawValue, privacy: .public) → \(job.outputURL.lastPathComponent, privacy: .public)")
         return job
     }
 

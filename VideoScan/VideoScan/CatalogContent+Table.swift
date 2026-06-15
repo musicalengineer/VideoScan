@@ -327,6 +327,33 @@ extension CatalogContent {
                                   || captionOrchestrator.currentStatus.isActive)
                         .accessibilityIdentifier("catalog.row.analyze")
 
+                        // Transcode — Pass C (Rick 2026-06-14). Two-preset
+                        // faithful conversion: ProRes 422 HQ for FCP edit
+                        // sessions, HEVC 10-bit for long-term archive.
+                        // Disabled when the file is offline OR another
+                        // transcode is already running for this same record
+                        // (the per-file disable prevents the user from
+                        // queueing two competing encodes against one input).
+                        let transcodeRunning = fileOpsCenter.jobs.contains { job in
+                            guard job.state.isActive, let t = job as? TranscodeJob else { return false }
+                            return t.record.id == rec.id
+                        }
+                        let transcodeBlocked = !VolumeReachability.isReachable(path: rec.fullPath)
+                            || transcodeRunning
+                        Menu("Transcode") {
+                            Button("For Editing (ProRes 422 HQ)") {
+                                requestTranscode(for: rec, preset: .editing)
+                            }
+                            .disabled(transcodeBlocked)
+                            .accessibilityIdentifier("catalog.row.transcodeEditing")
+
+                            Button("For Archival (HEVC 10-bit)") {
+                                requestTranscode(for: rec, preset: .archival)
+                            }
+                            .disabled(transcodeBlocked)
+                            .accessibilityIdentifier("catalog.row.transcodeArchival")
+                        }
+
                         // Rick 2026-06-14: grey out (don't hide) when
                         // the file lacks the relevant stream. More
                         // discoverable than absent — the user learns
@@ -616,6 +643,17 @@ extension CatalogContent {
             )
             openWindow(id: "combine")
         }
+    }
+
+    /// "Transcode" handler — kicks off a TranscodeJob with the chosen
+    /// preset and opens the Media File Operations window so the user
+    /// can watch progress. Pass C (Rick 2026-06-14): no preset sheet —
+    /// the menu's two entries ARE the UI. Lineage (`derivedFrom`) and
+    /// the workspace tint (`workspaceActive = true`) are wired up by
+    /// TranscodeJob.catalogTranscodeOutput.
+    private func requestTranscode(for rec: VideoRecord, preset: TranscodePreset) {
+        fileOpsCenter.startTranscode(record: rec, preset: preset, model: model)
+        openWindow(id: "combine")
     }
 
     /// "Repair Audio…" handler for video-only records. Uses the same
