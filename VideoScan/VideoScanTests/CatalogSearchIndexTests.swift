@@ -318,4 +318,93 @@ struct CatalogSearchIndexTests {
         #expect(idxElapsed < canElapsed * 1.5,
                 "Index (\(idxElapsed * 1000) ms) is materially slower than canonical (\(canElapsed * 1000) ms) — investigate")
     }
+
+    // MARK: - Phase 1A — directory + volumeName in haystack
+    //
+    // Rick's real-world miss on 2026-06-15: searching "Cape Cod 1997"
+    // for the elevator clip failed even though the LaCieWorkspace
+    // record's directory was /Volumes/LaCieWorkspace/.../CapeCod1997.
+    // iMovieProject/Media. Pre-fix, the catalog haystack omitted
+    // directory + volumeName per the "matt vs Matthew" concern. We
+    // brought them back because folder organization IS meaningful
+    // search input — the matt/Matthew concern is mitigated by AND
+    // semantics and (in 1B) word boundaries for short tokens.
+
+    /// Records organized by project folder must be findable by the
+    /// folder name token even when their content fields don't mention
+    /// it. This is the regression that prevented finding the elevator
+    /// clip via its CapeCod1997.iMovieProject directory.
+    @Test func haystackIncludesDirectory() {
+        let r = makeRecord(
+            path: "/Volumes/LaCieWorkspace/CheesegraterArchive/InternalRaid/CapeCod1997.iMovieProject/Media/Clip 05.dv",
+            transcript: "elevated line of trees. Bushes, yeah, bushes."
+        )
+        r.directory = "/Volumes/LaCieWorkspace/CheesegraterArchive/InternalRaid/CapeCod1997.iMovieProject/Media"
+        let idx = CatalogSearchIndex()
+        idx.rebuild(records: [r])
+
+        // The transcript doesn't contain "cape" or "cod" or "1997" —
+        // those tokens are reachable only via the directory.
+        let capeCod = idx.filter(records: [r], query: "cape cod")
+        #expect(capeCod.count == 1,
+                "Two-token directory search ('cape cod') must match a CapeCod1997 directory")
+        let year = idx.filter(records: [r], query: "1997")
+        #expect(year.count == 1,
+                "Directory-embedded year ('1997') must match via directory")
+    }
+
+    /// volumeName matching makes "Seagate2TB" or "LaCieWorkspace"
+    /// queries useful for narrowing to a specific physical volume.
+    @Test func haystackIncludesVolumeName() {
+        let r = makeRecord(
+            path: "/Volumes/LaCieWorkspace/something/Clip.mov",
+            transcript: nil
+        )
+        r.directory = "/Volumes/LaCieWorkspace/something"
+        var ctx = ScanContext()
+        ctx.volumeUUID = "FAKE-UUID"
+        ctx.volumeName = "LaCieWorkspace"
+        ctx.volumeMountType = "apfs"
+        ctx.scanHost = "test"
+        ctx.scannedAt = Date()
+        r.scanContext = ctx
+        let idx = CatalogSearchIndex()
+        idx.rebuild(records: [r])
+        let hits = idx.filter(records: [r], query: "lacieworkspace")
+        #expect(hits.count == 1,
+                "Volume name must be searchable so 'LaCieWorkspace' narrows to that volume's records")
+    }
+
+    /// regression: with directory in the haystack, the AND across tokens
+    /// must still narrow correctly. "Cape Cod elevator" matches a record
+    /// whose directory says "CapeCod1997" AND whose transcript says
+    /// "elevator" — but NOT a record where only one of those is true.
+    @Test func directoryANDTranscriptCompose() {
+        let elevatorClip = makeRecord(
+            path: "/Volumes/X/CapeCod1997.iMovieProject/Media/Clip 05.dv",
+            transcript: "Is it in the elevator? It's in the elevator."
+        )
+        elevatorClip.directory = "/Volumes/X/CapeCod1997.iMovieProject/Media"
+
+        let unrelatedCape = makeRecord(
+            path: "/Volumes/X/CapeCod2005.iMovieProject/Media/Clip 02.dv",
+            transcript: "Walking on the beach with the kids."
+        )
+        unrelatedCape.directory = "/Volumes/X/CapeCod2005.iMovieProject/Media"
+
+        let elevatorElsewhere = makeRecord(
+            path: "/Volumes/X/Misc/Random.mov",
+            transcript: "The hotel elevator was crowded."
+        )
+        elevatorElsewhere.directory = "/Volumes/X/Misc"
+
+        let idx = CatalogSearchIndex()
+        let all = [elevatorClip, unrelatedCape, elevatorElsewhere]
+        idx.rebuild(records: all)
+
+        let hits = idx.filter(records: all, query: "cape elevator")
+        #expect(hits.count == 1, "Only the record with BOTH 'cape' (dir) and 'elevator' (transcript) should match")
+        #expect(hits.first?.fullPath == elevatorClip.fullPath,
+                "Match must be the CapeCod1997 elevator clip, not an unrelated 'Cape' or 'elevator' record")
+    }
 }

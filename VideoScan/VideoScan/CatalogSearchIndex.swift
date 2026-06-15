@@ -166,8 +166,20 @@ final class CatalogSearchIndex {
         // and sceneCaptions (multiple ~200-300 char descriptions). Most
         // records have <5KB total searchable text.
         var parts: [String] = []
-        parts.reserveCapacity(8 + rec.sceneCaptions.count + rec.ocrText.count + rec.ocrDateCandidates.count)
+        parts.reserveCapacity(10 + rec.sceneCaptions.count + rec.ocrText.count + rec.ocrDateCandidates.count)
         parts.append(rec.filename)
+        // Rick 2026-06-15: directory and volumeName are deliberately
+        // included so folder-based queries ("Cape Cod 1997", "Christmas
+        // 2005") match files organized by project folder even when their
+        // content fields (transcript, captions) don't mention the topic
+        // verbatim. Pre-2026-06-15 these were excluded per the
+        // "matt vs Matthew" concern (substring 'matt' shouldn't match
+        // every file in a 'Matthew' directory). Mitigations:
+        //   - Word-boundary matching for short tokens kills most of
+        //     the 'matt' → 'Matthew' false positives.
+        //   - AND across multiple tokens still narrows reliably.
+        parts.append(rec.directory)
+        parts.append(rec.volumeName)
         parts.append(contentsOf: rec.detectedPeople)
         parts.append(contentsOf: rec.suspectedPeople)
         parts.append(contentsOf: rec.confirmedByUserPeople.map { $0.name })

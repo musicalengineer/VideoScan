@@ -304,6 +304,12 @@ nonisolated func pfCatalogTokenMatches(_ token: SearchToken, _ rec: VideoRecord)
     case .substring(let needle):
         let n = needle.lowercased()
         if rec.filename.lowercased().contains(n) { return true }
+        // Rick 2026-06-15: directory + volumeName join the catalog
+        // narrow matcher so folder-based queries like "Cape Cod 1997"
+        // match files organized by project folder. Must stay aligned
+        // with CatalogSearchIndex.buildHaystack — correctness contract.
+        if rec.directory.lowercased().contains(n) { return true }
+        if rec.volumeName.lowercased().contains(n) { return true }
         if rec.detectedPeople.contains(where: { $0.lowercased().contains(n) }) { return true }
         if rec.suspectedPeople.contains(where: { $0.lowercased().contains(n) }) { return true }
         // User-confirmed names match the same as algorithm-detected names
