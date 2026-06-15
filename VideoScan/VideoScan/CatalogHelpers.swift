@@ -273,6 +273,12 @@ struct CatalogContent: View {
         if viewFilters.contains(.hasFamily) {
             out = out.filter(pfRecordHasAnyPerson)
         }
+        // Workspace chip: keep only records the user has actively imported
+        // into the triage workspace. Orthogonal to lifecycleStage — a
+        // Cataloged record can also be workspace-active.
+        if viewFilters.contains(.workspaceOnly) {
+            out = out.filter { $0.workspaceActive }
+        }
         if viewFilters.contains(.untaggedOnly) {
             out = out.filter(pfRecordIsUntagged)
         }

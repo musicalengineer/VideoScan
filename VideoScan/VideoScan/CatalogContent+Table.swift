@@ -46,6 +46,7 @@ extension CatalogContent {
             TableColumn("Filename", value: \.filename) { rec in
                 let offline = !VolumeReachability.isReachable(path: rec.fullPath)
                 let purged = rec.isPurged
+                let workspaceActive = rec.workspaceActive
                 HStack(spacing: 4) {
                     if purged {
                         // Trash-slash icon makes the "removed" state obvious
@@ -63,6 +64,13 @@ extension CatalogContent {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .font(.system(size: 10))
                             .foregroundColor(.red)
+                    } else if workspaceActive {
+                        // Hammer = "being worked on with external tools."
+                        // Turquoise (.mint adapts for dark mode) marks the
+                        // record as triage-active. Pass A — Rick 2026-06-14.
+                        Image(systemName: "hammer.fill")
+                            .font(.system(size: 10))
+                            .foregroundColor(.mint)
                     } else if showPairsOnly && rec.pairedWith != nil {
                         Image(systemName: rec.streamType == .videoOnly ? "film" : "waveform")
                             .font(.system(size: 10))
@@ -73,12 +81,15 @@ extension CatalogContent {
                         // Italic when offline OR purged — both signal "not the
                         // active default state". Purge color (orange) wins over
                         // both offline-secondary and pair-blue/green when set.
+                        // Workspace tint (.mint / turquoise) sits between
+                        // purged-orange (highest priority) and the rest.
                         .italic(offline || purged)
                         .foregroundColor(purged ? .orange
-                            : (offline ? .secondary
-                                : (showPairsOnly && rec.pairedWith != nil
-                                   ? (rec.streamType == .videoOnly ? .blue : .green)
-                                   : rec.filenameColor)))
+                            : (workspaceActive ? .mint
+                                : (offline ? .secondary
+                                    : (showPairsOnly && rec.pairedWith != nil
+                                       ? (rec.streamType == .videoOnly ? .blue : .green)
+                                       : rec.filenameColor))))
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 2)
