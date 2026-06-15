@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Triage Filter
 
@@ -9,6 +10,11 @@ enum TriageFilter: String, CaseIterable {
     case suspectedJunk = "Suspected Junk"
     case confirmedJunk = "Confirmed Junk"
     case recoverable  = "Recoverable"
+    // Pass B — Workflow filter, not a disposition. `workspaceActive`
+    // is independent of MediaDisposition; a record can be Untriaged
+    // AND workspace-active. Lives in its own sidebar section so the
+    // user reads it as "workflow state" rather than "disposition pick."
+    case workspace    = "In Workspace"
 
     var icon: String {
         switch self {
@@ -18,6 +24,7 @@ enum TriageFilter: String, CaseIterable {
         case .suspectedJunk: return "exclamationmark.triangle"
         case .confirmedJunk: return "xmark.circle.fill"
         case .recoverable:   return "wrench.and.screwdriver.fill"
+        case .workspace:     return "hammer.fill"
         }
     }
 
@@ -29,6 +36,7 @@ enum TriageFilter: String, CaseIterable {
         case .suspectedJunk: return .orange
         case .confirmedJunk: return .red
         case .recoverable:   return .teal
+        case .workspace:     return .mint
         }
     }
 }
@@ -62,6 +70,15 @@ struct TriageView: View {
     // item-binding mutation and SwiftUI swaps content inside the same
     // modal presentation. See JunkSheet definition in JunkDeleteAction.swift.
     @State private var junkSheet: JunkSheet? = nil
+
+    // Pass B — Import-to-Workspace sheet state. Same Identifiable-enum
+    // pattern as JunkSheet to avoid chained-.sheet races. Set by the
+    // Import button's NSOpenPanel callback once the probe completes.
+    @State private var importSheet: WorkspaceImportSheet? = nil
+    // Disables the Import button while a probe is in flight so the
+    // user can't queue up half-a-dozen overlapping probes by mashing
+    // the button.
+    @State private var isImporting: Bool = false
 
     private var confirmedJunk: [VideoRecord] {
         model.records.filter {
@@ -100,6 +117,8 @@ struct TriageView: View {
             base = triageRecords.filter { $0.mediaDisposition == .confirmedJunk }
         case .recoverable:
             base = triageRecords.filter { $0.mediaDisposition == .recoverable }
+        case .workspace:
+            base = triageRecords.filter { $0.workspaceActive }
         }
 
         // Apply the "Online volumes only" toggle BEFORE the search filter
@@ -158,6 +177,17 @@ struct TriageView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
                     filterRow(.all)
+
+                    Divider().padding(.vertical, 6)
+
+                    // Pass B — WORKFLOW section sits above DISPOSITION
+                    // because workspace-active is a flag, not a
+                    // disposition pick. Keeping them visually distinct
+                    // prevents the user from misreading "In Workspace"
+                    // as an alternative to Important / Suspected Junk.
+                    sidebarSection("WORKFLOW") {
+                        filterRow(.workspace)
+                    }
 
                     Divider().padding(.vertical, 6)
 
@@ -232,6 +262,7 @@ struct TriageView: View {
         case .suspectedJunk: return triageRecords.filter { $0.mediaDisposition == .suspectedJunk }.count
         case .confirmedJunk: return triageRecords.filter { $0.mediaDisposition == .confirmedJunk }.count
         case .recoverable:   return triageRecords.filter { $0.mediaDisposition == .recoverable }.count
+        case .workspace:     return triageRecords.filter { $0.workspaceActive }.count
         }
     }
 
@@ -299,6 +330,28 @@ struct TriageView: View {
                 )
             }
         }
+        // Pass B — Workspace-import lineage picker. Driven by the same
+        // single-Identifiable-enum pattern as junkSheet so cancelling
+        // and committing always nil out the binding atomically.
+        .sheet(item: $importSheet) { sheet in
+            switch sheet {
+            case .lineagePicker(let pendingRecord):
+                WorkspaceImportLineageSheet(
+                    imported: pendingRecord,
+                    catalogRecords: model.records,
+                    onCommit: { parentID in
+                        commitImportedRecord(pendingRecord, parentID: parentID)
+                        importSheet = nil
+                    },
+                    onCancel: {
+                        // Cancel discards the probe result. User has to
+                        // re-pick the file if they want to retry —
+                        // intentional, keeps the flow honest.
+                        importSheet = nil
+                    }
+                )
+            }
+        }
     }
 
     private var toolbar: some View {
@@ -336,6 +389,21 @@ struct TriageView: View {
             .tint(.green)
             .disabled(selectedIDs.isEmpty)
             .help("Promote selected to Archive vault")
+
+            // Pass B — Import to Workspace. Sits left of the Analyze
+            // menu (per spec) so the natural toolbar reading order is
+            // triage actions → archive → import → analyze. Mint tint
+            // matches the workspace color story established in Pass A.
+            Button {
+                runImportFlow()
+            } label: {
+                Label(isImporting ? "Importing…" : "Import…",
+                      systemImage: "square.and.arrow.down.on.square")
+            }
+            .buttonStyle(.bordered)
+            .tint(.mint)
+            .disabled(isImporting)
+            .help("Import a media file from disk into the catalog as workspace-active")
 
             Menu {
                 Button("Analyze All (\(triageRecords.count))") {
@@ -624,6 +692,73 @@ struct TriageView: View {
         }
         selectedIDs = []
         model.saveCatalogDebounced()
+    }
+
+    // MARK: - Import to Workspace (Pass B)
+
+    /// Drives the full import flow: NSOpenPanel → ffprobe → lineage sheet.
+    /// Single-file only this pass — see spec "Out of scope: multi-file".
+    /// The panel runs synchronously on the main thread (NSOpenPanel doesn't
+    /// have a good async API), then the probe is awaited on a Task so the UI
+    /// stays responsive.
+    private func runImportFlow() {
+        // Lock the button so a double-click can't queue two probes.
+        // Swift's `guard ... else { return }` ≈ a C++ early-return after
+        // a null check.
+        guard !isImporting else { return }
+
+        let panel = NSOpenPanel()
+        panel.title = "Import Media to Workspace"
+        panel.message = "Pick a media file to add to the catalog as workspace-active."
+        panel.prompt = "Import"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        // .movie covers most container types Vision/AVFoundation know
+        // about (mov, mp4, m4v, mxf via UTI lookup); .audio for music
+        // and orphaned audio-only stems. Conservative pair; the user
+        // can broaden later if they need to import .avi etc.
+        panel.allowedContentTypes = [.movie, .audio]
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        isImporting = true
+        // Task ≈ a detached fiber — runs on the cooperative pool until
+        // we hop back to @MainActor with the result. Memory: probeFile
+        // streams ffprobe output, so worst-case footprint is the
+        // returned VideoRecord (small) plus whatever ffprobe holds in
+        // its own process. No file buffering on our side.
+        Task { @MainActor in
+            let probed = await model.probeFile(url: url)
+            isImporting = false
+
+            // Mark the freshly probed record as workspace-active. The
+            // lineage sheet will decide derivedFrom; we don't touch it
+            // here so cancel leaves the record un-committed.
+            probed.workspaceActive = true
+
+            importSheet = .lineagePicker(probed)
+        }
+    }
+
+    /// Append the probed record (with chosen parent lineage) into the
+    /// catalog and save. Called from the lineage sheet's onCommit.
+    private func commitImportedRecord(_ rec: VideoRecord, parentID: UUID?) {
+        rec.derivedFrom = parentID
+        // workspaceActive was set in runImportFlow before the sheet
+        // opened; the lineage sheet doesn't change it.
+        model.records.append(rec)
+        model.saveCatalogDebounced()
+        model.log("Imported \(rec.filename) to workspace" +
+                  (parentID == nil ? "." : " (derived from parent record)."))
+
+        // Focus the new row. The "Untriaged" or "All" filters will
+        // already include it because the fresh probe yields
+        // mediaDisposition == .unreviewed and lifecycleStage ==
+        // .cataloged. If the user is on the .workspace filter we just
+        // added, they'll see it there too — workspaceActive is true.
+        selectedIDs = [rec.id]
+        model.focusedMediaIDs = model.focusSet(for: rec.id)
     }
 
     // MARK: - Analysis
