@@ -37,6 +37,7 @@ extension VideoScanModel {
         record.sceneCaptions = captions
         record.sceneCaptionModel = model
         record.sceneCaptionDate = Date()
+        propagateDossierToMD5Duplicates(of: record)
         objectWillChange.send()
         saveCatalogDebounced()
         // Narrative log: one line per file captioned. Empty captions
@@ -77,6 +78,7 @@ extension VideoScanModel {
             record.sceneCaptions = captions
             record.sceneCaptionModel = model
             record.sceneCaptionDate = now
+            propagateDossierToMD5Duplicates(of: record)
             updated += 1
             totalCaptions += captions.count
         }

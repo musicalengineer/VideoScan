@@ -34,6 +34,9 @@ extension VideoScanModel {
         record.audioTranscript = transcript
         record.audioTranscriptModel = modelID
         record.audioTranscriptDate = Date()
+        // Propagate to MD5-identical siblings so search finds this
+        // transcript via any copy of the file (Phase 0).
+        propagateDossierToMD5Duplicates(of: record)
         objectWillChange.send()
         saveCatalogDebounced()
 
@@ -101,6 +104,7 @@ extension VideoScanModel {
             record.audioTranscript = transcript
             record.audioTranscriptModel = model
             record.audioTranscriptDate = now
+            propagateDossierToMD5Duplicates(of: record)
             updated += 1
             totalChars += transcript.count
             if transcript.isEmpty { emptyCount += 1 }

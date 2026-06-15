@@ -406,6 +406,14 @@ final class VideoScanModel: ObservableObject {
                     migrated += 1
                 }
             }
+            // Phase 0 (Rick 2026-06-15): backfill dossier propagation
+            // across MD5-identical duplicate records. Different scans of
+            // the same physical file (Whisper non-determinism) produce
+            // divergent transcripts; this harmonizes them by picking the
+            // longest/best result per MD5 group and applying to all
+            // members. Idempotent — re-running on an already-harmonized
+            // catalog is a no-op (0 records mutated, no save).
+            backfillDossierAcrossDuplicates()
             if migrated > 0 {
                 log("Migrated \(migrated) records to lifecycleStage.")
                 catalogStore.scheduleSave(records: records)
