@@ -309,21 +309,6 @@ extension CatalogContent {
                             .accessibilityIdentifier("catalog.row.repairAudio")
                         }
 
-                        // Analyze + Transcribe Audio + Generate Scene
-                        // Captions — three menu items routing through
-                        // a single requestAnalyze gate (Rick 2026-06-14:
-                        // "the verb should be Analyze; if the file
-                        // needs reformat first, pop a dialog and ask").
-                        // The gate inspects rec.videoCodec/audioCodec:
-                        // modern codecs go straight to AnalyzeJob;
-                        // legacy codecs (svq3, qdm2, …) prompt the
-                        // user to reformat first via a one-shot
-                        // confirm sheet. Stage filtering inside the
-                        // orchestrator is deferred (Phase 2); for
-                        // ship-first the stage set rides on the
-                        // AnalyzeJob row label so the user's intent
-                        // is visible even though both stages still
-                        // run internally.
                         Button("Analyze") {
                             requestAnalyze(for: rec, stages: AnalyzeStage.all)
                         }

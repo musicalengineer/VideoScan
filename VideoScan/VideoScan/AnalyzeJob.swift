@@ -68,7 +68,7 @@ final class AnalyzeJob: @MainActor MediaFileOperationJob {
     let canPause = false
 
     @Published private(set) var state: MediaFileOperationState = .running
-    @Published private(set) var subtitleText: String = "Queued for analyze…"
+    @Published private(set) var subtitleText: String
     @Published private(set) var fractionValue: Double = 0
     @Published private(set) var isIndeterminateValue: Bool = true
 
@@ -89,6 +89,20 @@ final class AnalyzeJob: @MainActor MediaFileOperationJob {
     var fraction: Double { fractionValue }
     var isIndeterminate: Bool { isIndeterminateValue }
 
+    /// Capitalized verb derived from `stages` — used as the row badge
+    /// AND as the leading word in every user-facing status string for
+    /// this job. One source of truth: badge, subtitle, success, and
+    /// empty-result text all read off this.
+    var displayBadge: String { Self.verb(for: stages) }
+
+    private static func verb(for stages: Set<AnalyzeStage>) -> String {
+        switch stages {
+        case [.transcript]: return "Transcribe"
+        case [.captions]:   return "Captions"
+        default:            return "Analyze"
+        }
+    }
+
     init(record: VideoRecord,
          model: VideoScanModel,
          orchestrator: CaptionOrchestrator,
@@ -97,6 +111,7 @@ final class AnalyzeJob: @MainActor MediaFileOperationJob {
         self.model = model
         self.orchestrator = orchestrator
         self.stages = stages
+        self.subtitleText = "Queued for \(Self.verb(for: stages).lowercased())…"
         // Subscribe to orchestrator changes so the row updates live.
         self.orchestratorForwarder = orchestrator.objectWillChange
             .receive(on: RunLoop.main)
@@ -181,14 +196,30 @@ final class AnalyzeJob: @MainActor MediaFileOperationJob {
         // Probe the record's POST-analyze state. dossierProcessedAt
         // is set by applyDossier on success; absent on failure.
         if model.records.first(where: { $0.id == record.id })?.dossierProcessedAt != nil {
-            await finish(success: "Analyze complete — captions and transcript banked.")
+            await finish(success: successMessage)
         } else {
             // Could be: candidate-filter excluded (DRM/junk/needs reformat),
             // VLM bailed (0 scenes in <1s), or no eligible candidates.
             // The dashboard's batch summary line in the log has more
             // detail; the row keeps it short.
-            await finish(failed: "Analyze finished but no dossier was banked — check log or run Reformat first.")
+            await finish(failed: emptyResultMessage)
         }
+    }
+
+    /// Terminal-success string. Single-stage runs name the artifact
+    /// they actually banked; the both-stage form is unchanged.
+    private var successMessage: String {
+        switch stages {
+        case [.transcript]: return "Transcribe complete — transcript banked."
+        case [.captions]:   return "Captions complete — scene captions banked."
+        default:            return "Analyze complete — captions and transcript banked."
+        }
+    }
+
+    /// "Orchestrator returned without banking anything" string. The
+    /// Reformat hint still applies in both single-stage cases.
+    private var emptyResultMessage: String {
+        "\(displayBadge) finished but no dossier was banked — check log or run Reformat first."
     }
 
     /// Translate orchestrator's @Published state to our row's

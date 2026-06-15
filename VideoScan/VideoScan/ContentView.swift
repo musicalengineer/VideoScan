@@ -230,7 +230,8 @@ struct CatalogView: View {
     /// Used to highlight the matching volume row in the Scan Targets pane.
     @State private var highlightedTargetPath: String = ""
     /// Volume Options filter — controls which scan targets are visible.
-    @State var volumeFilters: Set<VolumeFilter> = [.allScanned]
+    /// Default is Connected so the table shows only volumes MFO can act on.
+    @State var volumeFilters: Set<VolumeFilter> = [.connected]
     @State var showDeleteAllCatalogConfirm = false
     @State var showDeleteVolumeCatalogConfirm = false
     @State var deleteVolumeCatalogTarget: CatalogScanTarget?
@@ -767,9 +768,10 @@ struct CatalogView: View {
         } else {
             volumeFilters.insert(filter)
         }
-        // If nothing is checked, default back to All Scanned
+        // If nothing is checked, snap back to Connected — the safe baseline
+        // (volumes MFO can actually act on).
         if volumeFilters.isEmpty {
-            volumeFilters = [.allScanned]
+            volumeFilters = [.connected]
         }
     }
 

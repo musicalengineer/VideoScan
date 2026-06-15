@@ -243,7 +243,10 @@ struct MediaFileOperationRow: View {
 
         VStack(spacing: 0) {
             HStack(spacing: 10) {
-                MediaFileOperationBadge(kind: job.kind)
+                MediaFileOperationBadge(
+                    kind: job.kind,
+                    textOverride: (job as? AnalyzeJob)?.displayBadge
+                )
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(job.title)
@@ -459,9 +462,13 @@ struct MediaFileOperationRow: View {
 /// FRAMES purple — small caps bold.
 struct MediaFileOperationBadge: View {
     let kind: MediaFileOperationKind
+    /// When non-nil, overrides `kind.badgeText`. Used for `.analyze`
+    /// jobs whose displayed verb depends on the AnalyzeJob's stage
+    /// set (Transcribe / Captions / Analyze).
+    var textOverride: String? = nil
 
     var body: some View {
-        Text(kind.badgeText)
+        Text(textOverride ?? kind.badgeText)
             .font(Font.system(size: 10, weight: .bold).smallCaps())
             .foregroundColor(.white)
             // Uniform capsule width so the four verbs line up in the
