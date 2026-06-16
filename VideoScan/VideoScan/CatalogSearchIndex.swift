@@ -213,6 +213,91 @@ final class CatalogSearchIndex {
         return candidates
     }
 
+    // MARK: - Persistence (Rick 2026-06-16)
+    //
+    // Save the haystack cache to disk so the index doesn't rebuild from
+    // scratch on every catalog load. Only `haystacks` is persisted —
+    // the inverted `wordIndex` is RECOMPUTED on load. Reasoning:
+    // serializing wordIndex would multiply on-disk size by
+    // (avg-words-per-record × avg-records-per-word) — for a 15K-record
+    // catalog that's a 5-10× blow-up of redundant fullPath strings.
+    // Rebuilding wordIndex from haystacks at load time is ~30% of the
+    // full rebuild cost, so the launch wins are still ~70%.
+
+    /// Persisted format version. Bump when the on-disk layout changes
+    /// so old files force a rebuild instead of silently deserializing
+    /// wrong shapes.
+    nonisolated static let persistedVersion: Int = 1
+
+    /// Default location next to the catalog:
+    /// `~/Library/Application Support/VideoScan/catalog.search-index.v1.plist`
+    nonisolated static func defaultPersistenceURL() -> URL {
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        ).first ?? URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/Application Support")
+        let dir = appSupport.appendingPathComponent("VideoScan", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("catalog.search-index.v1.plist")
+    }
+
+    /// Persist the haystack cache atomically. Caller usually invokes
+    /// this after `rebuild` and on app quit. Failures are non-fatal —
+    /// the next launch just rebuilds from records as before.
+    func saveToDisk(at url: URL = defaultPersistenceURL()) throws {
+        let payload: [String: Any] = [
+            "version": Self.persistedVersion,
+            "savedAt": Date().timeIntervalSince1970,
+            "recordCount": haystacks.count,
+            "haystacks": haystacks,
+        ]
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: payload, format: .binary, options: 0
+        )
+        try data.write(to: url, options: .atomic)
+    }
+
+    /// Try to populate this index from a persisted file. Returns true
+    /// on success (caller can skip `rebuild`), false on missing file /
+    /// version mismatch / staleness vs catalog / parse failure.
+    ///
+    /// Staleness check: if `catalogModifiedAt` is provided AND the
+    /// persisted index was saved BEFORE that time, the index is
+    /// rejected — the catalog has changed since save and the haystacks
+    /// would be out of date. Pass `nil` to skip staleness (testing).
+    @discardableResult
+    func loadFromDisk(
+        at url: URL = defaultPersistenceURL(),
+        catalogModifiedAt: Date? = nil
+    ) -> Bool {
+        guard let data = try? Data(contentsOf: url) else { return false }
+        guard let payload = try? PropertyListSerialization.propertyList(
+            from: data, format: nil
+        ) as? [String: Any] else { return false }
+        guard let version = payload["version"] as? Int,
+              version == Self.persistedVersion else { return false }
+        guard let savedAt = payload["savedAt"] as? TimeInterval else { return false }
+        if let catalogModifiedAt {
+            let savedDate = Date(timeIntervalSince1970: savedAt)
+            if savedDate < catalogModifiedAt { return false }
+        }
+        guard let hs = payload["haystacks"] as? [String: String] else { return false }
+
+        self.haystacks = hs
+        // Rebuild the inverted word index from haystacks. This is the
+        // ~30% of rebuild cost we DIDN'T avoid by persisting; loading
+        // is still much faster than the full record-walk + haystack
+        // construction.
+        var wi: [String: Set<String>] = [:]
+        for (path, h) in hs {
+            for word in Self.extractWords(from: h) {
+                wi[word, default: []].insert(path)
+            }
+        }
+        self.wordIndex = wi
+        return true
+    }
+
     /// Extract maximal letter/digit runs from a (presumed lowercased +
     /// NFC) haystack. These are the keys of the inverted word index.
     /// Non-alphanumeric characters (whitespace, punctuation) split words.

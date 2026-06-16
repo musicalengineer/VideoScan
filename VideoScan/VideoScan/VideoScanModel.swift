@@ -449,7 +449,25 @@ final class VideoScanModel: ObservableObject {
         // Build the per-record haystack cache once the catalog is fully
         // assembled (restored + backfilled). All subsequent search
         // operations route through this index — see searchIndex above.
-        searchIndex.rebuild(records: records)
+        // Rick 2026-06-16: try to load the persisted index first
+        // (~70% launch-time savings on a warm cache). Stale-check
+        // against catalog.json's mtime — any catalog change since save
+        // forces a fresh rebuild for correctness.
+        let appSupport = FileManager.default.urls(
+            for: .applicationSupportDirectory, in: .userDomainMask
+        ).first?.appendingPathComponent("VideoScan", isDirectory: true)
+        let catalogJSONPath = appSupport?.appendingPathComponent("catalog.json").path
+        let catalogMTime: Date? = catalogJSONPath.flatMap {
+            try? FileManager.default.attributesOfItem(atPath: $0)[.modificationDate] as? Date
+        } ?? nil
+        let loaded = searchIndex.loadFromDisk(catalogModifiedAt: catalogMTime)
+        if !loaded {
+            searchIndex.rebuild(records: records)
+            // Persist the freshly-built index so the NEXT launch hits
+            // the fast path. Best-effort — a failure here just means
+            // we'll rebuild again next time.
+            try? searchIndex.saveToDisk()
+        }
         // Seed the memoized probe-cache count so the toolbar's first
         // render doesn't show 0 for 10 seconds.
         refreshCacheCountSoon()

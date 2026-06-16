@@ -615,6 +615,70 @@ struct CatalogSearchIndexTests {
         // buckets). Both behaviors stay correct.
     }
 
+    // MARK: - Persistence (Rick 2026-06-16)
+
+    private func makeTempURL(name: String) -> URL {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("vs_search_index_\(UUID().uuidString.prefix(8))",
+                                    isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent(name)
+    }
+
+    /// Save → load roundtrip preserves filter results bit-for-bit.
+    @Test func persistence_roundtripPreservesResults() throws {
+        let recs = makeCorpus(500)
+        let idx = CatalogSearchIndex()
+        idx.rebuild(records: recs)
+        let goldenQuery = "donna 1991 cape"
+        let golden = idx.filter(records: recs, query: goldenQuery).map { $0.fullPath }
+
+        let url = makeTempURL(name: "index.plist")
+        try idx.saveToDisk(at: url)
+
+        let loaded = CatalogSearchIndex()
+        let ok = loaded.loadFromDisk(at: url, catalogModifiedAt: nil)
+        #expect(ok, "loadFromDisk must succeed on a freshly-written file")
+
+        let restored = loaded.filter(records: recs, query: goldenQuery).map { $0.fullPath }
+        #expect(restored == golden,
+                "Filter results after persistence roundtrip must match exactly")
+    }
+
+    /// Staleness check: if catalogModifiedAt is AFTER the persisted
+    /// savedAt, loadFromDisk must reject the file so the caller
+    /// rebuilds from records (correctness over speed).
+    @Test func persistence_rejectsStaleIndex() throws {
+        let recs = makeCorpus(50)
+        let idx = CatalogSearchIndex()
+        idx.rebuild(records: recs)
+
+        let url = makeTempURL(name: "index.plist")
+        try idx.saveToDisk(at: url)
+
+        // Catalog modified one minute IN THE FUTURE → index is stale.
+        let future = Date().addingTimeInterval(60)
+        let loaded = CatalogSearchIndex()
+        let ok = loaded.loadFromDisk(at: url, catalogModifiedAt: future)
+        #expect(!ok, "Stale index must be rejected when catalog is newer")
+    }
+
+    /// loadFromDisk gracefully returns false on missing/garbage files
+    /// (no throws, no crashes — caller falls back to rebuild).
+    @Test func persistence_missingFileReturnsFalse() {
+        let bogusURL = URL(fileURLWithPath: "/tmp/definitely-not-there.plist")
+        let loaded = CatalogSearchIndex()
+        #expect(!loaded.loadFromDisk(at: bogusURL, catalogModifiedAt: nil))
+    }
+
+    @Test func persistence_garbageFileReturnsFalse() throws {
+        let url = makeTempURL(name: "garbage.plist")
+        try "not a real plist".write(to: url, atomically: true, encoding: .utf8)
+        let loaded = CatalogSearchIndex()
+        #expect(!loaded.loadFromDisk(at: url, catalogModifiedAt: nil),
+                "Corrupt plist must be rejected gracefully")
+    }
+
     /// Speedup expectation: with the index built, multi-token whole-
     /// word queries on 10k records should land WELL under the perf
     /// budget. Looser than the pre-existing perf test — this one
