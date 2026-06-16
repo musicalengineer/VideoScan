@@ -193,6 +193,8 @@ struct PersonFinderView: View {
     /// menu item on a PersonCard; the sheet presents the candidate
     /// labeling UI and clears this on dismiss. Rick 2026-06-16.
     @State private var confirmTarget: ConfirmSheetTarget?
+    /// Drives the View Confirmations sheet (cumulative progress).
+    @State private var confirmationsTarget: ConfirmationsTarget?
     /// The original name of the profile being edited (nil when adding new).
     @State private var editingOriginalName: String?
     /// Briefly set after a profile save to flash confirmation on the card.
@@ -409,7 +411,11 @@ struct PersonFinderView: View {
                                     Button("Confirm \(profile.name)\u{2026}") {
                                         confirmTarget = ConfirmSheetTarget(profile: profile)
                                     }
-                                    .help("Rate catalog-flagged candidates as Definitely/Likely/Unsure/Unlikely. Builds the labeled set Find Person will train on.")
+                                    .help("Rate catalog-flagged candidates Definitely / Likely / No. Builds the labeled set the classifier trains on.")
+                                    Button("View Confirmations\u{2026}") {
+                                        confirmationsTarget = ConfirmationsTarget(profile: profile)
+                                    }
+                                    .help("Cumulative progress: outcomes, signal precision, rounds, what remains.")
                                     if !model.referenceFaces.isEmpty && model.settings.personName.lowercased() == profile.name.lowercased() {
                                         Divider()
                                         Menu("Remove Low-Confidence Photos") {
@@ -540,6 +546,13 @@ struct PersonFinderView: View {
             ConfirmPersonSheet(profile: target.profile)
                 .environmentObject(model)
                 .environmentObject(catalogModel)
+        }
+        .sheet(item: $confirmationsTarget) { target in
+            ConfirmationsView(profile: target.profile, onConfirmMore: {
+                confirmTarget = ConfirmSheetTarget(profile: target.profile)
+            })
+            .environmentObject(model)
+            .environmentObject(catalogModel)
         }
     }
 

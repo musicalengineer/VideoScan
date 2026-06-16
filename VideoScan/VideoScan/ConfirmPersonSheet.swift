@@ -45,10 +45,24 @@ struct ConfirmPersonSheet: View {
     @State private var showSummary: Bool = false
     @State private var loadError: String?
 
-    /// Top-N highest-score candidates to surface, plus controlK
-    /// random low-score controls. Tunable later if Rick wants finer
-    /// control; defaults match what the metrics agent suggested.
-    private let topN: Int = 30
+    /// Sheet phase. .setup shows the round-size picker and availability
+    /// stats; .labeling is the existing per-candidate review; .summary
+    /// is the end-of-round report. Rick 2026-06-16.
+    @State private var phase: Phase = .setup
+    enum Phase { case setup, labeling, summary }
+
+    /// Stats from round assembly — shown in the setup pane.
+    @State private var stats: ConfirmRoundStats?
+
+    /// User's pick from the round-size picker. Default 25; bumped to
+    /// 100 if the user picks the long-round option.
+    @State private var roundSize: Int = 25
+
+    /// Held during setup so we don't re-score the catalog on every
+    /// roundSize tick. Recomputed when the sheet appears; the picker
+    /// just slices off the front.
+    @State private var fullCandidatePool: [PersonCandidateScore] = []
+
     private let controlK: Int = 5
 
     var body: some View {
@@ -60,7 +74,7 @@ struct ConfirmPersonSheet: View {
             footer
         }
         .frame(width: 720, height: 540)
-        .onAppear(perform: startRound)
+        .onAppear(perform: prepareSetup)
         .onDisappear { thumbnailLoadTask?.cancel() }
     }
 
@@ -79,7 +93,7 @@ struct ConfirmPersonSheet: View {
                     .foregroundColor(.secondary)
             }
             Spacer()
-            if !showSummary && !candidates.isEmpty {
+            if phase == .labeling && !candidates.isEmpty {
                 Text("\(currentIndex + 1) of \(candidates.count)")
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(.secondary)
@@ -93,20 +107,121 @@ struct ConfirmPersonSheet: View {
 
     @ViewBuilder
     private var content: some View {
-        if showSummary {
-            summaryView
-        } else if candidates.isEmpty {
-            emptyState
-        } else {
-            let candidate = candidates[currentIndex]
-            HStack(alignment: .top, spacing: 16) {
-                thumbnailView(for: candidate)
-                    .frame(width: 320)
-                signalsView(for: candidate)
+        switch phase {
+        case .setup:
+            setupView
+        case .labeling:
+            if candidates.isEmpty {
+                emptyState
+            } else {
+                let candidate = candidates[currentIndex]
+                HStack(alignment: .top, spacing: 16) {
+                    thumbnailView(for: candidate)
+                        .frame(width: 320)
+                    signalsView(for: candidate)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
             }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
+        case .summary:
+            summaryView
         }
+    }
+
+    private var setupView: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if let stats {
+                statsCard(stats)
+            } else {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text("Scoring catalog…")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+            }
+            roundSizePicker
+            Spacer()
+        }
+        .padding(20)
+    }
+
+    private func statsCard(_ s: ConfirmRoundStats) -> some View {
+        let availOnline = fullCandidatePool.filter { $0.reachable }.count
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("Available for \(profile.name)")
+                .font(.subheadline.weight(.medium))
+            statRow(symbol: "magnifyingglass", color: .blue,
+                    text: "\(s.candidatesSurfaced) candidates surfaced by catalog signal")
+            statRow(symbol: "arrow.triangle.merge", color: .secondary,
+                    text: "\(s.dupesCollapsed) duplicates collapsed (same content across volumes)")
+            statRow(symbol: "checkmark.seal", color: .green,
+                    text: "\(s.alreadyLabeled) already labeled in prior rounds — skipped")
+            if s.offlineSkipped > 0 {
+                statRow(
+                    symbol: "externaldrive.badge.exclamationmark", color: .orange,
+                    text: "\(s.offlineSkipped) offline — mount " +
+                          s.offlineVolumes.joined(separator: ", ") +
+                          " to include them"
+                )
+            }
+            Divider().padding(.vertical, 4)
+            statRow(symbol: "checkmark.circle", color: .accentColor,
+                    text: "\(availOnline) candidates ready to review now")
+        }
+        .padding(12)
+        .background(Color(NSColor.controlBackgroundColor))
+        .cornerRadius(8)
+    }
+
+    private func statRow(symbol: String, color: Color, text: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: symbol).foregroundColor(color).frame(width: 18)
+            Text(text).font(.callout)
+            Spacer()
+        }
+    }
+
+    private var roundSizePicker: some View {
+        let availOnline = fullCandidatePool.filter { $0.reachable }.count
+        let options: [Int] = {
+            var opts: [Int] = []
+            for size in [10, 25, 50, 100] where size <= availOnline {
+                opts.append(size)
+            }
+            if !opts.contains(availOnline) && availOnline > 0 { opts.append(availOnline) }
+            return opts
+        }()
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("How many would you like to review now?")
+                .font(.subheadline.weight(.medium))
+            HStack(spacing: 8) {
+                ForEach(options, id: \.self) { n in
+                    Button {
+                        roundSize = n
+                    } label: {
+                        Text(n == availOnline ? "All (\(n))" : "\(n)")
+                            .frame(minWidth: 48)
+                            .padding(.vertical, 4)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(roundSize == n ? .accentColor : .secondary)
+                }
+                Spacer()
+            }
+            // Time estimate — 30 sec/candidate is conservative; real
+            // rates from Rick's rounds were ~12-15 sec/candidate.
+            Text("Estimated time: ~\(estimateMinutes()) minutes")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private func estimateMinutes() -> Int {
+        // 25 sec per candidate including thumbnail loads and ratings.
+        let seconds = roundSize * 25
+        return max(1, seconds / 60)
     }
 
     private func thumbnailView(for candidate: PersonCandidateScore) -> some View {
@@ -185,7 +300,7 @@ struct ConfirmPersonSheet: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Is \(profile.name) in this video?")
                 .font(.system(size: 12).weight(.medium))
-            ForEach(ConfirmRating.allCases) { rating in
+            ForEach(ConfirmRating.userFacing) { rating in
                 Button {
                     apply(rating: rating, to: candidate)
                 } label: {
@@ -247,7 +362,7 @@ struct ConfirmPersonSheet: View {
             Text("Round summary — \(summary.total) labels")
                 .font(.title3.weight(.semibold))
             VStack(spacing: 6) {
-                ForEach(ConfirmRating.allCases) { rating in
+                ForEach(ConfirmRating.userFacing) { rating in
                     HStack {
                         Image(systemName: rating.symbol)
                             .foregroundColor(rating.color)
@@ -289,19 +404,34 @@ struct ConfirmPersonSheet: View {
 
     private var footer: some View {
         HStack {
+            // Roll-up of labels saved this round — present from the
+            // first rating onward so the user always knows their
+            // progress is real, even if they Cancel mid-round.
+            if !roundLabels.isEmpty {
+                Text("\(roundLabels.count) labeled this round \u{00B7} saved")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
             Spacer()
-            if showSummary {
-                Button("Done") { dismiss() }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.return, modifiers: [])
-            } else {
-                Button("Finish & Show Summary") {
-                    showSummary = true
-                }
-                .disabled(roundLabels.isEmpty)
+            switch phase {
+            case .setup:
                 Button("Cancel") { dismiss() }
                     .buttonStyle(.bordered)
                     .keyboardShortcut(.cancelAction)
+                Button("Begin \u{2192}") { startRound() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(stats == nil || (stats?.candidatesSurfaced ?? 0) == 0)
+                    .keyboardShortcut(.return, modifiers: [])
+            case .labeling:
+                Button("Finish & Show Summary") { phase = .summary }
+                    .disabled(roundLabels.isEmpty)
+                Button(roundLabels.isEmpty ? "Cancel" : "Save & Close") { dismiss() }
+                    .buttonStyle(.bordered)
+                    .keyboardShortcut(.cancelAction)
+            case .summary:
+                Button("Done") { dismiss() }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.return, modifiers: [])
             }
         }
         .padding(.horizontal, 20)
@@ -310,21 +440,38 @@ struct ConfirmPersonSheet: View {
 
     // MARK: - Round lifecycle
 
-    private func startRound() {
+    private func prepareSetup() {
         roundStart = Date()
-        let already = Set(personFinderModel.validationLabels
-            .labeledByPath(for: profile.name).keys)
-        var rng = SystemRandomNumberGenerator()
-        let round = pfConfirmRound(
-            name: profile.name,
-            records: catalogModel.records,
-            topN: topN,
-            controlK: controlK,
-            alreadyLabeled: already,
-            rng: &rng
-        )
-        candidates = round
+        // Score in the background — for 16k records this is ~1-2 sec.
+        // Keep the @MainActor scope clean by hopping out and back.
+        Task { @MainActor in
+            let already = Set(personFinderModel.validationLabels
+                .labeledByPath(for: profile.name).keys)
+            var rng = SystemRandomNumberGenerator()
+            let result = pfConfirmRound(
+                name: profile.name,
+                records: catalogModel.records,
+                topN: 100,   // upper bound; the roundSize picker trims
+                controlK: controlK,
+                alreadyLabeled: already,
+                rng: &rng
+            )
+            self.fullCandidatePool = result.candidates
+            self.stats = result.stats
+            // Default to a sensible round size if 25 isn't reachable.
+            let availOnline = result.candidates.filter { $0.reachable }.count
+            if availOnline < self.roundSize {
+                self.roundSize = max(min(availOnline, 25), 1)
+            }
+        }
+    }
+
+    private func startRound() {
+        // Slice the pre-scored pool to the user's chosen round size.
+        let onlineOnly = fullCandidatePool.filter { $0.reachable }
+        candidates = Array(onlineOnly.prefix(roundSize))
         currentIndex = 0
+        phase = .labeling
         if !candidates.isEmpty {
             loadThumbnail(for: candidates[0])
         }
@@ -350,35 +497,57 @@ struct ConfirmPersonSheet: View {
     private func catalogWriteback(rating: ConfirmRating, candidate: PersonCandidateScore) {
         guard let rec = catalogModel.records.first(where: { $0.id == candidate.recordID })
         else { return }
+        let p = profile.name
+        // Each writeback path enforces "this person belongs in EXACTLY
+        // ONE tier" — confirmedByUserPeople, suspectedPeople, or
+        // rejectedPeople — and cleans up the other two. This makes
+        // re-rating (via the Back button) idempotent: the catalog
+        // state always reflects the user's most recent decision.
         switch rating.writebackTier {
         case .confirmed:
-            // Append to confirmedByUserPeople if not already there
-            let already = rec.confirmedByUserPeople.contains {
-                $0.name.caseInsensitiveCompare(profile.name) == .orderedSame
-            }
-            if !already {
-                rec.confirmedByUserPeople.append(
-                    ConfirmedTag(name: profile.name, confirmedAt: Date())
-                )
-            }
-            // Also promote out of suspectedPeople if present
-            if let idx = rec.suspectedPeople.firstIndex(where: {
-                $0.caseInsensitiveCompare(profile.name) == .orderedSame
+            removePerson(p, from: &rec.suspectedPeople)
+            removePerson(p, from: &rec.rejectedPeople)
+            if !rec.confirmedByUserPeople.contains(where: {
+                $0.name.caseInsensitiveCompare(p) == .orderedSame
             }) {
-                rec.suspectedPeople.remove(at: idx)
+                rec.confirmedByUserPeople.append(ConfirmedTag(name: p, confirmedAt: Date()))
             }
             catalogModel.saveCatalogDebounced()
         case .suspected:
-            let already = rec.suspectedPeople.contains {
-                $0.caseInsensitiveCompare(profile.name) == .orderedSame
+            removeConfirmed(p, from: &rec.confirmedByUserPeople)
+            removePerson(p, from: &rec.rejectedPeople)
+            if !rec.suspectedPeople.contains(where: {
+                $0.caseInsensitiveCompare(p) == .orderedSame
+            }) {
+                rec.suspectedPeople.append(p)
             }
-            if !already {
-                rec.suspectedPeople.append(profile.name)
-                catalogModel.saveCatalogDebounced()
+            catalogModel.saveCatalogDebounced()
+        case .rejected:
+            removeConfirmed(p, from: &rec.confirmedByUserPeople)
+            removePerson(p, from: &rec.suspectedPeople)
+            // Also remove from detectedPeople so a stale PF tag from
+            // a prior scan doesn't keep this video showing up in
+            // people:donna search after the user explicitly said No.
+            removePerson(p, from: &rec.detectedPeople)
+            if !rec.rejectedPeople.contains(where: {
+                $0.caseInsensitiveCompare(p) == .orderedSame
+            }) {
+                rec.rejectedPeople.append(p)
             }
+            catalogModel.saveCatalogDebounced()
         case .none:
+            // Legacy Unsure/Unlikely — no catalog mutation. Label is
+            // still in the sidecar for training-data purposes.
             break
         }
+    }
+
+    private func removePerson(_ name: String, from arr: inout [String]) {
+        arr.removeAll { $0.caseInsensitiveCompare(name) == .orderedSame }
+    }
+
+    private func removeConfirmed(_ name: String, from arr: inout [ConfirmedTag]) {
+        arr.removeAll { $0.name.caseInsensitiveCompare(name) == .orderedSame }
     }
 
     private func advance() {
@@ -389,7 +558,7 @@ struct ConfirmPersonSheet: View {
             loadThumbnail(for: candidates[currentIndex])
         } else {
             // Out of candidates — show the summary automatically
-            showSummary = true
+            phase = .summary
         }
     }
 
