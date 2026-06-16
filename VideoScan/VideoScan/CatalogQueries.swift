@@ -27,6 +27,7 @@ enum SearchField: String, Equatable {
     case ocr          // ocrText + ocrDateCandidates
     case filename     // filename only (not path/dir)
     case notes        // user-written notes (only via field prefix; never via plain substring on catalog bar)
+    case streamType   // structural filter on rec.streamType (audio/video/both/failed/none)
 
     static func parse(_ raw: String) -> SearchField? {
         switch raw.lowercased() {
@@ -36,6 +37,7 @@ enum SearchField: String, Equatable {
         case "ocr", "text":                 return .ocr
         case "filename", "name", "file":    return .filename
         case "notes", "note":               return .notes
+        case "stream", "streamtype":        return .streamType
         default:                            return nil
         }
     }
@@ -212,6 +214,21 @@ nonisolated func pfFieldTokenMatches(_ field: SearchField, _ value: String, _ re
         return rec.filename.lowercased().contains(n)
     case .notes:
         return rec.notes.lowercased().contains(n)
+    case .streamType:
+        // Structural filter, not substring. `value` is matched against
+        // a hand-picked set of friendly aliases per StreamType case so
+        // users can type whatever feels natural. Unknown values return
+        // false rather than falling through — typo in `stream:audoi`
+        // should produce empty results, not match everything.
+        // Rick 2026-06-15.
+        switch n {
+        case "audio", "audioonly":             return rec.streamType == .audioOnly
+        case "video", "videoonly":             return rec.streamType == .videoOnly
+        case "both", "av", "videoandaudio":    return rec.streamType == .videoAndAudio
+        case "failed", "ffprobefailed":        return rec.streamType == .ffprobeFailed
+        case "empty", "none", "nostreams":     return rec.streamType == .noStreams
+        default:                               return false
+        }
     }
 }
 
