@@ -460,13 +460,21 @@ final class VideoScanModel: ObservableObject {
         let catalogMTime: Date? = catalogJSONPath.flatMap {
             try? FileManager.default.attributesOfItem(atPath: $0)[.modificationDate] as? Date
         } ?? nil
+        let idxStart = Date()
         let loaded = searchIndex.loadFromDisk(catalogModifiedAt: catalogMTime)
-        if !loaded {
+        if loaded {
+            let ms = Int((Date().timeIntervalSince(idxStart)) * 1000)
+            log("Search index loaded from disk in \(ms) ms (\(records.count) records)")
+        } else {
             searchIndex.rebuild(records: records)
+            let rebuildMs = Int((Date().timeIntervalSince(idxStart)) * 1000)
             // Persist the freshly-built index so the NEXT launch hits
             // the fast path. Best-effort — a failure here just means
             // we'll rebuild again next time.
+            let saveStart = Date()
             try? searchIndex.saveToDisk()
+            let saveMs = Int((Date().timeIntervalSince(saveStart)) * 1000)
+            log("Search index rebuilt in \(rebuildMs) ms, saved in \(saveMs) ms (\(records.count) records)")
         }
         // Seed the memoized probe-cache count so the toolbar's first
         // render doesn't show 0 for 10 seconds.
