@@ -183,14 +183,8 @@ struct ConfirmPersonSheet: View {
 
     private func ratingButtons(for candidate: PersonCandidateScore) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Is \(profile.name) visually on camera in this video?")
-                    .font(.system(size: 12).weight(.medium))
-                Text("Face/body must be visible. Hearing her name or voice alone doesn\u{2019}t count \u{2014} this trains a VISUAL classifier.")
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Text("Is \(profile.name) in this video?")
+                .font(.system(size: 12).weight(.medium))
             ForEach(ConfirmRating.allCases) { rating in
                 Button {
                     apply(rating: rating, to: candidate)
