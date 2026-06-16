@@ -547,6 +547,56 @@ extension CatalogContent {
                             .help("Hide these records from the default view. The files on disk are not deleted; toggle Show Removed in the toolbar to recover.")
                         }
 
+                        // Delete File — per-row parity with the triage window's
+                        // batch path (Rick 2026-06-15). Move to Trash is
+                        // recoverable; Delete Permanently shows a confirmation
+                        // alert first. Both call deleteConfirmedJunk, which
+                        // already handles offline-skip, already-missing, and
+                        // per-file failures on a detached task. Distinct from
+                        // Remove from Catalog (above) which only hides the row.
+                        if !activeRecs.isEmpty {
+                            Menu {
+                                Button(role: .destructive) {
+                                    let targets = activeRecs
+                                    Task { @MainActor in
+                                        let result = await model.deleteConfirmedJunk(targets, mode: .toTrash)
+                                        reportDeleteResult(result, mode: .toTrash)
+                                    }
+                                } label: {
+                                    Label("Move to Trash", systemImage: "trash")
+                                }
+                                .accessibilityIdentifier("catalog.row.deleteToTrash")
+
+                                Button(role: .destructive) {
+                                    let targets = activeRecs
+                                    let count = targets.count
+                                    let alert = NSAlert()
+                                    alert.messageText = count == 1
+                                        ? "Delete \u{201C}\(targets[0].filename)\u{201D} permanently?"
+                                        : "Delete \(count) files permanently?"
+                                    alert.informativeText = "This cannot be undone \u{2014} the file\(count == 1 ? " is" : "s are") removed from disk immediately, not moved to Trash."
+                                    alert.alertStyle = .critical
+                                    alert.addButton(withTitle: "Delete Permanently")
+                                    alert.addButton(withTitle: "Cancel")
+                                    if alert.runModal() == .alertFirstButtonReturn {
+                                        Task { @MainActor in
+                                            let result = await model.deleteConfirmedJunk(targets, mode: .permanent)
+                                            reportDeleteResult(result, mode: .permanent)
+                                        }
+                                    }
+                                } label: {
+                                    Label("Delete Permanently\u{2026}", systemImage: "trash.fill")
+                                }
+                                .accessibilityIdentifier("catalog.row.deletePermanently")
+                            } label: {
+                                Label(activeRecs.count > 1
+                                      ? "Delete \(activeRecs.count) Files"
+                                      : "Delete File",
+                                      systemImage: "xmark.bin")
+                            }
+                            .help("Move the file(s) to Trash or remove them from disk permanently. Distinct from \u{201C}Remove from Catalog\u{201D} which only hides the row.")
+                        }
+
                         // Restore to Catalog — visible when the selection
                         // contains at least one purged row. Symmetric with
                         // Remove: label count == operated-on count.
@@ -654,6 +704,41 @@ extension CatalogContent {
     private func requestTranscode(for rec: VideoRecord, preset: TranscodePreset) {
         fileOpsCenter.startTranscode(record: rec, preset: preset, model: model)
         openWindow(id: "combine")
+    }
+
+    /// Surface a result alert ONLY when something interesting happened —
+    /// skipped-offline, already-missing, or per-file failures. Pure
+    /// success is silent, matching Finder's behavior on trash/delete.
+    /// Called from the row context menu's Delete File submenu after the
+    /// detached FileManager pass completes.
+    private func reportDeleteResult(
+        _ result: VideoScanModel.JunkDeletionResult,
+        mode: VideoScanModel.JunkDeletionMode
+    ) {
+        let interesting = result.alreadyMissing > 0
+            || result.skippedOffline > 0
+            || !result.failed.isEmpty
+        guard interesting else { return }
+
+        var lines: [String] = []
+        if result.succeeded > 0 {
+            lines.append("\(result.succeeded) \(mode == .toTrash ? "moved to Trash" : "deleted permanently")")
+        }
+        if result.alreadyMissing > 0 {
+            lines.append("\(result.alreadyMissing) already missing \u{2014} catalog updated")
+        }
+        if result.skippedOffline > 0 {
+            lines.append("\(result.skippedOffline) skipped \u{2014} volume offline")
+        }
+        if !result.failed.isEmpty {
+            lines.append("\(result.failed.count) failed (permissions or locked)")
+        }
+        let alert = NSAlert()
+        alert.messageText = "Delete completed with notes"
+        alert.informativeText = lines.joined(separator: "\n")
+        alert.alertStyle = result.failed.isEmpty ? .informational : .warning
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     /// "Repair Audio…" handler for video-only records. Uses the same
