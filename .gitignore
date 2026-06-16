@@ -5,8 +5,8 @@ __pycache__/
 *.pyc
 *.pyo
 
-# ignore experiment dir for experiments
-experiment
+# Scratch / experiments — asm benchmarks, perf one-offs, throwaway code
+experiments/
 
 # Xcode / Swift
 build/
