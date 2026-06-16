@@ -43,25 +43,86 @@ enum SearchField: String, Equatable {
     }
 }
 
-/// Split a search query into tokens. Whitespace separates tokens; each
-/// token is then recognised in order:
+/// Lex-level result: a raw token plus whether it came from a quoted
+/// phrase. Quoted phrases bypass field-prefix recognition downstream so
+/// `"filename:cape"` (with quotes) matches the literal string
+/// `filename:cape` instead of being parsed as a field token.
+fileprivate struct PFRawToken {
+    let text: String
+    let quoted: Bool
+}
+
+/// Lex the query into raw tokens. Separators are whitespace, comma, and
+/// semicolon (Rick 2026-06-16 — natural-language punctuation as
+/// separators so "elevator, cape cod, donna" parses the way users
+/// expect). Pipe `|` is RESERVED for future OR semantics and not split
+/// on here. Double-quoted phrases are kept as single tokens with the
+/// quote marks stripped: `"cape cod"` → one token `cape cod`.
+/// Unterminated quotes treat the trailing material as a phrase.
+fileprivate func pfLexSearchTokens(_ query: String) -> [PFRawToken] {
+    var out: [PFRawToken] = []
+    var current = ""
+    var inQuotes = false
+    for ch in query {
+        if inQuotes {
+            if ch == "\"" {
+                if !current.isEmpty { out.append(PFRawToken(text: current, quoted: true)) }
+                current = ""
+                inQuotes = false
+            } else {
+                current.append(ch)
+            }
+        } else if ch == "\"" {
+            if !current.isEmpty { out.append(PFRawToken(text: current, quoted: false)) }
+            current = ""
+            inQuotes = true
+        } else if ch.isWhitespace || ch == "," || ch == ";" {
+            if !current.isEmpty { out.append(PFRawToken(text: current, quoted: false)) }
+            current = ""
+        } else {
+            current.append(ch)
+        }
+    }
+    if !current.isEmpty {
+        // Unterminated quote → trailing material treated as a phrase
+        // (matches what the user almost certainly meant — they started
+        // a quoted phrase and forgot to close it before submitting).
+        out.append(PFRawToken(text: current, quoted: inQuotes))
+    }
+    return out
+}
+
+/// Split a search query into tokens. Whitespace AND `,` `;` separate
+/// tokens (Rick 2026-06-16); double-quoted strings stay together as
+/// one phrase token. Each token is then recognised in order:
 ///
-///   1. **Field-prefix** like `people:donna` / `year:1991` / `year:1989..1995`
+///   1. **Quoted phrase** → substring with the literal phrase text
+///      (no field-prefix or year-shorthand interpretation).
+///   2. **Field-prefix** like `people:donna` / `year:1991` / `year:1989..1995`
 ///      / `transcript:beach`. The field name comes from `SearchField.parse`.
-///   2. **Decade shorthand** `1990s` / `199x` → year range.
-///   3. **Plain substring** (default).
+///   3. **Decade shorthand** `1990s` / `199x` → year range.
+///   4. **Plain substring** (default).
 ///
 /// Examples:
 ///
 ///     "donna 1990s holiday"
 ///       → [.substring("donna"), .yearRange(1990...1999), .substring("holiday")]
+///     "elevator, cape cod, donna"
+///       → [.substring("elevator"), .substring("cape"), .substring("cod"), .substring("donna")]
+///     `"cape cod" donna stream:audio`
+///       → [.substring("cape cod"), .substring("donna"), .field(.streamType,"audio")]
 ///     "people:donna year:1991..1995 caption:beach"
 ///       → [.field(.people,"donna"), .yearRange(1991...1995), .field(.caption,"beach")]
 nonisolated func pfTokenizeSearchQuery(_ query: String) -> [SearchToken] {
-    let parts = query.split(whereSeparator: \.isWhitespace).map(String.init)
-    return parts.compactMap { part in
-        let trimmed = part.trimmingCharacters(in: .whitespaces)
+    return pfLexSearchTokens(query).compactMap { raw in
+        let trimmed = raw.text.trimmingCharacters(in: .whitespaces)
         if trimmed.isEmpty { return nil }
+        // Quoted phrases bypass all special-token recognition — they're
+        // the user's explicit signal "match this exact text, including
+        // any colons or year-like sequences inside it."
+        if raw.quoted {
+            return .substring(trimmed)
+        }
         // 1. Field-prefix: key:value (year:... handled specially as a range)
         if let colonIdx = trimmed.firstIndex(of: ":") {
             let rawKey = String(trimmed[..<colonIdx])

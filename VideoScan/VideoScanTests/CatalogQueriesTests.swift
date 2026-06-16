@@ -51,6 +51,76 @@ struct UniversalSearchTokenTests {
             .substring("family"),
         ])
     }
+
+    // Rick 2026-06-16 — comma separators (natural-language punctuation)
+    @Test func commaAsSeparator() {
+        let toks = pfTokenizeSearchQuery("elevator, cape cod, donna")
+        #expect(toks == [
+            .substring("elevator"),
+            .substring("cape"),
+            .substring("cod"),
+            .substring("donna"),
+        ])
+    }
+
+    // Rick 2026-06-16 — semicolon separators (symmetric with comma)
+    @Test func semicolonAsSeparator() {
+        let toks = pfTokenizeSearchQuery("donna; family; 1990s")
+        #expect(toks == [
+            .substring("donna"),
+            .substring("family"),
+            .yearRange(1990...1999),
+        ])
+    }
+
+    // Rick 2026-06-16 — double-quoted phrases stay as one token
+    @Test func quotedPhraseStaysWhole() {
+        let toks = pfTokenizeSearchQuery(#""cape cod" donna"#)
+        #expect(toks == [
+            .substring("cape cod"),
+            .substring("donna"),
+        ])
+    }
+
+    // Rick 2026-06-16 — quoted phrase can include comma without splitting
+    @Test func quotedPhraseSurvivesComma() {
+        let toks = pfTokenizeSearchQuery(#""hello, world""#)
+        #expect(toks == [.substring("hello, world")])
+    }
+
+    // Rick 2026-06-16 — quoted phrase bypasses field-prefix recognition
+    // (escape-hatch for files actually containing "filename:" in their text)
+    @Test func quotedPhraseBypassesFieldPrefix() {
+        let toks = pfTokenizeSearchQuery(#""filename:cape""#)
+        #expect(toks == [.substring("filename:cape")])
+    }
+
+    // Rick 2026-06-16 — quoted phrase bypasses year-decade recognition too
+    @Test func quotedPhraseBypassesDecadeShorthand() {
+        let toks = pfTokenizeSearchQuery(#""1990s""#)
+        #expect(toks == [.substring("1990s")])
+    }
+
+    // Rick 2026-06-16 — unterminated quote at EOF treats trailing text
+    // as a phrase (matches user intent — they started a quote and
+    // submitted before closing)
+    @Test func unterminatedQuoteAtEnd() {
+        let toks = pfTokenizeSearchQuery(#"donna "cape cod"#)
+        #expect(toks == [
+            .substring("donna"),
+            .substring("cape cod"),
+        ])
+    }
+
+    // Rick 2026-06-16 — mixed: phrase + field-prefix + bare substring
+    @Test func mixedPhraseFieldSubstring() {
+        let toks = pfTokenizeSearchQuery(#""cape cod" stream:audio elevator"#)
+        #expect(toks == [
+            .substring("cape cod"),
+            .field(name: .streamType, value: "audio"),
+            .substring("elevator"),
+        ])
+    }
 }
 
 struct UniversalSearchYearExtractionTests {
