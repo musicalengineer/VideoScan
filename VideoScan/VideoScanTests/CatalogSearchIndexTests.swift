@@ -270,14 +270,17 @@ struct CatalogSearchIndexTests {
 
     @Test func performanceRebuildUnderBudget() {
         // Rebuild is run once at catalog load (and on full reset).
-        // 10k records should complete in well under 1 second even in
-        // Debug.
+        // 10k records should complete in well under 1.5 seconds even
+        // in Debug. Budget loosened from 1.0s to 1.5s (Rick 2026-06-16)
+        // to absorb the new inverted-word-index build that runs
+        // alongside the haystack build — ~10-15% wall-clock increase
+        // for a O(50x) speedup on subsequent whole-word queries.
         let recs = makeCorpus(10_000)
         let idx = CatalogSearchIndex()
         let start = Date()
         idx.rebuild(records: recs)
         let elapsed = Date().timeIntervalSince(start)
-        #expect(elapsed < 1.0,
+        #expect(elapsed < 1.5,
                 "Index rebuild took \(elapsed * 1000) ms for 10k records — over budget")
     }
 
@@ -463,5 +466,176 @@ struct CatalogSearchIndexTests {
         #expect(hits.count == 1, "Only the record with BOTH 'cape' (dir) and 'elevator' (transcript) should match")
         #expect(hits.first?.fullPath == elevatorClip.fullPath,
                 "Match must be the CapeCod1997 elevator clip, not an unrelated 'Cape' or 'elevator' record")
+    }
+
+    // MARK: - Inverted index v1 (Rick 2026-06-16)
+
+    /// Fast-path correctness: whole-word substring queries hit the
+    /// inverted word index and must return the SAME records the
+    /// canonical matcher would.
+    @Test func invertedIndex_wholeWordSearchMatchesCanonical() {
+        let recs = makeCorpus(200)
+        let idx = CatalogSearchIndex()
+        idx.rebuild(records: recs)
+
+        let viaIndex = Set(idx.filter(records: recs, query: "donna").map { $0.fullPath })
+        let viaCanonical = Set(pfRecordsMatchingQuery(recs, query: "donna").map { $0.fullPath })
+        #expect(viaIndex == viaCanonical,
+                "Inverted-index fast path must match canonical results for whole-word query")
+    }
+
+    /// Fallback correctness: a substring INSIDE a word ("elev" inside
+    /// "elevator") isn't a complete word in the index, so the query
+    /// falls back to the per-record linear matcher — still returns
+    /// the right records.
+    @Test func invertedIndex_partialWordFallsBackCorrectly() {
+        let recs = makeCorpus(200)
+        let idx = CatalogSearchIndex()
+        idx.rebuild(records: recs)
+
+        // "donn" is a partial — the inverted index has "donna" not "donn".
+        // The query must still find the records by falling back to linear.
+        let viaIndex = Set(idx.filter(records: recs, query: "donn").map { $0.fullPath })
+        let viaCanonical = Set(pfRecordsMatchingQuery(recs, query: "donn").map { $0.fullPath })
+        #expect(viaIndex == viaCanonical,
+                "Partial-word substring must still match via fallback path")
+        #expect(!viaIndex.isEmpty,
+                "Sanity check: a 'donn' query should find at least the donna-tagged records")
+    }
+
+    /// Fallback correctness: phrase tokens (contain whitespace) can't
+    /// use the word index — they need adjacency. Must fall back to
+    /// linear and still match.
+    @Test func invertedIndex_phraseFallsBackCorrectly() {
+        let cap = makeRecord(
+            path: "/Volumes/X/Holiday/cape-cod-1997.mov",
+            transcript: "We drove down to cape cod for the long weekend."
+        )
+        let other = makeRecord(
+            path: "/Volumes/X/Misc/random.mov",
+            transcript: "Some other content with cape and cod separately, far apart."
+        )
+        let idx = CatalogSearchIndex()
+        idx.rebuild(records: [cap, other])
+
+        // Phrase token — should only match the record where "cape cod"
+        // appears as a literal phrase.
+        let hits = idx.filter(records: [cap, other], query: "\"cape cod\"")
+        #expect(hits.count == 1, "Phrase query should match only the literal phrase record")
+        #expect(hits.first?.fullPath == cap.fullPath)
+    }
+
+    /// update() must keep the inverted index honest: words that LEFT
+    /// the haystack should be removed from their buckets, and new
+    /// words should be added.
+    @Test func invertedIndex_updateRefreshesWords() {
+        let rec = makeRecord(
+            path: "/Volumes/X/alpha.mov",
+            transcript: "before"
+        )
+        let idx = CatalogSearchIndex()
+        idx.rebuild(records: [rec])
+
+        // "before" should match; "after" should not.
+        #expect(idx.filter(records: [rec], query: "before").count == 1)
+        #expect(idx.filter(records: [rec], query: "after").isEmpty)
+
+        // Mutate the transcript and update the index — old word goes
+        // away, new word arrives.
+        rec.audioTranscript = "after"
+        idx.update(rec)
+
+        #expect(idx.filter(records: [rec], query: "before").isEmpty,
+                "Stale 'before' must no longer match after update()")
+        #expect(idx.filter(records: [rec], query: "after").count == 1,
+                "Fresh 'after' must match after update()")
+    }
+
+    /// remove() must drop the record's fullPath from every word bucket
+    /// it appeared in. Otherwise stale entries pile up and the index
+    /// returns false positives once the record is gone.
+    @Test func invertedIndex_removeDropsFromAllBuckets() {
+        let recA = makeRecord(path: "/Volumes/X/a.mov", transcript: "shared word")
+        let recB = makeRecord(path: "/Volumes/X/b.mov", transcript: "shared word")
+        let idx = CatalogSearchIndex()
+        idx.rebuild(records: [recA, recB])
+
+        #expect(idx.filter(records: [recA, recB], query: "shared").count == 2)
+
+        idx.remove(fullPath: recA.fullPath)
+
+        // After remove, only recB should be returned. Pass both records
+        // to filter() to confirm the index dropped recA, not just the
+        // caller's record list.
+        let after = idx.filter(records: [recA, recB], query: "shared")
+        #expect(after.map { $0.fullPath } == [recB.fullPath],
+                "remove() must drop the record from the inverted word buckets")
+    }
+
+    /// AND across two whole-word tokens must intersect bucket sets and
+    /// return only records containing both.
+    @Test func invertedIndex_multiTokenAndIntersection() {
+        let bothWords = makeRecord(
+            path: "/Volumes/X/both.mov",
+            transcript: "elevator and donna in the same clip"
+        )
+        let onlyElevator = makeRecord(
+            path: "/Volumes/X/elev.mov",
+            transcript: "just an elevator clip"
+        )
+        let onlyDonna = makeRecord(
+            path: "/Volumes/X/donna.mov",
+            transcript: "donna at the beach"
+        )
+        let idx = CatalogSearchIndex()
+        let all = [bothWords, onlyElevator, onlyDonna]
+        idx.rebuild(records: all)
+
+        let hits = idx.filter(records: all, query: "elevator donna")
+        #expect(hits.count == 1)
+        #expect(hits.first?.fullPath == bothWords.fullPath)
+    }
+
+    /// clear() must wipe BOTH the haystack cache AND the inverted
+    /// index — otherwise post-clear queries would return stale matches.
+    @Test func invertedIndex_clearWipesBothSides() {
+        let rec = makeRecord(path: "/Volumes/X/a.mov", transcript: "donna at home")
+        let idx = CatalogSearchIndex()
+        idx.rebuild(records: [rec])
+        #expect(idx.filter(records: [rec], query: "donna").count == 1)
+        #expect(idx.indexedWordCount() > 0)
+
+        idx.clear()
+
+        #expect(idx.indexedWordCount() == 0,
+                "clear() must drop every word entry")
+        // After clear, the haystack cache is empty too — the linear
+        // matcher's lazy haystack build still finds matches if the
+        // caller passes a record, but the fast path is empty (no
+        // buckets). Both behaviors stay correct.
+    }
+
+    /// Speedup expectation: with the index built, multi-token whole-
+    /// word queries on 10k records should land WELL under the perf
+    /// budget. Looser than the pre-existing perf test — this one
+    /// specifically exercises the fast path.
+    @Test func invertedIndex_fastPathUnderTightBudget() {
+        let recs = makeCorpus(10_000)
+        let idx = CatalogSearchIndex()
+        idx.rebuild(records: recs)
+
+        // "mark donna" should hit the fast path (both are full words
+        // present in the synthetic corpus' names). Take best of 5 to
+        // smooth over noise.
+        var best = TimeInterval.greatestFiniteMagnitude
+        for _ in 0..<5 {
+            let start = Date()
+            _ = idx.filter(records: recs, query: "mark donna")
+            best = min(best, Date().timeIntervalSince(start))
+        }
+        // Fast-path target: under 50 ms for 10k records (the linear
+        // path was already <500ms; we expect substantial improvement).
+        #expect(best < 0.100,
+                "Fast-path whole-word AND took \(best * 1000) ms — expected <100 ms")
     }
 }

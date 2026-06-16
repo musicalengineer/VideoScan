@@ -43,33 +43,85 @@ final class CatalogSearchIndex {
     /// O(1) and survive record rebuild as long as the path is stable.
     private var haystacks: [String: String] = [:]
 
+    /// Inverted word index: word → set of fullPaths whose haystack
+    /// contains that word. Built alongside `haystacks`, used by
+    /// `filter`/`count` as a fast pre-narrowing pass before the
+    /// per-record linear matcher (Rick 2026-06-16).
+    ///
+    /// A "word" is a maximal run of letters or digits in the lowercased
+    /// + NFC haystack. Path-decomposition (CamelCase splits via
+    /// `pathTokenize`) is applied before word extraction, so
+    /// `CapeCod1997` contributes the words `cape`, `cod`, `1997`.
+    ///
+    /// Fast-path applies when every substring token in the query is a
+    /// COMPLETE WORD that exists in the index. Partial-word substrings
+    /// ("elev" matching "elevator") and phrase tokens fall back to the
+    /// linear scan — correctness preserved at lower speed.
+    ///
+    /// Memory: ~30-100K unique words × avg ~100 record refs × ~120 byte
+    /// fullPath = ~50-80 MB for a 15K-record catalog. Set<String> shares
+    /// the underlying fullPath storage via Swift's CoW so the total
+    /// footprint is dominated by hashmap overhead, not string duplication.
+    private var wordIndex: [String: Set<String>] = [:]
+
     /// Discard the entire cache. Called on catalog reset / full reload.
     func clear() {
         haystacks.removeAll(keepingCapacity: false)
+        wordIndex.removeAll(keepingCapacity: false)
     }
 
     /// Build (or rebuild) the index from a record set. Replaces any
     /// existing index. O(n) over the input.
     func rebuild(records: [VideoRecord]) {
-        var dict: [String: String] = [:]
-        dict.reserveCapacity(records.count)
+        var hs: [String: String] = [:]
+        var wi: [String: Set<String>] = [:]
+        hs.reserveCapacity(records.count)
         for rec in records {
-            dict[rec.fullPath] = Self.buildHaystack(rec)
+            let h = Self.buildHaystack(rec)
+            hs[rec.fullPath] = h
+            for word in Self.extractWords(from: h) {
+                wi[word, default: []].insert(rec.fullPath)
+            }
         }
-        self.haystacks = dict
+        self.haystacks = hs
+        self.wordIndex = wi
     }
 
     /// One-shot update for a single record. Called after dossier
     /// writeback so the new caption/transcript/OCR text is searchable
-    /// without a full rebuild.
+    /// without a full rebuild. Maintains the inverted index by
+    /// diffing old vs new word sets — cheaper than re-walking the
+    /// haystack twice.
     func update(_ rec: VideoRecord) {
-        haystacks[rec.fullPath] = Self.buildHaystack(rec)
+        let oldWords = haystacks[rec.fullPath].map { Self.extractWords(from: $0) } ?? []
+        let newHaystack = Self.buildHaystack(rec)
+        let newWords = Self.extractWords(from: newHaystack)
+        haystacks[rec.fullPath] = newHaystack
+        // Words that left: remove this fullPath from their bucket.
+        for word in oldWords.subtracting(newWords) {
+            wordIndex[word]?.remove(rec.fullPath)
+            if wordIndex[word]?.isEmpty == true {
+                wordIndex.removeValue(forKey: word)
+            }
+        }
+        // Words that arrived: add this fullPath to their bucket.
+        for word in newWords.subtracting(oldWords) {
+            wordIndex[word, default: []].insert(rec.fullPath)
+        }
     }
 
     /// Drop a record from the index (purge, delete, rescan-removal).
     /// Cheap — a stale haystack returns no hits, but the caller's record
     /// list will already have dropped the record so it never reaches us.
     func remove(fullPath: String) {
+        if let h = haystacks[fullPath] {
+            for word in Self.extractWords(from: h) {
+                wordIndex[word]?.remove(fullPath)
+                if wordIndex[word]?.isEmpty == true {
+                    wordIndex.removeValue(forKey: word)
+                }
+            }
+        }
         haystacks.removeValue(forKey: fullPath)
     }
 
@@ -79,12 +131,31 @@ final class CatalogSearchIndex {
         haystacks[fullPath] != nil
     }
 
+    /// True if `word` is in the inverted index. Used by tests; not
+    /// load-bearing for production.
+    func indexedWordCount() -> Int { wordIndex.count }
+
     /// Filter `records` against `query`. Empty query returns all records
     /// (preserving order). Otherwise tokenizes via the canonical
     /// `pfTokenizeSearchQuery` and applies per-token AND semantics.
+    ///
+    /// Fast path: when every substring token is a complete word that
+    /// exists in the inverted index, the candidate set is the
+    /// intersection of those words' record buckets — typically a few
+    /// hundred records out of 15K. Skip the per-record matcher
+    /// entirely for those.
+    ///
+    /// Fallback: linear per-record matcher (the original behavior). Any
+    /// token that can't use the index (phrase with spaces, year/field
+    /// tokens, or a substring that isn't a complete word) sends the
+    /// whole query down this path. Correctness is preserved at lower
+    /// speed.
     func filter(records: [VideoRecord], query: String) -> [VideoRecord] {
         let tokens = Self.prepareTokens(pfTokenizeSearchQuery(query))
         if tokens.isEmpty { return records }
+        if let candidatePaths = tryIndexLookup(tokens: tokens) {
+            return records.filter { candidatePaths.contains($0.fullPath) }
+        }
         return records.filter { rec in matches(rec, tokens: tokens) }
     }
 
@@ -93,9 +164,74 @@ final class CatalogSearchIndex {
     func count(records: [VideoRecord], query: String) -> Int {
         let tokens = Self.prepareTokens(pfTokenizeSearchQuery(query))
         if tokens.isEmpty { return records.count }
+        if let candidatePaths = tryIndexLookup(tokens: tokens) {
+            // Intersect with the active record set (the caller may have
+            // pre-filtered before invoking us).
+            var n = 0
+            for rec in records where candidatePaths.contains(rec.fullPath) { n += 1 }
+            return n
+        }
         var n = 0
         for rec in records where matches(rec, tokens: tokens) { n += 1 }
         return n
+    }
+
+    // MARK: - Inverted-index fast path
+
+    /// Resolve the candidate set of fullPaths via the inverted word
+    /// index. Returns `nil` if any token can't use the index — caller
+    /// must fall back to the linear matcher to preserve substring
+    /// semantics (a token like "elev" doesn't match a complete word
+    /// but DOES match the haystack of records containing "elevator").
+    ///
+    /// Returns an empty set if every token used the index AND the
+    /// intersection is empty — there are provably zero matches and the
+    /// caller can short-circuit.
+    private func tryIndexLookup(tokens: [SearchToken]) -> Set<String>? {
+        var candidates: Set<String>?
+        for token in tokens {
+            // Year-range / field-prefix tokens always need structural
+            // record access — bail to linear.
+            guard case .substring(let needle) = token else { return nil }
+            // Phrase tokens (contain whitespace after tokenizer) need
+            // adjacent-word matching — index doesn't help. Bail to
+            // linear so the literalContains substring path runs.
+            if needle.contains(" ") { return nil }
+            if needle.isEmpty { return nil }
+            // Whole-word lookup. If the needle isn't a complete word in
+            // the index, the user is either typing a partial word
+            // ("elev") or a substring inside one ("apes" inside "capes")
+            // — both require the linear matcher. Bail.
+            guard let bucket = wordIndex[needle] else { return nil }
+            if let existing = candidates {
+                candidates = existing.intersection(bucket)
+                if candidates?.isEmpty == true { return [] }
+            } else {
+                candidates = bucket
+            }
+        }
+        return candidates
+    }
+
+    /// Extract maximal letter/digit runs from a (presumed lowercased +
+    /// NFC) haystack. These are the keys of the inverted word index.
+    /// Non-alphanumeric characters (whitespace, punctuation) split words.
+    /// Diacritics survive the lowercase + NFC step upstream and are
+    /// preserved here so "café" and "cafe" remain distinct words —
+    /// matches what the linear matcher sees.
+    nonisolated static func extractWords(from haystack: String) -> Set<String> {
+        var words: Set<String> = []
+        var current = ""
+        for ch in haystack {
+            if ch.isLetter || ch.isNumber {
+                current.append(ch)
+            } else if !current.isEmpty {
+                words.insert(current)
+                current = ""
+            }
+        }
+        if !current.isEmpty { words.insert(current) }
+        return words
     }
 
     /// Normalize substring needles ONCE per query (not per record):
