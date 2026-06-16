@@ -404,10 +404,20 @@ extension CatalogView {
         .onChange(of: model.volumeAggregatesRevision) { recomputeVolumeAggregates() }
     }
 
-    /// Auto-size the volume pane to fit all visible rows (header ~32 + ~30 per row),
-    /// capped at 400 so it never swallows the entire window.
+    /// Auto-size the volume pane to fit the toolbar + visible volume rows.
+    /// Capped at 400 so it never swallows the entire window; floored at
+    /// 3 rows so the table is readable even when filtered down to 1-2
+    /// volumes (Rick 2026-06-15 — the prior formula ignored the toolbar
+    /// and produced a 92px ideal for 2 volumes, hiding the table behind
+    /// the toolbar on every launch).
     var scanTargetsPaneAutoHeight: CGFloat {
-        let rowCount = CGFloat(volumeTableRows.count)
-        return min(400, 32 + rowCount * 30)
+        let toolbarHeight: CGFloat = 62      // HStack w/ .controlSize(.large) + 20px vpad
+        let tableHeaderHeight: CGFloat = 28
+        let perRowHeight: CGFloat = 28
+        let bottomMargin: CGFloat = 8
+        let displayRowCount = max(CGFloat(volumeTableRows.count), 3)
+        let needed = toolbarHeight + tableHeaderHeight
+                   + (displayRowCount * perRowHeight) + bottomMargin
+        return min(400, needed)
     }
 }

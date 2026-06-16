@@ -25,18 +25,31 @@ struct VerticalSplitView<Top: View, Bottom: View>: NSViewControllerRepresentable
     }
 
     func updateNSViewController(_ vc: SplitViewController<Top, Bottom>, context: Context) {
+        // Push the latest topIdealHeight through so viewDidLayout can
+        // re-apply it when the SwiftUI side learns the row count after
+        // the first layout pass (Rick 2026-06-15).
+        vc.topIdealHeight = topIdealHeight
         vc.updatePanes(top: top(), bottom: bottom())
     }
 }
 
 final class SplitViewController<Top: View, Bottom: View>: NSSplitViewController {
     var topMinHeight: CGFloat = 60
-    var topIdealHeight: CGFloat = 200
+    var topIdealHeight: CGFloat = 200 {
+        didSet {
+            // Requests a re-layout so viewDidLayout fires and our
+            // "growth + no user drag" branch can re-position the divider.
+            view.needsLayout = true
+        }
+    }
     var topMaxHeight: CGFloat = 400
 
     private var topHosting: NSHostingController<AnyView>?
     private var bottomHosting: NSHostingController<AnyView>?
     private var didSetInitialPosition = false
+    /// Last position we set programmatically. If the current divider sits
+    /// at this value, the user hasn't dragged → safe to re-apply on growth.
+    private var lastAppliedPos: CGFloat = -1
 
     func installPanes(top: Top, bottom: Bottom) {
         let topVC = NSHostingController(rootView: AnyView(top))
@@ -68,10 +81,27 @@ final class SplitViewController<Top: View, Bottom: View>: NSSplitViewController 
 
     override func viewDidLayout() {
         super.viewDidLayout()
-        if !didSetInitialPosition && splitView.frame.height > 0 {
+        guard splitView.frame.height > 0 else { return }
+
+        let desiredPos = min(topIdealHeight, splitView.frame.height * 0.5)
+
+        if !didSetInitialPosition {
             didSetInitialPosition = true
-            let pos = min(topIdealHeight, splitView.frame.height * 0.5)
-            splitView.setPosition(pos, ofDividerAt: 0)
+            splitView.setPosition(desiredPos, ofDividerAt: 0)
+            lastAppliedPos = desiredPos
+            return
+        }
+
+        // Re-apply when topIdealHeight grew AND the user hasn't dragged
+        // since our last placement. We detect "no drag" by comparing the
+        // current top-pane height to the last position we set — if they
+        // match within a few pixels, layout hasn't been perturbed by a
+        // user action.
+        let currentTopHeight = splitView.subviews.first?.frame.height ?? 0
+        let userDragged = abs(currentTopHeight - lastAppliedPos) > 4
+        if !userDragged && desiredPos > currentTopHeight + 4 {
+            splitView.setPosition(desiredPos, ofDividerAt: 0)
+            lastAppliedPos = desiredPos
         }
     }
 }
