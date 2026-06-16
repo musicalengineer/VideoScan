@@ -86,10 +86,26 @@ struct TriageView: View {
     // the button.
     @State private var isImporting: Bool = false
 
+    /// Records the Delete Junk button operates on. Scoped to the same
+    /// `triageRecords` set the table renders so the button's count
+    /// matches what the user sees. Without this scoping the button
+    /// silently included archived-but-junk records the user had no
+    /// way to inspect — Rick 2026-06-15. Archived junk surfaces in
+    /// the status bar instead, with an explanatory tooltip.
     private var confirmedJunk: [VideoRecord] {
+        triageRecords.filter { $0.mediaDisposition == .confirmedJunk }
+    }
+
+    /// Records tagged `.confirmedJunk` but already archived — outside
+    /// triage scope but still tagged junk. Surfaced in the status bar
+    /// so the discrepancy is visible, not silent. NOT included in the
+    /// Delete Junk button's target.
+    private var archivedConfirmedJunkCount: Int {
         model.records.filter {
-            $0.mediaDisposition == .confirmedJunk && $0.purgedAt == nil
-        }
+            $0.mediaDisposition == .confirmedJunk
+                && $0.purgedAt == nil
+                && $0.lifecycleStage == .archived
+        }.count
     }
 
     // Offline-aware filter. When on, the triage table hides any record
@@ -307,6 +323,8 @@ struct TriageView: View {
             } else {
                 fileTable(rows: rows)
             }
+
+            statusBar
         }
         // Delete-Junk sheets — mirror the catalog-toolbar wiring so users
         // can tag-then-delete without leaving Triage. Confirm sheet asks
@@ -358,6 +376,42 @@ struct TriageView: View {
                 )
             }
         }
+    }
+
+    /// Finder-style status bar at the bottom of the main pane. Always
+    /// shows the visible record count under the current filter; adds
+    /// "N selected" when there's a selection; surfaces archived-but-
+    /// confirmed-junk count when the user is on the Confirmed Junk
+    /// filter so they can see why the Delete Junk count and the table
+    /// row count match each other but differ from the model-wide total.
+    /// Rick 2026-06-15.
+    private var statusBar: some View {
+        HStack(spacing: 8) {
+            Text("\(filteredRecords.count) \(selectedFilter.rawValue.lowercased())")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+
+            if !selectedIDs.isEmpty {
+                Text("\u{00B7}").foregroundColor(.secondary)
+                Text("\(selectedIDs.count) selected")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
+
+            if selectedFilter == .confirmedJunk && archivedConfirmedJunkCount > 0 {
+                Text("\u{00B7}").foregroundColor(.secondary)
+                Text("\(archivedConfirmedJunkCount) archived (hidden)")
+                    .font(.system(size: 11))
+                    .foregroundColor(.orange)
+                    .help("Records tagged Confirmed Junk but already promoted to Archive. They are intentionally out of scope for the triage view and are NOT included in the Delete Junk button's count.")
+            }
+
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
+        .background(Color(NSColor.controlBackgroundColor))
+        .overlay(Divider(), alignment: .top)
     }
 
     private var toolbar: some View {
