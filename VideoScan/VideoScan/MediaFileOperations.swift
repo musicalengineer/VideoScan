@@ -243,11 +243,28 @@ final class MediaFileOperationsCenter: ObservableObject {
 
     /// Insert newest-first and start forwarding its change events.
     /// Internal (not private) so tests can drive the list directly.
+    ///
+    /// Forwarder is THROTTLED to 4 Hz (Rick 2026-06-15). Each running
+    /// job publishes `fractionValue` etc. on every ffmpeg progress line
+    /// (~4-10 Hz per job) plus on every Whisper/VLM log line, and the
+    /// unthrottled forwarder re-broadcast all of it through this
+    /// Center's `objectWillChange`. With 3-4 active jobs the Catalog
+    /// (which observes the Center via `@EnvironmentObject fileOpsCenter`
+    /// in CatalogHelpers.swift) was re-rendering 12-40× per second,
+    /// starving NSTableView's main-thread mouse hit-testing and making
+    /// row selection by mouse glitch during MFO load. Arrow-key
+    /// navigation stayed smooth because it bypasses SwiftUI re-eval.
+    /// 250 ms / 4 Hz is faster than the eye can resolve on a progress
+    /// bar and is still snappy for state transitions. The MFO window's
+    /// per-job rows subscribe to the job directly, so their progress
+    /// bars stay smooth — they aren't affected by this throttle.
     func add(_ job: any MediaFileOperationJob) {
         jobs.insert(job, at: 0)
-        jobForwarders[job.id] = job.objectWillChange.sink { [weak self] _ in
-            self?.objectWillChange.send()
-        }
+        jobForwarders[job.id] = job.objectWillChange
+            .throttle(for: .milliseconds(250), scheduler: DispatchQueue.main, latest: true)
+            .sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
         trimFinished()
     }
 

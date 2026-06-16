@@ -113,8 +113,16 @@ final class AnalyzeJob: @MainActor MediaFileOperationJob {
         self.stages = stages
         self.subtitleText = "Queued for \(Self.verb(for: stages).lowercased())…"
         // Subscribe to orchestrator changes so the row updates live.
+        // THROTTLED to 4 Hz (Rick 2026-06-15). The orchestrator
+        // publishes on every Whisper / VLM log line, and this forwarder
+        // was the upstream amplifier feeding the MFO Center cascade
+        // documented in MediaFileOperations.swift. Throttling only at
+        // the MFO site would still pay the cost here at the source —
+        // every fire still walks `objectWillChange` subscribers and
+        // calls `updateProgress()`. 250 ms matches the MFO throttle so
+        // both publish at the same cadence.
         self.orchestratorForwarder = orchestrator.objectWillChange
-            .receive(on: RunLoop.main)
+            .throttle(for: .milliseconds(250), scheduler: RunLoop.main, latest: true)
             .sink { [weak self] _ in
                 guard let self else { return }
                 self.objectWillChange.send()
