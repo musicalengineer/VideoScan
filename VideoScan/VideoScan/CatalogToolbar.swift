@@ -108,6 +108,70 @@ struct CatalogToolbar<Dashboard: View>: View {
                                                  query: debouncedSearchText)
     }
 
+    /// "+ Filter" menu next to the search field. Each pick appends a
+    /// field-prefix token (or a complete `stream:...` token) to the
+    /// current searchText so users discover the grammar by clicking
+    /// instead of memorizing it. Rick 2026-06-16. The menu deliberately
+    /// uses friendly labels (e.g. "Transcript", not "transcript:") and
+    /// surfaces the streamType values as a submenu so the user picks
+    /// from a finite list rather than typing free-form.
+    private var filterInsertMenu: some View {
+        Menu {
+            Section("Field filters") {
+                Button("Filename")    { insertSearchPrefix("filename:") }
+                Button("Transcript")  { insertSearchPrefix("transcript:") }
+                Button("Captions")    { insertSearchPrefix("caption:") }
+                Button("OCR text")    { insertSearchPrefix("ocr:") }
+                Button("People")      { insertSearchPrefix("people:") }
+                Button("Notes")       { insertSearchPrefix("notes:") }
+            }
+            Section("Structural") {
+                Menu("Stream type") {
+                    Button("Audio only")     { insertSearchToken("stream:audio") }
+                    Button("Video only")     { insertSearchToken("stream:video") }
+                    Button("Both")           { insertSearchToken("stream:both") }
+                    Button("ffprobe failed") { insertSearchToken("stream:failed") }
+                    Button("No streams")     { insertSearchToken("stream:empty") }
+                }
+                Button("Year…")   { insertSearchPrefix("year:") }
+                Button("Decade…") { insertSearchPrefix("decade:") }
+            }
+        } label: {
+            Image(systemName: "plus.circle")
+                .foregroundColor(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Insert a filter (filename:, transcript:, stream:audio, year:…)")
+    }
+
+    /// Append a field-prefix at the end of the search field, with a
+    /// leading space if needed. Cursor stays at end so the user can
+    /// type the value immediately. We don't try to be cursor-aware —
+    /// SwiftUI's TextField doesn't expose cursor position, and
+    /// end-append matches the common case (build the query left-to-
+    /// right) without false precision.
+    private func insertSearchPrefix(_ prefix: String) {
+        if searchText.isEmpty {
+            searchText = prefix
+        } else {
+            let needsSpace = !searchText.hasSuffix(" ")
+            searchText = searchText + (needsSpace ? " " : "") + prefix
+        }
+    }
+
+    /// Same as insertSearchPrefix but for complete tokens (stream:audio
+    /// is a complete filter, not a "needs a value" prefix). Adds a
+    /// trailing space so the user can continue typing.
+    private func insertSearchToken(_ token: String) {
+        if searchText.isEmpty {
+            searchText = token + " "
+        } else {
+            let needsSpace = !searchText.hasSuffix(" ")
+            searchText = searchText + (needsSpace ? " " : "") + token + " "
+        }
+    }
+
     private var canCombine: Bool {
         guard !isScanning && !isCombining else { return false }
         return hasCorrelatedPairs
@@ -341,6 +405,12 @@ struct CatalogToolbar<Dashboard: View>: View {
                     .help("Search hits across filename, people tags, captions, transcripts, and OCR text. Each whitespace-separated word must match somewhere on the record (AND). Year shorthand: 1990s · 199x.")
             }
 
+            // "+ Filter" menu — inserts a field-prefix token at the
+            // end of the search field so users discover the grammar
+            // through clicks instead of reading the help popover.
+            // Rick 2026-06-16.
+            filterInsertMenu
+
             // Help popover — surfaces the field-prefix grammar so users
             // don't have to read a docs file to discover `people:donna`
             // / `year:1989..1995` / `caption:beach`. Added 2026-06-08
@@ -486,6 +556,19 @@ private struct CatalogSearchHelpPopover: View {
                                         meaning: "all three names somewhere on the record (AND)")
                 CatalogSearchExampleRow(query: "cape cod 1990s",
                                         meaning: "cape, cod, and a 1990s year signal")
+                CatalogSearchExampleRow(query: "elevator, cape, donna",
+                                        meaning: "commas and semicolons also separate tokens")
+            }
+
+            Divider()
+
+            Group {
+                Text("Quoted phrases — match the literal string")
+                    .font(.subheadline.weight(.medium))
+                CatalogSearchExampleRow(query: "\"cape cod\"",
+                                        meaning: "the two words side-by-side, not separately")
+                CatalogSearchExampleRow(query: "\"hello, world\"",
+                                        meaning: "the comma is part of the phrase, not a separator")
             }
 
             Divider()
@@ -522,17 +605,19 @@ private struct CatalogSearchHelpPopover: View {
                                         meaning: "year range")
                 CatalogSearchExampleRow(query: "decade:1990s",
                                         meaning: "decade")
+                CatalogSearchExampleRow(query: "stream:audio",
+                                        meaning: "audio-only files (or video / both / failed)")
             }
 
             Divider()
 
-            Text("Field-prefix tokens compose with plain words. Every token must match (AND).")
+            Text("Field-prefix tokens compose with plain words. Every token must match (AND). The \u{201C}+ Filter\u{201D} menu next to the search field inserts prefixes for you.")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .frame(maxWidth: 360, alignment: .leading)
         }
         .padding(16)
-        .frame(width: 420)
+        .frame(width: 440)
     }
 }
 
