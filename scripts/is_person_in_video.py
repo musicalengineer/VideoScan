@@ -135,7 +135,7 @@ def extract_frames(video: Path, duration: float, interval_s: float,
     frames: list[tuple[float, Path]] = []
     for i, ts in enumerate(starts):
         out = tmpdir / f"f_{i:05d}.jpg"
-        cmd = ["ffmpeg", "-y", "-v", "error", "-ss", f"{ts:.2f}",
+        cmd = ["ffmpeg", "-y", "-v", "error", "-hwaccel", "videotoolbox", "-ss", f"{ts:.2f}",
                "-i", str(video), "-frames:v", "1",
                "-vf", "scale='min(640,iw)':'-2'",
                "-q:v", "4", "-an", str(out)]

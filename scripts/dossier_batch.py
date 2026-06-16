@@ -146,7 +146,7 @@ def dossier_one(video_path: Path, vlm_model, vlm_processor, vlm_config, num_fram
         for i, t in enumerate(frame_times):
             out = tmpdir / f"frame_{i:02d}.jpg"
             r = subprocess.run(
-                ["ffmpeg", "-y", "-ss", f"{t:.3f}", "-i", str(video_path),
+                ["ffmpeg", "-y", "-hwaccel", "videotoolbox", "-ss", f"{t:.3f}", "-i", str(video_path),
                  "-frames:v", "1", "-q:v", "2", str(out)],
                 capture_output=True, timeout=30
             )

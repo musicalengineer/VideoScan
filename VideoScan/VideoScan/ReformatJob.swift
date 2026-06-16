@@ -174,6 +174,7 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
             "-hide_banner",
             "-nostdin",
             "-y",
+            "-hwaccel", "videotoolbox",
             "-i", inputPath,
             "-vf", "bwdif=mode=send_field:parity=auto,hqdn3d=4:3:6:4.5",
             "-c:v", "hevc_videotoolbox",

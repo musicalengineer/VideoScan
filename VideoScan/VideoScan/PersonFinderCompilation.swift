@@ -497,6 +497,7 @@ func pfMergeBucketsToSingleFile(
             ffmpegPath: ffmpegPath,
             args: [
                 "-hide_banner", "-nostdin", "-y",
+                "-hwaccel", "videotoolbox",
                 "-i", src,
                 "-vf", "scale=-2:\(targetHeight),setsar=1,format=yuv420p",
                 "-c:v", "h264_videotoolbox",

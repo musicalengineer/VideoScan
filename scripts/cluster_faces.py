@@ -167,6 +167,7 @@ def extract_frames(path: Path, duration: float, interval_s: float,
 
     cmd = [
         "ffmpeg", "-y", "-v", "error",
+        "-hwaccel", "videotoolbox",
         "-i", str(path),
         "-vf", f"select='{select_expr}',scale='min(640\\,iw)':-2",
         "-vsync", "vfr",

@@ -126,6 +126,7 @@ def extract_frames(path: Path, duration: float, interval_s: float,
         # -ss before -i = fast (keyframe-accurate) seek
         cmd = [
             "ffmpeg", "-y", "-v", "error",
+            "-hwaccel", "videotoolbox",
             "-ss", f"{ts:.2f}",
             "-i", str(path),
             "-frames:v", "1",
