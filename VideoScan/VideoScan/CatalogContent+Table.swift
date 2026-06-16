@@ -320,6 +320,19 @@ extension CatalogContent {
                             .accessibilityIdentifier("catalog.row.repairAudio")
                         }
 
+                        // Repair Video — symmetric verb for audio-only
+                        // files (Rick 2026-06-15). Same CorrelationScorer
+                        // works both directions: given an audio-only
+                        // record, it returns the best video-only match.
+                        if rec.streamType == .audioOnly {
+                            Button("Repair Video…") {
+                                repairVideo(for: rec)
+                                openWindow(id: "combine")
+                            }
+                            .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
+                            .accessibilityIdentifier("catalog.row.repairVideo")
+                        }
+
                         Button("Analyze") {
                             requestAnalyze(for: rec, stages: AnalyzeStage.all)
                         }
@@ -773,6 +786,38 @@ extension CatalogContent {
         }
         // Pair found — open the existing Combine sheet pre-filled
         // with the high-confidence match.
+        onCombinePair?(cand.video, cand.audio)
+    }
+
+    /// "Repair Video…" handler for audio-only records — mirror of
+    /// repairAudio. The CorrelationScorer is direction-agnostic; the
+    /// returned pair is always (video, audio) regardless of which side
+    /// was the input record, so the Combine-sheet call site stays
+    /// identical. Rick 2026-06-15.
+    private func repairVideo(for rec: VideoRecord) {
+        let durationTolerance: Double = 1.0
+        let timestampTolerance: TimeInterval = 5.0
+        guard let cand = CorrelationScorer.findBestPair(
+            for: rec,
+            in: model.records,
+            durationTolerance: durationTolerance,
+            timestampTolerance: timestampTolerance
+        ) else {
+            let alert = NSAlert()
+            alert.messageText = "No Video Match Found"
+            alert.informativeText = """
+                No matching video-only file scored highly enough against:
+
+                \(rec.filename)
+
+                Try "Find A/V Pair…" to explore correlation candidates, \
+                or add the video source to the catalog first.
+                """
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
         onCombinePair?(cand.video, cand.audio)
     }
 
