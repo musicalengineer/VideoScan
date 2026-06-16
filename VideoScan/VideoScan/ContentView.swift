@@ -176,6 +176,19 @@ struct CatalogView: View {
     @State private var showInspector = true
     @State private var sortOrder = [KeyPathComparator(\VideoRecord.filename)]
     @State private var searchText: String = ""
+    /// Debounced mirror of `searchText` driving the CatalogContent
+    /// table filter. Updated 250 ms after the last keystroke so
+    /// computeFiltered (~10 ms × 15K records) only runs on the trailing
+    /// edge of typing. Rick 2026-06-16. Parallels CatalogToolbar's own
+    /// private debouncer (which feeds the hit-count badge) — type
+    /// checker couldn't absorb a Binding through the toolbar's already-
+    /// huge initializer, so we run two independent debouncers on the
+    /// same source. They produce identical output in practice.
+    @State private var debouncedSearchText: String = ""
+    /// Cancellable task that fires 250 ms after the last keystroke and
+    /// propagates `searchText` → `debouncedSearchText`. Reset on every
+    /// keystroke so only the trailing edge lands.
+    @State private var searchDebounceTask: Task<Void, Never>? = nil
     @State private var showDeleteDuplicatesConfirm = false
     @State private var deleteTargetVolume: String = ""
     @State private var deleteTargetCount: Int = 0
@@ -372,7 +385,7 @@ struct CatalogView: View {
                 records: model.records,
                 selectedIDs: $selectedIDs,
                 sortOrder: $sortOrder,
-                searchText: searchText,
+                searchText: debouncedSearchText,
                 filterTargetPaths: filterTargetPaths,
                 showPairsOnly: showPairsOnly,
                 viewFilters: catalogViewFilters,
@@ -460,6 +473,22 @@ struct CatalogView: View {
             // Clear the ID filter and focus when user types in search or selects a volume
             .onChange(of: searchText) {
                 if !searchText.isEmpty { filterByIDs = []; focusMatchScore = nil; model.focusedMediaIDs = [] }
+                // Debounce the CatalogContent filter: cancel any
+                // pending propagation and schedule a new 250 ms one.
+                // Empty-clears are instant — no debounce needed when
+                // the user is BACKSPACING the field empty.
+                searchDebounceTask?.cancel()
+                if searchText.isEmpty {
+                    debouncedSearchText = ""
+                } else {
+                    let pending = searchText
+                    searchDebounceTask = Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 250_000_000)
+                        if !Task.isCancelled {
+                            debouncedSearchText = pending
+                        }
+                    }
+                }
             }
             .onChange(of: selectedVolumeIDs) {
                 if !selectedVolumeIDs.isEmpty { filterByIDs = []; focusMatchScore = nil; model.focusedMediaIDs = [] }
