@@ -393,12 +393,29 @@ struct CatalogToolbar<Dashboard: View>: View {
             .padding(.vertical, 4)
             .background(Color(NSColor.textBackgroundColor))
             .cornerRadius(6)
-            // Match count badge — visible only while there's a query.
-            // Counts against the full record set so the badge reflects
-            // pre-filter results (i.e. before View-menu filters like
-            // Online/Has Family further narrow). Reads the memoized
-            // searchHitCount — never scan records inside body.
-            if !searchText.isEmpty {
+            // Searching... indicator. Shows while the user is mid-typing
+            // and the 250 ms debounce window hasn't yet propagated
+            // searchText → debouncedSearchText. Distinguishes the "still
+            // working" state from the "search complete, zero results"
+            // state (Rick 2026-06-16 — empty results were ambiguous).
+            if !searchText.isEmpty && searchText != debouncedSearchText {
+                HStack(spacing: 4) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .scaleEffect(0.6)
+                        .frame(width: 14, height: 14)
+                    Text("Searching\u{2026}")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+                .help("Filter recomputes 250 ms after you stop typing.")
+            } else if !searchText.isEmpty {
+                // Match count badge — visible only while the search has
+                // settled (debouncedSearchText caught up). Counts against
+                // the full record set so the badge reflects pre-filter
+                // results (i.e. before View-menu filters like Online/Has
+                // Family further narrow). Reads the memoized
+                // searchHitCount — never scan records inside body.
                 Text("\(searchHitCount) of \(model.records.count)")
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(searchHitCount == 0 ? .red : .secondary)

@@ -297,7 +297,31 @@ struct CatalogContent: View {
                     // above the table so it never reflows the grid below —
                     // the VStack just gets one more row when armed.
                     purgeUndoBanner
-                    catalogTable
+                    // Empty-state overlay: when a search is active and
+                    // yields zero rows, surface that explicitly instead
+                    // of leaving the user staring at a blank table area.
+                    // The Table widget itself just shows headers + empty,
+                    // which is ambiguous (Rick 2026-06-16).
+                    ZStack {
+                        catalogTable
+                        if tableData.isEmpty && !searchText.isEmpty {
+                            VStack(spacing: 8) {
+                                Image(systemName: "magnifyingglass")
+                                    .font(.system(size: 28))
+                                    .foregroundColor(.secondary)
+                                Text("No matches")
+                                    .font(.title3.weight(.medium))
+                                    .foregroundColor(.secondary)
+                                Text("Try removing a term, or check that the records you expect have transcripts (Transcribe Audio) and captions (Generate Captions) populated.")
+                                    .font(.callout)
+                                    .foregroundColor(.secondary)
+                                    .multilineTextAlignment(.center)
+                                    .frame(maxWidth: 420)
+                                    .padding(.horizontal, 16)
+                            }
+                            .padding(40)
+                        }
+                    }
                 }
                     .frame(minHeight: 250)
 
