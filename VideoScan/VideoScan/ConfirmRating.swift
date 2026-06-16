@@ -72,10 +72,10 @@ enum ConfirmRating: String, Codable, CaseIterable, Identifiable {
     /// One-line copy for the button label tooltip.
     var hint: String {
         switch self {
-        case .definitely: return "Person is clearly in this video"
-        case .likely:     return "Almost certainly — couldn't see every frame"
+        case .definitely: return "Face/body visible in at least one frame"
+        case .likely:     return "Probably visible — couldn't review every frame"
         case .unsure:     return "Can't tell from the preview"
-        case .unlikely:   return "Probably not in this video"
+        case .unlikely:   return "Not visible in any frame (audio/transcript mentions don't count)"
         }
     }
 

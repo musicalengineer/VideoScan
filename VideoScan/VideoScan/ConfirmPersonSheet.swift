@@ -183,8 +183,14 @@ struct ConfirmPersonSheet: View {
 
     private func ratingButtons(for candidate: PersonCandidateScore) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Is \(profile.name) in this video?")
-                .font(.system(size: 12).weight(.medium))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Is \(profile.name) visually on camera in this video?")
+                    .font(.system(size: 12).weight(.medium))
+                Text("Face/body must be visible. Hearing her name or voice alone doesn\u{2019}t count \u{2014} this trains a VISUAL classifier.")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             ForEach(ConfirmRating.allCases) { rating in
                 Button {
                     apply(rating: rating, to: candidate)
@@ -204,12 +210,14 @@ struct ConfirmPersonSheet: View {
                 .help(rating.hint)
             }
             HStack {
+                Button("Back") { goBack() }
+                    .buttonStyle(.borderless)
+                    .disabled(currentIndex == 0)
+                    .help("Return to the previous candidate (after an accidental skip or to re-rate)")
+                Spacer()
                 Button("Skip") { advance() }
                     .buttonStyle(.borderless)
-                Spacer()
-                Button("Undo") { undoLast() }
-                    .buttonStyle(.borderless)
-                    .disabled(roundLabels.isEmpty)
+                    .help("Move to the next candidate without labeling this one")
             }
             .font(.caption)
         }
@@ -391,13 +399,20 @@ struct ConfirmPersonSheet: View {
         }
     }
 
-    private func undoLast() {
-        // Lightweight undo: pop last labelled, go back one. We DON'T
-        // un-write the catalog tag — that's a harder operation and the
-        // label sidecar keeps the most-recent-wins semantics, so
-        // re-rating overwrites cleanly on the next round.
-        guard !roundLabels.isEmpty, currentIndex > 0 else { return }
-        roundLabels.removeLast()
+    private func goBack() {
+        // Pure navigation — go back to the previous candidate whether
+        // it was labeled or skipped (Rick 2026-06-16: an accidental
+        // Skip needs to be recoverable, not just an accidental rating).
+        // If the previous candidate WAS labeled this round, pop its
+        // entry from roundLabels so the user can re-rate without
+        // double-counting in the summary. The label sidecar's most-
+        // recent-wins semantics handles the duplicate-label case
+        // cleanly on the next .apply call.
+        guard currentIndex > 0 else { return }
+        let prevPath = candidates[currentIndex - 1].recordPath
+        if let last = roundLabels.last, last.path == prevPath {
+            roundLabels.removeLast()
+        }
         thumbnailLoadTask?.cancel()
         currentIndex -= 1
         loadThumbnail(for: candidates[currentIndex])
