@@ -47,7 +47,7 @@ enum SearchField: String, Equatable {
 /// phrase. Quoted phrases bypass field-prefix recognition downstream so
 /// `"filename:cape"` (with quotes) matches the literal string
 /// `filename:cape` instead of being parsed as a field token.
-fileprivate struct PFRawToken {
+private struct PFRawToken {
     let text: String
     let quoted: Bool
 }
@@ -59,7 +59,7 @@ fileprivate struct PFRawToken {
 /// on here. Double-quoted phrases are kept as single tokens with the
 /// quote marks stripped: `"cape cod"` → one token `cape cod`.
 /// Unterminated quotes treat the trailing material as a phrase.
-fileprivate func pfLexSearchTokens(_ query: String) -> [PFRawToken] {
+private func pfLexSearchTokens(_ query: String) -> [PFRawToken] {
     var out: [PFRawToken] = []
     var current = ""
     var inQuotes = false
