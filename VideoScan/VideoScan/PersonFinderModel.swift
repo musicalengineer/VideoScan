@@ -494,6 +494,12 @@ final class PersonFinderModel: ObservableObject {
 
     @Published var savedProfiles: [POIProfile] = POIProfile.listAll()
 
+    /// Disk-backed accumulator for user labels produced by the Confirm
+    /// verb. Lives next to the catalog in Application Support; survives
+    /// catalog rebuilds. Source of training data for the future
+    /// per-person classifier. Rick 2026-06-16.
+    let validationLabels = ValidationLabelStore()
+
     func saveCurrentPOI() {
         let cover = POIProfile.bestCoverFilename(from: referenceFaces)
         let profile = settings.toProfile(coverImageFilename: cover)

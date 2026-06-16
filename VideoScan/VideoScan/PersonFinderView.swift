@@ -189,6 +189,10 @@ struct PersonFinderView: View {
 
     @State private var confirmDeleteProfile: POIProfile?
     @State private var editingProfile: POIProfile?
+    /// Drives the Confirm-Person sheet. Set by the "Confirm…" context
+    /// menu item on a PersonCard; the sheet presents the candidate
+    /// labeling UI and clears this on dismiss. Rick 2026-06-16.
+    @State private var confirmTarget: ConfirmSheetTarget?
     /// The original name of the profile being edited (nil when adding new).
     @State private var editingOriginalName: String?
     /// Briefly set after a profile save to flash confirmation on the card.
@@ -401,6 +405,11 @@ struct PersonFinderView: View {
                                         editingOriginalName = profile.name
                                         editingProfile = profile
                                     }
+                                    Divider()
+                                    Button("Confirm \(profile.name)\u{2026}") {
+                                        confirmTarget = ConfirmSheetTarget(profile: profile)
+                                    }
+                                    .help("Rate catalog-flagged candidates as Definitely/Likely/Unsure/Unlikely. Builds the labeled set Find Person will train on.")
                                     if !model.referenceFaces.isEmpty && model.settings.personName.lowercased() == profile.name.lowercased() {
                                         Divider()
                                         Menu("Remove Low-Confidence Photos") {
@@ -526,6 +535,11 @@ struct PersonFinderView: View {
                     justSavedProfileID = nil
                 }
             }
+        }
+        .sheet(item: $confirmTarget) { target in
+            ConfirmPersonSheet(profile: target.profile)
+                .environmentObject(model)
+                .environmentObject(catalogModel)
         }
     }
 
