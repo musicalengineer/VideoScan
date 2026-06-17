@@ -340,6 +340,7 @@ struct ConfirmationsView: View {
         switch rating {
         case .definitely: return "\u{2192} confirmedByUserPeople"
         case .likely:     return "\u{2192} suspectedPeople"
+        case .cameo:      return "training sidecar only (excluded from positive set)"
         case .no:         return "\u{2192} rejectedPeople"
         case .unsure, .unlikely: return ""
         }

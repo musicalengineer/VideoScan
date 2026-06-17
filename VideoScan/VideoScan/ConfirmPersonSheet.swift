@@ -73,7 +73,7 @@ struct ConfirmPersonSheet: View {
             Divider()
             footer
         }
-        .frame(width: 720, height: 540)
+        .frame(width: 760, height: 640)
         .onAppear(perform: prepareSetup)
         .onDisappear { thumbnailLoadTask?.cancel() }
     }
@@ -358,48 +358,50 @@ struct ConfirmPersonSheet: View {
         let summary = personFinderModel.validationLabels.roundSummary(
             for: profile.name, since: roundStart
         )
-        return VStack(alignment: .leading, spacing: 14) {
-            Text("Round summary — \(summary.total) labels")
-                .font(.title3.weight(.semibold))
-            VStack(spacing: 6) {
-                ForEach(ConfirmRating.userFacing) { rating in
-                    HStack {
-                        Image(systemName: rating.symbol)
-                            .foregroundColor(rating.color)
-                            .frame(width: 18)
-                        Text(rating.rawValue)
-                            .frame(width: 110, alignment: .leading)
-                        Text("\(summary.counts[rating, default: 0])")
-                            .font(.system(.body, design: .monospaced))
-                        Spacer()
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Round summary \u{2014} \(summary.total) labels")
+                    .font(.title3.weight(.semibold))
+                VStack(spacing: 6) {
+                    ForEach(ConfirmRating.userFacing) { rating in
+                        HStack {
+                            Image(systemName: rating.symbol)
+                                .foregroundColor(rating.color)
+                                .frame(width: 18)
+                            Text(rating.rawValue)
+                                .frame(width: 110, alignment: .leading)
+                            Text("\(summary.counts[rating, default: 0])")
+                                .font(.system(.body, design: .monospaced))
+                            Spacer()
+                        }
                     }
                 }
-            }
-            if !summary.signalsByPositive.isEmpty {
-                Divider()
-                Text("Where \(profile.name) was confirmed — signal sources")
-                    .font(.subheadline.weight(.medium))
-                ForEach(summary.signalsByPositive.sorted { $0.value > $1.value }, id: \.key) { sig, count in
-                    HStack {
-                        Image(systemName: iconForSignal(sig))
-                            .foregroundColor(.accentColor)
-                            .frame(width: 18)
-                        Text(sig)
-                            .frame(width: 160, alignment: .leading)
-                        Text("\(count)")
-                            .font(.system(.body, design: .monospaced))
-                        Spacer()
+                if !summary.signalsByPositive.isEmpty {
+                    Divider()
+                    Text("Where \(profile.name) was confirmed \u{2014} signal sources")
+                        .font(.subheadline.weight(.medium))
+                    ForEach(summary.signalsByPositive.sorted { $0.value > $1.value }, id: \.key) { sig, count in
+                        HStack {
+                            Image(systemName: iconForSignal(sig))
+                                .foregroundColor(.accentColor)
+                                .frame(width: 18)
+                            Text(sig)
+                                .frame(width: 160, alignment: .leading)
+                            Text("\(count)")
+                                .font(.system(.body, design: .monospaced))
+                            Spacer()
+                        }
+                        .font(.system(size: 12))
                     }
-                    .font(.system(size: 12))
                 }
+                Text("Catalog updated. Definitely \u{2192} confirmedByUserPeople, Likely \u{2192} suspectedPeople, No \u{2192} rejectedPeople. Cameo labels stay in the training sidecar only \u{2014} they don't elevate the record in search but are remembered.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 4)
             }
-            Spacer()
-            Text("Catalog updated. \(profile.name) tags wrote back to confirmedByUserPeople (Definitely) and suspectedPeople (Likely). Run Find Person next to combine these labels with face inference.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(20)
         }
-        .padding(20)
     }
 
     private var footer: some View {
