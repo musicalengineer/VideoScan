@@ -276,20 +276,26 @@ nonisolated func pfFieldTokenMatches(_ field: SearchField, _ value: String, _ re
     case .notes:
         return rec.notes.lowercased().contains(n)
     case .streamType:
-        // Structural filter, not substring. `value` is matched against
-        // a hand-picked set of friendly aliases per StreamType case so
-        // users can type whatever feels natural. Unknown values return
-        // false rather than falling through — typo in `stream:audoi`
-        // should produce empty results, not match everything.
-        // Rick 2026-06-15.
-        switch n {
-        case "audio", "audioonly":             return rec.streamType == .audioOnly
-        case "video", "videoonly":             return rec.streamType == .videoOnly
-        case "both", "av", "videoandaudio":    return rec.streamType == .videoAndAudio
-        case "failed", "ffprobefailed":        return rec.streamType == .ffprobeFailed
-        case "empty", "none", "nostreams":     return rec.streamType == .noStreams
-        default:                               return false
-        }
+        return pfStreamTypeAliasMatches(value: n, recordType: rec.streamType)
+    }
+}
+
+/// Structural filter for `stream:<alias>` tokens. `value` is matched
+/// against a hand-picked set of friendly aliases per StreamType case so
+/// users can type whatever feels natural. Unknown values return false
+/// rather than falling through — typo in `stream:audoi` should produce
+/// empty results, not match everything. Rick 2026-06-15.
+///
+/// Extracted from `pfFieldTokenMatches` to drop its cyclomatic
+/// complexity (was 19; this is independently 6). Behavior unchanged.
+nonisolated func pfStreamTypeAliasMatches(value: String, recordType: StreamType) -> Bool {
+    switch value {
+    case "audio", "audioonly":             return recordType == .audioOnly
+    case "video", "videoonly":             return recordType == .videoOnly
+    case "both", "av", "videoandaudio":    return recordType == .videoAndAudio
+    case "failed", "ffprobefailed":        return recordType == .ffprobeFailed
+    case "empty", "none", "nostreams":     return recordType == .noStreams
+    default:                               return false
     }
 }
 
