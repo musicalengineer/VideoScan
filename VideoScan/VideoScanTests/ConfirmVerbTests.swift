@@ -32,7 +32,9 @@ struct ConfirmVerbTests {
         md5: String = "",
         dgid: UUID? = nil,
         size: Int64 = 0,
-        streamType: StreamType = .videoAndAudio
+        streamType: StreamType = .videoAndAudio,
+        duration: Double = 0,
+        dateCreated: Date? = nil
     ) -> VideoRecord {
         let r = VideoRecord()
         r.fullPath = path
@@ -48,6 +50,8 @@ struct ConfirmVerbTests {
         r.duplicateGroupID = dgid
         r.sizeBytes = size
         r.streamTypeRaw = streamType.rawValue
+        r.durationSeconds = duration
+        r.dateCreatedRaw = dateCreated
         return r
     }
 
@@ -192,6 +196,148 @@ struct ConfirmVerbTests {
         )
         #expect(result.candidates.count == 5)
         #expect(result.stats.candidatesSurfaced == 20)
+    }
+
+    // MARK: - v1.2 filters (Rick 2026-06-17)
+
+    @Test func round_skipsAudioOnlyRecords() {
+        let video = makeRec(path: "/v/Donna-video.mov", streamType: .videoAndAudio)
+        let audioOnly = makeRec(path: "/v/Donna-audio.mp3", streamType: .audioOnly)
+        var rng = SystemRandomNumberGenerator()
+        let result = pfConfirmRound(
+            name: "Donna", records: [video, audioOnly],
+            topN: 50, controlK: 0, alreadyLabeled: [],
+            rng: &rng
+        )
+        let paths = result.candidates.map { $0.recordPath }
+        #expect(paths.count == 1)
+        #expect(paths.first == "/v/Donna-video.mov")
+        #expect(result.stats.audioOnlySkipped == 1)
+    }
+
+    @Test func round_skipAudioOnlyCanBeDisabled() {
+        // Use distinct filenames so dedup definitely doesn't collapse them.
+        let video = makeRec(path: "/v/Donna-vid.mov", streamType: .videoAndAudio)
+        let audio = makeRec(path: "/v/Donna-aud.mp3", streamType: .audioOnly)
+        var rng = SystemRandomNumberGenerator()
+        let result = pfConfirmRound(
+            name: "Donna", records: [video, audio],
+            topN: 50, controlK: 0, alreadyLabeled: [],
+            skipAudioOnly: false, rng: &rng
+        )
+        #expect(result.candidates.count == 2)
+        #expect(result.stats.audioOnlySkipped == 0)
+    }
+
+    @Test func round_dropsOverlongVideos() {
+        // Default cap is 60 min = 3600s
+        let short = makeRec(path: "/v/Donna-15min.mov", duration: 15 * 60)
+        let long  = makeRec(path: "/v/Donna-90min.mov", duration: 90 * 60)
+        var rng = SystemRandomNumberGenerator()
+        let result = pfConfirmRound(
+            name: "Donna", records: [short, long],
+            topN: 50, controlK: 0, alreadyLabeled: [],
+            rng: &rng
+        )
+        let paths = result.candidates.map { $0.recordPath }
+        #expect(paths.contains("/v/Donna-15min.mov"))
+        #expect(!paths.contains("/v/Donna-90min.mov"))
+        #expect(result.stats.tooLongSkipped == 1)
+        #expect(result.stats.durationCapMinutes == 60)
+    }
+
+    @Test func round_unknownDurationKeptNotSkipped() {
+        // Legacy codecs sometimes have durationSeconds == 0. The cap
+        // must NOT penalize "unknown duration" by treating it as
+        // infinite.
+        let unknownDur = makeRec(path: "/v/Donna-legacy.mov", duration: 0)
+        var rng = SystemRandomNumberGenerator()
+        let result = pfConfirmRound(
+            name: "Donna", records: [unknownDur],
+            topN: 50, controlK: 0, alreadyLabeled: [],
+            rng: &rng
+        )
+        #expect(result.candidates.count == 1)
+        #expect(result.stats.tooLongSkipped == 0)
+    }
+
+    @Test func round_durationCapIsConfigurable() {
+        let m20 = makeRec(path: "/v/Donna-20min.mov", duration: 20 * 60)
+        var rng = SystemRandomNumberGenerator()
+        let strict = pfConfirmRound(
+            name: "Donna", records: [m20],
+            topN: 50, controlK: 0, alreadyLabeled: [],
+            durationCapSec: 15 * 60, rng: &rng
+        )
+        #expect(strict.candidates.isEmpty)
+        #expect(strict.stats.tooLongSkipped == 1)
+        #expect(strict.stats.durationCapMinutes == 15)
+    }
+
+    @Test func round_fuzzyDedupCollapsesTranscodedCopies() {
+        // Same source video transcoded to two formats: different
+        // basename, different size, different MD5 — but same duration
+        // and creation timestamp. The fuzzy pass should collapse them.
+        let date = Date(timeIntervalSince1970: 1700000000)
+        let prores = makeRec(
+            path: "/V1/Donna_birthday.mov", filename: "Donna_birthday.mov",
+            md5: "", size: 5_000_000, duration: 612.5, dateCreated: date
+        )
+        let hevc = makeRec(
+            path: "/V2/Donna_birthday.mp4", filename: "Donna_birthday.mp4",
+            md5: "", size: 1_200_000, duration: 612.5, dateCreated: date
+        )
+        var rng = SystemRandomNumberGenerator()
+        let result = pfConfirmRound(
+            name: "Donna", records: [prores, hevc],
+            topN: 50, controlK: 0, alreadyLabeled: [],
+            rng: &rng
+        )
+        #expect(result.candidates.count == 1)
+        #expect(result.stats.fuzzyDupesCollapsed == 1)
+        #expect(result.stats.exactDupesCollapsed == 0)
+        #expect(result.stats.dupesCollapsed == 1)
+    }
+
+    @Test func round_fuzzyDedupRequiresBothDurationAndDate() {
+        // Two records with the same duration but no dateCreated must
+        // NOT collapse — the catalog has plenty of unrelated videos
+        // with similar runtimes.
+        let a = makeRec(
+            path: "/V/donna-a.mov", filename: "donna-a.mov",
+            duration: 600, dateCreated: nil
+        )
+        let b = makeRec(
+            path: "/V/donna-b.mov", filename: "donna-b.mov",
+            duration: 600, dateCreated: nil
+        )
+        var rng = SystemRandomNumberGenerator()
+        let result = pfConfirmRound(
+            name: "Donna", records: [a, b],
+            topN: 50, controlK: 0, alreadyLabeled: [],
+            rng: &rng
+        )
+        #expect(result.candidates.count == 2)
+        #expect(result.stats.fuzzyDupesCollapsed == 0)
+    }
+
+    @Test func round_fuzzyDedupKeepsDifferentDurations() {
+        let date = Date(timeIntervalSince1970: 1700000000)
+        let twoMin = makeRec(
+            path: "/V/donna-2min.mov", filename: "donna-2min.mov",
+            duration: 120, dateCreated: date
+        )
+        let fiveMin = makeRec(
+            path: "/V/donna-5min.mov", filename: "donna-5min.mov",
+            duration: 300, dateCreated: date  // same date, very different duration
+        )
+        var rng = SystemRandomNumberGenerator()
+        let result = pfConfirmRound(
+            name: "Donna", records: [twoMin, fiveMin],
+            topN: 50, controlK: 0, alreadyLabeled: [],
+            rng: &rng
+        )
+        #expect(result.candidates.count == 2)
     }
 
     @Test func round_statsReportSurfacedCount() {

@@ -50,10 +50,23 @@ struct ConfirmSetupPane: View {
                 .font(.subheadline.weight(.medium))
             statRow(symbol: "magnifyingglass", color: .blue,
                     text: "\(s.candidatesSurfaced) candidates surfaced by catalog signal")
-            statRow(symbol: "arrow.triangle.merge", color: .secondary,
-                    text: "\(s.dupesCollapsed) duplicates collapsed (same content across volumes)")
-            statRow(symbol: "checkmark.seal", color: .green,
-                    text: "\(s.alreadyLabeled) already labeled in prior rounds \u{2014} skipped")
+            if s.dupesCollapsed > 0 {
+                let breakdown = "\(s.exactDupesCollapsed) exact + \(s.fuzzyDupesCollapsed) transcoded"
+                statRow(symbol: "arrow.triangle.merge", color: .secondary,
+                        text: "\(s.dupesCollapsed) duplicates collapsed (\(breakdown))")
+            }
+            if s.audioOnlySkipped > 0 {
+                statRow(symbol: "waveform.slash", color: .secondary,
+                        text: "\(s.audioOnlySkipped) audio-only \u{2014} skipped (no video to review)")
+            }
+            if s.tooLongSkipped > 0 {
+                statRow(symbol: "hourglass", color: .secondary,
+                        text: "\(s.tooLongSkipped) over \(s.durationCapMinutes) min \u{2014} skipped")
+            }
+            if s.alreadyLabeled > 0 {
+                statRow(symbol: "checkmark.seal", color: .green,
+                        text: "\(s.alreadyLabeled) already labeled in prior rounds \u{2014} skipped")
+            }
             if s.offlineSkipped > 0 {
                 statRow(
                     symbol: "externaldrive.badge.exclamationmark", color: .orange,

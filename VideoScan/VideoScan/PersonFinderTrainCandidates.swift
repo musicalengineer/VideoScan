@@ -153,17 +153,30 @@ nonisolated private func countOccurrences(of needle: String, in haystack: String
 /// Stats reported back to the UI alongside the round itself, so the
 /// setup pane can show the user what was filtered out and why.
 struct ConfirmRoundStats {
-    /// Distinct records that scored positively (before dedup or
-    /// offline filtering). The "universe" of catalog-surfaced
-    /// candidates.
+    /// Distinct records that scored positively (before any filter).
+    /// The "universe" of catalog-surfaced candidates.
     let candidatesSurfaced: Int
     /// Records collapsed because they were duplicates of another
-    /// candidate that was kept (e.g., same MP4 on three different
-    /// volumes). Surfaced so the user knows how aggressive dedup was.
+    /// candidate that was kept (exact dedup + fuzzy dedup combined).
     let dupesCollapsed: Int
+    /// Exact-dedup hits — same content by MD5 / duplicateGroupID /
+    /// basename+size. Cross-volume copies of the same file.
+    let exactDupesCollapsed: Int
+    /// Fuzzy-dedup hits — same content across formats (different MD5
+    /// and size, but matching duration + creation timestamp). Catches
+    /// transcoded copies the exact pass misses. Rick 2026-06-17.
+    let fuzzyDupesCollapsed: Int
+    /// Records skipped because they have no video track (audio-only
+    /// or no-stream). Can't have a visible person, so excluded from
+    /// the round. Rick 2026-06-17.
+    let audioOnlySkipped: Int
+    /// Records skipped because their duration exceeds `durationCapSec`.
+    /// Too long → too many people / too many things going on for a
+    /// rating to be meaningful. Rick 2026-06-17.
+    let tooLongSkipped: Int
+    /// The duration cap applied this round, in minutes (for display).
+    let durationCapMinutes: Int
     /// Records skipped because their volume isn't currently mounted.
-    /// We surface the count AND the list of volume names so the user
-    /// can decide whether to plug something in and re-run.
     let offlineSkipped: Int
     let offlineVolumes: [String]
     /// Records skipped because the user already labeled them in a
@@ -172,8 +185,15 @@ struct ConfirmRoundStats {
 }
 
 /// Wraps `pfCandidatesForPerson` with the round-assembly policy:
-///   - Dedup by (md5 OR duplicateGroupID OR basename+size) — keep one
-///     canonical per group; prefer reachable + highest-score.
+///   - Drop audio-only / no-stream records (can't have a visible
+///     person — there's no video track).
+///   - Drop records longer than `durationCapSec` (long videos have
+///     too many people / too much going on for a rating to be
+///     useful — Rick 2026-06-17).
+///   - Exact dedup by (md5 OR duplicateGroupID OR basename+size).
+///   - Fuzzy dedup by (duration + dateCreated) to catch transcoded
+///     copies the exact pass misses (different MD5 + different size
+///     but same source content).
 ///   - Drop offline candidates so the user only rates what they can
 ///     watch.
 ///   - Drop already-labeled candidates (idempotency).
@@ -182,13 +202,15 @@ struct ConfirmRoundStats {
 ///
 /// Returns both the candidates AND the stats so the setup pane can
 /// surface counts like "180 candidates · 47 dupes collapsed · 12
-/// offline."
+/// offline · 5 too long · 3 audio-only".
 nonisolated func pfConfirmRound(
     name: String,
     records: [VideoRecord],
     topN: Int,
     controlK: Int,
     alreadyLabeled: Set<String>,
+    durationCapSec: Double = 3600,   // 60 min default
+    skipAudioOnly: Bool = true,
     rng: inout SystemRandomNumberGenerator
 ) -> (candidates: [PersonCandidateScore], stats: ConfirmRoundStats) {
     let scoredAll = pfCandidatesForPerson(name: name, records: records)
@@ -197,38 +219,86 @@ nonisolated func pfConfirmRound(
 
     let fresh = scoredAll.filter { !alreadyLabeled.contains($0.recordPath) }
 
-    // --- Dedup pass ---
-    // Group by an identity key that survives cross-volume duplicates.
-    // Prefer MD5 (when probed) → duplicateGroupID (when correlated) →
-    // basename+size (last-resort heuristic). Keep one representative
-    // per group: reachable wins over offline, higher score wins ties.
-    var byKey: [String: PersonCandidateScore] = [:]
-    var dupesCollapsed = 0
-    // We need the underlying VideoRecord to look up md5 /
-    // duplicateGroupID / sizeBytes, so build a path → record map.
+    // Build path → rec lookup; reused by every filter / dedup pass.
     var byPath: [String: VideoRecord] = [:]
     byPath.reserveCapacity(records.count)
     for rec in records { byPath[rec.fullPath] = rec }
 
-    for cand in fresh {
-        let rec = byPath[cand.recordPath]
-        let key = dedupKey(for: rec, fallback: cand.filename)
-        if let existing = byKey[key] {
-            dupesCollapsed += 1
-            // Replace if this one is preferable (reachable wins over
-            // offline; higher score wins ties).
-            let replace: Bool = {
-                if cand.reachable && !existing.reachable { return true }
-                if existing.reachable && !cand.reachable { return false }
-                return cand.score > existing.score
-            }()
-            if replace { byKey[key] = cand }
-        } else {
-            byKey[key] = cand
+    // --- Audio-only / no-stream filter ---
+    // Records without a video track can't have a visible person, so
+    // they don't belong in a visual-confirmation round. Strictly
+    // pre-dedup so we don't lose a video-track copy to an audio-only
+    // duplicate winning the canonical slot.
+    var audioOnlySkipped = 0
+    let withVideoTrack: [PersonCandidateScore]
+    if skipAudioOnly {
+        withVideoTrack = fresh.filter { cand in
+            guard let rec = byPath[cand.recordPath] else { return true }
+            let st = rec.streamType
+            let hasVideo = (st == .videoAndAudio || st == .videoOnly)
+            if !hasVideo { audioOnlySkipped += 1 }
+            return hasVideo
         }
+    } else {
+        withVideoTrack = fresh
     }
 
-    let deduped = Array(byKey.values).sorted { $0.score > $1.score }
+    // --- Duration cap filter ---
+    // Records longer than the cap are excluded with a counted skip.
+    // durationSeconds == 0 means "unknown" — we KEEP those rather
+    // than penalize records where the probe couldn't measure
+    // duration (e.g., legacy codecs).
+    var tooLongSkipped = 0
+    let withinDuration = withVideoTrack.filter { cand in
+        guard let rec = byPath[cand.recordPath] else { return true }
+        let dur = rec.durationSeconds
+        if dur > 0 && dur > durationCapSec {
+            tooLongSkipped += 1
+            return false
+        }
+        return true
+    }
+
+    // --- Exact dedup pass ---
+    // Group by MD5 → duplicateGroupID → basename+size. Catches
+    // cross-volume copies of the same byte-stream.
+    var byExactKey: [String: PersonCandidateScore] = [:]
+    var exactDupesCollapsed = 0
+    for cand in withinDuration {
+        let rec = byPath[cand.recordPath]
+        let key = dedupKey(for: rec, fallback: cand.filename)
+        if let existing = byExactKey[key] {
+            exactDupesCollapsed += 1
+            if preferReplace(cand: cand, existing: existing) {
+                byExactKey[key] = cand
+            }
+        } else {
+            byExactKey[key] = cand
+        }
+    }
+    let exactDeduped = Array(byExactKey.values)
+
+    // --- Fuzzy dedup pass ---
+    // Same source content in different formats: same duration, very
+    // close creation timestamp, but different MD5 + size. Bucket by
+    // (duration in 0.5s, date in 60s). Records missing either
+    // duration or dateCreated get a path-unique key so they can't
+    // accidentally collapse together. Rick 2026-06-17.
+    var byFuzzyKey: [String: PersonCandidateScore] = [:]
+    var fuzzyDupesCollapsed = 0
+    for cand in exactDeduped {
+        let rec = byPath[cand.recordPath]
+        let key = fuzzyDedupKey(for: rec, fallbackPath: cand.recordPath)
+        if let existing = byFuzzyKey[key] {
+            fuzzyDupesCollapsed += 1
+            if preferReplace(cand: cand, existing: existing) {
+                byFuzzyKey[key] = cand
+            }
+        } else {
+            byFuzzyKey[key] = cand
+        }
+    }
+    let deduped = Array(byFuzzyKey.values).sorted { $0.score > $1.score }
 
     // --- Offline filter ---
     let offlineCandidates = deduped.filter { !$0.reachable }
@@ -268,12 +338,44 @@ nonisolated func pfConfirmRound(
 
     let stats = ConfirmRoundStats(
         candidatesSurfaced: candidatesSurfaced,
-        dupesCollapsed: dupesCollapsed,
+        dupesCollapsed: exactDupesCollapsed + fuzzyDupesCollapsed,
+        exactDupesCollapsed: exactDupesCollapsed,
+        fuzzyDupesCollapsed: fuzzyDupesCollapsed,
+        audioOnlySkipped: audioOnlySkipped,
+        tooLongSkipped: tooLongSkipped,
+        durationCapMinutes: Int(durationCapSec / 60),
         offlineSkipped: offlineCandidates.count,
         offlineVolumes: offlineVolumes,
         alreadyLabeled: alreadyLabeledMatches
     )
     return (positives + controlScores, stats)
+}
+
+/// Replace-existing predicate for the dedup passes: reachable wins
+/// over offline; score breaks ties.
+nonisolated private func preferReplace(
+    cand: PersonCandidateScore,
+    existing: PersonCandidateScore
+) -> Bool {
+    if cand.reachable && !existing.reachable { return true }
+    if existing.reachable && !cand.reachable { return false }
+    return cand.score > existing.score
+}
+
+/// Bucket records by (duration ≈ 0.5s, dateCreated ≈ 60s) to catch
+/// transcoded copies the exact dedup pass misses — same source media
+/// re-encoded as ProRes / HEVC / DV will have identical playback
+/// duration and very close creation timestamps even when MD5 and
+/// basename differ. Records that lack EITHER duration or
+/// dateCreatedRaw get a path-unique key so they don't accidentally
+/// collapse together.
+nonisolated private func fuzzyDedupKey(for rec: VideoRecord?, fallbackPath: String) -> String {
+    guard let rec, rec.durationSeconds > 0, let d = rec.dateCreatedRaw else {
+        return "fpath:\(fallbackPath)"
+    }
+    let durKey = Int(rec.durationSeconds * 2)
+    let dateKey = Int(d.timeIntervalSince1970 / 60)
+    return "fuzzy:\(durKey)|\(dateKey)"
 }
 
 /// Build a dedup key from the strongest available identity signal.
