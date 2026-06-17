@@ -122,10 +122,22 @@ final class ValidationLabelStore: ObservableObject {
         var signalsByPositive: [String: Int] = [:]
         for r in rows {
             counts[r.rating, default: 0] += 1
-            if r.rating.writebackTier != .none {
+            // signalsByPositive answers "which catalog signals flagged
+            // the videos the user CONFIRMED are real positives?" Only
+            // .definitely and .likely count — .no records also have a
+            // writeback tier (.rejected) but their signals are
+            // examples of FALSE positives, not positives, and would
+            // skew the precision-by-signal numbers in View
+            // Confirmations. .cameo has no catalog writeback at all,
+            // but the person IS visible per the rating, so includes
+            // it as a soft positive for signal-precision purposes.
+            switch r.rating {
+            case .definitely, .likely, .cameo:
                 for s in r.signals {
                     signalsByPositive[s, default: 0] += 1
                 }
+            case .no, .unsure, .unlikely:
+                break
             }
         }
         return RoundSummary(
