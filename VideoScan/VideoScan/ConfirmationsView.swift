@@ -144,7 +144,7 @@ struct ConfirmationsView: View {
             VStack(spacing: 4) {
                 ForEach(signalPrecision, id: \.signal) { item in
                     HStack {
-                        Image(systemName: symbol(for: item.signal))
+                        Image(systemName: confirmSignalIcon(item.signal))
                             .foregroundColor(.accentColor)
                             .frame(width: 18)
                         Text(item.signal).frame(width: 140, alignment: .leading)
@@ -346,15 +346,6 @@ struct ConfirmationsView: View {
         }
     }
 
-    private func symbol(for signal: String) -> String {
-        if signal.hasPrefix("PF-") || signal == "user-confirmed" { return "person.crop.square" }
-        if signal == "filename" { return "doc" }
-        if signal == "directory" { return "folder" }
-        if signal.hasPrefix("transcript") { return "waveform" }
-        if signal.hasPrefix("captions") { return "text.bubble" }
-        if signal.hasPrefix("ocr") { return "textformat.size" }
-        return "circle"
-    }
 
     private func precisionColor(_ p: Double) -> Color {
         switch p {

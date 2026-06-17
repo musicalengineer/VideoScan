@@ -109,7 +109,12 @@ struct ConfirmPersonSheet: View {
     private var content: some View {
         switch phase {
         case .setup:
-            setupView
+            ConfirmSetupPane(
+                personName: profile.name,
+                stats: stats,
+                availOnline: fullCandidatePool.filter { $0.reachable }.count,
+                roundSize: $roundSize
+            )
         case .labeling:
             if candidates.isEmpty {
                 emptyState
@@ -124,104 +129,11 @@ struct ConfirmPersonSheet: View {
                 .padding(.vertical, 12)
             }
         case .summary:
-            summaryView
+            let summary = personFinderModel.validationLabels.roundSummary(
+                for: profile.name, since: roundStart
+            )
+            ConfirmSummaryPane(personName: profile.name, summary: summary)
         }
-    }
-
-    private var setupView: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            if let stats {
-                statsCard(stats)
-            } else {
-                HStack {
-                    ProgressView().controlSize(.small)
-                    Text("Scoring catalog…")
-                        .font(.callout)
-                        .foregroundColor(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .center)
-            }
-            roundSizePicker
-            Spacer()
-        }
-        .padding(20)
-    }
-
-    private func statsCard(_ s: ConfirmRoundStats) -> some View {
-        let availOnline = fullCandidatePool.filter { $0.reachable }.count
-        return VStack(alignment: .leading, spacing: 6) {
-            Text("Available for \(profile.name)")
-                .font(.subheadline.weight(.medium))
-            statRow(symbol: "magnifyingglass", color: .blue,
-                    text: "\(s.candidatesSurfaced) candidates surfaced by catalog signal")
-            statRow(symbol: "arrow.triangle.merge", color: .secondary,
-                    text: "\(s.dupesCollapsed) duplicates collapsed (same content across volumes)")
-            statRow(symbol: "checkmark.seal", color: .green,
-                    text: "\(s.alreadyLabeled) already labeled in prior rounds — skipped")
-            if s.offlineSkipped > 0 {
-                statRow(
-                    symbol: "externaldrive.badge.exclamationmark", color: .orange,
-                    text: "\(s.offlineSkipped) offline — mount " +
-                          s.offlineVolumes.joined(separator: ", ") +
-                          " to include them"
-                )
-            }
-            Divider().padding(.vertical, 4)
-            statRow(symbol: "checkmark.circle", color: .accentColor,
-                    text: "\(availOnline) candidates ready to review now")
-        }
-        .padding(12)
-        .background(Color(NSColor.controlBackgroundColor))
-        .cornerRadius(8)
-    }
-
-    private func statRow(symbol: String, color: Color, text: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: symbol).foregroundColor(color).frame(width: 18)
-            Text(text).font(.callout)
-            Spacer()
-        }
-    }
-
-    private var roundSizePicker: some View {
-        let availOnline = fullCandidatePool.filter { $0.reachable }.count
-        let options: [Int] = {
-            var opts: [Int] = []
-            for size in [10, 25, 50, 100] where size <= availOnline {
-                opts.append(size)
-            }
-            if !opts.contains(availOnline) && availOnline > 0 { opts.append(availOnline) }
-            return opts
-        }()
-        return VStack(alignment: .leading, spacing: 6) {
-            Text("How many would you like to review now?")
-                .font(.subheadline.weight(.medium))
-            HStack(spacing: 8) {
-                ForEach(options, id: \.self) { n in
-                    Button {
-                        roundSize = n
-                    } label: {
-                        Text(n == availOnline ? "All (\(n))" : "\(n)")
-                            .frame(minWidth: 48)
-                            .padding(.vertical, 4)
-                    }
-                    .buttonStyle(.bordered)
-                    .tint(roundSize == n ? .accentColor : .secondary)
-                }
-                Spacer()
-            }
-            // Time estimate — 30 sec/candidate is conservative; real
-            // rates from Rick's rounds were ~12-15 sec/candidate.
-            Text("Estimated time: ~\(estimateMinutes()) minutes")
-                .font(.caption)
-                .foregroundColor(.secondary)
-        }
-    }
-
-    private func estimateMinutes() -> Int {
-        // 25 sec per candidate including thumbnail loads and ratings.
-        let seconds = roundSize * 25
-        return max(1, seconds / 60)
     }
 
     private func thumbnailView(for candidate: PersonCandidateScore) -> some View {
@@ -275,7 +187,7 @@ struct ConfirmPersonSheet: View {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(candidate.signals, id: \.self) { sig in
                     HStack(spacing: 6) {
-                        Image(systemName: iconForSignal(sig))
+                        Image(systemName: confirmSignalIcon(sig))
                             .foregroundColor(.accentColor)
                             .frame(width: 14)
                         Text(sig)
@@ -354,55 +266,6 @@ struct ConfirmPersonSheet: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var summaryView: some View {
-        let summary = personFinderModel.validationLabels.roundSummary(
-            for: profile.name, since: roundStart
-        )
-        return ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                Text("Round summary \u{2014} \(summary.total) labels")
-                    .font(.title3.weight(.semibold))
-                VStack(spacing: 6) {
-                    ForEach(ConfirmRating.userFacing) { rating in
-                        HStack {
-                            Image(systemName: rating.symbol)
-                                .foregroundColor(rating.color)
-                                .frame(width: 18)
-                            Text(rating.rawValue)
-                                .frame(width: 110, alignment: .leading)
-                            Text("\(summary.counts[rating, default: 0])")
-                                .font(.system(.body, design: .monospaced))
-                            Spacer()
-                        }
-                    }
-                }
-                if !summary.signalsByPositive.isEmpty {
-                    Divider()
-                    Text("Where \(profile.name) was confirmed \u{2014} signal sources")
-                        .font(.subheadline.weight(.medium))
-                    ForEach(summary.signalsByPositive.sorted { $0.value > $1.value }, id: \.key) { sig, count in
-                        HStack {
-                            Image(systemName: iconForSignal(sig))
-                                .foregroundColor(.accentColor)
-                                .frame(width: 18)
-                            Text(sig)
-                                .frame(width: 160, alignment: .leading)
-                            Text("\(count)")
-                                .font(.system(.body, design: .monospaced))
-                            Spacer()
-                        }
-                        .font(.system(size: 12))
-                    }
-                }
-                Text("Catalog updated. Definitely \u{2192} confirmedByUserPeople, Likely \u{2192} suspectedPeople, No \u{2192} rejectedPeople. Cameo labels stay in the training sidecar only \u{2014} they don't elevate the record in search but are remembered.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 4)
-            }
-            .padding(20)
-        }
-    }
 
     private var footer: some View {
         HStack {
@@ -637,14 +500,4 @@ struct ConfirmPersonSheet: View {
         NSWorkspace.shared.selectFile(path, inFileViewerRootedAtPath: "")
     }
 
-    private func iconForSignal(_ signal: String) -> String {
-        if signal.hasPrefix("PF-") || signal == "user-confirmed" { return "person.crop.square" }
-        if signal == "filename" { return "doc" }
-        if signal == "directory" { return "folder" }
-        if signal.hasPrefix("transcript") { return "waveform" }
-        if signal.hasPrefix("captions") { return "text.bubble" }
-        if signal.hasPrefix("ocr") { return "textformat.size" }
-        if signal == "control" { return "minus.circle" }
-        return "circle"
-    }
 }
