@@ -376,30 +376,20 @@ struct CatalogSearchBarTests {
         #expect(!pfRecordFilenameOrPersonMatch(r, query: "kayak"))
     }
 
-    // Intentional non-match: path / directory are NOT searched here, so
-    // typing "Volumes" or a directory name doesn't match every file
-    // under that mount. Keeps the catalog search bar predictable per
-    // the Finder-like heuristic in the helper's doc comment.
-    @Test func pathAndDirectoryAreNotSearched() {
-        let r = VideoRecord()
-        r.filename = "thing.mov"
-        r.fullPath = "/Volumes/MyBook/family/Donna_compilation/thing.mov"
-        r.directory = "/Volumes/MyBook/family/Donna_compilation"
-        // "donna" appears in path/directory only — no filename / tag match.
-        #expect(!pfRecordFilenameOrPersonMatch(r, query: "donna"))
-        // "Volumes" should not match either.
-        #expect(!pfRecordFilenameOrPersonMatch(r, query: "volumes"))
-    }
+    // Directory + volumeName ARE now searched per Rick 2026-06-15
+    // (commit 6246291: "directory + volumeName join the catalog
+    // search haystack"). Folder-based queries like "Cape Cod 1997"
+    // need to match files organized by project folder.
+    // (Test "pathAndDirectoryAreNotSearched" deleted 2026-06-17 —
+    // it asserted the prior design which has been intentionally
+    // reversed.)
 
-    // Semantic-content fields (captions, audio transcripts) ARE
-    // searched — they're "what's in the video" tags, not location
-    // metadata. This is the deliberate distinction from path/directory
-    // above: typing "donna" should find a clip captioned "donna
-    // playing guitar" even if the filename is IMG_4521.MOV, the same
-    // way it finds a clip tagged Donna in detectedPeople. Drives
-    // Rick's 2026-06-03 "Search metadata" request — captions are
-    // currently 0/13,570 populated, so this is greenfield, but lights
-    // up the moment any VLM-captioning run completes.
+    // Semantic-content fields (captions, audio transcripts) are
+    // also searched — they're "what's in the video" tags. Composes
+    // with people-tag matches: typing "donna" should find a clip
+    // captioned "donna playing guitar" even if the filename is
+    // IMG_4521.MOV. Drives Rick's 2026-06-03 "Search metadata"
+    // request.
     @Test func sceneCaptionTextIsSearched() {
         let r = VideoRecord()
         r.filename = "IMG_4521.MOV"
@@ -813,20 +803,14 @@ struct CatalogSearchTokenizeAndTests {
         #expect(pfRecordFilenameOrPersonMatch(r, query: "donna beach") == true)
     }
 
-    // MARK: - Design boundary: catalog bar must NOT match path/dir/codec/notes
+    // MARK: - Design boundary: catalog bar must NOT match codec/notes
 
-    @Test func pathIsNOTSearched_preventsMatthewDirectoryFalsePositive() {
-        // The whole reason the catalog bar uses the narrow field set
-        // instead of universal search: typing "matt" should NOT find
-        // EVERY file in a /Matthew/ directory. This test pins that
-        // intentional design boundary.
-        let r = record(
-            filename: "random_file.mov",
-            path: "/Volumes/X/Matthew/Vacation/random_file.mov",
-            directory: "/Volumes/X/Matthew/Vacation"
-        )
-        #expect(pfRecordFilenameOrPersonMatch(r, query: "matthew") == false)
-    }
+    // ("pathIsNOTSearched_preventsMatthewDirectoryFalsePositive"
+    // deleted 2026-06-17. Directory IS searched now per commit
+    // 6246291 — folder-based queries are first-class. The tradeoff
+    // Rick accepted: typing "matt" can surface every file under a
+    // /Matthew/ folder, but folder-organized projects become
+    // findable, which is the more common workflow.)
 
     @Test func codecIsNOTSearched() {
         let r = record(videoCodec: "hevc")
