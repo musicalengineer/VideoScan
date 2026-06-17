@@ -177,6 +177,20 @@ enum CorrelationScorer {
             vKey = ""  // computed per-candidate below
         }
 
+        // Issue #101: the user-facing Repair Audio path must NOT
+        // surface pairs whose entire score comes from duration +
+        // timestamp coincidence. In a 16k-record catalog, plenty of
+        // unrelated A and V files have similar duration and creation
+        // time by chance — Rick's Donna_by_decade demo was paired
+        // with an unrelated Avid orphan MXF on exactly that basis.
+        //
+        // For findBestPair, require at least one STRUCTURAL signal
+        // (path-level or persistent metadata): filename, directory,
+        // timecode, or tape. Bulk correlation (scoreCorrelatePair
+        // direct callers) keeps the original score >= 3 threshold —
+        // it has the broader correlation context and can tolerate
+        // duration-only pairs in well-bounded pools.
+        let structuralSignals: Set<String> = ["filename", "directory", "timecode", "tape"]
         var best: Candidate?
         for other in opposites {
             let video = isVideo ? record : other
@@ -187,6 +201,8 @@ enum CorrelationScorer {
                 durationTolerance: durationTolerance,
                 timestampTolerance: timestampTolerance
             ) {
+                let hasStructural = !Set(cand.reasons).isDisjoint(with: structuralSignals)
+                guard hasStructural else { continue }
                 if cand.score > (best?.score ?? -1) {
                     best = cand
                 }
