@@ -237,6 +237,51 @@ struct RelocateIntegrationTests {
         #expect(model.dashboard.relocateSucceeded == 0)  // no copy needed
     }
 
+    // Regression: a record left .salvageFailed by a PRIOR attempt (e.g. the
+    // source drive was momentarily unreadable) must have that stale terminal
+    // stage CLEARED when a later run successfully re-copies and verifies it.
+    // Mirrors the real RicksBackups batch (2026-06-19): 97 files copied +
+    // verified but stayed flagged "Salvage Failed" because the success path
+    // rewrote fullPath/hash without resetting archiveStage. Note the record
+    // has originalFullPath == nil — a failed attempt never set it — so it is
+    // still in scope even with skipAlreadyRelocated: true.
+    @Test
+    func successClearsStaleSalvageFailedStageFromPriorAttempt() async throws {
+        let ws = try Self.makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: ws.root) }
+
+        let src = ws.source.appendingPathComponent("recovered.bin")
+        let (sz, md5) = try writeFile(at: src, bytes: 2048)
+        let rec = makeRecord(fullPath: src.path, size: sz, md5: md5)
+        // Simulate the leftover state from a prior failed salvage.
+        rec.archiveStage = .salvageFailed
+        rec.notes = "Migrate 2026-06-16T00:00:00Z: preRead — cannot open source: No such file or directory"
+
+        let model = VideoScanModel()
+        model.catalogStore = CatalogStore(directory: ws.catalog)
+        model.records = [rec]
+        model.catalogStore.saveNow(records: [rec])
+
+        model.relocateVolume(RelocateOptions(
+            sourceVolumeRootPath: ws.source.path,
+            destinationRoot: ws.dest,
+            maxConcurrency: 1,
+            dryRun: false,
+            skipAlreadyRelocated: true
+        ))
+        await waitForRelocateDone(model)
+
+        // File moved + verified...
+        #expect(rec.fullPath.hasPrefix(ws.dest.path))
+        #expect(FileManager.default.fileExists(atPath: rec.fullPath))
+        #expect(rec.originalFullPath == src.path)
+        #expect(model.dashboard.relocateSucceeded == 1)
+        #expect(model.dashboard.relocateSalvageFailed == 0)
+        // ...and the stale terminal stage is cleared, with a recovery note.
+        #expect(rec.archiveStage == .none)
+        #expect(rec.notes.contains("salvage recovered"))
+    }
+
     @Test
     func previouslyRelocatedRecordIsSkippedWhenOptionSet() async throws {
         let ws = try Self.makeWorkspace()

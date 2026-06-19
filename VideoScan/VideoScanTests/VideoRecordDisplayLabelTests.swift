@@ -73,3 +73,57 @@ struct VideoRecordDisplayLabelTests {
         #expect(rec.displayVolumeLabel == "MyBook > summer")
     }
 }
+
+// Covers `VideoRecord.volumeName` for RELOCATED records: a file moved off its
+// scan volume must report the volume it physically lives on NOW, not the one it
+// was scanned from. Regression for the 2026-06-19 spot-test finding where 1,474
+// files moved RicksBackups → LaCie still showed "RicksBackups" in the Volume
+// column because volumeName trusted the stale scanContext.volumeName.
+@Suite("VideoRecord.volumeName (relocated)")
+struct VideoRecordRelocatedVolumeNameTests {
+
+    private func makeRecord(scanVolume: String, fullPath: String,
+                            originalFullPath: String?) -> VideoRecord {
+        let rec = VideoRecord()
+        rec.fullPath = fullPath
+        rec.originalFullPath = originalFullPath
+        var ctx = ScanContext()
+        ctx.volumeName = scanVolume
+        rec.scanContext = ctx
+        return rec
+    }
+
+    @Test func relocatedRecordReportsCurrentVolumeNotScanVolume() {
+        // Scanned on RicksBackups, relocated to LaCieWorkspace. The Volume
+        // column must read the CURRENT volume.
+        let rec = makeRecord(
+            scanVolume: "RicksBackups",
+            fullPath: "/Volumes/LaCieWorkspace/Movies/EppyDot.mov",
+            originalFullPath: "/Volumes/RicksBackups/RicksHomeBackup/Movies/EppyDot.mov"
+        )
+        #expect(rec.volumeName == "LaCieWorkspace")
+    }
+
+    @Test func nonRelocatedRecordStillUsesScanContextVolume() {
+        // Regression guard: untouched records keep the authoritative
+        // scanContext.volumeName (correct even when the volume is offline).
+        let rec = makeRecord(
+            scanVolume: "RicksBackups",
+            fullPath: "/Volumes/RicksBackups/RicksHomeBackup/Movies/EppyDot.mov",
+            originalFullPath: nil
+        )
+        #expect(rec.volumeName == "RicksBackups")
+    }
+
+    @Test func relocatedRecordWithUnparseableDestFallsBackToScanVolume() {
+        // Defensive: if the new path can't yield a volume name (bare filename
+        // → empty derived), don't blank the column — fall back to the stored
+        // scan volume rather than returning "".
+        let rec = makeRecord(
+            scanVolume: "RicksBackups",
+            fullPath: "clip.mov",
+            originalFullPath: "/Volumes/RicksBackups/clip.mov"
+        )
+        #expect(rec.volumeName == "RicksBackups")
+    }
+}

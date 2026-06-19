@@ -483,6 +483,19 @@ class VideoRecord: Identifiable, Codable {
     /// volume is offline. Falls back to path-component parsing for legacy
     /// records scanned before this field existed.
     var volumeName: String {
+        // A relocated record physically lives wherever fullPath now points —
+        // not where it was originally scanned. originalFullPath is set only by
+        // Relocate, so for those records derive the volume from the CURRENT
+        // path. Without this the catalog Volume column keeps showing the origin
+        // volume (files moved RicksBackups → LaCie still read "RicksBackups").
+        // volumeName(forPath:) is pure string parsing, so it stays correct even
+        // when the destination volume is offline. (Bug found 2026-06-19 while
+        // spot-testing the RicksBackups → LaCie salvage move: 1,474 relocated
+        // files showed their old volume in the Volume column.)
+        if originalFullPath != nil {
+            let derived = VolumeReachability.volumeName(forPath: fullPath)
+            if !derived.isEmpty { return derived }
+        }
         if !scanContext.volumeName.isEmpty { return scanContext.volumeName }
         return VolumeReachability.volumeName(forPath: fullPath)
     }

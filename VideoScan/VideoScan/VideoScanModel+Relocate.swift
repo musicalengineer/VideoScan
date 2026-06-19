@@ -407,6 +407,21 @@ extension VideoScanModel {
                 rec.fullPath = newPath
                 rec.directory = (newPath as NSString).deletingLastPathComponent
                 rec.partialMD5 = newHash
+                // A verified copy clears a stale terminal failure left by a
+                // PRIOR attempt: a record marked .salvageFailed when the
+                // source drive was momentarily unreadable, now successfully
+                // re-copied. Without this the record stays labeled "Salvage
+                // Failed" forever despite being safely relocated — and worse,
+                // could be swept up by any flow that targets salvage-failed
+                // records. Fresh relocates never set archiveStage, so only
+                // previously-failed records are touched. (Bug found 2026-06-19
+                // after re-running the RicksBackups salvage batch: 97 files
+                // copied + verified but stayed flagged Salvage Failed.)
+                if rec.archiveStage == .salvageFailed {
+                    rec.archiveStage = .none
+                    rec.notes = appendNote(rec.notes,
+                        "Migrate \(stamp()): salvage recovered — re-copied and verified")
+                }
                 dashboard.relocateSucceeded += 1
                 dashboard.relocateBytesCopied += bytes
                 log("    ✓ copied \(bytes) bytes in \(String(format: "%.1f", dur))s")
