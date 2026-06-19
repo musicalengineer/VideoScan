@@ -713,14 +713,27 @@ struct TriageView: View {
             .disabled(transcodeBlocked)
             .accessibilityIdentifier("catalog.row.transcodeEditing")
 
-            Button("For Archival (HEVC 10-bit)") {
-                if let r = singleRec {
-                    fileOpsCenter.startTranscode(record: r, preset: .archival, model: model)
-                    openWindow(id: "combine")
+            // Mirrors the catalog row menu: archival nests an HEVC
+            // access copy and a verified FFV1 v3 preservation master.
+            Menu("For Archival…") {
+                Button("Access Copy (HEVC 10-bit)") {
+                    if let r = singleRec {
+                        fileOpsCenter.startTranscode(record: r, preset: .archival, model: model)
+                        openWindow(id: "combine")
+                    }
                 }
+                .disabled(transcodeBlocked)
+                .accessibilityIdentifier("catalog.row.transcodeArchival")
+
+                Button("Preservation Master (FFV1 v3, verified)") {
+                    if let r = singleRec {
+                        fileOpsCenter.startTranscode(record: r, preset: .preservation, model: model)
+                        openWindow(id: "combine")
+                    }
+                }
+                .disabled(transcodeBlocked)
+                .accessibilityIdentifier("catalog.row.transcodePreservation")
             }
-            .disabled(transcodeBlocked)
-            .accessibilityIdentifier("catalog.row.transcodeArchival")
         } label: {
             Label("Transcode", systemImage: "wand.and.rays")
         }

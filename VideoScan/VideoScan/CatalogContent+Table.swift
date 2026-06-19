@@ -360,11 +360,25 @@ extension CatalogContent {
                             .disabled(transcodeBlocked)
                             .accessibilityIdentifier("catalog.row.transcodeEditing")
 
-                            Button("For Archival (HEVC 10-bit)") {
-                                requestTranscode(for: rec, preset: .archival)
+                            // Archival splits into an "access copy"
+                            // (HEVC, everyday viewing) and a verified
+                            // lossless preservation master (FFV1 v3, for
+                            // a possible LoC deposit). Nested so the menu
+                            // doesn't grow flat and the two archival
+                            // intents read as a pair.
+                            Menu("For Archival…") {
+                                Button("Access Copy (HEVC 10-bit)") {
+                                    requestTranscode(for: rec, preset: .archival)
+                                }
+                                .disabled(transcodeBlocked)
+                                .accessibilityIdentifier("catalog.row.transcodeArchival")
+
+                                Button("Preservation Master (FFV1 v3, verified)") {
+                                    requestTranscode(for: rec, preset: .preservation)
+                                }
+                                .disabled(transcodeBlocked)
+                                .accessibilityIdentifier("catalog.row.transcodePreservation")
                             }
-                            .disabled(transcodeBlocked)
-                            .accessibilityIdentifier("catalog.row.transcodeArchival")
                         }
 
                         // Rick 2026-06-14: grey out (don't hide) when
