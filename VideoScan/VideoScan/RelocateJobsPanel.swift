@@ -232,6 +232,8 @@ struct RelocateJobsPanel: View {
         switch job.status {
         case .queued:
             Button("Cancel") { _ = model.cancelRelocateJob(id: job.id) }
+        case .reconciling, .copying:
+            Button("Cancel", role: .destructive) { _ = model.cancelRelocateJob(id: job.id) }
         case .complete:
             if job.summary != nil {
                 Button("Show summary") { summaryToShow = job.summary }

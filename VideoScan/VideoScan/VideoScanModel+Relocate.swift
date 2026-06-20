@@ -267,6 +267,17 @@ extension VideoScanModel {
         logReconcileSummary(reconcile)
         relocateLog.write("Reconcile: ready=\(reconcile.ready.count) adopted=\(reconcile.adopted.count) sourceMoves=\(reconcile.sourceSideMoves.count) safelyRedundant=\(reconcile.safelyRedundant.count) manuallyDeleted=\(reconcile.manuallyDeleted.count) previouslyRelocated=\(reconcile.previouslyRelocated.count)")
 
+        // Cancellation check after reconcile (which can run minutes on a
+        // flaky HDD): stop before touching the catalog so a cancel during
+        // reconcile applies zero changes.
+        if Task.isCancelled {
+            relocateLog.write("Migrate canceled by user during reconcile — no changes applied.")
+            log("Migrate canceled during reconcile — no changes applied.")
+            updateJobStatus(id: jobID, status: .canceled)
+            startNextQueuedJobIfIdle()
+            return
+        }
+
         // Track salvageFailed for the final summary block.
         var salvageFailedPaths: [String] = []
 
@@ -395,7 +406,17 @@ extension VideoScanModel {
         if !toMigrate.isEmpty {
             updateJobStatus(id: jobID, status: .copying)
         }
+        var canceledMidRun = false
         for (i, rec) in toMigrate.enumerated() {
+            // Cooperative cancellation point — between atomic per-file copies.
+            // Everything copied so far is committed + verified and the source
+            // is untouched, so stopping here leaves a clean partial relocate.
+            if Task.isCancelled {
+                canceledMidRun = true
+                relocateLog.write("Migrate canceled by user after \(i) of \(toMigrate.count) file(s) copied.")
+                log("Migrate canceled — stopped after \(i) of \(toMigrate.count) file(s).")
+                break
+            }
             let newPath = Self.rewrittenPath(
                 forSourcePath: rec.fullPath,
                 sourceRoot: options.sourceVolumeRootPath,
@@ -470,6 +491,15 @@ extension VideoScanModel {
             catalogStore.scheduleSave(records: records)
         }
         catalogStore.scheduleSave(records: records)
+        if canceledMidRun {
+            // User canceled mid-copy. What landed is already persisted above;
+            // mark the job canceled, refresh per-volume aggregates, and advance
+            // the queue. No summary sheet — the user already chose to stop.
+            updateJobStatus(id: jobID, status: .canceled)
+            notifyVolumeAggregatesStale()
+            startNextQueuedJobIfIdle()
+            return
+        }
         logRelocateSummary(salvageFailedPaths: salvageFailedPaths)
 
         // Fix 2 — minimum-visible padding before the summary sheet

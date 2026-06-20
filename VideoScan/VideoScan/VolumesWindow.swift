@@ -224,21 +224,10 @@ struct VolumesWindow: View {
                 Button {
                     showRelocateJobsPanel = true
                 } label: {
-                    Label("Migrate Jobs", systemImage: "tray.full")
-                        .overlay(alignment: .topTrailing) {
-                            if model.queuedCount > 0 {
-                                Text("\(model.queuedCount)")
-                                    .font(.caption2.bold())
-                                    .foregroundColor(.white)
-                                    .padding(.horizontal, 4)
-                                    .padding(.vertical, 1)
-                                    .background(Color.red)
-                                    .clipShape(Capsule())
-                                    .offset(x: 8, y: -8)
-                            }
-                        }
+                    RelocateJobsBadge(activeCount: model.activeJobCount,
+                                      runningCount: model.runningCount)
                 }
-                .help("Queue of Migrate runs — kick off several and walk away.")
+                .help("Queue of Migrate runs — kick off several and walk away. A running job stays here after you Hide its progress; cancel or monitor it from this panel.")
                 .accessibilityIdentifier("volumesWindow.relocateJobs")
             }
         }

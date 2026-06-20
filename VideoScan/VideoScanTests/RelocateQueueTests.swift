@@ -254,10 +254,10 @@ struct RelocateQueueTests {
         #expect(model.queuedCount == 0)
     }
 
-    // MARK: - 5. cancelRelocateJob_runningJob_isNoOp
+    // MARK: - 5. cancelRelocateJob_runningJob_cancelsCooperatively
 
     @Test
-    func cancelRelocateJob_runningJob_isNoOp() async throws {
+    func cancelRelocateJob_runningJob_cancelsCooperatively() async throws {
         let ws = try Self.makeWorkspace()
         defer { try? FileManager.default.removeItem(at: ws.root) }
         let (model, _, options) = try makeOneJobModel(ws: ws)
@@ -268,16 +268,49 @@ struct RelocateQueueTests {
             options: options
         ))
 
-        // Job is at least .reconciling now.
+        // Job is at least .reconciling now. Cancelling a RUNNING job now
+        // works (cooperative between-files cancel) — it returns true and the
+        // runner converges to .canceled at its next cancellation point. (This
+        // replaces the old v1 "running cancel is a no-op" contract.)
         let canceled = model.cancelRelocateJob(id: id)
-        #expect(canceled == false, "v1 has no mid-run cancel")
-        let status = model.relocateQueue.first { $0.id == id }?.status
-        #expect(status != .canceled)
+        #expect(canceled == true)
 
-        // Let it complete cleanly so test cleanup doesn't strand
-        // anything.
-        await waitForCurrentJobDone(model)
-        model.acknowledgeRelocateSummary()
+        let deadline = Date().addingTimeInterval(30)
+        while model.relocateQueue.first(where: { $0.id == id })?.status != .canceled,
+              Date() < deadline {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        #expect(model.relocateQueue.first { $0.id == id }?.status == .canceled)
+        // A canceled run advances the queue without a summary to acknowledge.
+        #expect(model.pendingRelocateSummary == nil)
+    }
+
+    // MARK: - 5b. activeJobCount (toolbar-badge source of truth)
+
+    @Test
+    func activeJobCount_countsQueuedAndRunning_excludesTerminal() {
+        let model = VideoScanModel()
+        let dest = URL(fileURLWithPath: "/Volumes/Dest")
+        let opts = RelocateOptions(sourceVolumeRootPath: "/Volumes/Src", destinationRoot: dest)
+        func job(_ status: RelocateJobStatus) -> RelocateQueuedJob {
+            RelocateQueuedJob(sourceVolumeRootPath: "/Volumes/Src", sourceVolumeName: "Src",
+                              destinationRoot: dest, options: opts, status: status)
+        }
+
+        // A lone running job (nothing queued) must still register — that's the
+        // breadcrumb the old queuedCount-only badge missed.
+        model.relocateQueue = [job(.copying)]
+        #expect(model.activeJobCount == 1)
+        #expect(model.queuedCount == 0)
+
+        model.relocateQueue = [
+            job(.queued), job(.reconciling), job(.copying),
+            job(.complete), job(.failed(reason: "x")), job(.canceled)
+        ]
+        // queued + reconciling + copying = 3 active; the three terminal excluded.
+        #expect(model.activeJobCount == 3)
+        #expect(model.runningCount == 2)   // reconciling + copying are in-flight
+        #expect(model.queuedCount == 1)
     }
 
     // MARK: - 6. clearCompletedJobs

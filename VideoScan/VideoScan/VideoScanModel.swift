@@ -24,6 +24,12 @@ final class VideoScanModel: ObservableObject {
     /// `VideoScanModel+RelocateQueue.swift` and
     /// docs/relocate_volume_plan.md §3.
     @Published var relocateQueue: [RelocateQueuedJob] = []
+    /// Handle to the currently-running relocate runner Task, retained so
+    /// the user can cancel an in-flight job. Cancellation is cooperative:
+    /// `runRelocate`'s copy loop checks `Task.isCancelled` between files
+    /// (see `cancelActiveRelocate()`). Not `@Published` — it's an internal
+    /// control handle, not view state.
+    var relocateRunnerTask: Task<Void, Never>?
     /// True while any queued job is in flight. Replaces the prior stored
     /// `isRelocating: Bool` — kept as a computed property so existing UI
     /// gating (`disabled(model.isRelocating)`, the in-flight progress

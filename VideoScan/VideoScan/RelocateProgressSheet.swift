@@ -69,10 +69,17 @@ struct RelocateProgressSheet: View {
     /// Migrate Jobs panel toolbar badge.
     private var footer: some View {
         HStack {
+            Button("Cancel Migrate", role: .destructive) {
+                model.cancelActiveRelocate()
+            }
+            .help("Stop after the current file finishes. Files already copied stay safely in place; the source is never touched.")
+            .accessibilityIdentifier("relocateProgress.cancel")
+
             Spacer()
+
             Button("Hide", action: onHide)
                 .keyboardShortcut(.cancelAction)
-                .help("Close this sheet — the job keeps running. Open Migrate Jobs to monitor or add another volume to the queue.")
+                .help("Close this sheet — the job keeps running. It stays in Migrate Jobs (Volumes window), where you can monitor, cancel, or queue another volume.")
                 .accessibilityIdentifier("relocateProgress.hide")
         }
     }

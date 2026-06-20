@@ -63,26 +63,49 @@ extension VideoScanModel {
         return job.id
     }
 
-    /// Cancel a `.queued` job. Running/terminal jobs are left alone —
-    /// returns `false` so callers can show a "couldn't cancel" hint if
-    /// they care. v1 has no mid-copy abort (intentional: a partial copy
-    /// has unclear semantics, and the per-file engine already verifies
-    /// before committing). Documented in §3 of the plan.
+    /// Cancel a relocate job.
+    ///  - A `.queued` job is removed immediately.
+    ///  - An in-flight job (`.reconciling` / `.copying`) is canceled
+    ///    *cooperatively*: the runner stops after the current file, so every
+    ///    already-copied file stays fully committed and verified and the
+    ///    source is never touched — a clean partial relocate. (This is the
+    ///    between-files cancel that the original "no mid-copy abort" note
+    ///    was waiting on: stopping between atomic per-file copies has clear
+    ///    semantics, unlike aborting a single file mid-write.)
+    ///  - A job `.awaitingDone` (work finished, summary up) or already
+    ///    terminal can't be canceled — returns false.
     @discardableResult
     func cancelRelocateJob(id: UUID) -> Bool {
         guard let idx = relocateQueue.firstIndex(where: { $0.id == id }) else {
             return false
         }
-        guard relocateQueue[idx].status == .queued else {
+        switch relocateQueue[idx].status {
+        case .queued:
+            var job = relocateQueue[idx]
+            job.status = .canceled
+            job.completedAt = Date()
+            relocateQueue[idx] = job
+            log("Migrate canceled (queued): \(job.sourceVolumeName)")
+            return true
+        case .reconciling, .copying:
+            cancelActiveRelocate()
+            return true
+        default:
             log("Migrate cancel ignored: job \(id) is \(relocateQueue[idx].statusLabel).")
             return false
         }
-        var job = relocateQueue[idx]
-        job.status = .canceled
-        job.completedAt = Date()
-        relocateQueue[idx] = job
-        log("Migrate canceled (queued): \(job.sourceVolumeName)")
-        return true
+    }
+
+    /// Request cooperative cancellation of the in-flight relocate. Cancels
+    /// the runner Task; `runRelocate`'s copy loop observes `Task.isCancelled`
+    /// and stops after the current file, marks the job `.canceled`, and
+    /// advances the queue. No-op when nothing is actively reconciling/copying.
+    func cancelActiveRelocate() {
+        guard relocateQueue.contains(where: {
+            $0.status == .reconciling || $0.status == .copying
+        }) else { return }
+        relocateRunnerTask?.cancel()
+        log("Migrate cancel requested — stopping after the current file completes.")
     }
 
     /// Drop all `.complete` / `.failed` / `.canceled` entries from the
@@ -101,6 +124,12 @@ extension VideoScanModel {
 
     var queuedCount:      Int { relocateQueue.filter { $0.status == .queued }.count }
     var runningCount:     Int { relocateQueue.filter { $0.isInFlight }.count }
+    /// Jobs still needing attention — anything not yet terminal (queued OR
+    /// in flight). This is what the toolbar badge counts so a *hidden but
+    /// still running* job always leaves a visible breadcrumb, even when
+    /// nothing is queued behind it. (Previously the badge used queuedCount
+    /// alone, so a lone running job showed no badge at all.)
+    var activeJobCount:   Int { relocateQueue.filter { !$0.isTerminal }.count }
     var completedCount:   Int { relocateQueue.filter { $0.status == .complete }.count }
     var failedCount: Int {
         relocateQueue.filter {
@@ -140,7 +169,10 @@ extension VideoScanModel {
         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         """)
 
-        Task { @MainActor [weak self] in
+        // Retain the runner Task so the user can cancel an in-flight job.
+        // Cancellation is cooperative — runRelocate's copy loop polls
+        // Task.isCancelled between files (see cancelActiveRelocate()).
+        relocateRunnerTask = Task { @MainActor [weak self] in
             guard let self else { return }
             await self.runRelocate(jobID: jobID)
             // Note: we do NOT advance the queue here. The job flips to
