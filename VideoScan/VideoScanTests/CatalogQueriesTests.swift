@@ -413,6 +413,31 @@ struct CatalogSearchBarTests {
         #expect(!pfRecordFilenameOrPersonMatch(r, query: "graduation"))
     }
 
+    // MARK: - Volume filter membership (current location only)
+
+    @Test func volumeFilterMatchesCurrentLocationNotOrigin() {
+        // A relocated file: physically on LaCie now, originated on RicksBackups.
+        let moved = VideoRecord()
+        moved.fullPath = "/Volumes/LaCieWorkspace/Movies/EppyDot.mov"
+        moved.originalFullPath = "/Volumes/RicksBackups/RicksHomeBackup/Movies/EppyDot.mov"
+
+        // Shows under its CURRENT volume...
+        #expect(pfRecordOnSelectedVolume(moved, prefixes: ["/Volumes/LaCieWorkspace"]))
+        // ...and NOT under its SOURCE volume. The bug: clicking RicksBackups
+        // used to surface this LaCie file via originalFullPath.
+        #expect(!pfRecordOnSelectedVolume(moved, prefixes: ["/Volumes/RicksBackups"]))
+
+        // A never-relocated file matches its own volume only.
+        let local = VideoRecord()
+        local.fullPath = "/Volumes/RicksBackups/RicksHomeBackup/Movies/Local.mov"
+        #expect(pfRecordOnSelectedVolume(local, prefixes: ["/Volumes/RicksBackups"]))
+        #expect(!pfRecordOnSelectedVolume(local, prefixes: ["/Volumes/LaCieWorkspace"]))
+
+        // Multi-select: matches if the current location is under ANY prefix.
+        #expect(pfRecordOnSelectedVolume(moved,
+            prefixes: ["/Volumes/RicksBackups", "/Volumes/LaCieWorkspace"]))
+    }
+
     @Test func nilAudioTranscriptDoesNotCrashAndNeverMatches() {
         let r = VideoRecord()
         r.filename = "IMG_0001.mov"

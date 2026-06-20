@@ -618,3 +618,18 @@ nonisolated func pfApplyPurgeFilter(
     if showRemoved { return records }
     return pfActiveRecords(records)
 }
+
+/// Volume-membership predicate for the catalog's Volume filter. A record
+/// belongs to a selected volume only when its CURRENT location (`fullPath`)
+/// is under one of the selected scan-target prefixes.
+///
+/// Deliberately does NOT match on `originalFullPath`: after a Relocate, a file
+/// that moved (e.g. RicksBackups → LaCie) now lives on LaCie, so selecting the
+/// SOURCE volume must not surface it — otherwise you click RicksBackups and see
+/// LaCie files, which is confusing and inconsistent with the Volume column
+/// (which already reads the current volume). The record's origin is still kept
+/// on `originalFullPath` / File Journey for provenance; it just doesn't drive
+/// this physical-location filter. (Bug fix 2026-06-20.)
+nonisolated func pfRecordOnSelectedVolume(_ rec: VideoRecord, prefixes: [String]) -> Bool {
+    prefixes.contains { rec.fullPath.hasPrefix($0) }
+}
