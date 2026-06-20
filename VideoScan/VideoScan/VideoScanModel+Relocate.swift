@@ -405,6 +405,11 @@ extension VideoScanModel {
         // skip this loop and never see .copying.
         if !toMigrate.isEmpty {
             updateJobStatus(id: jobID, status: .copying)
+            // Seed the Jobs-panel bar at 0/total immediately so it appears the
+            // moment copying starts — not only after the first file lands.
+            updateJobCopyProgress(id: jobID, done: 0, total: toMigrate.count,
+                                  currentFile: toMigrate.first?.filename ?? "",
+                                  bytesCopied: dashboard.relocateBytesCopied)
         }
         var canceledMidRun = false
         for (i, rec) in toMigrate.enumerated() {
@@ -423,6 +428,12 @@ extension VideoScanModel {
                 destRoot: options.destinationRoot.path
             )
             dashboard.relocateCurrentFile = rec.filename
+            // Panel tick BEFORE the copy so a long single-file copy (e.g. a
+            // 16 GB master) still shows which file is in flight and holds the
+            // bar at the completed count rather than going blank.
+            updateJobCopyProgress(id: jobID, done: i, total: toMigrate.count,
+                                  currentFile: rec.filename,
+                                  bytesCopied: dashboard.relocateBytesCopied)
             log("  [\(i + 1)/\(toMigrate.count)] \(rec.filename)")
             log("    \(rec.fullPath) → \(newPath)")
 

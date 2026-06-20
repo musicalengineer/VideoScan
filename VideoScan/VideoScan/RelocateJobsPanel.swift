@@ -120,6 +120,9 @@ struct RelocateJobsPanel: View {
             if job.status == .copying, let p = job.copyProgress, p.total > 0 {
                 progressBlock(p)
             }
+            if job.status == .reconciling {
+                reconcilingBlock
+            }
             if case .failed(let reason) = job.status {
                 Text(reason)
                     .font(.caption)
@@ -171,7 +174,7 @@ struct RelocateJobsPanel: View {
             )
             .progressViewStyle(.linear)
             HStack {
-                Text("[\(p.done) / \(p.total)]")
+                Text("[\(p.done) / \(p.total)] \(Int(Double(p.done) / Double(max(p.total, 1)) * 100))%")
                     .font(.system(.caption2, design: .monospaced))
                 Text(p.currentFile)
                     .font(.system(.caption2, design: .monospaced))
@@ -183,6 +186,22 @@ struct RelocateJobsPanel: View {
                     .foregroundColor(.secondary)
             }
         }
+    }
+
+    /// Reconcile-phase indicator. The reconcile does a full-volume FS walk +
+    /// per-file hash matching with no natural done/total until it finishes —
+    /// and on a slow drive it can run minutes. An indeterminate bar tells the
+    /// user it's actively working rather than stalled (the phase that used to
+    /// show only an elapsed clock).
+    private var reconcilingBlock: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ProgressView()
+                .progressViewStyle(.linear)
+            Text("Scanning & matching files…")
+                .font(.system(.caption2, design: .monospaced))
+                .foregroundColor(.secondary)
+        }
+        .accessibilityIdentifier("relocateJobsPanel.row.reconciling")
     }
 
     /// Right-aligned info: elapsed time for complete/failed jobs,
