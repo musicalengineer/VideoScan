@@ -33,6 +33,12 @@ struct RelocateSheet: View {
     /// button. Used to drive the bucket-summary table + the disclosure
     /// under the safely-redundant toggle.
     @State private var previewResult: ReconcileResult?
+    /// True while the reconcile preview is computing off-actor — drives the
+    /// inline spinner instead of beachballing the sheet.
+    @State private var isPreviewing = false
+    /// Handle to the in-flight preview so a re-trigger or an option/source/dest
+    /// change can cancel it; the result is applied only if not cancelled.
+    @State private var previewTask: Task<Void, Never>?
 
     // MARK: - Pre-flight stats (recomputed reactively)
 
@@ -128,7 +134,7 @@ struct RelocateSheet: View {
                         .onChange(of: sourceVolumePath) { _, new in
                             UserDefaults.standard.set(new, forKey: relocateSourceVolumeKey)
                             // Source change invalidates any prior preview.
-                            previewResult = nil
+                            invalidatePreview()
                         }
                     Button("Browse…") { chooseSourceVolume() }
                         .accessibilityIdentifier("relocateSheet.browseSource")
@@ -203,7 +209,7 @@ struct RelocateSheet: View {
         .onChange(of: skipDupsOnOtherVolumes) { _, _ in
             // Toggle change invalidates the preview — the bucket counts
             // will differ depending on whether E is enabled.
-            previewResult = nil
+            invalidatePreview()
         }
     }
 
@@ -246,11 +252,17 @@ struct RelocateSheet: View {
                 Divider().padding(.vertical, 4)
 
                 // Reconcile preview + bucket summary.
-                HStack {
+                HStack(spacing: 8) {
                     Button("Reconcile preview") { runPreview() }
-                        .disabled(scopedRecords.isEmpty || destinationFolder == nil)
+                        .disabled(isPreviewing || scopedRecords.isEmpty || destinationFolder == nil)
                         .accessibilityIdentifier("relocateSheet.reconcilePreview")
-                    if previewResult != nil {
+                    if isPreviewing {
+                        ProgressView().controlSize(.small)
+                        Text("Scanning & matching files…")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .accessibilityIdentifier("relocateSheet.previewSpinner")
+                    } else if previewResult != nil {
                         Text("(\(scopedRecords.count) records classified)")
                             .font(.caption)
                             .foregroundColor(.secondary)
@@ -379,7 +391,7 @@ struct RelocateSheet: View {
         if panel.runModal() == .OK, let url = panel.url {
             sourceVolumePath = Self.normalizeSourcePath(url.path)
             UserDefaults.standard.set(sourceVolumePath, forKey: relocateSourceVolumeKey)
-            previewResult = nil  // source change invalidates preview
+            invalidatePreview()  // source change invalidates preview
         }
     }
 
@@ -409,38 +421,62 @@ struct RelocateSheet: View {
         if panel.runModal() == .OK, let url = panel.url {
             destinationFolder = url
             UserDefaults.standard.set(url.path, forKey: relocateDestFolderKey)
-            previewResult = nil  // dest change invalidates preview
+            invalidatePreview()  // dest change invalidates preview
         }
     }
 
-    /// Synchronous reconcile preview. Walks the source + dest dirs
-    /// (cheap, just enumerator + stat) and runs the pure classifier.
-    /// No catalog mutation. Touches the source drive read-only and
-    /// only for files whose size is referenced by an in-scope record —
-    /// safe on a flaky HDD.
+    /// Reconcile preview. The FS walk + per-file hashing runs OFF the main
+    /// actor (Task.detached) so the sheet shows a spinner instead of
+    /// beachballing while it thinks — the same fix applied to the live run's
+    /// reconcile. Inputs are snapshotted on the main actor; the result is
+    /// applied back on the main actor only if a re-trigger or an
+    /// option/source/dest change hasn't cancelled this Task in the meantime.
     private func runPreview() {
         guard let dest = destinationFolder else { return }
         let scope = scopedRecords
-        let sourceFiles = enumerateFiles(at: sourceVolumePath)
-        let destFiles = enumerateFiles(at: dest.path)
-        previewResult = RelocateReconcile.reconcile(
-            records: scope,
-            allCatalogRecords: model.records,
-            sourceVolumeRootPath: sourceVolumePath,
-            destinationRoot: dest,
-            sourceFiles: sourceFiles,
-            destFiles: destFiles,
-            skipDupsOnOtherVolumes: skipDupsOnOtherVolumes,
-            hash: { FileHasher.partialMD5(path: $0) }
-        )
+        let allRecords = model.records          // value-type (COW) snapshot — cheap
+        let src = sourceVolumePath
+        let skipDups = skipDupsOnOtherVolumes
+
+        previewTask?.cancel()
+        isPreviewing = true
+        previewTask = Task {
+            let result = await Task.detached(priority: .userInitiated) { () -> ReconcileResult in
+                let sourceFiles = Self.enumerateFiles(at: src)
+                let destFiles = Self.enumerateFiles(at: dest.path)
+                return RelocateReconcile.reconcile(
+                    records: scope,
+                    allCatalogRecords: allRecords,
+                    sourceVolumeRootPath: src,
+                    destinationRoot: dest,
+                    sourceFiles: sourceFiles,
+                    destFiles: destFiles,
+                    skipDupsOnOtherVolumes: skipDups,
+                    hash: { FileHasher.partialMD5(path: $0) }
+                )
+            }.value
+            if Task.isCancelled { return }   // superseded by a newer preview/invalidation
+            previewResult = result
+            isPreviewing = false
+        }
+    }
+
+    /// Clear any cached preview and stop an in-flight one. Called whenever an
+    /// input that feeds the reconcile (source, dest, skip-dups) changes, so a
+    /// stale preview can never be applied after the inputs moved.
+    private func invalidatePreview() {
+        previewTask?.cancel()
+        previewTask = nil
+        isPreviewing = false
+        previewResult = nil
     }
 
     /// Mirror of VideoScanModel.enumerateFiles — local copy because that
     /// helper is `private` to the model extension. Walks `root` and
     /// returns (path, size) for every regular file under it. Returns []
     /// when the path doesn't exist (e.g. dest folder hasn't been created
-    /// yet).
-    private func enumerateFiles(at root: String) -> [ReconcileFileEntry] {
+    /// yet). `nonisolated static` so the preview Task can run it off-actor.
+    nonisolated private static func enumerateFiles(at root: String) -> [ReconcileFileEntry] {
         guard FileManager.default.fileExists(atPath: root) else { return [] }
         let fm = FileManager.default
         guard let it = fm.enumerator(atPath: root) else { return [] }
