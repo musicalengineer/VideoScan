@@ -184,10 +184,17 @@ extension CatalogView {
 
         return scopedToScanned.filter { target in
             let path = target.searchPath
-            let hasRecords = model.records.contains { $0.fullPath.hasPrefix(path) }
-            let hasBadFiles = model.records.contains {
-                $0.fullPath.hasPrefix(path) && $0.streamTypeRaw == StreamType.ffprobeFailed.rawValue
-            }
+            // Drive hasRecords/hasBadFiles off the per-volume aggregate cache
+            // instead of re-scanning all ~16k records TWICE per target on every
+            // render (~640K hasPrefix calls/render before this — the exact cost
+            // volumeAggregateCache exists to kill, which had leaked back in
+            // here uncached). The cache counts records matching fullPath OR
+            // originalFullPath, so an emptied relocate-source volume correctly
+            // still "has records" via its origin provenance rather than flipping
+            // to "uncataloged". Perf fix 2026-06-20.
+            let agg = volumeAggregateCache[target.id]
+            let hasRecords = (agg?.files ?? 0) > 0
+            let hasBadFiles = (agg?.errors ?? 0) > 0
             let isNetwork = VolumeReachability.isNetworkVolume(path: path)
 
             // Target passes if ANY active filter matches
