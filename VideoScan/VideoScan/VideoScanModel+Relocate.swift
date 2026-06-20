@@ -248,8 +248,22 @@ extension VideoScanModel {
         let runStart = Date()
         let minVisibleSeconds: TimeInterval = 0.8
 
-        // 1A. Reconcile pre-flight.
-        let reconcile = performReconcile(scope: scope, options: options)
+        // 1A. Reconcile pre-flight — runs OFF the main actor. The classify
+        // phase does a full-volume FS walk + per-record partialMD5 disk reads;
+        // on a flaky HDD that blocked the main thread for ~235s and beachballed
+        // the UI with no responsive Hide/Cancel (perf analysis 2026-06-20). We
+        // snapshot the catalog array (value type, copy-on-write — cheap) and
+        // build the volume-safety resolver on the main actor, then hand the
+        // read-only work to a detached task. The apply phase below mutates
+        // records and stays on the main actor.
+        let allRecordsSnapshot = records
+        let resolver = makeVolumeSafetyResolver()
+        let reconcile = await Task.detached(priority: .userInitiated) {
+            Self.performReconcileOffActor(scope: scope,
+                                          allCatalogRecords: allRecordsSnapshot,
+                                          options: options,
+                                          resolveVolumeSafety: resolver)
+        }.value
         logReconcileSummary(reconcile)
         relocateLog.write("Reconcile: ready=\(reconcile.ready.count) adopted=\(reconcile.adopted.count) sourceMoves=\(reconcile.sourceSideMoves.count) safelyRedundant=\(reconcile.safelyRedundant.count) manuallyDeleted=\(reconcile.manuallyDeleted.count) previouslyRelocated=\(reconcile.previouslyRelocated.count)")
 
@@ -620,20 +634,29 @@ extension VideoScanModel {
 
     // MARK: - Reconcile FS walk
 
-    private func performReconcile(scope: [VideoRecord],
-                                  options: RelocateOptions) -> ReconcileResult {
+    /// Reconcile classify phase — designed to run OFF the main actor (see the
+    /// `Task.detached` call site in `runRelocate`). Pure and `nonisolated`: it
+    /// takes a snapshot of the catalog plus a pre-built volume-safety resolver,
+    /// walks the source/dest filesystems, and hashes candidate files. No `self`
+    /// access, so it can execute on a detached task without freezing the UI.
+    /// The apply phase (which mutates `VideoRecord`s) stays on the main actor.
+    nonisolated private static func performReconcileOffActor(
+        scope: [VideoRecord],
+        allCatalogRecords: [VideoRecord],
+        options: RelocateOptions,
+        resolveVolumeSafety: @escaping VolumeSafetyResolver
+    ) -> ReconcileResult {
         let sourceFiles = enumerateFiles(at: options.sourceVolumeRootPath)
         let destFiles = enumerateFiles(at: options.destinationRoot.path)
-        let resolver = makeVolumeSafetyResolver()
         return RelocateReconcile.reconcile(
             records: scope,
-            allCatalogRecords: records,
+            allCatalogRecords: allCatalogRecords,
             sourceVolumeRootPath: options.sourceVolumeRootPath,
             destinationRoot: options.destinationRoot,
             sourceFiles: sourceFiles,
             destFiles: destFiles,
             skipDupsOnOtherVolumes: options.skipDupsOnOtherVolumes,
-            resolveVolumeSafety: resolver,
+            resolveVolumeSafety: resolveVolumeSafety,
             hash: { FileHasher.partialMD5(path: $0) }
         )
     }
@@ -667,7 +690,7 @@ extension VideoScanModel {
         }
     }
 
-    private func enumerateFiles(at root: String) -> [ReconcileFileEntry] {
+    nonisolated private static func enumerateFiles(at root: String) -> [ReconcileFileEntry] {
         guard FileManager.default.fileExists(atPath: root) else { return [] }
         let fm = FileManager.default
         guard let it = fm.enumerator(atPath: root) else { return [] }
