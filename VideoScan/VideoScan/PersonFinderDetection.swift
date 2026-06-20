@@ -193,14 +193,63 @@ nonisolated func pfOrientationFromTransform(_ t: CGAffineTransform) -> CGImagePr
     }
 }
 
+/// Long-edge pixel cap for the face-DETECTION pass only. Frames whose long edge
+/// exceeds this are downsampled (aspect-preserving) before Vision runs, keeping
+/// detection cost and memory bounded on very high-resolution sources — a 4K frame
+/// is ~33 MB and ~9x the pixels of a 1280-wide one, with no meaningful loss in
+/// detecting normally-framed faces. Identity feature-printing (phase 2) still uses
+/// the FULL-resolution frame, so match accuracy is unaffected at any resolution.
+/// All current catalog material is well under this, so the cap is a no-op today —
+/// it exists so a converted/upscaled (e.g. 4K) clip can't beachball or exhaust
+/// memory. 1536 keeps comfortable detection-recall headroom over a 1280 floor.
+let pfDetectionLongEdgeCap = 1536
+
 /// Phase-1 face detection: run Vision directly on the CVPixelBuffer (no CGImage needed).
 /// Vision handles YpCbCr natively and dispatches to the Neural Engine / ANE.
+///
+/// When `longEdgeCap` is set and the source exceeds it, detection runs on an
+/// aspect-preserving downsampled copy (see `pfDownsampledForDetection`). Vision
+/// returns NORMALIZED bounding boxes, so the caller maps them straight onto the
+/// full-resolution frame for feature-printing — only the cheap detect pass is
+/// downsampled. `nil` (the default) preserves the original full-res behavior.
 nonisolated func pfDetectFacesInBuffer(_ buffer: CVPixelBuffer,
-                                      orientation: CGImagePropertyOrientation) -> [VNFaceObservation] {
+                                      orientation: CGImagePropertyOrientation,
+                                      longEdgeCap: Int? = nil) -> [VNFaceObservation] {
+    let detectBuffer = pfDownsampledForDetection(buffer, longEdgeCap: longEdgeCap)
     let req = VNDetectFaceRectanglesRequest(); req.revision = 3
-    let handler = VNImageRequestHandler(cvPixelBuffer: buffer, orientation: orientation, options: [:])
+    let handler = VNImageRequestHandler(cvPixelBuffer: detectBuffer, orientation: orientation, options: [:])
     try? handler.perform([req])
     return (req.results ?? []).sorted { $0.confidence > $1.confidence }
+}
+
+/// Aspect-preserving downsample of a frame buffer for the DETECTION pass only.
+/// Returns the original buffer untouched when no cap is set or the source already
+/// fits within it (the common case — zero allocation, zero copy). Renders to
+/// 32BGRA regardless of source pixel format, so it's safe for both the YpCbCr
+/// dense-reader path and the BGRA seeking path. On any allocation/render failure
+/// it returns the original buffer (detection then runs full-res — correct, just
+/// slower), so it can never break a scan.
+nonisolated func pfDownsampledForDetection(_ src: CVPixelBuffer, longEdgeCap: Int?) -> CVPixelBuffer {
+    guard let cap = longEdgeCap, cap > 0 else { return src }
+    let w = CVPixelBufferGetWidth(src)
+    let h = CVPixelBufferGetHeight(src)
+    let longEdge = max(w, h)
+    guard longEdge > cap else { return src }
+
+    let scale = CGFloat(cap) / CGFloat(longEdge)
+    let dstW = max(2, Int((CGFloat(w) * scale).rounded()))
+    let dstH = max(2, Int((CGFloat(h) * scale).rounded()))
+
+    var out: CVPixelBuffer?
+    let attrs = [kCVPixelBufferIOSurfacePropertiesKey as String: [:] as CFDictionary] as CFDictionary
+    guard CVPixelBufferCreate(kCFAllocatorDefault, dstW, dstH,
+                              kCVPixelFormatType_32BGRA, attrs, &out) == kCVReturnSuccess,
+          let dst = out else {
+        return src
+    }
+    let ci = CIImage(cvPixelBuffer: src).transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+    pfCIContext.render(ci, to: dst)
+    return dst
 }
 
 /// Phase-2 image: apply the track's preferredTransform so the CGImage is right-side-up,
@@ -493,7 +542,11 @@ nonisolated func pfProcessVideo(
 
         autoreleasepool {
             let t1 = CFAbsoluteTimeGetCurrent()
-            let allFaces = pfDetectFacesInBuffer(frame.pixelBuffer, orientation: ctx.orientation)
+            // Detect on a resolution-capped copy (no-op at/under the cap); the
+            // full-res frame.pixelBuffer is still used for the phase-2 oriented
+            // image below, so identity feature-printing stays full resolution.
+            let allFaces = pfDetectFacesInBuffer(frame.pixelBuffer, orientation: ctx.orientation,
+                                                 longEdgeCap: pfDetectionLongEdgeCap)
             let candidates: [VNFaceObservation] = settings.requirePrimary
                 ? (allFaces.max(by: { ($0.boundingBox.width * $0.boundingBox.height) < ($1.boundingBox.width * $1.boundingBox.height) }).map { [$0] } ?? [])
                 : allFaces
