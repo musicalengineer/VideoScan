@@ -9,7 +9,6 @@ import CoreImage
 import CoreGraphics
 import AVFoundation
 import os
-import os.lock
 
 // MARK: - Global serialization lock for MLModel.prediction(from:)
 //

@@ -13,7 +13,6 @@ import Vision
 import CoreImage
 import CoreGraphics
 import os
-import os.lock
 
 private let pfDetectLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "detection")
 
