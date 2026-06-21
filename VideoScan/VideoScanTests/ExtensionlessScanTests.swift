@@ -56,8 +56,9 @@ struct ExtensionlessScanTests {
         )
         let names = Set(found.map { $0.lastPathComponent })
         #expect(names.contains("t2-v"), "extensionless media must be discovered in probe mode")
-        // Targeted gap scan: extensioned files are already covered by normal scans.
-        #expect(!names.contains("clip.mov"))
+        // Additive: the normal video allowlist is still honored alongside the
+        // extensionless pass. Only the non-media file stays excluded.
+        #expect(names.contains("clip.mov"))
         #expect(!names.contains("notes.txt"))
     }
 }

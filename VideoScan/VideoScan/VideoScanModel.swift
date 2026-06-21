@@ -245,6 +245,16 @@ final class VideoScanModel: ObservableObject {
         "f4v", "3gp", "3g2", "dv", "dif", "braw", "r3d", "vro", "mod", "tod"
     ]
 
+    /// Standalone audio-file extensions. NOT scanned by default — only when the
+    /// "Scan for Audio Files" option is on — because archives hold thousands of
+    /// scratch/temp audio files (FCP/iMovie render audio, etc.). Audio-only
+    /// files inside video containers (.mxf, .mov) are already covered by
+    /// videoExtensions; this set is for files that carry an audio extension.
+    let audioExtensions: Set<String> = [
+        "wav", "aif", "aiff", "mp3", "mp2", "m4a", "aac", "flac", "caf",
+        "wma", "ac3", "oga", "opus", "alac", "amr", "au", "snd"
+    ]
+
     /// User-toggleable scan policy. Bound to the Scan Options menu. Walkers
     /// snapshot this at scan start via `skipDirsSnapshot()` /
     /// `skipBundleExtensionsSnapshot()` so toggling a category takes effect

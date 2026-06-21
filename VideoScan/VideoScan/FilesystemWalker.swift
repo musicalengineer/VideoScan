@@ -14,10 +14,20 @@ enum FilesystemWalker {
     /// without an extension (Avid/QuickTime video-only exports, etc.) that the
     /// allowlist silently dropped. It deliberately excludes already-extensioned
     /// files since the normal scan already covers them.
+    /// Admission is ADDITIVE: the normal video allowlist is always honored, and
+    /// each opt-in toggle adds a category on top — `scanAudioFiles` admits audio
+    /// files, `probeExtensionless` admits files with no extension (ffprobe then
+    /// arbitrates). So enabling several toggles in one scan does what the user
+    /// expects rather than one overriding another.
     static func shouldAdmitFile(extension ext: String,
                                 videoExtensions: Set<String>,
-                                probeExtensionless: Bool) -> Bool {
-        probeExtensionless ? ext.isEmpty : videoExtensions.contains(ext)
+                                audioExtensions: Set<String> = [],
+                                probeExtensionless: Bool = false,
+                                scanAudioFiles: Bool = false) -> Bool {
+        if videoExtensions.contains(ext) { return true }
+        if scanAudioFiles, audioExtensions.contains(ext) { return true }
+        if probeExtensionless, ext.isEmpty { return true }
+        return false
     }
 
     /// Walk a single directory tree and return all video file URLs.
@@ -30,6 +40,8 @@ enum FilesystemWalker {
         skipBundleExtensions: Set<String>,
         skipSmallFiles: Bool,
         probeExtensionless: Bool = false,
+        audioExtensions: Set<String> = [],
+        scanAudioFiles: Bool = false,
         onProgress: (@Sendable (_ currentDir: URL, _ filesFoundSoFar: Int, _ lastFile: URL?) -> Void)? = nil
     ) async -> [URL] {
         let minFileBytes: Int = skipSmallFiles ? 1_048_576 : 0
@@ -70,7 +82,9 @@ enum FilesystemWalker {
                     } else if rv.isRegularFile == true && rv.isReadable == true {
                         let ext = url.pathExtension.lowercased()
                         if shouldAdmitFile(extension: ext, videoExtensions: videoExtensions,
-                                           probeExtensionless: probeExtensionless) {
+                                           audioExtensions: audioExtensions,
+                                           probeExtensionless: probeExtensionless,
+                                           scanAudioFiles: scanAudioFiles) {
                             if ext == "ts" && !isMpegTS(url) {
                                 continue
                             }
@@ -101,6 +115,8 @@ enum FilesystemWalker {
         skipBundleExtensions: Set<String>,
         skipSmallFiles: Bool,
         probeExtensionless: Bool = false,
+        audioExtensions: Set<String> = [],
+        scanAudioFiles: Bool = false,
         onDirectoryEntered: (@Sendable (_ currentDir: URL) -> Void)? = nil
     ) -> AsyncStream<URL> {
         let minFileBytes: Int = skipSmallFiles ? 1_048_576 : 0
@@ -140,7 +156,9 @@ enum FilesystemWalker {
                         } else if rv.isRegularFile == true && rv.isReadable == true {
                             let ext = url.pathExtension.lowercased()
                             if shouldAdmitFile(extension: ext, videoExtensions: videoExtensions,
-                                               probeExtensionless: probeExtensionless) {
+                                               audioExtensions: audioExtensions,
+                                               probeExtensionless: probeExtensionless,
+                                               scanAudioFiles: scanAudioFiles) {
                                 if ext == "ts" && !isMpegTS(url) {
                                     continue
                                 }

@@ -233,7 +233,9 @@ struct ScanOptionsMenu: View {
             // Recovers Avid/QuickTime video-only exports written without an
             // extension that the normal allowlist scan misses.
             Toggle("Scan Files With No Extension", isOn: toggle(\.probeExtensionless))
-                .help("Also examine extensionless files (e.g. Avid video-only exports) and catalog the ones ffprobe identifies as media. Targeted recovery pass — leave off for normal scans.")
+                .help("Also examine extensionless files (e.g. iMovie/Avid video-only exports) and catalog the ones ffprobe identifies as media. Targeted recovery pass — leave off for normal scans.")
+            Toggle("Scan For Audio Files", isOn: toggle(\.scanAudioFiles))
+                .help("Also catalog standalone audio files (wav, aif, mp3, …). Off by default — archives hold many scratch/temp audio files. Turn on to find audio for Repair Audio / A-V correlation.")
 
             Divider()
 

@@ -46,7 +46,8 @@ extension VideoScanModel {
             skipDirs: skipDirsSnapshot(),
             skipBundleExtensions: skipBundleExtensionsSnapshot(),
             skipSmallFiles: scanOptions.skipSmallFiles,
-            probeExtensionless: scanOptions.probeExtensionless
+            probeExtensionless: scanOptions.probeExtensionless,
+            scanAudioFiles: scanOptions.scanAudioFiles
         ) { [weak self] currentDir in
             Task { @MainActor in
                 guard let self else { return }
@@ -246,6 +247,7 @@ extension VideoScanModel {
         skipBundleExtensions: Set<String>,
         skipSmallFiles: Bool,
         probeExtensionless: Bool = false,
+        scanAudioFiles: Bool = false,
         onDirectoryEntered: (@Sendable (_ currentDir: URL) -> Void)? = nil
     ) -> AsyncStream<URL> {
         FilesystemWalker.walkDirectoryStream(
@@ -255,6 +257,8 @@ extension VideoScanModel {
             skipBundleExtensions: skipBundleExtensions,
             skipSmallFiles: skipSmallFiles,
             probeExtensionless: probeExtensionless,
+            audioExtensions: audioExtensions,
+            scanAudioFiles: scanAudioFiles,
             onDirectoryEntered: onDirectoryEntered
         )
     }

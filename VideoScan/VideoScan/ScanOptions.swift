@@ -35,6 +35,12 @@ struct ScanOptions: Equatable {
     /// not something to leave on for every scan. See FilesystemWalker.
     var probeExtensionless: Bool = false
 
+    /// Polarity exception (additive "Scan X"): when ON, the scan ALSO admits
+    /// standalone audio files (wav/aif/mp3/…). OFF by default — archives hold
+    /// thousands of scratch/temp audio files, so this is an opt-in pass. Needed
+    /// to catalog audio for Repair Audio / A-V correlation. See audioExtensions.
+    var scanAudioFiles: Bool = false
+
     // MARK: Persistence
     // UserDefaults.standard is documented thread-safe (CFPreferences-backed
     // with internal locking). nonisolated(unsafe) tells strict concurrency
@@ -50,6 +56,7 @@ struct ScanOptions: Equatable {
         if d.object(forKey: "\(p)skipSmallFiles") != nil { s.skipSmallFiles   = d.bool(forKey: "\(p)skipSmallFiles") }
         if d.object(forKey: "\(p)skipChecksums") != nil { s.skipChecksums    = d.bool(forKey: "\(p)skipChecksums") }
         if d.object(forKey: "\(p)probeExtensionless") != nil { s.probeExtensionless = d.bool(forKey: "\(p)probeExtensionless") }
+        if d.object(forKey: "\(p)scanAudioFiles") != nil { s.scanAudioFiles = d.bool(forKey: "\(p)scanAudioFiles") }
         return s
     }
 
@@ -60,6 +67,7 @@ struct ScanOptions: Equatable {
         d.set(skipSmallFiles, forKey: "\(p)skipSmallFiles")
         d.set(skipChecksums, forKey: "\(p)skipChecksums")
         d.set(probeExtensionless, forKey: "\(p)probeExtensionless")
+        d.set(scanAudioFiles, forKey: "\(p)scanAudioFiles")
     }
 
     /// True when the user has deviated from the recommended fast-path
