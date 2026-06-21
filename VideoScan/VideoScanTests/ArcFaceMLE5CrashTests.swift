@@ -134,7 +134,7 @@ struct ArcFaceMLE5CrashTests {
         var nilCount = 0
         var okCount = 0
         for _ in 0..<500 {
-            if arcfaceEmbedding(from: img, model: model) != nil {
+            if arcfaceEmbedding(from: img, model: model).embedding != nil {
                 okCount += 1
             } else {
                 nilCount += 1

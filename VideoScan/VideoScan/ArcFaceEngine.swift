@@ -152,7 +152,15 @@ actor ArcFaceModelLoader {
 // MARK: - Embedding Extraction
 
 /// Extract a 512-D ArcFace embedding from a face crop (any size — will be resized to 112x112).
-nonisolated func arcfaceEmbedding(from faceImage: CGImage, model: MLModel) -> [Float]? {
+/// Computes the 512-D ArcFace embedding for a face crop.
+///
+/// Returns `(embedding, instabilityDrop)`. `embedding` is nil when no usable
+/// embedding could be produced. `instabilityDrop` is true ONLY when the face
+/// was lost because CoreML's MLE5 engine threw an ObjC NSException on every
+/// attempt (the "silent drop" failure mode) — callers use it to surface a
+/// degraded run instead of under-detecting silently (P0-2). Setup failures and
+/// Swift throws return `instabilityDrop == false`.
+nonisolated func arcfaceEmbedding(from faceImage: CGImage, model: MLModel) -> (embedding: [Float]?, instabilityDrop: Bool) {
     // Resize to 112x112 RGB
     let size = 112
     guard let context = CGContext(
@@ -160,11 +168,11 @@ nonisolated func arcfaceEmbedding(from faceImage: CGImage, model: MLModel) -> [F
         bitsPerComponent: 8, bytesPerRow: size * 4,
         space: CGColorSpaceCreateDeviceRGB(),
         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-    ) else { return nil }
+    ) else { return (nil, false) }
 
     context.interpolationQuality = .high
     context.draw(faceImage, in: CGRect(x: 0, y: 0, width: size, height: size))
-    guard let resized = context.makeImage() else { return nil }
+    guard let resized = context.makeImage() else { return (nil, false) }
 
     // Create CVPixelBuffer from CGImage for CoreML
     var pixelBuffer: CVPixelBuffer?
@@ -174,7 +182,7 @@ nonisolated func arcfaceEmbedding(from faceImage: CGImage, model: MLModel) -> [F
     ]
     let status = CVPixelBufferCreate(kCFAllocatorDefault, size, size,
                                      kCVPixelFormatType_32ARGB, attrs as CFDictionary, &pixelBuffer)
-    guard status == kCVReturnSuccess, let pb = pixelBuffer else { return nil }
+    guard status == kCVReturnSuccess, let pb = pixelBuffer else { return (nil, false) }
 
     CVPixelBufferLockBaseAddress(pb, [])
     if let ctx = CGContext(
@@ -195,43 +203,62 @@ nonisolated func arcfaceEmbedding(from faceImage: CGImage, model: MLModel) -> [F
     // even under serialized, per-instance access — crash 2026-05-23).
     do {
         let input = try MLDictionaryFeatureProvider(dictionary: ["faceImage": pb])
+
+        // CoreML's MLE5 engine can throw a transient ObjC NSException
+        // (MLE5BindEmptyMemoryObjectToPort) even under serialized, per-instance
+        // access. Such failures are usually transient, so retry ONCE before
+        // giving up and counting the face as a real instability drop (P0-2:
+        // recover what we can, then surface the rest instead of dropping silently).
         var output: MLFeatureProvider?
         var swiftError: (any Error)?
+        var instabilityDrop = false
+        let maxAttempts = 2
 
-        let ok: Bool = arcfacePredictionLock.withLock {
-            var caughtException: NSException?
-            let success = VSCatchObjCException({
-                do {
-                    output = try model.prediction(from: input)
-                } catch {
-                    swiftError = error
+        for attempt in 1...maxAttempts {
+            output = nil
+            swiftError = nil
+            let success: Bool = arcfacePredictionLock.withLock {
+                var caughtException: NSException?
+                let ok = VSCatchObjCException({
+                    do {
+                        output = try model.prediction(from: input)
+                    } catch {
+                        swiftError = error
+                    }
+                }, &caughtException)
+                if !ok {
+                    let n = arcfaceExceptionCountLock.withLock { arcfaceExceptionCount += 1; return arcfaceExceptionCount }
+                    let name = caughtException?.name.rawValue ?? "unknown"
+                    let reason = caughtException?.reason ?? "no reason"
+                    let info = caughtException?.userInfo?.description ?? "none"
+                    let msg = "⚠️ CoreML NSException caught (#\(n), attempt \(attempt)/\(maxAttempts), would have been SIGABRT) — name: \(name), reason: \(reason), userInfo: \(info)"
+                    arcfaceLogger.error("\(msg, privacy: .public)")
+                    appLog.write(msg)
+                    // First-occurrence-only greppable marker so a degraded run is
+                    // one grep away in videoscan.log.
+                    if n == 1 {
+                        let warn = "⚠️ ARCFACE_MLE5_INSTABILITY first occurrence — recognition may under-detect"
+                        arcfaceLogger.warning("\(warn, privacy: .public)")
+                        appLog.write(warn)
+                    }
                 }
-            }, &caughtException)
-            if !success {
-                let n = arcfaceExceptionCountLock.withLock { arcfaceExceptionCount += 1; return arcfaceExceptionCount }
-                let name = caughtException?.name.rawValue ?? "unknown"
-                let reason = caughtException?.reason ?? "no reason"
-                let info = caughtException?.userInfo?.description ?? "none"
-                let msg = "⚠️ CoreML NSException caught (#\(n), would have been SIGABRT) — name: \(name), reason: \(reason), userInfo: \(info)"
-                arcfaceLogger.error("\(msg, privacy: .public)")
-                appLog.write(msg)
-                // First-occurrence-only greppable marker so a degraded run is
-                // one grep away in videoscan.log; embeddings are dropped on
-                // these frames, so recognition may under-detect (P0-1, logging
-                // subset only — lock/model strategy unchanged).
-                if n == 1 {
-                    let warn = "⚠️ ARCFACE_MLE5_INSTABILITY first occurrence — recognition may under-detect"
-                    arcfaceLogger.warning("\(warn, privacy: .public)")
-                    appLog.write(warn)
-                }
+                return ok
             }
-            return success
+            if success {
+                instabilityDrop = false
+                break
+            }
+            // NSException fired on this attempt; flag it and let the loop retry.
+            // If the retry also fails, instabilityDrop stays true => real drop.
+            instabilityDrop = true
         }
 
         if let swiftError {
             arcfaceLogger.warning("CoreML prediction Swift error: \(swiftError.localizedDescription, privacy: .public)")
         }
-        guard ok, swiftError == nil, let output else { return nil }
+        // A Swift throw leaves instabilityDrop == false (success was true, just
+        // empty output), so only a surviving NSException counts as a drop.
+        guard swiftError == nil, let output else { return (nil, instabilityDrop) }
 
         for name in output.featureNames {
             if let arr = output.featureValue(for: name)?.multiArrayValue {
@@ -243,12 +270,12 @@ nonisolated func arcfaceEmbedding(from faceImage: CGImage, model: MLModel) -> [F
                 // L2-normalize
                 let norm = sqrt(embedding.reduce(0) { $0 + $1 * $1 })
                 if norm > 0 { for i in 0..<count { embedding[i] /= norm } }
-                return embedding
+                return (embedding, false)
             }
         }
-        return nil
+        return (nil, false)
     } catch {
-        return nil
+        return (nil, false)
     }
 }
 
@@ -314,7 +341,7 @@ nonisolated func arcfaceLoadReferenceEmbeddings(
         for obs in candidates {
             // Use the existing normalization crop (will be resized to 112x112 inside arcfaceEmbedding)
             guard let cropped = pfNormalizeFaceCrop(from: img, observation: obs, outputSize: 112) else { continue }
-            guard let emb = arcfaceEmbedding(from: cropped, model: model) else { continue }
+            guard let emb = arcfaceEmbedding(from: cropped, model: model).embedding else { continue }
             embeddings.append(emb)
         }
     }
@@ -413,6 +440,7 @@ private struct ArcFaceFrameMatch {
     var unmatchedRects: [CGRect] = []
     var facesDetected: Int = 0
     var bestCosineInFrame: Float = -1
+    var embedDrops: Int = 0     // faces lost to CoreML MLE5 instability (P0-2)
 }
 
 /// For each detected face in the oriented image, compute an ArcFace embedding
@@ -430,8 +458,12 @@ private func arcFaceMatchCandidates(
     var m = ArcFaceFrameMatch()
     for obs in candidates {
         guard obs.confidence >= settings.minFaceConfidence,
-              let cropped = pfNormalizeFaceCrop(from: orientedImage, observation: obs, outputSize: 112),
-              let embedding = arcfaceEmbedding(from: cropped, model: model) else { continue }
+              let cropped = pfNormalizeFaceCrop(from: orientedImage, observation: obs, outputSize: 112) else { continue }
+        let embedResult = arcfaceEmbedding(from: cropped, model: model)
+        guard let embedding = embedResult.embedding else {
+            if embedResult.instabilityDrop { m.embedDrops += 1 }
+            continue
+        }
         m.facesDetected += 1
 
         var bestCosine: Float = -1
@@ -553,6 +585,7 @@ nonisolated func pfProcessVideoWithArcFace(
 
     var hits: [(timeSecs: Double, distance: Float)] = []
     var totalFacesDetected = 0
+    var totalEmbedDrops = 0
     var bestCosineEver: Float = -1
     let frameInterval = Double(settings.frameStep) / ctx.fps
     var sampledSoFar = 0
@@ -628,6 +661,7 @@ nonisolated func pfProcessVideoWithArcFace(
                     bestCosineEver = frameMatch.bestCosineInFrame
                 }
                 totalFacesDetected += frameMatch.facesDetected
+                totalEmbedDrops += frameMatch.embedDrops
                 let rate = max(1, previewRateFn())
                 if (sampledSoFar + 1) % rate == 0 { previewImage = img }
             }
@@ -672,6 +706,10 @@ nonisolated func pfProcessVideoWithArcFace(
         await logFn("[perf] slow ArcFace file: \(filename) media=\(pfFormatDuration(ctx.duration)) wall=\(pfFormatDuration(wallSecs)) sampled=\(sampledSoFar) faces=\(totalFacesDetected)")
     }
     signpostLog.endInterval("video", spVideo)
+
+    if totalEmbedDrops > 0 {
+        await logFn("  [\(index)/\(total)] \(filename) → ⚠️ \(totalEmbedDrops) face embedding(s) dropped after retry (CoreML MLE5 instability) — this clip may under-detect")
+    }
 
     // Terminal best-distance publish: bypass the per-frame throttle so the last
     // value is never dropped on a short tail (P2-4). Falls back to the throttled

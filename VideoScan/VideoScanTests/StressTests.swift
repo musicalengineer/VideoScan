@@ -212,7 +212,7 @@ struct IntegrationStressTests {
                     guard let model else { return 0 }
                     var count = 0
                     for _ in 0..<50 {
-                        if arcfaceEmbedding(from: faceImage, model: model) != nil {
+                        if arcfaceEmbedding(from: faceImage, model: model).embedding != nil {
                             count += 1
                         }
                     }

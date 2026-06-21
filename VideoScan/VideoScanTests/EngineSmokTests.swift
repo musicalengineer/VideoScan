@@ -252,7 +252,7 @@ struct EngineSmokTests {
             return
         }
 
-        let embedding = arcfaceEmbedding(from: cropped, model: model)
+        let embedding = arcfaceEmbedding(from: cropped, model: model).embedding
         let emb = try #require(embedding, "ArcFace should produce an embedding from a real face")
         #expect(emb.count == 512, "ArcFace embedding should be 512-dimensional, got \(emb.count)")
 
