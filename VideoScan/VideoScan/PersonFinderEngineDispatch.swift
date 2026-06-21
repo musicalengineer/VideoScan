@@ -149,7 +149,8 @@ func pfRunArcFaceEngine(
     progressState: ThrottledMainActorUpdate,
     logFn: @Sendable @escaping (String) async -> Void,
     progressFn: @Sendable @escaping (String) async -> Void,
-    distFn: @Sendable @escaping (Float) async -> Void
+    distFn: @Sendable @escaping (Float) async -> Void,
+    distFnFinal: (@Sendable (Float) async -> Void)? = nil
 ) async -> pfVideoResult? {
     let (mlModel, err) = await ArcFaceModelLoader.shared.getModel()
     guard let mlModel else {
@@ -199,6 +200,7 @@ func pfRunArcFaceEngine(
             }
         },
         distFn: distFn,
+        distFnFinal: distFnFinal,
         visionStatsFn: { fps, msPerFrame in
             let workers = await MemoryPressureMonitor.shared.currentWorkers()
             await MainActor.run {

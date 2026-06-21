@@ -144,6 +144,10 @@ final class ScanJob: ObservableObject, Identifiable {
 
     var scanTask: Task<Void, Never>?
     var timerTask: Task<Void, Never>?
+    /// In-flight console-flush task spawned by scheduleConsoleFlush. Stored so
+    /// reset() can cancel it (previously detached and uncancellable, leaving a
+    /// 200ms double-schedule window — P2-5).
+    private var consoleFlushTask: Task<Void, Never>?
     fileprivate var taskStarted: Date?
     /// True when this job was reconstructed from a persisted descriptor
     /// on app launch and the user paused it before the previous quit.
@@ -192,7 +196,7 @@ final class ScanJob: ObservableObject, Identifiable {
     private func scheduleConsoleFlush() {
         if consoleFlushScheduled { return }
         consoleFlushScheduled = true
-        Task { @MainActor [weak self] in
+        consoleFlushTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .milliseconds(Int(Self.consoleFlushIntervalSec * 1000)))
             self?.flushConsoleLines()
         }
@@ -216,6 +220,7 @@ final class ScanJob: ObservableObject, Identifiable {
     func reset() {
         scanTask?.cancel(); timerTask?.cancel()
         compilationTask?.cancel()
+        consoleFlushTask?.cancel(); consoleFlushTask = nil
         Task { await pauseGate.resume() }  // release any waiters
         status = .idle; progress = 0; currentFile = ""
         videosTotal = 0; videosScanned = 0; videosWithHits = 0

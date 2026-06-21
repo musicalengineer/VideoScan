@@ -13,9 +13,17 @@ import Vision
 import CoreImage
 import CoreGraphics
 import os
+import os.lock
+
+private let pfDetectLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "detection")
 
 // Shared CIContext — expensive to create, reuse across calls
 private let pfCIContext = CIContext(options: [.useSoftwareRenderer: false])
+
+// Rate-limit for feature-print failure warnings so a systematically failing
+// scan (e.g. ANE wedged) emits one warning per ~500 throwing frames rather
+// than spamming the hot loop. Counter is best-effort; exactness not required.
+private let pfFeaturePrintFailLock = OSAllocatedUnfairLock(initialState: 0)
 
 // MARK: - Reference photo loading
 
@@ -142,7 +150,19 @@ nonisolated func pfNormalizeFaceCrop(from source: CGImage, observation: VNFaceOb
 private nonisolated func pfGenerateFeaturePrint(for image: CGImage) -> VNFeaturePrintObservation? {
     let req = VNGenerateImageFeaturePrintRequest()
     let handler = VNImageRequestHandler(cgImage: image, options: [:])
-    try? handler.perform([req])
+    do {
+        try handler.perform([req])
+    } catch {
+        // Rate-limited: warn on the 1st failure and every 500th thereafter so a
+        // systematic Vision/ANE failure is visible without per-frame log spam.
+        let n = pfFeaturePrintFailLock.withLock { state -> Int in
+            state += 1
+            return state
+        }
+        if n == 1 || n % 500 == 0 {
+            pfDetectLog.warning("VNGenerateImageFeaturePrint failed (occurrence \(n, privacy: .public)): \(error.localizedDescription, privacy: .public)")
+        }
+    }
     return req.results?.first as? VNFeaturePrintObservation
 }
 
@@ -464,6 +484,7 @@ nonisolated func pfProcessVideo(
     progressFn: @escaping @Sendable (String) async -> Void,
     frameFn: @escaping @Sendable (CGImage, [CGRect], [CGRect]) async -> Void,
     distFn: @escaping @Sendable (Float) async -> Void,
+    distFnFinal: (@Sendable (Float) async -> Void)? = nil,
     visionStatsFn: @escaping @Sendable (Double, Double) async -> Void = { _, _ in },
     previewRateFn: @escaping @Sendable () -> Int = { 5 }
 ) async -> pfVideoResult? {
@@ -582,6 +603,9 @@ nonisolated func pfProcessVideo(
 
         if let img = previewImage {
             await frameFn(img, frameMatch.matchedRects, frameMatch.unmatchedRects)
+            // Drop the full-res oriented CGImage now that it's been handed off,
+            // so it isn't pinned across the next await/suspension (P1-3).
+            previewImage = nil
         }
 
         if sampledSoFar % 5 == 0 {
@@ -612,7 +636,10 @@ nonisolated func pfProcessVideo(
     perfLog.notice("\(summary, privacy: .public)")
     signpostLog.endInterval("video", spVideo)
 
-    await distFn(bestDistEver)
+    // Terminal best-distance publish: bypass the per-frame throttle so the last
+    // value is never dropped on a short tail (P2-4). Falls back to the throttled
+    // distFn if no unthrottled terminal sink was supplied.
+    await (distFnFinal ?? distFn)(bestDistEver)
     if ctx.reader.status == .failed {
         await logFn("[\(index)/\(total)] \(filename) — reader error: \(ctx.reader.error?.localizedDescription ?? "unknown")")
     }

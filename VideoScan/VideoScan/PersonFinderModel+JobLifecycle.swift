@@ -795,6 +795,11 @@ extension PersonFinderModel {
         let distFn: @Sendable (Float) async -> Void = { dist in
             await progressState.update { if dist < job.bestDist { job.bestDist = dist } }
         }
+        // Terminal best-distance publish — unthrottled so the final value of a
+        // video is never dropped by the throttle on a short tail (P2-4).
+        let distFnFinal: @Sendable (Float) async -> Void = { dist in
+            await MainActor.run { if dist < job.bestDist { job.bestDist = dist } }
+        }
 
         @Sendable func runVision() async -> pfVideoResult? {
             await pfProcessVideo(
@@ -808,6 +813,7 @@ extension PersonFinderModel {
                     }
                 },
                 distFn: distFn,
+                distFnFinal: distFnFinal,
                 visionStatsFn: { fps, msPerFrame in
                     let workers = await MemoryPressureMonitor.shared.currentWorkers()
                     await MainActor.run {
@@ -825,7 +831,8 @@ extension PersonFinderModel {
                 filePath: videoFiles[idx], idx1: idx + 1, total: total,
                 settings: settings, job: job, dash: dash,
                 progressState: progressState,
-                logFn: logFn, progressFn: progressFn, distFn: distFn
+                logFn: logFn, progressFn: progressFn, distFn: distFn,
+                distFnFinal: distFnFinal
             )
         }
 

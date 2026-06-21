@@ -216,6 +216,15 @@ nonisolated func arcfaceEmbedding(from faceImage: CGImage, model: MLModel) -> [F
                 let msg = "⚠️ CoreML NSException caught (#\(n), would have been SIGABRT) — name: \(name), reason: \(reason), userInfo: \(info)"
                 arcfaceLogger.error("\(msg, privacy: .public)")
                 appLog.write(msg)
+                // First-occurrence-only greppable marker so a degraded run is
+                // one grep away in videoscan.log; embeddings are dropped on
+                // these frames, so recognition may under-detect (P0-1, logging
+                // subset only — lock/model strategy unchanged).
+                if n == 1 {
+                    let warn = "⚠️ ARCFACE_MLE5_INSTABILITY first occurrence — recognition may under-detect"
+                    arcfaceLogger.warning("\(warn, privacy: .public)")
+                    appLog.write(warn)
+                }
             }
             return success
         }
@@ -288,7 +297,15 @@ nonisolated func arcfaceLoadReferenceEmbeddings(
         // Detect faces with Vision
         let req = VNDetectFaceRectanglesRequest(); req.revision = 3
         let handler = VNImageRequestHandler(cgImage: img, options: [:])
-        try? handler.perform([req])
+        do {
+            try handler.perform([req])
+        } catch {
+            // Surface reference-photo detect failures the way the Vision loader
+            // does (P1-5); previously swallowed silently and the photo was
+            // skipped with no feedback.
+            arcfaceLogger.warning("reference photo Vision detect failed: \((imgPath as NSString).lastPathComponent, privacy: .public) — \(error.localizedDescription, privacy: .public)")
+            continue
+        }
 
         var candidates = (req.results ?? []).filter { $0.confidence >= 0.5 }
         if largestFaceOnly, let largest = candidates.max(by: {
@@ -513,6 +530,7 @@ nonisolated func pfProcessVideoWithArcFace(
     progressFn: @escaping @Sendable (String) async -> Void,
     frameFn: @escaping @Sendable (CGImage, [CGRect], [CGRect]) async -> Void,
     distFn: @escaping @Sendable (Float) async -> Void,
+    distFnFinal: (@Sendable (Float) async -> Void)? = nil,
     visionStatsFn: @escaping @Sendable (Double, Double) async -> Void = { _, _ in },
     previewRateFn: @escaping @Sendable () -> Int = { 5 }
 ) async -> pfVideoResult? {
@@ -623,6 +641,9 @@ nonisolated func pfProcessVideoWithArcFace(
 
         if let img = previewImage {
             await frameFn(img, frameMatch.matchedRects, frameMatch.unmatchedRects)
+            // Drop the full-res oriented CGImage now that it's been handed off,
+            // so it isn't pinned across the next await/suspension (P1-3).
+            previewImage = nil
         }
 
         if sampledSoFar % 5 == 0 {
@@ -653,7 +674,10 @@ nonisolated func pfProcessVideoWithArcFace(
     }
     signpostLog.endInterval("video", spVideo)
 
-    if bestCosineEver > -1 { await distFn(1.0 - bestCosineEver) }
+    // Terminal best-distance publish: bypass the per-frame throttle so the last
+    // value is never dropped on a short tail (P2-4). Falls back to the throttled
+    // distFn if no unthrottled terminal sink was supplied.
+    if bestCosineEver > -1 { await (distFnFinal ?? distFn)(1.0 - bestCosineEver) }
     if ctx.reader.status == .failed {
         await logFn("[\(index)/\(total)] \(filename) — reader error: \(ctx.reader.error?.localizedDescription ?? "unknown")")
     }

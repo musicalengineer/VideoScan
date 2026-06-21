@@ -406,10 +406,14 @@ final class PersonFinderCache {
         return ""
     }
 
+    // SQLite's SQLITE_TRANSIENT sentinel, i.e. (sqlite3_destructor_type)-1 —
+    // tells SQLite to make its own copy of the bound text bytes.
+    private static let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
     private func bind(_ stmt: OpaquePointer?, _ idx: Int32, _ val: String) {
         sqlite3_bind_text(
             stmt, idx, (val as NSString).utf8String, -1,
-            unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+            PersonFinderCache.SQLITE_TRANSIENT
         )
     }
 }
