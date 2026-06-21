@@ -152,6 +152,47 @@ actor ArcFaceModelLoader {
 // MARK: - Embedding Extraction
 
 /// Extract a 512-D ArcFace embedding from a face crop (any size — will be resized to 112x112).
+/// One locked ArcFace prediction attempt with the MLE5 ObjC-exception firewall.
+/// Runs `model.prediction(from:)` under `lock`, catching any NSException that
+/// CoreML's MLE5 engine would otherwise turn into a SIGABRT. Returns the output
+/// (nil on failure), any Swift error, and whether an NSException fired (the
+/// instability signal the caller uses to retry / count a drop).
+private func arcfacePredictAttempt(
+    input: MLFeatureProvider, model: MLModel, lock: OSAllocatedUnfairLock<Void>,
+    attempt: Int, maxAttempts: Int
+) -> (output: MLFeatureProvider?, swiftError: (any Error)?, exceptionFired: Bool) {
+    var output: MLFeatureProvider?
+    var swiftError: (any Error)?
+    let ok: Bool = lock.withLock {
+        var caughtException: NSException?
+        let success = VSCatchObjCException({
+            do {
+                output = try model.prediction(from: input)
+            } catch {
+                swiftError = error
+            }
+        }, &caughtException)
+        if !success {
+            let n = arcfaceExceptionCountLock.withLock { arcfaceExceptionCount += 1; return arcfaceExceptionCount }
+            let name = caughtException?.name.rawValue ?? "unknown"
+            let reason = caughtException?.reason ?? "no reason"
+            let info = caughtException?.userInfo?.description ?? "none"
+            let msg = "⚠️ CoreML NSException caught (#\(n), attempt \(attempt)/\(maxAttempts), would have been SIGABRT) — name: \(name), reason: \(reason), userInfo: \(info)"
+            arcfaceLogger.error("\(msg, privacy: .public)")
+            appLog.write(msg)
+            // First-occurrence-only greppable marker so a degraded run is
+            // one grep away in videoscan.log.
+            if n == 1 {
+                let warn = "⚠️ ARCFACE_MLE5_INSTABILITY first occurrence — recognition may under-detect"
+                arcfaceLogger.warning("\(warn, privacy: .public)")
+                appLog.write(warn)
+            }
+        }
+        return success
+    }
+    return (output, swiftError, !ok)
+}
+
 /// Computes the 512-D ArcFace embedding for a face crop.
 ///
 /// Returns `(embedding, instabilityDrop)`. `embedding` is nil when no usable

@@ -171,6 +171,13 @@ struct PersonFinderSettings: Equatable {
     // ArcFace engine
     var arcfaceThreshold: Float = 0.40    // cosine similarity threshold (higher = stricter)
 
+    /// EXPERIMENTAL: number of concurrent ArcFace inference slots. 1 (default)
+    /// = the long-standing serialized behavior (single global lock) that guards
+    /// the MLE5 crash. >1 enables a pool of K individually-locked model
+    /// instances for parallel inference (P0-1). Validate with the arcface
+    /// stress scripts before raising in production. See ArcFacePredictor.
+    var arcfaceInferenceConcurrency: Int = 1
+
     // dlib/Python engine
     var recognitionEngine: RecognitionEngine = .vision
     var pythonPath: String = Self.defaultPythonPath
@@ -252,6 +259,7 @@ struct PersonFinderSettings: Equatable {
         if d.object(forKey: "\(p)concurrency") != nil { s.concurrency = d.integer(forKey: "\(p)concurrency") }
         if d.object(forKey: "\(p)previewRate") != nil { s.previewRate = max(1, d.integer(forKey: "\(p)previewRate")) }
         if d.object(forKey: "\(p)arcfaceThreshold") != nil { s.arcfaceThreshold = d.float(forKey: "\(p)arcfaceThreshold") }
+        if d.object(forKey: "\(p)arcfaceInferenceConcurrency") != nil { s.arcfaceInferenceConcurrency = max(1, d.integer(forKey: "\(p)arcfaceInferenceConcurrency")) }
     }
 
     private static func restoreBoolValues(_ s: inout PersonFinderSettings) {
@@ -325,6 +333,7 @@ struct PersonFinderSettings: Equatable {
         d.set(largestFaceOnly, forKey: "\(p)largestFaceOnly")
         d.set(previewRate, forKey: "\(p)previewRate")
         d.set(arcfaceThreshold, forKey: "\(p)arcfaceThreshold")
+        d.set(arcfaceInferenceConcurrency, forKey: "\(p)arcfaceInferenceConcurrency")
         d.set(rejectedReferenceFiles, forKey: "\(p)rejectedReferenceFiles")
     }
 }

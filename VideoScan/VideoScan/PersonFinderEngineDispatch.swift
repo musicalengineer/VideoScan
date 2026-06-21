@@ -158,6 +158,14 @@ func pfRunArcFaceEngine(
         return nil
     }
 
+    // Shape the shared ArcFace inference pool for this job (idempotent, cheap
+    // after the first video). Default K=1 keeps the serialized global-lock path;
+    // K>1 is the experimental concurrent-inference prototype (P0-1).
+    await ArcFacePredictor.shared.configure(concurrency: settings.arcfaceInferenceConcurrency)
+    if settings.arcfaceInferenceConcurrency > 1 {
+        await logFn("[arcface] EXPERIMENTAL concurrent inference pool K=\(ArcFacePredictor.shared.concurrency) (default is serialized K=1)")
+    }
+
     // Reference embeddings: compute ONCE per job, then reuse for every
     // subsequent video. Previously this ran for every video, which:
     //  - wasted N-references × predictions of work per video
