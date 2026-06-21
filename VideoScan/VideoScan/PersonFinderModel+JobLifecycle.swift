@@ -318,6 +318,12 @@ extension PersonFinderModel {
             jobSettings.recognitionEngine = engineOverride
         }
 
+        // Bust the per-video result cache between aligned and unaligned ArcFace
+        // embeddings (they are not comparable). Set before any cache lookup so a
+        // toggle never serves stale results; "" preserves the legacy namespace.
+        PersonFinderCache.arcfaceEmbedVariant =
+            (jobSettings.recognitionEngine == .arcface && jobSettings.arcfaceLandmarkAlignment) ? "lm-v1" : ""
+
         // High-level narration to videoscan.log — emitted once volume + engine
         // are known. Per-job verbose detail continues to go to the job's
         // PersistentLog.

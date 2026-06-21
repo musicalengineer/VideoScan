@@ -365,6 +365,7 @@ struct ArcFaceMLE5ProvocationTests {
                     let (embeddings, _) = arcfaceLoadReferenceEmbeddings(
                         from: profilePath,
                         largestFaceOnly: false,
+                        useLandmarkAlignment: false,
                         model: model
                     )
                     completedOK.withLock { $0 += 1 }

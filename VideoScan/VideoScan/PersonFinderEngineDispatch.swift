@@ -186,6 +186,7 @@ func pfRunArcFaceEngine(
         let (computed, refErr) = arcfaceLoadReferenceEmbeddings(
             from: settings.referencePath,
             largestFaceOnly: settings.largestFaceOnly,
+            useLandmarkAlignment: settings.arcfaceLandmarkAlignment,
             model: mlModel
         )
         if let refErr {

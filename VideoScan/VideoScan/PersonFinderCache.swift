@@ -88,6 +88,12 @@ final class PersonFinderCache {
         let refHash: String
     }
 
+    /// Per-scan ArcFace embedding-variant discriminator folded into the cache
+    /// key (see makeKey). Set once at scan launch from the alignment toggle;
+    /// "" = legacy unaligned namespace. Written on the main actor before a scan,
+    /// read on worker threads during it.
+    nonisolated(unsafe) static var arcfaceEmbedVariant = ""
+
     static func makeKey(
         videoPath: String,
         personName: String,
@@ -105,7 +111,13 @@ final class PersonFinderCache {
               let modDate = attrs[.modificationDate] as? Date else {
             return nil
         }
-        let refHash = cachedRefHash(refFilenames)
+        var refHash = cachedRefHash(refFilenames)
+        // Aligned vs unaligned ArcFace embeddings are not comparable, so they
+        // must not share cached per-video results. arcfaceEmbedVariant is set
+        // per scan from the alignment toggle; "" keeps the legacy namespace.
+        if engine == .arcface, !arcfaceEmbedVariant.isEmpty {
+            refHash += "|" + arcfaceEmbedVariant
+        }
         cacheLog.debug("makeKey: refHash=\(refHash, privacy: .public) refs=\(refFilenames.count) person=\(personName, privacy: .public) engine=\(engine.rawValue, privacy: .public)")
         return CacheKey(
             videoPath: videoPath,

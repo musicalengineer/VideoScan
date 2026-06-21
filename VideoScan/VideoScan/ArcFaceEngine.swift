@@ -318,9 +318,21 @@ nonisolated func arcfaceCosine(_ a: [Float], _ b: [Float]) -> Float {
 
 /// Load reference photos and extract ArcFace 512-D embeddings.
 /// Returns (embeddings, thumbnails, error).
+/// Produce the 112x112 crop fed to ArcFace for one face: the landmark-aligned
+/// norm_crop when `useLandmarkAlignment` is on and Vision recovers the
+/// landmarks, otherwise the plain bbox crop. Returns nil only when both fail.
+nonisolated func arcfaceFaceCrop(from image: CGImage, observation: VNFaceObservation,
+                                 useLandmarkAlignment: Bool) -> CGImage? {
+    if useLandmarkAlignment, let aligned = arcfaceAlignedCrop(from: image, observation: observation) {
+        return aligned
+    }
+    return pfNormalizeFaceCrop(from: image, observation: observation, outputSize: 112)
+}
+
 nonisolated func arcfaceLoadReferenceEmbeddings(
     from path: String,
     largestFaceOnly: Bool,
+    useLandmarkAlignment: Bool,
     model: MLModel
 ) -> ([[Float]], String?) {
     let fm = FileManager.default
@@ -365,8 +377,10 @@ nonisolated func arcfaceLoadReferenceEmbeddings(
         }) { candidates = [largest] }
 
         for obs in candidates {
-            // Use the existing normalization crop (will be resized to 112x112 inside arcfaceEmbedding)
-            guard let cropped = pfNormalizeFaceCrop(from: img, observation: obs, outputSize: 112) else { continue }
+            // Same crop path the scan uses, so reference and frame embeddings
+            // are aligned the same way and stay comparable by cosine.
+            guard let cropped = arcfaceFaceCrop(from: img, observation: obs,
+                                                useLandmarkAlignment: useLandmarkAlignment) else { continue }
             guard let emb = arcfaceEmbedding(from: cropped, model: model).embedding else { continue }
             embeddings.append(emb)
         }
@@ -484,7 +498,8 @@ private func arcFaceMatchCandidates(
     var m = ArcFaceFrameMatch()
     for obs in candidates {
         guard obs.confidence >= settings.minFaceConfidence,
-              let cropped = pfNormalizeFaceCrop(from: orientedImage, observation: obs, outputSize: 112) else { continue }
+              let cropped = arcfaceFaceCrop(from: orientedImage, observation: obs,
+                                            useLandmarkAlignment: settings.arcfaceLandmarkAlignment) else { continue }
         let embedResult = arcfaceEmbedding(from: cropped, model: model)
         guard let embedding = embedResult.embedding else {
             if embedResult.instabilityDrop { m.embedDrops += 1 }

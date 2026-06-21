@@ -17,7 +17,9 @@ import os
 private let pfDetectLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "detection")
 
 // Shared CIContext — expensive to create, reuse across calls
-private let pfCIContext = CIContext(options: [.useSoftwareRenderer: false])
+// Shared across the person-finder detection + ArcFace alignment paths; a
+// CIContext is expensive to build, so there is exactly one.
+let pfCIContext = CIContext(options: [.useSoftwareRenderer: false])
 
 // Rate-limit for feature-print failure warnings so a systematically failing
 // scan (e.g. ANE wedged) emits one warning per ~500 throwing frames rather

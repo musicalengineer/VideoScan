@@ -171,6 +171,14 @@ struct PersonFinderSettings: Equatable {
     // ArcFace engine
     var arcfaceThreshold: Float = 0.40    // cosine similarity threshold (higher = stricter)
 
+    /// EXPERIMENTAL: when true, warp each face to ArcFace's canonical 112x112
+    /// via a 5-landmark similarity transform (norm_crop) before embedding,
+    /// instead of the plain bounding-box crop. This is how the w600k_r50 model
+    /// was trained, so it should improve match quality; falls back to the
+    /// bbox crop when Vision can't recover landmarks. Off by default pending
+    /// visual validation. See ArcFaceAlignment.
+    var arcfaceLandmarkAlignment: Bool = false
+
     /// EXPERIMENTAL: number of concurrent ArcFace inference slots. 1 (default)
     /// = the long-standing serialized behavior (single global lock) that guards
     /// the MLE5 crash. >1 enables a pool of K individually-locked model
@@ -268,6 +276,7 @@ struct PersonFinderSettings: Equatable {
         if d.object(forKey: "\(p)skipBundles") != nil { s.skipBundles = d.bool(forKey: "\(p)skipBundles") }
         if d.object(forKey: "\(p)skipCatalogBadFiles") != nil { s.skipCatalogBadFiles = d.bool(forKey: "\(p)skipCatalogBadFiles") }
         if d.object(forKey: "\(p)largestFaceOnly") != nil { s.largestFaceOnly = d.bool(forKey: "\(p)largestFaceOnly") }
+        if d.object(forKey: "\(p)arcfaceLandmarkAlignment") != nil { s.arcfaceLandmarkAlignment = d.bool(forKey: "\(p)arcfaceLandmarkAlignment") }
     }
 
     private static func validatePaths(_ s: inout PersonFinderSettings) {
@@ -331,6 +340,7 @@ struct PersonFinderSettings: Equatable {
         d.set(skipBundles, forKey: "\(p)skipBundles")
         d.set(skipCatalogBadFiles, forKey: "\(p)skipCatalogBadFiles")
         d.set(largestFaceOnly, forKey: "\(p)largestFaceOnly")
+        d.set(arcfaceLandmarkAlignment, forKey: "\(p)arcfaceLandmarkAlignment")
         d.set(previewRate, forKey: "\(p)previewRate")
         d.set(arcfaceThreshold, forKey: "\(p)arcfaceThreshold")
         d.set(arcfaceInferenceConcurrency, forKey: "\(p)arcfaceInferenceConcurrency")
