@@ -256,36 +256,17 @@ nonisolated func arcfaceEmbedding(from faceImage: CGImage, model: MLModel) -> (e
         let maxAttempts = 2
 
         for attempt in 1...maxAttempts {
-            output = nil
-            swiftError = nil
-            let success: Bool = arcfacePredictionLock.withLock {
-                var caughtException: NSException?
-                let ok = VSCatchObjCException({
-                    do {
-                        output = try model.prediction(from: input)
-                    } catch {
-                        swiftError = error
-                    }
-                }, &caughtException)
-                if !ok {
-                    let n = arcfaceExceptionCountLock.withLock { arcfaceExceptionCount += 1; return arcfaceExceptionCount }
-                    let name = caughtException?.name.rawValue ?? "unknown"
-                    let reason = caughtException?.reason ?? "no reason"
-                    let info = caughtException?.userInfo?.description ?? "none"
-                    let msg = "⚠️ CoreML NSException caught (#\(n), attempt \(attempt)/\(maxAttempts), would have been SIGABRT) — name: \(name), reason: \(reason), userInfo: \(info)"
-                    arcfaceLogger.error("\(msg, privacy: .public)")
-                    appLog.write(msg)
-                    // First-occurrence-only greppable marker so a degraded run is
-                    // one grep away in videoscan.log.
-                    if n == 1 {
-                        let warn = "⚠️ ARCFACE_MLE5_INSTABILITY first occurrence — recognition may under-detect"
-                        arcfaceLogger.warning("\(warn, privacy: .public)")
-                        appLog.write(warn)
-                    }
-                }
-                return ok
-            }
-            if success {
+            // Borrow a (model, lock) for this attempt: serialized mode returns
+            // the per-video `model` + the global lock (unchanged); pooled mode
+            // (K>1) returns one of K individually-locked instances.
+            let (predModel, lock) = ArcFacePredictor.shared.borrow(fallback: model)
+            let r = arcfacePredictAttempt(
+                input: input, model: predModel, lock: lock,
+                attempt: attempt, maxAttempts: maxAttempts
+            )
+            output = r.output
+            swiftError = r.swiftError
+            if !r.exceptionFired {
                 instabilityDrop = false
                 break
             }
@@ -300,24 +281,28 @@ nonisolated func arcfaceEmbedding(from faceImage: CGImage, model: MLModel) -> (e
         // A Swift throw leaves instabilityDrop == false (success was true, just
         // empty output), so only a surviving NSException counts as a drop.
         guard swiftError == nil, let output else { return (nil, instabilityDrop) }
-
-        for name in output.featureNames {
-            if let arr = output.featureValue(for: name)?.multiArrayValue {
-                let count = arr.count
-                guard count == 512 else { continue }
-                var embedding = [Float](repeating: 0, count: count)
-                let ptr = arr.dataPointer.bindMemory(to: Float.self, capacity: count)
-                for i in 0..<count { embedding[i] = ptr[i] }
-                // L2-normalize
-                let norm = sqrt(embedding.reduce(0) { $0 + $1 * $1 })
-                if norm > 0 { for i in 0..<count { embedding[i] /= norm } }
-                return (embedding, false)
-            }
-        }
-        return (nil, false)
+        return (arcfaceNormalizedEmbedding(from: output), false)
     } catch {
         return (nil, false)
     }
+}
+
+/// Extracts the first 512-D feature value from a CoreML output and returns it
+/// L2-normalized (ArcFace embeddings are compared by cosine, which assumes unit
+/// vectors). Returns nil if no 512-element array is present.
+private func arcfaceNormalizedEmbedding(from output: MLFeatureProvider) -> [Float]? {
+    for name in output.featureNames {
+        guard let arr = output.featureValue(for: name)?.multiArrayValue else { continue }
+        let count = arr.count
+        guard count == 512 else { continue }
+        var embedding = [Float](repeating: 0, count: count)
+        let ptr = arr.dataPointer.bindMemory(to: Float.self, capacity: count)
+        for i in 0..<count { embedding[i] = ptr[i] }
+        let norm = sqrt(embedding.reduce(0) { $0 + $1 * $1 })
+        if norm > 0 { for i in 0..<count { embedding[i] /= norm } }
+        return embedding
+    }
+    return nil
 }
 
 /// Cosine similarity between two L2-normalized 512-D embeddings.
