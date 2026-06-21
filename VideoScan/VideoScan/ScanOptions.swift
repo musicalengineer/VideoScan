@@ -27,6 +27,14 @@ struct ScanOptions: Equatable {
     /// you don't care about dup detection this pass.
     var skipChecksums: Bool = false
 
+    /// Polarity exception (an additive "Scan X", not a "Skip X"): when ON, the
+    /// scan ALSO examines files with NO extension and lets ffprobe decide if
+    /// they're media. Recovers Avid/QuickTime video-only exports and other
+    /// media written without an extension that the media-extension allowlist
+    /// silently dropped. OFF by default; this is a targeted gap-recovery pass,
+    /// not something to leave on for every scan. See FilesystemWalker.
+    var probeExtensionless: Bool = false
+
     // MARK: Persistence
     // UserDefaults.standard is documented thread-safe (CFPreferences-backed
     // with internal locking). nonisolated(unsafe) tells strict concurrency
@@ -41,6 +49,7 @@ struct ScanOptions: Equatable {
         if d.object(forKey: "\(p)skipMediaBundles") != nil { s.skipMediaBundles = d.bool(forKey: "\(p)skipMediaBundles") }
         if d.object(forKey: "\(p)skipSmallFiles") != nil { s.skipSmallFiles   = d.bool(forKey: "\(p)skipSmallFiles") }
         if d.object(forKey: "\(p)skipChecksums") != nil { s.skipChecksums    = d.bool(forKey: "\(p)skipChecksums") }
+        if d.object(forKey: "\(p)probeExtensionless") != nil { s.probeExtensionless = d.bool(forKey: "\(p)probeExtensionless") }
         return s
     }
 
@@ -50,6 +59,7 @@ struct ScanOptions: Equatable {
         d.set(skipMediaBundles, forKey: "\(p)skipMediaBundles")
         d.set(skipSmallFiles, forKey: "\(p)skipSmallFiles")
         d.set(skipChecksums, forKey: "\(p)skipChecksums")
+        d.set(probeExtensionless, forKey: "\(p)probeExtensionless")
     }
 
     /// True when the user has deviated from the recommended fast-path

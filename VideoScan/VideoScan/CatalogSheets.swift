@@ -228,6 +228,15 @@ struct ScanOptionsMenu: View {
 
             Divider()
 
+            // Additive gap-recovery pass (not a "Skip"): also examine files
+            // with no extension and let ffprobe decide if they're media.
+            // Recovers Avid/QuickTime video-only exports written without an
+            // extension that the normal allowlist scan misses.
+            Toggle("Scan Files With No Extension", isOn: toggle(\.probeExtensionless))
+                .help("Also examine extensionless files (e.g. Avid video-only exports) and catalog the ones ffprobe identifies as media. Targeted recovery pass — leave off for normal scans.")
+
+            Divider()
+
             Button("Fast Defaults") {
                 model.scanOptions = .fastDefaults
                 model.scanOptions.save()
