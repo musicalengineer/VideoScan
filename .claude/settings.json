@@ -1,4 +1,7 @@
 {
+    "env": {
+        "PATH": "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+    },
     "permissions": {
         "allow": [
             "Read",
@@ -301,7 +304,15 @@
             "Bash(gh ssh-key list:*)",
             "Bash(gh ssh-key add:*)",
             "Bash(gh auth setup-git)",
-            "Bash(gh auth status:*)"
+            "Bash(gh auth status:*)",
+            "Bash(export:*)",
+            "Read(/Users/rickb/dev/immich/**)",
+            "Write(/Users/rickb/dev/immich/**)",
+            "Edit(/Users/rickb/dev/immich/**)",
+            "Read(/Users/rickb/Library/Logs/**)",
+            "Read(/Users/rickb/Library/Logs/DiagnosticReports/**)",
+            "Read(/Library/Logs/DiagnosticReports/**)",
+            "Read(/Users/rickb/Library/Application Support/VideoScan/**)"
         ],
         "deny": [
             "Bash(git push --force origin main)",
