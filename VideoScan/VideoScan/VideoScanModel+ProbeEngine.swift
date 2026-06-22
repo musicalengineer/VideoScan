@@ -147,6 +147,19 @@ extension VideoScanModel {
         return (targetRecords, discoveredCount, completedCount)
     }
 
+    /// Whether a probed file should get a catalog record. Drops files that have
+    /// NO extension AND that ffprobe could not identify as media — the data-blob
+    /// noise the "Scan Files With No Extension" pass admits (e.g. ~4.9k junk
+    /// rows on a backup-drive sweep). Extensioned damaged media (a real but
+    /// unreadable Avid .mxf, say) is STILL cataloged so it stays visible. Each
+    /// drop is logged to videoscan.log at the call site, so "why isn't this
+    /// file cataloged?" always has an answer.
+    nonisolated static func shouldCatalogProbeResult(ext: String, streamTypeRaw: String) -> Bool {
+        let extensionless = ext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let unidentified = streamTypeRaw == StreamType.ffprobeFailed.rawValue
+        return !(extensionless && unidentified)
+    }
+
     /// Probe a pre-discovered file list (from a checkpoint). Skips the walk
     /// phase entirely — MetadataCache handles skipping already-probed files.
     func runResumedProbeGroup(
@@ -202,6 +215,11 @@ extension VideoScanModel {
             }
 
             for await rec in probeGroup {
+                guard Self.shouldCatalogProbeResult(ext: rec.ext, streamTypeRaw: rec.streamTypeRaw) else {
+                    appLog.write("NOT CATALOGED — no extension, ffprobe could not identify as media: \(rec.fullPath)")
+                    completedCount += 1
+                    continue
+                }
                 targetRecords.append(rec)
                 completedCount += 1
 
