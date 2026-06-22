@@ -15,8 +15,13 @@ struct ReformatJobProgressTests {
     @Test("structured out_time= parses hours/minutes/seconds correctly")
     func outTimeParses() {
         let s = ReformatJob.parseProgressSeconds(line: "out_time=01:23:45.678")
+        // Hoisted to an explicitly-typed constant: inlining the mixed
+        // Int/Double literal arithmetic inside the #expect macro blows up
+        // the constraint solver on Xcode 16.4 ("unable to type-check in
+        // reasonable time"). Pre-typing it keeps the macro body trivial.
+        let expected: Double = 3600 + 23 * 60 + 45.678
         #expect(s != nil)
-        #expect(abs((s ?? 0) - (3600 + 23*60 + 45.678)) < 0.001)
+        #expect(abs((s ?? 0) - expected) < 0.001)
     }
 
     @Test("legacy time= parses correctly")
