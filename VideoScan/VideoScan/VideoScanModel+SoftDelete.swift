@@ -56,6 +56,30 @@ extension VideoScanModel {
         return changed.count
     }
 
+    /// Pure selector: IDs of active (non-purged) records that are extensionless
+    /// AND ffprobe couldn't identify as media — the data-blob noise the
+    /// "Scan Files With No Extension" pass can sweep in (Lightroom previews,
+    /// Photos/FCP/Logic/GarageBand caches, Quicken data, app binaries, MIDI…).
+    /// Same predicate as the scan-time drop (shouldCatalogProbeResult), applied
+    /// retroactively to clean a catalog populated before that drop existed.
+    nonisolated static func unreadableExtensionlessIDs(in records: [VideoRecord]) -> [UUID] {
+        records.compactMap { rec in
+            guard rec.purgedAt == nil,
+                  !shouldCatalogProbeResult(ext: rec.ext, streamTypeRaw: rec.streamTypeRaw)
+            else { return nil }
+            return rec.id
+        }
+    }
+
+    /// Soft-delete (reversible) every active record that is extensionless and
+    /// unreadable by ffprobe. Files on disk are untouched; rows are hidden from
+    /// the default view and recoverable via Show Removed → Restore or the undo
+    /// banner. Returns the count removed.
+    @discardableResult
+    func softDeleteUnreadableExtensionless() -> Int {
+        purgeRecords(ids: Set(Self.unreadableExtensionlessIDs(in: records)))
+    }
+
     /// Clear `purgedAt` on a single record. Used by the right-click menu
     /// on a purged row when "Show removed" is on. Returns true on success.
     @discardableResult

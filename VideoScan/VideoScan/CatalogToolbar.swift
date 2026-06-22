@@ -467,6 +467,18 @@ struct CatalogToolbar<Dashboard: View>: View {
                     Divider()
                     Button("Clear All Filters") { viewFilters.removeAll() }
                 }
+                // Maintenance: one-click reversible removal of the extensionless
+                // files ffprobe can't read (caches/previews/app data) that the
+                // "Scan Files With No Extension" pass can sweep in. Soft-delete —
+                // files on disk untouched, recoverable via Show Removed.
+                let junkCount = VideoScanModel.unreadableExtensionlessIDs(in: model.records).count
+                if junkCount > 0 {
+                    Divider()
+                    Button("Remove \(junkCount) Unreadable Extensionless File\(junkCount == 1 ? "" : "s")") {
+                        _ = model.softDeleteUnreadableExtensionless()
+                    }
+                    .help("Hide non-media files with no extension that ffprobe can't read (caches, previews, app data). Files on disk are not deleted; toggle Show Removed to restore.")
+                }
             } label: {
                 HStack(spacing: 3) {
                     Image(systemName: "line.3.horizontal.decrease.circle\(viewFilters.isEmpty ? "" : ".fill")")

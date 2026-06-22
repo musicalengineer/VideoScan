@@ -38,4 +38,25 @@ struct ProbeResultCatalogingTests {
         #expect(decide(ext: "MOV", .videoAndAudio))
         #expect(decide(ext: "WAV", .audioOnly))
     }
+
+    @Test("Bulk cleanup selector picks only extensionless+unreadable active rows")
+    func bulkSelector() {
+        func mk(_ ext: String, _ stream: StreamType, purged: Bool = false) -> VideoRecord {
+            let r = VideoRecord()
+            r.ext = ext
+            r.streamTypeRaw = stream.rawValue
+            if purged { r.purgedAt = Date() }
+            return r
+        }
+        let junk1 = mk("", .ffprobeFailed)
+        let junk2 = mk("", .ffprobeFailed)
+        let realExtensionless = mk("", .videoOnly)        // extensionless but real media — keep
+        let damagedMxf = mk("MXF", .ffprobeFailed)        // extensioned damaged — keep
+        let normal = mk("MOV", .videoAndAudio)
+        let alreadyPurged = mk("", .ffprobeFailed, purged: true)  // skip — already removed
+
+        let ids = Set(VideoScanModel.unreadableExtensionlessIDs(
+            in: [junk1, junk2, realExtensionless, damagedMxf, normal, alreadyPurged]))
+        #expect(ids == Set([junk1.id, junk2.id]))
+    }
 }
