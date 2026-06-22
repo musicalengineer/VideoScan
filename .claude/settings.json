@@ -312,7 +312,8 @@
             "Read(/Users/rickb/Library/Logs/**)",
             "Read(/Users/rickb/Library/Logs/DiagnosticReports/**)",
             "Read(/Library/Logs/DiagnosticReports/**)",
-            "Read(/Users/rickb/Library/Application Support/VideoScan/**)"
+            "Read(/Users/rickb/Library/Application Support/VideoScan/**)",
+            "Bash"
         ],
         "deny": [
             "Bash(git push --force origin main)",
@@ -340,6 +341,13 @@
             "Bash(rm -rf:*)",
             "Bash(rm -r:*)",
             "Bash(sudo:*)",
+            "Bash(dd:*)",
+            "Bash(mkfs:*)",
+            "Bash(diskutil erase:*)",
+            "Bash(diskutil reformat:*)",
+            "Bash(diskutil partitionDisk:*)",
+            "Bash(diskutil eraseDisk:*)",
+            "Bash(diskutil eraseVolume:*)",
             "Bash(curl:*)",
             "Bash(wget:*)",
             "Bash(brew install:*)",
