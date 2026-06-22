@@ -295,7 +295,13 @@
             "Read(/Users/rickb/**)",
             "Write(/tmp/**)",
             "Write(/Volumes/Crucial2TB/Matt/**)",
-            "Write(/Volumes/Crucial2TB/VideoScan/**)"
+            "Write(/Volumes/Crucial2TB/VideoScan/**)",
+            "Bash(ssh-keyscan:*)",
+            "Bash(gh ssh-key list)",
+            "Bash(gh ssh-key list:*)",
+            "Bash(gh ssh-key add:*)",
+            "Bash(gh auth setup-git)",
+            "Bash(gh auth status:*)"
         ],
         "deny": [
             "Bash(git push --force origin main)",
