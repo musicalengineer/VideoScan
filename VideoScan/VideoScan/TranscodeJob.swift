@@ -399,7 +399,7 @@ extension TranscodeJob {
 // MARK: - Job
 
 @MainActor
-final class TranscodeJob: @MainActor MediaFileOperationJob {
+final class TranscodeJob: MediaFileOperationJob {
 
     let id = UUID()
     let kind: MediaFileOperationKind = .transcode

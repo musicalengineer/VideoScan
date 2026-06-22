@@ -27,11 +27,10 @@ import os
 private let fileOpsLog = Logger(subsystem: "Rick-Breen.VideoScan",
                                 category: "fileOps")
 
+// `@MainActor` isolation: the protocol's requirements may only be
+// used from the main actor — which is exactly how the window uses them.
 @MainActor
-// `@MainActor` on the conformance (SE-0470 isolated conformances):
-// the protocol's requirements may only be used from the main actor —
-// which is exactly how the window uses them.
-final class PairCompareJob: @MainActor MediaFileOperationJob {
+final class PairCompareJob: MediaFileOperationJob {
 
     /// One volume gate this job must hold while reading. Phase 2
     /// hoisted the concrete type to `MediaVolumeGate` (shared with
