@@ -148,16 +148,25 @@ except Exception:
         commit -m "$commit_msg" --quiet 2>/dev/null
 
     # ── Push with retry-on-conflict ─────────────────────────────────
-    # Up to 3 attempts. Between attempts, pull --rebase to pick up any
-    # other publisher's rows (e.g. an M1 ad-hoc run).
+    # Up to PUSH_MAX_ATTEMPTS tries. Between attempts, pull --rebase to
+    # pick up any other publisher's rows (e.g. an M1 ad-hoc run, the
+    # static-analysis nightly, or the metrics collector). The `metrics`
+    # branch is high-contention, so we also sleep with jittered backoff
+    # between attempts — without it all retries fire within a few seconds
+    # and a busy window guarantees exhaustion (see 2026-06-22 nightly).
+    local push_max_attempts=6
     local push_attempt=1
     local pushed=false
-    while [ $push_attempt -le 3 ]; do
+    while [ $push_attempt -le $push_max_attempts ]; do
         if git -C "$METRICS_WT" push origin metrics --quiet 2>/dev/null; then
             pushed=true
             break
         fi
-        log "  push attempt $push_attempt failed — rebasing and retrying"
+        # Jittered backoff: base 2s * attempt + 0–3s random jitter, so
+        # concurrent publishers desynchronize instead of colliding again.
+        local backoff=$(( push_attempt * 2 + (RANDOM % 4) ))
+        log "  push attempt $push_attempt/$push_max_attempts failed — backing off ${backoff}s, rebasing and retrying"
+        sleep "$backoff"
         git -C "$METRICS_WT" fetch origin metrics --quiet 2>/dev/null || true
         if ! git -C "$METRICS_WT" pull --rebase origin metrics --quiet 2>/dev/null; then
             # Rebase failed (conflict on jsonl — both sides appended).

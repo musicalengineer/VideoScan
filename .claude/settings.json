@@ -2,6 +2,18 @@
     "env": {
         "PATH": "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
     },
+    "hooks": {
+        "SessionStart": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "bash /Users/rickb/dev/VideoScan/.claude/scripts/session_morning_hook.sh"
+                    }
+                ]
+            }
+        ]
+    },
     "permissions": {
         "allow": [
             "Read",
