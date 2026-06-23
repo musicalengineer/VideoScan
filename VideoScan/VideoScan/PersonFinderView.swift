@@ -167,25 +167,6 @@ struct PersonFinderView: View {
         .controlSize(.small)
         .disabled(model.jobs.isEmpty)
 
-        // Experimental ArcFace recognition options — previously defaults-only.
-        Menu {
-            Section("Experimental — ArcFace engine") {
-                Toggle(isOn: Binding(
-                    get: { model.settings.arcfaceLandmarkAlignment },
-                    set: { model.settings.arcfaceLandmarkAlignment = $0 }   // didSet saves
-                )) {
-                    Text("5-landmark alignment (norm_crop)")
-                }
-            }
-            Text("Warps each face to the model's canonical 112×112 before embedding (how ArcFace was trained). May improve match accuracy across decades. Start a new search to see the effect.")
-        } label: {
-            Label("Engine Options", systemImage: "gearshape")
-                .font(.system(size: 11))
-        }
-        .menuStyle(.borderlessButton)
-        .fixedSize()
-        .help("Experimental ArcFace recognition options")
-
         let anyIdle   = model.jobs.contains { $0.status.isIdle }
         let anyActive = model.jobs.contains { $0.status.isActive }
         if model.jobs.count > 1 && anyIdle {

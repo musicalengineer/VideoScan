@@ -506,6 +506,20 @@ struct ScanJobRow: View {
             Text("Settings — \(engine.rawValue)")
                 .font(.headline)
 
+            // Engine Options (experimental) — ArcFace only. Lives at the top of
+            // the per-search settings so it sits with the engine it applies to.
+            if engine == .arcface {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Engine Options")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Toggle("5-landmark alignment (norm_crop)",
+                           isOn: model.settingsBinding.arcfaceLandmarkAlignment)
+                        .help("Warps each face to ArcFace's canonical 112×112 before embedding (how the model was trained). May improve match accuracy across decades. Experimental — start a new search to see the effect.")
+                }
+                Divider()
+            }
+
             // Common settings
             Group {
                 LabeledControl("Match Threshold") {
