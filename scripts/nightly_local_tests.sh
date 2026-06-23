@@ -253,21 +253,39 @@ COMMIT_DATE=$(git log -1 --format=%cd --date=short 2>/dev/null || echo "unknown"
 log "Commit: $COMMIT ($COMMIT_DATE)"
 
 # ── Build ───────────────────────────────────────────────────────────
+# DerivedData lives under ~/Library/Caches, NOT /tmp. macOS garbage-collects
+# /tmp and can leave a half-populated explicit-modules cache, which surfaces
+# as `module file '…Foundation….pcm' not found` and fails the build with rc=65
+# (nightly false failure 2026-06-23). A stable cache dir avoids that, and a
+# clean-and-retry-once guards against any residual module-cache corruption.
+NIGHTLY_DD="${HOME}/Library/Caches/videoscan-nightly-dd"
+
+run_nightly_build() {
+    xcodebuild build-for-testing \
+        -project VideoScan/VideoScan.xcodeproj \
+        -scheme VideoScan \
+        -configuration Debug \
+        -destination 'platform=macOS' \
+        -derivedDataPath "$NIGHTLY_DD" \
+        -enableCodeCoverage YES \
+        CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS= \
+        -quiet 2>&1 | tail -10
+    return "${PIPESTATUS[0]:-$?}"
+}
+
 log "Building..."
 BUILD_START=$(date +%s)
-xcodebuild build-for-testing \
-    -project VideoScan/VideoScan.xcodeproj \
-    -scheme VideoScan \
-    -configuration Debug \
-    -destination 'platform=macOS' \
-    -derivedDataPath /tmp/nightly-dd \
-    -enableCodeCoverage YES \
-    CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS= \
-    -quiet 2>&1 | tail -10
-BUILD_RC="${PIPESTATUS[0]:-$?}"
+run_nightly_build
+BUILD_RC=$?
+if [ "$BUILD_RC" -ne 0 ]; then
+    log "Build failed (rc=$BUILD_RC) — wiping DerivedData and retrying once (stale-module-cache guard)"
+    rm -rf "$NIGHTLY_DD"
+    run_nightly_build
+    BUILD_RC=$?
+fi
 
 if [ "$BUILD_RC" -ne 0 ]; then
-    log "FATAL: build failed (rc=$BUILD_RC)"
+    log "FATAL: build failed after clean retry (rc=$BUILD_RC)"
     publish_row "$(make_status_row failed "build-rc:$BUILD_RC" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")"
     exit 1
 fi
@@ -284,7 +302,7 @@ xcodebuild test-without-building \
     -scheme VideoScan \
     -configuration Debug \
     -destination 'platform=macOS' \
-    -derivedDataPath /tmp/nightly-dd \
+    -derivedDataPath "$NIGHTLY_DD" \
     -enableCodeCoverage YES \
     -resultBundlePath /tmp/nightly-results.xcresult \
     CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS= \
