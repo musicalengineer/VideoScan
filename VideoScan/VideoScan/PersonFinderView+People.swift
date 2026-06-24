@@ -1,0 +1,364 @@
+// PersonFinderView+People.swift
+// The People gallery — saved family profiles, the inline undo banner, the
+// person-card sizing math, and the gallery's alerts/sheets — extracted
+// verbatim from PersonFinderView's body in PersonFinderView.swift
+// (refactor 2026-06-24). A cross-file `extension` can't see `private`
+// members, so the handful of PersonFinderView members this code shares
+// with the other split files were widened to internal in the main file.
+// (Swift extension ≈ C++ partial class via free member functions: no new
+// stored state allowed, methods share the same `self`; `private` here
+// means file-private to THIS file.)
+
+import SwiftUI
+import AppKit
+
+extension PersonFinderView {
+
+    /// Image diameter scales linearly with the gallery height, leaving
+    /// ~70pt headroom for the name label and padding. Clamped so cards
+    /// stay tappable at the floor and don't overflow at the ceiling.
+    var personImageSize: CGFloat {
+        CGFloat(min(max(peopleGalleryHeight - 70, 56), 260))
+    }
+    var personCardWidth: CGFloat {
+        max(personImageSize + 24, 96)
+    }
+    var personNameFontSize: CGFloat {
+        min(max(11 + (personImageSize - 64) * 0.07, 11), 20)
+    }
+
+    /// Inline undo affordance for the most recent POI delete. Stays visible
+    /// until the user clicks Undo / dismisses with the × / a new delete
+    /// supersedes it / app relaunch (session-scope state). No auto-dismiss
+    /// timer — Rick wants to take his time.
+    @ViewBuilder
+    var undoBanner: some View {
+        if let snap = model.lastDeletedPOI {
+            HStack(spacing: 10) {
+                Image(systemName: "trash.slash")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.orange)
+                if let err = model.lastUndoError {
+                    Text(err)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.red)
+                } else {
+                    Text("Deleted '\(snap.name)'.")
+                        .font(.system(size: 12))
+                        .foregroundColor(.primary)
+                }
+                Button("Undo") {
+                    Task { @MainActor in
+                        _ = await model.undoLastDelete()
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .keyboardShortcut("z", modifiers: .command)
+
+                Spacer()
+
+                Button {
+                    model.dismissUndoBanner()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(Color.secondary, Color.secondary.opacity(0.2))
+                }
+                .buttonStyle(.plain)
+                .help("Dismiss — the POI stays in ~/dev/VideoScan/.trash/ for manual recovery")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.orange.opacity(0.12))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.orange.opacity(0.35), lineWidth: 1)
+            )
+            .transition(.opacity.combined(with: .move(edge: .top)))
+        }
+    }
+
+    var peopleGallery: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            // Inline undo banner — armed by deletePOI, dismissed by undo /
+            // dismiss / superseded by next delete / app relaunch. No timers.
+            // Sits ABOVE the header so it never reflows the grid below
+            // (the VStack just gets one more row).
+            undoBanner
+
+            HStack {
+                Image(systemName: "person.2.fill")
+                    .font(.title3)
+                    .foregroundColor(.accentColor)
+                Text("Family")
+                    .font(.headline)
+                Spacer()
+                if !model.savedProfiles.isEmpty {
+                    Text("\(model.savedProfiles.count) people")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            if model.savedProfiles.isEmpty {
+                // Empty state — prominent Add Person button
+                VStack(spacing: 10) {
+                    Button {
+                        editingOriginalName = nil
+                        editingProfile = POIProfile(name: "", referencePath: "")
+                    } label: {
+                        Label("Add Person\u{2026}", systemImage: "person.badge.plus")
+                            .font(.title3.weight(.medium))
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+
+                    Text("Add family members, choose their reference photos, and scan your video library to find them")
+                        .font(.caption)
+                        .foregroundColor(.secondary.opacity(0.8))
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 400)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        // Add Person — always left-aligned
+                        Button {
+                            editingOriginalName = nil
+                            editingProfile = POIProfile(name: "", referencePath: "")
+                        } label: {
+                            VStack(spacing: 6) {
+                                ZStack {
+                                    Circle()
+                                        .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [5, 3]))
+                                        .foregroundColor(.secondary.opacity(0.4))
+                                        .frame(width: personImageSize, height: personImageSize)
+                                    Image(systemName: "plus")
+                                        .font(.system(size: personImageSize * 0.34, weight: .medium))
+                                        .foregroundColor(.secondary)
+                                }
+                                Text("Add Person")
+                                    .font(.system(size: personNameFontSize, weight: .medium))
+                                    .foregroundColor(.secondary)
+                            }
+                            .frame(width: personCardWidth)
+                            .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.plain)
+
+                        // Build set of all people currently being scanned across all active jobs
+                        let scanningNames = Set(model.jobs.filter { $0.status.isActive }.compactMap { $0.assignedProfile?.name.lowercased() })
+                        ForEach(model.savedProfiles) { profile in
+                            let isBeingScanned = scanningNames.contains(profile.name.lowercased())
+                            let isActive = isBeingScanned
+                            PersonCard(profile: profile,
+                                       isActive: isActive,
+                                       justSaved: justSavedProfileID == profile.id,
+                                       imageSize: personImageSize,
+                                       cardWidth: personCardWidth,
+                                       nameFontSize: personNameFontSize)
+                                .opacity(isBeingScanned ? 0.7 : 1.0)
+                                .onTapGesture {
+                                    if isBeingScanned {
+                                        scanLockMessage = "Cannot edit \(profile.name) while scanning for \(profile.name)."
+                                        return
+                                    }
+                                    // Load this person's reference faces into the strip for inspection
+                                    model.settings.applyProfile(profile)
+                                    model.settings.save()
+                                    model.referenceFaces.removeAll()
+                                    model.referenceLoadFailures.removeAll()
+                                    Task { await model.loadReference() }
+                                }
+                                .draggable(profile.id) {
+                                    PersonCard(profile: profile,
+                                               isActive: false,
+                                               imageSize: personImageSize * 0.8,
+                                               cardWidth: personCardWidth * 0.8,
+                                               nameFontSize: personNameFontSize)
+                                        .opacity(0.8)
+                                }
+                                .dropDestination(for: String.self) { items, _ in
+                                    guard let fromID = items.first else { return false }
+                                    model.reorderProfiles(fromID: fromID, toID: profile.id)
+                                    draggingProfileID = nil
+                                    return true
+                                } isTargeted: { targeted in
+                                    if targeted { draggingProfileID = profile.id }
+                                }
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(Color.accentColor, lineWidth: 2)
+                                        .opacity(draggingProfileID == profile.id ? 1 : 0)
+                                        .animation(.easeInOut(duration: 0.15), value: draggingProfileID)
+                                )
+                                .contextMenu {
+                                    Button("Search for \(profile.name)\u{2026}") {
+                                        addJobForPerson(profile)
+                                    }
+                                    Divider()
+                                    Button("Show \(profile.name) in Family Tree") {
+                                        ftHighlight = profile.name
+                                        selectedTab = 5
+                                    }
+                                    Divider()
+                                    Button("Edit \(profile.name)\u{2026}") {
+                                        editingOriginalName = profile.name
+                                        editingProfile = profile
+                                    }
+                                    Divider()
+                                    Button("Confirm \(profile.name)\u{2026}") {
+                                        confirmTarget = ConfirmSheetTarget(profile: profile)
+                                    }
+                                    .help("Rate catalog-flagged candidates Definitely / Likely / No. Builds the labeled set the classifier trains on.")
+                                    Button("View Confirmations\u{2026}") {
+                                        confirmationsTarget = ConfirmationsTarget(profile: profile)
+                                    }
+                                    .help("Cumulative progress: outcomes, signal precision, rounds, what remains.")
+                                    if !model.referenceFaces.isEmpty && model.settings.personName.lowercased() == profile.name.lowercased() {
+                                        Divider()
+                                        Menu("Remove Low-Confidence Photos") {
+                                            let poorCount = model.referenceFaces.filter { $0.confidence < 0.60 }.count
+                                            let belowGoodCount = model.referenceFaces.filter { $0.confidence < 0.80 }.count
+                                            Button("Below Fair (< 60%) — \(poorCount) photo\(poorCount == 1 ? "" : "s")") {
+                                                model.removeReferenceFaces(belowConfidence: 0.60)
+                                            }
+                                            .disabled(poorCount == 0)
+                                            Button("Below Good (< 80%) — \(belowGoodCount) photo\(belowGoodCount == 1 ? "" : "s")") {
+                                                model.removeReferenceFaces(belowConfidence: 0.80)
+                                            }
+                                            .disabled(belowGoodCount == 0)
+                                        }
+                                    }
+                                    Divider()
+                                    Button("Delete \(profile.name)\u{2026}", role: .destructive) {
+                                        confirmDeleteProfile = profile
+                                    }
+                                    .keyboardShortcut(.delete, modifiers: .command)
+                                }
+                        }
+
+                        // Step 3: "Search for Family" — fan a scan across
+                        // every saved POI profile against a folder picked
+                        // via NSOpenPanel. One click, N parallel jobs.
+                        // Disabled until at least one profile has photos
+                        // loaded, otherwise enqueueFamilyJobs filters
+                        // them all out and the click would no-op silently.
+                        Button {
+                            browseForFamilyScanFolder()
+                        } label: {
+                            VStack(spacing: 6) {
+                                ZStack {
+                                    Circle()
+                                        .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [5, 3]))
+                                        .foregroundColor(.accentColor.opacity(0.6))
+                                        .frame(width: personImageSize, height: personImageSize)
+                                    Image(systemName: "person.2.crop.square.stack.fill")
+                                        .font(.system(size: personImageSize * 0.34, weight: .medium))
+                                        .foregroundColor(.accentColor)
+                                }
+                                Text("Search for Family")
+                                    .font(.system(size: personNameFontSize, weight: .medium))
+                                    .foregroundColor(.accentColor)
+                                    .lineLimit(1)
+                            }
+                            .frame(width: personCardWidth)
+                            .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(model.savedProfiles.allSatisfy { $0.referencePath.isEmpty })
+                        .help("Pick a folder or volume — every saved person will be scanned against it in parallel. Catalog rows for matched files get tagged with the detected name(s).")
+                    }
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 4)
+                }
+                .frame(height: peopleGalleryHeight)
+
+                // Drag handle to resize the People gallery — the photos
+                // grow/shrink with the pane height, so this is also the
+                // size control. Mirrors the reference-faces-strip pattern.
+                Rectangle()
+                    .fill(Color(NSColor.separatorColor))
+                    .frame(height: 5)
+                    .contentShape(Rectangle())
+                    .onHover { inside in
+                        if inside { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
+                    }
+                    .gesture(
+                        DragGesture(minimumDistance: 1)
+                            .onChanged { value in
+                                peopleGalleryHeight = max(110, min(420, peopleGalleryHeight + value.translation.height))
+                            }
+                    )
+                    .help("Drag to resize the People gallery — photos scale to fit")
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 10)
+        .padding(.bottom, model.savedProfiles.isEmpty ? 10 : 0)
+        .background(Color(NSColor.windowBackgroundColor))
+        .alert("Delete '\(confirmDeleteProfile?.name ?? "")' and all reference photos?",
+               isPresented: Binding(
+            get: { confirmDeleteProfile != nil },
+            set: { if !$0 { confirmDeleteProfile = nil } }
+        )) {
+            Button("Cancel", role: .cancel) { confirmDeleteProfile = nil }
+            Button("Delete", role: .destructive) {
+                if let p = confirmDeleteProfile {
+                    let name = p.name
+                    Task { @MainActor in
+                        let ok = await model.deletePOI(named: name)
+                        if !ok {
+                            scanLockMessage = "Could not move '\(name)' into .trash/. Check ~/dev/VideoScan/.trash/ permissions."
+                        }
+                    }
+                    confirmDeleteProfile = nil
+                }
+            }
+        } message: {
+            Text("Data is moved to ~/dev/VideoScan/.trash/POI-\(POIStorage.sanitize(confirmDeleteProfile?.name ?? ""))-<UTC>/ and is recoverable until you empty the trash manually. Nothing is permanently deleted.")
+        }
+        .alert("Scan in Progress", isPresented: Binding(
+            get: { scanLockMessage != nil },
+            set: { if !$0 { scanLockMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { scanLockMessage = nil }
+        } message: {
+            Text(scanLockMessage ?? "")
+        }
+        .sheet(item: $editingProfile) { profile in
+            PersonEditSheet(profile: profile) { updated in
+                model.updateProfile(updated, oldName: editingOriginalName)
+                // If this person is now the active POI, reload their faces
+                if model.settings.personName.lowercased() == updated.name.lowercased() {
+                    Task { await model.loadPOI(updated) }
+                }
+                // Flash the saved indicator on the card
+                justSavedProfileID = updated.id
+                Task {
+                    try? await Task.sleep(for: .seconds(2))
+                    justSavedProfileID = nil
+                }
+            }
+        }
+        .sheet(item: $confirmTarget) { target in
+            ConfirmPersonSheet(profile: target.profile)
+                .environmentObject(model)
+                .environmentObject(catalogModel)
+        }
+        .sheet(item: $confirmationsTarget) { target in
+            ConfirmationsView(profile: target.profile, onConfirmMore: {
+                confirmTarget = ConfirmSheetTarget(profile: target.profile)
+            })
+            .environmentObject(model)
+            .environmentObject(catalogModel)
+        }
+    }
+}
