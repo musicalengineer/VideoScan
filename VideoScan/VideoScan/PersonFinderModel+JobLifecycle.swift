@@ -404,6 +404,13 @@ extension PersonFinderModel {
         job.appendLog("Engine: \(jobSettings.recognitionEngine.title)")
         job.appendLog("  Threshold: \(String(format: "%.2f", jobSettings.threshold)), Confidence: \(String(format: "%.2f", jobSettings.minFaceConfidence))")
         job.appendLog("  FrameStep: \(jobSettings.frameStep), Concurrency: \(jobSettings.concurrency)")
+        if jobSettings.recognitionEngine == .arcface {
+            // ArcFace ignores the generic Threshold above and uses its own cosine
+            // threshold. Log the engine-specific knobs so each run is self-documenting
+            // (especially the landmark-alignment switch, which changes the cache namespace).
+            job.appendLog("  ArcFace: landmark alignment \(jobSettings.arcfaceLandmarkAlignment ? "ON (norm_crop lm-v1)" : "OFF (bbox crop)")")
+            job.appendLog("  ArcFace: cosine threshold \(String(format: "%.2f", jobSettings.arcfaceThreshold)), inference concurrency \(jobSettings.arcfaceInferenceConcurrency)")
+        }
         if let profile = job.assignedProfile {
             job.appendLog("  Profile rejected: \(profile.rejectedFiles.count) files")
         }
