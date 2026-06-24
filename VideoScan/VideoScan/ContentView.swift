@@ -175,7 +175,18 @@ struct CatalogView: View {
     @State private var showDashboard = false
     @State private var showInspector = true
     @State private var sortOrder = [KeyPathComparator(\VideoRecord.filename)]
-    @State private var searchText: String = ""
+    /// Catalog search term. `@SceneStorage` (not `@State`) so a search —
+    /// especially a complex one — survives leaving and returning to the
+    /// Catalog tab. The tab content is rendered via `switch selectedTab`,
+    /// which fully removes `CatalogView` from the hierarchy on tab switch
+    /// and would otherwise reset every `@State` to its default. SceneStorage
+    /// is scoped to the running scene (session), so it persists across tab
+    /// switches but does NOT carry a stale search across full app relaunches
+    /// the way `@AppStorage` would. The toolbar's search field keeps its
+    /// built-in "x" to clear. Rick 2026-06-24. On reappear we re-seed
+    /// `debouncedSearchText` in `.onAppear` (see below) because the debounce
+    /// only fires on `.onChange`, which does not run on view recreation.
+    @SceneStorage("catalogSearchText") private var searchText: String = ""
     /// Debounced mirror of `searchText` driving the CatalogContent
     /// table filter. Updated 250 ms after the last keystroke so
     /// computeFiltered (~10 ms × 15K records) only runs on the trailing
@@ -468,6 +479,15 @@ struct CatalogView: View {
             .onAppear {
                 handlePendingCatalogNavigation()
                 restoreFocusedMedia()
+                // Re-seed the debounced filter from the restored search term.
+                // `searchText` is SceneStorage so it survives a tab switch,
+                // but `debouncedSearchText` is plain @State and resets to ""
+                // on view recreation. `.onChange(of: searchText)` won't fire
+                // on reappear (the value didn't change), so without this the
+                // field would show the term but the table would be unfiltered.
+                if debouncedSearchText != searchText {
+                    debouncedSearchText = searchText
+                }
             }
             .onChange(of: model.pendingCatalogSelection) { handlePendingCatalogNavigation() }
             // Clear the ID filter and focus when user types in search or selects a volume
