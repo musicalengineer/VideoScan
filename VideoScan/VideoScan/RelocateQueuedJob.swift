@@ -86,13 +86,6 @@ struct RelocateQueuedJob: Identifiable, Equatable {
         let total: Int
         let currentFile: String
         let bytesCopied: Int64
-
-        init(done: Int, total: Int, currentFile: String, bytesCopied: Int64) {
-            self.done = done
-            self.total = total
-            self.currentFile = currentFile
-            self.bytesCopied = bytesCopied
-        }
     }
 
     init(

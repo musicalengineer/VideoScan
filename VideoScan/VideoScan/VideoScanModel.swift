@@ -475,7 +475,7 @@ final class VideoScanModel: ObservableObject {
         let catalogJSONPath = appSupport?.appendingPathComponent("catalog.json").path
         let catalogMTime: Date? = catalogJSONPath.flatMap {
             try? FileManager.default.attributesOfItem(atPath: $0)[.modificationDate] as? Date
-        } ?? nil
+        }
         let idxStart = Date()
         let loaded = searchIndex.loadFromDisk(catalogModifiedAt: catalogMTime)
         if loaded {
