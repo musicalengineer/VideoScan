@@ -100,6 +100,26 @@ opt_in_rules:
 force_unwrapping:
   severity: warning
 
+# inclusive_language: allow "master". Every occurrence in this codebase is
+# legitimate domain vocabulary, not casual usage:
+#   A. Persisted schema — VideoRecord.masterLocation is a Codable key written
+#      into catalog.json; ArchiveStage.masterAssigned ("Master") is a stored
+#      rawValue. Renaming is a schema migration, not a lint fix.
+#   B. Catalog-sync architecture — the one Mac that owns the media and is the
+#      sole writer is the "master" (vs N read-only "viewer" Macs). Documented
+#      as load-bearing in CatalogSync.swift; backed by a persisted UserDefaults
+#      key "CatalogSyncMasterHostname".
+#   C. External spec term — "MasterMob" is the literal AAF/OMF/Avid file-format
+#      term in AvbParser; it is not ours to rename.
+# Redefine the flagged-term list to drop "master" while keeping the other
+# defaults. (`override_terms` replaces the default set: master, slave,
+# blacklist, whitelist.)
+inclusive_language:
+  override_terms:
+    - slave
+    - blacklist
+    - whitelist
+
 # --- Custom rules: project-specific antipattern detectors. ---
 #
 # Each rule below is a regex-based check for a known shape of bug that has

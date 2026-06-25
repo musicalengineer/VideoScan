@@ -1,7 +1,6 @@
 // CatalogSync.swift
 // Read-only catalog sync between Rick's Mac fleet.
 //
-// swiftlint:disable inclusive_language
 // "master" is load-bearing terminology here — it matches the project's
 // hardware-fleet vocabulary in MEMORY.md, the rsync man page, and the
 // public conversation Rick and the agents have been having about this
