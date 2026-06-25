@@ -54,3 +54,4 @@
 {"ts":"2026-06-22T17:33:27Z","sha":"231e43ec","run_kind":"nightly","concurrency_warnings":273,"codeql_findings":0,"tsan_issues":null,"swiftlint_strict":96,"periphery_aggressive":0}
 {"ts":"2026-06-23T09:05:32Z","sha":"d2785eb5","run_kind":"nightly","concurrency_warnings":298,"codeql_findings":0,"tsan_issues":null,"swiftlint_strict":96,"periphery_aggressive":0}
 {"ts":"2026-06-24T08:58:29Z","sha":"ebe64bd6","run_kind":"nightly","concurrency_warnings":288,"codeql_findings":0,"tsan_issues":null,"swiftlint_strict":96,"periphery_aggressive":0}
+{"ts":"2026-06-25T08:58:34Z","sha":"9a32983d","run_kind":"nightly","concurrency_warnings":292,"codeql_findings":0,"tsan_issues":null,"swiftlint_strict":90,"periphery_aggressive":0}
