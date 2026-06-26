@@ -33,8 +33,11 @@ DonnaFaceDetectionTest.png
 .claude/settings.local.json
 .claude/worktrees/
 
-# ML models (too large for git, downloaded separately)
-models/
+# ML models (too large for git, downloaded separately).
+# Anchored to repo root so it ONLY ignores the top-level ./models weights
+# dir — NOT app source folders named Models/ (git's core.ignorecase on
+# macOS makes an unanchored `models/` also match `VideoScan/.../Models/`).
+/models/
 
 # Test media — allow small generated fixtures, block private real media
 # The pre-commit hook also rejects any staged file > 75 MB
