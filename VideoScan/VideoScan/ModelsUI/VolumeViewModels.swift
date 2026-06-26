@@ -3,7 +3,10 @@
 // VolumeRow, VolumeAggregate, CombinePairItem, DiscoveredVolume, and the
 // OptionalDateComparator (with its private ComparisonResult helper) —
 // moved verbatim from Models.swift (refactor 2026-06-26, model
-// decomposition step 1). See Models.swift for the group overview.
+// decomposition step 1). In step 2 this file moved from Models/ into the
+// app-side ModelsUI/ group: these are view-model value types backing
+// SwiftUI tables/UI, not part of the pure (Foundation-only) domain
+// layer. Moved verbatim — no logic change.
 
 import Foundation
 

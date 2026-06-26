@@ -1,8 +1,11 @@
 // CatalogScanTarget.swift
 // The per-scan-target observable model plus its status enum and the
 // dashboard progress value types — moved verbatim from Models.swift
-// (refactor 2026-06-26, model decomposition step 1). See Models.swift
-// for the group overview.
+// (refactor 2026-06-26, model decomposition step 1). In step 2 this file
+// moved from Models/ into the app-side ModelsUI/ group: it is a
+// @MainActor ObservableObject that depends on SwiftUI/Combine and is not
+// part of the pure (Foundation-only) domain layer. Moved verbatim — no
+// logic change.
 
 import SwiftUI
 import Combine

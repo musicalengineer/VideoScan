@@ -1,9 +1,13 @@
 // ArchiveModels.swift
-// File-lifecycle, disposition, archive-stage, archive-health, and backup
-// models — moved verbatim from Models.swift (refactor 2026-06-26, model
-// decomposition step 1). See Models.swift for the group overview.
+// File-lifecycle, disposition, archive-stage, and backup models — moved
+// verbatim from Models.swift (refactor 2026-06-26, model decomposition
+// step 1). See Models.swift for the group overview. In step 2 the SwiftUI
+// display accessors (SF Symbol / Color properties) were lifted into
+// ModelsUI/ArchiveModels+Presentation.swift and the wholly-UI
+// ArchiveHealth type moved to ModelsUI/ArchiveHealth.swift, leaving this
+// file Foundation-only.
 
-import SwiftUI
+import Foundation
 
 // MARK: - Lifecycle Stage (which tab shows this file)
 
@@ -37,26 +41,6 @@ enum MediaDisposition: String, Codable, CaseIterable {
     case recoverable   = "Recoverable"
     case suspectedJunk = "Suspected Junk"
     case confirmedJunk = "Confirmed Junk"
-
-    var icon: String {
-        switch self {
-        case .unreviewed:    return "circle"
-        case .important:     return "star.fill"
-        case .recoverable:   return "wrench.and.screwdriver.fill"
-        case .suspectedJunk: return "exclamationmark.triangle"
-        case .confirmedJunk: return "xmark.circle.fill"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .unreviewed:    return .secondary
-        case .important:     return .blue
-        case .recoverable:   return .teal
-        case .suspectedJunk: return .orange
-        case .confirmedJunk: return .red
-        }
-    }
 }
 
 enum ArchiveStage: String, Codable, CaseIterable, Comparable {
@@ -72,80 +56,9 @@ enum ArchiveStage: String, Codable, CaseIterable, Comparable {
     case manuallyDeleted = "Manually Deleted"
     case salvageFailed   = "Salvage Failed"
 
-    var icon: String {
-        switch self {
-        case .none:            return "circle"
-        case .healthy:         return "heart.fill"
-        case .masterAssigned:  return "crown.fill"
-        case .backedUp:        return "doc.on.doc.fill"
-        case .readyForArchive: return "checkmark.seal.fill"
-        case .archived:        return "archivebox.fill"
-        case .manuallyDeleted: return "trash.slash.fill"
-        case .salvageFailed:   return "exclamationmark.octagon.fill"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .none:            return .secondary
-        case .healthy:         return .green
-        case .masterAssigned:  return .blue
-        case .backedUp:        return .purple
-        case .readyForArchive: return .mint
-        case .archived:        return .indigo
-        case .manuallyDeleted: return .secondary
-        case .salvageFailed:   return .red
-        }
-    }
-
     static func < (lhs: ArchiveStage, rhs: ArchiveStage) -> Bool {
         let order: [ArchiveStage] = allCases
         return (order.firstIndex(of: lhs) ?? 0) < (order.firstIndex(of: rhs) ?? 0)
-    }
-}
-
-// MARK: - Archive Health (traffic-light summary)
-
-enum ArchiveHealth {
-    case safe            // green: reviewed, has A/V, backed up
-    case inProgress      // yellow: partially classified or archived
-    case needsAttention  // red: unreviewed, no backups
-    case notApplicable   // junk — no badge
-
-    var icon: String {
-        switch self {
-        case .safe:           return "checkmark.shield.fill"
-        case .inProgress:     return "clock.badge.checkmark"
-        case .needsAttention: return "exclamationmark.shield.fill"
-        case .notApplicable:  return ""
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .safe:           return .green
-        case .inProgress:     return .yellow
-        case .needsAttention: return .red
-        case .notApplicable:  return .clear
-        }
-    }
-
-    var label: String {
-        switch self {
-        case .safe:           return "Safe"
-        case .inProgress:     return "In Progress"
-        case .needsAttention: return "Needs Attention"
-        case .notApplicable:  return ""
-        }
-    }
-
-    var detail: String {
-        switch self {
-        case .safe:           return "Reviewed, has audio/video, backed up"
-        case .inProgress:     return "Partially reviewed or archived"
-        case .needsAttention: return "Not yet reviewed or backed up"
-        case .notApplicable:  return ""
-        }
     }
 }
 
@@ -161,13 +74,5 @@ struct BackupEntry: Codable, Identifiable, Equatable {
         case local   = "Local"       // external drive, same network
         case cloud   = "Cloud"       // iCloud, Backblaze, S3
         case offsite = "Offsite"     // physically elsewhere (son's NAS, etc.)
-
-        var icon: String {
-            switch self {
-            case .local:   return "externaldrive.fill"
-            case .cloud:   return "icloud.fill"
-            case .offsite: return "building.2.fill"
-            }
-        }
     }
 }

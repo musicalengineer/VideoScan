@@ -9,26 +9,36 @@
 // This file is intentionally code-free; it keeps the model-layer map in
 // one canonical place that the split files point back to.
 //
-//     Models/
+//     Models/   (PURE DOMAIN — Foundation-only; lifts into a Swift package)
 //     ├── VideoRecord.swift            — the VideoRecord class: declaration,
 //     │                                  ALL stored properties, designated init()
 //     ├── VideoRecord+Codable.swift    — CodingKeys, init(from:), encode(to:)
-//     ├── VideoRecord+Derived.swift    — computed/derived props (streamType,
-//     │                                  sort keys, volumeName, color/health …)
+//     ├── VideoRecord+Derived.swift    — non-UI computed/derived props
+//     │                                  (streamType, sort keys, volumeName,
+//     │                                  value heuristics …)
 //     ├── VideoRecord+Clone.swift      — snapshotClone() off-main deep copy
 //     ├── MediaClassification.swift    — StreamType, PairConfidence,
 //     │                                  DuplicateConfidence, DuplicateDisposition
 //     ├── ArchiveModels.swift          — LifecycleStage, MediaDisposition,
-//     │                                  ArchiveStage, ArchiveHealth, BackupEntry
+//     │                                  ArchiveStage, BackupEntry
 //     ├── VolumeStatusEnums.swift      — VolumePhase, VolumeRole, VolumeTrust,
-//     │                                  VolumeMediaTech, DestinationPolicy
-//     ├── CatalogScanTarget.swift      — CatalogScanTarget + CatalogTargetStatus,
-//     │                                  ScanPhase, VolumeProgress, ThroughputSample
-//     ├── VolumeViewModels.swift       — VolumeRow, VolumeAggregate,
-//     │                                  CombinePairItem, DiscoveredVolume,
-//     │                                  OptionalDateComparator
+//     │                                  VolumeMediaTech
 //     ├── Tagging.swift                — SceneCaption, ConfirmedTag
 //     └── FFProbeModels.swift          — FFProbeOutput, FFStream, FFFormat
+//
+//     ModelsUI/ (APP-SIDE — imports SwiftUI/Combine; the display layer)
+//     ├── MediaClassification+Presentation.swift — Color accessors
+//     ├── ArchiveModels+Presentation.swift       — icon/Color accessors
+//     ├── ArchiveHealth.swift                    — ArchiveHealth (UI-only)
+//     ├── VolumeStatusEnums+Presentation.swift   — icon/Color/shortLabel
+//     ├── DestinationPolicy.swift                — DestinationPolicy (UI-only)
+//     ├── VideoRecord+Presentation.swift         — filenameColor, rowColor,
+//     │                                            archiveHealth
+//     ├── CatalogScanTarget.swift      — CatalogScanTarget + CatalogTargetStatus,
+//     │                                  ScanPhase, VolumeProgress, ThroughputSample
+//     └── VolumeViewModels.swift       — VolumeRow, VolumeAggregate,
+//                                        CombinePairItem, DiscoveredVolume,
+//                                        OptionalDateComparator
 //
 // MAINTENANCE: adding a stored property to VideoRecord still means updating
 // FOUR places — CodingKeys, init(from:), encode(to:) (all in
