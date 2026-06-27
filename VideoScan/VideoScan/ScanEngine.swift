@@ -68,62 +68,82 @@ enum ScanEngine {
     }
 
     /// Extract metadata fields from ffprobe output into a `VideoRecord`.
+    ///
+    /// Thin wrapper over `extractMetadata(probe:) -> ProbeResult`: it computes
+    /// the Sendable value and stamps it onto `rec` via the single authoritative
+    /// copy point (`VideoRecord.apply`). The golden test drives THIS entry
+    /// point, so its observable behavior is unchanged. `apply` is unconditional
+    /// and `ProbeResult`'s defaults match `VideoRecord`'s, so a field the probe
+    /// didn't populate still lands as the same fresh-construction default.
     static func extractMetadata(probe: FFProbeOutput, into rec: VideoRecord) {
+        rec.apply(extractMetadata(probe: probe))
+    }
+
+    /// Pure metadata extraction: ffprobe output → Sendable `ProbeResult`.
+    /// No reference-type mutation, so it is safe to run off the main actor and
+    /// hand the result across the actor boundary. Logic is verbatim from the
+    /// old in-place version — the only change is that each field lands in a
+    /// local `ProbeResult` instead of being written straight onto a VideoRecord.
+    static func extractMetadata(probe: FFProbeOutput) -> ProbeResult {
         let fmt     = probe.format
         let streams = probe.streams ?? []
         let fmtTags = fmt?.tags ?? [:]
 
-        rec.container = fmt?.format_long_name ?? fmt?.format_name ?? ""
+        var r = ProbeResult()
+
+        r.container = fmt?.format_long_name ?? fmt?.format_name ?? ""
         if let d = Double(fmt?.duration ?? "") {
-            rec.durationSeconds = d
-            rec.duration = Formatting.duration(d)
+            r.durationSeconds = d
+            r.duration = Formatting.duration(d)
         }
         if let br = fmt?.bit_rate, let bri = Int(br) {
-            rec.totalBitrate = "\(bri / 1000) kbps"
+            r.totalBitrate = "\(bri / 1000) kbps"
         }
 
-        rec.timecode = fmtTags["timecode"] ?? fmtTags["Timecode"] ?? ""
-        rec.tapeName = fmtTags["tape_name"] ?? fmtTags["reel_name"]
-                       ?? fmtTags["com.apple.quicktime.reelname"] ?? ""
+        r.timecode = fmtTags["timecode"] ?? fmtTags["Timecode"] ?? ""
+        r.tapeName = fmtTags["tape_name"] ?? fmtTags["reel_name"]
+                     ?? fmtTags["com.apple.quicktime.reelname"] ?? ""
         // MXF MaterialPackage UMID. ffprobe emits this as a "0x..."-prefixed
         // 32-byte hex string in the format-level tags for MXF files. We
         // store it verbatim — the substitute-file resolver matches by
         // exact string, no normalization needed.
-        rec.materialPackageUMID = fmtTags["material_package_umid"] ?? ""
+        r.materialPackageUMID = fmtTags["material_package_umid"] ?? ""
 
         var hasVideo = false
         var hasAudio = false
 
         for s in streams {
             let stags = s.tags ?? [:]
-            if rec.timecode.isEmpty { rec.timecode = stags["timecode"] ?? "" }
+            if r.timecode.isEmpty { r.timecode = stags["timecode"] ?? "" }
 
             if s.codec_type == "video" && !hasVideo {
-                hasVideo       = true
-                rec.videoCodec = s.codec_name ?? ""
+                hasVideo     = true
+                r.videoCodec = s.codec_name ?? ""
                 let w = s.width ?? 0; let h = s.height ?? 0
-                if w > 0 && h > 0 { rec.resolution = "\(w)x\(h)" }
-                rec.frameRate  = Formatting.fraction(s.r_frame_rate ?? s.avg_frame_rate ?? "")
+                if w > 0 && h > 0 { r.resolution = "\(w)x\(h)" }
+                r.frameRate  = Formatting.fraction(s.r_frame_rate ?? s.avg_frame_rate ?? "")
                 if let vbr = s.bit_rate, let vbri = Int(vbr) {
-                    rec.videoBitrate = "\(vbri / 1000) kbps"
+                    r.videoBitrate = "\(vbri / 1000) kbps"
                 }
-                rec.colorSpace = s.color_space ?? ""
-                rec.bitDepth   = s.bits_per_raw_sample ?? ""
-                rec.scanType   = s.field_order ?? ""
+                r.colorSpace = s.color_space ?? ""
+                r.bitDepth   = s.bits_per_raw_sample ?? ""
+                r.scanType   = s.field_order ?? ""
             }
 
             if s.codec_type == "audio" && !hasAudio {
-                hasAudio          = true
-                rec.audioCodec    = s.codec_name ?? ""
-                rec.audioChannels = s.channels.map { String($0) } ?? ""
-                if let sr = s.sample_rate { rec.audioSampleRate = "\(sr) Hz" }
+                hasAudio        = true
+                r.audioCodec    = s.codec_name ?? ""
+                r.audioChannels = s.channels.map { String($0) } ?? ""
+                if let sr = s.sample_rate { r.audioSampleRate = "\(sr) Hz" }
             }
         }
 
-        if hasVideo && hasAudio { rec.streamTypeRaw = StreamType.videoAndAudio.rawValue } else if hasVideo { rec.streamTypeRaw = StreamType.videoOnly.rawValue } else if hasAudio { rec.streamTypeRaw = StreamType.audioOnly.rawValue } else { rec.streamTypeRaw = StreamType.noStreams.rawValue }
+        if hasVideo && hasAudio { r.streamTypeRaw = StreamType.videoAndAudio.rawValue } else if hasVideo { r.streamTypeRaw = StreamType.videoOnly.rawValue } else if hasAudio { r.streamTypeRaw = StreamType.audioOnly.rawValue } else { r.streamTypeRaw = StreamType.noStreams.rawValue }
 
-        rec.isPlayable = (rec.streamTypeRaw == StreamType.noStreams.rawValue)
+        r.isPlayable = (r.streamTypeRaw == StreamType.noStreams.rawValue)
             ? "No streams" : "Yes"
+
+        return r
     }
 
     // MARK: - MXF Header Fallback
