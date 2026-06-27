@@ -281,6 +281,16 @@ extension VideoScanModel {
         )
     }
 
+    /// Sentinel record for a probe cancelled before it acquired a permit.
+    ///
+    /// Unshared-instance invariant (ProbeResult seam, step 3): the returned
+    /// `VideoRecord` is freshly constructed on THIS call and is mutated only by
+    /// THIS task before it is handed off through the probe task group. No probe
+    /// path returns a record that another task also holds — each probe owns its
+    /// instance end-to-end (≈ C++ `unique_ptr` move, not a shared `shared_ptr`).
+    /// Moving this construction onto the main actor is deferred to step 4: it
+    /// requires `probeFile` and `MetadataCache.lookup`/`store` to traffic in a
+    /// Sendable carrier instead of `VideoRecord`, which is the cache rework.
     nonisolated func cancelledProbeRecord(url: URL) -> VideoRecord {
         let rec = VideoRecord()
         rec.filename      = url.lastPathComponent
@@ -328,7 +338,10 @@ extension VideoScanModel {
                 return result
             }
         } catch {
-            // Timeout fired before probeFile completed
+            // Timeout fired before probeFile completed.
+            // Unshared-instance invariant (step 3): freshly constructed here,
+            // owned solely by this probe task until handed off — see
+            // cancelledProbeRecord for the full note and the step-4 deferral.
             let rec = VideoRecord()
             rec.filename      = url.lastPathComponent
             rec.ext           = url.pathExtension.uppercased()
@@ -345,6 +358,17 @@ extension VideoScanModel {
     /// Probe a single file and return a populated VideoRecord.
     /// If prefetchToRAM is true and ramPath is available, copies the first 10MB
     /// to the RAM disk so ffprobe reads at memory speed instead of network speed.
+    ///
+    /// Unshared-instance invariant (ProbeResult seam, step 3): EVERY return path
+    /// here yields a `VideoRecord` that was freshly constructed within this call
+    /// and mutated only by this task — the not-found sentinel, the cache-hit
+    /// record (`MetadataCache.lookup` builds a brand-new record from the SQLite
+    /// row on every call — it does NOT vend a shared in-memory object), and the
+    /// probe-success/fallback record. The off-actor metadata stage now flows
+    /// through the Sendable `ProbeResult` value (see ScanEngine.extractMetadata).
+    /// Materializing the `VideoRecord` itself on the main actor is deferred to
+    /// step 4 — it is blocked on reworking `MetadataCache` to traffic in a
+    /// Sendable carrier rather than returning/consuming `VideoRecord`.
     nonisolated func probeFile(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false, scanRootPath: String? = nil) async -> VideoRecord {
         let fm = FileManager.default
         let path = url.path
