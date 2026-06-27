@@ -21,7 +21,7 @@
 
 import Foundation
 
-public struct ScanContext: Codable, Equatable {
+public struct ScanContext: Codable, Equatable, Sendable {
     /// Hostname of the machine running the scan (e.g. "MacStudio").
     public var scanHost: String = ""
 
