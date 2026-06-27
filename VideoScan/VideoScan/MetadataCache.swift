@@ -108,8 +108,15 @@ final class MetadataCache {
 
     // MARK: - Public API
 
-    /// Look up a cached record. Returns nil if not found or file has changed.
-    func lookup(path: String, fileSize: Int64, modDate: Date) -> VideoRecord? {
+    /// Look up a cached probe. Returns nil if not found or file has changed.
+    ///
+    /// Trafficks in the Sendable `ProbeOutcome` carrier rather than a
+    /// `VideoRecord`: building the reference type is deferred to the main-actor
+    /// drain points. The `wasCacheHit`/`scanContext` transients stay at their
+    /// defaults here (false / empty) — the off-actor probe path stamps them
+    /// onto the returned outcome, which is what removed the last off-actor
+    /// VideoRecord mutation. (Swift value-struct return ≈ C++ return-by-value.)
+    func lookup(path: String, fileSize: Int64, modDate: Date) -> ProbeOutcome? {
         lock.lock(); defer { lock.unlock() }
         guard let db = db else { return nil }
         let sql = "SELECT * FROM probe_cache WHERE path = ? AND file_size = ? AND mod_date = ? AND stream_type != 'ffprobe failed'"
@@ -123,44 +130,46 @@ final class MetadataCache {
 
         guard sqlite3_step(stmt) == SQLITE_ROW else { return nil }
 
-        let rec = VideoRecord()
-        rec.fullPath        = path
-        rec.filename        = col(stmt, 3)
-        rec.ext             = col(stmt, 4)
-        rec.streamTypeRaw   = col(stmt, 5)
-        rec.size            = col(stmt, 6)
-        rec.sizeBytes       = fileSize
-        rec.duration        = col(stmt, 7)
-        rec.durationSeconds = sqlite3_column_double(stmt, 8)
-        rec.dateCreated     = col(stmt, 9)
-        rec.dateModified    = col(stmt, 10)
-        let dcRaw           = sqlite3_column_double(stmt, 11)
-        let dmRaw           = sqlite3_column_double(stmt, 12)
-        rec.dateCreatedRaw  = dcRaw > 0 ? Date(timeIntervalSince1970: dcRaw) : nil
-        rec.dateModifiedRaw = dmRaw > 0 ? Date(timeIntervalSince1970: dmRaw) : nil
-        rec.container       = col(stmt, 13)
-        rec.videoCodec      = col(stmt, 14)
-        rec.resolution      = col(stmt, 15)
-        rec.frameRate       = col(stmt, 16)
-        rec.videoBitrate    = col(stmt, 17)
-        rec.totalBitrate    = col(stmt, 18)
-        rec.colorSpace      = col(stmt, 19)
-        rec.bitDepth        = col(stmt, 20)
-        rec.scanType        = col(stmt, 21)
-        rec.audioCodec      = col(stmt, 22)
-        rec.audioChannels   = col(stmt, 23)
-        rec.audioSampleRate = col(stmt, 24)
-        rec.timecode        = col(stmt, 25)
-        rec.tapeName        = col(stmt, 26)
-        rec.isPlayable      = col(stmt, 27)
-        rec.partialMD5      = col(stmt, 28)
-        rec.directory       = col(stmt, 29)
-        rec.notes           = col(stmt, 30)
-        return rec
+        var o = ProbeOutcome()
+        o.fullPath              = path
+        o.filename              = col(stmt, 3)
+        o.ext                   = col(stmt, 4)
+        o.probe.streamTypeRaw   = col(stmt, 5)
+        o.size                  = col(stmt, 6)
+        o.sizeBytes             = fileSize
+        o.probe.duration        = col(stmt, 7)
+        o.probe.durationSeconds = sqlite3_column_double(stmt, 8)
+        o.dateCreated           = col(stmt, 9)
+        o.dateModified          = col(stmt, 10)
+        let dcRaw               = sqlite3_column_double(stmt, 11)
+        let dmRaw               = sqlite3_column_double(stmt, 12)
+        o.dateCreatedRaw        = dcRaw > 0 ? Date(timeIntervalSince1970: dcRaw) : nil
+        o.dateModifiedRaw       = dmRaw > 0 ? Date(timeIntervalSince1970: dmRaw) : nil
+        o.probe.container       = col(stmt, 13)
+        o.probe.videoCodec      = col(stmt, 14)
+        o.probe.resolution      = col(stmt, 15)
+        o.probe.frameRate       = col(stmt, 16)
+        o.probe.videoBitrate    = col(stmt, 17)
+        o.probe.totalBitrate    = col(stmt, 18)
+        o.probe.colorSpace      = col(stmt, 19)
+        o.probe.bitDepth        = col(stmt, 20)
+        o.probe.scanType        = col(stmt, 21)
+        o.probe.audioCodec      = col(stmt, 22)
+        o.probe.audioChannels   = col(stmt, 23)
+        o.probe.audioSampleRate = col(stmt, 24)
+        o.probe.timecode        = col(stmt, 25)
+        o.probe.tapeName        = col(stmt, 26)
+        o.probe.isPlayable      = col(stmt, 27)
+        o.partialMD5            = col(stmt, 28)
+        o.directory             = col(stmt, 29)
+        o.notes                 = col(stmt, 30)
+        return o
     }
 
-    /// Store a probed record in the cache.
-    func store(record rec: VideoRecord, fileSize: Int64, modDate: Date) {
+    /// Store a probed outcome in the cache. The transient `wasCacheHit` /
+    /// `scanContext` carrier fields are intentionally NOT persisted — only the
+    /// stable identity + metadata columns are written (schema unchanged).
+    func store(outcome o: ProbeOutcome, fileSize: Int64, modDate: Date) {
         lock.lock(); defer { lock.unlock() }
         guard let db = db else { return }
         let sql = """
@@ -172,37 +181,37 @@ final class MetadataCache {
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
         defer { sqlite3_finalize(stmt) }
 
-        bind(stmt, 1, rec.fullPath)
+        bind(stmt, 1, o.fullPath)
         sqlite3_bind_int64(stmt, 2, fileSize)
         sqlite3_bind_double(stmt, 3, modDate.timeIntervalSince1970)
-        bind(stmt, 4, rec.filename)
-        bind(stmt, 5, rec.ext)
-        bind(stmt, 6, rec.streamTypeRaw)
-        bind(stmt, 7, rec.size)
-        bind(stmt, 8, rec.duration)
-        sqlite3_bind_double(stmt, 9, rec.durationSeconds)
-        bind(stmt, 10, rec.dateCreated)
-        bind(stmt, 11, rec.dateModified)
-        sqlite3_bind_double(stmt, 12, rec.dateCreatedRaw?.timeIntervalSince1970 ?? 0)
-        sqlite3_bind_double(stmt, 13, rec.dateModifiedRaw?.timeIntervalSince1970 ?? 0)
-        bind(stmt, 14, rec.container)
-        bind(stmt, 15, rec.videoCodec)
-        bind(stmt, 16, rec.resolution)
-        bind(stmt, 17, rec.frameRate)
-        bind(stmt, 18, rec.videoBitrate)
-        bind(stmt, 19, rec.totalBitrate)
-        bind(stmt, 20, rec.colorSpace)
-        bind(stmt, 21, rec.bitDepth)
-        bind(stmt, 22, rec.scanType)
-        bind(stmt, 23, rec.audioCodec)
-        bind(stmt, 24, rec.audioChannels)
-        bind(stmt, 25, rec.audioSampleRate)
-        bind(stmt, 26, rec.timecode)
-        bind(stmt, 27, rec.tapeName)
-        bind(stmt, 28, rec.isPlayable)
-        bind(stmt, 29, rec.partialMD5)
-        bind(stmt, 30, rec.directory)
-        bind(stmt, 31, rec.notes)
+        bind(stmt, 4, o.filename)
+        bind(stmt, 5, o.ext)
+        bind(stmt, 6, o.probe.streamTypeRaw)
+        bind(stmt, 7, o.size)
+        bind(stmt, 8, o.probe.duration)
+        sqlite3_bind_double(stmt, 9, o.probe.durationSeconds)
+        bind(stmt, 10, o.dateCreated)
+        bind(stmt, 11, o.dateModified)
+        sqlite3_bind_double(stmt, 12, o.dateCreatedRaw?.timeIntervalSince1970 ?? 0)
+        sqlite3_bind_double(stmt, 13, o.dateModifiedRaw?.timeIntervalSince1970 ?? 0)
+        bind(stmt, 14, o.probe.container)
+        bind(stmt, 15, o.probe.videoCodec)
+        bind(stmt, 16, o.probe.resolution)
+        bind(stmt, 17, o.probe.frameRate)
+        bind(stmt, 18, o.probe.videoBitrate)
+        bind(stmt, 19, o.probe.totalBitrate)
+        bind(stmt, 20, o.probe.colorSpace)
+        bind(stmt, 21, o.probe.bitDepth)
+        bind(stmt, 22, o.probe.scanType)
+        bind(stmt, 23, o.probe.audioCodec)
+        bind(stmt, 24, o.probe.audioChannels)
+        bind(stmt, 25, o.probe.audioSampleRate)
+        bind(stmt, 26, o.probe.timecode)
+        bind(stmt, 27, o.probe.tapeName)
+        bind(stmt, 28, o.probe.isPlayable)
+        bind(stmt, 29, o.partialMD5)
+        bind(stmt, 30, o.directory)
+        bind(stmt, 31, o.notes)
 
         sqlite3_step(stmt)
     }

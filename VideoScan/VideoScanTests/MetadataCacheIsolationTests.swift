@@ -44,15 +44,18 @@ struct MetadataCacheIsolationTests {
         return sqlite3_step(stmt) == SQLITE_ROW ? Int(sqlite3_column_int64(stmt, 0)) : 0
     }
 
-    private static func makeCanaryRecord(path: String) -> VideoRecord {
-        let rec = VideoRecord()
-        rec.fullPath = path
-        rec.filename = (path as NSString).lastPathComponent
-        rec.ext = "mov"
-        rec.streamTypeRaw = "Video + Audio"
-        rec.duration = "00:00:01"
-        rec.durationSeconds = 1.0
-        return rec
+    // Carrier-based (step 4): the cache API now trafficks in the Sendable
+    // ProbeOutcome value, not VideoRecord. Identity fields live top-level;
+    // the 19 ffprobe fields live under `.probe`.
+    private static func makeCanaryOutcome(path: String) -> ProbeOutcome {
+        var o = ProbeOutcome()
+        o.fullPath = path
+        o.filename = (path as NSString).lastPathComponent
+        o.ext = "mov"
+        o.probe.streamTypeRaw = "Video + Audio"
+        o.probe.duration = "00:00:01"
+        o.probe.durationSeconds = 1.0
+        return o
     }
 
     // MARK: - (a) Default init must not touch the real database
@@ -75,7 +78,7 @@ struct MetadataCacheIsolationTests {
         // actually opened (real one pre-fix, sandbox post-fix).
         defer { cache.clearForPathPrefix(canary) }
 
-        cache.store(record: Self.makeCanaryRecord(path: canary),
+        cache.store(outcome: Self.makeCanaryOutcome(path: canary),
                     fileSize: 1234,
                     modDate: Date(timeIntervalSince1970: 1_000_000))
 
@@ -145,7 +148,7 @@ struct MetadataCacheIsolationTests {
         let writer = MetadataCache(path: path)
         #expect(writer.dbPath == path,
                 "Explicit injection was redirected — gate must apply to the default only")
-        writer.store(record: Self.makeCanaryRecord(path: canary),
+        writer.store(outcome: Self.makeCanaryOutcome(path: canary),
                      fileSize: 5678, modDate: modDate)
         #expect(FileManager.default.fileExists(atPath: path),
                 "Injected db file was not created at the explicit path")
@@ -153,14 +156,66 @@ struct MetadataCacheIsolationTests {
         // Fresh instance against the same file proves the write hit disk,
         // not just an in-memory connection.
         let reader = MetadataCache(path: path)
-        let rec = try #require(reader.lookup(path: canary, fileSize: 5678, modDate: modDate),
-                               "Record stored via injected path not found by a second connection")
-        #expect(rec.fullPath == canary)
-        #expect(rec.streamTypeRaw == "Video + Audio")
-        #expect(rec.durationSeconds == 1.0)
+        let outcome = try #require(reader.lookup(path: canary, fileSize: 5678, modDate: modDate),
+                                   "Record stored via injected path not found by a second connection")
+        #expect(outcome.fullPath == canary)
+        #expect(outcome.probe.streamTypeRaw == "Video + Audio")
+        #expect(outcome.probe.durationSeconds == 1.0)
+        // Carrier transients are NOT persisted — a fresh lookup defaults them.
+        #expect(outcome.wasCacheHit == false)
 
         // Negative: a changed file size must miss (cache key contract).
         #expect(reader.lookup(path: canary, fileSize: 9999, modDate: modDate) == nil,
                 "lookup() matched despite different fileSize — cache key is broken")
+    }
+
+    // MARK: - (c) Cache-hit path sets wasCacheHit through the carrier
+
+    /// REGRESSION (step 4 carrier): the off-actor probe path used to do
+    /// `cached.wasCacheHit = true; cached.scanContext = …` directly on a
+    /// VideoRecord returned by `MetadataCache.lookup`. The cache now returns the
+    /// Sendable `ProbeOutcome`, and `probeFileOutcome` stamps the transients
+    /// onto the carrier before the VideoRecord is built on the main actor. This
+    /// pins that a pre-seeded file comes back as a cache hit with its cached
+    /// metadata intact and WITHOUT invoking ffprobe.
+    @MainActor
+    @Test("cache hit returns wasCacheHit=true with cached metadata, no ffprobe")
+    func cacheHitSetsWasCacheHitThroughCarrier() async throws {
+        let model = VideoScanModel()
+
+        // A real, tiny file so probeFile's existence check passes and we reach
+        // the cache lookup. Contents are irrelevant — we pre-seed the cache so
+        // ffprobe is never consulted (and the bytes aren't valid media anyway).
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("metacache-hit-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fileURL = dir.appendingPathComponent("clip.mov")
+        try Data([0x00, 0x01, 0x02, 0x03]).write(to: fileURL)
+
+        // Cache key = (path, size, modDate). Read them back exactly as
+        // probeFileOutcome will so the lookup hits.
+        let attrs = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        let size = (attrs[.size] as? Int64) ?? 0
+        let modDate = (attrs[.modificationDate] as? Date) ?? .distantPast
+
+        var seed = Self.makeCanaryOutcome(path: fileURL.path)
+        seed.probe.resolution = "1920x1080"
+        model.metadataCache.store(outcome: seed, fileSize: size, modDate: modDate)
+
+        let rec = await model.probeFile(url: fileURL)
+
+        #expect(rec.wasCacheHit == true,
+                "Cache-hit path did not set wasCacheHit on the carrier")
+        #expect(rec.streamTypeRaw == "Video + Audio",
+                "Cache-hit record lost cached metadata — ffprobe may have overwritten it")
+        #expect(rec.resolution == "1920x1080")
+        #expect(rec.durationSeconds == 1.0)
+        // Negative control: a never-cached file must NOT report a cache hit.
+        let missURL = dir.appendingPathComponent("uncached.mov")
+        try Data([0x09]).write(to: missURL)
+        let missRec = await model.probeFile(url: missURL)
+        #expect(missRec.wasCacheHit == false,
+                "Uncached file falsely reported wasCacheHit")
     }
 }

@@ -56,7 +56,7 @@ extension VideoScanModel {
             }
         }
 
-        await withTaskGroup(of: VideoRecord.self) { probeGroup in
+        await withTaskGroup(of: ProbeOutcome.self) { probeGroup in
             for await url in stream {
                 if Task.isCancelled { break }
                 discoveredCount += 1
@@ -85,7 +85,7 @@ extension VideoScanModel {
                             )
                         }
                     } catch {
-                        return self.cancelledProbeRecord(url: url)
+                        return self.cancelledProbeOutcome(url: url)
                     }
                 }
             }
@@ -113,7 +113,12 @@ extension VideoScanModel {
                 log("  💾 Checkpoint saved (\(totalFiles) files) — scan is resumable if interrupted")
             }
 
-            for await rec in probeGroup {
+            for await outcome in probeGroup {
+                // MainActor drain point: this loop is @MainActor-isolated, so
+                // the VideoRecord is constructed HERE — the off-actor probe
+                // pipeline only ever produced the Sendable ProbeOutcome carrier.
+                let rec = VideoRecord()
+                rec.apply(outcome)
                 targetRecords.append(rec)
                 completedCount += 1
 
@@ -187,7 +192,7 @@ extension VideoScanModel {
             VolumeProgress(rootPath: root, volumeName: volName)
         )
 
-        await withTaskGroup(of: VideoRecord.self) { probeGroup in
+        await withTaskGroup(of: ProbeOutcome.self) { probeGroup in
             for path in filePaths {
                 if Task.isCancelled { break }
                 let url = URL(fileURLWithPath: path)
@@ -209,17 +214,22 @@ extension VideoScanModel {
                             )
                         }
                     } catch {
-                        return self.cancelledProbeRecord(url: url)
+                        return self.cancelledProbeOutcome(url: url)
                     }
                 }
             }
 
-            for await rec in probeGroup {
-                guard Self.shouldCatalogProbeResult(ext: rec.ext, streamTypeRaw: rec.streamTypeRaw) else {
-                    appLog.write("NOT CATALOGED — no extension, ffprobe could not identify as media: \(rec.fullPath)")
+            for await outcome in probeGroup {
+                // Drop pre-construction so we never build a VideoRecord for a
+                // file we're about to discard (extensionless + unidentified).
+                guard Self.shouldCatalogProbeResult(ext: outcome.ext, streamTypeRaw: outcome.probe.streamTypeRaw) else {
+                    appLog.write("NOT CATALOGED — no extension, ffprobe could not identify as media: \(outcome.fullPath)")
                     completedCount += 1
                     continue
                 }
+                // MainActor drain point — construct the VideoRecord here.
+                let rec = VideoRecord()
+                rec.apply(outcome)
                 targetRecords.append(rec)
                 completedCount += 1
 
@@ -281,25 +291,30 @@ extension VideoScanModel {
         )
     }
 
-    /// Sentinel record for a probe cancelled before it acquired a permit.
-    ///
-    /// Unshared-instance invariant (ProbeResult seam, step 3): the returned
-    /// `VideoRecord` is freshly constructed on THIS call and is mutated only by
-    /// THIS task before it is handed off through the probe task group. No probe
-    /// path returns a record that another task also holds — each probe owns its
-    /// instance end-to-end (≈ C++ `unique_ptr` move, not a shared `shared_ptr`).
-    /// Moving this construction onto the main actor is deferred to step 4: it
-    /// requires `probeFile` and `MetadataCache.lookup`/`store` to traffic in a
-    /// Sendable carrier instead of `VideoRecord`, which is the cache rework.
-    nonisolated func cancelledProbeRecord(url: URL) -> VideoRecord {
+    /// Sentinel outcome for a probe cancelled before it acquired a permit.
+    /// Pure off-actor producer — returns the Sendable carrier, never a
+    /// VideoRecord. The task group consumes this; the VideoRecord is built at
+    /// the main-actor drain point.
+    nonisolated func cancelledProbeOutcome(url: URL) -> ProbeOutcome {
+        var o = ProbeOutcome()
+        o.filename            = url.lastPathComponent
+        o.ext                 = url.pathExtension.uppercased()
+        o.fullPath            = url.path
+        o.directory           = url.deletingLastPathComponent().path
+        o.probe.isPlayable    = "Cancelled"
+        o.notes               = "Probe cancelled before acquiring a concurrency permit"
+        o.probe.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+        return o
+    }
+
+    /// `@MainActor` VideoRecord shim over `cancelledProbeOutcome`. Retained for
+    /// the probe-engine error-path tests and any single-record caller that
+    /// wants a materialized record. The VideoRecord is constructed on the main
+    /// actor (this method is actor-isolated), so the no-off-actor-construction
+    /// invariant holds.
+    func cancelledProbeRecord(url: URL) -> VideoRecord {
         let rec = VideoRecord()
-        rec.filename      = url.lastPathComponent
-        rec.ext           = url.pathExtension.uppercased()
-        rec.fullPath      = url.path
-        rec.directory     = url.deletingLastPathComponent().path
-        rec.isPlayable    = "Cancelled"
-        rec.notes         = "Probe cancelled before acquiring a concurrency permit"
-        rec.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+        rec.apply(cancelledProbeOutcome(url: url))
         return rec
     }
 
@@ -311,20 +326,20 @@ extension VideoScanModel {
     /// VolumeComparer `(filename, size)` fallback can still match it against
     /// other volumes — without that, every timed-out file would be flagged as
     /// "unique to this volume" in Compare & Rescue.
-    nonisolated func probeFileWithTimeout(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false, scanRootPath: String? = nil) async -> VideoRecord {
+    nonisolated func probeFileWithTimeoutOutcome(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false, scanRootPath: String? = nil) async -> ProbeOutcome {
         // Best-effort stat before the race. stat() is metadata-only and
         // usually fast even on SMB when content reads stall. We use this only
-        // to populate the timeout record; probeFile re-fetches on its own
-        // path for the success case.
+        // to populate the timeout record; probeFileOutcome re-fetches on its
+        // own path for the success case.
         let preSize: Int64 = {
             let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
             return (attrs?[.size] as? Int64) ?? 0
         }()
 
         do {
-            return try await withThrowingTaskGroup(of: VideoRecord.self) { group in
+            return try await withThrowingTaskGroup(of: ProbeOutcome.self) { group in
                 group.addTask {
-                    await self.probeFile(url: url, prefetchToRAM: prefetchToRAM, ramPath: ramPath, skipHashing: skipHashing, scanRootPath: scanRootPath)
+                    await self.probeFileOutcome(url: url, prefetchToRAM: prefetchToRAM, ramPath: ramPath, skipHashing: skipHashing, scanRootPath: scanRootPath)
                 }
                 group.addTask {
                     try await Task.sleep(nanoseconds: self.probeTimeoutSeconds * 1_000_000_000)
@@ -338,38 +353,59 @@ extension VideoScanModel {
                 return result
             }
         } catch {
-            // Timeout fired before probeFile completed.
-            // Unshared-instance invariant (step 3): freshly constructed here,
-            // owned solely by this probe task until handed off — see
-            // cancelledProbeRecord for the full note and the step-4 deferral.
-            let rec = VideoRecord()
-            rec.filename      = url.lastPathComponent
-            rec.ext           = url.pathExtension.uppercased()
-            rec.fullPath      = url.path
-            rec.directory     = url.deletingLastPathComponent().path
-            rec.sizeBytes     = preSize
-            rec.isPlayable    = "Timed out"
-            rec.notes         = "File probe exceeded \(probeTimeoutSeconds)s — network I/O may be stalled"
-            rec.streamTypeRaw = StreamType.ffprobeFailed.rawValue
-            return rec
+            // Timeout fired before the probe completed. Pure value carrier —
+            // the VideoRecord is built later at the main-actor drain point.
+            var o = ProbeOutcome()
+            o.filename            = url.lastPathComponent
+            o.ext                 = url.pathExtension.uppercased()
+            o.fullPath            = url.path
+            o.directory           = url.deletingLastPathComponent().path
+            o.sizeBytes           = preSize
+            o.probe.isPlayable    = "Timed out"
+            o.notes               = "File probe exceeded \(probeTimeoutSeconds)s — network I/O may be stalled"
+            o.probe.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+            return o
         }
     }
 
-    /// Probe a single file and return a populated VideoRecord.
+    /// `@MainActor` VideoRecord shim over `probeFileWithTimeoutOutcome`.
+    /// Retained for the probe-engine timeout-regression tests; the scan
+    /// pipeline calls the `…Outcome` core directly via `probeAndRecord`.
+    func probeFileWithTimeout(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false, scanRootPath: String? = nil) async -> VideoRecord {
+        let outcome = await probeFileWithTimeoutOutcome(url: url, prefetchToRAM: prefetchToRAM, ramPath: ramPath, skipHashing: skipHashing, scanRootPath: scanRootPath)
+        let rec = VideoRecord()
+        rec.apply(outcome)
+        return rec
+    }
+
+    /// Probe a single file and return a populated `VideoRecord`.
+    ///
+    /// `@MainActor` shim over the nonisolated `probeFileOutcome` core: the
+    /// heavy work (existence check, hashing, ffprobe subprocess, MXF fallback,
+    /// caching) runs off-actor inside the core and yields a Sendable
+    /// `ProbeOutcome`; the `VideoRecord` is materialized HERE, on the main
+    /// actor. This is the single-file reprobe entry point used by TranscodeJob,
+    /// ReformatJob, and TriageView (all `@MainActor`) — and by the probe-engine
+    /// tests. The scan pipeline does NOT call this; it consumes the carrier
+    /// from the core directly (see `probeAndRecord`).
+    func probeFile(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false, scanRootPath: String? = nil) async -> VideoRecord {
+        let outcome = await probeFileOutcome(url: url, prefetchToRAM: prefetchToRAM, ramPath: ramPath, skipHashing: skipHashing, scanRootPath: scanRootPath)
+        let rec = VideoRecord()
+        rec.apply(outcome)
+        return rec
+    }
+
+    /// Probe a single file and return a Sendable `ProbeOutcome`.
     /// If prefetchToRAM is true and ramPath is available, copies the first 10MB
     /// to the RAM disk so ffprobe reads at memory speed instead of network speed.
     ///
-    /// Unshared-instance invariant (ProbeResult seam, step 3): EVERY return path
-    /// here yields a `VideoRecord` that was freshly constructed within this call
-    /// and mutated only by this task — the not-found sentinel, the cache-hit
-    /// record (`MetadataCache.lookup` builds a brand-new record from the SQLite
-    /// row on every call — it does NOT vend a shared in-memory object), and the
-    /// probe-success/fallback record. The off-actor metadata stage now flows
-    /// through the Sendable `ProbeResult` value (see ScanEngine.extractMetadata).
-    /// Materializing the `VideoRecord` itself on the main actor is deferred to
-    /// step 4 — it is blocked on reworking `MetadataCache` to traffic in a
-    /// Sendable carrier rather than returning/consuming `VideoRecord`.
-    nonisolated func probeFile(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false, scanRootPath: String? = nil) async -> VideoRecord {
+    /// Pure off-actor producer: EVERY return path yields a `ProbeOutcome` value
+    /// (the not-found sentinel, the cache-hit carrier from `MetadataCache.lookup`,
+    /// and the probe-success/fallback carrier). No `VideoRecord` is constructed
+    /// here — that now happens only at the main-actor drain points and the
+    /// `@MainActor` shims. This is what closes the off-actor reference-mutation
+    /// hole: the whole probe stage trafficks in Sendable values.
+    nonisolated func probeFileOutcome(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false, scanRootPath: String? = nil) async -> ProbeOutcome {
         let fm = FileManager.default
         let path = url.path
 
@@ -385,15 +421,15 @@ extension VideoScanModel {
         // here. Using it caused per-file existence misses to overwrite the
         // cached mount bit and flicker the catalog UI (italics flicker bug).
         guard fm.fileExists(atPath: path) else {
-            let rec = VideoRecord()
-            rec.filename      = url.lastPathComponent
-            rec.ext           = url.pathExtension.uppercased()
-            rec.fullPath      = path
-            rec.directory     = url.deletingLastPathComponent().path
-            rec.isPlayable    = "File not found"
-            rec.notes         = "File was discovered during scan but is no longer accessible"
-            rec.streamTypeRaw = StreamType.ffprobeFailed.rawValue
-            return rec
+            var o = ProbeOutcome()
+            o.filename            = url.lastPathComponent
+            o.ext                 = url.pathExtension.uppercased()
+            o.fullPath            = path
+            o.directory           = url.deletingLastPathComponent().path
+            o.probe.isPlayable    = "File not found"
+            o.notes               = "File was discovered during scan but is no longer accessible"
+            o.probe.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+            return o
         }
 
         // Get file attributes for cache key and record population
@@ -406,7 +442,7 @@ extension VideoScanModel {
         // mount type, volume UUID, remote server) reflects the current scan
         // and legacy records backfill naturally on rescan. The capture is two
         // syscalls — cheap even when multiplied across thousands of hits.
-        if let cached = metadataCache.lookup(path: path, fileSize: fileSize, modDate: modDate) {
+        if var cached = metadataCache.lookup(path: path, fileSize: fileSize, modDate: modDate) {
             cached.wasCacheHit = true
             cached.scanContext = ScanContext.capture(for: url, scanRootPath: scanRootPath)
             return cached
@@ -414,33 +450,33 @@ extension VideoScanModel {
 
         // autoreleasepool drains Obj-C bridged objects (DateFormatter, NSString,
         // FileManager internals) created during record population
-        let rec: VideoRecord = autoreleasepool {
-            let r = VideoRecord()
-            r.filename  = url.lastPathComponent
-            r.ext       = url.pathExtension.uppercased()
-            r.fullPath  = path
-            r.directory = url.deletingLastPathComponent().path
+        var outcome: ProbeOutcome = autoreleasepool {
+            var o = ProbeOutcome()
+            o.filename  = url.lastPathComponent
+            o.ext       = url.pathExtension.uppercased()
+            o.fullPath  = path
+            o.directory = url.deletingLastPathComponent().path
 
             let df = DateFormatter()
             df.dateFormat = "yyyy-MM-dd HH:mm:ss"
-            r.sizeBytes       = fileSize
-            r.size            = Formatting.humanSize(fileSize)
+            o.sizeBytes       = fileSize
+            o.size            = Formatting.humanSize(fileSize)
             // Reject impossible dates (future, before 1900, or the
             // known 2040-02-06 06:28:16 UTC sentinel from Rick's old
             // MacPro PRAM-dead scan) so they never enter the catalog.
             // See DateValidation.swift for the predicates + tests.
-            r.dateModifiedRaw = pfDateOrNilIfImpossible(attrs?[.modificationDate] as? Date)
-            r.dateCreatedRaw  = pfDateOrNilIfImpossible(attrs?[.creationDate] as? Date)
-            r.dateModified    = r.dateModifiedRaw.map { df.string(from: $0) } ?? ""
-            r.dateCreated     = r.dateCreatedRaw.map { df.string(from: $0) } ?? ""
+            o.dateModifiedRaw = pfDateOrNilIfImpossible(attrs?[.modificationDate] as? Date)
+            o.dateCreatedRaw  = pfDateOrNilIfImpossible(attrs?[.creationDate] as? Date)
+            o.dateModified    = o.dateModifiedRaw.map { df.string(from: $0) } ?? ""
+            o.dateCreated     = o.dateCreatedRaw.map { df.string(from: $0) } ?? ""
 
             // partialMD5 is the strong identity key for duplicate detection.
             // Skip reads ~64 KB per file, which is free on local SSD but costs
             // real seconds over SMB on thousands of files. skipHashing trades
             // dup detection for a faster pass — user can run "Analyze
             // Duplicates" later if they change their mind.
-            r.partialMD5 = skipHashing ? "" : FileHasher.partialMD5(path: path)
-            return r
+            o.partialMD5 = skipHashing ? "" : FileHasher.partialMD5(path: path)
+            return o
         }
 
         // Prefetch file header to RAM disk for fast ffprobe
@@ -466,7 +502,7 @@ extension VideoScanModel {
         )
         let stderrTrimmed = probeResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        ScanEngine.applyProbeOrFallback(rec: rec, url: url, path: path,
+        ScanEngine.applyProbeOrFallback(outcome: &outcome, url: url, path: path,
                                         probe: probeResult.output, stderrTrimmed: stderrTrimmed)
 
         // Clean up temp file
@@ -476,15 +512,15 @@ extension VideoScanModel {
 
         // Cache the result — but don't cache ffprobe failures, so future runs
         // with improved fallback parsers can retry them.
-        if rec.streamTypeRaw != StreamType.ffprobeFailed.rawValue {
-            metadataCache.store(record: rec, fileSize: fileSize, modDate: modDate)
+        if outcome.probe.streamTypeRaw != StreamType.ffprobeFailed.rawValue {
+            metadataCache.store(outcome: outcome, fileSize: fileSize, modDate: modDate)
         }
 
         // Stamp scan-time provenance. Done after caching so the SQLite cache
         // schema stays stable — scanContext lives in catalog.json only and is
         // recaptured fresh on every scan.
-        rec.scanContext = ScanContext.capture(for: url, scanRootPath: scanRootPath)
-        return rec
+        outcome.scanContext = ScanContext.capture(for: url, scanRootPath: scanRootPath)
+        return outcome
     }
 
     /// If prefetchToRAM is enabled and a RAM path is available, copy the
