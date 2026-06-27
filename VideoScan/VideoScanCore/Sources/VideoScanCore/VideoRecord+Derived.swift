@@ -1,11 +1,19 @@
 // VideoRecord+Derived.swift
 // VideoRecord's computed / derived properties — stream-type accessor,
-// table sort keys, volume-label derivation, and the value heuristics —
-// extracted verbatim from the VideoRecord class body in Models.swift
-// (refactor 2026-06-26, model decomposition step 1). In step 2 the
-// SwiftUI color / archive-health UI accessors were lifted out into
-// ModelsUI/VideoRecord+Presentation.swift, leaving this file
-// Foundation-only.
+// table sort keys, and the value heuristics — extracted verbatim from the
+// VideoRecord class body in Models.swift (refactor 2026-06-26, model
+// decomposition step 1). In step 2 the SwiftUI color / archive-health UI
+// accessors were lifted out into ModelsUI/VideoRecord+Presentation.swift,
+// leaving this file Foundation-only.
+//
+// Package-extraction note (2026-06-26): when VideoRecord moved into the
+// VideoScanCore package, the two volume-LABEL derivations (`volumeName`,
+// `displayVolumeLabel`) stayed app-side in
+// ModelsUI/VideoRecord+DerivedApp.swift because they depend on
+// VolumeReachability — app infrastructure that can't follow into the pure
+// domain package. Everything in THIS file is Foundation-only, so it lives
+// in the package and is `public` so the app target (which sees the package
+// via @_exported) keeps reading these members unchanged.
 //
 // (Swift extension ≈ C++ partial class via free member functions: no new
 // stored state, methods share the same `self`.)
@@ -14,28 +22,28 @@ import Foundation
 
 extension VideoRecord {
 
-    var hasAvidMetadata: Bool {
+    public var hasAvidMetadata: Bool {
         !avidClipName.isEmpty || !avidMobID.isEmpty
     }
 
     /// Convenience: true when this record has been soft-removed from the
     /// catalog. Used by UI filtering + styling. `// guard let` ≈ C++ early
     /// return after a null check.
-    var isPurged: Bool { purgedAt != nil }
+    public var isPurged: Bool { purgedAt != nil }
 
     /// True when EITHER the stored needsReformat flag is set OR the
     /// codec strings match a known-problematic legacy codec. The
     /// catalog UI's red `!` badge reads this so already-cataloged
     /// files surface immediately, without waiting for the next VLM
     /// run. See UnplayableLegacyCodecs.swift for the criteria.
-    var isLikelyUnanalyzable: Bool {
+    public var isLikelyUnanalyzable: Bool {
         if needsReformat { return true }
         return hasUnplayableLegacyCodec(videoCodec: videoCodec, audioCodec: audioCodec)
     }
 
     /// Tooltip text for the badge. nil when the file's codecs are
     /// fine AND no failed-VLM marker is set.
-    var unanalyzableReason: String? {
+    public var unanalyzableReason: String? {
         if let codecReason = unplayableLegacyReason(videoCodec: videoCodec, audioCodec: audioCodec) {
             return codecReason
         }
@@ -49,8 +57,12 @@ extension VideoRecord {
     /// Long old QuickTime files with audio score highest — the
     /// signature of deliberately-digitized family footage. Used to
     /// prioritize the reformat queue.
-    var analyzeValueScore: Int {
-        return VideoScan.analyzeValueScore(
+    public var analyzeValueScore: Int {
+        // Free function now lives in the same module (UnplayableLegacyCodecs.swift
+        // moved into the package). Module-qualify so the call resolves to the
+        // free function, not this same-named computed property — mirrors the
+        // original `VideoScan.analyzeValueScore(...)` disambiguation.
+        return VideoScanCore.analyzeValueScore(
             durationSeconds: durationSeconds,
             hasAudio: streamType == .videoAndAudio || streamType == .audioOnly,
             hasLegacyCodec: hasUnplayableLegacyCodec(videoCodec: videoCodec, audioCodec: audioCodec),
@@ -59,7 +71,7 @@ extension VideoRecord {
         )
     }
 
-    var streamType: StreamType {
+    public var streamType: StreamType {
         StreamType(rawValue: streamTypeRaw) ?? .ffprobeFailed
     }
 
@@ -80,7 +92,7 @@ extension VideoRecord {
     /// direction. Empty string would have sorted them to the top
     /// instead, which is rarely what users want when the column reads
     /// "People".
-    var peopleSortKey: String {
+    public var peopleSortKey: String {
         let confirmed = detectedPeople.sorted(by: { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending })
             .joined(separator: ", ")
         let suspected = suspectedPeople.sorted(by: { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending })
@@ -99,7 +111,7 @@ extension VideoRecord {
 
     /// Resolution sorted by total pixel count. Files with no resolution
     /// (audio-only, ffprobe failed) sort to the bottom.
-    var pixelCount: Int {
+    public var pixelCount: Int {
         let parts = resolution.lowercased().split(separator: "x")
         guard parts.count == 2,
               let w = Int(parts[0].trimmingCharacters(in: .whitespaces)),
@@ -110,53 +122,8 @@ extension VideoRecord {
 
     /// Non-optional creation date for sorting; missing dates sort to the
     /// far past so descending order surfaces real dates first.
-    var dateCreatedSortKey: Date { dateCreatedRaw ?? .distantPast }
+    public var dateCreatedSortKey: Date { dateCreatedRaw ?? .distantPast }
 
     /// Same idea for modification date.
-    var dateModifiedSortKey: Date { dateModifiedRaw ?? .distantPast }
-
-    /// Human-readable volume name. Prefers the name captured at scan time
-    /// (e.g. "Macintosh HD", "LaCieWorkspace") which works even when the
-    /// volume is offline. Falls back to path-component parsing for legacy
-    /// records scanned before this field existed.
-    var volumeName: String {
-        // A relocated record physically lives wherever fullPath now points —
-        // not where it was originally scanned. originalFullPath is set only by
-        // Relocate, so for those records derive the volume from the CURRENT
-        // path. Without this the catalog Volume column keeps showing the origin
-        // volume (files moved RicksBackups → LaCie still read "RicksBackups").
-        // volumeName(forPath:) is pure string parsing, so it stays correct even
-        // when the destination volume is offline. (Bug found 2026-06-19 while
-        // spot-testing the RicksBackups → LaCie salvage move: 1,474 relocated
-        // files showed their old volume in the Volume column.)
-        if originalFullPath != nil {
-            let derived = VolumeReachability.volumeName(forPath: fullPath)
-            if !derived.isEmpty { return derived }
-        }
-        if !scanContext.volumeName.isEmpty { return scanContext.volumeName }
-        return VolumeReachability.volumeName(forPath: fullPath)
-    }
-
-    /// Disambiguated label for the catalog "Volume" column. Returns just
-    /// the volume name for whole-volume scans, or "Volume > Folder" for
-    /// folder scans. The " > " ASCII breadcrumb reads naturally and is
-    /// trivially typeable/searchable — used everywhere subfolder scans need
-    /// volume context (catalog column, inspector, scan-target menus).
-    ///
-    /// Legacy records (no `scanRootLabel`) read the same as before — just
-    /// the volume name. Only newly scanned or re-scanned subfolder records
-    /// pick up the combined form.
-    var displayVolumeLabel: String {
-        let vol = volumeName
-        let root = scanContext.scanRootLabel
-        // Defensive guards:
-        //   - empty root  → whole-volume scan or legacy record → vol alone
-        //   - root == vol → degenerate case (scan root happened to equal the
-        //                   volume name, e.g. capture stamped the volume root)
-        //                   → vol alone, no " > " duplication
-        //   - empty vol   → fall back to root so the column is never blank
-        guard !root.isEmpty, root != vol else { return vol }
-        guard !vol.isEmpty else { return root }
-        return "\(vol) > \(root)"
-    }
+    public var dateModifiedSortKey: Date { dateModifiedRaw ?? .distantPast }
 }

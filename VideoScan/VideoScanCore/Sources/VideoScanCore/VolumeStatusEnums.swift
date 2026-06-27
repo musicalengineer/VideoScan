@@ -1,17 +1,19 @@
 // VolumeStatusEnums.swift
 // Volume lifecycle / role / trust / media-tech enums — moved verbatim
-// from Models.swift (refactor 2026-06-26, model decomposition step 1).
-// See Models.swift for the group overview. In step 2 the SwiftUI display
-// accessors (SF Symbol / Color / short-label properties) were lifted into
+// from Models.swift (refactor 2026-06-26, model decomposition step 1), then
+// into the VideoScanCore package (2026-06-26 step 3). The SwiftUI display
+// accessors (SF Symbol / Color / short-label properties) live in
 // ModelsUI/VolumeStatusEnums+Presentation.swift and the wholly-UI
-// DestinationPolicy enum moved to ModelsUI/DestinationPolicy.swift,
-// leaving this file Foundation-only.
+// DestinationPolicy enum in ModelsUI/DestinationPolicy.swift, app-side, so
+// this file is Foundation-only. `public` added during package extraction so
+// the app target (which sees the package via @_exported) reads these
+// unchanged.
 
 import Foundation
 
 // MARK: - Volume Phase (lifecycle)
 
-enum VolumePhase: String, CaseIterable, Codable {
+public enum VolumePhase: String, CaseIterable, Codable {
     case noCatalog    = "NO CATALOG"
     case cataloged    = "Cataloged"
     case reviewed     = "Reviewed"
@@ -19,7 +21,7 @@ enum VolumePhase: String, CaseIterable, Codable {
     case archived     = "Archived"
 
     // Legacy decoding: "New" → .noCatalog
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
         if raw == "New" { self = .noCatalog; return }
         guard let v = VolumePhase(rawValue: raw) else {
@@ -30,7 +32,7 @@ enum VolumePhase: String, CaseIterable, Codable {
     }
 
     /// Next phase in the lifecycle, or nil if already archived.
-    var next: VolumePhase? {
+    public var next: VolumePhase? {
         guard let idx = Self.allCases.firstIndex(of: self),
               idx + 1 < Self.allCases.count else { return nil }
         return Self.allCases[idx + 1]
@@ -39,7 +41,7 @@ enum VolumePhase: String, CaseIterable, Codable {
 
 // MARK: - Volume Role
 
-enum VolumeRole: String, CaseIterable, Codable {
+public enum VolumeRole: String, CaseIterable, Codable {
     case unassigned  = "Unassigned"
     case system      = "System"
     case original    = "Original"
@@ -49,7 +51,7 @@ enum VolumeRole: String, CaseIterable, Codable {
     case retired     = "Retired"
 }
 
-enum VolumeTrust: String, CaseIterable, Codable {
+public enum VolumeTrust: String, CaseIterable, Codable {
     case unknown    = "Unknown"
     case reliable   = "Reliable"
     case aging      = "Aging"
@@ -58,7 +60,7 @@ enum VolumeTrust: String, CaseIterable, Codable {
 
 // MARK: - Volume Media Technology
 
-enum VolumeMediaTech: String, CaseIterable, Codable {
+public enum VolumeMediaTech: String, CaseIterable, Codable {
     case unknown = "Unknown"
     case ssd     = "SSD"
     case hdd     = "HDD"
@@ -70,7 +72,7 @@ enum VolumeMediaTech: String, CaseIterable, Codable {
     case network = "Network"
 
     /// Multi-disk redundancy: a single-disk failure doesn't lose the volume.
-    var isRedundant: Bool {
+    public var isRedundant: Bool {
         switch self {
         case .raid1, .raid5, .raid10, .cloud: return true
         default: return false
@@ -79,5 +81,5 @@ enum VolumeMediaTech: String, CaseIterable, Codable {
 
     /// RAID-0 doubles failure probability with no redundancy — never an
     /// archive destination, even when new.
-    var isFragile: Bool { self == .raid0 }
+    public var isFragile: Bool { self == .raid0 }
 }

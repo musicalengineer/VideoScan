@@ -16,6 +16,10 @@ DerivedData/
 *.xcuserstate
 xcuserdata/
 
+# SwiftPM build artifacts (local VideoScanCore package)
+.build/
+.swiftpm/
+
 # macOS
 .DS_Store
 *.swp

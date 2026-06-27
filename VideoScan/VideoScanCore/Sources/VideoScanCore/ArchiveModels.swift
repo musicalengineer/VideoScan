@@ -1,17 +1,18 @@
 // ArchiveModels.swift
 // File-lifecycle, disposition, archive-stage, and backup models — moved
 // verbatim from Models.swift (refactor 2026-06-26, model decomposition
-// step 1). See Models.swift for the group overview. In step 2 the SwiftUI
-// display accessors (SF Symbol / Color properties) were lifted into
-// ModelsUI/ArchiveModels+Presentation.swift and the wholly-UI
-// ArchiveHealth type moved to ModelsUI/ArchiveHealth.swift, leaving this
-// file Foundation-only.
+// step 1), then into the VideoScanCore package (2026-06-26 step 3). The
+// SwiftUI display accessors (SF Symbol / Color properties) live in
+// ModelsUI/ArchiveModels+Presentation.swift and the wholly-UI ArchiveHealth
+// type in ModelsUI/ArchiveHealth.swift, app-side, so this file is
+// Foundation-only. `public` added during package extraction so the app
+// target (which sees the package via @_exported) reads these unchanged.
 
 import Foundation
 
 // MARK: - Lifecycle Stage (which tab shows this file)
 
-enum LifecycleStage: String, Codable, CaseIterable {
+public enum LifecycleStage: String, Codable, CaseIterable {
     case cataloged = "Cataloged"
     case reviewing = "In Triage"
     /// Output of Combine / Repair / Transcode workflows that have produced
@@ -35,7 +36,7 @@ enum LifecycleStage: String, Codable, CaseIterable {
 
 // MARK: - Media Disposition (per-file lifecycle)
 
-enum MediaDisposition: String, Codable, CaseIterable {
+public enum MediaDisposition: String, Codable, CaseIterable {
     case unreviewed    = "Unreviewed"
     case important     = "Important"
     case recoverable   = "Recoverable"
@@ -43,7 +44,7 @@ enum MediaDisposition: String, Codable, CaseIterable {
     case confirmedJunk = "Confirmed Junk"
 }
 
-enum ArchiveStage: String, Codable, CaseIterable, Comparable {
+public enum ArchiveStage: String, Codable, CaseIterable, Comparable {
     case none            = "None"
     case healthy         = "Healthy"
     case masterAssigned  = "Master"
@@ -56,7 +57,7 @@ enum ArchiveStage: String, Codable, CaseIterable, Comparable {
     case manuallyDeleted = "Manually Deleted"
     case salvageFailed   = "Salvage Failed"
 
-    static func < (lhs: ArchiveStage, rhs: ArchiveStage) -> Bool {
+    public static func < (lhs: ArchiveStage, rhs: ArchiveStage) -> Bool {
         let order: [ArchiveStage] = allCases
         return (order.firstIndex(of: lhs) ?? 0) < (order.firstIndex(of: rhs) ?? 0)
     }
@@ -64,13 +65,22 @@ enum ArchiveStage: String, Codable, CaseIterable, Comparable {
 
 // MARK: - Backup Entry
 
-struct BackupEntry: Codable, Identifiable, Equatable {
-    var id: String { name }
-    let name: String           // "LTA_Crucial", "iCloud", "Breen's NAS"
-    let kind: BackupKind
-    let date: Date
+public struct BackupEntry: Codable, Identifiable, Equatable {
+    public var id: String { name }
+    public let name: String           // "LTA_Crucial", "iCloud", "Breen's NAS"
+    public let kind: BackupKind
+    public let date: Date
 
-    enum BackupKind: String, Codable, CaseIterable {
+    // Public memberwise init: a public struct's compiler-synthesized
+    // memberwise init is internal, but app code (ArchiveView) constructs
+    // BackupEntry across the module boundary.
+    public init(name: String, kind: BackupKind, date: Date) {
+        self.name = name
+        self.kind = kind
+        self.date = date
+    }
+
+    public enum BackupKind: String, Codable, CaseIterable {
         case local   = "Local"       // external drive, same network
         case cloud   = "Cloud"       // iCloud, Backblaze, S3
         case offsite = "Offsite"     // physically elsewhere (son's NAS, etc.)

@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C0DE0000000000000000B000 /* VideoScanCore in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE0000000000000000A000 /* VideoScanCore */; };
+		C0DE0000000000000000B001 /* VideoScanCore in Frameworks */ = {isa = PBXBuildFile; productRef = C0DE0000000000000000A001 /* VideoScanCore */; };
 		FACE000000000000000000B1 /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = FACE000000000000000000A1 /* MLXVLM */; };
 		FACE000000000000000000B2 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = FACE000000000000000000A2 /* MLXLMCommon */; };
 		FACE000000000000000000B3 /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = FACE000000000000000000A3 /* MLX */; };
@@ -61,6 +63,7 @@
 				FACE000000000000000000B1 /* MLXVLM in Frameworks */,
 				FACE000000000000000000B2 /* MLXLMCommon in Frameworks */,
 				FACE000000000000000000B3 /* MLX in Frameworks */,
+				C0DE0000000000000000B000 /* VideoScanCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -68,6 +71,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C0DE0000000000000000B001 /* VideoScanCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -124,6 +128,7 @@
 				FACE000000000000000000A1 /* MLXVLM */,
 				FACE000000000000000000A2 /* MLXLMCommon */,
 				FACE000000000000000000A3 /* MLX */,
+				C0DE0000000000000000A000 /* VideoScanCore */,
 			);
 			productName = VideoScan;
 			productReference = 0DC193282F676647006295E7 /* VideoScan.app */;
@@ -147,6 +152,7 @@
 			);
 			name = VideoScanTests;
 			packageProductDependencies = (
+				C0DE0000000000000000A001 /* VideoScanCore */,
 			);
 			productName = VideoScanTests;
 			productReference = 0DC193352F676648006295E7 /* VideoScanTests.xctest */;
@@ -209,6 +215,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				FACE000000000000000000A0 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */,
+				C0DE0000000000000000F000 /* XCLocalSwiftPackageReference "VideoScanCore" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 0DC193292F676647006295E7 /* Products */;
@@ -597,6 +604,13 @@
 		};
 /* End XCConfigurationList section */
 
+/* Begin XCLocalSwiftPackageReference section */
+		C0DE0000000000000000F000 /* XCLocalSwiftPackageReference "VideoScanCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = VideoScanCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		FACE000000000000000000A0 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */ = {
 			isa = XCRemoteSwiftPackageReference;
@@ -609,6 +623,16 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		C0DE0000000000000000A000 /* VideoScanCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C0DE0000000000000000F000 /* XCLocalSwiftPackageReference "VideoScanCore" */;
+			productName = VideoScanCore;
+		};
+		C0DE0000000000000000A001 /* VideoScanCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C0DE0000000000000000F000 /* XCLocalSwiftPackageReference "VideoScanCore" */;
+			productName = VideoScanCore;
+		};
 		FACE000000000000000000A1 /* MLXVLM */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = FACE000000000000000000A0 /* XCRemoteSwiftPackageReference "mlx-swift-examples" */;

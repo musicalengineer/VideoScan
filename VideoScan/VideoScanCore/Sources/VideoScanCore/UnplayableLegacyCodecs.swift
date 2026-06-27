@@ -29,7 +29,7 @@ import Foundation
 /// from Apple's QuickTime 7 deprecation notice + Sorenson/Indeo/
 /// Cinepak being legacy proprietary formats with no modern decoder
 /// outside ffmpeg / VLC.
-let unplayableLegacyVideoCodecs: Set<String> = [
+public let unplayableLegacyVideoCodecs: Set<String> = [
     // Sorenson (early QuickTime web video, pre-2005)
     "svq1", "svq3",
     "sorenson", "sorenson video", "sorenson video 3",
@@ -46,7 +46,7 @@ let unplayableLegacyVideoCodecs: Set<String> = [
 ]
 
 /// Audio codecs AVFoundation can't decode on macOS 10.15+.
-let unplayableLegacyAudioCodecs: Set<String> = [
+public let unplayableLegacyAudioCodecs: Set<String> = [
     // QDesign (early QuickTime web audio, pre-2005)
     "qdm2", "qdmc",
     // QCELP (early mobile)
@@ -62,7 +62,7 @@ let unplayableLegacyAudioCodecs: Set<String> = [
 /// Returns true iff the codec strings indicate a file the
 /// in-app analyzer can't decode. Pure function; takes the
 /// ffprobe-style strings directly so it's trivially testable.
-func hasUnplayableLegacyCodec(videoCodec: String, audioCodec: String) -> Bool {
+public func hasUnplayableLegacyCodec(videoCodec: String, audioCodec: String) -> Bool {
     let v = videoCodec.lowercased().trimmingCharacters(in: .whitespaces)
     let a = audioCodec.lowercased().trimmingCharacters(in: .whitespaces)
     if !v.isEmpty, unplayableLegacyVideoCodecs.contains(v) { return true }
@@ -72,7 +72,7 @@ func hasUnplayableLegacyCodec(videoCodec: String, audioCodec: String) -> Bool {
 
 /// One-line user-facing reason a record needs reformatting.
 /// Returns nil if the record's codecs are fine.
-func unplayableLegacyReason(videoCodec: String, audioCodec: String) -> String? {
+public func unplayableLegacyReason(videoCodec: String, audioCodec: String) -> String? {
     let v = videoCodec.lowercased().trimmingCharacters(in: .whitespaces)
     let a = audioCodec.lowercased().trimmingCharacters(in: .whitespaces)
     if !v.isEmpty, unplayableLegacyVideoCodecs.contains(v) {
@@ -98,23 +98,23 @@ func unplayableLegacyReason(videoCodec: String, audioCodec: String) -> String? {
 // contribution is readable in the source. Tuning happens here, not
 // scattered through render code.
 
-struct AnalyzeValueWeights {
+public struct AnalyzeValueWeights {
     /// > 15 minutes — deliberate recordings, not snippets.
-    static let longDuration = 30
+    public static let longDuration = 30
     /// Has audio track — family voices, recorded events.
-    static let hasAudio = 20
+    public static let hasAudio = 20
     /// Codec / container signals deliberate archival digitization.
-    static let legacyCodec = 25
+    public static let legacyCodec = 25
     /// QuickTime container — Apple-era archival workflow signature.
-    static let quickTimeContainer = 10
+    public static let quickTimeContainer = 10
     /// File mtime pre-2010 — genuine pre-digital source, not a
     /// modern smartphone clip.
-    static let preDigitalEraMTime = 15
+    public static let preDigitalEraMTime = 15
 }
 
 /// Heuristic 0–100 score for "this is probably an important file."
 /// Used to prioritize reformat-and-analyze queue ordering.
-func analyzeValueScore(
+public func analyzeValueScore(
     durationSeconds: Double,
     hasAudio: Bool,
     hasLegacyCodec: Bool,

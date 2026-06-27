@@ -54,7 +54,7 @@ extension VideoRecord {
         case workspaceActive
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
         try c.encode(filename, forKey: .filename)

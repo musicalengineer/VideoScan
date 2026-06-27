@@ -30,7 +30,7 @@ extension VideoRecord {
     /// FOUR places: CodingKeys, init(from:), encode(to:), and this clone.
     /// CatalogStoreAsyncSaveTests.cloneEncodesIdenticallyToOriginal pins the
     /// parity for every field its fixture populates.
-    func snapshotClone() -> VideoRecord {
+    public func snapshotClone() -> VideoRecord {
         let c = VideoRecord()
         c.id = id
         c.filename = filename

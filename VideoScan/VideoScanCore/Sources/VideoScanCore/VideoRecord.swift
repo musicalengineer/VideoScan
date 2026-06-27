@@ -15,61 +15,61 @@ import Foundation
 
 // MARK: - Video Record
 
-class VideoRecord: Identifiable, Codable {
-    var id: UUID = UUID()
+public class VideoRecord: Identifiable, Codable {
+    public var id: UUID = UUID()
 
-    var filename: String = ""
-    var ext: String = ""
-    var streamTypeRaw: String = ""
-    var size: String = ""
-    var sizeBytes: Int64 = 0
-    var duration: String = ""
-    var durationSeconds: Double = 0
-    var dateCreated: String = ""
-    var dateModified: String = ""
-    var dateCreatedRaw: Date?
-    var dateModifiedRaw: Date?
-    var container: String = ""
-    var videoCodec: String = ""
-    var resolution: String = ""
-    var frameRate: String = ""
-    var videoBitrate: String = ""
-    var totalBitrate: String = ""
-    var colorSpace: String = ""
-    var bitDepth: String = ""
-    var scanType: String = ""
-    var audioCodec: String = ""
-    var audioChannels: String = ""
-    var audioSampleRate: String = ""
-    var timecode: String = ""
-    var tapeName: String = ""
-    var isPlayable: String = ""
-    var partialMD5: String = ""
-    var fullPath: String = ""
-    var directory: String = ""
-    var notes: String = ""
+    public var filename: String = ""
+    public var ext: String = ""
+    public var streamTypeRaw: String = ""
+    public var size: String = ""
+    public var sizeBytes: Int64 = 0
+    public var duration: String = ""
+    public var durationSeconds: Double = 0
+    public var dateCreated: String = ""
+    public var dateModified: String = ""
+    public var dateCreatedRaw: Date?
+    public var dateModifiedRaw: Date?
+    public var container: String = ""
+    public var videoCodec: String = ""
+    public var resolution: String = ""
+    public var frameRate: String = ""
+    public var videoBitrate: String = ""
+    public var totalBitrate: String = ""
+    public var colorSpace: String = ""
+    public var bitDepth: String = ""
+    public var scanType: String = ""
+    public var audioCodec: String = ""
+    public var audioChannels: String = ""
+    public var audioSampleRate: String = ""
+    public var timecode: String = ""
+    public var tapeName: String = ""
+    public var isPlayable: String = ""
+    public var partialMD5: String = ""
+    public var fullPath: String = ""
+    public var directory: String = ""
+    public var notes: String = ""
 
     /// Provenance: where this record's file lived before the most recent
     /// Relocate. Set once at first migration, never overwritten — so even
     /// after multiple relocates, this still points at the *original* home.
     /// nil ⇒ never relocated. See docs/relocate_volume_plan.md §1.
-    var originalFullPath: String?
+    public var originalFullPath: String?
 
     /// Friendly volume name at original location (the value of
     /// `volumeName` at the time of first migration). nil ⇒ never relocated.
-    var originVolume: String?
-    var wasCacheHit: Bool = false   // transient — not persisted to SQLite cache
+    public var originVolume: String?
+    public var wasCacheHit: Bool = false   // transient — not persisted to SQLite cache
 
     // Avid bin metadata (populated by cross-referencing .avb files)
-    var avidClipName: String = ""
-    var avidMobID: String = ""
-    var avidMaterialUUID: String = ""
-    var avidBinFile: String = ""
-    var avidMobType: String = ""
-    var avidMediaPath: String = ""     // original media path from Avid bin
-    var avidTapeName: String = ""
-    var avidEditRate: Double = 0
-    var avidTracks: String = ""        // e.g. "V1, A1-A2"
+    public var avidClipName: String = ""
+    public var avidMobID: String = ""
+    public var avidMaterialUUID: String = ""
+    public var avidBinFile: String = ""
+    public var avidMobType: String = ""
+    public var avidMediaPath: String = ""     // original media path from Avid bin
+    public var avidTapeName: String = ""
+    public var avidEditRate: Double = 0
+    public var avidTracks: String = ""        // e.g. "V1, A1-A2"
 
     /// SMPTE UMID for the MaterialPackage inside the MXF file itself, as
     /// reported by ffprobe's `material_package_umid` format tag. Distinct
@@ -81,95 +81,95 @@ class VideoRecord: Identifiable, Codable {
     /// the source path transparently.
     /// Empty for non-MXF files and for MXFs scanned before the field was
     /// added (re-scan picks it up).
-    var materialPackageUMID: String = ""
+    public var materialPackageUMID: String = ""
 
-    var pairedWith: VideoRecord?
+    public var pairedWith: VideoRecord?
     /// Set during decode; CatalogStore resolves it to a real `pairedWith`
     /// reference after the entire array has been decoded.
-    var pendingPairedWithID: UUID?
-    var pairGroupID: UUID?
-    var pairConfidence: PairConfidence?
-    var duplicateGroupID: UUID?
-    var duplicateConfidence: DuplicateConfidence?
-    var duplicateDisposition: DuplicateDisposition = .none
-    var duplicateReasons: String = ""
-    var duplicateBestMatchFilename: String = ""
-    var duplicateGroupCount: Int = 0
+    public var pendingPairedWithID: UUID?
+    public var pairGroupID: UUID?
+    public var pairConfidence: PairConfidence?
+    public var duplicateGroupID: UUID?
+    public var duplicateConfidence: DuplicateConfidence?
+    public var duplicateDisposition: DuplicateDisposition = .none
+    public var duplicateReasons: String = ""
+    public var duplicateBestMatchFilename: String = ""
+    public var duplicateGroupCount: Int = 0
 
     // Media lifecycle
-    var lifecycleStage: LifecycleStage = .cataloged
-    var mediaDisposition: MediaDisposition = .unreviewed
-    var archiveStage: ArchiveStage = .none
-    var masterLocation: String = ""           // e.g. "Mac Studio SSD"
-    var backupDestinations: [BackupEntry] = []
-    var junkScore: Int = 0
-    var junkReasons: [String] = []
-    var starRating: Int = 0                   // 0 = unrated, 1-3 stars
-    var detectedPeople: [String] = []
+    public var lifecycleStage: LifecycleStage = .cataloged
+    public var mediaDisposition: MediaDisposition = .unreviewed
+    public var archiveStage: ArchiveStage = .none
+    public var masterLocation: String = ""           // e.g. "Mac Studio SSD"
+    public var backupDestinations: [BackupEntry] = []
+    public var junkScore: Int = 0
+    public var junkReasons: [String] = []
+    public var starRating: Int = 0                   // 0 = unrated, 1-3 stars
+    public var detectedPeople: [String] = []
     /// Borderline matches — face recognition score fell in the gray zone
     /// between strong-match and the threshold. Surfaced in the UI as
     /// "suspected: <name>" so the user knows the call is less certain.
     /// On re-scan, a strong hit moves the name from suspected → detected;
     /// a still-borderline hit keeps it here; a miss leaves both alone.
-    var suspectedPeople: [String] = []
+    public var suspectedPeople: [String] = []
     /// User-confirmed person tags — Rick's ground truth, distinct from
     /// the algorithm's detectedPeople. See ConfirmedTag for shape.
     /// Empty until first manual confirmation. Search treats these the
     /// same as detectedPeople (a confirmed name matches the catalog
     /// search bar exactly like an auto-tagged name).
-    var confirmedByUserPeople: [ConfirmedTag] = []
+    public var confirmedByUserPeople: [ConfirmedTag] = []
     /// Names Rick has explicitly rejected on this record — "no, that's
     /// not Anna". Suppresses future auto-tag of that name on this
     /// record AND feeds the eventual training loop as a hard negative
     /// ("classifier said Anna, ground truth says no"). NOT surfaced via
     /// catalog search — searching "anna" should never find a record
     /// where the user said "not anna".
-    var rejectedPeople: [String] = []
+    public var rejectedPeople: [String] = []
     /// Scene captions generated by the vision-language model — sibling
     /// annotation to detectedPeople/suspectedPeople. Each entry pins a
     /// caption to a specific frame timestamp. Empty until "Caption
     /// Videos" runs. Re-captioning replaces the array wholesale; we
     /// don't merge captions from different models.
-    var sceneCaptions: [SceneCaption] = []
+    public var sceneCaptions: [SceneCaption] = []
     /// OCR date/time hits captured from VLM-targeted dossier prompt
     /// per-frame. Each entry pins a date-shaped string ("JUN.21 1991",
     /// "PM 11:30") to its source frame timestamp. The
     /// `inferredRecordDate` field below is the consensus output from
     /// these candidates plus other signals. PROVEN 2026-06-04 on
     /// Clip 03_converted.mov: 11/15 frames agreed on "JUN 21 1991".
-    var ocrDateCandidates: [SceneCaption] = []
+    public var ocrDateCandidates: [SceneCaption] = []
     /// Other on-screen text captured by the VLM dossier prompt —
     /// signs, captions, name tags, screen content. Searchable.
-    var ocrText: [SceneCaption] = []
+    public var ocrText: [SceneCaption] = []
     /// Consensus / triangulated record date from
     /// `pfInferRecordDate` (OCR + audio + path + file metadata).
     /// nil ⇒ no dossier run or inconclusive. When set, this is the
     /// authoritative date — overrides file mtime when picking which
     /// year-bucket a record belongs in.
-    var inferredRecordDate: Date?
+    public var inferredRecordDate: Date?
     /// Confidence in `inferredRecordDate`, 0.0–1.0. OCR consensus
     /// across ≥3 frames is ~0.95; audio-only mentions ~0.85; path
     /// year only ~0.5; file mtime alone ~0.3. UI surfaces low-
     /// confidence dates with a "?" affordance.
-    var inferredDateConfidence: Float?
+    public var inferredDateConfidence: Float?
     /// Wall-clock time the dossier pass ran. Lets the UI offer
     /// "re-run with newer model" actions and lets the catalog-wide
     /// orchestrator skip already-processed records idempotently.
-    var dossierProcessedAt: Date?
+    public var dossierProcessedAt: Date?
     /// The model stack used for the dossier pass, e.g.
     /// "qwen2.5-vl-3b-4bit+whisper-medium-mlx-q4". Lets the UI
     /// distinguish freshly-processed records from older ones and
     /// trigger re-runs when the engine version changes.
-    var dossierProcessedBy: String?
+    public var dossierProcessedBy: String?
     /// Provenance: which VLM produced `sceneCaptions`. Lets the UI
     /// distinguish freshly-captioned rows from rows tagged by an older
     /// model and offer "re-caption with current model." nil when no
     /// captioning has been run yet.
-    var sceneCaptionModel: String?
+    public var sceneCaptionModel: String?
     /// Wall-clock time the captions were generated. Pair with
     /// `sceneCaptionModel` for the "captioned 2026-05-22 with qwen2.5-vl-3b-4bit"
     /// provenance string.
-    var sceneCaptionDate: Date?
+    public var sceneCaptionDate: Date?
 
     // MARK: Audio transcript (Phase 1 — engine + data + search only)
     //
@@ -183,22 +183,22 @@ class VideoRecord: Identifiable, Codable {
     /// content; video+audio files: just the audio). Empty string is a
     /// valid value meaning "ran transcription, found no speech" — that's
     /// distinct from nil ("never transcribed").
-    var audioTranscript: String?
+    public var audioTranscript: String?
     /// Provenance: which engine + model produced the transcript.
     /// Suggested format e.g. "whisper-medium-mlx-q4", matches the
     /// modelID returned by the `AudioTranscriber` implementation.
-    var audioTranscriptModel: String?
+    public var audioTranscriptModel: String?
     /// Wall-clock time the transcript was generated. Pair with
     /// `audioTranscriptModel` for the "transcribed 2026-05-25 with
     /// whisper-medium-mlx-q4" provenance string.
-    var audioTranscriptDate: Date?
+    public var audioTranscriptDate: Date?
 
-    var combinedFromPairID: UUID?             // links back to source pair group
+    public var combinedFromPairID: UUID?             // links back to source pair group
 
     /// Hostname of the machine that originally cataloged this record.
     /// Empty on records scanned locally; populated on import from another
     /// machine's exported catalog so the UI can show "from <host>".
-    var sourceHost: String = ""
+    public var sourceHost: String = ""
 
     /// Soft-delete marker. `nil` = active (visible in default catalog view);
     /// non-nil = "removed from catalog" — the file on disk is untouched but
@@ -211,7 +211,7 @@ class VideoRecord: Identifiable, Codable {
     /// so pre-feature catalog.json files (where the key is absent) come back
     /// as active records, not as decode failures.
     /// Swift's `Date?` ≈ C++ `std::optional<Date>` — nil/empty means "no value".
-    var purgedAt: Date?
+    public var purgedAt: Date?
 
     /// True when the file is DRM-protected (e.g. iTunes FairPlay-encrypted
     /// m4v / m4p purchases from long-defunct user accounts). Detected via
@@ -226,7 +226,7 @@ class VideoRecord: Identifiable, Codable {
     /// Codable note: decoded via decodeIfPresent so legacy catalog.json
     /// files round-trip as false (unprotected, will be tested on next
     /// orchestrator pass).
-    var drmProtected: Bool = false
+    public var drmProtected: Bool = false
 
     /// True when the analyzer pipeline determined this file's codec /
     /// container can't be decoded by AVFoundation (the path the in-app
@@ -245,7 +245,7 @@ class VideoRecord: Identifiable, Codable {
     ///
     /// Codable note: encoded only when true (minimize delta), decoded
     /// via decodeIfPresent so legacy catalogs round-trip cleanly.
-    var needsReformat: Bool = false
+    public var needsReformat: Bool = false
 
     /// When this record was produced by an MFO recipe from another
     /// catalog record, this is the parent record's id. nil for
@@ -256,7 +256,7 @@ class VideoRecord: Identifiable, Codable {
     ///
     /// Codable: encoded only when non-nil (minimize delta), decoded
     /// via decodeIfPresent so legacy catalogs round-trip cleanly.
-    var derivedFrom: UUID?
+    public var derivedFrom: UUID?
 
     /// True when this record represents a file currently being actively
     /// worked on with external tools (transcode in another app, Topaz,
@@ -265,16 +265,16 @@ class VideoRecord: Identifiable, Codable {
     /// when the user sets a final disposition or explicitly takes the
     /// file out of triage. Surfaced as a turquoise row tint.
     /// Swift's `Bool = false` ≈ C++ in-class member initializer.
-    var workspaceActive: Bool = false
+    public var workspaceActive: Bool = false
 
     /// Provenance captured at scan time: which machine ran the scan, what
     /// kind of volume the file lived on (local/smb/nfs/afp), the volume's
     /// stable UUID if available, and the remote server name for network
     /// mounts. Populated automatically during file probing; refreshed
     /// on every rescan so old records backfill naturally.
-    var scanContext: ScanContext = ScanContext()
+    public var scanContext: ScanContext = ScanContext()
 
-    init() {}
+    public init() {}
 
     // MARK: Codable decode
     //
@@ -283,7 +283,7 @@ class VideoRecord: Identifiable, Codable {
     // CodingKeys and encode(to:), which are in VideoRecord+Codable.swift). So
     // the decoder stays here, but reads the `CodingKeys` defined alongside the
     // encoder. Body is verbatim from the original Models.swift.
-    required init(from decoder: Decoder) throws {
+    public required init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id                          = try c.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         filename                    = try c.decodeIfPresent(String.self, forKey: .filename) ?? ""
