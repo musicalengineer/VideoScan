@@ -9,12 +9,17 @@
 // Threading (perf fix 2026-06-10): catalog.json is ~73 MB with dossier
 // transcripts/captions inline, so encode+write must NOT run on the main
 // actor (it was a multi-second beachball per tag/rating/note edit).
-// Debounced saves now snapshot the record graph on the main actor (cheap
-// deep copy — tens of ms for ~13.5K records) and encode+write the snapshot
-// on a serial background queue. All file writes are serialized through
-// that one queue so a terminal `saveNow` (queue.sync) always lands LAST
-// and the freshest content wins. See `deepCopySnapshot` for why the copy
-// is required for race-freedom.
+// Debounced saves now snapshot the record graph on the main actor by
+// building a Sendable `CatalogSnapshotDTO` (each VideoRecord copied by
+// value into a `VideoRecordDTO` — tens of ms for ~13.5K records) and
+// encode+write that DTO on a serial background queue. The DTO IS the
+// race-free copy and is a true value type, so it crosses the actor
+// boundary with no `@unchecked Sendable` hatch and no live VideoRecord off
+// the main actor. All file writes are serialized through that one queue so
+// a terminal `saveNow` (queue.sync) always lands LAST and the freshest
+// content wins. See `makePayload` / VideoRecordDTO for the race-freedom and
+// byte-identity contracts. (`deepCopySnapshot` remains as a tested utility
+// but is no longer on the save path.)
 //
 // Crash-safety: writes are atomic (temp file + rename via Data's atomic
 // option, which writes to a sibling tmp and posix-renames into place);
@@ -329,11 +334,12 @@ final class CatalogStore {
         debounceTask?.cancel()
         debounceTask = nil
         pendingRecords = nil  // superseded by this synchronous save
+        // Build the Sendable DTO payload ON the main actor (the only place
+        // VideoRecord is read), then encode it off-thread on the write queue.
         let payload = Self.makePayload(records: records)
-        let box = SnapshotBox(payload: payload)
         var ok = false
         writeQueue.sync {
-            ok = Self.encodeAndWrite(payload: box.payload, to: fileURL)
+            ok = Self.encodeAndWrite(payload: payload, to: fileURL)
         }
         if ok {
             observer?.catalogStoreDidWrite(self)
@@ -376,18 +382,20 @@ final class CatalogStore {
         }
         saveInFlight = true
 
-        // Snapshot ON the main actor — see deepCopySnapshot for why.
+        // Snapshot ON the main actor — see makePayload for why. Building the
+        // DTO array copies every persisted field by value (String/Array CoW),
+        // yielding a fully-independent Sendable payload that crosses the actor
+        // boundary with no @unchecked hatch and no live VideoRecord.
         let t0 = CFAbsoluteTimeGetCurrent()
         let payload = Self.makePayload(records: records)
         let snapshotMs = (CFAbsoluteTimeGetCurrent() - t0) * 1000
         catalogStoreLog.debug("catalog save: snapshot of \(records.count) records took \(snapshotMs, format: .fixed(precision: 1)) ms")
 
-        let box = SnapshotBox(payload: payload)
         let dest = fileURL
         let delay = testWriteDelay
         writeQueue.async {
             if delay > 0 { Thread.sleep(forTimeInterval: delay) }
-            let ok = Self.encodeAndWrite(payload: box.payload, to: dest)
+            let ok = Self.encodeAndWrite(payload: payload, to: dest)
             Task { @MainActor [weak self] in
                 self?.asyncSaveDidFinish(success: ok)
             }
@@ -412,13 +420,19 @@ final class CatalogStore {
         }
     }
 
-    /// Build the on-disk payload from a RACE-FREE deep copy of the live
-    /// records. Must run on the main actor (it reads live mutable state).
-    private static func makePayload(records: [VideoRecord]) -> CatalogSnapshot {
-        CatalogSnapshot(
+    /// Build the on-disk payload as a Sendable DTO. Must run on the main
+    /// actor — `VideoRecordDTO(_:)` is the ONLY place the live (non-Sendable)
+    /// VideoRecord is read on the save path. Each DTO copies every persisted
+    /// field BY VALUE (String/Array CoW), so the resulting payload is a
+    /// fully-independent, race-free snapshot the background encoder owns
+    /// outright. This supersedes the old deepCopySnapshot-then-encode dance:
+    /// the DTO construction IS the race-free copy, and ships across the actor
+    /// boundary as a true value type (no @unchecked Sendable box).
+    private static func makePayload(records: [VideoRecord]) -> CatalogSnapshotDTO {
+        CatalogSnapshotDTO(
             version: CatalogSnapshot.currentVersion,
             savedAt: Date(),
-            records: deepCopySnapshot(records: records),
+            records: records.map(VideoRecordDTO.init),
             savedFromHost: CatalogHost.currentName
         )
     }
@@ -462,7 +476,7 @@ final class CatalogStore {
     /// pretty-printed, indentation alone was ~30-40% of the file; every
     /// downstream consumer (Python merge/dossier scripts, LiveReload,
     /// CatalogSync) parses JSON and never diffs the text form.
-    nonisolated private static func encodeAndWrite(payload: CatalogSnapshot, to fileURL: URL) -> Bool {
+    nonisolated private static func encodeAndWrite(payload: CatalogSnapshotDTO, to fileURL: URL) -> Bool {
         let t0 = CFAbsoluteTimeGetCurrent()
         do {
             let encoder = JSONEncoder()
@@ -485,12 +499,30 @@ final class CatalogStore {
     }
 }
 
-/// Transport box for handing the snapshot payload to the write queue.
-/// `@unchecked Sendable` is justified because the boxed records are the
-/// deep copies produced by `deepCopySnapshot` — after construction they are
-/// exclusively owned by the save pipeline; no other thread holds a
-/// reference, and nothing mutates them. (The live records the UI mutates
-/// are different objects.)
-private struct SnapshotBox: @unchecked Sendable {
-    let payload: CatalogSnapshot
+/// Sendable, encode-only mirror of `CatalogSnapshot` used solely by the
+/// off-main save path (`makePayload` → `encodeAndWrite`). It replaces the
+/// former `SnapshotBox: @unchecked Sendable` transport: because every field
+/// is a value type (and `records` is `[VideoRecordDTO]`, itself Sendable),
+/// the whole payload crosses to the write queue as a TRUE value type — no
+/// unsafe hatch, and no live VideoRecord off the main actor.
+///
+/// BYTE-IDENTITY: its keys, order, and per-field encoding mirror
+/// `CatalogSnapshot` exactly — same CodingKeys (`version`, `savedAt`,
+/// `records`, `savedFromHost`), same property order, all unconditional —
+/// and each `VideoRecordDTO` encodes byte-identically to its `VideoRecord`
+/// (the class delegates its encoder to the DTO). The on-disk catalog.json
+/// is therefore unchanged. Pinned by CatalogStoreAsyncSaveTests'
+/// byte-identity regression test.
+///
+/// Decode still goes through `CatalogSnapshot` / `VideoRecord` on the main
+/// actor (see `CatalogStore.decode(url:)`), so there is no DTO decoder.
+struct CatalogSnapshotDTO: Sendable, Encodable {
+    var version: Int = CatalogSnapshot.currentVersion
+    var savedAt: Date = Date()
+    var records: [VideoRecordDTO] = []
+    var savedFromHost: String = ""
+
+    private enum CodingKeys: String, CodingKey {
+        case version, savedAt, records, savedFromHost
+    }
 }

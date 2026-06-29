@@ -320,4 +320,141 @@ struct CatalogStoreAsyncSaveTests {
         #expect(cv.pairedWith !== orphanPartner, "Stub must not reference the live partner")
         #expect(cv.pairedWith?.id == orphanPartner.id)
     }
+
+    // MARK: 6. DTO byte-identity (seam E regression guard)
+    //
+    // The off-main catalog save (2026-06-29 seam E) no longer encodes the
+    // non-Sendable VideoRecord off the main actor. Instead it builds a
+    // Sendable `VideoRecordDTO` / `CatalogSnapshotDTO` payload ON the main
+    // actor and encodes THAT off-thread. catalog.json is irreplaceable
+    // family-archive data, so the DTO's JSON MUST be byte-for-byte identical
+    // to what VideoRecord / CatalogSnapshot produced before this refactor.
+    //
+    // These two tests are the safety net. They use the EXACT encoder the
+    // catalog uses (compact — NO .sortedKeys — so KEY ORDER is pinned too,
+    // not just key presence — plus .iso8601 dates). If the DTO ever drifts
+    // from the class (e.g. a future field added to one but not the other, or
+    // VideoRecord.encode stops delegating to the DTO), the byte comparison
+    // fails loudly.
+
+    /// A fully-populated VideoRecord with a resolved `pairedWith` partner so
+    /// the `pairedWith?.id` → `pairedWithID` flattening is exercised.
+    private static func fullyPopulatedRecordWithPartner() throws -> VideoRecord {
+        let json = """
+        {
+          "id": "11111111-2222-3333-4444-555555555555",
+          "filename": "clip.mov", "ext": "mov", "streamTypeRaw": "Video+Audio",
+          "size": "1.2 GB", "sizeBytes": 123456789,
+          "duration": "00:01:00", "durationSeconds": 60.5,
+          "dateCreated": "1991-06-21", "dateModified": "1991-06-22",
+          "dateCreatedRaw": "1991-06-21T12:00:00Z", "dateModifiedRaw": "1991-06-22T12:00:00Z",
+          "container": "mov", "videoCodec": "h264", "resolution": "720x480",
+          "frameRate": "29.97", "videoBitrate": "8 Mb/s", "totalBitrate": "9 Mb/s",
+          "colorSpace": "bt601", "bitDepth": "8", "scanType": "interlaced",
+          "audioCodec": "pcm_s16le", "audioChannels": "2", "audioSampleRate": "48000",
+          "timecode": "01:00:00:00", "tapeName": "Tape1", "isPlayable": "Yes",
+          "partialMD5": "ABC123", "fullPath": "/Volumes/T/clip.mov",
+          "directory": "/Volumes/T", "notes": "birthday",
+          "originalFullPath": "/Volumes/Old/clip.mov", "originVolume": "OldDrive",
+          "avidClipName": "Clip 1", "avidMobID": "mob1", "avidMaterialUUID": "amu",
+          "avidBinFile": "bin.avb", "avidMobType": "Master", "avidMediaPath": "/avid/media",
+          "avidTapeName": "AT", "avidEditRate": 29.97, "avidTracks": "V1, A1-A2",
+          "materialPackageUMID": "0x060A2B34",
+          "pairGroupID": "88888888-8888-8888-8888-888888888888",
+          "pairConfidence": "High",
+          "duplicateGroupID": "77777777-7777-7777-7777-777777777777",
+          "duplicateConfidence": "Medium", "duplicateDisposition": "Keep",
+          "duplicateReasons": "same md5", "duplicateBestMatchFilename": "other.mov",
+          "duplicateGroupCount": 2,
+          "lifecycleStage": "Cataloged", "mediaDisposition": "Important",
+          "archiveStage": "Backed Up", "masterLocation": "Mac Studio SSD",
+          "backupDestinations": [{"name": "LTA_Crucial", "kind": "Local", "date": "2026-01-01T00:00:00Z"}],
+          "junkScore": 3, "junkReasons": ["short"], "starRating": 2,
+          "detectedPeople": ["Donna"], "suspectedPeople": ["Tim"],
+          "confirmedByUserPeople": [{"name": "Donna", "confirmedAt": "2026-04-12T00:00:00Z"}],
+          "rejectedPeople": ["Anna"],
+          "sceneCaptions": [{"timestamp": 1.5, "text": "a man playing guitar"}],
+          "ocrDateCandidates": [{"timestamp": 2, "text": "JUN.21 1991"}],
+          "ocrText": [{"timestamp": 3, "text": "Happy Birthday"}],
+          "inferredRecordDate": "1991-06-21T00:00:00Z", "inferredDateConfidence": 0.95,
+          "dossierProcessedAt": "2026-06-04T00:00:00Z", "dossierProcessedBy": "qwen+whisper",
+          "sceneCaptionModel": "qwen2.5-vl-3b-4bit", "sceneCaptionDate": "2026-05-22T00:00:00Z",
+          "audioTranscript": "happy birthday matt",
+          "audioTranscriptModel": "whisper-medium-mlx-q4",
+          "audioTranscriptDate": "2026-06-04T01:00:00Z",
+          "combinedFromPairID": "66666666-6666-6666-6666-666666666666",
+          "sourceHost": "MacStudio",
+          "scanContext": {
+            "scanHost": "MacStudio", "volumeUUID": "VU-1", "volumeMountType": "smbfs",
+            "volumeName": "MyBook3Terabytes", "remoteServerName": "macpro.local",
+            "scannedAt": "2026-05-01T00:00:00Z", "scanRootLabel": "Movies"
+          },
+          "purgedAt": "2026-06-01T00:00:00Z",
+          "drmProtected": true, "needsReformat": true,
+          "derivedFrom": "55555555-aaaa-bbbb-cccc-555555555555",
+          "workspaceActive": true
+        }
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let record = try decoder.decode(VideoRecord.self, from: Data(json.utf8))
+        // Resolve a real pairedWith so pairedWithID is encoded (not omitted).
+        let partner = VideoRecord()
+        partner.id = UUID(uuidString: "99999999-9999-9999-9999-999999999999")!
+        record.pairedWith = partner
+        return record
+    }
+
+    /// Exactly the encoder CatalogStore.encodeAndWrite uses — compact (no
+    /// .sortedKeys / .prettyPrinted), .iso8601 dates. Compact means the byte
+    /// comparison pins KEY ORDER, not just key set.
+    private static func catalogEncoder() -> JSONEncoder {
+        let e = JSONEncoder()
+        e.dateEncodingStrategy = .iso8601
+        return e
+    }
+
+    /// VideoRecordDTO must encode byte-for-byte identically to VideoRecord.
+    @Test
+    func dtoEncodesByteIdenticalToVideoRecord() throws {
+        let record = try Self.fullyPopulatedRecordWithPartner()
+        let enc = Self.catalogEncoder()
+
+        let fromClass = try enc.encode(record)
+        let fromDTO = try enc.encode(VideoRecordDTO(record))
+
+        #expect(fromClass == fromDTO,
+                "VideoRecordDTO drifted from VideoRecord's on-disk encoding — catalog.json would change shape")
+        // Sanity: prove the comparison is non-vacuous (the fixture really did
+        // produce a fat record, and pairedWithID really is present).
+        #expect(fromDTO.count > 500)
+        let obj = try #require(try JSONSerialization.jsonObject(with: fromDTO) as? [String: Any])
+        #expect(obj["pairedWithID"] as? String == "99999999-9999-9999-9999-999999999999")
+    }
+
+    /// The full on-disk file shape: CatalogSnapshotDTO must encode byte-for-
+    /// byte identically to CatalogSnapshot (snapshot wrapper + record array).
+    /// Both built with the SAME savedAt so only the encode contract differs.
+    @Test
+    func snapshotDTOEncodesByteIdenticalToCatalogSnapshot() throws {
+        let record = try Self.fullyPopulatedRecordWithPartner()
+        let savedAt = Date(timeIntervalSince1970: 1_750_000_000)  // fixed instant
+        let host = "MacStudio"
+
+        let classSnapshot = CatalogSnapshot(version: CatalogSnapshot.currentVersion,
+                                            savedAt: savedAt,
+                                            records: [record],
+                                            savedFromHost: host)
+        let dtoSnapshot = CatalogSnapshotDTO(version: CatalogSnapshot.currentVersion,
+                                             savedAt: savedAt,
+                                             records: [VideoRecordDTO(record)],
+                                             savedFromHost: host)
+
+        let enc = Self.catalogEncoder()
+        let fromClass = try enc.encode(classSnapshot)
+        let fromDTO = try enc.encode(dtoSnapshot)
+
+        #expect(fromClass == fromDTO,
+                "CatalogSnapshotDTO drifted from CatalogSnapshot — the on-disk catalog.json wrapper would change")
+    }
 }

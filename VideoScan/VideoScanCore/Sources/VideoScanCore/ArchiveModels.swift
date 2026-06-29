@@ -65,7 +65,7 @@ public enum ArchiveStage: String, Codable, CaseIterable, Comparable, Sendable {
 
 // MARK: - Backup Entry
 
-public struct BackupEntry: Codable, Identifiable, Equatable {
+public struct BackupEntry: Codable, Identifiable, Equatable, Sendable {
     public var id: String { name }
     public let name: String           // "LTA_Crucial", "iCloud", "Breen's NAS"
     public let kind: BackupKind
@@ -80,7 +80,7 @@ public struct BackupEntry: Codable, Identifiable, Equatable {
         self.date = date
     }
 
-    public enum BackupKind: String, Codable, CaseIterable {
+    public enum BackupKind: String, Codable, CaseIterable, Sendable {
         case local   = "Local"       // external drive, same network
         case cloud   = "Cloud"       // iCloud, Backblaze, S3
         case offsite = "Offsite"     // physically elsewhere (son's NAS, etc.)
