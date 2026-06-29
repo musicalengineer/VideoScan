@@ -12,7 +12,7 @@ import Foundation
 
 // MARK: - Lifecycle Stage (which tab shows this file)
 
-public enum LifecycleStage: String, Codable, CaseIterable {
+public enum LifecycleStage: String, Codable, CaseIterable, Sendable {
     case cataloged = "Cataloged"
     case reviewing = "In Triage"
     /// Output of Combine / Repair / Transcode workflows that have produced
@@ -36,7 +36,7 @@ public enum LifecycleStage: String, Codable, CaseIterable {
 
 // MARK: - Media Disposition (per-file lifecycle)
 
-public enum MediaDisposition: String, Codable, CaseIterable {
+public enum MediaDisposition: String, Codable, CaseIterable, Sendable {
     case unreviewed    = "Unreviewed"
     case important     = "Important"
     case recoverable   = "Recoverable"
@@ -44,7 +44,7 @@ public enum MediaDisposition: String, Codable, CaseIterable {
     case confirmedJunk = "Confirmed Junk"
 }
 
-public enum ArchiveStage: String, Codable, CaseIterable, Comparable {
+public enum ArchiveStage: String, Codable, CaseIterable, Comparable, Sendable {
     case none            = "None"
     case healthy         = "Healthy"
     case masterAssigned  = "Master"

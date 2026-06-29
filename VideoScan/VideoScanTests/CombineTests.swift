@@ -1012,3 +1012,113 @@ struct CatalogNavigationTests {
         }
     }
 }
+
+// MARK: - CombinedRecordSpec copy point (Seam A)
+
+/// Pins the field-mapping that moved out of `buildCombinedRecord` when the
+/// Combine path stopped constructing a VideoRecord off the main actor. The
+/// off-actor builder now fills a Sendable `CombinedRecordSpec`; the actual
+/// `VideoRecord()` + `apply(spec)` happens on the main actor. If anyone drops
+/// or reorders a field in that single copy point, these break.
+@Suite struct CombinedRecordSpecTests {
+
+    // regression: Seam A — VideoRecord.apply(CombinedRecordSpec) copies every field faithfully
+    @Test func applyCopiesAllFields() {
+        var spec = CombinedRecordSpec()
+        spec.filename = "clip_combined.mov"
+        spec.ext = "mov"
+        spec.fullPath = "/vol/out/clip_combined.mov"
+        spec.directory = "/vol/out"
+        spec.container = "mov,mp4,m4a"
+        spec.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        spec.sizeBytes = 123_456_789
+        spec.size = "117.7 MB"
+        spec.durationSeconds = 42.5
+        spec.duration = "00:00:42"
+        spec.videoCodec = "prores"
+        spec.resolution = "1920x1080"
+        spec.frameRate = "30000/1001"
+        spec.videoBitrate = "50000000"
+        spec.colorSpace = "bt709"
+        spec.bitDepth = "10"
+        spec.scanType = "progressive"
+        spec.audioCodec = "pcm_s16le"
+        spec.audioChannels = "2"
+        spec.audioSampleRate = "48000"
+        spec.totalBitrate = "50500000"
+        spec.isPlayable = "Yes"
+        spec.notes = "Combined: 1920x1080 prores + pcm_s16le"
+        let created = Date(timeIntervalSince1970: 1_000_000)
+        let modified = Date(timeIntervalSince1970: 2_000_000)
+        spec.dateCreatedRaw = created
+        spec.dateCreated = "2001-01-12T13:46:40"
+        spec.dateModifiedRaw = modified
+        spec.dateModified = "2001-01-24T03:33:20"
+        spec.mediaDisposition = .unreviewed
+        spec.archiveStage = .none
+        spec.lifecycleStage = .workbench
+        spec.starRating = 3
+        let pairID = UUID()
+        spec.combinedFromPairID = pairID
+
+        let rec = VideoRecord()
+        rec.apply(spec)
+
+        #expect(rec.filename == "clip_combined.mov")
+        #expect(rec.ext == "mov")
+        #expect(rec.fullPath == "/vol/out/clip_combined.mov")
+        #expect(rec.directory == "/vol/out")
+        #expect(rec.container == "mov,mp4,m4a")
+        #expect(rec.streamTypeRaw == StreamType.videoAndAudio.rawValue)
+        #expect(rec.sizeBytes == 123_456_789)
+        #expect(rec.size == "117.7 MB")
+        #expect(rec.durationSeconds == 42.5)
+        #expect(rec.duration == "00:00:42")
+        #expect(rec.videoCodec == "prores")
+        #expect(rec.resolution == "1920x1080")
+        #expect(rec.frameRate == "30000/1001")
+        #expect(rec.videoBitrate == "50000000")
+        #expect(rec.colorSpace == "bt709")
+        #expect(rec.bitDepth == "10")
+        #expect(rec.scanType == "progressive")
+        #expect(rec.audioCodec == "pcm_s16le")
+        #expect(rec.audioChannels == "2")
+        #expect(rec.audioSampleRate == "48000")
+        #expect(rec.totalBitrate == "50500000")
+        #expect(rec.isPlayable == "Yes")
+        #expect(rec.notes == "Combined: 1920x1080 prores + pcm_s16le")
+        #expect(rec.dateCreatedRaw == created)
+        #expect(rec.dateCreated == "2001-01-12T13:46:40")
+        #expect(rec.dateModifiedRaw == modified)
+        #expect(rec.dateModified == "2001-01-24T03:33:20")
+        #expect(rec.mediaDisposition == .unreviewed)
+        #expect(rec.archiveStage == .none)
+        #expect(rec.lifecycleStage == .workbench)
+        #expect(rec.starRating == 3)
+        #expect(rec.combinedFromPairID == pairID)
+    }
+
+    // regression: Seam A — a default spec applied to a fresh record is a no-op
+    // (every spec default mirrors the VideoRecord default), proving the
+    // unconditional copy preserves the old conditional-mutation behavior.
+    @Test func applyDefaultSpecMatchesFreshRecord() {
+        let spec = CombinedRecordSpec()
+        let rec = VideoRecord()
+        rec.apply(spec)
+
+        #expect(rec.filename.isEmpty)
+        #expect(rec.streamTypeRaw.isEmpty)
+        #expect(rec.videoCodec.isEmpty)
+        #expect(rec.resolution.isEmpty)
+        #expect(rec.audioCodec.isEmpty)
+        #expect(rec.dateCreatedRaw == nil)
+        #expect(rec.dateModifiedRaw == nil)
+        #expect(rec.dateCreated.isEmpty)
+        #expect(rec.starRating == 0)
+        #expect(rec.combinedFromPairID == nil)
+        // Spec defaults for the lifecycle trio match VideoRecord's own defaults.
+        #expect(rec.mediaDisposition == .unreviewed)
+        #expect(rec.archiveStage == .none)
+        #expect(rec.lifecycleStage == .cataloged)
+    }
+}
