@@ -37,7 +37,7 @@ extension VideoScanModel {
         snapshotPreservedFieldsForRescan(of: target)
         // Clear any existing catalog records for this volume so a rescan
         // doesn't create duplicates. The cache is kept (probes are reused).
-        records.removeAll { $0.fullPath.hasPrefix(target.searchPath) }
+        records.removeAll { PathScope.contains($0.fullPath, within: target.searchPath) } // regression: codex C2
         target.status = .scanning
         target.filesFound = 0
         target.filesScanned = 0

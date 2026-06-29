@@ -78,14 +78,13 @@ enum RelocateError: Error, Equatable {
 extension VideoScanModel {
 
     /// Records whose `fullPath` is under `sourceVolumeRootPath`.
-    /// Matching uses a trailing slash so `/Volumes/Mini2TB-backup` does
-    /// not false-match `/Volumes/Mini2TB`.
+    /// Component-boundary matching (PathScope) so `/Volumes/Mini2TB-backup`
+    /// does not false-match `/Volumes/Mini2TB`, and an empty/"/" root never
+    /// matches the whole catalog. This is the central scoping helper behind
+    /// totalRecordsOn / relocate / retire accounting. // regression: codex C2
     nonisolated static func recordsScoped(to sourceVolumeRootPath: String,
                                           in all: [VideoRecord]) -> [VideoRecord] {
-        let prefix = sourceVolumeRootPath.hasSuffix("/")
-            ? sourceVolumeRootPath
-            : sourceVolumeRootPath + "/"
-        return all.filter { $0.fullPath.hasPrefix(prefix) }
+        all.filter { PathScope.contains($0.fullPath, within: sourceVolumeRootPath) }
     }
 
     /// Translate a source file's absolute path to its destination path
