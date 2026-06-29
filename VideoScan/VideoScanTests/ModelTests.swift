@@ -599,7 +599,7 @@ struct DetectedPeopleTests {
         rec.filename = "holiday_1992.mov"
         rec.detectedPeople = ["Donna", "Timmy"]
 
-        let data = try JSONEncoder().encode(rec)
+        let data = try JSONEncoder().encode(VideoRecordDTO(rec))
         let decoded = try JSONDecoder().decode(VideoRecord.self, from: data)
 
         #expect(decoded.detectedPeople == ["Donna", "Timmy"])
@@ -609,7 +609,7 @@ struct DetectedPeopleTests {
     @Test func backwardCompatMissingField() throws {
         let rec = VideoRecord()
         rec.filename = "old_catalog_entry.mov"
-        let data = try JSONEncoder().encode(rec)
+        let data = try JSONEncoder().encode(VideoRecordDTO(rec))
 
         // Simulate an old catalog entry that never had the field:
         // remove "detectedPeople" key from the JSON
@@ -627,7 +627,7 @@ struct DetectedPeopleTests {
         rec.filename = "no_people.mov"
         rec.detectedPeople = []
 
-        let data = try JSONEncoder().encode(rec)
+        let data = try JSONEncoder().encode(VideoRecordDTO(rec))
         let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
 
         // Empty array should be omitted to keep catalog JSON compact
@@ -651,7 +651,7 @@ struct LifecycleStageTests {
         rec.filename = "test.mov"
         rec.lifecycleStage = .archived
 
-        let data = try JSONEncoder().encode(rec)
+        let data = try JSONEncoder().encode(VideoRecordDTO(rec))
         let decoded = try JSONDecoder().decode(VideoRecord.self, from: data)
 
         #expect(decoded.lifecycleStage == .archived)
@@ -661,7 +661,7 @@ struct LifecycleStageTests {
     @Test func backwardCompatMissingField() throws {
         let rec = VideoRecord()
         rec.filename = "legacy.mov"
-        let data = try JSONEncoder().encode(rec)
+        let data = try JSONEncoder().encode(VideoRecordDTO(rec))
 
         var json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
         json.removeValue(forKey: "lifecycleStage")

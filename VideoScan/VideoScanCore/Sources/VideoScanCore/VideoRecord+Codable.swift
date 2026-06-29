@@ -1,32 +1,36 @@
 // VideoRecord+Codable.swift
-// VideoRecord's CodingKeys enum and its encoder — extracted from the
-// VideoRecord class body in Models.swift (refactor 2026-06-26, model
-// decomposition step 1).
+// VideoRecord's CodingKeys enum — extracted from the VideoRecord class
+// body in Models.swift (refactor 2026-06-26, model decomposition step 1).
 //
-// NOTE on the split: Swift requires a non-final class's `required
-// init(from:)` to be declared in the PRIMARY class declaration, so the
-// DECODER (init(from:)) stays in VideoRecord.swift. Only CodingKeys and
-// encode(to:) live here. Because the decoder in VideoRecord.swift must
-// reference CodingKeys across files, `CodingKeys` was widened from the
-// original `private` to internal (no access keyword). It remains nested
-// in VideoRecord, so it is not visible outside the type's own files.
+// VideoRecord is `Decodable` ONLY (refactor 2026-06-29, step 5b): all
+// ENCODE logic lives in `VideoRecordDTO`, a Sendable value mirror, so the
+// non-Sendable class never crosses an actor boundary on the save path and
+// never needs an `@unchecked Sendable` box. The class's `init(from:)`
+// (decoder) stays in VideoRecord.swift — Swift requires a non-final
+// class's `required init(from:)` to be declared in the PRIMARY class
+// declaration. Only CodingKeys lives here. Because the decoder in
+// VideoRecord.swift references CodingKeys across files, `CodingKeys` was
+// widened from the original `private` to internal (no access keyword). It
+// remains nested in VideoRecord, so it is not visible outside the type's
+// own files, and VideoRecordDTO.encode(to:) reuses it (same module).
 //
 // MAINTENANCE: adding a persisted stored property to VideoRecord means
 // updating FIVE places: CodingKeys (here), init(from:) (in
 // VideoRecord.swift), snapshotClone() (in VideoRecord+Clone.swift), and
 // VideoRecordDTO's stored property + init(_:) + encode(to:) (in
-// VideoRecordDTO.swift — encode(to:) below just delegates to the DTO, which
-// owns the single copy of the encode logic). The byte-identity test in
-// CatalogStoreAsyncSaveTests fails loudly if the DTO drifts from the class.
+// VideoRecordDTO.swift — the DTO owns the single copy of the encode
+// logic). The byte-identity golden in CatalogStoreAsyncSaveTests fails
+// loudly if the DTO drifts from the on-disk schema.
 
 import Foundation
 
-// MARK: - Codable
+// MARK: - CodingKeys
 
 extension VideoRecord {
 
     // Access widened private → internal: the decoder in VideoRecord.swift
-    // (forced to stay in the class body by Swift) references these keys.
+    // (forced to stay in the class body by Swift) and VideoRecordDTO's
+    // encoder both reference these keys.
     enum CodingKeys: String, CodingKey {
         case id, filename, ext, streamTypeRaw, size, sizeBytes, duration, durationSeconds
         case dateCreated, dateModified, dateCreatedRaw, dateModifiedRaw
@@ -56,17 +60,5 @@ extension VideoRecord {
         case needsReformat
         case derivedFrom
         case workspaceActive
-    }
-
-    // Encoding is delegated to `VideoRecordDTO`, a Sendable value mirror
-    // that owns the SINGLE copy of the on-disk encode logic (moved there
-    // verbatim, 2026-06-29 seam E). Delegating guarantees the live class
-    // and the DTO can never diverge byte-for-byte — there is exactly one
-    // encoder. The DTO is also what the off-main catalog save ships across
-    // the actor boundary, so the non-Sendable VideoRecord never leaves the
-    // main actor during a save. See VideoRecordDTO.swift for the full
-    // byte-identity contract.
-    public func encode(to encoder: Encoder) throws {
-        try VideoRecordDTO(self).encode(to: encoder)
     }
 }

@@ -74,7 +74,7 @@ enum CatalogLoadOutcome: Equatable {
 ///    a marker so a v6-aware build knows the parallel volume metadata
 ///    layer *may* carry retire fields; v5 catalog.json files load
 ///    unchanged (no record-level fields were added).
-struct CatalogSnapshot: Codable {
+struct CatalogSnapshot: Decodable {
     static let currentVersion = 6
 
     var version: Int = Self.currentVersion
@@ -523,5 +523,25 @@ struct CatalogSnapshotDTO: Sendable, Encodable {
 
     private enum CodingKeys: String, CodingKey {
         case version, savedAt, records, savedFromHost
+    }
+}
+
+extension CatalogSnapshotDTO {
+    /// Convenience: snapshot live records into the encode-only DTO. Each
+    /// `VideoRecord` is copied BY VALUE into a `VideoRecordDTO` (the ONLY
+    /// place the non-Sendable class is read), so the result is a true
+    /// Sendable value safe to ship off the main actor — and it is the
+    /// SINGLE encoder for catalog.json. Used by the synchronous export /
+    /// bundle paths that previously encoded a `CatalogSnapshot` directly
+    /// (refactor 2026-06-29, step 5b). Preserves the source snapshot's
+    /// version / savedAt / host verbatim so the on-disk bytes are unchanged.
+    ///
+    /// Runs on the main actor (step 5c onward) — `VideoRecordDTO(_:)` reads
+    /// the main-actor-isolated VideoRecord.
+    init(_ snapshot: CatalogSnapshot) {
+        self.init(version: snapshot.version,
+                  savedAt: snapshot.savedAt,
+                  records: snapshot.records.map(VideoRecordDTO.init),
+                  savedFromHost: snapshot.savedFromHost)
     }
 }

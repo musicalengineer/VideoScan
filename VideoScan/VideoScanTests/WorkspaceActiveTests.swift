@@ -38,7 +38,7 @@ struct WorkspaceActiveTests {
         // --- A. Fresh encode/decode with the flag set ---
         let original = makeRecord(name: "topaz_in_progress.mov", workspaceActive: true)
         let encoder = JSONEncoder()
-        let data = try encoder.encode(original)
+        let data = try encoder.encode(VideoRecordDTO(original))
 
         let decoder = JSONDecoder()
         let decoded = try decoder.decode(VideoRecord.self, from: data)

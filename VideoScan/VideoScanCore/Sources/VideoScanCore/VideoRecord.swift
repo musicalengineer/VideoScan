@@ -15,7 +15,7 @@ import Foundation
 
 // MARK: - Video Record
 
-public class VideoRecord: Identifiable, Codable {
+public class VideoRecord: Identifiable, Decodable {
     // `nonisolated let`: the identity is immutable and isolation-independent,
     // so it satisfies Identifiable without crossing the (future) MainActor
     // boundary. Injected at construction; decode sets it from JSON below.

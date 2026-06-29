@@ -488,7 +488,7 @@ struct FamilyTaggingTests {
         r.suspectedPeople = ["Tim"]
         let snap = CatalogSnapshot(records: [r])
 
-        let data = try JSONEncoder().encode(snap)
+        let data = try JSONEncoder().encode(CatalogSnapshotDTO(snap))
         let decoded = try JSONDecoder().decode(CatalogSnapshot.self, from: data)
 
         #expect(decoded.version == CatalogSnapshot.currentVersion)

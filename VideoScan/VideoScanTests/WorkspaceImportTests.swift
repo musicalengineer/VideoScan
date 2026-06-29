@@ -71,7 +71,7 @@ struct WorkspaceImportTests {
         // Round-trip through JSON to model the catalog-save path. If a
         // future encoder change drops either field, this fails loud.
         let encoder = JSONEncoder()
-        let data = try encoder.encode(imported)
+        let data = try encoder.encode(VideoRecordDTO(imported))
         let decoder = JSONDecoder()
         let decoded = try decoder.decode(VideoRecord.self, from: data)
 

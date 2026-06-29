@@ -50,7 +50,7 @@ struct CatalogStoreHardeningTests {
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         enc.dateEncodingStrategy = .iso8601
-        return try enc.encode(snapshot)
+        return try enc.encode(CatalogSnapshotDTO(snapshot))
     }
 
     // MARK: - 1. Atomic write

@@ -274,8 +274,8 @@ struct CatalogStoreAsyncSaveTests {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        let a = try encoder.encode(original)
-        let b = try encoder.encode(clone)
+        let a = try encoder.encode(VideoRecordDTO(original))
+        let b = try encoder.encode(VideoRecordDTO(clone))
         #expect(a == b, "snapshotClone() drifted from VideoRecord's stored properties — a field is missing from the clone")
     }
 
@@ -302,7 +302,7 @@ struct CatalogStoreAsyncSaveTests {
         // And the encoded pairedWithID survives the copy.
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(cv)
+        let data = try encoder.encode(VideoRecordDTO(cv))
         let obj = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(obj["pairedWithID"] as? String == audio.id.uuidString)
     }
@@ -404,56 +404,69 @@ struct CatalogStoreAsyncSaveTests {
         return record
     }
 
-    /// Exactly the encoder CatalogStore.encodeAndWrite uses — compact (no
-    /// .sortedKeys / .prettyPrinted), .iso8601 dates. Compact means the byte
-    /// comparison pins KEY ORDER, not just key set.
-    private static func catalogEncoder() -> JSONEncoder {
+    // GOLDEN-JSON guard (step 5b). VideoRecord is now Decodable-only, so the
+    // old "DTO encodes byte-identical to the class" comparison is impossible —
+    // there is no class encoder left to compare against. The guard is instead
+    // re-anchored on a CHECKED-IN GOLDEN: a fully-populated DTO is encoded with
+    // a DETERMINISTIC `.sortedKeys` + `.iso8601` encoder and its bytes are
+    // asserted equal to a captured constant. This is STRICTLY STRONGER than the
+    // former comparison — it pins every key AND every value to a fixed string,
+    // not merely "the DTO matches the class."
+    //
+    // Why a `.sortedKeys` encoder here when PRODUCTION is compact (no
+    // .sortedKeys, see CatalogStore.encodeAndWrite)? The production compact
+    // encoder emits keys in a context-dependent order, so its raw bytes are not
+    // stable across processes/contexts and can't be pinned to a golden.
+    // `.sortedKeys` IS stable, so it can — while still proving the full schema
+    // (every field's presence, value, and the encodeIfPresent / isEmpty gating).
+    // Production encoders are intentionally UNCHANGED; only this guard differs.
+    private static func goldenEncoder() -> JSONEncoder {
         let e = JSONEncoder()
+        e.outputFormatting = [.sortedKeys]
         e.dateEncodingStrategy = .iso8601
         return e
     }
 
-    /// VideoRecordDTO must encode byte-for-byte identically to VideoRecord.
+    // regression: catalog.json is irreplaceable family-archive data. This pins
+    // the exact on-disk bytes VideoRecordDTO produces for a fully-populated
+    // record. Captured 2026-06-29 from the then-current schema with
+    // goldenEncoder(). If a field is added/removed/reordered or its encoding
+    // changes, this fails loudly — update the golden ONLY as a deliberate,
+    // reviewed schema migration.
     @Test
-    func dtoEncodesByteIdenticalToVideoRecord() throws {
+    func dtoEncodesGoldenJSON() throws {
         let record = try Self.fullyPopulatedRecordWithPartner()
-        let enc = Self.catalogEncoder()
-
-        let fromClass = try enc.encode(record)
-        let fromDTO = try enc.encode(VideoRecordDTO(record))
-
-        #expect(fromClass == fromDTO,
-                "VideoRecordDTO drifted from VideoRecord's on-disk encoding — catalog.json would change shape")
-        // Sanity: prove the comparison is non-vacuous (the fixture really did
-        // produce a fat record, and pairedWithID really is present).
-        #expect(fromDTO.count > 500)
-        let obj = try #require(try JSONSerialization.jsonObject(with: fromDTO) as? [String: Any])
-        #expect(obj["pairedWithID"] as? String == "99999999-9999-9999-9999-999999999999")
+        let produced = String(decoding: try Self.goldenEncoder().encode(VideoRecordDTO(record)),
+                              as: UTF8.self)
+        #expect(produced == Self.videoRecordGolden,
+                "VideoRecordDTO drifted from the catalog.json schema golden — see step 5b guard")
+        // Sanity: prove the fixture really is fat and pairedWithID is present.
+        #expect(produced.count > 500)
+        #expect(produced.contains("\"pairedWithID\":\"99999999-9999-9999-9999-999999999999\""))
     }
 
-    /// The full on-disk file shape: CatalogSnapshotDTO must encode byte-for-
-    /// byte identically to CatalogSnapshot (snapshot wrapper + record array).
-    /// Both built with the SAME savedAt so only the encode contract differs.
+    // regression: the full on-disk file shape — CatalogSnapshotDTO (wrapper +
+    // record array). Same deterministic-golden contract as above; savedAt is
+    // pinned to a fixed instant so the wrapper bytes are stable.
     @Test
-    func snapshotDTOEncodesByteIdenticalToCatalogSnapshot() throws {
+    func snapshotDTOEncodesGoldenJSON() throws {
         let record = try Self.fullyPopulatedRecordWithPartner()
         let savedAt = Date(timeIntervalSince1970: 1_750_000_000)  // fixed instant
-        let host = "MacStudio"
-
-        let classSnapshot = CatalogSnapshot(version: CatalogSnapshot.currentVersion,
-                                            savedAt: savedAt,
-                                            records: [record],
-                                            savedFromHost: host)
         let dtoSnapshot = CatalogSnapshotDTO(version: CatalogSnapshot.currentVersion,
                                              savedAt: savedAt,
                                              records: [VideoRecordDTO(record)],
-                                             savedFromHost: host)
-
-        let enc = Self.catalogEncoder()
-        let fromClass = try enc.encode(classSnapshot)
-        let fromDTO = try enc.encode(dtoSnapshot)
-
-        #expect(fromClass == fromDTO,
-                "CatalogSnapshotDTO drifted from CatalogSnapshot — the on-disk catalog.json wrapper would change")
+                                             savedFromHost: "MacStudio")
+        let produced = String(decoding: try Self.goldenEncoder().encode(dtoSnapshot),
+                              as: UTF8.self)
+        #expect(produced == Self.snapshotGolden,
+                "CatalogSnapshotDTO drifted from the catalog.json wrapper golden — see step 5b guard")
     }
+
+    // MARK: Golden constants (captured 2026-06-29 via goldenEncoder())
+
+    private static let videoRecordGolden =
+        #"{"archiveStage":"Backed Up","audioChannels":"2","audioCodec":"pcm_s16le","audioSampleRate":"48000","audioTranscript":"happy birthday matt","audioTranscriptDate":"2026-06-04T01:00:00Z","audioTranscriptModel":"whisper-medium-mlx-q4","avidBinFile":"bin.avb","avidClipName":"Clip 1","avidEditRate":29.97,"avidMaterialUUID":"amu","avidMediaPath":"\/avid\/media","avidMobID":"mob1","avidMobType":"Master","avidTapeName":"AT","avidTracks":"V1, A1-A2","backupDestinations":[{"date":"2026-01-01T00:00:00Z","kind":"Local","name":"LTA_Crucial"}],"bitDepth":"8","colorSpace":"bt601","combinedFromPairID":"66666666-6666-6666-6666-666666666666","confirmedByUserPeople":[{"confirmedAt":"2026-04-12T00:00:00Z","name":"Donna"}],"container":"mov","dateCreated":"1991-06-21","dateCreatedRaw":"1991-06-21T12:00:00Z","dateModified":"1991-06-22","dateModifiedRaw":"1991-06-22T12:00:00Z","derivedFrom":"55555555-AAAA-BBBB-CCCC-555555555555","detectedPeople":["Donna"],"directory":"\/Volumes\/T","dossierProcessedAt":"2026-06-04T00:00:00Z","dossierProcessedBy":"qwen+whisper","drmProtected":true,"duplicateBestMatchFilename":"other.mov","duplicateConfidence":"Medium","duplicateDisposition":"Keep","duplicateGroupCount":2,"duplicateGroupID":"77777777-7777-7777-7777-777777777777","duplicateReasons":"same md5","duration":"00:01:00","durationSeconds":60.5,"ext":"mov","filename":"clip.mov","frameRate":"29.97","fullPath":"\/Volumes\/T\/clip.mov","id":"11111111-2222-3333-4444-555555555555","inferredDateConfidence":0.95,"inferredRecordDate":"1991-06-21T00:00:00Z","isPlayable":"Yes","junkReasons":["short"],"junkScore":3,"lifecycleStage":"Cataloged","masterLocation":"Mac Studio SSD","materialPackageUMID":"0x060A2B34","mediaDisposition":"Important","needsReformat":true,"notes":"birthday","ocrDateCandidates":[{"text":"JUN.21 1991","timestamp":2}],"ocrText":[{"text":"Happy Birthday","timestamp":3}],"originVolume":"OldDrive","originalFullPath":"\/Volumes\/Old\/clip.mov","pairConfidence":"High","pairGroupID":"88888888-8888-8888-8888-888888888888","pairedWithID":"99999999-9999-9999-9999-999999999999","partialMD5":"ABC123","purgedAt":"2026-06-01T00:00:00Z","rejectedPeople":["Anna"],"resolution":"720x480","scanContext":{"remoteServerName":"macpro.local","scanHost":"MacStudio","scanRootLabel":"Movies","scannedAt":"2026-05-01T00:00:00Z","volumeMountType":"smbfs","volumeName":"MyBook3Terabytes","volumeUUID":"VU-1"},"scanType":"interlaced","sceneCaptionDate":"2026-05-22T00:00:00Z","sceneCaptionModel":"qwen2.5-vl-3b-4bit","sceneCaptions":[{"text":"a man playing guitar","timestamp":1.5}],"size":"1.2 GB","sizeBytes":123456789,"sourceHost":"MacStudio","starRating":2,"streamTypeRaw":"Video+Audio","suspectedPeople":["Tim"],"tapeName":"Tape1","timecode":"01:00:00:00","totalBitrate":"9 Mb\/s","videoBitrate":"8 Mb\/s","videoCodec":"h264","workspaceActive":true}"#
+
+    private static let snapshotGolden =
+        #"{"records":[{"archiveStage":"Backed Up","audioChannels":"2","audioCodec":"pcm_s16le","audioSampleRate":"48000","audioTranscript":"happy birthday matt","audioTranscriptDate":"2026-06-04T01:00:00Z","audioTranscriptModel":"whisper-medium-mlx-q4","avidBinFile":"bin.avb","avidClipName":"Clip 1","avidEditRate":29.97,"avidMaterialUUID":"amu","avidMediaPath":"\/avid\/media","avidMobID":"mob1","avidMobType":"Master","avidTapeName":"AT","avidTracks":"V1, A1-A2","backupDestinations":[{"date":"2026-01-01T00:00:00Z","kind":"Local","name":"LTA_Crucial"}],"bitDepth":"8","colorSpace":"bt601","combinedFromPairID":"66666666-6666-6666-6666-666666666666","confirmedByUserPeople":[{"confirmedAt":"2026-04-12T00:00:00Z","name":"Donna"}],"container":"mov","dateCreated":"1991-06-21","dateCreatedRaw":"1991-06-21T12:00:00Z","dateModified":"1991-06-22","dateModifiedRaw":"1991-06-22T12:00:00Z","derivedFrom":"55555555-AAAA-BBBB-CCCC-555555555555","detectedPeople":["Donna"],"directory":"\/Volumes\/T","dossierProcessedAt":"2026-06-04T00:00:00Z","dossierProcessedBy":"qwen+whisper","drmProtected":true,"duplicateBestMatchFilename":"other.mov","duplicateConfidence":"Medium","duplicateDisposition":"Keep","duplicateGroupCount":2,"duplicateGroupID":"77777777-7777-7777-7777-777777777777","duplicateReasons":"same md5","duration":"00:01:00","durationSeconds":60.5,"ext":"mov","filename":"clip.mov","frameRate":"29.97","fullPath":"\/Volumes\/T\/clip.mov","id":"11111111-2222-3333-4444-555555555555","inferredDateConfidence":0.95,"inferredRecordDate":"1991-06-21T00:00:00Z","isPlayable":"Yes","junkReasons":["short"],"junkScore":3,"lifecycleStage":"Cataloged","masterLocation":"Mac Studio SSD","materialPackageUMID":"0x060A2B34","mediaDisposition":"Important","needsReformat":true,"notes":"birthday","ocrDateCandidates":[{"text":"JUN.21 1991","timestamp":2}],"ocrText":[{"text":"Happy Birthday","timestamp":3}],"originVolume":"OldDrive","originalFullPath":"\/Volumes\/Old\/clip.mov","pairConfidence":"High","pairGroupID":"88888888-8888-8888-8888-888888888888","pairedWithID":"99999999-9999-9999-9999-999999999999","partialMD5":"ABC123","purgedAt":"2026-06-01T00:00:00Z","rejectedPeople":["Anna"],"resolution":"720x480","scanContext":{"remoteServerName":"macpro.local","scanHost":"MacStudio","scanRootLabel":"Movies","scannedAt":"2026-05-01T00:00:00Z","volumeMountType":"smbfs","volumeName":"MyBook3Terabytes","volumeUUID":"VU-1"},"scanType":"interlaced","sceneCaptionDate":"2026-05-22T00:00:00Z","sceneCaptionModel":"qwen2.5-vl-3b-4bit","sceneCaptions":[{"text":"a man playing guitar","timestamp":1.5}],"size":"1.2 GB","sizeBytes":123456789,"sourceHost":"MacStudio","starRating":2,"streamTypeRaw":"Video+Audio","suspectedPeople":["Tim"],"tapeName":"Tape1","timecode":"01:00:00:00","totalBitrate":"9 Mb\/s","videoBitrate":"8 Mb\/s","videoCodec":"h264","workspaceActive":true}],"savedAt":"2025-06-15T15:06:40Z","savedFromHost":"MacStudio","version":6}"#
 }

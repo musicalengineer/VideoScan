@@ -165,7 +165,7 @@ struct AudioTranscriberTests {
         rec.audioTranscriptDate = when
 
         let enc = JSONEncoder()
-        let data = try enc.encode(rec)
+        let data = try enc.encode(VideoRecordDTO(rec))
 
         let dec = JSONDecoder()
         let round = try dec.decode(VideoRecord.self, from: data)
@@ -195,7 +195,7 @@ struct AudioTranscriberTests {
         #expect(rec.audioTranscript == nil)
 
         let enc = JSONEncoder()
-        let data = try enc.encode(rec)
+        let data = try enc.encode(VideoRecordDTO(rec))
 
         // Sanity: the encoded JSON should NOT mention the audio
         // transcript keys at all (encodeIfPresent skips them).
@@ -223,7 +223,7 @@ struct AudioTranscriberTests {
         rec.audioTranscriptModel = "python-whisper-medium-mlx-q4"
         rec.audioTranscriptDate = Date()
 
-        let data = try JSONEncoder().encode(rec)
+        let data = try JSONEncoder().encode(VideoRecordDTO(rec))
         let round = try JSONDecoder().decode(VideoRecord.self, from: data)
         #expect(round.audioTranscript == "")
         #expect(round.audioTranscriptModel == "python-whisper-medium-mlx-q4")

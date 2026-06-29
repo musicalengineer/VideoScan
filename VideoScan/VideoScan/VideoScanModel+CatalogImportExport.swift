@@ -43,7 +43,10 @@ extension VideoScanModel {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(snapshot)
+        // Encode through the Sendable DTO — VideoRecord is Decodable-only
+        // (step 5b); CatalogSnapshotDTO owns the single encoder and is
+        // byte-identical to the former CatalogSnapshot encoding.
+        let data = try encoder.encode(CatalogSnapshotDTO(snapshot))
         try data.write(to: url, options: .atomic)
         if excluded > 0 {
             log("Exported \(activeRecords.count) records (\(excluded) removed records excluded)")
