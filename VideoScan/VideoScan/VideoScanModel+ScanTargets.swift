@@ -168,13 +168,28 @@ extension VideoScanModel {
         return ["smbfs", "nfs", "afpfs", "webdav"].contains(fsType)
     }
 
+    /// "Remove from List" / "Remove Selected" (Catalog volume context menu).
+    ///
+    /// DATA-SAFETY CONTRACT (codex C1): this is a *list* operation, not a
+    /// catalog purge. It stops any in-flight work for the target and drops
+    /// its probe cache (all safe, record-independent cleanup), then removes
+    /// the target from `scanTargets` while PRESERVING every catalog record
+    /// under the volume as an orphan. The record-preserving removal +
+    /// per-path UserDefaults teardown is exactly `deleteScanTarget`'s
+    /// contract, so we delegate to it rather than duplicating the logic.
+    ///
+    /// Previously this method did `records.removeAll { hasPrefix }` followed
+    /// by `saveCatalogNow()`, which permanently deleted and persisted-away
+    /// the user's irreplaceable catalog records with no confirmation. If a
+    /// genuinely-destructive "remove AND purge records" action is ever
+    /// wanted it must be a separate, clearly-labeled, confirmation-gated
+    /// action — never the default "Remove from List".
     func removeScanTarget(_ target: CatalogScanTarget) {
+        // Record-independent cleanup — always safe to run.
         target.scanTask?.cancel()
         target.stopElapsedTimer()
         clearCacheForTarget(target)
-        records.removeAll { $0.fullPath.hasPrefix(target.searchPath) }
-        scanTargets.removeAll { $0.id == target.id }
-        persistScanTargets()
-        saveCatalogNow()
+        // Remove from the list but KEEP catalog records (orphan semantics).
+        deleteScanTarget(target)
     }
 }
