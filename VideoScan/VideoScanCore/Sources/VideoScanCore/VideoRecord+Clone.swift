@@ -31,8 +31,7 @@ extension VideoRecord {
     /// CatalogStoreAsyncSaveTests.cloneEncodesIdenticallyToOriginal pins the
     /// parity for every field its fixture populates.
     public func snapshotClone() -> VideoRecord {
-        let c = VideoRecord()
-        c.id = id
+        let c = VideoRecord(id: id)
         c.filename = filename
         c.ext = ext
         c.streamTypeRaw = streamTypeRaw

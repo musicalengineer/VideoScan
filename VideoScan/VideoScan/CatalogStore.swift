@@ -460,8 +460,7 @@ final class CatalogStore {
             if let mapped = cloneByID[partner.id] {
                 clone.pairedWith = mapped
             } else {
-                let stub = VideoRecord()
-                stub.id = partner.id
+                let stub = VideoRecord(id: partner.id)
                 clone.pairedWith = stub
             }
         }

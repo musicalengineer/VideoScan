@@ -16,7 +16,12 @@ import Foundation
 // MARK: - Video Record
 
 public class VideoRecord: Identifiable, Codable {
-    public var id: UUID = UUID()
+    // `nonisolated let`: the identity is immutable and isolation-independent,
+    // so it satisfies Identifiable without crossing the (future) MainActor
+    // boundary. Injected at construction; decode sets it from JSON below.
+    // `// In C++ terms: a `const` member set only in the constructor's
+    // initializer list — never reassigned afterward.`
+    public nonisolated let id: UUID
 
     public var filename: String = ""
     public var ext: String = ""
@@ -274,7 +279,9 @@ public class VideoRecord: Identifiable, Codable {
     /// on every rescan so old records backfill naturally.
     public var scanContext: ScanContext = ScanContext()
 
-    public init() {}
+    public init(id: UUID = UUID()) {
+        self.id = id
+    }
 
     // MARK: Codable decode
     //

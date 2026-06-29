@@ -399,8 +399,7 @@ struct CatalogStoreAsyncSaveTests {
         decoder.dateDecodingStrategy = .iso8601
         let record = try decoder.decode(VideoRecord.self, from: Data(json.utf8))
         // Resolve a real pairedWith so pairedWithID is encoded (not omitted).
-        let partner = VideoRecord()
-        partner.id = UUID(uuidString: "99999999-9999-9999-9999-999999999999")!
+        let partner = VideoRecord(id: UUID(uuidString: "99999999-9999-9999-9999-999999999999")!)
         record.pairedWith = partner
         return record
     }
