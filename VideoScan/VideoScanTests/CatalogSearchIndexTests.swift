@@ -596,6 +596,79 @@ struct CatalogSearchIndexTests {
         #expect(hits.first?.fullPath == bothWords.fullPath)
     }
 
+    /// regression: a needle that is simultaneously a STANDALONE word in some
+    /// records AND an INFIX of a different word in others must still return
+    /// BOTH sets — matching the canonical SUBSTRING matcher. This is the real
+    /// 2026-06-27 bug ("rick" 917 vs 11016): the whole-word bucket for "rick"
+    /// held only the standalone-token records and missed every record where
+    /// "rick" lived inside "rickb" / "ricksbackups". The infix-safety gate in
+    /// tryIndexLookup must detect that "rick" is an infix of another indexed
+    /// word and either bail to the linear matcher or otherwise return the
+    /// complete set. Either way: index == canonical, with BOTH records present.
+    @Test func invertedIndex_infixOfAnotherWordMatchesCanonical() {
+        // "rick" is a standalone word here (filename token).
+        let standalone = makeRecord(path: "/Volumes/X/rick at the beach.mov",
+                                    transcript: "rick waves hello")
+        // "rick" appears ONLY as an infix of "rickb" — never standalone.
+        let infixUser = makeRecord(path: "/Volumes/X/rickb-home-movie.mov",
+                                   transcript: "captured by rickb on the camcorder")
+        // "rick" as an infix of a directory-style token "ricksbackups".
+        let infixDir = makeRecord(path: "/Volumes/RicksBackups/clip.mov",
+                                  transcript: "no name token here")
+        infixDir.directory = "/Volumes/RicksBackups/2001"
+        // A control record that must NOT match.
+        let unrelated = makeRecord(path: "/Volumes/X/donna.mov",
+                                   transcript: "donna at home")
+
+        let all = [standalone, infixUser, infixDir, unrelated]
+        let idx = CatalogSearchIndex()
+        idx.rebuild(records: all)
+
+        let viaIndex = Set(idx.filter(records: all, query: "rick").map { $0.fullPath })
+        let viaCanonical = Set(
+            all.filter { pfRecordFilenameOrPersonMatch($0, query: "rick") }
+                .map { $0.fullPath }
+        )
+        #expect(viaIndex == viaCanonical,
+                "Infix needle 'rick' diverged: index=\(viaIndex.count) canonical=\(viaCanonical.count)")
+        // The standalone AND both infix records must be present; the
+        // unrelated 'donna' record must be absent.
+        #expect(viaIndex.contains(standalone.fullPath), "standalone 'rick' record missing")
+        #expect(viaIndex.contains(infixUser.fullPath), "infix 'rickb' record missing — whole-word bucket under-returned")
+        #expect(viaIndex.contains(infixDir.fullPath), "infix 'RicksBackups' directory record missing")
+        #expect(!viaIndex.contains(unrelated.fullPath), "unrelated record must not match 'rick'")
+    }
+
+    /// regression: the eligibility memo must not go stale. A needle that is
+    /// fast-path eligible (standalone, no infix overlap) can become INELIGIBLE
+    /// after update() introduces a longer word that contains it. The first
+    /// query caches "eligible"; after the update, the same query must recompute
+    /// and return the now-larger complete set.
+    @Test func invertedIndex_eligibilityMemoInvalidatesOnUpdate() {
+        let standalone = makeRecord(path: "/Volumes/X/rick.mov", transcript: "rick here")
+        let other = makeRecord(path: "/Volumes/X/other.mov", transcript: "plain content")
+        let idx = CatalogSearchIndex()
+        idx.rebuild(records: [standalone, other])
+
+        // First query: "rick" is standalone-only → fast-path eligible, cached.
+        let before = Set(idx.filter(records: [standalone, other], query: "rick").map { $0.fullPath })
+        #expect(before == [standalone.fullPath])
+
+        // Now "other" gains the word "rickb" — "rick" is now an infix of it.
+        other.audioTranscript = "captured by rickb"
+        idx.update(other)
+
+        let after = Set(idx.filter(records: [standalone, other], query: "rick").map { $0.fullPath })
+        let canonical = Set(
+            [standalone, other].filter { pfRecordFilenameOrPersonMatch($0, query: "rick") }
+                .map { $0.fullPath }
+        )
+        #expect(after == canonical,
+                "Stale eligibility memo: 'rick' returned \(after.count), canonical \(canonical.count)")
+        #expect(after.contains(other.fullPath),
+                "After update() added 'rickb', 'rick' must now match that record too")
+    }
+
     /// clear() must wipe BOTH the haystack cache AND the inverted
     /// index — otherwise post-clear queries would return stale matches.
     @Test func invertedIndex_clearWipesBothSides() {

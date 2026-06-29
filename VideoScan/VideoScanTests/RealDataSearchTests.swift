@@ -292,51 +292,37 @@ struct RealDataSearchTests {
         }
     }
 
-    // MARK: - 4c. INDEX == CANONICAL on real data — KNOWN FAST-PATH GAP
+    // MARK: - 4c. INDEX == CANONICAL on real data (STRICT — primary proof)
     //
-    // The production contract (CatalogSearchIndex.swift:34) states `filter`
-    // MUST return the SAME records as the canonical catalog matcher. On the
-    // real corpus that contract is VIOLATED by the inverted-index fast path:
+    // regression: the production contract (CatalogSearchIndex.swift:34) states
+    // `filter` MUST return the SAME records as the canonical catalog matcher.
+    // This asserts FULL equivalence — completeness AND soundness — on the real
+    // 19K-record corpus, for every query in the data-derived battery.
     //
-    //   query "rick"  → index 917  vs canonical 11016   (misses 10099)
-    //   query "mov"   → index 4790 vs canonical 5716    (misses 926)
-    //   query "clip"  → index 977  vs canonical 1046
-    //
-    // Root cause: `tryIndexLookup` does a WHOLE-WORD bucket lookup, but the
-    // canonical matcher does SUBSTRING matching (incl. directory / volumeName).
-    // A token like "rick" is a standalone word in some records yet an INFIX of
-    // "rickb" / "RicksBackups" directory paths in ~10K others — the whole-word
-    // bucket misses every infix hit. The fast path is unsound for any token
-    // that is simultaneously a complete word AND a substring-within-a-word
-    // elsewhere. Effect: the catalog bar SILENTLY UNDER-COUNTS results.
+    // History: this previously failed because the inverted-index fast path did
+    // a WHOLE-WORD bucket lookup while the canonical matcher does SUBSTRING
+    // matching. A token like "rick" is a standalone word in some records yet an
+    // INFIX of "rickb"/"RicksBackups" directory paths in ~10K others — the
+    // whole-word bucket missed every infix hit (index 917 vs canonical 11016).
+    // The fix (the "infix-safety gate" in tryIndexLookup) only trusts a
+    // whole-word bucket when the needle is NOT also an infix of any OTHER
+    // indexed word; otherwise it bails to the linear matcher. With that gate in
+    // place the fast path is provably the complete substring-match set, so this
+    // equivalence now holds STRICT.
     //
     // The synthetic suites (CatalogSearchIndexTests) never had this infix
-    // overlap, so they pass while real search is wrong. This is exactly the
-    // class of bug the real-data harness exists to catch.
-    //
-    // We pin it with `withKnownIssue` rather than weaken the assertion: the
-    // FULL equivalence is still evaluated every run, the failure is recorded,
-    // and the suite stays green — but if the fast path is ever fixed,
-    // withKnownIssue reports an "unexpected pass" so Rick knows to delete this
-    // wrapper and promote the check to strict.
-    //
-    // C++ analogy: `withKnownIssue { ... }` ≈ a GoogleTest EXPECT_*
-    // wrapped in a known-bug guard — closest to wrapping the body in
-    // `if (!kKnownBugXYZ) { EXPECT_EQ(...); }` but with the inverse alarm:
-    // it *fires* when the bug stops reproducing.
-    @Test func indexEqualsCanonicalOnRealData_knownFastPathGap() throws {
+    // overlap, so they passed while real search was wrong — exactly the class
+    // of bug this real-data harness exists to catch. CatalogSearchIndexTests
+    // now also carries a synthetic infix regression so the fix is pinned
+    // without real data (CI-safe).
+    @Test func indexEqualsCanonicalOnRealData() throws {
         let (records, idx) = try Self.shared()
         try #require(!records.isEmpty)
-        withKnownIssue("CatalogSearchIndex fast path under-returns vs canonical substring matcher (whole-word bucket misses infix matches; e.g. 'rick' 917 vs 11016). Remove this wrapper when tryIndexLookup is fixed.") {
-            for q in Self.queryBattery(records) {
-                let viaIndex = Set(idx.filter(records: records, query: q).map(\.fullPath))
-                let viaCanon = Set(records.filter { pfRecordFilenameOrPersonMatch($0, query: q) }.map(\.fullPath))
-                if viaIndex != viaCanon {
-                    print("[RealDataSearch known-gap] '\(q)': index=\(viaIndex.count) canonical=\(viaCanon.count) (missed \(viaCanon.subtracting(viaIndex).count))")
-                }
-                #expect(viaIndex == viaCanon,
-                        "Index/canonical divergence on '\(q)': index=\(viaIndex.count) canonical=\(viaCanon.count)")
-            }
+        for q in Self.queryBattery(records) {
+            let viaIndex = Set(idx.filter(records: records, query: q).map(\.fullPath))
+            let viaCanon = Set(records.filter { pfRecordFilenameOrPersonMatch($0, query: q) }.map(\.fullPath))
+            #expect(viaIndex == viaCanon,
+                    "Index/canonical divergence on '\(q)': index=\(viaIndex.count) canonical=\(viaCanon.count) (missed \(viaCanon.subtracting(viaIndex).count), extra \(viaIndex.subtracting(viaCanon).count))")
         }
     }
 

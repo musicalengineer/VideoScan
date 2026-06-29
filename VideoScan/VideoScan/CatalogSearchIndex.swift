@@ -64,10 +64,29 @@ final class CatalogSearchIndex {
     /// footprint is dominated by hashmap overhead, not string duplication.
     private var wordIndex: [String: Set<String>] = [:]
 
+    /// Memo for the infix-safety gate (Rick 2026-06-29). Keyed by a
+    /// whole-word needle; value is whether that needle is "fast-path
+    /// eligible" — i.e. whether `wordIndex[needle]` is the COMPLETE
+    /// substring-match set for that needle.
+    ///
+    /// Why this exists: catalog search semantics are SUBSTRING (the
+    /// canonical `pfRecordFilenameOrPersonMatch` does `.contains`). The
+    /// whole-word bucket `wordIndex["rick"]` holds only records where
+    /// "rick" is a standalone token — it MISSES records where "rick" is an
+    /// infix of "rickb"/"ricksbackups". So the bucket is the complete
+    /// answer ONLY IF "rick" is not also a substring of some OTHER indexed
+    /// word. We compute that lazily (scan the word set once on first use of
+    /// a needle: O(W·L)) and cache the boolean (O(1) thereafter). The memo
+    /// is invalidated on ANY wordIndex mutation — update() can introduce a
+    /// new word that turns a previously-safe needle unsafe, so we must not
+    /// keep a stale "eligible" verdict.
+    private var fastPathEligibility: [String: Bool] = [:]
+
     /// Discard the entire cache. Called on catalog reset / full reload.
     func clear() {
         haystacks.removeAll(keepingCapacity: false)
         wordIndex.removeAll(keepingCapacity: false)
+        fastPathEligibility.removeAll(keepingCapacity: false)
     }
 
     /// Build (or rebuild) the index from a record set. Replaces any
@@ -85,6 +104,8 @@ final class CatalogSearchIndex {
         }
         self.haystacks = hs
         self.wordIndex = wi
+        // Word set replaced wholesale → any cached eligibility verdict is stale.
+        fastPathEligibility.removeAll(keepingCapacity: false)
     }
 
     /// One-shot update for a single record. Called after dossier
@@ -108,6 +129,12 @@ final class CatalogSearchIndex {
         for word in newWords.subtracting(oldWords) {
             wordIndex[word, default: []].insert(rec.fullPath)
         }
+        // The word SET may have changed (added/removed keys). A newly added
+        // word could make a previously-"safe" needle an infix of it, so any
+        // cached eligibility verdict is now suspect — drop the whole memo.
+        if oldWords != newWords {
+            fastPathEligibility.removeAll(keepingCapacity: false)
+        }
     }
 
     /// Drop a record from the index (purge, delete, rescan-removal).
@@ -123,6 +150,10 @@ final class CatalogSearchIndex {
             }
         }
         haystacks.removeValue(forKey: fullPath)
+        // Removing the last reference to a word drops it from the key set,
+        // which could make a previously-ineligible needle eligible. Drop the
+        // memo so the next query recomputes against the current word set.
+        fastPathEligibility.removeAll(keepingCapacity: false)
     }
 
     /// True if the index has a haystack for this record. Used by tests
@@ -203,6 +234,16 @@ final class CatalogSearchIndex {
             // ("elev") or a substring inside one ("apes" inside "capes")
             // — both require the linear matcher. Bail.
             guard let bucket = wordIndex[needle] else { return nil }
+            // Infix-safety gate (Rick 2026-06-29). Even when `needle` IS a
+            // complete word, its bucket is the COMPLETE substring-match set
+            // ONLY IF `needle` is not also an infix of some OTHER indexed
+            // word. Catalog semantics are SUBSTRING: "rick" must also match
+            // records whose only "rick" lives inside "rickb"/"ricksbackups",
+            // which live in DIFFERENT buckets. If `needle` is an infix of
+            // another word, the whole-word bucket under-returns — bail to the
+            // linear matcher for the whole query, exactly as for a non-word
+            // needle. (Eligibility is memoized; see fastPathEligibility.)
+            guard isFastPathEligible(needle) else { return nil }
             if let existing = candidates {
                 candidates = existing.intersection(bucket)
                 if candidates?.isEmpty == true { return [] }
@@ -211,6 +252,36 @@ final class CatalogSearchIndex {
             }
         }
         return candidates
+    }
+
+    /// Is `needle` (which is known to be a wordIndex key) safe to answer
+    /// purely from its own whole-word bucket? True iff `needle` is NOT a
+    /// proper substring (infix) of any OTHER indexed word — only then is
+    /// `wordIndex[needle]` provably the COMPLETE substring-match set for the
+    /// needle, so the fast path matches the canonical SUBSTRING matcher.
+    ///
+    /// Lazy + memoized: first use of a given needle pays O(W·L) to scan the
+    /// word set once; the boolean is cached so repeated queries (the common
+    /// case) are O(1). The memo is dropped on any wordIndex mutation
+    /// (rebuild/clear/update/remove/load) so a verdict never goes stale.
+    ///
+    /// `needle` is lowercased + NFC (via prepareTokens) and so are the
+    /// wordIndex keys (via extractWords over the normalized haystack), so the
+    /// byte-literal `memmem` containment is the correct comparison.
+    private func isFastPathEligible(_ needle: String) -> Bool {
+        if let cached = fastPathEligibility[needle] { return cached }
+        var eligible = true
+        for other in wordIndex.keys {
+            // A word longer than `needle` is the only kind that can strictly
+            // contain it; skip the equal key and anything too short cheaply.
+            if other.utf8.count <= needle.utf8.count { continue }
+            if Self.literalContains(haystack: other, needle: needle) {
+                eligible = false
+                break
+            }
+        }
+        fastPathEligibility[needle] = eligible
+        return eligible
     }
 
     // MARK: - Persistence (Rick 2026-06-16)
@@ -295,6 +366,8 @@ final class CatalogSearchIndex {
             }
         }
         self.wordIndex = wi
+        // Fresh word set from disk → discard any eligibility verdicts.
+        fastPathEligibility.removeAll(keepingCapacity: false)
         return true
     }
 
