@@ -607,6 +607,8 @@ struct DashboardCombineCounterTests {
 
 // MARK: - Catalog Navigation Tests (Issue #39)
 
+// @MainActor: catalogFilterIDs is now MainActor-isolated (reads VideoRecord).
+@MainActor
 struct CatalogNavigationTests {
 
     // regression: #39 — Show in Catalog: pair-mode off returns only the requested record
@@ -709,7 +711,8 @@ struct CatalogNavigationTests {
 
 // MARK: - Online Substitute Finder Tests
 
-@Suite struct OnlineSubstituteTests {
+// @MainActor: findOnlineSubstitutes is now MainActor-isolated (reads VideoRecord).
+@Suite @MainActor struct OnlineSubstituteTests {
 
     @Test func findsContentIdenticalCopy() {
         let offline = VideoRecord()

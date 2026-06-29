@@ -193,6 +193,8 @@ struct FormattingBoundaryTests {
 
 // MARK: - CatalogFilterIDs Boundary Tests
 
+// @MainActor: catalogFilterIDs is now MainActor-isolated (reads VideoRecord).
+@MainActor
 struct CatalogFilterBoundaryTests {
 
     // regression: #39 — Show in Catalog: missing-record fallback returns the requested ID alone
@@ -251,6 +253,8 @@ struct CatalogFilterBoundaryTests {
 
 // MARK: - Online Substitute Boundary Tests
 
+// @MainActor: findOnlineSubstitutes is now MainActor-isolated (reads VideoRecord).
+@MainActor
 struct OnlineSubstituteBoundaryTests {
 
     @Test func emptyAllRecords() {
