@@ -157,8 +157,16 @@ extension VideoScanModel {
         // Carrying record INDEX through the boundary (rather than the
         // VideoRecord reference) keeps the detached task's captures
         // strictly Sendable (String paths + Int indices + the mode).
+        //
+        // Seam D (VideoRecord-Sendable restructure): the `Sendable`
+        // conformance below is the explicit contract that NO `VideoRecord`
+        // crosses into the detached FileManager pass — only this value type
+        // does. The index is the key we apply outcomes back through on the
+        // main actor (Phase 3). The conformance is checked, so a future
+        // edit that tried to smuggle a `VideoRecord` field in here would
+        // fail to compile rather than silently re-cross the boundary.
         // -------------------------------------------------------------
-        struct WorkItem {
+        struct WorkItem: Sendable {
             let index: Int
             let path: String
         }
