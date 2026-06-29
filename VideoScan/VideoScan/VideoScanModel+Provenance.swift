@@ -3,9 +3,16 @@ import Foundation
 // MARK: - VideoScanModel+Provenance
 //
 // Pure builders for the Provenance & Audit Trail feature (View 1, View 2,
-// View 3). These functions are `nonisolated static` wherever they don't
-// need MainActor state — the views call thin MainActor wrappers further
-// down that snapshot the model and hand off to the pure builders.
+// View 3). The builders that read `VideoRecord` (`buildVolumeProvenance`,
+// `buildFileJourney`, `buildMigrationOverview`) are `@MainActor static`:
+// they hold no instance state but they touch `VideoRecord` fields, which
+// is MainActor-bound work. The views call thin MainActor wrappers further
+// down that pass `records` straight to the builders. The note/path string
+// parsers below stay `nonisolated` — they only see `String`/`Date`.
+//
+// (`@MainActor static` here ≈ a C++ free function that the type system
+// pins to the UI thread; the annotation is a compile-time contract, a
+// runtime no-op since every caller already runs on the main actor.)
 //
 // Design notes:
 //   - No new schema. Everything reads from existing `VideoRecord` fields
@@ -209,7 +216,7 @@ extension VideoScanModel {
     /// Build the payload for "Where files from <vol> live now."
     /// Pure — takes the catalog snapshot + role/trust resolver and emits
     /// the value. The MainActor wrapper below grabs both off the model.
-    nonisolated static func buildVolumeProvenance(
+    @MainActor static func buildVolumeProvenance(
         sourceVolumeRootPath: String,
         sourceVolumeName: String,
         sourceIsRetired: Bool,
@@ -380,7 +387,7 @@ extension VideoScanModel {
 
     /// Build the payload for "Following <filename>". Pure — same MainActor
     /// wrapper pattern as `buildVolumeProvenance`.
-    nonisolated static func buildFileJourney(
+    @MainActor static func buildFileJourney(
         for rec: VideoRecord,
         allRecords: [VideoRecord],
         resolveVolumeSafety: VolumeSafetyResolver
@@ -546,7 +553,7 @@ extension VideoScanModel {
 
     /// Build the payload for "From aging drives to safe homes." Pure —
     /// same MainActor wrapper pattern as the other builders.
-    nonisolated static func buildMigrationOverview(
+    @MainActor static func buildMigrationOverview(
         allRecords: [VideoRecord],
         resolveVolumeSafety: VolumeSafetyResolver,
         now: Date = Date()
