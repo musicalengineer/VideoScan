@@ -144,6 +144,93 @@ struct RescanPreservationTests {
         #expect(fresh.sizeBytes == 555_555)
     }
 
+    // Regression marker (seam B, 2026-06-29): exhaustively pin EVERY
+    // preserved field through a full snapshot -> apply round-trip. The
+    // older tests above sample a subset; archiveStage, junkScore, and
+    // the *Model / *Date provenance fields were unasserted. This path
+    // protects user-curated + expensive-to-recompute data, so a missed
+    // field is a silent data-loss bug. If RescanPreservedFields grows a
+    // field, add it here.
+    @Test func applyRoundTripPreservesEveryCuratedField() {
+        let original = VideoRecord()
+        original.fullPath = "/Volumes/Test/everything.mov"
+        original.filename = "everything.mov"
+
+        // Distinct, non-default values for every preserved field.
+        let capDate = Date(timeIntervalSince1970: 1_600_000_000)
+        let txDate  = Date(timeIntervalSince1970: 1_600_111_111)
+        let inferDate = Date(timeIntervalSince1970: 700_000_000)
+        let procDate = Date(timeIntervalSince1970: 1_650_000_000)
+        let confDate = Date(timeIntervalSince1970: 1_660_000_000)
+
+        original.sceneCaptions = [SceneCaption(timestamp: 3.0, text: "porch summer 1985")]
+        original.sceneCaptionModel = "qwen2.5-vl-7b-4bit"
+        original.sceneCaptionDate = capDate
+        original.audioTranscript = "and there's grandpa waving"
+        original.audioTranscriptModel = "whisper-large-v3-mlx"
+        original.audioTranscriptDate = txDate
+        original.ocrDateCandidates = [SceneCaption(timestamp: 0.2, text: "AUG 1985")]
+        original.ocrText = [SceneCaption(timestamp: 4.0, text: "REUNION")]
+        original.inferredRecordDate = inferDate
+        original.inferredDateConfidence = 0.42
+        original.dossierProcessedAt = procDate
+        original.dossierProcessedBy = "qwen7b+whisperLargeV3"
+        original.detectedPeople = ["Grandpa", "Donna"]
+        original.suspectedPeople = ["Uncle Joe"]
+        original.confirmedByUserPeople = [ConfirmedTag(name: "Donna", confirmedAt: confDate)]
+        original.rejectedPeople = ["Stranger", "Neighbor"]
+        original.mediaDisposition = .confirmedJunk
+        original.lifecycleStage = .reviewing
+        original.archiveStage = .archived
+        original.starRating = 5
+        original.junkScore = 7
+        original.notes = "reunion reel, second tape"
+
+        let snap = RescanPreservedFields(from: original)
+
+        // Fresh record with DIFFERENT scan-derived + blank curated state,
+        // to prove apply() overwrites curated fields with snapshot values.
+        let fresh = VideoRecord()
+        fresh.fullPath = "/Volumes/Test/everything.mov"
+        fresh.filename = "everything.mov"
+        fresh.videoCodec = "hevc-NEW"
+        fresh.sizeBytes = 42
+
+        snap.apply(to: fresh)
+
+        // Dossier channels — all twelve.
+        #expect(fresh.sceneCaptions.count == 1)
+        #expect(fresh.sceneCaptions.first?.text == "porch summer 1985")
+        #expect(fresh.sceneCaptionModel == "qwen2.5-vl-7b-4bit")
+        #expect(fresh.sceneCaptionDate == capDate)
+        #expect(fresh.audioTranscript == "and there's grandpa waving")
+        #expect(fresh.audioTranscriptModel == "whisper-large-v3-mlx")
+        #expect(fresh.audioTranscriptDate == txDate)
+        #expect(fresh.ocrDateCandidates.first?.text == "AUG 1985")
+        #expect(fresh.ocrText.first?.text == "REUNION")
+        #expect(fresh.inferredRecordDate == inferDate)
+        #expect(fresh.inferredDateConfidence == 0.42)
+        #expect(fresh.dossierProcessedAt == procDate)
+        #expect(fresh.dossierProcessedBy == "qwen7b+whisperLargeV3")
+
+        // User-edit fields — all ten.
+        #expect(fresh.detectedPeople == ["Grandpa", "Donna"])
+        #expect(fresh.suspectedPeople == ["Uncle Joe"])
+        #expect(fresh.confirmedByUserPeople.first?.name == "Donna")
+        #expect(fresh.confirmedByUserPeople.first?.confirmedAt == confDate)
+        #expect(fresh.rejectedPeople == ["Stranger", "Neighbor"])
+        #expect(fresh.mediaDisposition == .confirmedJunk)
+        #expect(fresh.lifecycleStage == .reviewing)
+        #expect(fresh.archiveStage == .archived)
+        #expect(fresh.starRating == 5)
+        #expect(fresh.junkScore == 7)
+        #expect(fresh.notes == "reunion reel, second tape")
+
+        // Scan-derived field left untouched by apply().
+        #expect(fresh.videoCodec == "hevc-NEW")
+        #expect(fresh.sizeBytes == 42)
+    }
+
     // MARK: - Model-level snapshot/restore
 
     @Test func endToEnd_snapshotThenApplyRestoresOnFreshRecord() {
