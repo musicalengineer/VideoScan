@@ -625,7 +625,7 @@ struct WindowMenuItems: View {
         .keyboardShortcut("v", modifiers: [.command, .shift])
 
         Button("Analyze Dashboard") {
-            openWindow(id: "dossier")
+            DossierWindowOpener.open(using: openWindow, source: "menu")
         }
         .keyboardShortcut("o", modifiers: [.command, .shift])
     }

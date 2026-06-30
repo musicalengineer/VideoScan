@@ -32,7 +32,7 @@ struct DossierToolbarChip: View {
 
     var body: some View {
         Button {
-            openWindow(id: "dossier")
+            DossierWindowOpener.open(using: openWindow, source: "chip")
         } label: {
             HStack(spacing: 6) {
                 MiniRing(progress: progress, active: rate.perMinute >= 1)

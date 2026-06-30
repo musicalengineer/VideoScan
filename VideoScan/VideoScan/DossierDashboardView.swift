@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import os
 
 // MARK: - Dossier Dashboard
 //
@@ -233,7 +234,10 @@ struct DossierDashboardView: View {
         // taller than the 3-row fleet panel they replaced (2 lanes +
         // up to 8 history rows).
         .frame(minWidth: 700, minHeight: 760)
-        .onAppear { refreshCounts() }
+        .onAppear {
+            dossierWindowLog.info("dossier dashboard body appeared")
+            refreshCounts()
+        }
         .onReceive(refreshTimer) { _ in
             refreshCounts()
         }
