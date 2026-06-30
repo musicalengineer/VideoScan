@@ -114,6 +114,18 @@ extension VideoScanModel {
             }
 
             for await outcome in probeGroup {
+                // Apply the SAME junk-admission gate as the network-resume path
+                // (runResumedProbeGroup). Drop pre-construction so we never
+                // build a VideoRecord for a file we're about to discard
+                // (extensionless + ffprobe-unidentified). Without this, a local
+                // scan with "Scan files with no extension" on admitted junk the
+                // resume path would have filtered — the two paths must gate
+                // identically.
+                guard Self.shouldCatalogProbeResult(ext: outcome.ext, streamTypeRaw: outcome.probe.streamTypeRaw) else {
+                    appLog.write("NOT CATALOGED — no extension, ffprobe could not identify as media: \(outcome.fullPath)")
+                    completedCount += 1
+                    continue
+                }
                 // MainActor drain point: this loop is @MainActor-isolated, so
                 // the VideoRecord is constructed HERE — the off-actor probe
                 // pipeline only ever produced the Sendable ProbeOutcome carrier.
