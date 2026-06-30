@@ -733,6 +733,9 @@ struct AboutView: View {
                                     .font(.system(.caption, design: .monospaced))
                             }
                             .foregroundStyle(.secondary)
+                            Text("PolyForm Noncommercial 1.0.0 · Not for sale")
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(.tertiary)
                         }
                         Spacer()
                     }
