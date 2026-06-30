@@ -224,6 +224,11 @@ struct CatalogView: View {
     /// verb created the focus ("A/V Pair focus", "Online copies",
     /// "Not migrated from <volume>").
     @State private var focusLabel = "A/V Pair focus"
+    /// punch-list #5: non-nil drives a brief alert when an Archive→Catalog
+    /// navigation resolves to no live records (stale id after live-reload
+    /// identity churn). We clear the filter (leaving the full catalog
+    /// visible) rather than blanking the table, and explain why.
+    @State private var catalogNavigationNotice: String?
     /// Non-nil presents the volume migration report sheet
     /// ("Show Migrated…" on an offline/retired volume).
     /// Internal (not private): set by showMigrationReport(for:) in
@@ -610,6 +615,18 @@ struct CatalogView: View {
                 isPresented: $showCaptionProgress
             )
         }
+        .alert(
+            "Show in Catalog",
+            isPresented: Binding(
+                get: { catalogNavigationNotice != nil },
+                set: { if !$0 { catalogNavigationNotice = nil } }
+            ),
+            presenting: catalogNavigationNotice
+        ) { _ in
+            Button("OK", role: .cancel) { catalogNavigationNotice = nil }
+        } message: { msg in
+            Text(msg)
+        }
         .alert("Delete Catalog", isPresented: $showDeleteAllCatalogConfirm) {
             Button("Delete All", role: .destructive) {
                 model.deleteAllCatalog()
@@ -726,6 +743,18 @@ struct CatalogView: View {
         showPairsOnly = false
 
         let ids = VideoScanModel.catalogFilterIDs(for: id, pairMode: pairMode, in: model.records)
+        // punch-list #5: empty means the record is no longer in the catalog
+        // (stale id after live-reload identity churn). Clear the filter so the
+        // full catalog stays visible — do NOT filter to nothing (blank table).
+        guard !ids.isEmpty else {
+            filterByIDs = []
+            focusMatchScore = nil
+            focusLabel = "A/V Pair focus"
+            selectedIDs = []
+            model.focusedMediaIDs = []
+            catalogNavigationNotice = "That file is no longer in the catalog — it may have been removed or replaced by a re-scan. Showing the full catalog."
+            return
+        }
         filterByIDs = ids
         focusMatchScore = nil
         focusLabel = "A/V Pair focus"

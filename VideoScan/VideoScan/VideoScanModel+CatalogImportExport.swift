@@ -190,7 +190,11 @@ extension VideoScanModel {
     // no `VideoRecord` escapes.
     @MainActor static func catalogFilterIDs(for recordID: UUID, pairMode: Bool, in records: [VideoRecord]) -> Set<UUID> {
         guard let rec = records.first(where: { $0.id == recordID }) else {
-            return [recordID]
+            // punch-list #5: a not-found id (e.g. a stale MFO-job id after
+            // overnight live-reload identity churn) must NOT become the filter
+            // set — that filters the table to a non-existent row and blanks it.
+            // Return empty so the navigation handler clears the filter instead.
+            return []
         }
         if !pairMode {
             return [recordID]
@@ -204,6 +208,15 @@ extension VideoScanModel {
             }
         }
         return ids
+    }
+
+    /// True iff `id` still resolves to a live catalog record. Used by the
+    /// MFO "Show in Catalog" button to validate before navigating — the
+    /// SwiftUI button isn't unit-testable, so the decision lives here.
+    /// (punch-list #5: prevents navigating to a stale/orphan id that would
+    /// blank the catalog table.)
+    @MainActor func canNavigateToRecord(id: UUID) -> Bool {
+        records.contains(where: { $0.id == id })
     }
 
     /// Expand a single record into a focus set: the record itself plus all

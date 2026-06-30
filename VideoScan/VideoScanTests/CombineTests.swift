@@ -676,10 +676,32 @@ struct CatalogNavigationTests {
         #expect(ids.contains(audio.id))
     }
 
+    // regression: punch-list #5 — a not-found record returns an EMPTY set,
+    // not the requested id. Returning the orphan id filtered the catalog to
+    // a non-existent row and blanked the table. Supersedes the #39 contract.
     @Test func pairModeRecordNotFound() {
         let bogusID = UUID()
         let ids = VideoScanModel.catalogFilterIDs(for: bogusID, pairMode: true, in: [])
-        #expect(ids == [bogusID], "Should return the requested ID even if record isn't found")
+        #expect(ids.isEmpty, "Missing record must yield empty so the handler clears the filter, not blanks the table")
+    }
+
+    // punch-list #5 — model-level gate used by the MFO "Show in Catalog"
+    // button to validate an id before navigating (the SwiftUI button itself
+    // isn't unit-testable, so the decision lives in a testable helper).
+    @Test func canNavigateToRecordPresent() {
+        let rec = VideoRecord()
+        rec.filename = "present.mov"
+        let model = VideoScanModel()
+        model.records = [rec]
+        #expect(model.canNavigateToRecord(id: rec.id))
+    }
+
+    @Test func canNavigateToRecordMissing() {
+        let rec = VideoRecord()
+        rec.filename = "present.mov"
+        let model = VideoScanModel()
+        model.records = [rec]
+        #expect(!model.canNavigateToRecord(id: UUID()))
     }
 
     @Test func pairModeNoPairAtAll() {

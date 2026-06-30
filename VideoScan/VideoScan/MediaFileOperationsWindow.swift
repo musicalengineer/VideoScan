@@ -236,6 +236,12 @@ struct MediaFileOperationRow: View {
     /// and flip this bit, which invalidates the view.
     @State private var heartbeat = false
 
+    /// punch-list #5: non-nil drives a brief alert when "Show in Catalog"
+    /// is clicked for a record that's no longer in the catalog (stale id
+    /// after live-reload identity churn). Mirrors the findOnlineNotice
+    /// pattern in CatalogHelpers.
+    @State private var showInCatalogNotice: String?
+
     var body: some View {
         // Referencing `heartbeat` ties this view's identity to the
         // toggle below — that's what makes onReceive re-render us.
@@ -290,6 +296,18 @@ struct MediaFileOperationRow: View {
         }
         .onReceive(job.objectWillChange) { _ in
             heartbeat.toggle()
+        }
+        .alert(
+            "Show in Catalog",
+            isPresented: Binding(
+                get: { showInCatalogNotice != nil },
+                set: { if !$0 { showInCatalogNotice = nil } }
+            ),
+            presenting: showInCatalogNotice
+        ) { _ in
+            Button("OK", role: .cancel) { showInCatalogNotice = nil }
+        } message: { msg in
+            Text(msg)
         }
     }
 
@@ -444,6 +462,16 @@ struct MediaFileOperationRow: View {
     /// don't need a path-based lookup.
     private func showInCatalogButtonByID(_ id: UUID) -> some View {
         Button {
+            // punch-list #5: validate the id still resolves to a live record
+            // before navigating. Overnight live-reload/merge churns record
+            // identity (e.g. IMG_0795.mov has 35 duplicate copies), so an MFO
+            // job can hold an id that no longer exists. Mirror the url-path's
+            // guard/no-op — but surface a brief notice instead of silently
+            // blanking the catalog table.
+            guard model.canNavigateToRecord(id: id) else {
+                showInCatalogNotice = "This file is no longer in the catalog — it may have been removed or replaced by a re-scan."
+                return
+            }
             UserDefaults.standard.set(1, forKey: "selectedTab")
             model.pendingCatalogSelection = id
             MainWindowHelper.shared.openMainWindow()

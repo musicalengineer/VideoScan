@@ -197,18 +197,23 @@ struct FormattingBoundaryTests {
 @MainActor
 struct CatalogFilterBoundaryTests {
 
-    // regression: #39 — Show in Catalog: missing-record fallback returns the requested ID alone
+    // regression: punch-list #5 — Show in Catalog must NOT filter to a
+    // missing id (that blanks the table). A not-found record now yields an
+    // EMPTY set so the navigation handler can clear the filter instead of
+    // hiding every row. Supersedes the old #39 contract (return [id]).
     @Test func emptyRecordsList() {
         let id = UUID()
         let result = VideoScanModel.catalogFilterIDs(for: id, pairMode: true, in: [])
-        #expect(result == [id])
+        #expect(result.isEmpty)
     }
 
+    // regression: punch-list #5 — stale/orphan id (e.g. after overnight
+    // live-reload identity churn) returns empty, not the orphan id.
     @Test func nonexistentRecordID() {
         let rec = makeRecord(filename: "a.mov")
         let bogusID = UUID()
         let result = VideoScanModel.catalogFilterIDs(for: bogusID, pairMode: true, in: [rec])
-        #expect(result == [bogusID])
+        #expect(result.isEmpty)
     }
 
     @Test func singleRecordNoPair() {
