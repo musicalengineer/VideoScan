@@ -429,6 +429,13 @@ final class VideoScanModel: ObservableObject {
             // longest/best result per MD5 group and applying to all
             // members. Idempotent — re-running on an already-harmonized
             // catalog is a no-op (0 records mutated, no save).
+            //
+            // First, one-shot cleanup of the pre-2026-06-30 smear
+            // corruption: unreadable/ffprobe-failed records that earlier
+            // builds smeared hallucinated dossier content onto (no
+            // dossierProcessedAt stamp). Gated so it runs exactly once;
+            // prior content is quarantined to a JSON sidecar for undo.
+            cleanupSmearedDossiersOnUnreadableRecords()
             backfillDossierAcrossDuplicates()
             if migrated > 0 {
                 log("Migrated \(migrated) records to lifecycleStage.")

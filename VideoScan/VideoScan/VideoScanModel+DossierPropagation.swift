@@ -83,15 +83,27 @@ extension VideoScanModel {
     @MainActor
     @discardableResult
     func propagateBestDossier(in group: [VideoRecord]) -> Int {
-        guard group.count >= 2 else { return 0 }
+        // Playability guard (regression fix 2026-06-30, smear introduced
+        // 2026-06-15): a record that's `.ffprobeFailed` OR
+        // `isLikelyUnanalyzable` is excluded as BOTH donor and recipient.
+        // The direct dossier pipeline already skips these via the same
+        // streamType / codec predicates; propagation must too, or a
+        // junk/unreadable file that merely COLLIDES on partialMD5 with a
+        // readable sibling inherits hallucinated transcript/captions it
+        // never earned (and with no `dossierProcessedAt` stamp, since
+        // propagation doesn't stamp). Filtering the group up front means
+        // the "best" selectors only ever see readable donors, and only
+        // readable records are written back.
+        let eligible = group.filter { !Self.isExcludedFromPropagation($0) }
+        guard eligible.count >= 2 else { return 0 }
 
-        let bestTranscript = Self.bestAudioTranscript(in: group)
-        let bestCaptions   = Self.bestSceneCaptions(in: group)
-        let bestOCRText    = Self.bestOCRText(in: group)
-        let bestOCRDates   = Self.bestOCRDateCandidates(in: group)
+        let bestTranscript = Self.bestAudioTranscript(in: eligible)
+        let bestCaptions   = Self.bestSceneCaptions(in: eligible)
+        let bestOCRText    = Self.bestOCRText(in: eligible)
+        let bestOCRDates   = Self.bestOCRDateCandidates(in: eligible)
 
         var mutated = 0
-        for rec in group {
+        for rec in eligible {
             var changed = false
             if let best = bestTranscript,
                (rec.audioTranscript ?? "") != best.text {
@@ -120,6 +132,157 @@ extension VideoScanModel {
             if changed { mutated += 1 }
         }
         return mutated
+    }
+
+    // MARK: - Playability / degeneracy guards (regression 2026-06-30)
+
+    /// True when a record must be EXCLUDED from dossier propagation —
+    /// both as a donor and as a recipient. Composes the two canonical
+    /// readability predicates the rest of the app already uses:
+    ///   • `streamType == .ffprobeFailed` — ffprobe couldn't classify it
+    ///     (the exact filter the direct dossier pipeline applies).
+    ///   • `isLikelyUnanalyzable` — known-bad legacy codec OR a prior VLM
+    ///     run set `needsReformat`.
+    /// No new domain predicate is invented here; this just ORs the two
+    /// existing ones so the donor/recipient filter reads in one place.
+    @MainActor static func isExcludedFromPropagation(_ rec: VideoRecord) -> Bool {
+        rec.streamType == .ffprobeFailed || rec.isLikelyUnanalyzable
+    }
+
+    /// A dossier text is "degenerate" when, after trimming whitespace and
+    /// newlines, it's empty OR every remaining character is identical
+    /// (e.g. "!!!!", "----"). These are recognizer failure artifacts, not
+    /// content — never worth propagating. `Set(trimmed).count == 1`
+    /// captures the single-distinct-character case.
+    static func isDegenerateDossierText(_ s: String) -> Bool {
+        let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return true }
+        return Set(trimmed).count == 1
+    }
+
+    // MARK: - One-shot cleanup of pre-fix smear corruption
+
+    /// Pure, testable cleanup core (no gate, no file I/O): walk `records`
+    /// and clear dossier content from every record matching the exact
+    /// corruption signature left by the pre-2026-06-30 smear:
+    ///   1. record is unreadable (`isExcludedFromPropagation`), AND
+    ///   2. `dossierProcessedAt == nil` — never legitimately analyzed
+    ///      (the direct pipeline ALWAYS stamps this; only propagation,
+    ///      which never stamped, could populate content without it), AND
+    ///   3. at least one dossier field is populated (the smeared content).
+    /// Returns the cleared records (with their PRIOR content still intact
+    /// on the returned snapshot copies) so the caller can quarantine them
+    /// before the live records are blanked. Idempotent: a second run finds
+    /// nothing because the content is gone.
+    /// When `dryRun` is true, the corrupted records are identified and
+    /// snapshotted (so the caller can quarantine/report them) but the live
+    /// records are NOT blanked — used for the review-first pass.
+    @MainActor
+    @discardableResult
+    func clearSmearedDossiers(dryRun: Bool = false) -> [VideoRecord] {
+        var clearedSnapshots: [VideoRecord] = []
+        for rec in records {
+            guard Self.isExcludedFromPropagation(rec),
+                  rec.dossierProcessedAt == nil else { continue }
+            let hasContent = !(rec.audioTranscript ?? "").isEmpty
+                || !rec.sceneCaptions.isEmpty
+                || !rec.ocrText.isEmpty
+                || !rec.ocrDateCandidates.isEmpty
+            guard hasContent else { continue }
+
+            clearedSnapshots.append(rec.snapshotClone())
+
+            if dryRun { continue }
+
+            rec.audioTranscript      = nil
+            rec.audioTranscriptModel = nil
+            rec.audioTranscriptDate  = nil
+            rec.sceneCaptions        = []
+            rec.sceneCaptionModel    = nil
+            rec.sceneCaptionDate     = nil
+            rec.ocrText              = []
+            rec.ocrDateCandidates    = []
+        }
+        return clearedSnapshots
+    }
+
+    /// Gated one-shot wrapper, run once on catalog load. Quarantines the
+    /// prior content to a JSON sidecar (reversible/auditable) BEFORE
+    /// blanking the live records, then sets a UserDefaults flag so it
+    /// never runs again. Mirrors the lifecycleStage backfill migration
+    /// that runs alongside it.
+    /// Review-first switch. While `true`, the one-shot cleanup runs in
+    /// DRY-RUN: it writes the quarantine sidecar listing the corrupted
+    /// records and logs the count, but mutates NOTHING. Flip to `false`
+    /// (one-line change + rebuild) after Rick has reviewed the sidecar to
+    /// perform the live clean. (Rick's call, 2026-06-30.)
+    static let smearCleanupDryRun = true
+
+    @MainActor
+    @discardableResult
+    func cleanupSmearedDossiersOnUnreadableRecords() -> Int {
+        if Self.smearCleanupDryRun {
+            // Dry-run: write the review list once, never mutate, never set
+            // the live gate (so the eventual live pass still runs).
+            let dryGateKey = "VideoScan.dossierSmearCleanup.v1.dryRunDone"
+            if UserDefaults.standard.bool(forKey: dryGateKey) { return 0 }
+            let candidates = clearSmearedDossiers(dryRun: true)
+            UserDefaults.standard.set(true, forKey: dryGateKey)
+            guard !candidates.isEmpty else { return 0 }
+            Self.writeSmearQuarantine(candidates)
+            log("Dossier smear cleanup [DRY-RUN]: identified \(candidates.count) unreadable record(s) carrying smeared dossier content (regression 2026-06-15). NOTHING mutated. Review list written under ~/Library/Logs/VideoScan/dossier_smear_quarantine_*.json. Flip smearCleanupDryRun=false to clean.")
+            return candidates.count
+        }
+
+        let gateKey = "VideoScan.dossierSmearCleanup.v1.done"
+        if UserDefaults.standard.bool(forKey: gateKey) { return 0 }
+
+        let cleared = clearSmearedDossiers()
+        UserDefaults.standard.set(true, forKey: gateKey)
+
+        guard !cleared.isEmpty else { return 0 }
+
+        Self.writeSmearQuarantine(cleared)
+        objectWillChange.send()
+        saveCatalogDebounced()
+        log("Dossier smear cleanup: cleared hallucinated dossier content from \(cleared.count) unreadable record(s) (regression 2026-06-15). Prior content quarantined under ~/Library/Logs/VideoScan/ for audit/undo.")
+        return cleared.count
+    }
+
+    /// Write the pre-clear dossier content of the corrupted records to a
+    /// timestamped JSON sidecar so the destructive cleanup is reversible.
+    /// Never throws to the caller — a failed write must not abort load.
+    @MainActor
+    private static func writeSmearQuarantine(_ records: [VideoRecord]) {
+        let stampFmt = DateFormatter()
+        stampFmt.dateFormat = "yyyyMMdd-HHmmss"
+        stampFmt.timeZone = TimeZone(secondsFromGMT: 0)
+        let url = PersistentLog.logDir
+            .appendingPathComponent("dossier_smear_quarantine_\(stampFmt.string(from: Date())).json")
+
+        struct Quarantined: Encodable {
+            let id: String
+            let fullPath: String
+            let partialMD5: String
+            let audioTranscript: String?
+            let sceneCaptionCount: Int
+            let ocrTextCount: Int
+            let ocrDateCount: Int
+        }
+        let payload = records.map {
+            Quarantined(id: $0.id.uuidString,
+                        fullPath: $0.fullPath,
+                        partialMD5: $0.partialMD5,
+                        audioTranscript: $0.audioTranscript,
+                        sceneCaptionCount: $0.sceneCaptions.count,
+                        ocrTextCount: $0.ocrText.count,
+                        ocrDateCount: $0.ocrDateCandidates.count)
+        }
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? enc.encode(payload) {
+            try? data.write(to: url, options: .atomic)
+        }
     }
 
     // MARK: - Pure "best wins" selectors (testable)
@@ -154,6 +317,12 @@ extension VideoScanModel {
         var best: BestTranscript?
         for rec in group {
             guard let tx = rec.audioTranscript, !tx.isEmpty else { continue }
+            // Reject degenerate donor output: a transcript that collapses
+            // to a single repeated character ("!!!!", "----") after
+            // trimming is a Whisper failure artifact, never real speech.
+            // Without this guard the smear bug propagated a literal "!!!!"
+            // transcript across a whole MD5 group (Rick 2026-06-30).
+            if Self.isDegenerateDossierText(tx) { continue }
             if best == nil || tx.count > (best?.text.count ?? 0) {
                 best = BestTranscript(
                     text: tx,

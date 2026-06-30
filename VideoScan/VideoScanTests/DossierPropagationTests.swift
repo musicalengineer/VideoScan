@@ -33,12 +33,21 @@ struct DossierPropagationTests {
         captionModel: String? = nil,
         captionDate: Date? = nil,
         ocrText: [SceneCaption] = [],
-        ocrDates: [SceneCaption] = []
+        ocrDates: [SceneCaption] = [],
+        // A fresh VideoRecord has streamTypeRaw="" which maps to
+        // `.ffprobeFailed` via the model's fallback — i.e. "unreadable".
+        // The propagation playability guard (correctly) excludes those, so
+        // legitimate-propagation cases must pin a readable stream type.
+        // Default to Video+Audio so the existing "harmonize duplicates"
+        // tests model READABLE duplicates, which is what they always meant.
+        streamType: StreamType = .videoAndAudio,
+        dossierProcessedAt: Date? = nil
     ) -> VideoRecord {
         let r = VideoRecord()
         r.fullPath = path
         r.filename = (path as NSString).lastPathComponent
         r.partialMD5 = md5
+        r.streamTypeRaw = streamType.rawValue
         r.audioTranscript = transcript
         r.audioTranscriptModel = transcriptModel
         r.audioTranscriptDate = transcriptDate
@@ -47,6 +56,7 @@ struct DossierPropagationTests {
         r.sceneCaptionDate = captionDate
         r.ocrText = ocrText
         r.ocrDateCandidates = ocrDates
+        r.dossierProcessedAt = dossierProcessedAt
         return r
     }
 
@@ -263,5 +273,162 @@ struct DossierPropagationTests {
                 "Already-harmonized records — first pass should be a no-op")
         #expect(second == 0,
                 "Second pass MUST be no-op — backfill is idempotent (runs every load)")
+    }
+
+    // MARK: - 4. Playability guard (smear regression, fixed 2026-06-30)
+    //
+    // Bug: an unreadable / ffprobe-failed file that merely COLLIDES on
+    // partialMD5 with a readable, analyzed sibling was inheriting that
+    // sibling's transcript/captions — hallucinated content the junk file
+    // never earned, written with NO dossierProcessedAt stamp. ~230 records
+    // showed the signature. Propagation must exclude unreadable records as
+    // BOTH donor and recipient, exactly as the direct dossier pipeline does.
+
+    /// red→green: an unreadable (.ffprobeFailed) record sharing a
+    /// partialMD5 with a readable donor must NOT receive the donor's
+    /// transcript. Reproduces the core smear.
+    @Test func propagation_unreadableRecipientRejectsSmear() {
+        let model = VideoScanModel()
+        let readableDonor = makeRecord(
+            path: "/Volumes/LaCie/clip.mov", md5: "COLLIDE",
+            transcript: "Happy birthday Matt, blow out the candles.",
+            transcriptModel: "whisper-medium",
+            streamType: .videoAndAudio
+        )
+        let junkRecipient = makeRecord(
+            path: "/Volumes/Junk/0001.tmp", md5: "COLLIDE",
+            transcript: nil,
+            streamType: .ffprobeFailed
+        )
+        model.records = [readableDonor, junkRecipient]
+        model.propagateBestDossier(in: [readableDonor, junkRecipient])
+
+        #expect(junkRecipient.audioTranscript == nil,
+                "Unreadable/ffprobe-failed record must NEVER inherit a sibling's transcript")
+        #expect(junkRecipient.dossierProcessedAt == nil,
+                "Guard must leave the junk record's provenance untouched")
+    }
+
+    /// red→green: an unreadable record must not act as a DONOR either —
+    /// a readable sibling must not inherit content from junk.
+    @Test func propagation_unreadableDonorIsIgnored() {
+        let model = VideoScanModel()
+        let junkDonor = makeRecord(
+            path: "/Volumes/Junk/0002.tmp", md5: "COLLIDE2",
+            transcript: "garbage transcript from an unreadable file",
+            streamType: .ffprobeFailed
+        )
+        let readableRecipient = makeRecord(
+            path: "/Volumes/LaCie/real.mov", md5: "COLLIDE2",
+            transcript: nil,
+            streamType: .videoAndAudio
+        )
+        model.records = [junkDonor, readableRecipient]
+        let mutated = model.propagateBestDossier(in: [junkDonor, readableRecipient])
+
+        #expect(mutated == 0,
+                "Only one readable record in the group — nothing to propagate")
+        #expect(readableRecipient.audioTranscript == nil,
+                "Readable record must NOT inherit a transcript from an unreadable donor")
+    }
+
+    /// red→green: a degenerate donor transcript (single repeated character
+    /// like "!!!!") must never propagate — it's a recognizer failure
+    /// artifact, not speech. Both records are readable to isolate the
+    /// degeneracy guard from the playability guard.
+    @Test func propagation_degenerateDonorRejected() {
+        let model = VideoScanModel()
+        let degenerate = makeRecord(
+            path: "/A/a.mov", md5: "DEGEN",
+            transcript: "!!!!!!!!",
+            streamType: .videoAndAudio
+        )
+        let recipient = makeRecord(
+            path: "/B/b.mov", md5: "DEGEN",
+            transcript: nil,
+            streamType: .videoAndAudio
+        )
+        model.records = [degenerate, recipient]
+        let mutated = model.propagateBestDossier(in: [degenerate, recipient])
+
+        #expect(mutated == 0,
+                "A degenerate '!!!!' transcript is the only candidate — nothing worth propagating")
+        #expect(recipient.audioTranscript == nil,
+                "Recipient must NOT inherit a single-repeated-character transcript")
+        #expect(VideoScanModel.bestAudioTranscript(in: [degenerate, recipient]) == nil,
+                "Degenerate text must be skipped by the donor selector outright")
+    }
+
+    /// positive: two READABLE duplicates still harmonize normally — the
+    /// fix must not break the legitimate feature. (Mirrors the elevator
+    /// case but asserts explicitly with pinned readable stream types.)
+    @Test func propagation_betweenTwoReadableDuplicatesStillWorks() {
+        let model = VideoScanModel()
+        let online = makeRecord(
+            path: "/Volumes/LaCie/e.dv", md5: "READABLE",
+            transcript: "short", streamType: .videoAndAudio
+        )
+        let offline = makeRecord(
+            path: "/Volumes/Seagate/e.dv", md5: "READABLE",
+            transcript: "Is it in the elevator? Yes the elevator.",
+            transcriptModel: "whisper-medium",
+            streamType: .videoAndAudio
+        )
+        model.records = [online, offline]
+        let mutated = model.propagateBestDossier(in: [online, offline])
+
+        #expect(mutated == 1, "The shorter readable copy inherits the longer transcript")
+        #expect(online.audioTranscript == offline.audioTranscript,
+                "Legitimate propagation between two readable duplicates must still work")
+    }
+
+    // MARK: - 5. One-shot corruption cleanup
+
+    /// The cleanup core clears ONLY records matching the exact corruption
+    /// signature (unreadable + dossierProcessedAt==nil + has content) and
+    /// leaves everything else — readable analyzed records, and legitimately
+    /// stamped records — untouched. Idempotent on a second pass.
+    @Test func cleanup_clearsOnlyCorruptedUnreadableRecords() {
+        let model = VideoScanModel()
+
+        // Corrupted: unreadable, smeared content, no stamp.
+        let corrupted = makeRecord(
+            path: "/Junk/x.tmp", md5: "M",
+            transcript: "smeared birthday transcript",
+            captions: [SceneCaption(timestamp: 0, text: "a cake")],
+            streamType: .ffprobeFailed
+        )
+        // Legit readable analyzed record (the donor) — must survive.
+        let healthy = makeRecord(
+            path: "/Real/x.mov", md5: "M",
+            transcript: "smeared birthday transcript",
+            streamType: .videoAndAudio,
+            dossierProcessedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        // Unreadable but legitimately stamped (e.g. audio-only edge) —
+        // NOT corruption, must survive.
+        let stampedUnreadable = makeRecord(
+            path: "/Junk/y.tmp", md5: "N",
+            transcript: "kept",
+            streamType: .ffprobeFailed,
+            dossierProcessedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        model.records = [corrupted, healthy, stampedUnreadable]
+        let cleared = model.clearSmearedDossiers()
+
+        #expect(cleared.count == 1, "Only the one corrupted record matches the signature")
+        #expect(cleared.first?.audioTranscript == "smeared birthday transcript",
+                "Snapshot must preserve the PRIOR content for the quarantine sidecar")
+        #expect(corrupted.audioTranscript == nil && corrupted.sceneCaptions.isEmpty,
+                "Live corrupted record must be blanked")
+        #expect(healthy.audioTranscript == "smeared birthday transcript",
+                "Readable analyzed record must be untouched")
+        #expect(stampedUnreadable.audioTranscript == "kept",
+                "Legitimately stamped record must be untouched even if unreadable")
+
+        // Idempotent second pass finds nothing.
+        let second = model.clearSmearedDossiers()
+        #expect(second.isEmpty, "Cleanup is idempotent — corruption is gone after the first pass")
     }
 }
