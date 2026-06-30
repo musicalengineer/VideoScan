@@ -63,6 +63,16 @@ struct RelocateOptions {
     /// Toggle OFF to fall back to the legacy A/B/C/D rules; those
     /// records will copy normally (Bucket A) instead.
     var skipDupsOnOtherVolumes: Bool = true
+
+    /// When ON (default), a RECOVERED file whose source has no usable
+    /// filename extension gets the correct extension appended on the
+    /// destination copy, derived from its probed container (punch-list #3).
+    /// macOS routes file-open by extension/UTI, so an extensionless file
+    /// that ffprobe decodes fine is still un-openable on double-click; the
+    /// recovered copy should land openable. Only unambiguous container→ext
+    /// mappings are applied; the source file is never renamed in place.
+    /// Toggle OFF to preserve byte-for-byte filenames on the destination.
+    var addInferredExtensionOnRecovery: Bool = true
 }
 
 /// Error surface for the public relocate entry point.
@@ -429,11 +439,33 @@ extension VideoScanModel {
                 log("Migrate canceled — stopped after \(i) of \(toMigrate.count) file(s).")
                 break
             }
-            let newPath = Self.rewrittenPath(
+            var newPath = Self.rewrittenPath(
                 forSourcePath: rec.fullPath,
                 sourceRoot: options.sourceVolumeRootPath,
                 destRoot: options.destinationRoot.path
             )
+            // Punch-list #3: a recovered file with no usable extension is
+            // un-openable on macOS even when ffprobe decodes it. If the
+            // probed container maps confidently to a canonical extension,
+            // append it to the destination copy ONLY (source untouched). A
+            // resulting X.mov collision is handled by the SAME mechanism as
+            // every other dest collision — RelocateEngine.runOne Stage 1
+            // returns .salvageFailed(.copy); we add no uniquing scheme here.
+            switch Self.inferredRecoveryExtension(
+                forDestinationPath: newPath,
+                probedContainer: rec.container,
+                enabled: options.addInferredExtensionOnRecovery
+            ) {
+            case .append(let appended, let fromExt, let toExt):
+                let oldLeaf = (newPath as NSString).lastPathComponent
+                let newLeaf = (appended as NSString).lastPathComponent
+                let fromDesc = fromExt.isEmpty ? "no extension" : "extension .\(fromExt)"
+                relocateLog.write("[EXT] recovered extensionless file \(oldLeaf) → \(newLeaf) (\(fromDesc); ffprobe format \"\(rec.container)\" → .\(toExt))")
+                log("    + adding inferred extension .\(toExt) (\(fromDesc); container \"\(rec.container)\")")
+                newPath = appended
+            case .unchanged:
+                break
+            }
             dashboard.relocateCurrentFile = rec.filename
             // Panel tick BEFORE the copy so a long single-file copy (e.g. a
             // 16 GB master) still shows which file is in flight and holds the
