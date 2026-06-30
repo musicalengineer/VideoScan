@@ -61,6 +61,19 @@ final class PairCompareJob: MediaFileOperationJob {
     /// statusText (string-sniffing state is how subtle bugs happen).
     @Published private(set) var wasCancelled = false
 
+    /// Set by the stall watchdog when the comparator stops making progress
+    /// (a sleeping /Volumes drive mid-read during an ffmpeg streamhash /
+    /// perceptual tier). Surfaced as `.failed` with volume-drop attribution
+    /// — distinct from a user cancel. The watchdog cancels the Task, which
+    /// kills the ffmpeg child via ProcessRunner's SIGTERM→SIGKILL path.
+    @Published private(set) var stallReason: String?
+
+    /// Live for the duration of the comparator run; kicked by the
+    /// comparator's `objectWillChange` (which fires on every ffmpeg
+    /// `out_time_us` progress line and every hash-loop byte-granularity
+    /// update). Silence past the threshold ⇒ stall.
+    private var stallMonitor: StallMonitor?
+
     /// Non-nil while queued behind another compare on a gated volume.
     @Published private(set) var waitingForVolumeLabel: String?
 
@@ -81,6 +94,9 @@ final class PairCompareJob: MediaFileOperationJob {
         self.recordB = recordB
         self.gates = gates
         comparatorForwarder = comparator.objectWillChange.sink { [weak self] _ in
+            // Each comparator publish (progress line / hash-loop tick) is a
+            // liveness signal — kick the stall watchdog before re-broadcast.
+            self?.stallMonitor?.tick()
             self?.objectWillChange.send()
         }
     }
@@ -103,7 +119,18 @@ final class PairCompareJob: MediaFileOperationJob {
     private func runHoldingGates(_ remaining: ArraySlice<Gate>) async {
         guard let gate = remaining.first else {
             waitingForVolumeLabel = nil
+            // Stall watchdog spans the whole comparator run (all tiers).
+            let monitor = StallMonitor(label: "compare \(recordA.filename) vs \(recordB.filename)") { [weak self] silentFor in
+                Task { @MainActor [weak self] in
+                    self?.handleStall(silentFor: silentFor)
+                }
+            }
+            stallMonitor = monitor
+            monitor.start()
+            fileOpsLog.info("compare RUN: \(self.recordA.filename, privacy: .public) vs \(self.recordB.filename, privacy: .public)")
             await comparator.run(recordA: recordA, recordB: recordB)
+            monitor.stop()
+            stallMonitor = nil
             return
         }
         waitingForVolumeLabel = gate.label
@@ -162,6 +189,11 @@ final class PairCompareJob: MediaFileOperationJob {
         if let verdict = comparator.verdict {
             return .finished(summary: verdict.title)
         }
+        // Stall wins over a generic comparator error / cancel: it's the more
+        // specific cause (and carries volume-drop attribution).
+        if let stallReason {
+            return .failed(message: stallReason)
+        }
         if let error = comparator.lastError {
             return .failed(message: error)
         }
@@ -176,5 +208,24 @@ final class PairCompareJob: MediaFileOperationJob {
         wasCancelled = true
         task?.cancel()
         fileOpsLog.info("compare cancelled: \(self.title, privacy: .public)")
+    }
+
+    // MARK: Stall handling
+
+    /// Invoked (on the main actor) by the StallMonitor when the comparator
+    /// stops publishing progress. Records a SPECIFIC reason with volume-drop
+    /// vs file-error attribution (#6.4) and cancels the run — killing any
+    /// live ffmpeg child via ProcessRunner's SIGTERM→SIGKILL escalation.
+    /// (Note: an in-process Tier-1 hash read blocked in uninterruptible
+    /// kernel I/O is detected here but can't be force-unblocked — only the
+    /// ffmpeg-subprocess tiers, including the perceptual tier, are killable.)
+    private func handleStall(silentFor: Double) {
+        guard state.isActive, stallReason == nil, !wasCancelled else { return }
+        let attribution = StallMonitor.attribution(forPaths: [recordA.fullPath, recordB.fullPath])
+        let reason = "Stalled — no compare progress for \(Int(silentFor))s. \(attribution)"
+        stallReason = reason
+        fileOpsLog.error("compare WATCHDOG: killing \(self.title, privacy: .public) — \(reason, privacy: .public)")
+        appLog.write("compare watchdog: \(title) stalled \(Int(silentFor))s — \(attribution); killing")
+        task?.cancel()
     }
 }

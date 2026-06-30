@@ -95,6 +95,14 @@ final class TranscodeJob: MediaFileOperationJob {
     /// Total source duration in seconds, used for the fraction.
     private var totalDurationSeconds: Double = 0
 
+    /// Set by the stall watchdog when an ffmpeg phase (encode OR verify
+    /// decode) flatlines. Distinguishes a watchdog kill (→ `.failed` with a
+    /// specific reason, incl. volume-drop attribution) from a user cancel
+    /// (→ `.cancelled`). Checked before every generic cancel branch because
+    /// the watchdog cancels the Task, which also trips `Task.isCancelled`.
+    /// This is exactly the 14 h `framemd5` hang the punch-list targets.
+    private var stallReason: String?
+
     // Archive-grade telemetry for the preservation summary (videoscan.log).
     // Populated as the job runs; emitted in one consolidated block at the
     // end. Infrequent operation — we log generously. Rick 2026-06-18.
@@ -161,13 +169,23 @@ final class TranscodeJob: MediaFileOperationJob {
 
         let inputPath = record.fullPath
         let outputPath = outputURL.path
+        // ffmpeg encodes here; we atomic-rename to outputPath only after a
+        // COMPLETE, non-trivial encode (#6.3). A killed/stalled encode leaves
+        // only this partial, which we delete — never a truncated master at
+        // the real output path. The verify phase (preservation) runs against
+        // the promoted FINAL file, and only ever reads it.
+        let partialPath = ReformatJob.partialURL(for: outputURL).path
+
+        let volumeLabel = VolumeReachability.displayLabel(forPath: inputPath)
+        transcodeLog.info("transcode START: \(self.record.filename, privacy: .public) preset=\(self.preset.rawValue, privacy: .public) on \(volumeLabel, privacy: .public) → \(self.outputURL.lastPathComponent, privacy: .public)")
 
         if preset == .preservation {
             transcodeLog.info("preservation: starting FFV1 v3 master for \(self.record.filename, privacy: .public) → \(self.outputURL.lastPathComponent, privacy: .public)")
         }
 
-        // Clean up any prior derivative (resumed from a cancel).
+        // Clean up any prior derivative + stale partial (resumed from a cancel).
         try? FileManager.default.removeItem(atPath: outputPath)
+        try? FileManager.default.removeItem(atPath: partialPath)
 
         guard FileManager.default.fileExists(atPath: inputPath) else {
             await finish(failed: "Source file missing on disk")
@@ -191,7 +209,7 @@ final class TranscodeJob: MediaFileOperationJob {
 
         let args = Self.transcodeArgs(preset: preset,
                                       input: inputPath,
-                                      output: outputPath,
+                                      output: partialPath,
                                       sourceAudioIsPCM: audioIsPCM)
 
         subtitleText = preset.subtitle
@@ -211,7 +229,15 @@ final class TranscodeJob: MediaFileOperationJob {
         // output format. Out of scope for this pass to hoist the helper
         // into a shared file.
         let totalDur = totalDurationSeconds
+        // Stall watchdog for the encode (#6). Every ffmpeg progress line
+        // kicks it; silence past the threshold ⇒ volume stalled ⇒ kill+fail.
+        let encodeMonitor = StallMonitor(label: "transcode encode \(record.filename)") { [weak self] silentFor in
+            Task { @MainActor [weak self] in
+                self?.handleStall(phase: "transcode encode", silentFor: silentFor)
+            }
+        }
         let progressUpdater: @Sendable (String) -> Void = { [weak self] line in
+            encodeMonitor.tick()
             guard let self else { return }
             let sec = ReformatJob.parseProgressSeconds(line: line)
             guard let sec, totalDur > 0 else { return }
@@ -222,17 +248,28 @@ final class TranscodeJob: MediaFileOperationJob {
         }
 
         let encodeStart = Date()
+        encodeMonitor.start()
         let _ = await ProcessRunner.runStreaming(
             executable: ffmpeg,
             arguments: args,
             environment: nil,
             stderrLine: progressUpdater
         )
+        encodeMonitor.stop()
         encodeElapsed = Date().timeIntervalSince(encodeStart)
+
+        // Watchdog stall wins over a generic cancel (the watchdog cancels
+        // the Task) — surface the specific cause, not "Cancelled".
+        if let stallReason {
+            try? FileManager.default.removeItem(atPath: partialPath)
+            transcodeLog.error("transcode FAILED (stall, encode): \(self.record.filename, privacy: .public) — \(stallReason, privacy: .public)")
+            await finish(failed: stallReason)
+            return
+        }
 
         // Cancelled mid-run?
         if Task.isCancelled || state == .cancelling {
-            try? FileManager.default.removeItem(atPath: outputPath)
+            try? FileManager.default.removeItem(atPath: partialPath)
             await finish(cancelled: true)
             return
         }
@@ -240,15 +277,26 @@ final class TranscodeJob: MediaFileOperationJob {
         // Verify output is non-trivial (ffmpeg occasionally returns 0 but
         // writes a header-only file when a codec library is missing or the
         // input has an unrecoverable stream).
-        guard FileManager.default.fileExists(atPath: outputPath) else {
+        guard FileManager.default.fileExists(atPath: partialPath) else {
             await finish(failed: "ffmpeg finished but no output file was produced")
             return
         }
-        let attrs = try? FileManager.default.attributesOfItem(atPath: outputPath)
+        let attrs = try? FileManager.default.attributesOfItem(atPath: partialPath)
         let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
         if size < 10_000 {
-            try? FileManager.default.removeItem(atPath: outputPath)
+            try? FileManager.default.removeItem(atPath: partialPath)
             await finish(failed: "ffmpeg output too small (\(size) bytes) — likely a codec failure")
+            return
+        }
+
+        // Atomic publish: a complete, non-trivial encode — promote the
+        // partial to the real output name in one rename (#6.3). Verify (if
+        // any) then reads the FINAL file, which it only ever reads.
+        do {
+            try ReformatJob.atomicPublish(from: partialPath, to: outputPath)
+        } catch {
+            try? FileManager.default.removeItem(atPath: partialPath)
+            await finish(failed: "Could not finalize output file: \(error.localizedDescription)")
             return
         }
 
@@ -260,6 +308,14 @@ final class TranscodeJob: MediaFileOperationJob {
             let verdict = await verifyLossless(ffmpeg: ffmpeg,
                                                source: inputPath,
                                                output: outputPath)
+            // A stall DURING verify (the literal 14 h framemd5 incident) must
+            // fail loudly with attribution — not masquerade as a clean
+            // cancel. The master is left on disk; the user can re-verify.
+            if let stallReason {
+                transcodeLog.error("transcode FAILED (stall, verify): \(self.record.filename, privacy: .public) — \(stallReason, privacy: .public)")
+                await finish(failed: stallReason)
+                return
+            }
             if Task.isCancelled || state == .cancelling {
                 // Leave the master in place — the user can re-run verify
                 // later rather than re-encode an expensive FFV1 file.
@@ -281,6 +337,7 @@ final class TranscodeJob: MediaFileOperationJob {
         }
 
         await catalogTranscodeOutput()
+        transcodeLog.info("transcode DONE: \(self.record.filename, privacy: .public) preset=\(self.preset.rawValue, privacy: .public) → \(self.outputURL.lastPathComponent, privacy: .public) (\(Self.humanBytes(size), privacy: .public)) encode \(self.encodeElapsed, format: .fixed(precision: 1), privacy: .public)s")
         await finish(success: "Transcoded → \(outputURL.lastPathComponent) (\(Self.humanBytes(size))).")
     }
 
@@ -394,7 +451,7 @@ final class TranscodeJob: MediaFileOperationJob {
         let args = ["-hide_banner", "-nostdin", "-i", file,
                     "-map", "0:v:0", "-an",
                     "-f", "framemd5", "-progress", "pipe:2", "-"]
-        return await runDecodeCapture(ffmpeg: ffmpeg, args: args)
+        return await runDecodeCapture(ffmpeg: ffmpeg, args: args, phase: "verify (video framemd5)")
     }
 
     /// Decode the AUDIO stream to a single WHOLE-STREAM MD5 and return just
@@ -410,7 +467,7 @@ final class TranscodeJob: MediaFileOperationJob {
                     "-map", "0:a:0", "-vn",
                     "-c:a", pcmCodec,
                     "-f", "md5", "-progress", "pipe:2", "-"]
-        let out = await runDecodeCapture(ffmpeg: ffmpeg, args: args)
+        let out = await runDecodeCapture(ffmpeg: ffmpeg, args: args, phase: "verify (audio md5)")
         return Self.parseStreamMD5(out)
     }
 
@@ -482,9 +539,21 @@ final class TranscodeJob: MediaFileOperationJob {
     /// Shared decode runner: spawns ffmpeg, drives the progress bar off its
     /// `-progress pipe:2` stderr, and returns captured stdout (the md5
     /// lines). Bounded output; see the file-header memory note.
-    private func runDecodeCapture(ffmpeg: String, args: [String]) async -> String {
+    ///
+    /// Guarded by a StallMonitor (#6): the framemd5 decode of an archival
+    /// master is the EXACT op that wedged for 14 h. Each progress line kicks
+    /// the watchdog; silence past the threshold cancels the run (killing the
+    /// ffmpeg child via ProcessRunner) and records a specific stall reason
+    /// that the verify branch surfaces as a loud failure.
+    private func runDecodeCapture(ffmpeg: String, args: [String], phase: String) async -> String {
         let totalDur = totalDurationSeconds
+        let monitor = StallMonitor(label: "transcode \(phase) \(record.filename)") { [weak self] silentFor in
+            Task { @MainActor [weak self] in
+                self?.handleStall(phase: "transcode \(phase)", silentFor: silentFor)
+            }
+        }
         let progressUpdater: @Sendable (String) -> Void = { [weak self] line in
+            monitor.tick()
             guard let self else { return }
             let sec = ReformatJob.parseProgressSeconds(line: line)
             guard let sec, totalDur > 0 else { return }
@@ -494,13 +563,33 @@ final class TranscodeJob: MediaFileOperationJob {
             }
         }
 
+        monitor.start()
         let stdout = await ProcessRunner.runStreaming(
             executable: ffmpeg,
             arguments: args,
             environment: nil,
             stderrLine: progressUpdater
         )
+        monitor.stop()
         return stdout ?? ""
+    }
+
+    // MARK: Stall handling
+
+    /// Invoked (on the main actor) by a StallMonitor when an ffmpeg phase
+    /// flatlines. Records a SPECIFIC reason with volume-drop vs file-error
+    /// attribution (#6.4) and cancels the run — killing the ffmpeg child via
+    /// ProcessRunner's SIGTERM→SIGKILL escalation. Idempotent across the
+    /// encode + the (possibly several) verify decodes: the first stall wins.
+    private func handleStall(phase: String, silentFor: Double) {
+        guard state.isActive, stallReason == nil else { return }
+        let attribution = StallMonitor.attribution(forPaths: [record.fullPath, outputURL.path])
+        let reason = "Stalled — no ffmpeg progress for \(Int(silentFor))s during \(phase). \(attribution)"
+        stallReason = reason
+        subtitleText = "Stalled — stopping…"
+        transcodeLog.error("transcode WATCHDOG: killing \(self.record.filename, privacy: .public) (\(phase, privacy: .public)) — \(reason, privacy: .public)")
+        appLog.write("transcode watchdog: \(record.filename) stalled \(Int(silentFor))s during \(phase) — \(attribution); killing ffmpeg")
+        task?.cancel()
     }
 
     /// Write `<output>.framemd5-MISMATCH.log` next to the master with the

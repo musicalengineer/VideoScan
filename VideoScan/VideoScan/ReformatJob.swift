@@ -39,6 +39,18 @@ import os
 //
 // Progress: parsed from ffmpeg's stderr `out_time` / `time=` lines
 // against the input duration. Indeterminate during model load / probe.
+//
+// Stall watchdog (#6, Rick 2026-06-30): the encode runs under a
+// `StallMonitor`. Every ffmpeg progress line kicks the watchdog; if the
+// op flatlines for `StallMonitor.defaultStallThresholdSeconds` (a sleeping
+// /Volumes drive mid-read), the watchdog cancels the run — which kills the
+// ffmpeg child via ProcessRunner's SIGTERM→SIGKILL escalation — and the job
+// fails CLEANLY with a specific reason instead of hanging for hours.
+//
+// Atomic output (#6.3): ffmpeg writes to a `.vs-partial` sibling; we
+// atomic-rename to the final name ONLY after the encode completes and the
+// size check passes. A killed/stalled op leaves only the partial (which we
+// delete) — never a truncated file at the real output path.
 
 private let reformatLog = Logger(subsystem: "Rick-Breen.VideoScan",
                                  category: "fileOps")
@@ -78,6 +90,12 @@ final class ReformatJob: MediaFileOperationJob {
     /// Total source duration in seconds, set after probe. Used for the
     /// fraction calculation.
     private var totalDurationSeconds: Double = 0
+
+    /// Set by the stall watchdog when the encode flatlines. Distinguishes a
+    /// watchdog kill (→ `.failed` with a specific reason) from a user cancel
+    /// (→ `.cancelled`). Checked before the generic cancel branch because
+    /// the watchdog cancels the Task, which also sets `Task.isCancelled`.
+    private var stallReason: String?
 
     /// MediaFileOperationJob requires `objectWillChange` ==
     /// ObservableObjectPublisher, which is the default for ObservableObject.
@@ -144,9 +162,17 @@ final class ReformatJob: MediaFileOperationJob {
 
         let inputPath = record.fullPath
         let outputPath = outputURL.path
+        // ffmpeg writes here; we atomic-rename to outputPath only on success
+        // (#6.3). A killed/stalled op leaves only this partial, which we
+        // delete — never a truncated file at the real output path.
+        let partialPath = Self.partialURL(for: outputURL).path
 
-        // Clean up any prior _reformatted.mp4 (resumed from a cancel).
+        // Clean up any prior derivative + stale partial (resumed from a cancel).
         try? FileManager.default.removeItem(atPath: outputPath)
+        try? FileManager.default.removeItem(atPath: partialPath)
+
+        let volumeLabel = VolumeReachability.displayLabel(forPath: inputPath)
+        reformatLog.info("reformat START: \(self.record.filename, privacy: .public) on \(volumeLabel, privacy: .public) → \(self.outputURL.lastPathComponent, privacy: .public)")
 
         guard FileManager.default.fileExists(atPath: inputPath) else {
             await finish(failed: "Source file missing on disk")
@@ -184,7 +210,7 @@ final class ReformatJob: MediaFileOperationJob {
             "-b:a", "192k",
             "-movflags", "+faststart",
             "-progress", "pipe:2",
-            outputPath
+            partialPath
         ]
 
         subtitleText = "Transcoding to H.264/AAC…"
@@ -197,7 +223,17 @@ final class ReformatJob: MediaFileOperationJob {
         // -progress pipe:2 flag emits the structured lines. We accept
         // either to be robust.
         let totalDur = totalDurationSeconds  // capture for the closure
+
+        // Stall watchdog: every stderr line (ffmpeg emits progress blocks
+        // continuously while it makes forward progress) kicks the monitor.
+        // Silence past the threshold ⇒ the volume stalled ⇒ kill + fail.
+        let monitor = StallMonitor(label: "reformat \(record.filename)") { [weak self] silentFor in
+            Task { @MainActor [weak self] in
+                self?.handleStall(inputPath: inputPath, silentFor: silentFor)
+            }
+        }
         let progressUpdater: @Sendable (String) -> Void = { [weak self] line in
+            monitor.tick()
             guard let self else { return }
             let sec = Self.parseProgressSeconds(line: line)
             guard let sec, totalDur > 0 else { return }
@@ -207,16 +243,31 @@ final class ReformatJob: MediaFileOperationJob {
             }
         }
 
+        let encodeStart = Date()
+        monitor.start()
         let _ = await ProcessRunner.runStreaming(
             executable: ffmpeg,
             arguments: args,
             environment: nil,
             stderrLine: progressUpdater
         )
+        monitor.stop()
+        let elapsed = Date().timeIntervalSince(encodeStart)
+
+        // Watchdog stall wins over a generic cancel: the watchdog cancels
+        // the Task (setting Task.isCancelled), so check stallReason FIRST so
+        // the user sees the specific cause, not "Cancelled".
+        if let stallReason {
+            try? FileManager.default.removeItem(atPath: partialPath)
+            reformatLog.error("reformat FAILED (stall): \(self.record.filename, privacy: .public) after \(elapsed, format: .fixed(precision: 1), privacy: .public)s — \(stallReason, privacy: .public)")
+            await finish(failed: stallReason)
+            return
+        }
 
         // Was it cancelled mid-run?
         if Task.isCancelled || state == .cancelling {
-            try? FileManager.default.removeItem(atPath: outputPath)
+            try? FileManager.default.removeItem(atPath: partialPath)
+            reformatLog.info("reformat cancelled: \(self.record.filename, privacy: .public) after \(elapsed, format: .fixed(precision: 1), privacy: .public)s")
             await finish(cancelled: true)
             return
         }
@@ -224,22 +275,50 @@ final class ReformatJob: MediaFileOperationJob {
         // Verify output exists + is non-trivial. ffmpeg sometimes
         // returns 0 but writes a 1KB header-only file on early failure
         // (codec library unavailable, etc.); reject those.
-        guard FileManager.default.fileExists(atPath: outputPath) else {
+        guard FileManager.default.fileExists(atPath: partialPath) else {
             await finish(failed: "ffmpeg finished but no output file was produced")
             return
         }
-        let attrs = try? FileManager.default.attributesOfItem(atPath: outputPath)
+        let attrs = try? FileManager.default.attributesOfItem(atPath: partialPath)
         let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
         if size < 10_000 {
-            try? FileManager.default.removeItem(atPath: outputPath)
+            try? FileManager.default.removeItem(atPath: partialPath)
             await finish(failed: "ffmpeg output too small (\(size) bytes) — likely a codec failure")
+            return
+        }
+
+        // Atomic publish: the encode is complete and non-trivial — promote
+        // the partial to the real output name in one rename (#6.3).
+        do {
+            try Self.atomicPublish(from: partialPath, to: outputPath)
+        } catch {
+            try? FileManager.default.removeItem(atPath: partialPath)
+            await finish(failed: "Could not finalize output file: \(error.localizedDescription)")
             return
         }
 
         // Catalog + queue for analyze.
         await catalogAndQueueAnalyze()
 
+        reformatLog.info("reformat DONE: \(self.record.filename, privacy: .public) → \(self.outputURL.lastPathComponent, privacy: .public) (\(Self.humanBytes(size), privacy: .public)) in \(elapsed, format: .fixed(precision: 1), privacy: .public)s")
         await finish(success: "Reformatted → \(outputURL.lastPathComponent) (\(Self.humanBytes(size))). Queued for analysis.")
+    }
+
+    // MARK: Stall handling
+
+    /// Invoked (on the main actor) by the StallMonitor when the encode
+    /// flatlines. Records a SPECIFIC failure reason — with volume-drop vs
+    /// file-error attribution (#6.4) — and cancels the run, which kills the
+    /// ffmpeg child through ProcessRunner's SIGTERM→SIGKILL escalation.
+    private func handleStall(inputPath: String, silentFor: Double) {
+        guard state.isActive, stallReason == nil else { return }
+        let attribution = StallMonitor.attribution(forPaths: [inputPath])
+        let reason = "Stalled — no ffmpeg progress for \(Int(silentFor))s during reformat. \(attribution)"
+        stallReason = reason
+        subtitleText = "Stalled — stopping…"
+        reformatLog.error("reformat WATCHDOG: killing \(self.record.filename, privacy: .public) — \(reason, privacy: .public)")
+        appLog.write("reformat watchdog: \(record.filename) stalled \(Int(silentFor))s — \(attribution); killing ffmpeg")
+        task?.cancel()
     }
 
     /// Probe the new file, append to the catalog, kick off an analyze
@@ -366,5 +445,32 @@ final class ReformatJob: MediaFileOperationJob {
         f.allowedUnits = [.useMB, .useGB]
         f.countStyle = .file
         return f.string(fromByteCount: bytes)
+    }
+
+    // MARK: - Atomic output helpers (#6.3)
+
+    /// Sibling `.vs-partial` URL ffmpeg writes to. Keeps the FINAL extension
+    /// (`stem.vs.hevc.<ts>.vs-partial.mp4`) so ffmpeg still infers the muxer
+    /// from `.mp4`, and lands in the same directory so the promote is a
+    /// metadata-only rename (atomic on the same filesystem). Pure —
+    /// unit-testable. Rick 2026-06-30.
+    nonisolated static func partialURL(for output: URL) -> URL {
+        let ext = output.pathExtension
+        return output
+            .deletingPathExtension()
+            .appendingPathExtension("vs-partial")
+            .appendingPathExtension(ext)
+    }
+
+    /// Promote a completed partial to its final name in one atomic rename.
+    /// If a file already sits at `to` (a prior derivative we cleaned up but
+    /// that reappeared), it's replaced. Throws on failure so the caller
+    /// fails loudly rather than catalog a file that isn't there.
+    nonisolated static func atomicPublish(from partialPath: String, to finalPath: String) throws {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: finalPath) {
+            try fm.removeItem(atPath: finalPath)
+        }
+        try fm.moveItem(atPath: partialPath, toPath: finalPath)
     }
 }
