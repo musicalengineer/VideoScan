@@ -36,8 +36,22 @@ import Foundation
 //   current bytes, so a rescan refreshing them is correct.
 
 /// Snapshot of the fields a rescan must not destroy. One per record.
-/// `nonisolated` — pure value type, safe to construct off the main
-/// actor during the post-scan merge pass.
+///
+/// This is a `Sendable` value-type carrier: all stored properties are
+/// themselves Sendable (the LifecycleStage / MediaDisposition /
+/// ArchiveStage enums conform), so an instance can be stashed in
+/// `pendingPreservedFields` and cross actor boundaries freely.
+///
+/// `init(from:)` and `apply(to:)` are the only members that touch a
+/// `VideoRecord`. They are `@MainActor` because VideoRecord is moving
+/// toward main-actor isolation — reading/writing its fields must happen
+/// on the main actor. Both are invoked solely from the @MainActor
+/// snapshot/apply helpers below, so the annotation is a runtime no-op
+/// (the calls were already on the main actor); it just makes the
+/// isolation explicit for the compiler.
+// `@MainActor` on a method ≈ "this member may only run on the UI thread";
+// the struct itself stays a plain Sendable value (like a POD that's safe
+// to copy across threads — only these two accessors are pinned).
 struct RescanPreservedFields: Sendable {
 
     // Dossier channels
@@ -88,6 +102,7 @@ struct RescanPreservedFields: Sendable {
             || !notes.isEmpty
     }
 
+    @MainActor
     init(from rec: VideoRecord) {
         self.sceneCaptions = rec.sceneCaptions
         self.sceneCaptionModel = rec.sceneCaptionModel
@@ -117,6 +132,7 @@ struct RescanPreservedFields: Sendable {
     /// The new record's scan-derived fields (size, codec, etc.) are
     /// preserved as-is; only the dossier + user-edit fields are
     /// restored.
+    @MainActor
     func apply(to rec: VideoRecord) {
         rec.sceneCaptions = self.sceneCaptions
         rec.sceneCaptionModel = self.sceneCaptionModel

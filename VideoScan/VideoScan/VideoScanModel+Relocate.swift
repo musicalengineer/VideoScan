@@ -251,19 +251,27 @@ extension VideoScanModel {
         // 1A. Reconcile pre-flight — runs OFF the main actor. The classify
         // phase does a full-volume FS walk + per-record partialMD5 disk reads;
         // on a flaky HDD that blocked the main thread for ~235s and beachballed
-        // the UI with no responsive Hide/Cancel (perf analysis 2026-06-20). We
-        // snapshot the catalog array (value type, copy-on-write — cheap) and
-        // build the volume-safety resolver on the main actor, then hand the
-        // read-only work to a detached task. The apply phase below mutates
-        // records and stays on the main actor.
-        let allRecordsSnapshot = records
+        // the UI with no responsive Hide/Cancel (perf analysis 2026-06-20).
+        //
+        // Seam D (VideoRecord-Sendable restructure): we project every record
+        // the classify pass reads into Sendable `ReconcileRecordInput` values
+        // ON THE MAIN ACTOR (scope = in-scope records; the full catalog =
+        // Bucket-E witnesses) and build the volume-safety resolver here too,
+        // then hand only those Sendable values to the detached task. The task
+        // returns an id-keyed, Sendable `ReconcilePlan` — no `VideoRecord`
+        // crosses the boundary. We re-materialize the plan against the live
+        // records back here on main, then the apply phase below mutates those
+        // records on the main actor exactly as before.
+        let scopeInputs = scope.map(\.asReconcileInput)
+        let witnessInputs = records.map(\.asReconcileInput)
         let resolver = makeVolumeSafetyResolver()
-        let reconcile = await Task.detached(priority: .userInitiated) {
-            Self.performReconcileOffActor(scope: scope,
-                                          allCatalogRecords: allRecordsSnapshot,
-                                          options: options,
-                                          resolveVolumeSafety: resolver)
+        let plan = await Task.detached(priority: .userInitiated) {
+            Self.performReconcilePlanOffActor(scopeInputs: scopeInputs,
+                                              witnessInputs: witnessInputs,
+                                              options: options,
+                                              resolveVolumeSafety: resolver)
         }.value
+        let reconcile = RelocateReconcile.materialize(plan, scope: scope)
         logReconcileSummary(reconcile)
         relocateLog.write("Reconcile: ready=\(reconcile.ready.count) adopted=\(reconcile.adopted.count) sourceMoves=\(reconcile.sourceSideMoves.count) safelyRedundant=\(reconcile.safelyRedundant.count) manuallyDeleted=\(reconcile.manuallyDeleted.count) previouslyRelocated=\(reconcile.previouslyRelocated.count)")
 
@@ -677,21 +685,25 @@ extension VideoScanModel {
 
     /// Reconcile classify phase — designed to run OFF the main actor (see the
     /// `Task.detached` call site in `runRelocate`). Pure and `nonisolated`: it
-    /// takes a snapshot of the catalog plus a pre-built volume-safety resolver,
-    /// walks the source/dest filesystems, and hashes candidate files. No `self`
-    /// access, so it can execute on a detached task without freezing the UI.
-    /// The apply phase (which mutates `VideoRecord`s) stays on the main actor.
-    nonisolated private static func performReconcileOffActor(
-        scope: [VideoRecord],
-        allCatalogRecords: [VideoRecord],
+    /// takes Sendable record projections plus a pre-built volume-safety
+    /// resolver, walks the source/dest filesystems, and hashes candidate
+    /// files. No `self` access and — as of Seam D — no `VideoRecord` either,
+    /// so it can execute on a detached task without freezing the UI and
+    /// without a non-Sendable class crossing the boundary. The caller
+    /// re-materializes the returned `ReconcilePlan` into a `ReconcileResult`
+    /// on the main actor; the apply phase (which mutates `VideoRecord`s)
+    /// stays on the main actor.
+    nonisolated private static func performReconcilePlanOffActor(
+        scopeInputs: [ReconcileRecordInput],
+        witnessInputs: [ReconcileRecordInput],
         options: RelocateOptions,
         resolveVolumeSafety: @escaping VolumeSafetyResolver
-    ) -> ReconcileResult {
+    ) -> ReconcilePlan {
         let sourceFiles = enumerateFiles(at: options.sourceVolumeRootPath)
         let destFiles = enumerateFiles(at: options.destinationRoot.path)
-        return RelocateReconcile.reconcile(
-            records: scope,
-            allCatalogRecords: allCatalogRecords,
+        return RelocateReconcile.reconcilePlan(
+            records: scopeInputs,
+            witnesses: witnessInputs,
             sourceVolumeRootPath: options.sourceVolumeRootPath,
             destinationRoot: options.destinationRoot,
             sourceFiles: sourceFiles,

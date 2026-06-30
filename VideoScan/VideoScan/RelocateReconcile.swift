@@ -48,6 +48,24 @@ import Foundation
 // Pure & injectable: the file lists (with sizes) are passed in, and
 // the hash function is injectable. The real caller wraps an FS walk
 // and FileHasher.partialMD5. See docs/relocate_volume_plan.md §1A.
+//
+// ── Sendable boundary (Seam D, VideoRecord-Sendable restructure,
+// 2026-06-29) ───────────────────────────────────────────────────────
+// The classify pass runs OFF the main actor (a `Task.detached` in
+// `runRelocate` and in the RelocateSheet preview), because it does a
+// full-volume FS walk + per-record partialMD5 disk reads. To keep the
+// non-Sendable `VideoRecord` class off that boundary, the actual logic
+// now lives in `reconcilePlan(...)`, which consumes a Sendable
+// `[ReconcileRecordInput]` and emits a Sendable, id-keyed `ReconcilePlan`.
+// The historical `reconcile(records: [VideoRecord], ...) -> ReconcileResult`
+// entry point is preserved verbatim as a thin **main-actor adapter** so
+// the existing (exhaustive) reconcile test-suite keeps proving behavior:
+// it projects records → inputs, calls `reconcilePlan`, then re-materializes
+// the plan against the live records via `materialize(_:scope:)`.
+// `ReconcileResult` itself is unchanged (still VideoRecord-bearing) —
+// callers map ids back to records on the actor that owns them.
+
+// MARK: - VideoRecord-bearing result (consumed on the owning actor)
 
 struct ReconcileResult: Equatable {
     /// File present at recorded path, ready to copy. Records here are
@@ -102,9 +120,11 @@ struct ReconcileResult: Equatable {
 /// closure. Sorted-ranked use of this struct lives in the summary sheet.
 ///
 /// `Equatable` so `SafelyRedundantEntry`'s synthesized equality keeps
-/// working; `Codable`-free because the audit-trail note keeps the path
-/// list in a flat, hand-tokenized format (see `formatSafelyRedundantNote`).
-struct SafeWitnessInfo: Equatable, Hashable {
+/// working; `Sendable` so it can ride out of the detached classify pass
+/// on a `ReconcilePlan` (Seam D). `Codable`-free because the audit-trail
+/// note keeps the path list in a flat, hand-tokenized format (see
+/// `formatSafelyRedundantNote`).
+struct SafeWitnessInfo: Equatable, Hashable, Sendable {
     let path: String
     /// Volume role from the host scan target, or `.unassigned` when the
     /// path doesn't resolve to a known target (the resolver should never
@@ -187,7 +207,7 @@ struct SafelyRedundantEntry: Equatable {
 }
 
 /// One entry in the size-indexed file lists handed to `reconcile`.
-struct ReconcileFileEntry: Equatable {
+struct ReconcileFileEntry: Equatable, Sendable {
     let path: String
     let size: Int64
 }
@@ -198,7 +218,76 @@ struct ReconcileFileEntry: Equatable {
 /// `(.unassigned, .unknown)` when the path doesn't resolve to a known
 /// volume — neutral default that keeps the witness *safe* (the role/trust
 /// scoring counts unassigned/unknown as low-but-not-zero).
-typealias VolumeSafetyResolver = (String) -> (role: VolumeRole, trust: VolumeTrust)
+typealias VolumeSafetyResolver = @Sendable (String) -> (role: VolumeRole, trust: VolumeTrust)
+
+// MARK: - Sendable boundary types (Seam D)
+
+/// Sendable projection of the only `VideoRecord` fields the classify pass
+/// reads. Built on the main actor; safe to capture into the detached
+/// reconcile task. `id` is the key the result is re-materialized against.
+///
+/// Swift's `struct` value semantics ≈ a C++ POD passed by value — there is
+/// no shared reference for another actor to race on.
+struct ReconcileRecordInput: Sendable, Equatable, Identifiable {
+    let id: UUID
+    let fullPath: String
+    let partialMD5: String
+    let sizeBytes: Int64
+    /// Non-nil ⇒ already relocated once (drives the previouslyRelocated bucket).
+    let originalFullPath: String?
+}
+
+/// Sendable, id-keyed classification produced by `reconcilePlan`. Mirrors
+/// `ReconcileResult` one-for-one but references records by `UUID` instead
+/// of by the non-Sendable `VideoRecord`. `materialize(_:scope:)` turns this
+/// back into a `ReconcileResult` on the actor that owns the records.
+struct ReconcilePlan: Sendable, Equatable {
+    var readyIDs: [UUID] = []
+    var manuallyDeletedIDs: [UUID] = []
+    var sourceSideMoves: [SourceSideMovePlan] = []
+    var adopted: [AdoptedPlan] = []
+    var safelyRedundant: [SafelyRedundantPlanEntry] = []
+    var previouslyRelocatedIDs: [UUID] = []
+}
+
+/// Bucket C plan entry: record id + its new in-source path.
+struct SourceSideMovePlan: Sendable, Equatable {
+    let id: UUID
+    let newSourcePath: String
+}
+
+/// Bucket D plan entry: record id + the destination path it was found at.
+struct AdoptedPlan: Sendable, Equatable {
+    let id: UUID
+    let destPath: String
+}
+
+/// Bucket E plan entry: record id + the witness audit data. Identical
+/// payload to `SafelyRedundantEntry` minus the `VideoRecord` reference.
+struct SafelyRedundantPlanEntry: Sendable, Equatable {
+    let id: UUID
+    let witnesses: [String]
+    let totalWitnessCount: Int
+    let safeWitnesses: [SafeWitnessInfo]
+    let degradedWitnesses: [SafeWitnessInfo]
+}
+
+// MARK: - VideoRecord projection / re-materialization
+
+extension VideoRecord {
+    /// Capture the Sendable subset the reconcile classify pass needs.
+    /// Reads `VideoRecord` fields, so call it on the actor that owns the
+    /// record (the main actor) before crossing into the detached task.
+    var asReconcileInput: ReconcileRecordInput {
+        ReconcileRecordInput(
+            id: id,
+            fullPath: fullPath,
+            partialMD5: partialMD5,
+            sizeBytes: sizeBytes,
+            originalFullPath: originalFullPath
+        )
+    }
+}
 
 enum RelocateReconcile {
 
@@ -217,7 +306,18 @@ enum RelocateReconcile {
         (.unassigned, .unknown)
     }
 
-    /// Classify each in-scope record into one of the five buckets.
+    // MARK: - Main-actor adapter (preserves the historical signature)
+
+    /// Classify each in-scope record into one of the five buckets and
+    /// return a VideoRecord-bearing `ReconcileResult`.
+    ///
+    /// As of Seam D (2026-06-29) this is a thin adapter over the Sendable
+    /// `reconcilePlan(...)`: it projects the records to `ReconcileRecordInput`
+    /// values, runs the classification, and re-materializes the id-keyed
+    /// plan against the same `records`. Behavior is byte-identical to the
+    /// pre-Seam-D implementation — the existing reconcile test-suite drives
+    /// this entry point and proves it. Call this only on the actor that
+    /// owns the records; the off-actor callers use `reconcilePlan` directly.
     ///
     /// - Parameter records: pre-filtered to records under `sourceVolumeRootPath`.
     /// - Parameter allCatalogRecords: the entire catalog. Used to detect
@@ -249,6 +349,84 @@ enum RelocateReconcile {
         resolveVolumeSafety: VolumeSafetyResolver = permissiveResolver,
         hash: (String) -> String
     ) -> ReconcileResult {
+        let plan = reconcilePlan(
+            records: records.map(\.asReconcileInput),
+            witnesses: allCatalogRecords.map(\.asReconcileInput),
+            sourceVolumeRootPath: sourceVolumeRootPath,
+            destinationRoot: destinationRoot,
+            sourceFiles: sourceFiles,
+            destFiles: destFiles,
+            skipDupsOnOtherVolumes: skipDupsOnOtherVolumes,
+            resolveVolumeSafety: resolveVolumeSafety,
+            hash: hash
+        )
+        return materialize(plan, scope: records)
+    }
+
+    /// Re-hydrate a Sendable `ReconcilePlan` into a VideoRecord-bearing
+    /// `ReconcileResult` by mapping each id back to the live record in
+    /// `scope`. Order within every bucket is preserved (plan arrays are
+    /// already in classify-iteration order; `compactMap` is order-stable).
+    /// Records the plan can't resolve (should be impossible — every bucketed
+    /// id came from `scope`) are dropped rather than crashing.
+    ///
+    /// Call on the actor that owns `scope` (the main actor). All bucket
+    /// entries reference *scope* records only — witnesses never appear in a
+    /// bucket — so a `scope`-only lookup table is sufficient.
+    static func materialize(_ plan: ReconcilePlan,
+                            scope: [VideoRecord]) -> ReconcileResult {
+        var byID: [UUID: VideoRecord] = [:]
+        byID.reserveCapacity(scope.count)
+        for rec in scope { byID[rec.id] = rec }   // last-wins on dup id (UUIDs are unique)
+
+        return ReconcileResult(
+            ready: plan.readyIDs.compactMap { byID[$0] },
+            manuallyDeleted: plan.manuallyDeletedIDs.compactMap { byID[$0] },
+            sourceSideMoves: plan.sourceSideMoves.compactMap { entry in
+                byID[entry.id].map { (rec: $0, newSourcePath: entry.newSourcePath) }
+            },
+            adopted: plan.adopted.compactMap { entry in
+                byID[entry.id].map { (rec: $0, destPath: entry.destPath) }
+            },
+            safelyRedundant: plan.safelyRedundant.compactMap { entry in
+                byID[entry.id].map { rec in
+                    SafelyRedundantEntry(
+                        rec: rec,
+                        witnesses: entry.witnesses,
+                        totalWitnessCount: entry.totalWitnessCount,
+                        safeWitnesses: entry.safeWitnesses,
+                        degradedWitnesses: entry.degradedWitnesses
+                    )
+                }
+            },
+            previouslyRelocated: plan.previouslyRelocatedIDs.compactMap { byID[$0] }
+        )
+    }
+
+    // MARK: - Sendable classify core (runs off the main actor)
+
+    /// Pure, Sendable-in/Sendable-out classification. Identical bucket logic
+    /// to the historical `reconcile`, but it neither reads nor returns a
+    /// `VideoRecord` — it works on `ReconcileRecordInput` values and emits an
+    /// id-keyed `ReconcilePlan`. This is what the detached reconcile task
+    /// calls, keeping the non-Sendable catalog class off the actor boundary.
+    ///
+    /// - Parameter records: in-scope record projections (under source root).
+    /// - Parameter witnesses: projections of the entire catalog, used to
+    ///   build the (size, partialMD5) → other-volume witness index for
+    ///   Bucket E. Pass `records` itself for no cross-volume check.
+    /// All other parameters match `reconcile`.
+    static func reconcilePlan(
+        records: [ReconcileRecordInput],
+        witnesses: [ReconcileRecordInput],
+        sourceVolumeRootPath: String,
+        destinationRoot: URL,
+        sourceFiles: [ReconcileFileEntry],
+        destFiles: [ReconcileFileEntry],
+        skipDupsOnOtherVolumes: Bool,
+        resolveVolumeSafety: VolumeSafetyResolver = permissiveResolver,
+        hash: (String) -> String
+    ) -> ReconcilePlan {
 
         // Build size-indexed lookup tables. The whole point is to avoid
         // O(records × files) hashing — for each record we only consult
@@ -266,7 +444,7 @@ enum RelocateReconcile {
         //
         // Memory: keyed on (Int64, String) tuple-as-struct; at ~64B/entry
         // and a worst-case catalog of ~50K records, this is a few MB. Bounded
-        // by `allCatalogRecords.count`. No streaming concerns.
+        // by `witnesses.count`. No streaming concerns.
         var witnessIndex: [WitnessKey: [String]] = [:]
         if skipDupsOnOtherVolumes {
             let srcPrefix = sourceVolumeRootPath.hasSuffix("/")
@@ -275,7 +453,7 @@ enum RelocateReconcile {
             let dstPrefix = destinationRoot.path.hasSuffix("/")
                 ? destinationRoot.path
                 : destinationRoot.path + "/"
-            for other in allCatalogRecords {
+            for other in witnesses {
                 // Skip the source-volume records — they're the input set,
                 // not witnesses. Skip dest-resident records — bucket D is
                 // strictly preferred over E for those.
@@ -290,18 +468,13 @@ enum RelocateReconcile {
             }
         }
 
-        var ready: [VideoRecord] = []
-        var manuallyDeleted: [VideoRecord] = []
-        var sourceSideMoves: [(rec: VideoRecord, newSourcePath: String)] = []
-        var adopted: [(rec: VideoRecord, destPath: String)] = []
-        var safelyRedundant: [SafelyRedundantEntry] = []
-        var previouslyRelocated: [VideoRecord] = []
+        var plan = ReconcilePlan()
 
         for rec in records {
             // Already-migrated records get short-circuited; caller
             // decides via skipAlreadyRelocated whether to retry.
             if rec.originalFullPath != nil {
-                previouslyRelocated.append(rec)
+                plan.previouslyRelocatedIDs.append(rec.id)
                 continue
             }
 
@@ -317,11 +490,14 @@ enum RelocateReconcile {
             )
             if matchesHashByCandidate(planned, expectedHash: rec.partialMD5, hash: hash),
                fileSize(at: planned) == rec.sizeBytes {
-                adopted.append((rec: rec, destPath: planned))
+                plan.adopted.append(AdoptedPlan(id: rec.id, destPath: planned))
                 continue
             }
-            if let match = findMatch(rec: rec, candidatesBySize: destIndex, hash: hash) {
-                adopted.append((rec: rec, destPath: match))
+            if let match = findMatch(sizeBytes: rec.sizeBytes,
+                                     partialMD5: rec.partialMD5,
+                                     candidatesBySize: destIndex,
+                                     hash: hash) {
+                plan.adopted.append(AdoptedPlan(id: rec.id, destPath: match))
                 continue
             }
 
@@ -363,8 +539,8 @@ enum RelocateReconcile {
                         let safeCapped = Array(safe.prefix(maxWitnessSample))
                         let degradedCapped = Array(degraded.prefix(maxWitnessSample))
                         let auditPaths = safeCapped.map(\.path)
-                        safelyRedundant.append(SafelyRedundantEntry(
-                            rec: rec,
+                        plan.safelyRedundant.append(SafelyRedundantPlanEntry(
+                            id: rec.id,
                             witnesses: auditPaths,
                             totalWitnessCount: allWitnesses.count,
                             safeWitnesses: safeCapped,
@@ -382,30 +558,26 @@ enum RelocateReconcile {
             if let bytes = fileSize(at: rec.fullPath),
                bytes == rec.sizeBytes {
                 if rec.partialMD5.isEmpty || hash(rec.fullPath) == rec.partialMD5 {
-                    ready.append(rec)
+                    plan.readyIDs.append(rec.id)
                     continue
                 }
             }
 
             // Bucket C: same content moved elsewhere on the source.
-            if let match = findMatch(rec: rec, candidatesBySize: sourceIndex, hash: hash),
+            if let match = findMatch(sizeBytes: rec.sizeBytes,
+                                     partialMD5: rec.partialMD5,
+                                     candidatesBySize: sourceIndex,
+                                     hash: hash),
                match != rec.fullPath {
-                sourceSideMoves.append((rec: rec, newSourcePath: match))
+                plan.sourceSideMoves.append(SourceSideMovePlan(id: rec.id, newSourcePath: match))
                 continue
             }
 
             // Bucket B: gone with no plausible match anywhere we can see.
-            manuallyDeleted.append(rec)
+            plan.manuallyDeletedIDs.append(rec.id)
         }
 
-        return ReconcileResult(
-            ready: ready,
-            manuallyDeleted: manuallyDeleted,
-            sourceSideMoves: sourceSideMoves,
-            adopted: adopted,
-            safelyRedundant: safelyRedundant,
-            previouslyRelocated: previouslyRelocated
-        )
+        return plan
     }
 
     // MARK: - Internals
@@ -425,22 +597,23 @@ enum RelocateReconcile {
     }
 
     /// Among the size-indexed candidates whose byte count equals
-    /// `rec.sizeBytes`, return the first whose hash matches
-    /// `rec.partialMD5`. Returns nil if catalog has no stored hash AND
-    /// more than one same-sized candidate exists (ambiguous — refuse
-    /// to guess; safer to fall through to manuallyDeleted).
-    private static func findMatch(rec: VideoRecord,
+    /// `sizeBytes`, return the first whose hash matches `partialMD5`.
+    /// Returns nil if catalog has no stored hash AND more than one
+    /// same-sized candidate exists (ambiguous — refuse to guess; safer
+    /// to fall through to manuallyDeleted).
+    private static func findMatch(sizeBytes: Int64,
+                                  partialMD5: String,
                                   candidatesBySize: [Int64: [String]],
                                   hash: (String) -> String) -> String? {
-        guard let candidates = candidatesBySize[rec.sizeBytes], !candidates.isEmpty else {
+        guard let candidates = candidatesBySize[sizeBytes], !candidates.isEmpty else {
             return nil
         }
-        if rec.partialMD5.isEmpty {
+        if partialMD5.isEmpty {
             // Without a stored hash, only auto-accept when there's
             // exactly one size match — otherwise we'd be guessing.
             return candidates.count == 1 ? candidates[0] : nil
         }
-        for path in candidates where hash(path) == rec.partialMD5 {
+        for path in candidates where hash(path) == partialMD5 {
             return path
         }
         return nil

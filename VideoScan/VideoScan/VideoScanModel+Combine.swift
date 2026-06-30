@@ -246,7 +246,9 @@ extension VideoScanModel {
             return false
         }
 
-        let combinedRecord = await buildCombinedRecord(
+        // Build the Sendable spec off-actor; construct + stamp the
+        // (non-Sendable) VideoRecord on the main actor at the insertion point.
+        let combinedSpec = await buildCombinedRecord(
             outputURL: outURL, video: video, audio: audio, summary: verified.summary
         )
         await MainActor.run {
@@ -261,7 +263,9 @@ extension VideoScanModel {
                 }
             }
             self.log("    ✓ Verified: \(outURL.path) (\(verified.summary))")
-            if let rec = combinedRecord {
+            if let spec = combinedSpec {
+                let rec = VideoRecord()
+                rec.apply(spec)
                 self.records.append(rec)
                 self.log("    → Added to catalog for Archive")
             }
@@ -312,76 +316,81 @@ extension VideoScanModel {
         dashboard.combineJobs[index].isPaused.toggle()
     }
 
-    /// Build a catalog record for a successfully combined output file.
-    /// Inherits the star rating from the source pair and links back via combinedFromPairID.
+    /// Build the Sendable spec for a successfully combined output file.
+    /// Inherits the star rating from the source pair and links back via
+    /// combinedFromPairID. Runs entirely off the main actor — it only produces
+    /// the `CombinedRecordSpec` value; the `VideoRecord` itself is constructed
+    /// and stamped on the @MainActor side (see runMuxAndVerify) via
+    /// `VideoRecord.apply(spec)`. This keeps the non-Sendable VideoRecord off
+    /// the actor boundary (Seam A of the VideoRecord-Sendable restructure).
     nonisolated func buildCombinedRecord(
         outputURL: URL, video: VideoRecordSnapshot, audio: VideoRecordSnapshot, summary: String
-    ) async -> VideoRecord? {
+    ) async -> CombinedRecordSpec? {
         let (probe, _) = await CombineVerifier.runFFProbe(url: outputURL, ffprobePath: ffprobePath)
         guard let probe else { return nil }
         let fm = FileManager.default
         let attrs = try? fm.attributesOfItem(atPath: outputURL.path)
 
-        let rec = VideoRecord()
-        rec.filename = outputURL.lastPathComponent
-        rec.ext = outputURL.pathExtension.lowercased()
-        rec.fullPath = outputURL.path
-        rec.directory = outputURL.deletingLastPathComponent().path
-        rec.container = probe.format?.format_name ?? "mov"
-        rec.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        var spec = CombinedRecordSpec()
+        spec.filename = outputURL.lastPathComponent
+        spec.ext = outputURL.pathExtension.lowercased()
+        spec.fullPath = outputURL.path
+        spec.directory = outputURL.deletingLastPathComponent().path
+        spec.container = probe.format?.format_name ?? "mov"
+        spec.streamTypeRaw = StreamType.videoAndAudio.rawValue
 
         let bytes = (attrs?[.size] as? Int64) ?? Int64(probe.format?.size ?? "0") ?? 0
-        rec.sizeBytes = bytes
-        rec.size = Formatting.humanSize(bytes)
+        spec.sizeBytes = bytes
+        spec.size = Formatting.humanSize(bytes)
 
         let dur = Double(probe.format?.duration ?? "0") ?? 0
-        rec.durationSeconds = dur
-        rec.duration = Formatting.duration(dur)
+        spec.durationSeconds = dur
+        spec.duration = Formatting.duration(dur)
 
         let streams = probe.streams ?? []
         if let vs = streams.first(where: { $0.codec_type == "video" }) {
-            rec.videoCodec = vs.codec_name ?? ""
-            if let w = vs.width, let h = vs.height { rec.resolution = "\(w)x\(h)" } else { rec.resolution = "" }
-            rec.frameRate = vs.r_frame_rate ?? ""
-            rec.videoBitrate = vs.bit_rate ?? ""
-            rec.colorSpace = vs.color_space ?? ""
-            rec.bitDepth = vs.bits_per_raw_sample ?? ""
-            rec.scanType = vs.field_order ?? ""
+            spec.videoCodec = vs.codec_name ?? ""
+            if let w = vs.width, let h = vs.height { spec.resolution = "\(w)x\(h)" } else { spec.resolution = "" }
+            spec.frameRate = vs.r_frame_rate ?? ""
+            spec.videoBitrate = vs.bit_rate ?? ""
+            spec.colorSpace = vs.color_space ?? ""
+            spec.bitDepth = vs.bits_per_raw_sample ?? ""
+            spec.scanType = vs.field_order ?? ""
         }
         if let as_ = streams.first(where: { $0.codec_type == "audio" }) {
-            rec.audioCodec = as_.codec_name ?? ""
-            rec.audioChannels = as_.channels.map(String.init) ?? ""
-            rec.audioSampleRate = as_.sample_rate ?? ""
+            spec.audioCodec = as_.codec_name ?? ""
+            spec.audioChannels = as_.channels.map(String.init) ?? ""
+            spec.audioSampleRate = as_.sample_rate ?? ""
         }
 
-        rec.totalBitrate = probe.format?.bit_rate ?? ""
-        rec.isPlayable = "Yes"
-        rec.notes = "Combined: \(summary)"
+        spec.totalBitrate = probe.format?.bit_rate ?? ""
+        spec.isPlayable = "Yes"
+        spec.notes = "Combined: \(summary)"
 
         let dateFmt = ISO8601DateFormatter()
         dateFmt.formatOptions = [.withFullDate, .withTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
         // Reject impossible / 2040-sentinel dates per DateValidation.swift.
         if let created = pfDateOrNilIfImpossible(attrs?[.creationDate] as? Date) {
-            rec.dateCreatedRaw = created
-            rec.dateCreated = dateFmt.string(from: created)
+            spec.dateCreatedRaw = created
+            spec.dateCreated = dateFmt.string(from: created)
         }
         if let modified = pfDateOrNilIfImpossible(attrs?[.modificationDate] as? Date) {
-            rec.dateModifiedRaw = modified
-            rec.dateModified = dateFmt.string(from: modified)
+            spec.dateModifiedRaw = modified
+            spec.dateModified = dateFmt.string(from: modified)
         }
 
-        rec.mediaDisposition = .unreviewed
-        rec.archiveStage = .none
+        spec.mediaDisposition = .unreviewed
+        spec.archiveStage = .none
         // Newly-combined files start on the Workbench so the user can
         // spot-check them before promoting to the Archive. Without this,
         // every overnight Combine batch would silently sprinkle thousands
         // of new rows into the main Catalog with no way to distinguish
         // "I just made this" from "scanned six months ago".
-        rec.lifecycleStage = .workbench
-        rec.starRating = max(video.starRating, audio.starRating)
-        rec.combinedFromPairID = video.pairGroupID
+        spec.lifecycleStage = .workbench
+        spec.starRating = max(video.starRating, audio.starRating)
+        spec.combinedFromPairID = video.pairGroupID
 
-        return rec
+        return spec
     }
 
     func waitForJobPause(_ index: Int) async {

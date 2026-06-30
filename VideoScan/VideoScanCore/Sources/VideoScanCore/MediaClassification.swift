@@ -25,7 +25,7 @@ public enum StreamType: String, Codable {
 
 // MARK: - Pair Confidence
 
-public enum PairConfidence: String, Codable, Comparable {
+public enum PairConfidence: String, Codable, Comparable, Sendable {
     case high   = "High"
     case medium = "Medium"
     case low    = "Low"
@@ -38,7 +38,7 @@ public enum PairConfidence: String, Codable, Comparable {
 
 // MARK: - Duplicate Confidence
 
-public enum DuplicateConfidence: String, Codable, Comparable {
+public enum DuplicateConfidence: String, Codable, Comparable, Sendable {
     case high   = "High"
     case medium = "Medium"
     case low    = "Low"
@@ -49,7 +49,7 @@ public enum DuplicateConfidence: String, Codable, Comparable {
     }
 }
 
-public enum DuplicateDisposition: String, Codable {
+public enum DuplicateDisposition: String, Codable, Sendable {
     case none      = ""
     case keep      = "Keep"
     case review    = "Review"

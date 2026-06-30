@@ -189,7 +189,7 @@ struct ModelSchemaTests {
     func videoRecordFullRoundTrip() throws {
         let original = try Self.makeFullyPopulated()
 
-        let data = try Self.catalogEncoder().encode(original)
+        let data = try Self.catalogEncoder().encode(VideoRecordDTO(original))
         let decoded = try Self.catalogDecoder().decode(VideoRecord.self, from: data)
 
         // Sanity: the fixture really did populate things (guards against a

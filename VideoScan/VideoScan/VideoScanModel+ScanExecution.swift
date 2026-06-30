@@ -18,11 +18,12 @@ extension VideoScanModel {
     /// Probe a single URL and update the dashboard counters for one volume.
     /// Extracted from `runScanForTarget` / `runParallelScan` so the big scan
     /// methods stay below the SwiftLint function-body ceiling. Returns the
-    /// resulting VideoRecord — a `StreamType.ffprobeFailed` placeholder when
-    /// the task is cancelled.
+    /// resulting Sendable `ProbeOutcome` — a `StreamType.ffprobeFailed`
+    /// placeholder when the task is cancelled. The VideoRecord is materialized
+    /// later, at the main-actor drain points in the probe task groups.
     ///
-    /// - Parameter useTimeout: true → `probeFileWithTimeout` (per-target scan),
-    ///   false → `probeFile` (parallel multi-root scan).
+    /// - Parameter useTimeout: true → `probeFileWithTimeoutOutcome` (per-target
+    ///   scan), false → `probeFileOutcome` (parallel multi-root scan).
     /// - Parameter echoFilename: true → log `[vol] filename` before probing
     ///   (matches the old parallel-scan UX).
     func probeAndRecord(
@@ -34,14 +35,12 @@ extension VideoScanModel {
         skipHashing: Bool,
         useTimeout: Bool,
         echoFilename: Bool
-    ) async -> VideoRecord {
+    ) async -> ProbeOutcome {
         if Task.isCancelled {
-            return await MainActor.run {
-                let skip = VideoRecord()
-                skip.filename = url.lastPathComponent
-                skip.streamTypeRaw = StreamType.ffprobeFailed.rawValue
-                return skip
-            }
+            var skip = ProbeOutcome()
+            skip.filename = url.lastPathComponent
+            skip.probe.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+            return skip
         }
         await MainActor.run {
             if echoFilename {
@@ -49,9 +48,9 @@ extension VideoScanModel {
             }
             self.dashboard.recordScanFile(volume: volName, filename: url.lastPathComponent)
         }
-        let rec: VideoRecord
+        let outcome: ProbeOutcome
         if useTimeout {
-            rec = await self.probeFileWithTimeout(
+            outcome = await self.probeFileWithTimeoutOutcome(
                 url: url,
                 prefetchToRAM: rootIsNetwork,
                 ramPath: ramMountPoint,
@@ -59,7 +58,7 @@ extension VideoScanModel {
                 scanRootPath: root
             )
         } else {
-            rec = await self.probeFile(
+            outcome = await self.probeFileOutcome(
                 url: url,
                 prefetchToRAM: rootIsNetwork,
                 ramPath: ramMountPoint,
@@ -72,24 +71,24 @@ extension VideoScanModel {
             ds.scanCompleted += 1
             if let idx = ds.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
                 ds.volumeProgress[idx].completedFiles += 1
-                if rec.wasCacheHit {
+                if outcome.wasCacheHit {
                     ds.volumeProgress[idx].cacheHits += 1
                 }
-                if rec.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
+                if outcome.probe.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
                     ds.volumeProgress[idx].errors += 1
                 }
             }
-            if rec.wasCacheHit {
+            if outcome.wasCacheHit {
                 ds.scanCacheHits += 1
             } else {
                 ds.scanCacheMisses += 1
             }
-            if rec.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
+            if outcome.probe.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
                 ds.scanErrors += 1
             }
-            ds.liveStreamCounts[rec.streamTypeRaw, default: 0] += 1
+            ds.liveStreamCounts[outcome.probe.streamTypeRaw, default: 0] += 1
         }
-        return rec
+        return outcome
     }
 
     /// Process one probe result inside the per-target scan loop.

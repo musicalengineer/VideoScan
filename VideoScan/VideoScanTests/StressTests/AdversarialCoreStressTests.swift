@@ -157,7 +157,7 @@ struct AdversarialCoreStressTests {
         let snapshot = CatalogSnapshot(records: records, savedFromHost: "stress-\(worker)")
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(snapshot)
+        let data = try encoder.encode(CatalogSnapshotDTO(snapshot))
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601

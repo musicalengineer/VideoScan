@@ -69,7 +69,7 @@ struct RelocateSchemaTests {
         rec.originalFullPath = "/Volumes/Mini2TB/test.mov"
         rec.originVolume = "Mini2TB"
 
-        let data = try JSONEncoder().encode(rec)
+        let data = try JSONEncoder().encode(VideoRecordDTO(rec))
         let decoded = try JSONDecoder().decode(VideoRecord.self, from: data)
         #expect(decoded.originalFullPath == "/Volumes/Mini2TB/test.mov")
         #expect(decoded.originVolume == "Mini2TB")
@@ -85,7 +85,7 @@ struct RelocateSchemaTests {
         rec.filename = "fresh.mov"
         rec.fullPath = "/Volumes/Crucial2TB/fresh.mov"
 
-        let data = try JSONEncoder().encode(rec)
+        let data = try JSONEncoder().encode(VideoRecordDTO(rec))
         let json = try #require(String(data: data, encoding: .utf8))
         #expect(!json.contains("originalFullPath"))
         #expect(!json.contains("originVolume"))

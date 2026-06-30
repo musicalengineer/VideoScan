@@ -31,7 +31,7 @@ struct BundleImportLegacyManifestTests {
                                       savedAt: Date(),
                                       records: [],
                                       savedFromHost: "test-host")
-        try encoder.encode(catalog)
+        try encoder.encode(CatalogSnapshotDTO(catalog))
             .write(to: tmp.appendingPathComponent("catalog.json"))
 
         let volumes = VolumesSnapshot(version: 1, savedAt: Date(), volumes: [])

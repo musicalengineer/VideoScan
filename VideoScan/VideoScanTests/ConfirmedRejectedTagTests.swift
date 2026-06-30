@@ -25,7 +25,7 @@ struct ConfirmedRejectedTagSchemaTests {
         r.filename = "IMG_4521.MOV"
         r.confirmedByUserPeople = [ConfirmedTag(name: "Donna", confirmedAt: d)]
 
-        let data = try JSONEncoder().encode(r)
+        let data = try JSONEncoder().encode(VideoRecordDTO(r))
         let decoded = try JSONDecoder().decode(VideoRecord.self, from: data)
 
         #expect(decoded.confirmedByUserPeople.count == 1)
@@ -42,7 +42,7 @@ struct ConfirmedRejectedTagSchemaTests {
             ConfirmedTag(name: "Matt", confirmedAt: d2)
         ]
 
-        let data = try JSONEncoder().encode(r)
+        let data = try JSONEncoder().encode(VideoRecordDTO(r))
         let decoded = try JSONDecoder().decode(VideoRecord.self, from: data)
 
         #expect(decoded.confirmedByUserPeople.count == 2)
@@ -53,7 +53,7 @@ struct ConfirmedRejectedTagSchemaTests {
         let r = VideoRecord()
         r.rejectedPeople = ["Anna", "Tim"]
 
-        let data = try JSONEncoder().encode(r)
+        let data = try JSONEncoder().encode(VideoRecordDTO(r))
         let decoded = try JSONDecoder().decode(VideoRecord.self, from: data)
 
         #expect(decoded.rejectedPeople == ["Anna", "Tim"])
@@ -64,7 +64,7 @@ struct ConfirmedRejectedTagSchemaTests {
     @Test func emptyConfirmedTagsNotEncodedInJSON() throws {
         let r = VideoRecord()
         // Don't set confirmedByUserPeople — stays empty default
-        let data = try JSONEncoder().encode(r)
+        let data = try JSONEncoder().encode(VideoRecordDTO(r))
         let json = String(data: data, encoding: .utf8) ?? ""
         // The catalog.json delta-minimal pattern: missing arrays are
         // not present in the JSON. Old records pre-confirmedByUserPeople
@@ -75,7 +75,7 @@ struct ConfirmedRejectedTagSchemaTests {
 
     @Test func emptyRejectedPeopleNotEncodedInJSON() throws {
         let r = VideoRecord()
-        let data = try JSONEncoder().encode(r)
+        let data = try JSONEncoder().encode(VideoRecordDTO(r))
         let json = String(data: data, encoding: .utf8) ?? ""
         #expect(!json.contains("rejectedPeople"),
                 "Empty rejectedPeople should not appear in JSON")

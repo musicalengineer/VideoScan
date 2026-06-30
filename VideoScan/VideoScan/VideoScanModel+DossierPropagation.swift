@@ -123,6 +123,11 @@ extension VideoScanModel {
     }
 
     // MARK: - Pure "best wins" selectors (testable)
+    //
+    // `@MainActor static`: stateless, but they read `VideoRecord` fields,
+    // which is main-actor work. Callers (`propagateBestDossier`, the
+    // MainActor test suite) already run on the main actor, so this is a
+    // compile-time contract only — no runtime behavior change.
 
     struct BestTranscript: Equatable {
         let text: String
@@ -145,7 +150,7 @@ extension VideoScanModel {
     /// the propagated copy is honestly attributed to the run that made
     /// it. Returns nil when no member has a non-empty transcript
     /// (nothing worth propagating).
-    nonisolated static func bestAudioTranscript(in group: [VideoRecord]) -> BestTranscript? {
+    @MainActor static func bestAudioTranscript(in group: [VideoRecord]) -> BestTranscript? {
         var best: BestTranscript?
         for rec in group {
             guard let tx = rec.audioTranscript, !tx.isEmpty else { continue }
@@ -163,7 +168,7 @@ extension VideoScanModel {
     /// Best scene captions = largest count of captions, tiebreak on
     /// total text length. More scenes captured + more text per scene =
     /// more search signal. Nil when nobody has captions.
-    nonisolated static func bestSceneCaptions(in group: [VideoRecord]) -> BestCaptions? {
+    @MainActor static func bestSceneCaptions(in group: [VideoRecord]) -> BestCaptions? {
         var best: BestCaptions?
         var bestScore = -1
         for rec in group {
@@ -188,7 +193,7 @@ extension VideoScanModel {
 
     /// Best OCR text = largest count, tiebreak on total text length.
     /// Same shape as scene captions. Nil when nobody has OCR text.
-    nonisolated static func bestOCRText(in group: [VideoRecord]) -> BestOCREntries? {
+    @MainActor static func bestOCRText(in group: [VideoRecord]) -> BestOCREntries? {
         var best: BestOCREntries?
         var bestScore = -1
         for rec in group {
@@ -206,7 +211,7 @@ extension VideoScanModel {
     /// Best OCR date candidates = largest count, tiebreak on total
     /// text length. Same shape as OCR text. Nil when nobody has
     /// OCR date candidates.
-    nonisolated static func bestOCRDateCandidates(in group: [VideoRecord]) -> BestOCREntries? {
+    @MainActor static func bestOCRDateCandidates(in group: [VideoRecord]) -> BestOCREntries? {
         var best: BestOCREntries?
         var bestScore = -1
         for rec in group {

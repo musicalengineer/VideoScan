@@ -114,7 +114,7 @@ struct SceneCaptionsTests {
         r.sceneCaptionDate = Date(timeIntervalSince1970: 1_716_000_000)
         let snap = CatalogSnapshot(records: [r])
 
-        let data = try JSONEncoder().encode(snap)
+        let data = try JSONEncoder().encode(CatalogSnapshotDTO(snap))
         let decoded = try JSONDecoder().decode(CatalogSnapshot.self, from: data)
 
         #expect(decoded.version == 6)
@@ -139,7 +139,7 @@ struct SceneCaptionsTests {
         r.fullPath = "/v/untouched.mov"
         r.filename = "untouched.mov"
 
-        let data = try JSONEncoder().encode(r)
+        let data = try JSONEncoder().encode(VideoRecordDTO(r))
         let json = String(data: data, encoding: .utf8) ?? ""
 
         #expect(!json.contains("sceneCaptions"))

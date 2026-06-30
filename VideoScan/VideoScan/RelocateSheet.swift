@@ -434,19 +434,24 @@ struct RelocateSheet: View {
     private func runPreview() {
         guard let dest = destinationFolder else { return }
         let scope = scopedRecords
-        let allRecords = model.records          // value-type (COW) snapshot — cheap
+        // Seam D — project the records the classify pass reads into Sendable
+        // inputs HERE on the main actor (the enclosing Task inherits MainActor),
+        // so no VideoRecord crosses into the detached task. `scope` stays on
+        // main and is used to re-materialize the id-keyed plan afterwards.
+        let scopeInputs = scope.map(\.asReconcileInput)
+        let witnessInputs = model.records.map(\.asReconcileInput)
         let src = sourceVolumePath
         let skipDups = skipDupsOnOtherVolumes
 
         previewTask?.cancel()
         isPreviewing = true
         previewTask = Task {
-            let result = await Task.detached(priority: .userInitiated) { () -> ReconcileResult in
+            let plan = await Task.detached(priority: .userInitiated) { () -> ReconcilePlan in
                 let sourceFiles = Self.enumerateFiles(at: src)
                 let destFiles = Self.enumerateFiles(at: dest.path)
-                return RelocateReconcile.reconcile(
-                    records: scope,
-                    allCatalogRecords: allRecords,
+                return RelocateReconcile.reconcilePlan(
+                    records: scopeInputs,
+                    witnesses: witnessInputs,
                     sourceVolumeRootPath: src,
                     destinationRoot: dest,
                     sourceFiles: sourceFiles,
@@ -456,7 +461,7 @@ struct RelocateSheet: View {
                 )
             }.value
             if Task.isCancelled { return }   // superseded by a newer preview/invalidation
-            previewResult = result
+            previewResult = RelocateReconcile.materialize(plan, scope: scope)
             isPreviewing = false
         }
     }

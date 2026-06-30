@@ -28,7 +28,7 @@ struct DossierSchemaTests {
             SceneCaption(timestamp: 2.4, text: "JUN.21 1991"),
             SceneCaption(timestamp: 7.3, text: "PM11:30 JUN.21 1991")
         ]
-        let data = try JSONEncoder().encode(r)
+        let data = try JSONEncoder().encode(VideoRecordDTO(r))
         let decoded = try JSONDecoder().decode(VideoRecord.self, from: data)
         #expect(decoded.ocrDateCandidates.count == 2)
         #expect(decoded.ocrDateCandidates[0].text == "JUN.21 1991")
@@ -38,7 +38,7 @@ struct DossierSchemaTests {
     @Test func ocrTextRoundTrip() throws {
         let r = VideoRecord()
         r.ocrText = [SceneCaption(timestamp: 0.0, text: "PLAY")]
-        let data = try JSONEncoder().encode(r)
+        let data = try JSONEncoder().encode(VideoRecordDTO(r))
         let decoded = try JSONDecoder().decode(VideoRecord.self, from: data)
         #expect(decoded.ocrText.count == 1)
         #expect(decoded.ocrText[0].text == "PLAY")
@@ -49,7 +49,7 @@ struct DossierSchemaTests {
         let ts = Date(timeIntervalSince1970: 677462400)   // 1991-06-21
         r.inferredRecordDate = ts
         r.inferredDateConfidence = 0.95
-        let data = try JSONEncoder().encode(r)
+        let data = try JSONEncoder().encode(VideoRecordDTO(r))
         let decoded = try JSONDecoder().decode(VideoRecord.self, from: data)
         #expect(decoded.inferredRecordDate == ts)
         #expect(decoded.inferredDateConfidence == 0.95)
@@ -60,7 +60,7 @@ struct DossierSchemaTests {
         let when = Date(timeIntervalSince1970: 1749100000)
         r.dossierProcessedAt = when
         r.dossierProcessedBy = "qwen2.5-vl-3b-4bit+whisper-medium-mlx-q4"
-        let data = try JSONEncoder().encode(r)
+        let data = try JSONEncoder().encode(VideoRecordDTO(r))
         let decoded = try JSONDecoder().decode(VideoRecord.self, from: data)
         #expect(decoded.dossierProcessedAt == when)
         #expect(decoded.dossierProcessedBy == "qwen2.5-vl-3b-4bit+whisper-medium-mlx-q4")
@@ -70,7 +70,7 @@ struct DossierSchemaTests {
     // catalog.json for the 13,569 records that haven't been processed.
     @Test func emptyDossierFieldsAreOmittedFromJSON() throws {
         let r = VideoRecord()
-        let data = try JSONEncoder().encode(r)
+        let data = try JSONEncoder().encode(VideoRecordDTO(r))
         let json = String(data: data, encoding: .utf8) ?? ""
         #expect(!json.contains("ocrDateCandidates"))
         #expect(!json.contains("ocrText"))

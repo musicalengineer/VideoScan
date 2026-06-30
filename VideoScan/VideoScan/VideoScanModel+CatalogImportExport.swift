@@ -43,7 +43,10 @@ extension VideoScanModel {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(snapshot)
+        // Encode through the Sendable DTO — VideoRecord is Decodable-only
+        // (step 5b); CatalogSnapshotDTO owns the single encoder and is
+        // byte-identical to the former CatalogSnapshot encoding.
+        let data = try encoder.encode(CatalogSnapshotDTO(snapshot))
         try data.write(to: url, options: .atomic)
         if excluded > 0 {
             log("Exported \(activeRecords.count) records (\(excluded) removed records excluded)")
@@ -180,7 +183,12 @@ extension VideoScanModel {
     /// Find the set of record IDs that should be shown when navigating from
     /// Archive to Catalog for a given record. In pair mode, includes both the
     /// record and its partner (via `pairedWith` or `pairGroupID` fallback).
-    nonisolated static func catalogFilterIDs(for recordID: UUID, pairMode: Bool, in records: [VideoRecord]) -> Set<UUID> {
+    // `@MainActor static`: reads `VideoRecord` (`id`, `pairedWith`,
+    // `pairGroupID`), so it's main-actor work. Production callers
+    // (`ContentView`) are MainActor views; the boundary/navigation test
+    // suites are pinned `@MainActor` to match. Returns plain `UUID`s —
+    // no `VideoRecord` escapes.
+    @MainActor static func catalogFilterIDs(for recordID: UUID, pairMode: Bool, in records: [VideoRecord]) -> Set<UUID> {
         guard let rec = records.first(where: { $0.id == recordID }) else {
             return [recordID]
         }
@@ -221,7 +229,11 @@ extension VideoScanModel {
 
     /// Find online content-identical copies of an offline record.
     /// Matches on partialMD5 + sizeBytes (byte-identical) only — no fuzzy matching.
-    nonisolated static func findOnlineSubstitutes(
+    /// `@MainActor static`: reads `VideoRecord` and returns `VideoRecord`
+    /// substitutes (so a snapshot signature can't carry the result back).
+    /// Production callers (`CombineSheet`) are MainActor views; the
+    /// substitute test suites are pinned `@MainActor` to match.
+    @MainActor static func findOnlineSubstitutes(
         for record: VideoRecord,
         in allRecords: [VideoRecord]
     ) -> [OnlineSubstitute] {

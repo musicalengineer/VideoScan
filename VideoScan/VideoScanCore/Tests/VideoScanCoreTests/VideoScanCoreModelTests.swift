@@ -172,7 +172,7 @@ struct VideoScanCoreModelTests {
     func videoRecordFullRoundTrip() throws {
         let original = try Self.makeFullyPopulated()
 
-        let data = try Self.catalogEncoder().encode(original)
+        let data = try Self.catalogEncoder().encode(VideoRecordDTO(original))
         let decoded = try Self.catalogDecoder().decode(VideoRecord.self, from: data)
 
         // Sanity: the fixture really populated (guards a JSON-literal typo

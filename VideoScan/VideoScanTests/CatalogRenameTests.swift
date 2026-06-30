@@ -99,7 +99,7 @@ struct CatalogRenameTests {
         let snap = CatalogSnapshot(records: model.records)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        let data = try encoder.encode(snap)
+        let data = try encoder.encode(CatalogSnapshotDTO(snap))
 
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
