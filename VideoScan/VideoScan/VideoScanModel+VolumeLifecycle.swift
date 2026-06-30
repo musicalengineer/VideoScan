@@ -183,7 +183,7 @@ extension VideoScanModel {
             target.status = .idle
         }
         let before = records.count
-        records.removeAll { $0.fullPath.hasPrefix(path) }
+        records.removeAll { PathScope.contains($0.fullPath, within: path) } // regression: codex C2
         let removed = before - records.count
         // If any of the banner-tracked rows lived on this volume, the
         // banner's Undo would now skip them — drop the banner to avoid the

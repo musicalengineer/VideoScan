@@ -177,7 +177,7 @@ extension VideoScanModel {
     @MainActor
     func snapshotPreservedFieldsForRescan(of target: CatalogScanTarget) {
         var map: [String: RescanPreservedFields] = [:]
-        for rec in records where rec.fullPath.hasPrefix(target.searchPath) {
+        for rec in records where PathScope.contains(rec.fullPath, within: target.searchPath) { // regression: codex C2
             let snap = RescanPreservedFields(from: rec)
             if snap.isWorthRestoring {
                 map[rec.fullPath] = snap

@@ -56,23 +56,23 @@ extension VideoScanModel {
         isDeletingDuplicates = true
         defer { isDeletingDuplicates = false }
 
-        let prefix = volumePath.hasSuffix("/") ? volumePath : volumePath + "/"
-
         // Build keeper lookup: groupID → keeper record
         let keepers = keepersByGroupID()
 
-        // Only target extra copies whose keeper is on the same volume
+        // Only target extra copies whose keeper is on the same volume.
+        // Component-boundary scoping (PathScope) so a sibling volume can
+        // never be swept into a destructive file deletion. // regression: codex C2
         let targets = records.filter { rec in
             guard rec.duplicateDisposition == .extraCopy,
-                  rec.fullPath.hasPrefix(prefix),
+                  PathScope.contains(rec.fullPath, within: volumePath),
                   let groupID = rec.duplicateGroupID,
                   let keeper = keepers[groupID] else { return false }
-            return keeper.fullPath.hasPrefix(prefix)
+            return PathScope.contains(keeper.fullPath, within: volumePath)
         }
 
         let skippedCount = records.filter { rec in
             rec.duplicateDisposition == .extraCopy &&
-            rec.fullPath.hasPrefix(prefix) &&
+            PathScope.contains(rec.fullPath, within: volumePath) &&
             !targets.contains(where: { $0.id == rec.id })
         }.count
 
@@ -161,8 +161,7 @@ extension VideoScanModel {
         }
         // For non-/Volumes paths, use the scan target root that contains it
         for target in scanTargets {
-            let prefix = target.searchPath.hasSuffix("/") ? target.searchPath : target.searchPath + "/"
-            if path.hasPrefix(prefix) || path == target.searchPath {
+            if PathScope.contains(path, within: target.searchPath) { // regression: codex C2
                 return target.searchPath
             }
         }

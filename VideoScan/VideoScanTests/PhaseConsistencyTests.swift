@@ -209,7 +209,13 @@ struct PhaseConsistencyTests {
         #expect(repaired == 0)
     }
 
-    @Test func repairIgnoresSubstringMatchNotPrefix() {
+    // regression: codex C2 — phase repair must scope on a component boundary.
+    // Previously this documented a defect: "/Volumes/Volume99/a.mov" was
+    // treated as living under "/Volumes/Vol" via raw hasPrefix, so the
+    // unrelated "/Volumes/Vol" target got falsely repaired to .cataloged.
+    // PathScope.contains rejects the sibling-prefix match, so no repair
+    // happens — assert the corrected behavior.
+    @Test func repairIgnoresSiblingPrefixNotComponentBoundary() {
         let model = VideoScanModel()
         model.scanTargets.removeAll()
         let target = CatalogScanTarget(searchPath: "/Volumes/Vol")
@@ -218,10 +224,10 @@ struct PhaseConsistencyTests {
         model.scanTargets = [target]
         model.records = [rec]
         let repaired = model.repairCorruptedPhases()
-        // "/Volumes/Volume99/a.mov".hasPrefix("/Volumes/Vol") is true — this is a known
-        // prefix-match limitation. Document it: the current implementation treats /Vol as
-        // a prefix of /Volume99. If this becomes a problem, match with trailing /.
-        #expect(repaired == 1)
+        // "/Volumes/Volume99/a.mov" is NOT under "/Volumes/Vol" — different
+        // volumes that merely share a name prefix. No phase should change.
+        #expect(repaired == 0)
+        #expect(target.phase == .noCatalog)
     }
 
     @Test func repairHandlesSlashTerminatedSearchPath() {

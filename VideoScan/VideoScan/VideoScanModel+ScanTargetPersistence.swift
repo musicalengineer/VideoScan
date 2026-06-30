@@ -63,7 +63,7 @@ extension VideoScanModel {
     /// deleted or lost — reset to NO CATALOG so the UI doesn't lie.
     func enforcePhaseConsistency() {
         for t in scanTargets where t.phase == .cataloged {
-            let hasRecords = records.contains { $0.fullPath.hasPrefix(t.searchPath) }
+            let hasRecords = records.contains { PathScope.contains($0.fullPath, within: t.searchPath) } // regression: codex C2
             if !hasRecords {
                 t.phase = .noCatalog
                 t.lastScannedDate = nil
@@ -79,7 +79,7 @@ extension VideoScanModel {
         guard !records.isEmpty else { return 0 }
         var repaired = 0
         for t in scanTargets where t.phase == .noCatalog && !t.searchPath.isEmpty {
-            if records.contains(where: { $0.fullPath.hasPrefix(t.searchPath) }) {
+            if records.contains(where: { PathScope.contains($0.fullPath, within: t.searchPath) }) { // regression: codex C2
                 t.phase = .cataloged
                 repaired += 1
             }

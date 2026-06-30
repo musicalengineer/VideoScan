@@ -22,7 +22,7 @@ extension VideoScanModel {
     func verifyCatalog(for target: CatalogScanTarget) {
         let root = target.searchPath
         let volName = URL(fileURLWithPath: root).lastPathComponent
-        let volumeRecords = records.filter { $0.fullPath.hasPrefix(root) }
+        let volumeRecords = records.filter { PathScope.contains($0.fullPath, within: root) } // regression: codex C2
 
         guard !volumeRecords.isEmpty else {
             log("No catalog records for \(volName) — nothing to verify")

@@ -613,7 +613,7 @@ final class VideoScanModel: ObservableObject {
         target.reset()
         clearCacheForTarget(target)
         // Also drop in-memory records that came from this target so the table reflects the reset
-        records.removeAll { $0.fullPath.hasPrefix(target.searchPath) }
+        records.removeAll { PathScope.contains($0.fullPath, within: target.searchPath) } // regression: codex C2
     }
 
     // MARK: - Probe-cache count (memoized)
