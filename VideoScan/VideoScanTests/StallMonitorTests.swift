@@ -229,6 +229,48 @@ struct StallMonitorTests {
         #expect(m.lifecycleCountersForTesting.tokensEnded == 1)
     }
 
+    // MARK: stop() atomicity — interleaved stop()/start() must not leak a
+    // token (harden-jul01 QA follow-up)
+    //
+    // Regression for the stop() half of the same TOCTOU family: stop() used
+    // TWO separate lock acquisitions (clear pollTask, then endActivityToken).
+    // A start() racing into the gap sees pollTask == nil, begins token #2
+    // overwriting still-live token #1 (leaked — App Nap suppressed forever),
+    // and stop()'s tail then ends token #2 — leaving the NEW poll loop
+    // running with no power assertion. Observable as tokensEnded <
+    // tokensBegun after the final stop().
+
+    @Test func interleavedStopStartPairsNeverLeakToken() {
+        // Same hammer shape as concurrentStartsSpawnExactlyOneLoopAndOneToken:
+        // genuinely parallel threads via concurrentPerform. Half the threads
+        // call stop(), half call start(), against a monitor that begins
+        // running — maximizing traffic through stop()'s window between its
+        // lock releases. A correct monitor balances every begun token with an
+        // ended one once the final (quiescent) stop() lands, and holds no
+        // loop handle.
+        for round in 0..<50 {
+            let m = StallMonitor(label: "stop-race-test",
+                                 thresholdSeconds: 60,
+                                 pollIntervalSeconds: 0.02,
+                                 clock: { 0 },
+                                 onStall: { _ in })
+            m.start()
+            DispatchQueue.concurrentPerform(iterations: 16) { i in
+                if i % 2 == 0 {
+                    m.stop()
+                } else {
+                    m.start()
+                }
+            }
+            m.stop()   // final, uncontended stop — must fully quiesce
+            let c = m.lifecycleCountersForTesting
+            #expect(c.tokensEnded == c.tokensBegun,
+                    "round \(round): begun \(c.tokensBegun) ended \(c.tokensEnded) — activity token leaked by stop()/start() interleave")
+            #expect(!m.isRunningForTesting,
+                    "round \(round): poll-loop handle still held after final stop()")
+        }
+    }
+
     @Test func restartAfterStopSpawnsFreshLoopAndToken() {
         // stop() must fully reset so a later start() works — pins that the
         // fix didn't turn "idempotent while running" into "once, ever".

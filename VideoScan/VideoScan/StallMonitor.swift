@@ -255,13 +255,30 @@ final class StallMonitor: @unchecked Sendable {
     /// Stop watching: cancel the poll loop and release the power assertion.
     /// Idempotent — safe to call from a `defer` after a normally-completing
     /// op as well as after a stall.
+    ///
+    /// `pollTask` and `activityToken` are captured-and-cleared in ONE
+    /// critical section, mirroring `start()`. (The earlier version used two
+    /// separate lock holds — clear `pollTask`, then a second lock inside
+    /// `endActivityToken()`. A `start()` racing into the gap saw
+    /// `pollTask == nil`, began token #2 overwriting still-live token #1 —
+    /// leaked, App Nap suppressed forever — and this tail then ended
+    /// token #2, leaving the new poll loop running with no assertion.
+    /// Pinned by `interleavedStopStartPairsNeverLeakToken`.) The cancel and
+    /// `endActivity` side effects run outside the lock; neither re-enters
+    /// the monitor.
     func stop() {
         lock.lock()
         let task = pollTask
         pollTask = nil
+        let token = activityToken
+        activityToken = nil
+        if token != nil { activityTokensEnded += 1 }
         lock.unlock()
         task?.cancel()
-        endActivityToken()
+        if let token {
+            ProcessInfo.processInfo.endActivity(token)
+            stallLog.info("power assertion released (\(self.label, privacy: .public))")
+        }
     }
 
     // MARK: Power assertion (#7 optional — taken/released are logged)
@@ -274,19 +291,9 @@ final class StallMonitor: @unchecked Sendable {
     // automatically-terminated out from under us). The hardware is still
     // free to sleep — and the watchdog is exactly what makes that safe.
     //
-    // Acquisition lives inline in `start()` (same critical section as the
-    // running-check); release stays here for `stop()`.
-
-    private func endActivityToken() {
-        lock.lock()
-        let token = activityToken
-        activityToken = nil
-        if token != nil { activityTokensEnded += 1 }
-        lock.unlock()
-        guard let token else { return }
-        ProcessInfo.processInfo.endActivity(token)
-        stallLog.info("power assertion released (\(self.label, privacy: .public))")
-    }
+    // Acquisition lives inline in `start()` and release inline in `stop()` —
+    // each inside the SAME critical section as its `pollTask` transition, so
+    // the token and the loop handle can never disagree about lifecycle.
 
     // MARK: Post-mortem attribution (#6.4)
 
