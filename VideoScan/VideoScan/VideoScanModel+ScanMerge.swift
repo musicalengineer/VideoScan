@@ -40,6 +40,15 @@ import os
 //     including when the volume unmounts in the millisecond window BETWEEN
 //     the root check and the per-record loop (a 100%-gone non-trivial
 //     vanished set triggers one root re-check before any pruning).
+//   - Move/rename identity (feature/move-rename-identity): a complete
+//     scan's ADDED files are fingerprint-matched (partialMD5 + sizeBytes)
+//     against gone/absent records — same-root genuinely-gone first, then
+//     catalog records outside the root whose file is proven off-disk. A
+//     match RELOCATES the old record (id, dossier, curation, pair refs
+//     survive) instead of prune-here + stranger-there, and is excluded
+//     from the tripwire's prune count (a folder reorganize is not a mass
+//     deletion). Candidates whose file still exists are COPIES — never
+//     adopted. See VideoScanModel+ScanMergeMoveIdentity.swift.
 //   - Mass-deletion tripwire (defense in depth): a complete scan whose
 //     merge would remove MORE THAN 50 records AND MORE THAN 20% of the
 //     existing records under the root first snapshots catalog.json to a
@@ -65,9 +74,19 @@ struct ScanMergeOutcome: Equatable {
     /// Old records under the root removed because their file is GENUINELY
     /// gone from disk (complete scans only; existence-checked).
     var pruned: Int = 0
+    /// Records that FOLLOWED THEIR FILES to new locations (complete scans
+    /// only): an added path fingerprint-matched a gone/absent record, so the
+    /// old record was relocated in place — id, dossier, user curation, and
+    /// pair references preserved — instead of prune-here + stranger-there.
+    /// Never counted in `pruned`, and excluded from the tripwire's judgment
+    /// (a mass folder reorganize is not a mass deletion). See
+    /// VideoScanModel+ScanMergeMoveIdentity.swift.
+    var moved: Int = 0
     /// Fresh records committed under the root: same-path refreshes PLUS
     /// genuinely new paths (i.e. every record in `targetRecords`). The
-    /// overlap is `refreshed`; genuinely-new = `upserted - refreshed`.
+    /// overlap is `refreshed`; `moved` is the subset of new paths that
+    /// landed by relocating an existing record instead of a fresh insert;
+    /// genuine strangers = `upserted - refreshed - moved`.
     /// (Was `added`, which silently double-counted the refreshed set.)
     var upserted: Int = 0
     /// Old records under the root kept even though the scan didn't re-see
@@ -178,31 +197,12 @@ extension VideoScanModel {
         targetRecords: [VideoRecord],
         scanWasComplete: Bool
     ) async -> ScanMergeOutcome {
+        guard scanWasComplete else {
+            return mergePartialScanResults(root: root, volName: volName, targetRecords: targetRecords)
+        }
         var outcome = ScanMergeOutcome()
         let newPaths = Set(targetRecords.map(\.fullPath))
         outcome.upserted = targetRecords.count
-
-        guard scanWasComplete else {
-            // Partial scan (aborted mid-probe). Evidence is incomplete, so
-            // pruning is forbidden: replace only the paths the scan actually
-            // re-saw, keep everything else under the root. No suspension on
-            // this path — no existence checks are needed when nothing is
-            // ever pruned.
-            let existingUnderRoot = records.filter { PathScope.contains($0.fullPath, within: root) }
-            let vanished = existingUnderRoot.filter { !newPaths.contains($0.fullPath) }
-            outcome.refreshed = existingUnderRoot.count - vanished.count
-            outcome.retainedStale = vanished.count
-            records.removeAll {
-                PathScope.contains($0.fullPath, within: root) && newPaths.contains($0.fullPath)
-            }
-            records.append(contentsOf: targetRecords)
-            if !vanished.isEmpty {
-                log("  ⚠ Scan of \(volName) did not complete — kept \(vanished.count) existing record(s) under \(root) that were not re-verified (no pruning on partial scans).")
-            }
-            scanMergeLog.notice("Partial-scan merge for \(volName, privacy: .public): +\(targetRecords.count) upserted, \(vanished.count) stale retained under \(root, privacy: .public)")
-            appLog.write("Catalog merge (\(volName), PARTIAL): \(targetRecords.count) upserted, \(vanished.count) stale retained, 0 pruned")
-            return outcome
-        }
 
         // Complete scan. "Not re-seen" conflates two very different things:
         // the file was DELETED from disk (prune — correct), and the file is
@@ -227,13 +227,25 @@ extension VideoScanModel {
                   !newPaths.contains(rec.fullPath) else { return nil }
             return rec.fullPath
         }
+        // Move/rename identity (2026-07-02): outside-root records whose
+        // fingerprint matches one of this scan's added files are cross-root
+        // MOVE candidates — but only if their file is genuinely gone from
+        // its old location, which is blocking I/O to find out. Hoisted as
+        // plain paths here; statted on the SAME detached task below (the
+        // merge keeps its ONE suspension point); match decisions are
+        // re-derived post-await. See VideoScanModel+ScanMergeMoveIdentity.
+        let moveCandidatePathsPreAwait = hoistOutsideRootMoveCandidatePaths(
+            root: root, targetRecords: targetRecords)
         let afterRootCheck = scanMergeAfterRootCheckForTesting
         let evidenceTask = Task.detached(priority: .userInitiated) {
-            Self.gatherScanMergeExistenceEvidence(
+            let existence = Self.gatherScanMergeExistenceEvidence(
                 root: root, vanishedPaths: vanishedPathsPreAwait, afterRootCheck: afterRootCheck)
+            let moveCandidateExists = Self.gatherMoveCandidateExistenceEvidence(
+                paths: moveCandidatePathsPreAwait)
+            return (existence, moveCandidateExists)
         }
         if let hook = scanMergeDuringExistenceChecksForTesting { await hook() }
-        let evidence = await evidenceTask.value
+        let (evidence, moveCandidateExists) = await evidenceTask.value
 
         // ATOMICITY RE-DERIVATION (QA correctness constraint, 2026-07-02):
         // the await above is the merge's ONE suspension point, and `records`
@@ -268,6 +280,27 @@ extension VideoScanModel {
         } else {
             retainedInvisible = vanished
         }
+
+        // MOVE / RENAME IDENTITY (2026-07-02): fingerprint-match this scan's
+        // added files against (a) the genuinely-gone set (same-root rename)
+        // and (b) outside-root records whose file the detached sweep proved
+        // gone (cross-root move). Derivation runs against the CURRENT
+        // records array (same post-await re-derivation discipline as the
+        // prune path); a candidate with no stat evidence is never adopted.
+        // Matched candidates are RELOCATIONS, not deletions — pull them out
+        // of genuinelyGone BEFORE the tripwire judges the prune count, so a
+        // whole-folder reorganize can't fire the mass-deletion tripwire.
+        let adoptions = deriveMoveAdoptions(
+            root: root,
+            targetRecords: targetRecords,
+            existingPathsUnderRoot: Set(existingUnderRoot.map(\.fullPath)),
+            genuinelyGone: genuinelyGone,
+            outsideRootCandidateExists: moveCandidateExists)
+        if !adoptions.isEmpty {
+            let adoptedOldPaths = Set(adoptions.values)
+            genuinelyGone.removeAll { adoptedOldPaths.contains($0.fullPath) }
+        }
+        outcome.moved = adoptions.count
         outcome.pruned = genuinelyGone.count
         outcome.retainedInvisible = retainedInvisible.count
 
@@ -292,15 +325,61 @@ extension VideoScanModel {
         // Remove only what the scan re-saw (replaced by the fresh instance)
         // or what is genuinely gone from disk — retained-invisible records
         // stay untouched (original instances, so their dossier/user fields
-        // never even need restoring).
+        // never even need restoring). Adopted candidates survive this sweep
+        // by construction: their CURRENT path is the old one (updated only
+        // below), which is neither re-seen nor in the (post-exclusion) gone
+        // set, and cross-root candidates aren't under the root at all.
         let gonePaths = Set(genuinelyGone.map(\.fullPath))
         records.removeAll {
             PathScope.contains($0.fullPath, within: root)
                 && (newPaths.contains($0.fullPath) || gonePaths.contains($0.fullPath))
         }
+        // Adopted paths are NOT appended: the moved file's record is the OLD
+        // instance, relocated in place right after — its id survives, so
+        // pairedWith references from other records keep resolving.
+        if adoptions.isEmpty {
+            records.append(contentsOf: targetRecords)
+        } else {
+            let adoptedNewPaths = Set(adoptions.keys)
+            records.append(contentsOf: targetRecords.filter { !adoptedNewPaths.contains($0.fullPath) })
+            applyMoveAdoptions(adoptions, targetRecords: targetRecords)
+            // ONE summary line per merge (fa24921) — never per-record spam.
+            log("  ↪ \(adoptions.count) record(s) followed their files to new locations (rename/move detected — catalog identity, dossier and tags preserved).")
+        }
+        scanMergeLog.info("Scan merge for \(volName, privacy: .public): +\(targetRecords.count) upserted (\(outcome.refreshed) refreshed), \(genuinelyGone.count) pruned, \(adoptions.count) moved, \(retainedInvisible.count) retained-invisible under \(root, privacy: .public)")
+        appLog.write("Catalog merge (\(volName)): \(targetRecords.count) upserted (\(outcome.refreshed) refreshed), \(genuinelyGone.count) pruned, \(adoptions.count) moved (followed their files), \(retainedInvisible.count) retained (files on disk, invisible to scan options)")
+        return outcome
+    }
+
+    /// Partial scan (aborted mid-probe). Evidence is incomplete, so pruning
+    /// is forbidden: replace only the paths the scan actually re-saw, keep
+    /// everything else under the root. NO suspension on this path — no
+    /// existence checks (and no move detection: nothing is ever pruned, so
+    /// there is nothing to rescue; the eventual COMPLETE scan adopts).
+    /// Extracted verbatim from commitScanResults' guard (2026-07-02, body-
+    /// length ceiling) — behavior pinned by partialScanUpsertsWithoutPruning
+    /// and partialScanUpsertReplacesSamePathRecord.
+    private func mergePartialScanResults(
+        root: String,
+        volName: String,
+        targetRecords: [VideoRecord]
+    ) -> ScanMergeOutcome {
+        var outcome = ScanMergeOutcome()
+        let newPaths = Set(targetRecords.map(\.fullPath))
+        outcome.upserted = targetRecords.count
+        let existingUnderRoot = records.filter { PathScope.contains($0.fullPath, within: root) }
+        let vanished = existingUnderRoot.filter { !newPaths.contains($0.fullPath) }
+        outcome.refreshed = existingUnderRoot.count - vanished.count
+        outcome.retainedStale = vanished.count
+        records.removeAll {
+            PathScope.contains($0.fullPath, within: root) && newPaths.contains($0.fullPath)
+        }
         records.append(contentsOf: targetRecords)
-        scanMergeLog.info("Scan merge for \(volName, privacy: .public): +\(targetRecords.count) upserted (\(outcome.refreshed) refreshed), \(genuinelyGone.count) pruned, \(retainedInvisible.count) retained-invisible under \(root, privacy: .public)")
-        appLog.write("Catalog merge (\(volName)): \(targetRecords.count) upserted (\(outcome.refreshed) refreshed), \(genuinelyGone.count) pruned, \(retainedInvisible.count) retained (files on disk, invisible to scan options)")
+        if !vanished.isEmpty {
+            log("  ⚠ Scan of \(volName) did not complete — kept \(vanished.count) existing record(s) under \(root) that were not re-verified (no pruning on partial scans).")
+        }
+        scanMergeLog.notice("Partial-scan merge for \(volName, privacy: .public): +\(targetRecords.count) upserted, \(vanished.count) stale retained under \(root, privacy: .public)")
+        appLog.write("Catalog merge (\(volName), PARTIAL): \(targetRecords.count) upserted, \(vanished.count) stale retained, 0 pruned")
         return outcome
     }
 
