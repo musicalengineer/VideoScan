@@ -192,7 +192,15 @@ struct DetectResumableTargetTests {
         #expect(target.status == .resumable)
     }
 
-    @Test func cleansUpFullyScannedCheckpoint() {
+    // CONTRACT CHANGE (2026-07-02, scan-merge restructure): this test used
+    // to assert the reverse — a checkpoint whose paths were all present in
+    // the catalog was treated as "fully scanned" and deleted. Since the
+    // destructive replace moved from scan START to scan COMPLETION,
+    // cataloged records no longer prove a scan finalized (they survive the
+    // whole scan now). A lingering checkpoint means finalize never ran, so
+    // it is offered as resumable — resume is a cheap cache-backed
+    // re-verify of the full checkpoint list.
+    @Test func coveredCheckpointIsStillOfferedAsResumable() {
         let model = VideoScanModel()
         model.scanTargets.removeAll()
 
@@ -212,9 +220,34 @@ struct DetectResumableTargetTests {
             totalDiscovered: 2
         )
         ScanCheckpointStorage.save(cp)
+        defer { ScanCheckpointStorage.delete(for: testPath) }
 
         model.detectResumableTargets()
-        #expect(target.status == .idle)
+        #expect(target.status == .resumable,
+                "Records in the catalog no longer prove the scan finalized — keep the checkpoint and offer resume")
+        #expect(ScanCheckpointStorage.exists(for: testPath))
+    }
+
+    @Test func emptyCheckpointIsCleanedUp() {
+        let model = VideoScanModel()
+        model.scanTargets.removeAll()
+
+        let testPath = "/Volumes/EmptyCp_\(UUID().uuidString.prefix(8))"
+        let target = CatalogScanTarget(searchPath: testPath)
+        target.status = .idle
+        model.scanTargets.append(target)
+
+        let cp = ScanCheckpoint(
+            volumePath: testPath,
+            startedAt: Date(),
+            discoveredPaths: [],
+            totalDiscovered: 0
+        )
+        ScanCheckpointStorage.save(cp)
+        defer { ScanCheckpointStorage.delete(for: testPath) }
+
+        model.detectResumableTargets()
+        #expect(target.status == .idle, "Nothing to resume from an empty checkpoint")
         #expect(!ScanCheckpointStorage.exists(for: testPath))
     }
 }

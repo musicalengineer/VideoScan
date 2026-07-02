@@ -14,8 +14,8 @@ extension VideoScanModel {
     func startTarget(_ target: CatalogScanTarget) {
         guard !target.searchPath.isEmpty else { return }
         // §1B: retired volumes are off-limits for rescan. The destructive
-        // bit is the `records.removeAll` line below — it would wipe the
-        // Bucket-E `.manuallyDeleted` witness records that ARE the
+        // bit is the scan-completion merge (commitScanResults) — it would
+        // wipe the Bucket-E `.manuallyDeleted` witness records that ARE the
         // retire audit trail. The user has to Reinstate first via the
         // Volumes window if they really want to re-scan.
         guard !target.isRetired else {
@@ -29,15 +29,20 @@ extension VideoScanModel {
         }
         // Clear any stale checkpoint — this is a fresh scan.
         ScanCheckpointStorage.delete(for: target.searchPath)
-        // Snapshot dossier + user-edit fields BEFORE we wipe records.
-        // The scan completion path applies them onto the new records
-        // so a routine rescan doesn't destroy hours of Qwen + Whisper
-        // work or manual people-tagging. Critical: snapshot must
-        // happen before removeAll. See VideoScanModel+RescanPreservation.
+        // Snapshot dossier + user-edit fields BEFORE the scan runs. The
+        // scan-completion merge applies them onto the new records so a
+        // routine rescan doesn't destroy hours of Qwen + Whisper work or
+        // manual people-tagging. See VideoScanModel+RescanPreservation.
         snapshotPreservedFieldsForRescan(of: target)
-        // Clear any existing catalog records for this volume so a rescan
-        // doesn't create duplicates. The cache is kept (probes are reused).
-        records.removeAll { PathScope.contains($0.fullPath, within: target.searchPath) } // regression: codex C2
+        // DO NOT remove existing records here. The wipe-at-scan-start that
+        // used to live on the next line destroyed 5,586 LaCieWorkspace
+        // records on 2026-07-01: discovery came back incomplete and the
+        // completion path blindly saved the remainder. Replacement now
+        // happens atomically at scan COMPLETION — root-scoped, with a
+        // mass-deletion tripwire. See VideoScanModel+ScanMerge.swift.
+        // (Duplicates can't arise mid-scan: fresh records accumulate in a
+        // local buffer and only enter `records` inside commitScanResults,
+        // which removes the old ones in the same pass.)
         target.status = .scanning
         target.filesFound = 0
         target.filesScanned = 0

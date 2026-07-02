@@ -163,12 +163,13 @@ extension VideoScanModel {
 
     // MARK: - Snapshot helpers
     //
-    // Called by startTarget() right before records.removeAll, and by
-    // the scan-complete codepath in ScanExecution right before
-    // records.append(contentsOf: targetRecords). The intermediate
-    // storage `pendingPreservedFields` is keyed by the target's
-    // searchPath so two concurrent rescans of different volumes don't
-    // collide.
+    // Called by startTarget() when the scan begins, and by the
+    // scan-complete codepath in ScanExecution right before
+    // commitScanResults performs the root-scoped replace (2026-07-02:
+    // the old wipe-at-scan-start is gone — see VideoScanModel+ScanMerge).
+    // The intermediate storage `pendingPreservedFields` is keyed by the
+    // target's searchPath so two concurrent rescans of different volumes
+    // don't collide.
 
     /// Snapshot dossier + user-edit fields for records under `target`,
     /// keyed by fullPath. Stash on the model so the post-scan merge

@@ -168,7 +168,19 @@ extension VideoScanModel {
         target.filesScanned = completedCount
         if discoveredCount == 0 {
             log("  No video files found on \(volName).")
-            appLog.write("Completed catalog scan of volume \(volName): no video files found")
+            // Empty discovery NEVER prunes: an empty walk over a tree the
+            // catalog knows is populated is the LaCieWorkspace incident
+            // shape (2026-07-01) — keep the existing records and say so.
+            let retained = records.filter {
+                PathScope.contains($0.fullPath, within: target.searchPath)
+            }.count
+            if retained > 0 {
+                log("  Keeping \(retained) existing catalog record(s) under \(volName) — a scan that discovers nothing never prunes.")
+                appLog.write("Completed catalog scan of volume \(volName): no video files found; retained \(retained) existing records (empty discovery never prunes)")
+            } else {
+                appLog.write("Completed catalog scan of volume \(volName): no video files found")
+            }
+            discardPreservedFieldsSnapshot(of: target)
             if rootIsNetwork { await ramDisk.unmount() }
             target.status = .complete
             target.lastScannedDate = Date()
@@ -181,24 +193,32 @@ extension VideoScanModel {
             target.status = .stopped
             target.stopElapsedTimer()
             // Drop the rescan snapshot so the map doesn't grow unbounded.
-            // Today this means a cancelled rescan loses the volume's
-            // records until next scan (pre-existing behavior — startTarget
-            // already removed them). A future improvement could re-insert
-            // originals from a full-record snapshot. For now: discard.
+            // Since the 2026-07-02 merge restructure, a cancelled scan
+            // loses NOTHING: existing records were never removed (the old
+            // wipe-at-start is gone) and the partial targetRecords buffer
+            // is simply discarded here.
             discardPreservedFieldsSnapshot(of: target)
-            appLog.write("Cancelled catalog scan of volume \(volName) at \(completedCount)/\(discoveredCount) file(s)")
+            appLog.write("Cancelled catalog scan of volume \(volName) at \(completedCount)/\(discoveredCount) file(s) — catalog unchanged")
             updateGlobalScanState()
             return
         }
-        // Restore dossier + user-edit fields snapshotted in startTarget
-        // before the rescan's removeAll. Without this, every rescan
-        // would silently destroy hours of Qwen + Whisper work and any
-        // manual people tags. Returns the count restored for logging.
+        // Restore dossier + user-edit fields snapshotted in startTarget.
+        // Without this, every rescan would silently destroy hours of
+        // Qwen + Whisper work and any manual people tags. Must run BEFORE
+        // commitScanResults so the merged-in records carry the fields.
         let restored = applyPreservedFieldsAfterRescan(of: target, onto: targetRecords)
         if restored > 0 {
             appLog.write("Rescan preservation: restored dossier+user fields onto \(restored) of \(targetRecords.count) freshly-scanned records on \(volName)")
         }
-        records.append(contentsOf: targetRecords)
+        // Atomic root-scoped replace + mass-deletion tripwire — see
+        // VideoScanModel+ScanMerge.swift. An aborted scan (completed <
+        // discovered: volume died mid-probe) upserts without pruning.
+        commitScanResults(
+            root: target.searchPath,
+            volName: volName,
+            targetRecords: targetRecords,
+            scanWasComplete: completedCount >= discoveredCount
+        )
         saveCatalogDebounced()
         ScanCheckpointStorage.delete(for: target.searchPath)
         logTargetScanSummary(volName: volName, records: targetRecords)
@@ -363,10 +383,16 @@ extension VideoScanModel {
 
         let root = target.searchPath
         let volName = URL(fileURLWithPath: root).lastPathComponent
-        let existingPaths = Set(records.filter { $0.fullPath.hasPrefix(root) }.map(\.fullPath))
-        let remainingPaths = checkpoint.discoveredPaths.filter { !existingPaths.contains($0) }
-        log("Resuming scan of \(volName): \(remainingPaths.count) of \(checkpoint.totalDiscovered) files remaining")
-        appLog.write("Resuming catalog scan of volume \(volName) from checkpoint (\(remainingPaths.count) remaining)")
+        // Probe the FULL checkpoint list, not "checkpoint minus records
+        // already in the catalog". Since the 2026-07-02 merge restructure,
+        // existing records survive until scan COMPLETION — filtering them
+        // out here would shrink targetRecords to the un-cataloged remainder
+        // and commitScanResults would then prune everything else under the
+        // root. MetadataCache makes the re-probes cheap (cache hits skip
+        // ffprobe), so re-covering the whole list costs little.
+        let remainingPaths = checkpoint.discoveredPaths
+        log("Resuming scan of \(volName): re-verifying \(remainingPaths.count) checkpointed file(s) (cache hits skip ffprobe)")
+        appLog.write("Resuming catalog scan of volume \(volName) from checkpoint (\(remainingPaths.count) file(s), full-list re-verify)")
 
         target.scanTask = Task {
             let rootIsNetwork = CombineVerifier.isNetworkPath(root)
@@ -413,11 +439,17 @@ extension VideoScanModel {
         for cp in checkpoints {
             if let target = scanTargets.first(where: { $0.searchPath == cp.volumePath }),
                target.status == .idle || target.status == .stopped {
+                // A lingering checkpoint means the scan never finalized
+                // (finalize deletes it), so any non-empty checkpoint is
+                // resumable. The old "checkpoint count minus cataloged
+                // records under the path" arithmetic is meaningless now
+                // that existing records survive until scan completion —
+                // it would go ≤ 0 on every interrupted RESCAN and delete
+                // the checkpoint the user needs.
                 let remaining = cp.discoveredPaths.count
-                    - records.filter({ $0.fullPath.hasPrefix(cp.volumePath) }).count
                 if remaining > 0 {
                     target.status = .resumable
-                    log("  💾 Checkpoint found for \(URL(fileURLWithPath: cp.volumePath).lastPathComponent): \(remaining) files remaining")
+                    log("  💾 Checkpoint found for \(URL(fileURLWithPath: cp.volumePath).lastPathComponent): \(remaining) file(s) to re-verify")
                 } else {
                     ScanCheckpointStorage.delete(for: cp.volumePath)
                 }
