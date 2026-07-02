@@ -431,4 +431,118 @@ struct DossierPropagationTests {
         let second = model.clearSmearedDossiers()
         #expect(second.isEmpty, "Cleanup is idempotent — corruption is gone after the first pass")
     }
+
+    // MARK: - 6. Quarantine sidecar is a genuine undo record
+    //
+    // The live cleanup pass BLANKS dossier fields on ~230 records; the
+    // sidecar JSON is the only place the prior content survives. The log
+    // line promises "Prior content quarantined … for audit/undo", so the
+    // sidecar must carry the FULL content of every quarantined field —
+    // counts alone cannot restore anything.
+
+    /// Test-local mirror of the sidecar entry schema. Decoding the real
+    /// payload into this proves the on-disk JSON carries full content
+    /// (a counts-only sidecar fails decode with keyNotFound).
+    private struct SidecarEntry: Decodable {
+        let id: String
+        let fullPath: String
+        let partialMD5: String
+        let audioTranscript: String?
+        let audioTranscriptModel: String?
+        let audioTranscriptDate: Date?
+        let sceneCaptions: [SceneCaption]
+        let sceneCaptionModel: String?
+        let sceneCaptionDate: Date?
+        let ocrText: [SceneCaption]
+        let ocrDateCandidates: [SceneCaption]
+    }
+
+    /// red→green: every quarantined dossier field must round-trip out of
+    /// the sidecar payload byte-for-byte equal to the original values —
+    /// multi-entry captions with timestamps, OCR text, OCR date
+    /// candidates, and the transcript.
+    @Test func quarantineSidecar_roundTripsFullDossierContent() throws {
+        let captions = [
+            SceneCaption(timestamp: 0.0, text: "a birthday cake with lit candles"),
+            SceneCaption(timestamp: 12.5, text: "kids around the kitchen table"),
+            SceneCaption(timestamp: 47.25, text: "a woman laughing near the window")
+        ]
+        let ocr = [
+            SceneCaption(timestamp: 3.0, text: "JUL 4 1997"),
+            SceneCaption(timestamp: 9.0, text: "CAPE COD")
+        ]
+        let ocrDates = [
+            SceneCaption(timestamp: 3.0, text: "1997-07-04")
+        ]
+        // Whole-second dates: the sidecar encodes ISO-8601 (human-
+        // reviewable), which drops sub-second precision.
+        let transcriptDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let captionDate = Date(timeIntervalSince1970: 1_710_000_000)
+        let smeared = makeRecord(
+            path: "/Volumes/Junk/0001.tmp", md5: "SMEAR-RT",
+            transcript: "Happy birthday, blow out the candles.",
+            transcriptModel: "whisper-medium",
+            transcriptDate: transcriptDate,
+            captions: captions,
+            captionModel: "fastvlm",
+            captionDate: captionDate,
+            ocrText: ocr,
+            ocrDates: ocrDates,
+            streamType: .ffprobeFailed
+        )
+
+        // Same shape as the live/dry-run paths: the sidecar is written
+        // from pre-clear snapshots.
+        let data = try VideoScanModel.smearQuarantinePayloadData([smeared.snapshotClone()])
+
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        let decoded = try dec.decode([SidecarEntry].self, from: data)
+        #expect(decoded.count == 1)
+        let entry = try #require(decoded.first)
+        #expect(entry.id == smeared.id.uuidString)
+        #expect(entry.fullPath == "/Volumes/Junk/0001.tmp")
+        #expect(entry.partialMD5 == "SMEAR-RT")
+        #expect(entry.audioTranscript == "Happy birthday, blow out the candles.",
+                "Full transcript must be recoverable from the sidecar")
+        #expect(entry.sceneCaptions == captions,
+                "Full caption array (timestamps + text, in order) must be recoverable from the sidecar")
+        #expect(entry.ocrText == ocr,
+                "Full OCR text entries must be recoverable from the sidecar")
+        #expect(entry.ocrDateCandidates == ocrDates,
+                "Full OCR date candidates must be recoverable from the sidecar")
+        // Attribution fields the cleanup also blanks — part of the undo.
+        #expect(entry.audioTranscriptModel == "whisper-medium")
+        #expect(entry.audioTranscriptDate == transcriptDate)
+        #expect(entry.sceneCaptionModel == "fastvlm")
+        #expect(entry.sceneCaptionDate == captionDate)
+    }
+
+    /// The sidecar stays human-reviewable: pretty-printed JSON, and the
+    /// per-field counts survive as summary fields alongside the content.
+    @Test func quarantineSidecar_staysHumanReviewableWithCounts() throws {
+        let smeared = makeRecord(
+            path: "/Volumes/Junk/0002.tmp", md5: "SMEAR-HR",
+            transcript: "smeared",
+            captions: [SceneCaption(timestamp: 0, text: "a cake"),
+                       SceneCaption(timestamp: 5, text: "a dog")],
+            ocrText: [SceneCaption(timestamp: 1, text: "JUN 1991")],
+            ocrDates: [SceneCaption(timestamp: 1, text: "1991-06-21")],
+            streamType: .ffprobeFailed
+        )
+        let data = try VideoScanModel.smearQuarantinePayloadData([smeared])
+        let json = try #require(String(data: data, encoding: .utf8))
+        #expect(json.contains("\n"), "Sidecar must stay pretty-printed for Rick's review")
+
+        struct CountsEntry: Decodable {
+            let sceneCaptionCount: Int
+            let ocrTextCount: Int
+            let ocrDateCount: Int
+        }
+        let counts = try JSONDecoder().decode([CountsEntry].self, from: data)
+        let entry = try #require(counts.first)
+        #expect(entry.sceneCaptionCount == 2)
+        #expect(entry.ocrTextCount == 1)
+        #expect(entry.ocrDateCount == 1)
+    }
 }

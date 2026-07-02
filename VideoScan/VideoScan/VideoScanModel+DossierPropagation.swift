@@ -260,11 +260,42 @@ extension VideoScanModel {
         let url = PersistentLog.logDir
             .appendingPathComponent("dossier_smear_quarantine_\(stampFmt.string(from: Date())).json")
 
+        if let data = try? smearQuarantinePayloadData(records) {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    /// Build the JSON payload for the quarantine sidecar. Extracted from
+    /// `writeSmearQuarantine` so the schema is directly testable — the
+    /// sidecar is the ONLY undo record for the destructive live pass, so
+    /// a regression test must be able to prove the original dossier
+    /// content round-trips out of it.
+    ///
+    /// Schema fix 2026-07-01: the original sidecar serialized full text
+    /// ONLY for `audioTranscript`; captions and OCR were reduced to
+    /// counts, so the live pass would have destroyed their content with
+    /// no way back. Every field the cleanup blanks is now carried in
+    /// full (content + model/date attribution); the counts stay as a
+    /// review summary. A counts-only sidecar from the 2026-07-01 dry run
+    /// exists on disk — it's superseded, not migrated, by the next run.
+    @MainActor
+    static func smearQuarantinePayloadData(_ records: [VideoRecord]) throws -> Data {
         struct Quarantined: Encodable {
             let id: String
             let fullPath: String
             let partialMD5: String
+            // Full content of every field `clearSmearedDossiers` blanks —
+            // this is the undo record.
             let audioTranscript: String?
+            let audioTranscriptModel: String?
+            let audioTranscriptDate: Date?
+            let sceneCaptions: [SceneCaption]
+            let sceneCaptionModel: String?
+            let sceneCaptionDate: Date?
+            let ocrText: [SceneCaption]
+            let ocrDateCandidates: [SceneCaption]
+            // Review-summary counts (redundant with the arrays above,
+            // kept so the dry-run list stays skimmable).
             let sceneCaptionCount: Int
             let ocrTextCount: Int
             let ocrDateCount: Int
@@ -274,15 +305,23 @@ extension VideoScanModel {
                         fullPath: $0.fullPath,
                         partialMD5: $0.partialMD5,
                         audioTranscript: $0.audioTranscript,
+                        audioTranscriptModel: $0.audioTranscriptModel,
+                        audioTranscriptDate: $0.audioTranscriptDate,
+                        sceneCaptions: $0.sceneCaptions,
+                        sceneCaptionModel: $0.sceneCaptionModel,
+                        sceneCaptionDate: $0.sceneCaptionDate,
+                        ocrText: $0.ocrText,
+                        ocrDateCandidates: $0.ocrDateCandidates,
                         sceneCaptionCount: $0.sceneCaptions.count,
                         ocrTextCount: $0.ocrText.count,
                         ocrDateCount: $0.ocrDateCandidates.count)
         }
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? enc.encode(payload) {
-            try? data.write(to: url, options: .atomic)
-        }
+        // Human-reviewable timestamps (the default numeric encoding is
+        // unreadable in a review file).
+        enc.dateEncodingStrategy = .iso8601
+        return try enc.encode(payload)
     }
 
     // MARK: - Pure "best wins" selectors (testable)
