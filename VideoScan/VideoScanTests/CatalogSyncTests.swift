@@ -486,6 +486,25 @@ struct CatalogStoreReadOnlyTests {
     }
 
     @Test
+    func readOnlyStoreRefusesWriteSnapshot() throws {
+        // QA 2026-07-02 (fix/qa-minors): writeSnapshot(records:toPath:) was
+        // the ONE write path missing the isReadOnly guard that saveNow /
+        // scheduleSave / saveAsync all enforce — a read-only viewer could
+        // still write catalog.pre-merge.* siblings via the scan-merge
+        // tripwire. RED pre-guard: the snapshot lands on disk and the call
+        // returns true.
+        let dir = scratchDir("ro-snap")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = CatalogStore(directory: dir)
+        store.isReadOnly = true
+        let snapPath = dir.appendingPathComponent("catalog.pre-merge.test.json").path
+        let ok = store.writeSnapshot(records: [makeRecord("a.mov")], toPath: snapPath)
+        #expect(!ok, "readOnly writeSnapshot must report failure so the tripwire degrades to no-prune")
+        #expect(!FileManager.default.fileExists(atPath: snapPath),
+                "readOnly store must not write snapshot siblings")
+    }
+
+    @Test
     func togglingReadOnlyOffReEnablesWrites() throws {
         let dir = scratchDir("ro-toggle")
         defer { try? FileManager.default.removeItem(at: dir) }

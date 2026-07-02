@@ -431,9 +431,18 @@ final class CatalogStore {
     /// before deciding whether to prune (fail-safe contract: no snapshot →
     /// no prune). It never writes catalog.json itself, so it does not
     /// contend with writeQueue's debounced saves. Returns true on success.
+    /// Read-only guard (QA 2026-07-02, fix/qa-minors): this was the ONE
+    /// write path missing the check saveNow/scheduleSave/saveAsync all
+    /// enforce — a read-only viewer could still write catalog.pre-merge.*
+    /// siblings. Returning false feeds the tripwire's existing fail-safe:
+    /// no snapshot → degrade to no-prune (retainedNoSnapshot semantics).
     func writeSnapshot(records: [VideoRecord], toPath path: String) -> Bool {
-        Self.encodeAndWrite(payload: Self.makePayload(records: records),
-                            to: URL(fileURLWithPath: path))
+        if isReadOnly {
+            NSLog("VideoScan: CatalogStore.writeSnapshot refused — read-only viewer mode")
+            return false
+        }
+        return Self.encodeAndWrite(payload: Self.makePayload(records: records),
+                                   to: URL(fileURLWithPath: path))
     }
 
     /// Build the on-disk payload as a Sendable DTO. Must run on the main

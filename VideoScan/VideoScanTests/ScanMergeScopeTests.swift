@@ -924,6 +924,42 @@ struct ScanMergeRobustnessTests {
                 "The snapshot must capture IN-MEMORY state — a debounce-lagged disk copy loses the user's newest edits (RED pre-fix; got notes=\(clip0?.notes ?? "<missing record>"))")
     }
 
+    // MARK: - 19b. Read-only store: tripwire merge degrades, no snapshot sibling
+
+    // QA 2026-07-02 (fix/qa-minors): writeSnapshot skipped the isReadOnly guard
+    // saveNow/scheduleSave/saveAsync enforce — a read-only viewer wrote
+    // catalog.pre-merge.* siblings AND a tripwired merge pruned for real. Guarded,
+    // it returns false → the nil→degrade path of test 13. RED pre-guard: snapshot
+    // written, snapshotPath non-nil, 200 pruned. Records must stay intact.
+    @Test @MainActor
+    func readOnlyStoreTripwireMergeDegradesToNoPrune() async throws {
+        let dir = try makeTempDir("rosnap")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let vids = try makeTempDir("rosnapvids")   // real root, seeds never created
+        defer { try? FileManager.default.removeItem(at: vids) }
+
+        let model = VideoScanModel()
+        model.catalogStore = CatalogStore(directory: dir)
+        model.catalogStore.isReadOnly = true
+        let seeds = (0..<300).map { makeRecord(path: vids.appendingPathComponent("clip\($0).mov").path) }
+        model.records = seeds
+
+        // Tripwire-scale complete scan: 100 of 300 re-found, 200 genuinely gone.
+        let fresh = (0..<100).map { makeRecord(path: vids.appendingPathComponent("clip\($0).mov").path) }
+        let outcome = await model.commitScanResults(
+            root: vids.path, volName: "X", targetRecords: fresh, scanWasComplete: true)
+
+        #expect(outcome.tripwireFired, "Fixture sanity: 200 of 300 must fire the tripwire")
+        #expect(outcome.snapshotPath == nil,
+                "A read-only store must refuse the pre-merge snapshot (RED pre-guard: it writes one)")
+        let snapshots = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+            .filter { $0.hasPrefix("catalog.pre-merge.") }
+        #expect(snapshots.isEmpty, "No catalog.pre-merge.* sibling next to a read-only store (found \(snapshots))")
+        #expect(outcome.pruned == 0 && outcome.retainedNoSnapshot == 200,
+                "No snapshot → no prune: the merge must degrade (got pruned=\(outcome.pruned))")
+        #expect(model.records.count == 300, "100 fresh + 200 retained = 300 (got \(model.records.count))")
+    }
+
     // MARK: - 20. Aborted scan is offered as resumable IMMEDIATELY (no relaunch)
 
     // QA on 3628e07: after a partial/aborted merge, finalize set
