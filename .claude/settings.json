@@ -348,10 +348,6 @@
             "Bash(git push --mirror:*)",
             "Bash(git push --all)",
             "Bash(git push --all:*)",
-            "Bash(git reset --hard:*)",
-            "Bash(git clean -fd:*)",
-            "Bash(rm -rf:*)",
-            "Bash(rm -r:*)",
             "Bash(sudo:*)",
             "Bash(dd:*)",
             "Bash(mkfs:*)",
@@ -372,6 +368,12 @@
             "Read(/etc/**)",
             "Edit(/Users/rickb/dev/VideoScan/.git/**)",
             "Write(/Users/rickb/dev/VideoScan/.git/**)"
+        ],
+        "ask": [
+            "Bash(git reset --hard:*)",
+            "Bash(git clean -fd:*)",
+            "Bash(rm -rf:*)",
+            "Bash(rm -r:*)"
         ]
     }
 }
