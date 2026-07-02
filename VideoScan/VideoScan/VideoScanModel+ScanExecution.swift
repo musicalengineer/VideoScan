@@ -93,8 +93,18 @@ extension VideoScanModel {
 
     /// Process one probe result inside the per-target scan loop.
     /// Returns true if the caller should break (abort threshold tripped).
+    ///
+    /// Takes the Sendable `ProbeOutcome`, NOT a `VideoRecord`, so it can run
+    /// for EVERY outcome — including files the catalog-admission gate
+    /// (`shouldCatalogProbeResult`) rejects, for which no record is ever
+    /// constructed. Scan-health accounting (the consecutiveNotAccessible
+    /// abort counter, filesScanned, progress logging) must never depend on
+    /// catalog admission: if a volume unmounts mid-scan in an
+    /// extensionless-heavy tree (Avid media dirs), every outcome is
+    /// extensionless + ffprobeFailed and gated out — and the abort would
+    /// never fire. Pinned by ProbeGroupAbortAccountingTests.
     func processTargetProbeResult(
-        rec: VideoRecord,
+        outcome: ProbeOutcome,
         volName: String,
         completedCount: Int,
         totalFiles: Int,
@@ -104,10 +114,10 @@ extension VideoScanModel {
         milestones: Set<Int>,
         abortAfter: Int
     ) -> Bool {
-        if rec.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
-            let detail = rec.notes.isEmpty ? "no detail available" : rec.notes
-            log("  ⚠ FAILED: \(rec.filename) — \(detail)")
-            if rec.isPlayable == "File not found" {
+        if outcome.probe.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
+            let detail = outcome.notes.isEmpty ? "no detail available" : outcome.notes
+            log("  ⚠ FAILED: \(outcome.filename) — \(detail)")
+            if outcome.probe.isPlayable == "File not found" {
                 consecutiveNotAccessible += 1
                 if consecutiveNotAccessible >= abortAfter {
                     log("  ⛔ \(abortAfter) consecutive files inaccessible on \(volName) — volume likely unmounted. Aborting remaining probes.")

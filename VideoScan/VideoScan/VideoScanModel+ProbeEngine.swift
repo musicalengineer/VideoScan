@@ -114,38 +114,29 @@ extension VideoScanModel {
             }
 
             for await outcome in probeGroup {
-                // Apply the SAME junk-admission gate as the network-resume path
-                // (runResumedProbeGroup). Drop pre-construction so we never
-                // build a VideoRecord for a file we're about to discard
-                // (extensionless + ffprobe-unidentified). Without this, a local
-                // scan with "Scan files with no extension" on admitted junk the
-                // resume path would have filtered — the two paths must gate
-                // identically.
-                guard Self.shouldCatalogProbeResult(ext: outcome.ext, streamTypeRaw: outcome.probe.streamTypeRaw) else {
-                    appLog.write("NOT CATALOGED — no extension, ffprobe could not identify as media: \(outcome.fullPath)")
-                    completedCount += 1
-                    continue
-                }
-                // MainActor drain point: this loop is @MainActor-isolated, so
-                // the VideoRecord is constructed HERE — the off-actor probe
-                // pipeline only ever produced the Sendable ProbeOutcome carrier.
-                let rec = VideoRecord()
-                rec.apply(outcome)
-                targetRecords.append(rec)
                 completedCount += 1
 
+                // Scan-health accounting runs for EVERY outcome — BEFORE the
+                // catalog-admission gate below. The gate decides what enters
+                // the catalog, never whether the volume-unmount abort counter
+                // or filesScanned tick. (Regression: gated-out extensionless
+                // + ffprobeFailed outcomes used to `continue` past this, so a
+                // mid-scan unmount in an Avid extensionless tree never
+                // tripped the consecutive-failures abort and the scan ground
+                // through the whole dead volume.)
+                //
                 // If keepalive detected volume recovery, reset the consecutive
                 // failure counter so transient outages don't accumulate toward
                 // the abort threshold.
                 if let ka = keepalive {
                     let volDown = await ka.volumeIsDown
-                    if !volDown && consecutiveNotAccessible > 0 && rec.streamTypeRaw != StreamType.ffprobeFailed.rawValue {
+                    if !volDown && consecutiveNotAccessible > 0 && outcome.probe.streamTypeRaw != StreamType.ffprobeFailed.rawValue {
                         consecutiveNotAccessible = 0
                     }
                 }
 
                 let shouldAbort = processTargetProbeResult(
-                    rec: rec,
+                    outcome: outcome,
                     volName: volName,
                     completedCount: completedCount,
                     totalFiles: totalFiles,
@@ -155,6 +146,24 @@ extension VideoScanModel {
                     milestones: milestones,
                     abortAfter: abortAfter
                 )
+
+                // Catalog-admission gate — the SAME junk gate as the
+                // network-resume path (runResumedProbeGroup). Drop
+                // pre-construction so we never build a VideoRecord for a file
+                // we're about to discard (extensionless + ffprobe-
+                // unidentified). The two paths must gate identically.
+                if Self.shouldCatalogProbeResult(ext: outcome.ext, streamTypeRaw: outcome.probe.streamTypeRaw) {
+                    // MainActor drain point: this loop is @MainActor-isolated,
+                    // so the VideoRecord is constructed HERE — the off-actor
+                    // probe pipeline only ever produced the Sendable
+                    // ProbeOutcome carrier.
+                    let rec = VideoRecord()
+                    rec.apply(outcome)
+                    targetRecords.append(rec)
+                } else {
+                    appLog.write("NOT CATALOGED — no extension, ffprobe could not identify as media: \(outcome.fullPath)")
+                }
+
                 if shouldAbort {
                     probeGroup.cancelAll()
                     break
@@ -232,28 +241,21 @@ extension VideoScanModel {
             }
 
             for await outcome in probeGroup {
-                // Drop pre-construction so we never build a VideoRecord for a
-                // file we're about to discard (extensionless + unidentified).
-                guard Self.shouldCatalogProbeResult(ext: outcome.ext, streamTypeRaw: outcome.probe.streamTypeRaw) else {
-                    appLog.write("NOT CATALOGED — no extension, ffprobe could not identify as media: \(outcome.fullPath)")
-                    completedCount += 1
-                    continue
-                }
-                // MainActor drain point — construct the VideoRecord here.
-                let rec = VideoRecord()
-                rec.apply(outcome)
-                targetRecords.append(rec)
                 completedCount += 1
 
+                // Scan-health accounting BEFORE the catalog gate — see the
+                // matching comment in runTargetProbeGroup. The gate controls
+                // catalog admission only; the not-accessible abort counter
+                // and filesScanned must tick for gated-out outcomes too.
                 if let ka = keepalive {
                     let volDown = await ka.volumeIsDown
-                    if !volDown && consecutiveNotAccessible > 0 && rec.streamTypeRaw != StreamType.ffprobeFailed.rawValue {
+                    if !volDown && consecutiveNotAccessible > 0 && outcome.probe.streamTypeRaw != StreamType.ffprobeFailed.rawValue {
                         consecutiveNotAccessible = 0
                     }
                 }
 
                 let shouldAbort = processTargetProbeResult(
-                    rec: rec,
+                    outcome: outcome,
                     volName: volName,
                     completedCount: completedCount,
                     totalFiles: totalFiles,
@@ -263,6 +265,19 @@ extension VideoScanModel {
                     milestones: milestones,
                     abortAfter: abortAfter
                 )
+
+                // Catalog-admission gate. Drop pre-construction so we never
+                // build a VideoRecord for a file we're about to discard
+                // (extensionless + unidentified).
+                if Self.shouldCatalogProbeResult(ext: outcome.ext, streamTypeRaw: outcome.probe.streamTypeRaw) {
+                    // MainActor drain point — construct the VideoRecord here.
+                    let rec = VideoRecord()
+                    rec.apply(outcome)
+                    targetRecords.append(rec)
+                } else {
+                    appLog.write("NOT CATALOGED — no extension, ffprobe could not identify as media: \(outcome.fullPath)")
+                }
+
                 if shouldAbort {
                     probeGroup.cancelAll()
                     break
