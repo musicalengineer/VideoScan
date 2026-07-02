@@ -185,4 +185,102 @@ struct RelocateReconcilePlanMappingTests {
         #expect(viaAdapter.sourceSideMoves.first?.newSourcePath == movedPath)
         #expect(viaAdapter.sourceSideMoves.first?.rec.id == r.id)
     }
+
+    // MARK: - skipAlreadyRelocated at the plan level (QA fix 2026-07-01)
+
+    // regression: the previouslyRelocated short-circuit used to be
+    // unconditional, making RelocateOptions.skipAlreadyRelocated = false a
+    // silent no-op. With the option off, a previously-relocated record must
+    // re-enter the bucket cascade — here its source file still reads with a
+    // matching hash, so it lands in ready (the salvage-failed re-attempt path).
+    @Test func reconcilePlan_forceRetry_previouslyRelocatedReentersAsReady() throws {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("vs-recon-retry-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        // Real file so the Bucket A stat() succeeds.
+        let here = tmp.appendingPathComponent("retry.mov")
+        try Data(repeating: 7, count: 1024).write(to: here)
+
+        let r = rec("retry.mov", path: here.path, size: 1024, md5: "HASH-R",
+                    originalFullPath: "/Volumes/SomePastVolume/retry.mov")
+
+        let plan = RelocateReconcile.reconcilePlan(
+            records: [r.asReconcileInput], witnesses: [r.asReconcileInput],
+            sourceVolumeRootPath: tmp.path,
+            destinationRoot: URL(fileURLWithPath: "/tmp/no-dest"),
+            sourceFiles: [.init(path: here.path, size: 1024)],
+            destFiles: [],
+            skipDupsOnOtherVolumes: false,
+            skipAlreadyRelocated: false,
+            hash: { $0 == here.path ? "HASH-R" : "" }
+        )
+        #expect(plan.readyIDs == [r.id])
+        #expect(plan.previouslyRelocatedIDs.isEmpty)
+    }
+
+    // regression: with the option off, a previously-relocated record whose
+    // content already sits at the planned destination must classify adopted
+    // (dest-first check) — NOT ready. This is the guard that force-retry can
+    // never re-copy a record whose relocation actually succeeded.
+    @Test func reconcilePlan_forceRetry_alreadyAtDest_classifiesAdoptedNotReady() {
+        let r = rec("done.mov", path: "/Volumes/Mini2TB/family/done.mov",
+                    size: 8192, md5: "HASH-D",
+                    originalFullPath: "/Volumes/SomePastVolume/done.mov")
+        let destPath = "/Volumes/LaCie/archive/family/done.mov"
+
+        let plan = RelocateReconcile.reconcilePlan(
+            records: [r.asReconcileInput], witnesses: [r.asReconcileInput],
+            sourceVolumeRootPath: "/Volumes/Mini2TB",
+            destinationRoot: URL(fileURLWithPath: "/Volumes/LaCie/archive"),
+            sourceFiles: [],
+            destFiles: [.init(path: destPath, size: 8192)],
+            skipDupsOnOtherVolumes: false,
+            skipAlreadyRelocated: false,
+            hash: { $0 == destPath ? "HASH-D" : "" }
+        )
+        #expect(plan.adopted == [AdoptedPlan(id: r.id, destPath: destPath)])
+        #expect(plan.readyIDs.isEmpty)
+        #expect(plan.previouslyRelocatedIDs.isEmpty)
+    }
+
+    // pin: the default (skipAlreadyRelocated: true, both explicit and via
+    // the parameter default) keeps the historical short-circuit — a
+    // previously-relocated record is never classified further.
+    @Test func reconcilePlan_defaultSkip_previouslyRelocatedShortCircuits() throws {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("vs-recon-skip-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let here = tmp.appendingPathComponent("done.mov")
+        try Data(repeating: 3, count: 512).write(to: here)
+
+        let r = rec("done.mov", path: here.path, size: 512, md5: "HASH-S",
+                    originalFullPath: "/Volumes/SomePastVolume/done.mov")
+        let input = r.asReconcileInput
+
+        // Explicit true and parameter-default must agree.
+        let explicit = RelocateReconcile.reconcilePlan(
+            records: [input], witnesses: [input],
+            sourceVolumeRootPath: tmp.path,
+            destinationRoot: URL(fileURLWithPath: "/tmp/no-dest"),
+            sourceFiles: [.init(path: here.path, size: 512)],
+            destFiles: [],
+            skipDupsOnOtherVolumes: false,
+            skipAlreadyRelocated: true,
+            hash: { $0 == here.path ? "HASH-S" : "" }
+        )
+        let defaulted = RelocateReconcile.reconcilePlan(
+            records: [input], witnesses: [input],
+            sourceVolumeRootPath: tmp.path,
+            destinationRoot: URL(fileURLWithPath: "/tmp/no-dest"),
+            sourceFiles: [.init(path: here.path, size: 512)],
+            destFiles: [],
+            skipDupsOnOtherVolumes: false,
+            hash: { $0 == here.path ? "HASH-S" : "" }
+        )
+        #expect(explicit == defaulted)
+        #expect(explicit.previouslyRelocatedIDs == [r.id])
+        #expect(explicit.readyIDs.isEmpty)
+    }
 }

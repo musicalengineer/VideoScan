@@ -457,6 +457,9 @@ struct RelocateSheet: View {
                     sourceFiles: sourceFiles,
                     destFiles: destFiles,
                     skipDupsOnOtherVolumes: skipDups,
+                    // Must mirror handleRelocate()'s hardcoded value so the
+                    // preview counts match what the run will actually do.
+                    skipAlreadyRelocated: true,
                     hash: { FileHasher.partialMD5(path: $0) }
                 )
             }.value

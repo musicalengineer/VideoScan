@@ -397,5 +397,150 @@ struct RelocateIntegrationTests {
 
         #expect(model.dashboard.relocateSkipped == 1)
         #expect(rec.fullPath == src.path)  // unchanged
+        // Counter consistency: the skipped record is COUNTED, so the
+        // progress bar reaches the displayed total.
+        #expect(model.dashboard.relocateCompleted == model.dashboard.relocateTotal)
+    }
+
+    // Regression (QA 2026-07-01): the `skipAlreadyRelocated = false` option
+    // promised "force re-attempts on previously salvage-failed records" but
+    // silently did nothing — reconcilePlan short-circuited every record with
+    // originalFullPath != nil into previouslyRelocated BEFORE bucket logic,
+    // and runRelocate never re-attempted them when the option was false.
+    // Worse, those records were neither skipped-counted nor migrated, so
+    // relocateCompleted could never reach relocateTotal (progress bar
+    // stalled short of 100%).
+    //
+    // Shape: a record relocated INTO this volume once (originalFullPath set
+    // by that earlier successful hop) whose NEXT hop salvage-failed
+    // (archiveStage == .salvageFailed — the failure marker; a failed attempt
+    // never sets originalFullPath itself). With the option OFF the record
+    // must re-enter bucket classification, land in ready, and get re-copied.
+    @Test
+    func forceRetry_salvageFailedPreviouslyRelocated_isRecopied_andCountersReachTotal() async throws {
+        let ws = try Self.makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: ws.root) }
+
+        let src = ws.source.appendingPathComponent("retry.bin")
+        let (sz, md5) = try writeFile(at: src, bytes: 512)
+        let rec = makeRecord(fullPath: src.path, size: sz, md5: md5)
+        // Hop 1 (success, long ago): relocated into this volume.
+        rec.originalFullPath = "/Volumes/SomePastVolume/retry.bin"
+        rec.originVolume = "SomePastVolume"
+        // Hop 2 (failed): salvage attempt off this volume died mid-copy.
+        rec.archiveStage = .salvageFailed
+        rec.notes = "Migrate 2026-06-16T00:00:00Z: copy — Input/output error"
+
+        let model = VideoScanModel()
+        model.catalogStore = CatalogStore(directory: ws.catalog)
+        model.records = [rec]
+        model.catalogStore.saveNow(records: [rec])
+
+        model.relocateVolume(RelocateOptions(
+            sourceVolumeRootPath: ws.source.path,
+            destinationRoot: ws.dest,
+            maxConcurrency: 1,
+            dryRun: false,
+            skipAlreadyRelocated: false
+        ))
+        await waitForRelocateDone(model)
+
+        // Re-attempted and verified: copied to dest, stale failure cleared.
+        #expect(rec.fullPath.hasPrefix(ws.dest.path))
+        #expect(FileManager.default.fileExists(atPath: rec.fullPath))
+        #expect(rec.archiveStage == .none)
+        // Provenance preserved from the ORIGINAL hop — success path only
+        // stamps originalFullPath when nil.
+        #expect(rec.originalFullPath == "/Volumes/SomePastVolume/retry.bin")
+        #expect(model.dashboard.relocateSucceeded == 1)
+        #expect(model.dashboard.relocateSkipped == 0)
+        // Progress accounting: every in-scope record is counted.
+        #expect(model.dashboard.relocateCompleted == model.dashboard.relocateTotal)
+    }
+
+    // Companion safety guard for the force-retry fix: a previously-relocated
+    // record whose content ALREADY sits verified at the planned destination
+    // must NOT be re-copied when skipAlreadyRelocated is false. Re-entering
+    // classification routes it through the normal dest-first check → Bucket D
+    // (adopted). The readable source file proves adoption won over re-copy.
+    @Test
+    func forceRetry_recordAlreadyAtDest_adoptsInsteadOfRecopying() async throws {
+        let ws = try Self.makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: ws.root) }
+
+        let src = ws.source.appendingPathComponent("done.bin")
+        let (sz, md5) = try writeFile(at: src, bytes: 1024)
+        // The planned dest copy already exists (prior successful run whose
+        // catalog rewrite was lost, or a manual workaround copy).
+        let destCopy = ws.dest.appendingPathComponent("done.bin")
+        try FileManager.default.copyItem(at: src, to: destCopy)
+
+        let rec = makeRecord(fullPath: src.path, size: sz, md5: md5)
+        rec.originalFullPath = "/Volumes/SomePastVolume/done.bin"
+        rec.originVolume = "SomePastVolume"
+
+        let model = VideoScanModel()
+        model.catalogStore = CatalogStore(directory: ws.catalog)
+        model.records = [rec]
+        model.catalogStore.saveNow(records: [rec])
+
+        model.relocateVolume(RelocateOptions(
+            sourceVolumeRootPath: ws.source.path,
+            destinationRoot: ws.dest,
+            maxConcurrency: 1,
+            dryRun: false,
+            skipAlreadyRelocated: false
+        ))
+        await waitForRelocateDone(model)
+
+        #expect(model.dashboard.relocateAdopted == 1)
+        #expect(model.dashboard.relocateSucceeded == 0)   // NOT re-copied
+        #expect(rec.fullPath == destCopy.path)
+        #expect(rec.originalFullPath == "/Volumes/SomePastVolume/done.bin")
+        #expect(model.dashboard.relocateCompleted == model.dashboard.relocateTotal)
+    }
+
+    // The doc's exact scenario: "force re-attempts on previously
+    // salvage-failed records that you've since worked around" — Rick's
+    // workaround being a manual copy to the destination. The record adopts
+    // the verified dest copy AND the stale .salvageFailed terminal stage is
+    // cleared (mirror of the 2026-06-19 success-path fix: a hash-verified
+    // safe copy must not stay labeled "Salvage Failed" forever).
+    @Test
+    func forceRetry_adoptionClearsStaleSalvageFailedStage() async throws {
+        let ws = try Self.makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: ws.root) }
+
+        let src = ws.source.appendingPathComponent("worked-around.bin")
+        let (sz, md5) = try writeFile(at: src, bytes: 2048)
+        let destCopy = ws.dest.appendingPathComponent("worked-around.bin")
+        try FileManager.default.copyItem(at: src, to: destCopy)
+
+        let rec = makeRecord(fullPath: src.path, size: sz, md5: md5)
+        rec.originalFullPath = "/Volumes/SomePastVolume/worked-around.bin"
+        rec.originVolume = "SomePastVolume"
+        rec.archiveStage = .salvageFailed
+        rec.notes = "Migrate 2026-06-16T00:00:00Z: preRead — cannot open source"
+
+        let model = VideoScanModel()
+        model.catalogStore = CatalogStore(directory: ws.catalog)
+        model.records = [rec]
+        model.catalogStore.saveNow(records: [rec])
+
+        model.relocateVolume(RelocateOptions(
+            sourceVolumeRootPath: ws.source.path,
+            destinationRoot: ws.dest,
+            maxConcurrency: 1,
+            dryRun: false,
+            skipAlreadyRelocated: false
+        ))
+        await waitForRelocateDone(model)
+
+        #expect(model.dashboard.relocateAdopted == 1)
+        #expect(model.dashboard.relocateSucceeded == 0)   // adopted, not copied
+        #expect(rec.fullPath == destCopy.path)
+        #expect(rec.archiveStage == .none)
+        #expect(rec.notes.contains("salvage recovered"))
+        #expect(model.dashboard.relocateCompleted == model.dashboard.relocateTotal)
     }
 }

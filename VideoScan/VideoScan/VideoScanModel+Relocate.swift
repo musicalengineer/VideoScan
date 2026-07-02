@@ -49,7 +49,11 @@ struct RelocateOptions {
 
     /// Skip records that have already been relocated once
     /// (`originalFullPath != nil`). Set false to force re-attempts on
-    /// previously salvage-failed records that you've since worked around.
+    /// previously salvage-failed records that you've since worked around:
+    /// they re-enter reconcile bucket classification, so a record whose
+    /// copy already sits verified at the destination adopts (no re-copy)
+    /// while one whose source is now readable is re-copied — and a
+    /// verified outcome clears a stale `.salvageFailed` stage.
     var skipAlreadyRelocated: Bool = true
 
     /// When ON (default), reconcile classifies a record as
@@ -338,6 +342,19 @@ extension VideoScanModel {
                 r.fullPath = dest
                 r.directory = (dest as NSString).deletingLastPathComponent
                 r.notes = appendNote(r.notes, "Reconcile \(stamp()): adopted existing copy at dest")
+                // Adoption is hash-verified, so it clears a stale terminal
+                // failure exactly like the copy-success path does (see the
+                // 2026-06-19 fix in the migrate loop): a record left
+                // .salvageFailed by a prior attempt, later worked around by
+                // copying the file to dest by hand, must not stay labeled
+                // "Salvage Failed" once we've verified the dest copy. This
+                // is the force-retry (skipAlreadyRelocated=false) doc
+                // scenario landing in Bucket D.
+                if r.archiveStage == .salvageFailed {
+                    r.archiveStage = .none
+                    r.notes = appendNote(r.notes,
+                        "Migrate \(stamp()): salvage recovered — verified existing copy at dest")
+                }
                 dashboard.relocateAdopted += 1
                 dashboard.relocateCompleted += 1
             }
@@ -388,8 +405,13 @@ extension VideoScanModel {
                 dashboard.relocateSourceMoves += 1
                 toMigrate.append(r)
             }
-            // Previously-relocated short-circuit
-            for r in reconcile.previouslyRelocated where options.skipAlreadyRelocated {
+            // Previously-relocated short-circuit. The bucket is populated
+            // only when options.skipAlreadyRelocated is true — with the
+            // force-retry option (false) reconcile classifies those records
+            // into the real buckets instead (QA fix 2026-07-01), so counting
+            // every entry here unconditionally keeps relocateCompleted able
+            // to reach relocateTotal in both modes.
+            for r in reconcile.previouslyRelocated {
                 relocateLog.write("[RECONCILE] previously-relocated, skipping: \(r.fullPath)")
                 dashboard.relocateSkipped += 1
                 dashboard.relocateCompleted += 1
@@ -398,9 +420,10 @@ extension VideoScanModel {
             catalogStore.scheduleSave(records: records)
         } else {
             dashboard.relocateSourceMoves = reconcile.sourceSideMoves.count
-            dashboard.relocateSkipped = options.skipAlreadyRelocated
-                ? reconcile.previouslyRelocated.count
-                : 0
+            // Same invariant as the real-run loop above: the bucket is
+            // empty when skipAlreadyRelocated is false, so no option
+            // check is needed here.
+            dashboard.relocateSkipped = reconcile.previouslyRelocated.count
             dashboard.relocateCompleted += dashboard.relocateSkipped
         }
 
@@ -748,6 +771,7 @@ extension VideoScanModel {
             sourceFiles: sourceFiles,
             destFiles: destFiles,
             skipDupsOnOtherVolumes: options.skipDupsOnOtherVolumes,
+            skipAlreadyRelocated: options.skipAlreadyRelocated,
             resolveVolumeSafety: resolveVolumeSafety,
             hash: { FileHasher.partialMD5(path: $0) }
         )

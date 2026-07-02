@@ -96,8 +96,11 @@ struct ReconcileResult: Equatable {
     var safelyRedundant: [SafelyRedundantEntry]
 
     /// Records under `sourceVolumeRootPath` but already relocated once
-    /// (`originalFullPath != nil`). Not classified further — caller's
-    /// `skipAlreadyRelocated` option decides whether to retry.
+    /// (`originalFullPath != nil`), short-circuited without further
+    /// classification. Only populated when the run's `skipAlreadyRelocated`
+    /// option is true (the default): with the option false the classify
+    /// pass sends these records through the normal bucket cascade instead
+    /// (force-retry, QA fix 2026-07-01), so this bucket comes back empty.
     var previouslyRelocated: [VideoRecord]
 
     static func == (lhs: ReconcileResult, rhs: ReconcileResult) -> Bool {
@@ -331,6 +334,14 @@ enum RelocateReconcile {
     /// - Parameter skipDupsOnOtherVolumes: when true, enable Bucket E
     ///   classification. When false, records that would land in E fall
     ///   through to the A/C/B rules as before — preserves legacy behavior.
+    /// - Parameter skipAlreadyRelocated: when true (default), records with
+    ///   `originalFullPath != nil` short-circuit into `previouslyRelocated`
+    ///   without further classification. When false (force-retry), they
+    ///   re-enter the normal bucket cascade so a salvage-failed record can
+    ///   be re-attempted; the cascade's dest-first check means a record
+    ///   whose copy already sits verified at the destination classifies as
+    ///   adopted rather than being re-copied. (QA fix 2026-07-01 — the
+    ///   option used to be consumed nowhere, making it a silent no-op.)
     /// - Parameter resolveVolumeSafety: maps a witness path to its host
     ///   volume's `(role, trust)`. Bucket E now requires at least one
     ///   witness on a *safe* host (role != .retired AND trust != .unreliable).
@@ -346,6 +357,7 @@ enum RelocateReconcile {
         sourceFiles: [ReconcileFileEntry],
         destFiles: [ReconcileFileEntry],
         skipDupsOnOtherVolumes: Bool,
+        skipAlreadyRelocated: Bool = true,
         resolveVolumeSafety: VolumeSafetyResolver = permissiveResolver,
         hash: (String) -> String
     ) -> ReconcileResult {
@@ -357,6 +369,7 @@ enum RelocateReconcile {
             sourceFiles: sourceFiles,
             destFiles: destFiles,
             skipDupsOnOtherVolumes: skipDupsOnOtherVolumes,
+            skipAlreadyRelocated: skipAlreadyRelocated,
             resolveVolumeSafety: resolveVolumeSafety,
             hash: hash
         )
@@ -424,6 +437,7 @@ enum RelocateReconcile {
         sourceFiles: [ReconcileFileEntry],
         destFiles: [ReconcileFileEntry],
         skipDupsOnOtherVolumes: Bool,
+        skipAlreadyRelocated: Bool = true,
         resolveVolumeSafety: VolumeSafetyResolver = permissiveResolver,
         hash: (String) -> String
     ) -> ReconcilePlan {
@@ -471,9 +485,20 @@ enum RelocateReconcile {
         var plan = ReconcilePlan()
 
         for rec in records {
-            // Already-migrated records get short-circuited; caller
-            // decides via skipAlreadyRelocated whether to retry.
-            if rec.originalFullPath != nil {
+            // Already-migrated records (originalFullPath != nil — success
+            // provenance from a prior hop) short-circuit ONLY when the
+            // skipAlreadyRelocated option is on (the default). With the
+            // option off (force-retry), they fall through into the normal
+            // bucket cascade: a record whose copy is already verified at
+            // the planned destination adopts (Bucket D, dest-first — never
+            // re-copied), a genuinely salvage-failed one whose source now
+            // reads lands in ready (Bucket A) and gets re-attempted, and
+            // every safety gate below (hash-verified adoption, Bucket E
+            // safe-witness filter) applies unchanged. Previously the
+            // short-circuit was unconditional, which made the option a
+            // silent no-op AND left these records uncounted so the
+            // progress bar stalled short of its total (QA 2026-07-01).
+            if skipAlreadyRelocated, rec.originalFullPath != nil {
                 plan.previouslyRelocatedIDs.append(rec.id)
                 continue
             }
