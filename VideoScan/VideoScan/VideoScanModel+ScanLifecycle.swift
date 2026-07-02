@@ -13,6 +13,17 @@ extension VideoScanModel {
 
     func startTarget(_ target: CatalogScanTarget) {
         guard !target.searchPath.isEmpty else { return }
+        // QA 2026-07-02 (fix/qa-minors): refuse a double-start. Without this
+        // guard a second programmatic start of the SAME target deleted the
+        // in-flight checkpoint, re-snapshotted the preserved-fields map, and
+        // spawned a SECOND scanTask whose completion merge could interleave
+        // with the first at commitScanResults' single await (safe-by-
+        // construction except a narrow TOCTOU — the systemic fix is refusing
+        // the double-start at the door). Return before ANY side effect.
+        guard !target.status.isActive else {
+            log("--- Scan already \(target.status.rawValue.lowercased()) for \(URL(fileURLWithPath: target.searchPath).lastPathComponent) — start ignored ---")
+            return
+        }
         // §1B: retired volumes are off-limits for rescan. The destructive
         // bit is the scan-completion merge (commitScanResults) — it would
         // wipe the Bucket-E `.manuallyDeleted` witness records that ARE the

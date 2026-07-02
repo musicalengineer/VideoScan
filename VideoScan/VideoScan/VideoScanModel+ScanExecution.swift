@@ -481,6 +481,14 @@ extension VideoScanModel {
     /// Resume a previously interrupted scan from its checkpoint.
     func resumeTarget(_ target: CatalogScanTarget) {
         guard !target.searchPath.isEmpty else { return }
+        // Same double-start guard as startTarget (QA 2026-07-02): a resume
+        // of an already-active target would re-snapshot the preserved-fields
+        // map, clobber filesFound from the checkpoint, and spawn a second
+        // scanTask. No side effects past this point on refusal.
+        guard !target.status.isActive else {
+            log("--- Scan already \(target.status.rawValue.lowercased()) for \(URL(fileURLWithPath: target.searchPath).lastPathComponent) — resume ignored ---")
+            return
+        }
         // §1B: same retire guard as startTarget. Resume eventually
         // converges on the same record-write path, so the same audit
         // trail destruction would apply.
