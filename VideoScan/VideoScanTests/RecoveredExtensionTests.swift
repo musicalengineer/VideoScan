@@ -91,6 +91,53 @@ struct RecoveredExtensionTests {
             forProbedContainer: "MPEG-PS (MPEG-2 Program Stream)") == "mpg")
     }
 
+    // MARK: - canonicalContainerExtension: audio must not false-match video
+
+    @Test
+    func mp3LongNameMapsToMp3NotMpg() {
+        // Regression [harden-jul01]: ffprobe's MP3/MP2 demuxer long name is
+        // "MP2/3 (MPEG audio layer 2/3)", which tokenizes to include "mpeg"
+        // (and "mp2", but NOT "mp3"). The generic mpeg rule used to win and
+        // stamp a recovered extensionless MP3 as ".mpg" — a video extension.
+        #expect(VideoScanModel.canonicalContainerExtension(
+            forProbedContainer: "MP2/3 (MPEG audio layer 2/3)") == "mp3")
+        // Short-form fallback (format_name) when long name is absent.
+        #expect(VideoScanModel.canonicalContainerExtension(
+            forProbedContainer: "mp3") == "mp3")
+    }
+
+    @Test
+    func extensionlessMp3RecoveryGetsMp3Appended() {
+        // End-to-end decision surface for the same regression: an audio-only
+        // extensionless MP3 recovered by Relocate must gain ".mp3", not ".mpg".
+        let dest = "/Volumes/LaCie/from-X/Donna-VoiceMemo-1998"
+        let decision = VideoScanModel.inferredRecoveryExtension(
+            forDestinationPath: dest,
+            probedContainer: "MP2/3 (MPEG audio layer 2/3)",
+            enabled: true)
+        #expect(decision == .append(
+            newPath: dest + ".mp3", fromExt: "", toExt: "mp3"))
+    }
+
+    @Test
+    func otherAudioLongNamesStillRefuseToGuess() {
+        // Audit companions [harden-jul01]: these real ffprobe long names must
+        // keep mapping to nil (no video rule token collision, no new guessing).
+        #expect(VideoScanModel.canonicalContainerExtension(
+            forProbedContainer: "raw ADTS AAC (Advanced Audio Coding)") == nil)
+        #expect(VideoScanModel.canonicalContainerExtension(
+            forProbedContainer: "WAV / WAVE (Waveform Audio)") == nil)
+        #expect(VideoScanModel.canonicalContainerExtension(
+            forProbedContainer: "raw AC-3") == nil)
+        #expect(VideoScanModel.canonicalContainerExtension(
+            forProbedContainer: "PCM signed 16-bit little-endian") == nil)
+        // Exact-token matching keeps "dts" off the "ts" rule and "flac" off "flv".
+        #expect(VideoScanModel.canonicalContainerExtension(
+            forProbedContainer: "raw DTS") == nil)
+        #expect(VideoScanModel.canonicalContainerExtension(
+            forProbedContainer: "raw FLAC") == nil)
+    }
+
     // MARK: - canonicalContainerExtension: refuse to guess
 
     @Test

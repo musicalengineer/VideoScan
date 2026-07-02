@@ -79,6 +79,15 @@ extension VideoScanModel {
             (["asf", "wmv"], "wmv"),
             // Flash Video.                       short "flv" | long "FLV (Flash Video)"
             (["flv"], "flv"),
+            // MPEG audio (MP3/MP2) — MUST precede the generic mpeg rule.
+            // ffprobe's demuxer long name "MP2/3 (MPEG audio layer 2/3)"
+            // tokenizes to include "mpeg" AND "mp2" (but NOT "mp3"), so
+            // without this rule an extensionless MP3 would be stamped ".mpg",
+            // a video extension. Match both the long-name token "mp2" and the
+            // short format_name "mp3". macOS routes ".mp3" to CoreAudio for
+            // MPEG audio layers 2 and 3 alike.
+            //                                    short "mp3" | long "MP2/3 (MPEG audio layer 2/3)"
+            (["mp3", "mp2"], "mp3"),
             // MPEG program/elementary stream.    short "mpeg" | long "MPEG-PS (MPEG-2 Program Stream)"
             (["mpeg", "mpg", "mpegps"], "mpg"),
         ]
