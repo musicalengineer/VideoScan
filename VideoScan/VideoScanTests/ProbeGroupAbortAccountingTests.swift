@@ -100,4 +100,111 @@ struct ProbeGroupAbortAccountingTests {
         #expect(result.records.isEmpty,
                 "not-accessible extensionless outcomes must still be kept OUT of the catalog")
     }
+
+    // MARK: Console-noise follow-up (harden-jul01 QA finding)
+    //
+    // The accounting fix above made processTargetProbeResult run for EVERY
+    // outcome — which also made it log "⚠ FAILED" for every gated-out junk
+    // file on a perfectly HEALTHY volume (thousands of console lines on an
+    // Avid-tree scan). The counters must tick for gated-out outcomes; the
+    // console line must not appear UNLESS the failure is "File not found"
+    // (the volume-unmount diagnostic the abort path depends on).
+
+    @Test("Healthy-volume gated-out junk (file exists) emits NO console FAILED line but still counts")
+    func gatedOutExistingJunkIsQuietOnConsoleButStillCounted() async throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("vs_quietjunk_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // Extensionless data blobs that EXIST and stay put: ffprobe fails
+        // (ext == "", ffprobeFailed) so the gate rejects them, but the volume
+        // is healthy — isPlayable is NOT "File not found".
+        let junkCount = 3
+        for i in 0..<junkCount {
+            let name = String(format: "junk-blob-%02d", i)
+            try Data(repeating: 0, count: 4096).write(to: dir.appendingPathComponent(name))
+        }
+
+        let model = VideoScanModel()
+        model.scanOptions.probeExtensionless = true
+        model.scanOptions.skipChecksums = true
+        model.scanOptions.skipSmallFiles = false
+        let target = CatalogScanTarget(searchPath: dir.path)
+
+        let result = await model.runTargetProbeGroup(
+            target: target,
+            root: dir.path,
+            volName: "TestVol",
+            rootIsNetwork: false,
+            ramMountPoint: nil
+        )
+
+        // Accounting must still run for every gated-out outcome.
+        #expect(result.completed == junkCount)
+        #expect(target.filesScanned == junkCount,
+                "filesScanned must tick for gated-out outcomes on a healthy volume")
+        #expect(result.records.isEmpty,
+                "gated-out junk must stay out of the catalog")
+
+        // Console lines flush on a 0.15 s debounce — wait it out, then the
+        // FAILED spam must be absent. (The quieter appLog 'NOT CATALOGED'
+        // line still records each drop in videoscan.log.)
+        try await Task.sleep(nanoseconds: 400_000_000)
+        let console = model.dashboard.consoleLines.joined(separator: "\n")
+        #expect(!console.contains("⚠ FAILED"),
+                "healthy-volume gated-out junk must NOT spam the console FAILED line; console was:\n\(console)")
+    }
+
+    @Test("Not-found gated-out failures STILL log the console FAILED line (unmount diagnostics preserved)")
+    func gatedOutNotFoundFailuresStillLogToConsole() async throws {
+        // Small-scale version of the abort repro above: extensionless files
+        // that VANISH after the walk. These are gated out AND "File not
+        // found" — they must keep the visible FAILED line (and the abort
+        // counting pinned by the 60-file test). Guards the quiet-junk fix
+        // against overreach.
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("vs_notfoundlog_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let junkCount = 3
+        for i in 0..<junkCount {
+            let name = String(format: "gone-blob-%02d", i)
+            try Data(repeating: 0xAB, count: 4096).write(to: dir.appendingPathComponent(name))
+        }
+
+        let model = VideoScanModel()
+        model.scanOptions.probeExtensionless = true
+        model.scanOptions.skipChecksums = true
+        model.scanOptions.skipSmallFiles = false
+        let target = CatalogScanTarget(searchPath: dir.path)
+
+        // Hold probes at the gate until the files are gone (same determinism
+        // trick as the abort test).
+        await target.pauseGate.pause()
+        let scanTask = Task {
+            await model.runTargetProbeGroup(
+                target: target,
+                root: dir.path,
+                volName: "TestVol",
+                rootIsNetwork: false,
+                ramMountPoint: nil
+            )
+        }
+        for _ in 0..<600 where target.filesFound != junkCount {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        try #require(target.filesFound == junkCount)
+        try FileManager.default.removeItem(at: dir)
+        await target.pauseGate.resume()
+
+        let result = await scanTask.value
+        #expect(result.completed == junkCount)
+
+        try await Task.sleep(nanoseconds: 400_000_000)
+        let console = model.dashboard.consoleLines.joined(separator: "\n")
+        #expect(console.contains("⚠ FAILED"),
+                "gated-out not-found failures must KEEP the console FAILED line — it is the volume-unmount trail")
+    }
 }

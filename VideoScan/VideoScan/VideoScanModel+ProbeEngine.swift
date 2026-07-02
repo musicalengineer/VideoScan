@@ -135,24 +135,31 @@ extension VideoScanModel {
                     }
                 }
 
+                // Catalog-admission gate — the SAME junk gate as the
+                // network-resume path (runResumedProbeGroup). Computed ONCE
+                // here: the accounting call below needs it too (gated-out
+                // failures on a healthy volume keep the quieter appLog-only
+                // treatment instead of a console FAILED line per junk blob).
+                let shouldCatalog = Self.shouldCatalogProbeResult(
+                    ext: outcome.ext, streamTypeRaw: outcome.probe.streamTypeRaw)
+
                 let shouldAbort = processTargetProbeResult(
                     outcome: outcome,
                     volName: volName,
                     completedCount: completedCount,
                     totalFiles: totalFiles,
                     target: target,
+                    catalogGated: !shouldCatalog,
                     consecutiveNotAccessible: &consecutiveNotAccessible,
                     loggedMilestones: &loggedMilestones,
                     milestones: milestones,
                     abortAfter: abortAfter
                 )
 
-                // Catalog-admission gate — the SAME junk gate as the
-                // network-resume path (runResumedProbeGroup). Drop
-                // pre-construction so we never build a VideoRecord for a file
-                // we're about to discard (extensionless + ffprobe-
+                // Drop pre-construction so we never build a VideoRecord for a
+                // file we're about to discard (extensionless + ffprobe-
                 // unidentified). The two paths must gate identically.
-                if Self.shouldCatalogProbeResult(ext: outcome.ext, streamTypeRaw: outcome.probe.streamTypeRaw) {
+                if shouldCatalog {
                     // MainActor drain point: this loop is @MainActor-isolated,
                     // so the VideoRecord is constructed HERE — the off-actor
                     // probe pipeline only ever produced the Sendable
@@ -254,22 +261,28 @@ extension VideoScanModel {
                     }
                 }
 
+                // Catalog-admission gate — computed ONCE (see the matching
+                // comment in runTargetProbeGroup); also feeds the accounting
+                // call so healthy-volume gated-out junk stays off the console.
+                let shouldCatalog = Self.shouldCatalogProbeResult(
+                    ext: outcome.ext, streamTypeRaw: outcome.probe.streamTypeRaw)
+
                 let shouldAbort = processTargetProbeResult(
                     outcome: outcome,
                     volName: volName,
                     completedCount: completedCount,
                     totalFiles: totalFiles,
                     target: target,
+                    catalogGated: !shouldCatalog,
                     consecutiveNotAccessible: &consecutiveNotAccessible,
                     loggedMilestones: &loggedMilestones,
                     milestones: milestones,
                     abortAfter: abortAfter
                 )
 
-                // Catalog-admission gate. Drop pre-construction so we never
-                // build a VideoRecord for a file we're about to discard
-                // (extensionless + unidentified).
-                if Self.shouldCatalogProbeResult(ext: outcome.ext, streamTypeRaw: outcome.probe.streamTypeRaw) {
+                // Drop pre-construction so we never build a VideoRecord for a
+                // file we're about to discard (extensionless + unidentified).
+                if shouldCatalog {
                     // MainActor drain point — construct the VideoRecord here.
                     let rec = VideoRecord()
                     rec.apply(outcome)

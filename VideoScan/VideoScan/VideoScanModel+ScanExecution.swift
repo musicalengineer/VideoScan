@@ -103,21 +103,36 @@ extension VideoScanModel {
     /// extensionless-heavy tree (Avid media dirs), every outcome is
     /// extensionless + ffprobeFailed and gated out — and the abort would
     /// never fire. Pinned by ProbeGroupAbortAccountingTests.
+    ///
+    /// - Parameter catalogGated: true when the caller's catalog-admission
+    ///   gate rejects this outcome (extensionless + ffprobe-unidentified).
+    ///   The caller computes `shouldCatalogProbeResult` ONCE and passes its
+    ///   negation, so gate logic is never evaluated twice per file. Gated-out
+    ///   failures on a HEALTHY volume (file exists, ffprobe just couldn't
+    ///   identify it) skip the visible "⚠ FAILED" console line — thousands of
+    ///   junk blobs in an Avid tree would otherwise flood the console; the
+    ///   quieter appLog "NOT CATALOGED" line at the drain point still records
+    ///   each one. "File not found" failures ALWAYS log and count: they are
+    ///   the volume-unmount trail the abort diagnostic depends on.
     func processTargetProbeResult(
         outcome: ProbeOutcome,
         volName: String,
         completedCount: Int,
         totalFiles: Int,
         target: CatalogScanTarget,
+        catalogGated: Bool,
         consecutiveNotAccessible: inout Int,
         loggedMilestones: inout Set<Int>,
         milestones: Set<Int>,
         abortAfter: Int
     ) -> Bool {
         if outcome.probe.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
-            let detail = outcome.notes.isEmpty ? "no detail available" : outcome.notes
-            log("  ⚠ FAILED: \(outcome.filename) — \(detail)")
-            if outcome.probe.isPlayable == "File not found" {
+            let notFound = outcome.probe.isPlayable == "File not found"
+            if notFound || !catalogGated {
+                let detail = outcome.notes.isEmpty ? "no detail available" : outcome.notes
+                log("  ⚠ FAILED: \(outcome.filename) — \(detail)")
+            }
+            if notFound {
                 consecutiveNotAccessible += 1
                 if consecutiveNotAccessible >= abortAfter {
                     log("  ⛔ \(abortAfter) consecutive files inaccessible on \(volName) — volume likely unmounted. Aborting remaining probes.")
