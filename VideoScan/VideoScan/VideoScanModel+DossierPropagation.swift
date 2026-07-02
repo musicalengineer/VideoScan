@@ -160,6 +160,39 @@ extension VideoScanModel {
         return Set(trimmed).count == 1
     }
 
+    // MARK: - Provenance stamp for direct writebacks (fix 2026-07-01)
+
+    /// Backfill the dossier provenance stamp after a direct per-channel
+    /// writeback (audio transcript, scene captions). The smear-cleanup
+    /// signature below treats "unreadable + has dossier content +
+    /// dossierProcessedAt == nil" as corruption to blank — but a record
+    /// with an unplayable legacy VIDEO codec (svq3/cinepak/... →
+    /// `isLikelyUnanalyzable`) can still carry perfectly legitimate
+    /// direct results: ffmpeg decodes the audio for Whisper, and the
+    /// frame-rip path feeds the VLM, even when AVFoundation can't touch
+    /// the video. Without the stamp such content matched the corruption
+    /// signature and the one-shot cleanup destroyed it.
+    ///
+    /// Backfill-only: a record that already carries a FULL dossier stamp
+    /// (VLM+Whisper stack, from `applyDossier`) keeps that attribution —
+    /// the channel's own provenance is already carried by its
+    /// model/date fields (audioTranscriptModel/Date, sceneCaptionModel/
+    /// Date), so overwriting `dossierProcessedBy` with a single-channel
+    /// id would erase the record of the full pass.
+    /// Shared by VideoScanModel+AudioTranscript and
+    /// VideoScanModel+SceneCaptions; lives here because this file owns
+    /// the smear signature the stamp exists to satisfy.
+    @MainActor
+    func stampDossierProvenance(
+        on record: VideoRecord,
+        modelID: String,
+        at date: Date
+    ) {
+        guard record.dossierProcessedAt == nil else { return }
+        record.dossierProcessedAt = date
+        record.dossierProcessedBy = modelID
+    }
+
     // MARK: - One-shot cleanup of pre-fix smear corruption
 
     /// Pure, testable cleanup core (no gate, no file I/O): walk `records`

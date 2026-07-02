@@ -13,35 +13,12 @@ extension VideoScanModel {
     // models. (Matches the sceneCaptions "re-caption replaces" rule.)
     //
     // Provenance stamp (fix 2026-07-01): every apply variant also stamps
-    // `dossierProcessedAt` (backfill-only — see stampDossierProvenance).
-    // The smear-cleanup signature in VideoScanModel+DossierPropagation
-    // treats "unreadable + has dossier content + dossierProcessedAt==nil"
-    // as corruption to blank. A record with an unplayable legacy VIDEO
-    // codec (svq3/cinepak/... → isLikelyUnanalyzable) can still carry a
-    // perfectly legitimate Whisper AUDIO transcript — ffmpeg decodes the
-    // audio fine even when AVFoundation can't touch the video. Without
-    // the stamp, a direct transcript write onto such a record matched the
-    // corruption signature and the one-shot cleanup would destroy it.
-
-    /// Backfill the dossier provenance stamp after a direct transcript
-    /// write. Only fills the stamp when it's missing: a record that
-    /// already carries a FULL dossier stamp (VLM+Whisper stack, from
-    /// `applyDossier`) keeps that attribution — the audio channel's own
-    /// provenance is already carried by audioTranscriptModel/Date, so
-    /// overwriting `dossierProcessedBy` with a whisper-only id would
-    /// erase the record of the VLM pass.
-    /// `// fileprivate` ≈ C++ file-static: helper visible to this
-    /// translation unit only.
-    @MainActor
-    fileprivate func stampDossierProvenance(
-        on record: VideoRecord,
-        modelID: String,
-        at date: Date
-    ) {
-        guard record.dossierProcessedAt == nil else { return }
-        record.dossierProcessedAt = date
-        record.dossierProcessedBy = modelID
-    }
+    // `dossierProcessedAt` (backfill-only). The helper and the full
+    // rationale live in VideoScanModel+DossierPropagation
+    // (`stampDossierProvenance`), shared with the applyCaptions family —
+    // the short version: without the stamp, a legit direct write onto an
+    // `isLikelyUnanalyzable` record matched the smear-cleanup corruption
+    // signature and the one-shot cleanup would destroy it.
 
     /// Apply a fresh audio transcript to a single catalog record by
     /// reference. Replaces any prior transcript on that record (the

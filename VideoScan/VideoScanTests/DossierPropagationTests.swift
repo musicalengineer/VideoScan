@@ -681,4 +681,118 @@ struct DossierPropagationTests {
         #expect(smeared.audioTranscript == nil, "Genuine smear must still be blanked")
         #expect(legit.audioTranscript == "real speech", "Stamped direct transcript must survive")
     }
+
+    // MARK: - 8. Direct caption writeback carries provenance (twin of section 7, 2026-07-01)
+    //
+    // Identical exposure to the transcript bug above, on the caption
+    // channel: applyCaptions historically wrote sceneCaptions /
+    // sceneCaptionModel / sceneCaptionDate without stamping
+    // dossierProcessedAt. A caption-only run onto an isLikelyUnanalyzable
+    // record (VLM captioning a legacy-codec file via the ffmpeg frame-rip
+    // path, which decodes fine even when AVFoundation can't) therefore
+    // matched the smear-cleanup corruption signature and the one-shot
+    // cleanup would blank the legitimate captions.
+
+    @Test func applyCaptions_byPath_stampsProvenance_survivesSmearCleanup() {
+        let model = VideoScanModel()
+        let rec = makeLegacyVideoCodecRecord(path: "/Vols/T/beachday.mov", md5: "LGC8")
+        model.records = [rec]
+        #expect(VideoScanModel.isExcludedFromPropagation(rec),
+                "Precondition: legacy-codec record must be in the at-risk class")
+
+        let matched = model.applyCaptions(
+            [SceneCaption(timestamp: 0, text: "Kids building a sandcastle")],
+            to: "/Vols/T/beachday.mov",
+            model: "qwen2.5-vl-3b-4bit")
+        #expect(matched)
+
+        #expect(rec.dossierProcessedAt != nil,
+                "Path-keyed caption writeback must stamp dossierProcessedAt provenance")
+
+        let cleared = model.clearSmearedDossiers()
+        #expect(cleared.isEmpty,
+                "Directly-applied captions are legitimate content, not smear")
+        #expect(rec.sceneCaptions.count == 1,
+                "Legit VLM captions on an unplayable-video record must survive cleanup")
+    }
+
+    @Test func applyCaptions_bulk_stampsProvenance_survivesSmearCleanup() {
+        let model = VideoScanModel()
+        let a = makeLegacyVideoCodecRecord(path: "/Vols/T/c.mov", md5: "LGC9")
+        let b = makeLegacyVideoCodecRecord(path: "/Vols/T/d.mov", md5: "LGCA")
+        model.records = [a, b]
+
+        let updated = model.applyCaptions(
+            ["/Vols/T/c.mov": [SceneCaption(timestamp: 0, text: "A birthday cake with candles")],
+             "/Vols/T/d.mov": [SceneCaption(timestamp: 5, text: "A dog running across the yard")]],
+            model: "qwen2.5-vl-3b-4bit")
+        #expect(updated == 2)
+
+        #expect(a.dossierProcessedAt != nil && b.dossierProcessedAt != nil,
+                "Bulk caption writeback must stamp dossierProcessedAt on every updated record")
+
+        let cleared = model.clearSmearedDossiers()
+        #expect(cleared.isEmpty)
+        #expect(a.sceneCaptions.first?.text == "A birthday cake with candles")
+        #expect(b.sceneCaptions.first?.text == "A dog running across the yard")
+    }
+
+    /// Re-captioning a record that already carries a FULL dossier stamp
+    /// must not overwrite that provenance — same backfill-only rule as
+    /// the transcript twin. The caption channel's own provenance lives
+    /// in sceneCaptionModel/Date.
+    @Test func applyCaptions_preservesExistingFullDossierProvenance() {
+        let model = VideoScanModel()
+        let fullDossierAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let rec = makeRecord(path: "/Vols/T/dossiered2.mov", md5: "LGCB",
+                             captions: [SceneCaption(timestamp: 0, text: "old caption")],
+                             streamType: .videoAndAudio,
+                             dossierProcessedAt: fullDossierAt)
+        rec.dossierProcessedBy = "qwen2.5-vl-3b-4bit+whisper-medium-mlx-q4"
+        model.records = [rec]
+
+        let matched = model.applyCaptions(
+            [SceneCaption(timestamp: 0, text: "new re-run caption")],
+            to: "/Vols/T/dossiered2.mov",
+            model: "qwen2.5-vl-7b-8bit")
+        #expect(matched)
+
+        #expect(rec.sceneCaptions.first?.text == "new re-run caption")
+        #expect(rec.sceneCaptionModel == "qwen2.5-vl-7b-8bit")
+        #expect(rec.dossierProcessedAt == fullDossierAt,
+                "Existing full-dossier timestamp must not be overwritten by a re-caption")
+        #expect(rec.dossierProcessedBy == "qwen2.5-vl-3b-4bit+whisper-medium-mlx-q4",
+                "Existing full-dossier stack attribution must not be overwritten by a re-caption")
+    }
+
+    /// Negative control (caption flavor): the fix must NOT weaken smear
+    /// detection. Caption content that arrived WITHOUT a provenance stamp
+    /// (the pre-2026-06-30 ungated MD5 propagation) on an unreadable
+    /// record is still corruption and is still cleared — even when a
+    /// legitimately-captioned record sits in the same catalog.
+    @Test func smearCleanup_stillDetectsGenuineCaptionSmear_alongsideDirectCaptions() {
+        let model = VideoScanModel()
+
+        // Legit: captions arrive via the apply path → stamped → kept.
+        let legit = makeLegacyVideoCodecRecord(path: "/Vols/T/legitcap.mov", md5: "LGCC")
+        // Smeared: content field-assigned the way the old propagation did
+        // (copies captions + model + date but never a dossierProcessedAt).
+        let smeared = makeLegacyVideoCodecRecord(path: "/Vols/T/smearedcap.mov", md5: "LGCD")
+        smeared.sceneCaptions = [SceneCaption(timestamp: 0, text: "hallucinated inherited caption")]
+        smeared.sceneCaptionModel = "qwen2.5-vl-3b-4bit"
+        smeared.sceneCaptionDate = Date(timeIntervalSince1970: 1_700_000_000)
+
+        model.records = [legit, smeared]
+        _ = model.applyCaptions(
+            [SceneCaption(timestamp: 0, text: "real scene description")],
+            to: "/Vols/T/legitcap.mov",
+            model: "qwen2.5-vl-3b-4bit")
+
+        let cleared = model.clearSmearedDossiers()
+        #expect(cleared.count == 1, "Exactly the unstamped record matches the smear signature")
+        #expect(cleared.first?.fullPath == "/Vols/T/smearedcap.mov")
+        #expect(smeared.sceneCaptions.isEmpty, "Genuine caption smear must still be blanked")
+        #expect(legit.sceneCaptions.first?.text == "real scene description",
+                "Stamped direct captions must survive")
+    }
 }

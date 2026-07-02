@@ -11,6 +11,14 @@ extension VideoScanModel {
     // with the model id and date that produced them. Re-captioning
     // *replaces* the array wholesale — we don't merge captions from
     // different models per docs/scene_captions_plan.md.
+    //
+    // Provenance stamp (fix 2026-07-01, twin of the applyAudioTranscript
+    // fix): every apply variant also stamps `dossierProcessedAt`
+    // (backfill-only). The helper and the full rationale live in
+    // VideoScanModel+DossierPropagation (`stampDossierProvenance`) —
+    // the short version: without the stamp, legit direct captions onto
+    // an `isLikelyUnanalyzable` record matched the smear-cleanup
+    // corruption signature and the one-shot cleanup would destroy them.
 
     /// Apply scene captions from a captioning run to a single catalog
     /// record by path. Replaces any prior captions on that record (the
@@ -34,9 +42,12 @@ extension VideoScanModel {
         guard let record = records.first(where: { $0.fullPath == path }) else {
             return false
         }
+        let now = Date()
         record.sceneCaptions = captions
         record.sceneCaptionModel = model
-        record.sceneCaptionDate = Date()
+        record.sceneCaptionDate = now
+        // Smear-signature exclusion — see the section comment above.
+        stampDossierProvenance(on: record, modelID: model, at: now)
         propagateDossierToMD5Duplicates(of: record)
         objectWillChange.send()
         saveCatalogDebounced()
@@ -78,6 +89,8 @@ extension VideoScanModel {
             record.sceneCaptions = captions
             record.sceneCaptionModel = model
             record.sceneCaptionDate = now
+            // Smear-signature exclusion — see the section comment above.
+            stampDossierProvenance(on: record, modelID: model, at: now)
             propagateDossierToMD5Duplicates(of: record)
             updated += 1
             totalCaptions += captions.count
