@@ -104,6 +104,60 @@ extension VideoScanModel {
         removedCount > 50 && removedCount * 5 > existingCount
     }
 
+    /// Sendable result of the OFF-MAIN-ACTOR existence sweep: whether the
+    /// scan root was reachable, and for every pre-await vanished path,
+    /// whether its file is still on disk. The results are keyed by path so
+    /// they stay valid across the merge's suspension even if the records
+    /// array is mutated meanwhile (the post-await re-derivation consumes
+    /// them by path, never by cached record reference).
+    struct ScanMergeExistenceEvidence: Sendable {
+        var rootReachable: Bool
+        var existsByPath: [String: Bool]
+    }
+
+    /// The stat work of a complete-scan merge, extracted so it can run on a
+    /// DETACHED task instead of the main actor (QA/perf 2026-07-02: with
+    /// thousands of vanished records under cold/unwalked subtrees the
+    /// per-record `fileExists` loop measured ~11–50 s of main-thread
+    /// beachball). Pure function of the filesystem: root reachability check,
+    /// one `fileExists` per vanished path, and the millisecond-unmount-window
+    /// root re-check.
+    ///
+    /// `// nonisolated static ≈ a free function in C++ — no actor hop, no
+    /// // access to model state, everything it needs comes in by value.`
+    nonisolated static func gatherScanMergeExistenceEvidence(
+        root: String,
+        vanishedPaths: [String],
+        afterRootCheck: (@Sendable () -> Void)?
+    ) -> ScanMergeExistenceEvidence {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: root) else {
+            return ScanMergeExistenceEvidence(rootReachable: false, existsByPath: [:])
+        }
+        afterRootCheck?()
+        var exists = [String: Bool](minimumCapacity: vanishedPaths.count)
+        var goneCount = 0
+        for path in vanishedPaths {
+            let onDisk = fm.fileExists(atPath: path)
+            exists[path] = onDisk
+            if !onDisk { goneCount += 1 }
+        }
+        // Millisecond unmount window (QA 2026-07-02): the root check above
+        // and the loop just now are not atomic — a volume that unmounts in
+        // between passes the check, then fails EVERY per-record existence
+        // test. That signature (100% of a non-trivial vanished set gone at
+        // once) warrants ONE root re-check before pruning; if the root is
+        // no longer there, report it unreachable (the merge then retains
+        // all — never prune based on an unreachable disk). The >10 floor
+        // keeps small legitimate cleanups (user deleted a handful of
+        // files) off the extra stat.
+        if goneCount == vanishedPaths.count, vanishedPaths.count > 10,
+           !fm.fileExists(atPath: root) {
+            return ScanMergeExistenceEvidence(rootReachable: false, existsByPath: exists)
+        }
+        return ScanMergeExistenceEvidence(rootReachable: true, existsByPath: exists)
+    }
+
     /// Commit a finished scan into the catalog: replace records under the
     /// scanned `root` (component-boundary scoped) with `targetRecords`.
     ///
@@ -111,6 +165,9 @@ extension VideoScanModel {
     ///   the call site. `false` means the probe loop aborted early (e.g.
     ///   consecutive-inaccessible threshold: volume unmounted mid-scan) —
     ///   the merge then upserts and NEVER prunes.
+    ///
+    /// ASYNC (2026-07-02): complete-scan merges suspend ONCE, while the
+    /// existence sweep runs off-actor. Partial merges never suspend.
     ///
     /// Caller is responsible for persisting (saveCatalogDebounced) — kept
     /// out of here so tests can assert pure in-memory semantics.
@@ -120,18 +177,20 @@ extension VideoScanModel {
         volName: String,
         targetRecords: [VideoRecord],
         scanWasComplete: Bool
-    ) -> ScanMergeOutcome {
+    ) async -> ScanMergeOutcome {
         var outcome = ScanMergeOutcome()
         let newPaths = Set(targetRecords.map(\.fullPath))
-        let existingUnderRoot = records.filter { PathScope.contains($0.fullPath, within: root) }
-        let vanished = existingUnderRoot.filter { !newPaths.contains($0.fullPath) }
-        outcome.refreshed = existingUnderRoot.count - vanished.count
         outcome.upserted = targetRecords.count
 
         guard scanWasComplete else {
             // Partial scan (aborted mid-probe). Evidence is incomplete, so
             // pruning is forbidden: replace only the paths the scan actually
-            // re-saw, keep everything else under the root.
+            // re-saw, keep everything else under the root. No suspension on
+            // this path — no existence checks are needed when nothing is
+            // ever pruned.
+            let existingUnderRoot = records.filter { PathScope.contains($0.fullPath, within: root) }
+            let vanished = existingUnderRoot.filter { !newPaths.contains($0.fullPath) }
+            outcome.refreshed = existingUnderRoot.count - vanished.count
             outcome.retainedStale = vanished.count
             records.removeAll {
                 PathScope.contains($0.fullPath, within: root) && newPaths.contains($0.fullPath)
@@ -157,36 +216,56 @@ extension VideoScanModel {
         // scan ROOT itself is unreachable at merge time (volume unmounted
         // between scan and merge), trust nothing: retain ALL vanished —
         // never prune based on an unreachable disk.
-        let fm = FileManager.default
-        var rootReachable = fm.fileExists(atPath: root)
+        //
+        // OFF-MAIN-ACTOR (QA/perf 2026-07-02): the stats run on a detached
+        // task — vanished paths are hoisted as plain strings, the sweep
+        // returns Sendable evidence keyed by path. This derivation exists
+        // ONLY to know which paths to stat; it is deliberately shadowed by
+        // the post-await re-derivation below and must never feed the merge.
+        let vanishedPathsPreAwait: [String] = records.compactMap { rec in
+            guard PathScope.contains(rec.fullPath, within: root),
+                  !newPaths.contains(rec.fullPath) else { return nil }
+            return rec.fullPath
+        }
+        let afterRootCheck = scanMergeAfterRootCheckForTesting
+        let evidenceTask = Task.detached(priority: .userInitiated) {
+            Self.gatherScanMergeExistenceEvidence(
+                root: root, vanishedPaths: vanishedPathsPreAwait, afterRootCheck: afterRootCheck)
+        }
+        if let hook = scanMergeDuringExistenceChecksForTesting { await hook() }
+        let evidence = await evidenceTask.value
+
+        // ATOMICITY RE-DERIVATION (QA correctness constraint, 2026-07-02):
+        // the await above is the merge's ONE suspension point, and `records`
+        // may have been mutated meanwhile (another target's finalize, a
+        // LiveReload merge, a user edit). Everything the merge acts on is
+        // therefore re-derived from the CURRENT records array here — no
+        // pre-await record set survives past this comment. The existence
+        // evidence stays valid because it is keyed by PATH:
+        //   - path in evidence → use its on-disk verdict;
+        //   - path NOT in evidence (record appeared under the root during
+        //     the await) → NO evidence, so it is RETAINED (`?? true`) —
+        //     never prune a record whose file was never statted;
+        //   - path that left the catalog during the await → simply absent
+        //     from the re-derived vanished set; its evidence goes unused.
+        // From here to the records.removeAll/append below there are no
+        // further awaits, so the mutation is atomic on the main actor.
+        let existingUnderRoot = records.filter { PathScope.contains($0.fullPath, within: root) }
+        let vanished = existingUnderRoot.filter { !newPaths.contains($0.fullPath) }
+        outcome.refreshed = existingUnderRoot.count - vanished.count
+
         var genuinelyGone: [VideoRecord] = []
         var retainedInvisible: [VideoRecord] = []
+        let rootReachable = evidence.rootReachable
         if rootReachable {
-            scanMergeAfterRootCheckForTesting?()
             for rec in vanished {
-                if fm.fileExists(atPath: rec.fullPath) {
+                if evidence.existsByPath[rec.fullPath] ?? true {
                     retainedInvisible.append(rec)
                 } else {
                     genuinelyGone.append(rec)
                 }
             }
-            // Millisecond unmount window (QA 2026-07-02): the root check
-            // above and the loop just now are not atomic — a volume that
-            // unmounts in between passes the check, then fails EVERY
-            // per-record existence test. That signature (100% of a
-            // non-trivial vanished set gone at once) warrants ONE root
-            // re-check before pruning; if the root is no longer there,
-            // fall through to the unreachable-root semantics below (retain
-            // all — never prune based on an unreachable disk). The >10
-            // floor keeps small legitimate cleanups (user deleted a
-            // handful of files) off the extra stat.
-            if genuinelyGone.count == vanished.count, vanished.count > 10,
-               !fm.fileExists(atPath: root) {
-                rootReachable = false
-                genuinelyGone = []
-            }
-        }
-        if !rootReachable {
+        } else {
             retainedInvisible = vanished
         }
         outcome.pruned = genuinelyGone.count
@@ -276,10 +355,19 @@ extension VideoScanModel {
         }
     }
 
-    /// Copy the live catalog.json to a timestamped sibling
+    /// Write the CURRENT in-memory records to a timestamped sibling
     /// `catalog.pre-merge.<stamp>.json` before a tripwired merge. Mirrors
     /// relocate's snapshotCatalogPreRelocate. Returns the snapshot path,
-    /// or nil when no catalog file exists yet / the copy failed.
+    /// or nil when the write failed.
+    ///
+    /// FROM MEMORY, not a disk copy (QA 🟡 #7, 2026-07-02): copying
+    /// catalog.json lagged in-memory state by the 2 s save debounce, so a
+    /// user edit made just before finalize was missing from the safety
+    /// copy. Encoding `records` through the store's canonical
+    /// makePayload/encode path (CatalogStore.writeSnapshot) captures
+    /// exactly what the user sees, in the exact catalog.json format.
+    /// Bonus: a first-ever scan with no catalog.json on disk yet can now
+    /// still write a snapshot (the old copyItem returned nil there).
     ///
     /// Test gate: the SHARED store points at the user's real
     /// ~/Library/Application Support/VideoScan — never write there from a
@@ -288,9 +376,7 @@ extension VideoScanModel {
     @discardableResult
     func snapshotCatalogPreMerge() -> String? {
         if TestEnvironment.isTestHost && catalogStore === CatalogStore.shared { return nil }
-        let src = catalogStore.fileLocation
-        guard FileManager.default.fileExists(atPath: src) else { return nil }
-        let dir = (src as NSString).deletingLastPathComponent
+        let dir = (catalogStore.fileLocation as NSString).deletingLastPathComponent
         let stamp = ISO8601DateFormatter().string(from: Date())
             .replacingOccurrences(of: ":", with: "-")
         var snap = (dir as NSString).appendingPathComponent("catalog.pre-merge.\(stamp).json")
@@ -300,13 +386,11 @@ extension VideoScanModel {
             snap = (dir as NSString).appendingPathComponent("catalog.pre-merge.\(stamp).\(n).json")
             n += 1
         }
-        do {
-            try FileManager.default.copyItem(atPath: src, toPath: snap)
+        if catalogStore.writeSnapshot(records: records, toPath: snap) {
             return snap
-        } catch {
-            log("  ⚠ Pre-merge snapshot failed: \(error.localizedDescription) — a tripwired merge will now degrade to no-prune (fail safe)")
-            scanMergeLog.error("Pre-merge snapshot failed: \(String(describing: error), privacy: .public)")
-            return nil
         }
+        log("  ⚠ Pre-merge snapshot failed (could not encode/write \(snap)) — a tripwired merge will now degrade to no-prune (fail safe)")
+        scanMergeLog.error("Pre-merge snapshot failed at \(snap, privacy: .public)")
+        return nil
     }
 }

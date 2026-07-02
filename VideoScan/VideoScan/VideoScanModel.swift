@@ -379,13 +379,23 @@ final class VideoScanModel: ObservableObject {
     /// See VideoScanModel+RescanPreservation.swift for the contract.
     var pendingPreservedFields: [String: [String: RescanPreservedFields]] = [:]
 
-    /// Test seam (ScanMergeScopeTests): invoked by `commitScanResults` right
-    /// after its initial root-reachability check passes, so the
+    /// Test seam (ScanMergeScopeTests): invoked by the scan-merge existence
+    /// sweep right after its initial root-reachability check passes, so the
     /// millisecond-unmount-window recheck can be exercised deterministically
     /// (the test removes the root here, simulating a volume that unmounts
-    /// between the root check and the per-record existence loop). Always nil
+    /// between the root check and the per-record existence loop). Since the
+    /// sweep moved off the main actor (2026-07-02, beachball fix) the hook
+    /// runs on the detached checker task — hence `@Sendable`. Always nil
     /// in production; `var` for the same test-seam reason as ffprobePath.
-    var scanMergeAfterRootCheckForTesting: (() -> Void)?
+    var scanMergeAfterRootCheckForTesting: (@Sendable () -> Void)?
+
+    /// Test seam (ScanMergeScopeTests): awaited ON THE MAIN ACTOR by
+    /// `commitScanResults` while the detached existence sweep runs, i.e.
+    /// inside the merge's one suspension window. Lets the atomicity test
+    /// mutate `records` deterministically "during the await" and assert the
+    /// post-suspension re-derivation still merges correctly. Always nil in
+    /// production.
+    var scanMergeDuringExistenceChecksForTesting: (@MainActor () async -> Void)?
 
     // Internal so VideoScanModel+ScanTargetPersistence can gate persistence
     // during XCTest runs.

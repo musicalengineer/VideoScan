@@ -264,7 +264,7 @@ extension VideoScanModel {
         // VideoScanModel+ScanMerge.swift. An aborted scan (completed <
         // discovered: volume died mid-probe) upserts without pruning.
         let scanWasComplete = completedCount >= discoveredCount && !walkIncomplete
-        commitScanResults(
+        await commitScanResults(
             root: target.searchPath,
             volName: volName,
             targetRecords: targetRecords,
@@ -275,21 +275,36 @@ extension VideoScanModel {
         // ran to COMPLETION. A partial merge (unmount-abort) keeps it so
         // the target stays resumable — the merge above pruned nothing, and
         // the checkpoint is the only record of what was left to re-verify.
+        var keptCheckpoint = false
         if scanWasComplete {
             ScanCheckpointStorage.delete(for: target.searchPath)
         } else if ScanCheckpointStorage.load(for: target.searchPath) != nil {
+            keptCheckpoint = true
             log("  💾 Scan checkpoint kept for \(volName) — the scan aborted before completing, so it stays resumable.")
         }
         logTargetScanSummary(volName: volName, records: targetRecords)
         finishDiscoveryAudit(audit, volName: volName, cataloged: targetRecords.count)
         appLog.write("Completed catalog scan of volume \(volName): \(completedCount) file(s) scanned, \(targetRecords.count) catalogued")
-        target.status = .complete
+        // Post-merge status (QA on 3628e07): a PARTIAL merge must not claim
+        // .complete — that both misstates what happened and hides the
+        // resume affordance until relaunch, because detectResumableTargets
+        // only promotes .idle/.stopped targets. `.stopped` is the existing
+        // "ended without completing" state (stopTarget, the cancel branch
+        // above), and promotion to `.resumable` stays
+        // detectResumableTargets' job — it remains the SINGLE writer of
+        // that status and it validates the checkpoint is non-empty.
+        target.status = scanWasComplete ? .complete : .stopped
         target.lastScannedDate = Date()
         if target.phase == .noCatalog { target.phase = .cataloged }
         target.stopElapsedTimer()
         persistScanDates()
         notifyTargetsChanged()
         updateGlobalScanState()
+        if keptCheckpoint {
+            // Surface the kept checkpoint as a resume affordance NOW, not
+            // only at next app launch.
+            detectResumableTargets()
+        }
         if !hasActiveTargets {
             dashboard.stopThroughputTimer()
             dashboard.scanPhase = .complete

@@ -23,55 +23,55 @@ import Testing
 import Foundation
 @testable import VideoScan
 
+// MARK: - Shared fixture helpers (file-scope: used by both suites below)
+
+/// Minimal cataloged record at an arbitrary path.
+private func makeRecord(path: String) -> VideoRecord {
+    let r = VideoRecord()
+    r.fullPath = path
+    r.filename = (path as NSString).lastPathComponent
+    r.directory = (path as NSString).deletingLastPathComponent
+    r.sizeBytes = 1_000_000
+    r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+    return r
+}
+
+/// Model with a DETERMINISTIC in-memory scan policy for pipeline-driving
+/// tests. VideoScanModel's default `scanOptions = .restored()` reads the
+/// developer's LIVE UserDefaults in the test host (the app is the host),
+/// so these tests silently depended on Rick's real prefs — with factory
+/// defaults (skipSmallFiles=true) the 64-byte fixtures would never be
+/// discovered and the pipeline tests would fail on any other machine.
+/// Pin the policy here, in memory only; `ScanOptions.save()` is never
+/// called, so real prefs are untouched (settings-pollution class).
+@MainActor
+private func makePipelineModel() -> VideoScanModel {
+    let model = VideoScanModel()
+    var opts = ScanOptions()
+    opts.skipSmallFiles = false      // fixtures are tiny junk-byte files
+    opts.skipChecksums = true        // speed; hashing is irrelevant here
+    opts.probeExtensionless = false  // extensionless e2e lives in T3VExtensionlessSurvivalTests
+    model.scanOptions = opts
+    return model
+}
+
+private func makeTempDir(_ label: String) throws -> URL {
+    // Canonicalize: NSTemporaryDirectory() is /var/folders/…, but the
+    // walker yields realpath'd /private/var/folders/… URLs. Seeded
+    // record paths must share the walker's prefix or nothing matches.
+    // (URL.resolvingSymlinksInPath is no help — it STRIPS /private
+    // instead of adding it; .canonicalPathKey gives the real path.)
+    var dir = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("vs_scanmerge_\(label)_\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    if let canonical = try dir.resourceValues(forKeys: [.canonicalPathKey]).canonicalPath {
+        dir = URL(fileURLWithPath: canonical, isDirectory: true)
+    }
+    return dir
+}
+
 @Suite("Scan-completion catalog merge — scoped replace + tripwire")
 struct ScanMergeScopeTests {
-
-    // MARK: - Helpers
-
-    /// Minimal cataloged record at an arbitrary path.
-    private func makeRecord(path: String) -> VideoRecord {
-        let r = VideoRecord()
-        r.fullPath = path
-        r.filename = (path as NSString).lastPathComponent
-        r.directory = (path as NSString).deletingLastPathComponent
-        r.sizeBytes = 1_000_000
-        r.streamTypeRaw = StreamType.videoAndAudio.rawValue
-        return r
-    }
-
-    /// Model with a DETERMINISTIC in-memory scan policy for pipeline-driving
-    /// tests. VideoScanModel's default `scanOptions = .restored()` reads the
-    /// developer's LIVE UserDefaults in the test host (the app is the host),
-    /// so these tests silently depended on Rick's real prefs — with factory
-    /// defaults (skipSmallFiles=true) the 64-byte fixtures would never be
-    /// discovered and the pipeline tests would fail on any other machine.
-    /// Pin the policy here, in memory only; `ScanOptions.save()` is never
-    /// called, so real prefs are untouched (settings-pollution class).
-    @MainActor
-    private func makePipelineModel() -> VideoScanModel {
-        let model = VideoScanModel()
-        var opts = ScanOptions()
-        opts.skipSmallFiles = false      // fixtures are tiny junk-byte files
-        opts.skipChecksums = true        // speed; hashing is irrelevant here
-        opts.probeExtensionless = false  // extensionless e2e lives in T3VExtensionlessSurvivalTests
-        model.scanOptions = opts
-        return model
-    }
-
-    private func makeTempDir(_ label: String) throws -> URL {
-        // Canonicalize: NSTemporaryDirectory() is /var/folders/…, but the
-        // walker yields realpath'd /private/var/folders/… URLs. Seeded
-        // record paths must share the walker's prefix or nothing matches.
-        // (URL.resolvingSymlinksInPath is no help — it STRIPS /private
-        // instead of adding it; .canonicalPathKey gives the real path.)
-        var dir = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("vs_scanmerge_\(label)_\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        if let canonical = try dir.resourceValues(forKeys: [.canonicalPathKey]).canonicalPath {
-            dir = URL(fileURLWithPath: canonical, isDirectory: true)
-        }
-        return dir
-    }
 
     // MARK: - 1. Incident replay: scan start must not destroy the catalog
 
@@ -184,7 +184,7 @@ struct ScanMergeScopeTests {
     // synthetic /Volumes/X root simulated a scan that can no longer happen:
     // a nonexistent root can't complete a scan.)
     @Test @MainActor
-    func commitReplacesOnlyUnderRootAtComponentBoundary() throws {
+    func commitReplacesOnlyUnderRootAtComponentBoundary() async throws {
         let vol = try makeTempDir("commitscope")
         defer { try? FileManager.default.removeItem(at: vol) }
         let rootA = vol.appendingPathComponent("A", isDirectory: true)
@@ -197,7 +197,7 @@ struct ScanMergeScopeTests {
         model.records = [oldA, keepB, trap]
 
         let fresh = makeRecord(path: rootA.appendingPathComponent("new.mov").path)
-        let outcome = model.commitScanResults(
+        let outcome = await model.commitScanResults(
             root: rootA.path, volName: "X",
             targetRecords: [fresh], scanWasComplete: true)
 
@@ -214,7 +214,7 @@ struct ScanMergeScopeTests {
     // A scan that aborted mid-probe ("volume likely unmounted") has
     // incomplete evidence: it must upsert what it re-saw and keep the rest.
     @Test @MainActor
-    func partialScanUpsertsWithoutPruning() {
+    func partialScanUpsertsWithoutPruning() async {
         let model = VideoScanModel()
         var seeds: [VideoRecord] = []
         for i in 0..<100 {
@@ -227,7 +227,7 @@ struct ScanMergeScopeTests {
         fresh.append(makeRecord(path: "/Volumes/X/vids/brand-new-1.mov"))
         fresh.append(makeRecord(path: "/Volumes/X/vids/brand-new-2.mov"))
 
-        let outcome = model.commitScanResults(
+        let outcome = await model.commitScanResults(
             root: "/Volumes/X/vids", volName: "X",
             targetRecords: fresh, scanWasComplete: false)
 
@@ -262,7 +262,7 @@ struct ScanMergeScopeTests {
     // neither. Uses an injected CatalogStore(directory:) so nothing touches
     // the user's real Application Support.
     @Test @MainActor
-    func tripwireFiresOnMassRemovalAndSnapshots() throws {
+    func tripwireFiresOnMassRemovalAndSnapshots() async throws {
         let dir = try makeTempDir("store")
         defer { try? FileManager.default.removeItem(at: dir) }
         // Real on-disk scan root (see the Fix-2 fixture note above); the
@@ -282,7 +282,7 @@ struct ScanMergeScopeTests {
 
         // "Complete" scan that only re-found 100 of 300 — incident shape.
         let fresh = (0..<100).map { makeRecord(path: vids.appendingPathComponent("clip\($0).mov").path) }
-        let outcome = model.commitScanResults(
+        let outcome = await model.commitScanResults(
             root: vids.path, volName: "X",
             targetRecords: fresh, scanWasComplete: true)
 
@@ -307,7 +307,7 @@ struct ScanMergeScopeTests {
     }
 
     @Test @MainActor
-    func tripwireStaysQuietOnNormalMerge() throws {
+    func tripwireStaysQuietOnNormalMerge() async throws {
         let dir = try makeTempDir("store2")
         defer { try? FileManager.default.removeItem(at: dir) }
         let vids = try makeTempDir("vids2")   // real root, seeds never created
@@ -325,7 +325,7 @@ struct ScanMergeScopeTests {
         // Routine rescan: 40 files genuinely deleted (13%, and under the
         // 50-record floor is irrelevant here — 40 < 50 anyway).
         let fresh = (0..<260).map { makeRecord(path: vids.appendingPathComponent("clip\($0).mov").path) }
-        let outcome = model.commitScanResults(
+        let outcome = await model.commitScanResults(
             root: vids.path, volName: "X",
             targetRecords: fresh, scanWasComplete: true)
 
@@ -342,7 +342,7 @@ struct ScanMergeScopeTests {
     // Guards the wiring (existingUnderRoot / vanished counting inside
     // commitScanResults), which tripwireThresholds cannot see.
     @Test @MainActor
-    func tripwireBoundaryExactThresholdsThroughMerge() throws {
+    func tripwireBoundaryExactThresholdsThroughMerge() async throws {
         // Sub-case: (seedCount, refoundCount, shouldFire, why)
         let cases: [(seeds: Int, refound: Int, fires: Bool, why: String)] = [
             (100, 50, false, "removes exactly 50 — not MORE than 50 records"),
@@ -361,7 +361,7 @@ struct ScanMergeScopeTests {
             model.catalogStore.saveNow(records: seeds)
 
             let fresh = (0..<c.refound).map { makeRecord(path: vids.appendingPathComponent("clip\($0).mov").path) }
-            let outcome = model.commitScanResults(
+            let outcome = await model.commitScanResults(
                 root: vids.path, volName: "X",
                 targetRecords: fresh, scanWasComplete: true)
 
@@ -380,7 +380,7 @@ struct ScanMergeScopeTests {
     // the re-seen path ends up with the FRESH record (refreshed scan-derived
     // fields, exactly one instance), never a stale duplicate pair.
     @Test @MainActor
-    func partialScanUpsertReplacesSamePathRecord() {
+    func partialScanUpsertReplacesSamePathRecord() async {
         let model = VideoScanModel()
         let old = makeRecord(path: "/Volumes/X/vids/refreshed.mov")
         old.sizeBytes = 111
@@ -389,7 +389,7 @@ struct ScanMergeScopeTests {
 
         let fresh = makeRecord(path: "/Volumes/X/vids/refreshed.mov")
         fresh.sizeBytes = 222
-        let outcome = model.commitScanResults(
+        let outcome = await model.commitScanResults(
             root: "/Volumes/X/vids", volName: "X",
             targetRecords: [fresh], scanWasComplete: false)
 
@@ -554,7 +554,7 @@ struct ScanMergeScopeTests {
     // merge would prune the lot. The root check must catch this first and
     // retain all vanished records.
     @Test @MainActor
-    func unreachableRootAtMergeTimeRetainsAllVanished() throws {
+    func unreachableRootAtMergeTimeRetainsAllVanished() async throws {
         let vol = try makeTempDir("unmounted")
         defer { try? FileManager.default.removeItem(at: vol) }
         let root = vol.appendingPathComponent("gone", isDirectory: true).path // never created
@@ -565,7 +565,7 @@ struct ScanMergeScopeTests {
         }
         model.records = seeds
 
-        let outcome = model.commitScanResults(
+        let outcome = await model.commitScanResults(
             root: root, volName: "gone",
             targetRecords: [], scanWasComplete: true)
 
@@ -581,7 +581,7 @@ struct ScanMergeScopeTests {
     // not MORE than 50, so the tripwire stays quiet and no snapshot is
     // written. Pre-fix this merge would have pruned all 200 AND fired.
     @Test @MainActor
-    func tripwireJudgesOnlyGenuinelyGoneRecords() throws {
+    func tripwireJudgesOnlyGenuinelyGoneRecords() async throws {
         let dir = try makeTempDir("store3")
         defer { try? FileManager.default.removeItem(at: dir) }
         let vids = try makeTempDir("vids3")
@@ -599,7 +599,7 @@ struct ScanMergeScopeTests {
             try Data(repeating: 0, count: 64).write(to: vids.appendingPathComponent("clip\(i).mov"))
         }
         let fresh = (0..<100).map { makeRecord(path: vids.appendingPathComponent("clip\($0).mov").path) }
-        let outcome = model.commitScanResults(
+        let outcome = await model.commitScanResults(
             root: vids.path, volName: "X",
             targetRecords: fresh, scanWasComplete: true)
 
@@ -623,7 +623,7 @@ struct ScanMergeScopeTests {
     // partial-merge semantics for the genuinely-gone set: upsert what the
     // scan re-saw, prune NOTHING. RED against the fail-open behavior.
     @Test @MainActor
-    func tripwireWithoutSnapshotDegradesToNoPrune() throws {
+    func tripwireWithoutSnapshotDegradesToNoPrune() async throws {
         let dir = try makeTempDir("nosnap")
         let vids = try makeTempDir("nosnapvids")
         defer {
@@ -648,7 +648,7 @@ struct ScanMergeScopeTests {
         // Tripwire-scale complete scan: re-found 100 of 300, none of the
         // other 200 files exist on disk (genuinely gone).
         let fresh = (0..<100).map { makeRecord(path: vids.appendingPathComponent("clip\($0).mov").path) }
-        let outcome = model.commitScanResults(
+        let outcome = await model.commitScanResults(
             root: vids.path, volName: "X",
             targetRecords: fresh, scanWasComplete: true)
 
@@ -676,7 +676,7 @@ struct ScanMergeScopeTests {
     // (retain all). The test seam removes the root after the first check —
     // RED before the recheck exists (everything pruned).
     @Test @MainActor
-    func millisecondUnmountWindowRetainsAllVanished() throws {
+    func millisecondUnmountWindowRetainsAllVanished() async throws {
         let vol = try makeTempDir("window")
         defer { try? FileManager.default.removeItem(at: vol) }
 
@@ -691,7 +691,7 @@ struct ScanMergeScopeTests {
         }
         defer { model.scanMergeAfterRootCheckForTesting = nil }
 
-        let outcome = model.commitScanResults(
+        let outcome = await model.commitScanResults(
             root: vol.path, volName: "X",
             targetRecords: [], scanWasComplete: true)
 
@@ -818,5 +818,147 @@ struct ScanMergeScopeTests {
         #expect(model.pendingPreservedFields.isEmpty,
                 "The .error return must discard the preserved-fields snapshot (stale-map growth; RED pre-fix)")
         #expect(model.records.count == 1, "The catalog is untouched on the error path")
+    }
+}
+
+// MARK: - Robustness batch 2026-07-02 (off-actor existence checks, in-memory
+// tripwire snapshot, immediate resumability). Separate suite so neither
+// struct rides the type_body_length ceiling; shares the file-scope helpers.
+
+@Suite("Scan-merge robustness — suspension atomicity, snapshot freshness, resume affordance")
+struct ScanMergeRobustnessTests {
+
+    // MARK: - 18. Atomicity under mutation during the existence-check suspension
+
+    // The 2026-07-02 beachball fix moved the per-record existence checks off
+    // the main actor, which introduces ONE await between deriving the
+    // vanished set and mutating `records`. QA's correctness constraint: a
+    // concurrent record mutation during that await must never cause a wrong
+    // prune (or a resurrected record). The merge must RE-DERIVE
+    // existingUnderRoot/vanished from the CURRENT records array after the
+    // suspension — existence evidence stays valid (keyed by path); paths
+    // with no evidence (appeared during the await) are RETAINED, never
+    // pruned. RED against a merge that caches the pre-await sets: the
+    // outcome counts come from stale sets (pruned=2/retainedInvisible=0
+    // instead of 1/1), and any rebuild-style naive merge also resurrects
+    // the removed record / drops the added one. Permanent sensor either way.
+    @Test @MainActor
+    func recordMutationsDuringExistenceCheckSuspensionMergeCorrectly() async throws {
+        let vol = try makeTempDir("atomic")
+        defer { try? FileManager.default.removeItem(at: vol) }
+
+        let model = VideoScanModel()
+        let goneSeed = makeRecord(path: vol.appendingPathComponent("gone.mov").path)         // no file → prune
+        let removedDuringAwait = makeRecord(path: vol.appendingPathComponent("removed.mov").path) // no file either
+        model.records = [goneSeed, removedDuringAwait]
+
+        // Appears in the catalog only DURING the suspension; its file does
+        // not exist on disk, and the sweep never statted it (no evidence).
+        let addedDuringAwait = makeRecord(path: vol.appendingPathComponent("appeared.mov").path)
+
+        model.scanMergeDuringExistenceChecksForTesting = { @MainActor in
+            model.records.removeAll { $0 === removedDuringAwait }
+            model.records.append(addedDuringAwait)
+        }
+        defer { model.scanMergeDuringExistenceChecksForTesting = nil }
+
+        let fresh = makeRecord(path: vol.appendingPathComponent("fresh.mov").path)
+        let outcome = await model.commitScanResults(
+            root: vol.path, volName: "X",
+            targetRecords: [fresh], scanWasComplete: true)
+
+        let paths = Set(model.records.map(\.fullPath))
+        #expect(!paths.contains(goneSeed.fullPath),
+                "Evidence-backed genuinely-gone record must still be pruned")
+        #expect(!paths.contains(removedDuringAwait.fullPath),
+                "A record REMOVED from the catalog during the suspension must stay removed — never resurrected from pre-await sets")
+        #expect(paths.contains(addedDuringAwait.fullPath),
+                "A record ADDED during the suspension has no existence evidence — it must be retained, never wrongly pruned")
+        #expect(paths.contains(fresh.fullPath), "Fresh scan results still land")
+        #expect(outcome.pruned == 1,
+                "pruned must be judged against the POST-await records array (got \(outcome.pruned); 2 = stale pre-await sets)")
+        #expect(outcome.retainedInvisible == 1,
+                "the evidence-less added record must count as retained (got \(outcome.retainedInvisible))")
+    }
+
+    // MARK: - 19. Tripwire snapshot captures in-memory state, not stale disk bytes
+
+    // QA 🟡 #7: snapshotCatalogPreMerge copied catalog.json from DISK, which
+    // lags in-memory state by the 2 s save debounce — a user edit made just
+    // before finalize was missing from the safety copy, so "recovery is a
+    // file copy" silently dropped the newest edits. The snapshot must encode
+    // the CURRENT in-memory records through the store's canonical
+    // makePayload/encode path. RED against the copyItem implementation.
+    @Test @MainActor
+    func tripwireSnapshotCapturesUnsavedInMemoryEdits() async throws {
+        let dir = try makeTempDir("memsnap")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let vids = try makeTempDir("memsnapvids")   // real root, seeds never created
+        defer { try? FileManager.default.removeItem(at: vids) }
+
+        let model = VideoScanModel()
+        model.catalogStore = CatalogStore(directory: dir)
+        let seeds = (0..<300).map { makeRecord(path: vids.appendingPathComponent("clip\($0).mov").path) }
+        model.records = seeds
+        model.catalogStore.saveNow(records: seeds)   // disk copy WITHOUT the edit
+
+        // The user edit the 2 s debounce has NOT flushed yet — in-memory is
+        // ahead of catalog.json (no save is triggered here on purpose).
+        seeds[0].notes = "tagged Donna just before finalize"
+
+        // Tripwire-scale complete scan: re-found 100 of 300, rest genuinely gone.
+        let fresh = (0..<100).map { makeRecord(path: vids.appendingPathComponent("clip\($0).mov").path) }
+        let outcome = await model.commitScanResults(
+            root: vids.path, volName: "X",
+            targetRecords: fresh, scanWasComplete: true)
+
+        #expect(outcome.tripwireFired, "Fixture sanity: 200 of 300 must fire the tripwire")
+        let snapshotPath = try #require(outcome.snapshotPath, "Fixture sanity: a snapshot must have been written")
+        let data = try Data(contentsOf: URL(fileURLWithPath: snapshotPath))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let snap = try decoder.decode(CatalogSnapshot.self, from: data)
+        #expect(snap.records.count == 300, "Snapshot must contain all 300 pre-merge records")
+        let clip0 = snap.records.first { $0.fullPath == seeds[0].fullPath }
+        #expect(clip0?.notes == "tagged Donna just before finalize",
+                "The snapshot must capture IN-MEMORY state — a debounce-lagged disk copy loses the user's newest edits (RED pre-fix; got notes=\(clip0?.notes ?? "<missing record>"))")
+    }
+
+    // MARK: - 20. Aborted scan is offered as resumable IMMEDIATELY (no relaunch)
+
+    // QA on 3628e07: after a partial/aborted merge, finalize set
+    // target.status = .complete — but detectResumableTargets only promotes
+    // .idle/.stopped targets, so the kept checkpoint surfaced as a resume
+    // affordance only after an app relaunch. A partial merge whose
+    // checkpoint survives must leave the target .resumable right away.
+    // Same fixture shape as test 15 (60 checkpointed paths, all vanished,
+    // consecutive-inaccessible abort at 50 → partial merge). RED pre-fix
+    // (status stuck at .complete until relaunch).
+    @Test @MainActor
+    func abortedScanIsImmediatelyResumable() async throws {
+        let dir = try makeTempDir("abortresume")
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let model = makePipelineModel()
+        let bogusPaths = (0..<60).map {
+            dir.appendingPathComponent("vanished_\($0).mov").path
+        }
+        ScanCheckpointStorage.save(ScanCheckpoint(
+            volumePath: dir.path,
+            startedAt: Date(),
+            discoveredPaths: bogusPaths,
+            totalDiscovered: bogusPaths.count,
+            skipChecksums: true))
+        defer { ScanCheckpointStorage.delete(for: dir.path) }
+
+        let target = CatalogScanTarget(searchPath: dir.path)
+        model.scanTargets = [target]
+        model.resumeTarget(target)
+        _ = await target.scanTask?.value
+
+        #expect(ScanCheckpointStorage.load(for: dir.path) != nil,
+                "Fixture sanity: the partial merge keeps its checkpoint (test 15)")
+        #expect(target.status == .resumable,
+                "An aborted (partial-merge) scan must be offered as resumable immediately — not only after relaunch (RED pre-fix: status was \(target.status.rawValue))")
     }
 }

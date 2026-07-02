@@ -420,6 +420,22 @@ final class CatalogStore {
         }
     }
 
+    /// Write a snapshot of `records` to an ARBITRARY path using the same
+    /// makePayload → encodeAndWrite pipeline as catalog.json saves, so the
+    /// bytes are format-identical (decodable via CatalogSnapshot). Used by
+    /// the scan-merge tripwire for catalog.pre-merge.<stamp>.json siblings
+    /// (QA #7, 2026-07-02: the snapshot must capture IN-MEMORY state — a
+    /// disk copy of catalog.json lags by the 2 s save debounce).
+    ///
+    /// Synchronous ON PURPOSE: the tripwire must know the snapshot landed
+    /// before deciding whether to prune (fail-safe contract: no snapshot →
+    /// no prune). It never writes catalog.json itself, so it does not
+    /// contend with writeQueue's debounced saves. Returns true on success.
+    func writeSnapshot(records: [VideoRecord], toPath path: String) -> Bool {
+        Self.encodeAndWrite(payload: Self.makePayload(records: records),
+                            to: URL(fileURLWithPath: path))
+    }
+
     /// Build the on-disk payload as a Sendable DTO. Must run on the main
     /// actor — `VideoRecordDTO(_:)` is the ONLY place the live (non-Sendable)
     /// VideoRecord is read on the save path. Each DTO copies every persisted
