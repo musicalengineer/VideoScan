@@ -181,6 +181,10 @@ extension VideoScanModel {
                 appLog.write("Completed catalog scan of volume \(volName): no video files found")
             }
             discardPreservedFieldsSnapshot(of: target)
+            // The walk ran to completion (it just found nothing), so any
+            // checkpoint is consumed — e.g. a network scan's post-walk
+            // checkpoint, or a resumed checkpoint with zero paths.
+            ScanCheckpointStorage.delete(for: target.searchPath)
             if rootIsNetwork { await ramDisk.unmount() }
             target.status = .complete
             target.lastScannedDate = Date()
@@ -196,7 +200,10 @@ extension VideoScanModel {
             // Since the 2026-07-02 merge restructure, a cancelled scan
             // loses NOTHING: existing records were never removed (the old
             // wipe-at-start is gone) and the partial targetRecords buffer
-            // is simply discarded here.
+            // is simply discarded here. The checkpoint (if any) is
+            // deliberately KEPT: this branch commits nothing, so
+            // resumability must survive a user cancel (QA 2026-07-02;
+            // pinned by userCancelMidProbeLeavesCatalogAndCheckpointIntact).
             discardPreservedFieldsSnapshot(of: target)
             appLog.write("Cancelled catalog scan of volume \(volName) at \(completedCount)/\(discoveredCount) file(s) — catalog unchanged")
             updateGlobalScanState()
@@ -213,14 +220,23 @@ extension VideoScanModel {
         // Atomic root-scoped replace + mass-deletion tripwire — see
         // VideoScanModel+ScanMerge.swift. An aborted scan (completed <
         // discovered: volume died mid-probe) upserts without pruning.
+        let scanWasComplete = completedCount >= discoveredCount
         commitScanResults(
             root: target.searchPath,
             volName: volName,
             targetRecords: targetRecords,
-            scanWasComplete: completedCount >= discoveredCount
+            scanWasComplete: scanWasComplete
         )
         saveCatalogDebounced()
-        ScanCheckpointStorage.delete(for: target.searchPath)
+        // Checkpoint lifecycle (QA 2026-07-02): consumed only when the scan
+        // ran to COMPLETION. A partial merge (unmount-abort) keeps it so
+        // the target stays resumable — the merge above pruned nothing, and
+        // the checkpoint is the only record of what was left to re-verify.
+        if scanWasComplete {
+            ScanCheckpointStorage.delete(for: target.searchPath)
+        } else if ScanCheckpointStorage.load(for: target.searchPath) != nil {
+            log("  💾 Scan checkpoint kept for \(volName) — the scan aborted before completing, so it stays resumable.")
+        }
         logTargetScanSummary(volName: volName, records: targetRecords)
         appLog.write("Completed catalog scan of volume \(volName): \(completedCount) file(s) scanned, \(targetRecords.count) catalogued")
         target.status = .complete
@@ -282,6 +298,10 @@ extension VideoScanModel {
 
         guard FileManager.default.fileExists(atPath: ffprobePath) else {
             log("ERROR: ffprobe not found at \(ffprobePath)\nInstall with: brew install ffmpeg")
+            // The preserved-fields snapshot startTarget just took has no
+            // consumer on this path — discard it, or the map grows by one
+            // stale entry per failed start (QA 2026-07-02).
+            discardPreservedFieldsSnapshot(of: target)
             target.status = .error
             target.stopElapsedTimer()
             updateGlobalScanState()
@@ -431,8 +451,12 @@ extension VideoScanModel {
 
             if let ka = keepalive { await ka.stop() }
 
-            ScanCheckpointStorage.delete(for: root)
-
+            // Checkpoint lifecycle belongs to finalizeSingleTargetScan:
+            // deleted only when the scan ran to COMPLETION. The
+            // unconditional delete that used to sit here destroyed the
+            // checkpoint on a CANCELLED or unmount-aborted resume — whose
+            // finalize branches commit nothing, so resumability must
+            // survive them (QA 2026-07-02).
             await finalizeSingleTargetScan(
                 target: target,
                 volName: volName,

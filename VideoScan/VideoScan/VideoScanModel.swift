@@ -363,6 +363,14 @@ final class VideoScanModel: ObservableObject {
     /// See VideoScanModel+RescanPreservation.swift for the contract.
     var pendingPreservedFields: [String: [String: RescanPreservedFields]] = [:]
 
+    /// Test seam (ScanMergeScopeTests): invoked by `commitScanResults` right
+    /// after its initial root-reachability check passes, so the
+    /// millisecond-unmount-window recheck can be exercised deterministically
+    /// (the test removes the root here, simulating a volume that unmounts
+    /// between the root check and the per-record existence loop). Always nil
+    /// in production; `var` for the same test-seam reason as ffprobePath.
+    var scanMergeAfterRootCheckForTesting: (() -> Void)?
+
     // Internal so VideoScanModel+ScanTargetPersistence can gate persistence
     // during XCTest runs.
     static var isRunningTests: Bool {

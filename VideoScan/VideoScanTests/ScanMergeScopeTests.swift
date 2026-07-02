@@ -204,7 +204,8 @@ struct ScanMergeScopeTests {
         let paths = Set(model.records.map(\.fullPath))
         #expect(paths == [keepB.fullPath, trap.fullPath, fresh.fullPath],
                 "Replace must be scoped to the scanned root at a path-component boundary")
-        #expect(outcome.pruned == 1 && outcome.added == 1 && !outcome.tripwireFired)
+        #expect(outcome.pruned == 1 && outcome.upserted == 1 && !outcome.tripwireFired)
+        #expect(outcome.refreshed == 0, "The one fresh record is a new path, not a refresh")
         #expect(outcome.retainedInvisible == 0)
     }
 
@@ -234,6 +235,8 @@ struct ScanMergeScopeTests {
                 "Partial scan: 95 unseen retained + 5 refreshed + 2 new = 102 (got \(model.records.count))")
         #expect(outcome.retainedStale == 95 && outcome.pruned == 0 && !outcome.tripwireFired,
                 "Partial scans must never prune")
+        #expect(outcome.upserted == 7 && outcome.refreshed == 5,
+                "upserted counts ALL committed records (5 refreshed + 2 new); refreshed counts the overlap")
     }
 
     // MARK: - 6. Mass-deletion tripwire
@@ -608,5 +611,212 @@ struct ScanMergeScopeTests {
         let snapshots = try FileManager.default.contentsOfDirectory(atPath: dir.path)
             .filter { $0.hasPrefix("catalog.pre-merge.") }
         #expect(snapshots.isEmpty, "No pre-merge snapshot when the tripwire stays quiet")
+    }
+
+    // MARK: - 13. Tripwire fails SAFE when the snapshot cannot be written
+
+    // QA 2026-07-02: the tripwire's whole job is "a mass removal is always
+    // recoverable". If snapshotCatalogPreMerge returns nil (unwritable
+    // store directory here — same nil as a full disk or a missing parent),
+    // proceeding to prune is fail-OPEN: the exact incident class with the
+    // safety net announced but absent. The merge must instead degrade to
+    // partial-merge semantics for the genuinely-gone set: upsert what the
+    // scan re-saw, prune NOTHING. RED against the fail-open behavior.
+    @Test @MainActor
+    func tripwireWithoutSnapshotDegradesToNoPrune() throws {
+        let dir = try makeTempDir("nosnap")
+        let vids = try makeTempDir("nosnapvids")
+        defer {
+            // Restore write permission FIRST or the cleanup itself fails.
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o755], ofItemAtPath: dir.path)
+            try? FileManager.default.removeItem(at: dir)
+            try? FileManager.default.removeItem(at: vids)
+        }
+
+        let model = VideoScanModel()
+        model.catalogStore = CatalogStore(directory: dir)
+        let seeds = (0..<300).map { makeRecord(path: vids.appendingPathComponent("clip\($0).mov").path) }
+        model.records = seeds
+        model.catalogStore.saveNow(records: seeds)   // catalog.json DOES exist…
+
+        // …but the directory is read-only, so the pre-merge copy must fail
+        // (r-x for owner: copyItem cannot create the snapshot sibling).
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o500], ofItemAtPath: dir.path)
+
+        // Tripwire-scale complete scan: re-found 100 of 300, none of the
+        // other 200 files exist on disk (genuinely gone).
+        let fresh = (0..<100).map { makeRecord(path: vids.appendingPathComponent("clip\($0).mov").path) }
+        let outcome = model.commitScanResults(
+            root: vids.path, volName: "X",
+            targetRecords: fresh, scanWasComplete: true)
+
+        #expect(outcome.tripwireFired, "200 of 300 must still fire the tripwire")
+        #expect(outcome.snapshotPath == nil, "Fixture sanity: the snapshot must have failed")
+        #expect(outcome.pruned == 0,
+                "No snapshot → no prune: a mass removal must never proceed without a recovery copy (RED pre-fix)")
+        #expect(outcome.retainedNoSnapshot == 200,
+                "The genuinely-gone set must be counted as retained-no-snapshot (got \(outcome.retainedNoSnapshot))")
+        #expect(model.records.count == 300,
+                "100 fresh upserts + 200 retained originals = 300 (got \(model.records.count))")
+        #expect(model.records.contains { $0.fullPath == seeds[299].fullPath },
+                "A genuinely-gone record must survive the degraded merge")
+    }
+
+    // MARK: - 14. Millisecond unmount window between root check and existence loop
+
+    // QA 2026-07-02: the root-reachability check and the per-record existence
+    // loop are not atomic — a volume that unmounts in that window passes the
+    // root check, then EVERY vanished record fails its existence check and
+    // the whole set is "genuinely gone". Signature: 100% of a non-trivial
+    // vanished set (> 10, the recheck floor) gone at once. The merge must
+    // re-check the root ONCE before pruning and, if it is no longer
+    // reachable, fall back to the existing unreachable-root semantics
+    // (retain all). The test seam removes the root after the first check —
+    // RED before the recheck exists (everything pruned).
+    @Test @MainActor
+    func millisecondUnmountWindowRetainsAllVanished() throws {
+        let vol = try makeTempDir("window")
+        defer { try? FileManager.default.removeItem(at: vol) }
+
+        let model = VideoScanModel()
+        let seeds = (0..<12).map {   // 12 > the >10 recheck floor
+            makeRecord(path: vol.appendingPathComponent("clip\($0).mov").path)
+        }
+        model.records = seeds
+        // Simulate the unmount landing between the two checks.
+        model.scanMergeAfterRootCheckForTesting = { [path = vol.path] in
+            try? FileManager.default.removeItem(atPath: path)
+        }
+        defer { model.scanMergeAfterRootCheckForTesting = nil }
+
+        let outcome = model.commitScanResults(
+            root: vol.path, volName: "X",
+            targetRecords: [], scanWasComplete: true)
+
+        #expect(model.records.count == 12,
+                "A root that vanished between the reachability check and the existence loop must retain ALL records (got \(model.records.count)/12; RED pre-recheck)")
+        #expect(outcome.pruned == 0 && outcome.retainedInvisible == 12 && !outcome.tripwireFired)
+    }
+
+    // MARK: - 15. Aborted (partial) scan keeps its checkpoint
+
+    // QA 2026-07-02 (item 4): finalize deleted the checkpoint even when the
+    // merge was PARTIAL (mid-probe abort: volume likely unmounted) — and the
+    // resume path deleted it unconditionally before finalize even ran. An
+    // unmount-abort must stay resumable: the checkpoint survives a partial
+    // merge and is only deleted when a scan runs to completion. Fixture is
+    // the T3V phase-(b2) shape: resume a checkpoint of 60 vanished paths,
+    // every probe is "File not found", the consecutive-inaccessible abort
+    // fires at 50 < 60 → partial merge. RED pre-fix (checkpoint destroyed).
+    @Test @MainActor
+    func abortedScanKeepsCheckpointForResume() async throws {
+        let dir = try makeTempDir("abortcp")
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let model = makePipelineModel()
+        let bogusPaths = (0..<60).map {
+            dir.appendingPathComponent("vanished_\($0).mov").path
+        }
+        ScanCheckpointStorage.save(ScanCheckpoint(
+            volumePath: dir.path,
+            startedAt: Date(),
+            discoveredPaths: bogusPaths,
+            totalDiscovered: bogusPaths.count,
+            skipChecksums: true))
+        defer { ScanCheckpointStorage.delete(for: dir.path) }
+
+        let target = CatalogScanTarget(searchPath: dir.path)
+        model.scanTargets = [target]
+        model.resumeTarget(target)
+        _ = await target.scanTask?.value
+
+        #expect(ScanCheckpointStorage.load(for: dir.path) != nil,
+                "An unmount-aborted (partial) scan must KEEP its checkpoint so it stays resumable (RED pre-fix)")
+    }
+
+    // MARK: - 16. User cancel mid-probe: catalog untouched, checkpoint intact
+
+    // QA 2026-07-02 (item 6, pins finalize's Task.isCancelled branch through
+    // the REAL pipeline): parking every probe at the pause gate before
+    // cancelling makes "cancel while probes are in flight" deterministic —
+    // no sleeps. The checkpoint expectation is RED pre-fix (the resume path
+    // deleted it unconditionally); the catalog expectations pin the
+    // cancelled branch itself: were it removed, this completed-count ==
+    // discovered-count scan would take the COMPLETE merge path and prune
+    // the seeded gone.mov.
+    @Test @MainActor
+    func userCancelMidProbeLeavesCatalogAndCheckpointIntact() async throws {
+        let dir = try makeTempDir("cancel")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var checkpointPaths: [String] = []
+        for i in 0..<6 {
+            let p = dir.appendingPathComponent("clip\(i).mov")
+            try Data(repeating: 0, count: 64).write(to: p)
+            checkpointPaths.append(p.path)
+        }
+
+        let model = makePipelineModel()
+        // Would be PRUNED by a complete merge (no file on disk) — its
+        // survival proves the cancelled branch ran instead of the merge.
+        let seedGone = makeRecord(path: dir.appendingPathComponent("gone.mov").path)
+        let seedKept = makeRecord(path: checkpointPaths[0])
+        seedKept.notes = "curated"   // makes the preserved-fields snapshot non-empty
+        model.records = [seedGone, seedKept]
+
+        ScanCheckpointStorage.save(ScanCheckpoint(
+            volumePath: dir.path,
+            startedAt: Date(),
+            discoveredPaths: checkpointPaths,
+            totalDiscovered: checkpointPaths.count,
+            skipChecksums: true))
+        defer { ScanCheckpointStorage.delete(for: dir.path) }
+
+        let target = CatalogScanTarget(searchPath: dir.path)
+        model.scanTargets = [target]
+        await target.pauseGate.pause()      // park the probes…
+        model.resumeTarget(target)
+        let task = target.scanTask
+        model.stopTarget(target)            // …then cancel (also releases the gate)
+        _ = await task?.value
+
+        #expect(Set(model.records.map(\.fullPath)) == [seedGone.fullPath, seedKept.fullPath],
+                "A cancelled scan must leave the catalog exactly as it was — no prune, no partial commit (got \(model.records.map(\.fullPath)))")
+        #expect(model.records.contains { $0 === seedKept },
+                "Surviving records must be the ORIGINAL instances (nothing was replaced)")
+        #expect(ScanCheckpointStorage.load(for: dir.path) != nil,
+                "A cancelled resume must KEEP its checkpoint — the cancelled branch commits nothing, so resumability must survive (RED pre-fix)")
+        #expect(model.pendingPreservedFields.isEmpty,
+                "The cancelled branch must discard its preserved-fields snapshot")
+        #expect(target.status == .stopped)
+    }
+
+    // MARK: - 17. Error return path discards the preserved-fields snapshot
+
+    // QA 2026-07-02 (item 3): startTarget snapshots dossier + user fields
+    // before launching the scan; the ffprobe-missing .error return never
+    // consumed OR discarded it, so the map grew by one stale entry per
+    // failed start. Sensor: after an .error return the map must be empty.
+    @Test @MainActor
+    func errorReturnDiscardsPreservedFieldsSnapshot() async throws {
+        let dir = try makeTempDir("nodeps")
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let model = makePipelineModel()
+        let seed = makeRecord(path: dir.appendingPathComponent("keeper.mov").path)
+        seed.notes = "curated"   // isWorthRestoring → enters the snapshot map
+        model.records = [seed]
+        model.ffprobePath = dir.appendingPathComponent("no-such-ffprobe").path
+
+        let target = CatalogScanTarget(searchPath: dir.path)
+        model.scanTargets = [target]
+        model.startTarget(target)
+        _ = await target.scanTask?.value
+
+        #expect(target.status == .error, "Fixture sanity: the missing-ffprobe guard must have fired")
+        #expect(model.pendingPreservedFields.isEmpty,
+                "The .error return must discard the preserved-fields snapshot (stale-map growth; RED pre-fix)")
+        #expect(model.records.count == 1, "The catalog is untouched on the error path")
     }
 }
