@@ -39,6 +39,25 @@ struct ScanMergeScopeTests {
         return r
     }
 
+    /// Model with a DETERMINISTIC in-memory scan policy for pipeline-driving
+    /// tests. VideoScanModel's default `scanOptions = .restored()` reads the
+    /// developer's LIVE UserDefaults in the test host (the app is the host),
+    /// so these tests silently depended on Rick's real prefs — with factory
+    /// defaults (skipSmallFiles=true) the 64-byte fixtures would never be
+    /// discovered and the pipeline tests would fail on any other machine.
+    /// Pin the policy here, in memory only; `ScanOptions.save()` is never
+    /// called, so real prefs are untouched (settings-pollution class).
+    @MainActor
+    private func makePipelineModel() -> VideoScanModel {
+        let model = VideoScanModel()
+        var opts = ScanOptions()
+        opts.skipSmallFiles = false      // fixtures are tiny junk-byte files
+        opts.skipChecksums = true        // speed; hashing is irrelevant here
+        opts.probeExtensionless = false  // extensionless e2e lives in T3VExtensionlessSurvivalTests
+        model.scanOptions = opts
+        return model
+    }
+
     private func makeTempDir(_ label: String) throws -> URL {
         // Canonicalize: NSTemporaryDirectory() is /var/folders/…, but the
         // walker yields realpath'd /private/var/folders/… URLs. Seeded
@@ -66,7 +85,7 @@ struct ScanMergeScopeTests {
         let dir = try makeTempDir("empty")
         defer { try? FileManager.default.removeItem(at: dir) }
 
-        let model = VideoScanModel()
+        let model = makePipelineModel()
         let insideA = makeRecord(path: dir.appendingPathComponent("sub/a.mov").path)
         let insideB = makeRecord(path: dir.appendingPathComponent("b.mov").path)
         let outside = makeRecord(path: "/Volumes/ElsewhereVol/keep.mov")
@@ -106,7 +125,7 @@ struct ScanMergeScopeTests {
         // cataloged (extensioned damaged media stays visible).
         try Data(repeating: 0, count: 64).write(to: subA.appendingPathComponent("clip.mov"))
 
-        let model = VideoScanModel()
+        let model = makePipelineModel()
         let staleA   = makeRecord(path: subA.appendingPathComponent("gone.mov").path)
         let siblingB = makeRecord(path: vol.appendingPathComponent("B/keep.mov").path)
         // Component-boundary trap: "<root>suffix" must NOT match "<root>".
@@ -140,7 +159,7 @@ struct ScanMergeScopeTests {
         defer { try? FileManager.default.removeItem(at: vol) }
         try Data(repeating: 0, count: 64).write(to: vol.appendingPathComponent("still-here.mov"))
 
-        let model = VideoScanModel()
+        let model = makePipelineModel()
         let deleted = makeRecord(path: vol.appendingPathComponent("deleted.mov").path)
         model.records = [deleted]
 
@@ -294,5 +313,116 @@ struct ScanMergeScopeTests {
             .filter { $0.hasPrefix("catalog.pre-merge.") }
         #expect(snapshots.isEmpty, "No pre-merge snapshot on a normal merge")
         #expect(model.records.count == 260, "Normal prune proceeds silently")
+    }
+
+    // Boundary check THROUGH the merge, not just the static predicate:
+    // exactly-at-threshold merges stay quiet, one-past fires and snapshots.
+    // Guards the wiring (existingUnderRoot / vanished counting inside
+    // commitScanResults), which tripwireThresholds cannot see.
+    @Test @MainActor
+    func tripwireBoundaryExactThresholdsThroughMerge() throws {
+        // Sub-case: (seedCount, refoundCount, shouldFire, why)
+        let cases: [(seeds: Int, refound: Int, fires: Bool, why: String)] = [
+            (100, 50, false, "removes exactly 50 — not MORE than 50 records"),
+            (255, 204, false, "removes 51 of 255 — exactly 20%, not MORE than 20%"),
+            (254, 203, true, "removes 51 of 254 — just past both gates"),
+        ]
+        for c in cases {
+            let dir = try makeTempDir("boundary")
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let model = VideoScanModel()
+            model.catalogStore = CatalogStore(directory: dir)
+            let seeds = (0..<c.seeds).map { makeRecord(path: "/Volumes/X/vids/clip\($0).mov") }
+            model.records = seeds
+            model.catalogStore.saveNow(records: seeds)
+
+            let fresh = (0..<c.refound).map { makeRecord(path: "/Volumes/X/vids/clip\($0).mov") }
+            let outcome = model.commitScanResults(
+                root: "/Volumes/X/vids", volName: "X",
+                targetRecords: fresh, scanWasComplete: true)
+
+            #expect(outcome.tripwireFired == c.fires, "\(c.why)")
+            #expect(outcome.pruned == c.seeds - c.refound)
+            let snapshots = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+                .filter { $0.hasPrefix("catalog.pre-merge.") }
+            #expect(snapshots.isEmpty == !c.fires,
+                    "Snapshot presence must track the tripwire (\(c.why))")
+        }
+    }
+
+    // MARK: - 7. Partial-scan upsert actually REPLACES same-path records
+
+    // partialScanUpsertsWithoutPruning proves counts; this proves identity —
+    // the re-seen path ends up with the FRESH record (refreshed scan-derived
+    // fields, exactly one instance), never a stale duplicate pair.
+    @Test @MainActor
+    func partialScanUpsertReplacesSamePathRecord() {
+        let model = VideoScanModel()
+        let old = makeRecord(path: "/Volumes/X/vids/refreshed.mov")
+        old.sizeBytes = 111
+        let untouched = makeRecord(path: "/Volumes/X/vids/unseen.mov")
+        model.records = [old, untouched]
+
+        let fresh = makeRecord(path: "/Volumes/X/vids/refreshed.mov")
+        fresh.sizeBytes = 222
+        let outcome = model.commitScanResults(
+            root: "/Volumes/X/vids", volName: "X",
+            targetRecords: [fresh], scanWasComplete: false)
+
+        let atPath = model.records.filter { $0.fullPath == old.fullPath }
+        #expect(atPath.count == 1, "Upsert must never leave duplicate records at one path")
+        #expect(atPath.first?.sizeBytes == 222,
+                "The freshly-scanned record must WIN the upsert (got sizeBytes \(atPath.first?.sizeBytes ?? -1))")
+        // `===` is reference identity — like comparing pointers in C++, not operator==.
+        #expect(atPath.first === fresh, "The surviving instance must be the fresh record")
+        #expect(model.records.contains { $0.fullPath == untouched.fullPath },
+                "The un-re-seen record is retained on a partial scan")
+        #expect(outcome.refreshed == 1 && outcome.retainedStale == 1 && outcome.pruned == 0)
+    }
+
+    // MARK: - 8. Rescan preservation survives the completion merge (pipeline)
+
+    // RescanPreservationTests pins snapshot/apply in isolation; this pins the
+    // ORDER in the real pipeline: applyPreservedFieldsAfterRescan must run
+    // BEFORE commitScanResults replaces the records, or a routine same-path
+    // refresh silently destroys dossier + user-curated fields (the 2026-06-07
+    // dossier-dial incident class). Full pipeline: startTarget (snapshot) →
+    // walker → probe → finalize (apply, then merge).
+    @Test @MainActor
+    func dossierAndUserFieldsSurviveSamePathRefresh() async throws {
+        let dir = try makeTempDir("preserve")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let filePath = dir.appendingPathComponent("keeper.mov").path
+        // Junk bytes: ffprobe fails but extensioned damaged media is still
+        // cataloged, so the path IS re-seen and replaced by the merge.
+        try Data(repeating: 0, count: 64).write(to: URL(fileURLWithPath: filePath))
+
+        let model = makePipelineModel()
+        let seed = makeRecord(path: filePath)
+        seed.sizeBytes = 999_999                      // stale scan-derived value
+        seed.lifecycleStage = .archived
+        seed.mediaDisposition = .important
+        seed.sceneCaptions = [SceneCaption(timestamp: 1.0, text: "porch summer 1985")]
+        seed.detectedPeople = ["Donna"]
+        seed.notes = "curated"
+        model.records = [seed]
+
+        let target = CatalogScanTarget(searchPath: dir.path)
+        model.scanTargets = [target]
+        model.startTarget(target)
+        _ = await target.scanTask?.value
+
+        let refreshed = try #require(model.records.first { $0.fullPath == filePath },
+                                     "Re-seen path must still be cataloged after the rescan")
+        #expect(refreshed !== seed,
+                "The merge must have REPLACED the record with a freshly-scanned instance")
+        #expect(refreshed.sizeBytes == 64,
+                "Scan-derived fields must be refreshed from disk (got \(refreshed.sizeBytes))")
+        // The irreplaceable fields must have been restored onto the fresh record.
+        #expect(refreshed.lifecycleStage == .archived)
+        #expect(refreshed.mediaDisposition == .important)
+        #expect(refreshed.sceneCaptions.first?.text == "porch summer 1985")
+        #expect(refreshed.detectedPeople == ["Donna"])
+        #expect(refreshed.notes == "curated")
     }
 }
