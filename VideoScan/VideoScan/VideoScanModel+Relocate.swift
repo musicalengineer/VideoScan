@@ -298,8 +298,16 @@ extension VideoScanModel {
         // Track salvageFailed for the final summary block.
         var salvageFailedPaths: [String] = []
 
-        // Snapshot catalog.json before any mutation.
-        let snapshotPath = snapshotCatalogPreRelocate()
+        // Snapshot catalog.json before any mutation — but only when a
+        // mutation can actually happen. A dry-run promises zero side
+        // effects, and the snapshot file itself is a side effect: the
+        // old unconditional call left a misleading
+        // catalog.pre-relocate.<stamp>.json behind on every preview
+        // (QA P3, 2026-07-01). Placement matters: the apply phase for
+        // Buckets B/D/E starts immediately below, so the snapshot must
+        // stay HERE (not after the dry-run early-return further down,
+        // which would put it after the first real mutation).
+        let snapshotPath: String? = options.dryRun ? nil : snapshotCatalogPreRelocate()
 
         // Apply zero-copy mutations: Bucket B (manuallyDeleted),
         // Bucket C (rewrite path then queue for migration),
@@ -401,7 +409,7 @@ extension VideoScanModel {
             // relocate.log filename is intentionally preserved (per renaming
             // policy log file paths stay the same).
             relocateLog.write("[DRY RUN] no copies; would migrate \(toMigrate.count) record(s)")
-            logRelocateSummary(salvageFailedPaths: [])
+            logRelocateSummary(salvageFailedPaths: [], snapshotTaken: false)
             // Pad to min-visible window even on dry-run so a 50ms
             // reconcile doesn't blink past.
             await padToMinVisible(runStart: runStart, minVisibleSeconds: minVisibleSeconds)
@@ -550,7 +558,7 @@ extension VideoScanModel {
             startNextQueuedJobIfIdle()
             return
         }
-        logRelocateSummary(salvageFailedPaths: salvageFailedPaths)
+        logRelocateSummary(salvageFailedPaths: salvageFailedPaths, snapshotTaken: snapshotPath != nil)
 
         // Fix 2 — minimum-visible padding before the summary sheet
         // pops. On a Bucket-E-heavy run with zero copies the entire
@@ -839,7 +847,7 @@ extension VideoScanModel {
         """)
     }
 
-    private func logRelocateSummary(salvageFailedPaths: [String]) {
+    private func logRelocateSummary(salvageFailedPaths: [String], snapshotTaken: Bool) {
         let mb = Double(dashboard.relocateBytesCopied) / 1_048_576.0
         let elapsed = dashboard.relocateStartTime.map { Date().timeIntervalSince($0) } ?? 0
         let mbps = elapsed > 0 ? mb / elapsed : 0
@@ -854,7 +862,9 @@ extension VideoScanModel {
             failedBlock = "\n  Salvage failed files:\n\(head)\(more)"
         }
 
-        let snapshotHint = "\n  Pre-migrate snapshot kept in app support — restore via `cp` if needed."
+        let snapshotHint = snapshotTaken
+            ? "\n  Pre-migrate snapshot kept in app support — restore via `cp` if needed."
+            : ""
 
         log("""
 

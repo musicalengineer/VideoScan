@@ -200,6 +200,95 @@ struct RelocateIntegrationTests {
         #expect(!FileManager.default.fileExists(atPath: destFile.path))
     }
 
+    // Regression (QA P3, 2026-07-01): a dry-run promises ZERO side
+    // effects, but snapshotCatalogPreRelocate() ran before the dryRun
+    // gate, leaving a catalog.pre-relocate.<stamp>.json file behind.
+    // Note: the catalog MUST be persisted first (saveNow) — without a
+    // catalog.json on disk the snapshot helper returns nil and creates
+    // nothing, which is exactly why dryRun_makesNoChangesOnDisk_...
+    // above never caught this.
+    @Test
+    func dryRun_leavesNoPreRelocateSnapshotFile() async throws {
+        let ws = try Self.makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: ws.root) }
+
+        let src = ws.source.appendingPathComponent("y.bin")
+        let (sy, hy) = try writeFile(at: src, bytes: 256)
+        let rec = makeRecord(fullPath: src.path, size: sy, md5: hy)
+
+        let model = VideoScanModel()
+        model.catalogStore = CatalogStore(directory: ws.catalog)
+        model.records = [rec]
+        // Persist so a catalog.json exists for the snapshot path to copy.
+        model.catalogStore.saveNow(records: [rec])
+
+        model.relocateVolume(RelocateOptions(
+            sourceVolumeRootPath: ws.source.path,
+            destinationRoot: ws.dest,
+            maxConcurrency: 1,
+            dryRun: true,
+            skipAlreadyRelocated: true
+        ))
+        await waitForRelocateDone(model)
+
+        // No pre-relocate snapshot file may exist after a dry-run.
+        let catalogDirContents = try FileManager.default.contentsOfDirectory(atPath: ws.catalog.path)
+        #expect(!catalogDirContents.contains(where: { $0.hasPrefix("catalog.pre-relocate.") }),
+                "dry-run must not leave a pre-relocate snapshot behind, found: \(catalogDirContents)")
+        // And the summary must not advertise one.
+        #expect(model.pendingRelocateSummary?.snapshotPath == nil)
+    }
+
+    // Placement guard for the dry-run snapshot fix: on a REAL run the
+    // snapshot must still be taken BEFORE the first catalog mutation is
+    // persisted. We prove ordering by content: the snapshot is a copy
+    // of catalog.json taken at run start, so its record paths must
+    // still point at the SOURCE volume even though the live catalog
+    // has been rewritten to dest by the time the run completes.
+    @Test
+    func realRun_snapshotContentPrecedesFirstMutation() async throws {
+        let ws = try Self.makeWorkspace()
+        defer { try? FileManager.default.removeItem(at: ws.root) }
+
+        let src = ws.source.appendingPathComponent("z.bin")
+        let (sz, hz) = try writeFile(at: src, bytes: 512)
+        let rec = makeRecord(fullPath: src.path, size: sz, md5: hz)
+
+        let model = VideoScanModel()
+        model.catalogStore = CatalogStore(directory: ws.catalog)
+        model.records = [rec]
+        model.catalogStore.saveNow(records: [rec])
+
+        model.relocateVolume(RelocateOptions(
+            sourceVolumeRootPath: ws.source.path,
+            destinationRoot: ws.dest,
+            maxConcurrency: 1,
+            dryRun: false,
+            skipAlreadyRelocated: true
+        ))
+        await waitForRelocateDone(model)
+
+        // The live record migrated...
+        #expect(rec.fullPath.hasPrefix(ws.dest.path))
+
+        // ...but the snapshot still carries the pre-mutation source path.
+        let snapshotName = try #require(
+            try FileManager.default.contentsOfDirectory(atPath: ws.catalog.path)
+                .first(where: { $0.hasPrefix("catalog.pre-relocate.") }),
+            "real run must create a pre-relocate snapshot")
+        let snapURL = ws.catalog.appendingPathComponent(snapshotName)
+        // JSONEncoder escapes "/" as "\/" by default — unescape so plain
+        // path substring checks work.
+        let snapText = try String(contentsOf: snapURL, encoding: .utf8)
+            .replacingOccurrences(of: "\\/", with: "/")
+        #expect(snapText.contains(src.path),
+                "snapshot must contain the ORIGINAL source path (taken before mutation)")
+        #expect(!snapText.contains(ws.dest.appendingPathComponent("z.bin").path),
+                "snapshot must NOT contain the rewritten dest path")
+        // Summary surfaces the snapshot path on real runs.
+        #expect(model.pendingRelocateSummary?.snapshotPath == snapURL.path)
+    }
+
     @Test
     func adopted_skipsCopy_butStampsProvenanceAndRewritesPath() async throws {
         let ws = try Self.makeWorkspace()
