@@ -137,7 +137,15 @@ enum FilesystemWalker {
                 if Task.isCancelled { break }
                 guard let rv = try? url.resourceValues(
                     forKeys: [.isDirectoryKey, .isRegularFileKey, .isReadableKey, .fileSizeKey]
-                ) else { continue }
+                ) else {
+                    // QA 2026-07-02: an entry whose resource values cannot be
+                    // fetched used to vanish with a bare `continue`. Record
+                    // it — visibility only, the scan stays "complete" (the
+                    // merge's existence check retains on-disk files, so
+                    // nothing can be pruned by skipping it).
+                    audit?.unreadableFile(path: url.path)
+                    continue
+                }
 
                 if rv.isDirectory == true {
                     let dirName = url.lastPathComponent.lowercased()
@@ -149,9 +157,16 @@ enum FilesystemWalker {
                     } else {
                         dirStack.append(url)
                     }
-                } else if rv.isRegularFile == true && rv.isReadable == true {
-                    processRegularFile(url, fileSize: rv.fileSize, policy: policy,
-                                       audit: audit, emit: emit)
+                } else if rv.isRegularFile == true {
+                    if rv.isReadable == true {
+                        processRegularFile(url, fileSize: rv.fileSize, policy: policy,
+                                           audit: audit, emit: emit)
+                    } else {
+                        // Regular file the walker can see but not read
+                        // (permissions) — previously a silent skip. Same
+                        // visibility-only treatment as above.
+                        audit?.unreadableFile(path: url.path)
+                    }
                 }
             }
         }

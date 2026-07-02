@@ -172,9 +172,13 @@ enum SkipCategories {
         "json", "xml", "plist", "yml", "yaml", "html", "htm", "css", "js",
         "py", "sh", "c", "h", "cpp", "hpp", "swift", "java", "rb",
         "sql", "db", "sqlite", "sqlite3",
-        // images (stills — Vision/Photos territory, not ffprobe's)
+        // images (stills — Vision/Photos territory, not ffprobe's).
+        // (No "raw" — a .raw file is plausibly a raw video/PCM dump, so it
+        // stays "unknown" and the sniff arbitrates; camera-RAW stills will
+        // sniff-fail and land in the audit, which is the correct fate. The
+        // vendor-specific still extensions below are unambiguous and stay.)
         "jpg", "jpeg", "png", "gif", "tif", "tiff", "bmp", "heic", "heif",
-        "webp", "psd", "svg", "ico", "icns", "raw", "cr2", "nef", "arw", "dng",
+        "webp", "psd", "svg", "ico", "icns", "cr2", "nef", "arw", "dng",
         // archives / disk images / packages. (No "iso" — a DVD-video image
         // is plausibly media; leave it "unknown" so the sniff/ffprobe judge.)
         "zip", "gz", "bz2", "xz", "7z", "rar", "tar", "sit", "sitx", "dmg",

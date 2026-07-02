@@ -42,7 +42,8 @@ extension VideoScanModel {
         ramMountPoint: String?,
         skipHashing: Bool,
         useTimeout: Bool,
-        echoFilename: Bool
+        echoFilename: Bool,
+        catalogedPaths: Set<String> = []
     ) async -> ProbeOutcome {
         if Task.isCancelled {
             var skip = ProbeOutcome()
@@ -63,7 +64,8 @@ extension VideoScanModel {
                 prefetchToRAM: rootIsNetwork,
                 ramPath: ramMountPoint,
                 skipHashing: skipHashing,
-                scanRootPath: root
+                scanRootPath: root,
+                catalogedPaths: catalogedPaths
             )
         } else {
             outcome = await self.probeFileOutcome(
@@ -71,18 +73,28 @@ extension VideoScanModel {
                 prefetchToRAM: rootIsNetwork,
                 ramPath: ramMountPoint,
                 skipHashing: skipHashing,
-                scanRootPath: root
+                scanRootPath: root,
+                catalogedPaths: catalogedPaths
             )
         }
         await MainActor.run {
             let ds = self.dashboard
             ds.scanCompleted += 1
+            // Sniff-rejected outcomes are junk CLASSIFICATION, not probe
+            // errors (QA 2026-07-02): ffprobe never ran, nothing failed —
+            // the file simply isn't media. They carry the ffprobeFailed
+            // streamType for the junk gate, but must not inflate the
+            // dashboard's error counts (a .dat-blob volume would otherwise
+            // report thousands of "errors" on a perfectly healthy scan).
+            // ffprobe-failed outcomes that PASSED the sniff still count.
+            let isProbeError = outcome.probe.streamTypeRaw == StreamType.ffprobeFailed.rawValue
+                && !outcome.sniffRejected
             if let idx = ds.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
                 ds.volumeProgress[idx].completedFiles += 1
                 if outcome.wasCacheHit {
                     ds.volumeProgress[idx].cacheHits += 1
                 }
-                if outcome.probe.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
+                if isProbeError {
                     ds.volumeProgress[idx].errors += 1
                 }
             }
@@ -91,7 +103,7 @@ extension VideoScanModel {
             } else {
                 ds.scanCacheMisses += 1
             }
-            if outcome.probe.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
+            if isProbeError {
                 ds.scanErrors += 1
             }
             ds.liveStreamCounts[outcome.probe.streamTypeRaw, default: 0] += 1
@@ -238,13 +250,20 @@ extension VideoScanModel {
         // that would have made the June-30 incident shape visible AND
         // harmless.
         let enumerationErrors = audit?.directoryEnumerationErrors ?? 0
+        // walkWasIncomplete also covers the RESUMED case (QA 2026-07-02):
+        // a checkpoint whose ORIGINAL walk hit enumeration errors carries
+        // walkHadEnumerationErrors, resume marks the audit, and this scan —
+        // which never re-walked — must not claim completeness either.
+        let walkIncomplete = audit?.walkWasIncomplete ?? false
         if enumerationErrors > 0 {
             log("  ⚠ \(enumerationErrors) director\(enumerationErrors == 1 ? "y" : "ies") could not be read on \(volName) — treating this scan as INCOMPLETE (no records will be pruned).")
+        } else if walkIncomplete {
+            log("  ⚠ Resumed from a checkpoint whose original walk could not read every directory on \(volName) — treating this scan as INCOMPLETE (no records will be pruned).")
         }
         // Atomic root-scoped replace + mass-deletion tripwire — see
         // VideoScanModel+ScanMerge.swift. An aborted scan (completed <
         // discovered: volume died mid-probe) upserts without pruning.
-        let scanWasComplete = completedCount >= discoveredCount && enumerationErrors == 0
+        let scanWasComplete = completedCount >= discoveredCount && !walkIncomplete
         commitScanResults(
             root: target.searchPath,
             volName: volName,
@@ -306,8 +325,14 @@ extension VideoScanModel {
         if audit.sniffRejected > 0 || audit.probeRejected > 0 {
             lines.append("  Not cataloged: \(audit.sniffRejected) no media signature (sniff) · \(audit.probeRejected) unidentified by ffprobe")
         }
+        if audit.unreadableFiles > 0 {
+            lines.append("  ⚠ \(audit.unreadableFiles) file(s) could not be read (permissions) — recorded in the audit, never probed")
+        }
         if audit.directoryEnumerationErrors > 0 {
             lines.append("  ⚠ \(audit.directoryEnumerationErrors) directories could not be read — discovery was INCOMPLETE")
+        }
+        if audit.resumedFromIncompleteWalk {
+            lines.append("  ⚠ Resumed from a checkpoint whose original walk was incomplete — discovery was INCOMPLETE")
         }
         if let sidecarPath {
             lines.append("  Audit JSON: \(sidecarPath)")
@@ -318,7 +343,7 @@ extension VideoScanModel {
         if audit.directoryEnumerationErrors > 0 {
             discoveryAuditLog.warning("Discovery INCOMPLETE for \(volName, privacy: .public): \(audit.directoryEnumerationErrors) unreadable directories — scan finalized as not-complete (upsert, no prune)")
         }
-        appLog.write("Discovery audit (\(volName)): enumerated \(audit.filesEnumerated), admitted \(audit.filesAdmitted), cataloged \(audit.filesCataloged), sniff-rejected \(audit.sniffRejected), probe-rejected \(audit.probeRejected), unreadable dirs \(audit.directoryEnumerationErrors)\(sidecarPath.map { "; sidecar: \($0)" } ?? "")")
+        appLog.write("Discovery audit (\(volName)): enumerated \(audit.filesEnumerated), admitted \(audit.filesAdmitted), cataloged \(audit.filesCataloged), sniff-rejected \(audit.sniffRejected), probe-rejected \(audit.probeRejected), unreadable dirs \(audit.directoryEnumerationErrors), unreadable files \(audit.unreadableFiles)\(sidecarPath.map { "; sidecar: \($0)" } ?? "")")
     }
 
     /// Mount the RAM disk for network scans if any root needs it.
@@ -517,6 +542,15 @@ extension VideoScanModel {
             // enumeration stats — but the probe-gate hooks (sniff-rejected /
             // probe-rejected) and the finalize summary still apply.
             let audit = DiscoveryAuditCollector(scanRoot: root, volumeName: volName)
+            // Checkpoint honesty (QA 2026-07-02): the ORIGINAL walk behind
+            // this checkpoint could not read every directory. The resume
+            // never re-walks, so the incompleteness carries over — finalize
+            // must refuse to call the scan complete (upsert, never prune),
+            // or it would prune records under directories that walk never
+            // saw despite completing every checkpointed path.
+            if checkpoint.walkHadEnumerationErrors {
+                audit.markResumedFromIncompleteWalk()
+            }
 
             let result = await runResumedProbeGroup(
                 target: target,

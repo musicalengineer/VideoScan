@@ -119,6 +119,27 @@ struct UnknownExtensionAdmissionTests {
         // never smuggle them past a deliberate scanAudioFiles=off.
         #expect(classify("wav", unknown: true) == .reject(.audioScanningOff))
     }
+
+    // QA fix batch 2026-07-02 (item 5): a .raw file is plausibly a raw
+    // video/PCM dump — the junk list must not make it permanently invisible.
+    // The sniff arbitrates instead (camera-RAW stills sniff-fail and are
+    // audited, which is the correct disposition).
+    @Test(".raw routes through the sniff — not permanently junk-listed (RED pre-fix)")
+    func rawIsNoLongerKnownNonMedia() {
+        #expect(!SkipCategories.knownNonMediaExtensions.contains("raw"),
+                ".raw may be a raw video/PCM dump — the sniff must arbitrate, not the junk list")
+        #expect(FilesystemWalker.classifyFile(
+            extension: "raw", videoExtensions: videoExtensions,
+            audioExtensions: audioExtensions, scanUnknownExtensions: true) == .admit)
+        // Camera-RAW stills with their OWN extensions stay junk-listed —
+        // they are unambiguous, unlike the generic ".raw".
+        #expect(FilesystemWalker.classifyFile(
+            extension: "cr2", videoExtensions: videoExtensions,
+            audioExtensions: audioExtensions, scanUnknownExtensions: true) == .reject(.nonMediaExtension))
+        #expect(FilesystemWalker.classifyFile(
+            extension: "dng", videoExtensions: videoExtensions,
+            audioExtensions: audioExtensions, scanUnknownExtensions: true) == .reject(.nonMediaExtension))
+    }
 }
 
 // MARK: - Pro-video bundle helpers (Feature 2, pure level)
@@ -412,5 +433,245 @@ struct DiscoveryCompletenessPipelineTests {
                 "the readable part of the tree is still cataloged")
         #expect(!model.records.contains { $0.fullPath == locked.appendingPathComponent("hidden.mov").path },
                 "fixture sanity: nothing inside the unreadable directory was discovered")
+    }
+}
+
+// MARK: - QA fix batch 2026-07-02 (post-b150a1f)
+
+// Item 1 — checkpoint decode tolerance. The pipeline half (resume honors
+// the flag) lives in DiscoveryQAFixBatchPipelineTests below.
+@Suite("ScanCheckpoint — enumeration-error flag decode tolerance")
+struct ScanCheckpointHonestyDecodeTests {
+
+    @Test("Old checkpoint JSON without the flag decodes clean (RED before decodeIfPresent)")
+    func oldCheckpointDecodesWithoutFlag() throws {
+        // Byte-for-byte the shape ScanCheckpointStorage wrote before the
+        // walkHadEnumerationErrors field existed.
+        let legacy = Data("""
+        {
+          "volumePath" : "/Volumes/OldDrive",
+          "startedAt" : "2026-06-30T12:00:00Z",
+          "discoveredPaths" : ["/Volumes/OldDrive/a.mov"],
+          "totalDiscovered" : 1,
+          "skipChecksums" : true
+        }
+        """.utf8)
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        let cp = try dec.decode(ScanCheckpoint.self, from: legacy)
+        #expect(!cp.walkHadEnumerationErrors, "missing field must default to false")
+        #expect(cp.skipChecksums && cp.totalDiscovered == 1)
+    }
+
+    @Test("Even older JSON without skipChecksums still decodes")
+    func ancientCheckpointDecodesWithoutSkipChecksums() throws {
+        let ancient = Data("""
+        {
+          "volumePath" : "/Volumes/OldDrive",
+          "startedAt" : "2026-06-30T12:00:00Z",
+          "discoveredPaths" : [],
+          "totalDiscovered" : 0
+        }
+        """.utf8)
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        let cp = try dec.decode(ScanCheckpoint.self, from: ancient)
+        #expect(!cp.skipChecksums && !cp.walkHadEnumerationErrors)
+    }
+
+    @Test("The flag round-trips when set")
+    func flagRoundTrips() throws {
+        let cp = ScanCheckpoint(
+            volumePath: "/Volumes/X", startedAt: Date(),
+            discoveredPaths: ["/Volumes/X/a.mov"], totalDiscovered: 1,
+            skipChecksums: false, walkHadEnumerationErrors: true)
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        let dec = JSONDecoder()
+        dec.dateDecodingStrategy = .iso8601
+        let back = try dec.decode(ScanCheckpoint.self, from: enc.encode(cp))
+        #expect(back.walkHadEnumerationErrors)
+    }
+}
+
+// Items 1–4, pipeline level. Helpers duplicated per the established
+// ScanMergeScopeTests convention (each suite owns its fixtures).
+// Isolation: in-memory scan options only (never .save()d); checkpoints use
+// production storage with UUID temp-path keys + defer delete
+// (RobustScanTests convention); no sidecar is written (no override, test
+// host gate).
+@Suite("Discovery QA fix batch — pipelines")
+struct DiscoveryQAFixBatchPipelineTests {
+
+    private func makeTempDir(_ label: String) throws -> URL {
+        var dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("vs_qafix_\(label)_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        if let canonical = try dir.resourceValues(forKeys: [.canonicalPathKey]).canonicalPath {
+            dir = URL(fileURLWithPath: canonical, isDirectory: true)
+        }
+        return dir
+    }
+
+    private func makeRecord(path: String) -> VideoRecord {
+        let r = VideoRecord()
+        r.fullPath = path
+        r.filename = (path as NSString).lastPathComponent
+        r.directory = (path as NSString).deletingLastPathComponent
+        r.sizeBytes = 1_000_000
+        r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        return r
+    }
+
+    @MainActor
+    private func makePipelineModel(_ configure: (inout ScanOptions) -> Void = { _ in }) -> VideoScanModel {
+        let model = VideoScanModel()
+        var opts = ScanOptions()
+        opts.skipSmallFiles = false
+        opts.skipChecksums = true
+        configure(&opts)
+        model.scanOptions = opts
+        model.scanTargets.removeAll()
+        return model
+    }
+
+    @MainActor
+    private func runScan(_ model: VideoScanModel, root: String) async {
+        let target = CatalogScanTarget(searchPath: root)
+        model.scanTargets.append(target)
+        model.startTarget(target)
+        _ = await target.scanTask?.value
+    }
+
+    // MARK: Item 1 — checkpoint-resume honors the honesty hook
+
+    @Test @MainActor
+    func resumedCheckpointFlaggedIncompleteNeverPrunes() async throws {
+        let dir = try makeTempDir("cphonesty")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let clipPath = dir.appendingPathComponent("clip0.mov").path
+        try Data(repeating: 0, count: 64).write(to: URL(fileURLWithPath: clipPath))
+
+        let model = makePipelineModel()
+        // Seeded under a directory the ORIGINAL walk never read. The file
+        // does not exist, so a scan finalized as COMPLETE would prune it —
+        // exactly the silent-data-loss shape the flag exists to prevent.
+        let hidden = makeRecord(path: dir.appendingPathComponent("unwalked/hidden.mov").path)
+        model.records = [hidden]
+
+        ScanCheckpointStorage.save(ScanCheckpoint(
+            volumePath: dir.path,
+            startedAt: Date(),
+            discoveredPaths: [clipPath],
+            totalDiscovered: 1,
+            skipChecksums: true,
+            walkHadEnumerationErrors: true))
+        defer { ScanCheckpointStorage.delete(for: dir.path) }
+
+        let target = CatalogScanTarget(searchPath: dir.path)
+        model.scanTargets = [target]
+        model.resumeTarget(target)
+        _ = await target.scanTask?.value
+
+        #expect(model.records.contains { $0.fullPath == hidden.fullPath },
+                "resume of an enumeration-error checkpoint completed all its paths, but the ORIGINAL walk was incomplete — the merge must NOT prune records under directories that walk never read (RED pre-fix)")
+        #expect(model.records.contains { $0.fullPath == clipPath },
+                "the re-verified file is still upserted")
+        let audit = try #require(model.lastDiscoveryAudit)
+        #expect(audit.resumedFromIncompleteWalk, "the audit must carry the checkpoint's incompleteness")
+        #expect(!audit.discoveryComplete)
+        #expect(ScanCheckpointStorage.load(for: dir.path) != nil,
+                "a not-complete scan keeps its checkpoint (the flag persists for the next resume)")
+    }
+
+    // MARK: Item 2b — cataloged paths are exempt from the sniff gate
+
+    @Test @MainActor
+    func catalogedPathBypassesSniffGate() async throws {
+        let dir = try makeTempDir("catexempt")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // Extensionless file whose CURRENT bytes carry no media signature…
+        let blobPath = dir.appendingPathComponent("t9-v").path
+        try Data(repeating: 0, count: 4096).write(to: URL(fileURLWithPath: blobPath))
+
+        let model = makePipelineModel { $0.probeExtensionless = true }
+        // …but ffprobe once vouched for it: a catalog record exists at the
+        // path. A 264-byte sniff must never overrule that verdict.
+        model.records = [makeRecord(path: blobPath)]
+
+        await runScan(model, root: dir.path)
+
+        let audit = try #require(model.lastDiscoveryAudit)
+        #expect(audit.sniffRejected == 0,
+                "a cataloged path must BYPASS the sniff gate and reach ffprobe (RED pre-fix: sniff-rejected \(audit.sniffRejected))")
+        #expect(audit.probeRejected == 1 && audit.probeRejectedPaths == [blobPath],
+                "the zero-blob at the cataloged path must be judged by ffprobe, not the sniff")
+        // Either way the record survives (file still on disk → retained by
+        // the merge's existence check) — the assertion above pins the
+        // MECHANISM, this one the outcome.
+        #expect(model.records.contains { $0.fullPath == blobPath })
+    }
+
+    // MARK: Item 3 — unreadable files are audited, without blocking prune
+
+    @Test @MainActor
+    func unreadableFilesAreCountedAndListedWithoutBlockingPrune() async throws {
+        let fm = FileManager.default
+        let dir = try makeTempDir("unreadablefile")
+        try Data(repeating: 0, count: 64).write(to: dir.appendingPathComponent("visible.mov"))
+        let lockedPath = dir.appendingPathComponent("locked.mov").path
+        try Data(repeating: 0, count: 64).write(to: URL(fileURLWithPath: lockedPath))
+        try fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: lockedPath)
+        defer {
+            // Restore FIRST or the cleanup itself fails.
+            try? fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: lockedPath)
+            try? fm.removeItem(at: dir)
+        }
+
+        let model = makePipelineModel()
+        let deleted = makeRecord(path: dir.appendingPathComponent("deleted.mov").path)
+        model.records = [deleted]
+
+        await runScan(model, root: dir.path)
+
+        let audit = try #require(model.lastDiscoveryAudit)
+        #expect(audit.unreadableFiles == 1,
+                "the chmod-0000 file must be counted (RED pre-fix: silently skipped, got \(audit.unreadableFiles))")
+        #expect(audit.unreadableFilePaths == [lockedPath], "…and listed by path")
+        #expect(audit.directoryEnumerationErrors == 0 && audit.discoveryComplete,
+                "unreadable FILES do not force scan-incomplete (Manager decision: the merge's existence check already retains on-disk files)")
+        let paths = Set(model.records.map(\.fullPath))
+        #expect(!paths.contains(deleted.fullPath),
+                "record-prune behavior unchanged: the genuinely-gone record is still pruned")
+        #expect(paths.contains(dir.appendingPathComponent("visible.mov").path),
+                "the readable file is still cataloged")
+        #expect(!paths.contains(lockedPath), "the unreadable file was never admitted")
+    }
+
+    // MARK: Item 4 — sniff rejections are junk classification, not errors
+
+    @Test @MainActor
+    func sniffRejectionsDoNotTickScanErrors() async throws {
+        let dir = try makeTempDir("errinflate")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // Three extensionless zero-blobs: sniff-rejected junk.
+        for i in 0..<3 {
+            try Data(repeating: 0, count: 4096)
+                .write(to: dir.appendingPathComponent("blob\(i)"))
+        }
+        // One junk-byte .mov: known extension → no sniff → ffprobe fails —
+        // a REAL probe error that must keep ticking.
+        try Data(repeating: 0, count: 64).write(to: dir.appendingPathComponent("damaged.mov"))
+
+        let model = makePipelineModel { $0.probeExtensionless = true }
+        await runScan(model, root: dir.path)
+
+        let audit = try #require(model.lastDiscoveryAudit)
+        #expect(audit.sniffRejected == 3, "fixture sanity: the blobs were sniff-rejected")
+        #expect(model.dashboard.scanErrors == 1,
+                "sniff-rejected junk must NOT tick scanErrors — only the ffprobe-failed .mov counts (got \(model.dashboard.scanErrors); RED pre-fix: 4)")
+        let vp = try #require(model.dashboard.volumeProgress.first { $0.rootPath == dir.path })
+        #expect(vp.errors == 1,
+                "per-volume error count must agree (got \(vp.errors))")
     }
 }

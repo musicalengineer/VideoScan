@@ -77,16 +77,36 @@ struct DiscoveryAudit: Codable, Equatable, Sendable {
     /// Directories the enumerator could not read. NON-ZERO MEANS DISCOVERY
     /// WAS INCOMPLETE — finalize must not treat the scan as complete.
     var directoryEnumerationErrors: Int = 0
+    /// Filesystem entries the walker saw but could not examine: a regular
+    /// file without read permission, or an entry whose resource values could
+    /// not be fetched at all (QA 2026-07-02 — previously a silent `continue`).
+    /// VISIBILITY ONLY: these do NOT force scan-incomplete. Manager decision:
+    /// the merge's per-record existence check already retains records whose
+    /// files are still on disk, so an unprobed-but-present file can never be
+    /// pruned — the audit just has to say it exists.
+    var unreadableFiles: Int = 0
 
     var sniffRejectedPaths: [String] = []
     var probeRejectedPaths: [String] = []
     /// "path — error description" per unreadable directory.
     var unreadableDirectories: [String] = []
+    /// Unreadable-entry paths (capped like the other lists; count stays exact).
+    var unreadableFilePaths: [String] = []
     /// True when any per-path list hit the recording cap (counts stay exact).
     var pathListsTruncated: Bool = false
 
-    /// Discovery honesty flag: false when any directory could not be read.
-    var discoveryComplete: Bool { directoryEnumerationErrors == 0 }
+    /// True when this scan resumed from a checkpoint whose ORIGINAL walk hit
+    /// directory-enumeration errors (ScanCheckpoint.walkHadEnumerationErrors,
+    /// QA 2026-07-02). A resumed scan never re-walks, so the incompleteness
+    /// carries over — finalize must treat the scan as not-complete (upsert,
+    /// never prune) even though the resume itself saw no enumeration errors.
+    var resumedFromIncompleteWalk: Bool = false
+
+    /// Discovery honesty flag: false when any directory could not be read —
+    /// by THIS walk, or by the original walk behind a resumed checkpoint.
+    var discoveryComplete: Bool {
+        directoryEnumerationErrors == 0 && !resumedFromIncompleteWalk
+    }
 }
 
 // MARK: - DiscoveryAuditCollector (thread-safe accumulator)
@@ -144,6 +164,17 @@ final class DiscoveryAuditCollector: @unchecked Sendable {
         with { $0.directoryEnumerationErrors += 1 }
         append("\(path) — \(error.localizedDescription)", to: \.unreadableDirectories)
     }
+    func unreadableFile(path: String) {
+        with { $0.unreadableFiles += 1 }
+        append(path, to: \.unreadableFilePaths)
+    }
+
+    // ── Resume hook ──
+    /// Carry the ORIGINAL walk's incompleteness into a resumed scan's audit
+    /// (checkpoint honesty, QA 2026-07-02).
+    func markResumedFromIncompleteWalk() {
+        with { $0.resumedFromIncompleteWalk = true }
+    }
 
     // ── Probe-engine hooks ──
     func sniffRejected(path: String) {
@@ -161,6 +192,15 @@ final class DiscoveryAuditCollector: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return audit.directoryEnumerationErrors
+    }
+
+    /// Read-only completeness peek for finalize: true when THIS walk hit
+    /// enumeration errors OR the checkpoint this scan resumed from recorded
+    /// that the original walk did.
+    var walkWasIncomplete: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return audit.directoryEnumerationErrors > 0 || audit.resumedFromIncompleteWalk
     }
 
     /// Stamp the end-of-scan facts and return the immutable audit.

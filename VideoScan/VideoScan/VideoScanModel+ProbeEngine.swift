@@ -49,6 +49,15 @@ extension VideoScanModel {
         let abortAfter = rootIsNetwork ? 100 : 50
         var allDiscoveredPaths: [String] = []
         let knownMediaExtensions = videoExtensions.union(audioExtensions)
+        // Sniff-gate exemption (QA 2026-07-02): paths that ALREADY have a
+        // catalog record reach ffprobe even if their first bytes match no
+        // signature — ffprobe once vouched for them, and a 264-byte sniff
+        // must never overrule that verdict (it would feed the prune chain).
+        // Built ONCE per target on the main actor, then carried into the
+        // off-actor probe tasks as an immutable Set — zero actor traffic.
+        let catalogedPaths = Set(records.lazy
+            .map(\.fullPath)
+            .filter { PathScope.contains($0, within: root) })
 
         let stream = walkDirectoryStream(
             root: root,
@@ -92,7 +101,8 @@ extension VideoScanModel {
                                 ramMountPoint: ramMountPoint,
                                 skipHashing: skipHashingCaptured,
                                 useTimeout: true,
-                                echoFilename: false
+                                echoFilename: false,
+                                catalogedPaths: catalogedPaths
                             )
                         }
                     } catch {
@@ -113,12 +123,18 @@ extension VideoScanModel {
             // Save checkpoint after walk completes so a crash during probing
             // can resume without re-walking the entire directory tree.
             if rootIsNetwork {
+                // Checkpoint honesty (QA 2026-07-02): if the walk hit
+                // enumeration errors, the checkpoint must say so — a resume
+                // completes only the ADMITTED paths, and without the flag it
+                // would finalize as "complete" and prune records under the
+                // directories this walk never read.
                 let checkpoint = ScanCheckpoint(
                     volumePath: root,
                     startedAt: Date(),
                     discoveredPaths: allDiscoveredPaths,
                     totalDiscovered: totalFiles,
-                    skipChecksums: skipHashingCaptured
+                    skipChecksums: skipHashingCaptured,
+                    walkHadEnumerationErrors: (audit?.directoryEnumerationErrors ?? 0) > 0
                 )
                 ScanCheckpointStorage.save(checkpoint)
                 log("  💾 Checkpoint saved (\(totalFiles) files) — scan is resumable if interrupted")
@@ -261,6 +277,11 @@ extension VideoScanModel {
         let abortAfter = rootIsNetwork ? 100 : 50
         let totalFiles = filePaths.count
         let knownMediaExtensions = videoExtensions.union(audioExtensions)
+        // Sniff-gate exemption — same per-target context as
+        // runTargetProbeGroup (see the comment there).
+        let catalogedPaths = Set(records.lazy
+            .map(\.fullPath)
+            .filter { PathScope.contains($0, within: root) })
 
         target.filesFound = totalFiles
         dashboard.volumeProgress.append(
@@ -285,7 +306,8 @@ extension VideoScanModel {
                                 ramMountPoint: ramMountPoint,
                                 skipHashing: skipChecksums,
                                 useTimeout: true,
-                                echoFilename: false
+                                echoFilename: false,
+                                catalogedPaths: catalogedPaths
                             )
                         }
                     } catch {
@@ -418,7 +440,7 @@ extension VideoScanModel {
     /// VolumeComparer `(filename, size)` fallback can still match it against
     /// other volumes — without that, every timed-out file would be flagged as
     /// "unique to this volume" in Compare & Rescue.
-    nonisolated func probeFileWithTimeoutOutcome(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false, scanRootPath: String? = nil) async -> ProbeOutcome {
+    nonisolated func probeFileWithTimeoutOutcome(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false, scanRootPath: String? = nil, catalogedPaths: Set<String> = []) async -> ProbeOutcome {
         // Best-effort stat before the race. stat() is metadata-only and
         // usually fast even on SMB when content reads stall. We use this only
         // to populate the timeout record; probeFileOutcome re-fetches on its
@@ -431,7 +453,7 @@ extension VideoScanModel {
         do {
             return try await withThrowingTaskGroup(of: ProbeOutcome.self) { group in
                 group.addTask {
-                    await self.probeFileOutcome(url: url, prefetchToRAM: prefetchToRAM, ramPath: ramPath, skipHashing: skipHashing, scanRootPath: scanRootPath)
+                    await self.probeFileOutcome(url: url, prefetchToRAM: prefetchToRAM, ramPath: ramPath, skipHashing: skipHashing, scanRootPath: scanRootPath, catalogedPaths: catalogedPaths)
                 }
                 group.addTask {
                     try await Task.sleep(nanoseconds: self.probeTimeoutSeconds * 1_000_000_000)
@@ -497,7 +519,7 @@ extension VideoScanModel {
     /// here — that now happens only at the main-actor drain points and the
     /// `@MainActor` shims. This is what closes the off-actor reference-mutation
     /// hole: the whole probe stage trafficks in Sendable values.
-    nonisolated func probeFileOutcome(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false, scanRootPath: String? = nil) async -> ProbeOutcome {
+    nonisolated func probeFileOutcome(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false, scanRootPath: String? = nil, catalogedPaths: Set<String> = []) async -> ProbeOutcome {
         let fm = FileManager.default
         let path = url.path
 
@@ -552,10 +574,15 @@ extension VideoScanModel {
         //     not a 64 KB hash + subprocess.
         // `.unreadable` deliberately falls THROUGH to ffprobe: the sniff only
         // ever rejects on evidence, never on an I/O hiccup.
+        // Cataloged-path exemption (QA 2026-07-02): a path that already has
+        // a catalog record skips the gate entirely — ffprobe once vouched
+        // for it, and a 264-byte sniff must never overrule that verdict and
+        // feed the prune chain. ffprobe re-judges it below.
         let extLower = url.pathExtension.lowercased()
         if MediaSignatures.needsSniff(pathExtension: extLower,
                                       videoExtensions: videoExtensions,
                                       audioExtensions: audioExtensions),
+           !catalogedPaths.contains(path),
            case .noMediaSignature = MediaSignatures.sniff(path: path) {
             var o = ProbeOutcome()
             o.filename            = url.lastPathComponent

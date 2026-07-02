@@ -106,6 +106,50 @@ struct MediaSignaturesTests {
         #expect(MediaSignatures.match(header: Data([0x1F, 0x07, 0x00, 0x3F, 0x51])) == "dv-dif")
     }
 
+    // MARK: - QA fix batch 2026-07-02: ADTS AAC / AC-3 / CAF / RF64
+
+    @Test func adtsAacSignature() {
+        // ADTS byte 1 layout: 1111 (sync) | ID (1 bit) | layer (2 bits, MUST
+        // be 00) | protection_absent (1 bit) — so all four ID/protection
+        // combinations are valid ADTS second bytes.
+        #expect(MediaSignatures.match(header: Data([0xFF, 0xF1, 0x50, 0x80, 0x1F, 0x3F])) == "adts-aac",
+                "MPEG-4 ADTS, no CRC (0xFFF1) — the common shape")
+        #expect(MediaSignatures.match(header: Data([0xFF, 0xF0, 0x50, 0x80])) == "adts-aac",
+                "MPEG-4 ADTS with CRC (0xFFF0)")
+        #expect(MediaSignatures.match(header: Data([0xFF, 0xF9, 0x50, 0x80])) == "adts-aac",
+                "MPEG-2 ADTS, no CRC (0xFFF9)")
+        #expect(MediaSignatures.match(header: Data([0xFF, 0xF8, 0x50, 0x80])) == "adts-aac",
+                "MPEG-2 ADTS with CRC (0xFFF8)")
+        // Non-zero LAYER bits are MPEG audio (MP3/MP2) frame sync, not ADTS —
+        // the sniff deliberately stays out of the bare-MP3 collision swamp
+        // (see the ID3 comment above).
+        #expect(MediaSignatures.match(header: Data([0xFF, 0xFB, 0x90, 0x64])) == nil,
+                "MPEG-1 Layer III (bare MP3) is NOT ADTS")
+        #expect(MediaSignatures.match(header: Data([0xFF, 0xF2, 0x90, 0x64])) == nil,
+                "layer bits 01 is not ADTS")
+        #expect(MediaSignatures.match(header: Data([0xFF, 0x00, 0x00, 0x00])) == nil,
+                "a lone 0xFF is not a sync word")
+    }
+
+    @Test func ac3CafAndRf64Signatures() {
+        // AC-3 sync word.
+        #expect(MediaSignatures.match(header: Data([0x0B, 0x77, 0x1A, 0x2B, 0x40])) == "ac3")
+        #expect(MediaSignatures.match(header: Data([0x77, 0x0B, 0x1A, 0x2B])) == nil,
+                "byte-swapped 0x77 0x0B is not the raw AC-3 sync")
+        // Core Audio Format: 'caff' + file version. (Data(_.utf8): all-ASCII
+        // strings, so the bytes equal the .ascii encoding without the
+        // force-unwrapped optional.)
+        #expect(MediaSignatures.match(header: Data("caff\u{00}\u{01}\u{00}\u{00}desc".utf8)) == "caf")
+        #expect(MediaSignatures.match(header: Data("CAFF\u{00}\u{01}\u{00}\u{00}".utf8)) == nil,
+                "the CAF magic is lowercase 'caff' — uppercase is not the signature")
+        // RF64 (>4 GB Broadcast-WAV) — RIFF-shaped, treated like RIFF.
+        var rf64 = Data("RF64".utf8)
+        rf64.append(contentsOf: [0xFF, 0xFF, 0xFF, 0xFF])   // size = -1 per spec
+        rf64.append(Data("WAVEds64".utf8))
+        #expect(MediaSignatures.match(header: rf64) == "rf64")
+        #expect(MediaSignatures.match(header: Data("RF63AAAAWAVE".utf8)) == nil)
+    }
+
     // MARK: - Negatives (the junk the sniff exists to reject)
 
     @Test func negatives() {

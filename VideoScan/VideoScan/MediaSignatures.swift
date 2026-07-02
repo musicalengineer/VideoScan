@@ -28,7 +28,8 @@ import Foundation
 enum MediaSignatures {
 
     /// Bytes read by `sniff(path:)`. 264 covers the deepest probe below —
-    /// the MPEG-TS sync-byte check at offset 188 (and BDAV at 192).
+    /// the MPEG-TS sync-byte checks at offset 188 (standard) and 196 (the
+    /// BDAV/AVCHD second packet start, the deepest index examined).
     static let sniffLength = 264
 
     /// Verdict of the file-level sniff.
@@ -99,6 +100,11 @@ enum MediaSignatures {
         }
         // RIFF container (AVI, WAV — also WebP etc.; ffprobe arbitrates).
         if h.ascii(0..<4) == "RIFF" { return "riff" }
+        // RF64 (>4 GB Broadcast-WAV) — RIFF-shaped 64-bit variant; treated
+        // exactly like RIFF (ffprobe arbitrates the ds64/WAVE innards).
+        if h.ascii(0..<4) == "RF64" { return "rf64" }
+        // Core Audio Format — 'caff' magic + file version (Apple's WAV).
+        if h.ascii(0..<4) == "caff" { return "caf" }
         // AIFF/AIFC (IFF FORM container).
         if h.ascii(0..<4) == "FORM", let form = h.ascii(8..<12),
            form == "AIFF" || form == "AIFC" {
@@ -141,6 +147,15 @@ enum MediaSignatures {
         if h.ascii(0..<3) == "ID3" { return "id3-audio" }
         // DV DIF header block (raw DV stream dumps).
         if h.hasPrefix([0x1F, 0x07, 0x00]) { return "dv-dif" }
+        // AC-3 sync word (raw Dolby Digital dumps).
+        if h.hasPrefix([0x0B, 0x77]) { return "ac3" }
+        // ADTS AAC. Byte 1: 1111 (sync) | ID (1 bit) | LAYER (2 bits — MUST
+        // be 00 for ADTS) | protection_absent (1 bit), so the mask keeps the
+        // sync + layer bits and ignores ID/protection: matches 0xF0/0xF1
+        // (MPEG-4) and 0xF8/0xF9 (MPEG-2) alike. Non-zero layer bits are
+        // MPEG audio (MP3/MP2) frame sync — deliberately NOT matched here
+        // (see the ID3 note above; bare MP3 is too collision-prone).
+        if h.count >= 2, h.b[0] == 0xFF, h.b[1] & 0xF6 == 0xF0 { return "adts-aac" }
         return nil
     }
 
