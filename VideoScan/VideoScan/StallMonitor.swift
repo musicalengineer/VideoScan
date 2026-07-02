@@ -38,9 +38,9 @@ import os
 // timestamps, no real delays. The live `start()` poll loop and the power
 // assertion are production-only and never run in those pure tests.
 //
-// Memory: holds nothing but two Doubles, a Bool, and the poll Task. The
-// onStall closure captures the job weakly. Worst-case footprint is a few
-// dozen bytes.
+// Memory: holds nothing but two Doubles, a Bool, a few counters, and the
+// poll Task. The onStall closure captures the job weakly. Worst-case
+// footprint is a few dozen bytes.
 //
 // C++ analogy: a software watchdog timer you "kick" on each unit of
 // forward progress; if it isn't kicked within the timeout it fires the
@@ -94,8 +94,35 @@ final class StallMonitor: @unchecked Sendable {
     /// late tick can't "un-stall" a killed op.
     private var fired = false
     private var pollTask: Task<Void, Never>?
-    /// Power-assertion token (production only) — see `beginActivityToken`.
+    /// Power-assertion token (production only) — see the "Power assertion"
+    /// section below. Begun in `start()` under the SAME lock hold as the
+    /// running-check and `pollTask` assignment, so a racing second `start()`
+    /// can never overwrite (leak) it.
     private var activityToken: NSObjectProtocol?
+
+    // MARK: Lifecycle counters (lock-guarded; test introspection)
+    //
+    // Cheap integers written under `lock` alongside the state they shadow.
+    // They pin the atomicity contract of start()/stop(): exactly ONE poll
+    // loop per start/stop cycle, and every activity token begun is ended.
+    // (StallMonitorTests hammers start() concurrently and asserts on these.)
+    private var loopsSpawned = 0
+    private var activityTokensBegun = 0
+    private var activityTokensEnded = 0
+
+    /// Snapshot of the lifecycle counters (test introspection only).
+    var lifecycleCountersForTesting: (loopsSpawned: Int, tokensBegun: Int, tokensEnded: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (loopsSpawned, activityTokensBegun, activityTokensEnded)
+    }
+
+    /// True while a poll-loop handle is held (test introspection only).
+    var isRunningForTesting: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return pollTask != nil
+    }
 
     // MARK: Init
 
@@ -168,21 +195,49 @@ final class StallMonitor: @unchecked Sendable {
 
     /// Start watching. Takes a bounded power assertion (so App Nap / sudden
     /// termination can't silence the watchdog mid-op) and launches the poll
-    /// loop. Idempotent.
+    /// loop. Idempotent AND race-safe: a second `start()` while running is a
+    /// no-op even from another thread.
+    ///
+    /// The running-check, activity-token acquisition, and `pollTask`
+    /// assignment are ONE critical section. (≈ C++: the whole test-and-set
+    /// lives inside the mutex. The earlier version checked under the lock
+    /// but assigned after releasing it — classic TOCTOU: two racers could
+    /// each spawn a poll loop, and the loser's `beginActivity` token
+    /// overwrote the winner's, leaking it.) `ProcessInfo.beginActivity` and
+    /// `Task.detached` are both non-reentrant here (neither calls back into
+    /// the monitor), so holding the lock across them is deadlock-free; the
+    /// detached task doesn't run synchronously.
     func start() {
         lock.lock()
-        let alreadyRunning = pollTask != nil
-        if !alreadyRunning { lastTickAt = clock() }
-        lock.unlock()
-        guard !alreadyRunning else { return }
+        guard pollTask == nil else {
+            lock.unlock()
+            return
+        }
+        lastTickAt = clock()
 
-        beginActivityToken()
+        // Power assertion — see the "Power assertion" section below for the
+        // option rationale. Taken under the lock so exactly one token can
+        // ever be live per start/stop cycle.
+        activityToken = ProcessInfo.processInfo.beginActivity(
+            options: [.background, .suddenTerminationDisabled, .automaticTerminationDisabled],
+            reason: "VideoScan MFO long op: \(label)")
+        activityTokensBegun += 1
 
+        // `pollIntervalSeconds` is immutable — capture it by value so the
+        // sleep at the top of each pass never needs (and never retains)
+        // `self`. `[weak self]` + per-iteration `guard let` means the loop
+        // holds the monitor strongly only for the microseconds of each
+        // stall check, not for the loop's whole lifetime.
+        let interval = pollIntervalSeconds
+        loopsSpawned += 1
         pollTask = Task.detached(priority: .utility) { [weak self] in
-            guard let self else { return }
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: UInt64(self.pollIntervalSeconds * 1_000_000_000))
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
                 if Task.isCancelled { return }
+                // Re-weaken every pass: the strong binding below is scoped
+                // to this iteration, so if the owner drops the monitor the
+                // loop exits on its next wake instead of pinning it forever.
+                guard let self else { return }
                 let now = self.clock()
                 if self.evaluateStall(at: now) {
                     let silent = self.secondsSinceLastTick(at: now)
@@ -192,6 +247,9 @@ final class StallMonitor: @unchecked Sendable {
                 }
             }
         }
+        lock.unlock()
+
+        stallLog.info("power assertion taken (\(self.label, privacy: .public)): App Nap suppressed, sudden/auto-termination disabled (sleep NOT disabled)")
     }
 
     /// Stop watching: cancel the poll loop and release the power assertion.
@@ -215,22 +273,15 @@ final class StallMonitor: @unchecked Sendable {
     // long, expensive transcode/verify shouldn't be sudden- or
     // automatically-terminated out from under us). The hardware is still
     // free to sleep — and the watchdog is exactly what makes that safe.
-
-    private func beginActivityToken() {
-        let reason = "VideoScan MFO long op: \(label)"
-        let token = ProcessInfo.processInfo.beginActivity(
-            options: [.background, .suddenTerminationDisabled, .automaticTerminationDisabled],
-            reason: reason)
-        lock.lock()
-        activityToken = token
-        lock.unlock()
-        stallLog.info("power assertion taken (\(self.label, privacy: .public)): App Nap suppressed, sudden/auto-termination disabled (sleep NOT disabled)")
-    }
+    //
+    // Acquisition lives inline in `start()` (same critical section as the
+    // running-check); release stays here for `stop()`.
 
     private func endActivityToken() {
         lock.lock()
         let token = activityToken
         activityToken = nil
+        if token != nil { activityTokensEnded += 1 }
         lock.unlock()
         guard let token else { return }
         ProcessInfo.processInfo.endActivity(token)

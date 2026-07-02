@@ -171,6 +171,84 @@ struct StallMonitorTests {
         m.stop()
         #expect(!flag.didFire)
     }
+
+    // MARK: start() atomicity — one loop, one token, no leak (harden-jul01)
+    //
+    // Regression for the latent start() race: the running-check was under
+    // the lock but the token acquisition and pollTask assignment were NOT,
+    // so concurrent start() calls could each spawn a poll loop and the
+    // second's ProcessInfo activity token overwrote (leaked) the first.
+    // Latent today (all call sites are single-actor) but a landmine for any
+    // future multi-context caller. The lifecycle counters make the race
+    // deterministic to observe: loopsSpawned > 1 after a concurrent hammer
+    // is the RED.
+
+    @Test func concurrentStartsSpawnExactlyOneLoopAndOneToken() {
+        // DispatchQueue.concurrentPerform launches genuinely parallel
+        // threads with tight simultaneity (a TaskGroup staggers too much to
+        // land in the µs-wide race window). 50 rounds × 16 threads makes the
+        // unfixed race reproduce reliably; a correct monitor spawns exactly
+        // one loop and one token in EVERY round. Constant clock at 0 with
+        // threshold 60 → the loop never stalls during the test.
+        for round in 0..<50 {
+            let m = StallMonitor(label: "race-test",
+                                 thresholdSeconds: 60,
+                                 pollIntervalSeconds: 0.02,
+                                 clock: { 0 },
+                                 onStall: { _ in })
+            DispatchQueue.concurrentPerform(iterations: 16) { _ in m.start() }
+
+            let running = m.lifecycleCountersForTesting
+            #expect(running.loopsSpawned == 1,
+                    "round \(round): \(running.loopsSpawned) poll loops spawned")
+            #expect(running.tokensBegun == 1,
+                    "round \(round): \(running.tokensBegun) activity tokens begun")
+            #expect(m.isRunningForTesting)
+
+            m.stop()
+            let final = m.lifecycleCountersForTesting
+            #expect(final.tokensEnded == final.tokensBegun,
+                    "round \(round): begun \(final.tokensBegun) ended \(final.tokensEnded) — token leak")
+            #expect(!m.isRunningForTesting)              // loop handle gone
+        }
+    }
+
+    @Test func repeatedSequentialStartIsNoOp() {
+        let m = StallMonitor(label: "idempotent-test",
+                             thresholdSeconds: 60,
+                             pollIntervalSeconds: 0.02,
+                             clock: { 0 },
+                             onStall: { _ in })
+        m.start()
+        m.start()   // must be a no-op while running
+        m.start()
+        let c = m.lifecycleCountersForTesting
+        #expect(c.loopsSpawned == 1)
+        #expect(c.tokensBegun == 1)
+        m.stop()
+        #expect(m.lifecycleCountersForTesting.tokensEnded == 1)
+    }
+
+    @Test func restartAfterStopSpawnsFreshLoopAndToken() {
+        // stop() must fully reset so a later start() works — pins that the
+        // fix didn't turn "idempotent while running" into "once, ever".
+        let m = StallMonitor(label: "restart-test",
+                             thresholdSeconds: 60,
+                             pollIntervalSeconds: 0.02,
+                             clock: { 0 },
+                             onStall: { _ in })
+        m.start()
+        m.stop()
+        m.start()
+        let c = m.lifecycleCountersForTesting
+        #expect(c.loopsSpawned == 2)
+        #expect(c.tokensBegun == 2)
+        #expect(c.tokensEnded == 1)
+        #expect(m.isRunningForTesting)
+        m.stop()
+        #expect(m.lifecycleCountersForTesting.tokensEnded == 2)
+        #expect(!m.isRunningForTesting)
+    }
 }
 
 // MARK: - Attribution (#6.4) + atomic output helpers (#6.3)
