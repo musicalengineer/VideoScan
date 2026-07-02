@@ -17,7 +17,9 @@
 //   (a) survive a later scan of a DIFFERENT subtree on the same volume,
 //   (b) survive a later scan of the SAME root that discovers nothing
 //       (extensionless option back OFF — the exact way discovery "loses"
-//       t3-v), and survive an ABORTED (partial) rescan of the same root,
+//       t3-v), survive a same-root rescan with NON-EMPTY discovery that
+//       still cannot see it (b1b — retained-invisible existence check),
+//       and survive an ABORTED (partial) rescan of the same root,
 //   (c) remain findable by search afterward.
 //
 // Red/green: phase (b1) FAILS at fa24921 (pre-fix: startTarget's
@@ -142,6 +144,22 @@ struct T3VExtensionlessSurvivalTests {
         #expect(model.records.contains { $0.fullPath == t3vPath },
                 "t3-v must survive a same-root rescan whose discovery comes back empty (RED pre-0a6fd3c)")
 
+        // ── Phase (b1b): same-root rescan, extensionless OFF, NON-EMPTY discovery ──
+        // The adjacent hazard to (b1): a decoy .mov sits next to t3-v, so
+        // discovery returns 1 file and the merge takes the COMPLETE-scan
+        // prune path instead of the empty-discovery guard. "Not re-seen"
+        // must not mean "deleted": t3-v's bytes are on disk, it is merely
+        // INVISIBLE to this scan's options — and one vanished record is far
+        // under the >50 tripwire floor. RED before the retained-invisible
+        // existence check in commitScanResults.
+        let decoyPath = rescuedDir.appendingPathComponent("decoy.mov").path
+        try Data(repeating: 0, count: 64).write(to: URL(fileURLWithPath: decoyPath))
+        await runScan(model, root: rescuedDir.path, probeExtensionless: false)
+        #expect(model.records.contains { $0.fullPath == t3vPath },
+                "t3-v must survive a complete same-root rescan that cannot SEE it while its file is still on disk (RED pre-retained-invisible fix)")
+        #expect(model.records.contains { $0.fullPath == decoyPath },
+                "The decoy scan itself must still catalog its own files")
+
         // ── Phase (b2): ABORTED (partial) rescan of the same root ──
         // Resume from a checkpoint of 60 vanished extensionless paths: every
         // probe is "File not found", the consecutive-inaccessible abort fires
@@ -166,8 +184,8 @@ struct T3VExtensionlessSurvivalTests {
         let underRoot = model.records.filter {
             PathScope.contains($0.fullPath, within: rescuedDir.path)
         }
-        #expect(underRoot.map(\.fullPath) == [t3vPath],
-                "Aborted rescan must keep t3-v and admit none of the vanished blobs (got \(underRoot.map(\.fullPath)))")
+        #expect(Set(underRoot.map(\.fullPath)) == [t3vPath, decoyPath],
+                "Aborted rescan must keep t3-v (and the b1b decoy) and admit none of the vanished blobs (got \(underRoot.map(\.fullPath)))")
 
         // ── Phase (c): the record is still findable via the REAL search path ──
         // Same call the catalog bar makes (CatalogHelpers.swift →

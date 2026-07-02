@@ -30,6 +30,13 @@ import os
 //     unmounted") UPSERTS instead: refreshed records replace their
 //     same-path predecessors, new files are added, and nothing is pruned
 //     — a half-dead volume must never erase what it failed to re-read.
+//   - Pruning is EXISTENCE-CHECKED (2026-07-02, Fix 2): a complete scan
+//     prunes only records whose file is genuinely gone from disk. Records
+//     the scan didn't re-see but whose file still exists are retained —
+//     "not re-seen" also happens when the file is merely invisible to this
+//     scan's options (extensionless probing off, small-file skip, audio
+//     off, skip-listed subtrees — the t3-v shape). If the scan root itself
+//     is unreachable at merge time, ALL un-re-seen records are retained.
 //   - Mass-deletion tripwire (defense in depth): a complete scan whose
 //     merge would remove MORE THAN 50 records AND MORE THAN 20% of the
 //     existing records under the root first snapshots catalog.json to a
@@ -49,14 +56,21 @@ private let scanMergeLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "
 struct ScanMergeOutcome: Equatable {
     /// Old records under the root replaced by a fresh record at the same path.
     var refreshed: Int = 0
-    /// Old records under the root removed because the scan no longer sees
-    /// their file (complete scans only).
+    /// Old records under the root removed because their file is GENUINELY
+    /// gone from disk (complete scans only; existence-checked).
     var pruned: Int = 0
     /// Fresh records appended.
     var added: Int = 0
     /// Old records under the root kept even though the scan didn't re-see
     /// them (partial scans only — never pruned on incomplete evidence).
     var retainedStale: Int = 0
+    /// Old records under the root the scan didn't re-see but whose file is
+    /// STILL ON DISK (complete scans only) — invisible to this scan's
+    /// options (extensionless probing off, small-file skip, audio off,
+    /// skip-listed subtree), not deleted. Never pruned. Includes ALL
+    /// vanished records when the scan root itself is unreachable at merge
+    /// time (never prune based on an unreachable disk).
+    var retainedInvisible: Int = 0
     /// True when the mass-deletion tripwire fired (snapshot + warning).
     var tripwireFired: Bool = false
     /// Absolute path of the pre-merge catalog snapshot, when one was written.
@@ -116,30 +130,77 @@ extension VideoScanModel {
             return outcome
         }
 
-        outcome.pruned = vanished.count
+        // Complete scan. "Not re-seen" conflates two very different things:
+        // the file was DELETED from disk (prune — correct), and the file is
+        // still on disk but INVISIBLE to this scan's options
+        // (probeExtensionless off, skipSmallFiles, scanAudioFiles off,
+        // skip-listed subtrees — the t3-v shape). Pruning the latter repeats
+        // the incident class with the catalog's own options as the weapon,
+        // and slips under the tripwire whenever the invisible set is small.
+        // Existence-check the vanished set (only the vanished set — usually
+        // small) and retain every record whose file is still on disk. If the
+        // scan ROOT itself is unreachable at merge time (volume unmounted
+        // between scan and merge), trust nothing: retain ALL vanished —
+        // never prune based on an unreachable disk.
+        let fm = FileManager.default
+        let rootReachable = fm.fileExists(atPath: root)
+        var genuinelyGone: [VideoRecord] = []
+        var retainedInvisible: [VideoRecord] = []
+        if rootReachable {
+            for rec in vanished {
+                if fm.fileExists(atPath: rec.fullPath) {
+                    retainedInvisible.append(rec)
+                } else {
+                    genuinelyGone.append(rec)
+                }
+            }
+        } else {
+            retainedInvisible = vanished
+        }
+        outcome.pruned = genuinelyGone.count
+        outcome.retainedInvisible = retainedInvisible.count
+
+        // ONE summary line per merge (fa24921 console etiquette) — never
+        // per-record spam.
+        if !rootReachable && !vanished.isEmpty {
+            log("  ⚠ Scan root \(root) is not reachable at merge time — kept all \(vanished.count) un-re-seen record(s) under it (never prune based on an unreachable disk).")
+            scanMergeLog.warning("Scan merge for \(volName, privacy: .public): root unreachable at merge time; retained all \(vanished.count) vanished records under \(root, privacy: .public)")
+        } else if !retainedInvisible.isEmpty {
+            log("  ℹ Kept \(retainedInvisible.count) existing record(s) under \(root) that this scan did not re-see — their files exist on disk but were not visible to this scan's options (e.g. extensionless probing off, small-file skip, audio files off, skip-listed folders).")
+        }
 
         // Tripwire: never silently mass-delete. Snapshot first, warn loudly,
         // then proceed — the merge itself may be legitimate (user really did
-        // clear out a drive), but it must always be recoverable.
+        // clear out a drive), but it must always be recoverable. Evaluated
+        // on the GENUINELY-GONE set only: retained-invisible records are
+        // kept regardless, so they are not part of the removal being judged.
         if Self.scanMergeTripwireWouldFire(existingCount: existingUnderRoot.count,
-                                           removedCount: vanished.count) {
+                                           removedCount: genuinelyGone.count) {
             outcome.tripwireFired = true
             outcome.snapshotPath = snapshotCatalogPreMerge()
-            let pct = existingUnderRoot.isEmpty ? 0 : vanished.count * 100 / existingUnderRoot.count
+            let pct = existingUnderRoot.isEmpty ? 0 : genuinelyGone.count * 100 / existingUnderRoot.count
             log("""
               ⚠️⚠️ MASS-REMOVAL TRIPWIRE — \(volName)
-              This scan removes \(vanished.count) of \(existingUnderRoot.count) cataloged record(s) under \(root) (\(pct)%).
+              This scan removes \(genuinelyGone.count) of \(existingUnderRoot.count) cataloged record(s) under \(root) (\(pct)%) whose files are no longer on disk.
               If files were NOT deleted from disk, the scan likely failed to see part of the tree (skip rules, unmount, I/O errors).
               Pre-merge catalog snapshot: \(outcome.snapshotPath ?? "SNAPSHOT FAILED — see log")
               """)
-            scanMergeLog.warning("Mass-removal tripwire fired for \(volName, privacy: .public): removing \(vanished.count) of \(existingUnderRoot.count) records under \(root, privacy: .public); snapshot=\(outcome.snapshotPath ?? "FAILED", privacy: .public)")
-            appLog.write("TRIPWIRE: scan merge for \(volName) removes \(vanished.count)/\(existingUnderRoot.count) records under \(root); pre-merge snapshot: \(outcome.snapshotPath ?? "FAILED")")
+            scanMergeLog.warning("Mass-removal tripwire fired for \(volName, privacy: .public): removing \(genuinelyGone.count) of \(existingUnderRoot.count) records under \(root, privacy: .public); snapshot=\(outcome.snapshotPath ?? "FAILED", privacy: .public)")
+            appLog.write("TRIPWIRE: scan merge for \(volName) removes \(genuinelyGone.count)/\(existingUnderRoot.count) records under \(root); pre-merge snapshot: \(outcome.snapshotPath ?? "FAILED")")
         }
 
-        records.removeAll { PathScope.contains($0.fullPath, within: root) }
+        // Remove only what the scan re-saw (replaced by the fresh instance)
+        // or what is genuinely gone from disk — retained-invisible records
+        // stay untouched (original instances, so their dossier/user fields
+        // never even need restoring).
+        let gonePaths = Set(genuinelyGone.map(\.fullPath))
+        records.removeAll {
+            PathScope.contains($0.fullPath, within: root)
+                && (newPaths.contains($0.fullPath) || gonePaths.contains($0.fullPath))
+        }
         records.append(contentsOf: targetRecords)
-        scanMergeLog.info("Scan merge for \(volName, privacy: .public): +\(targetRecords.count) added/refreshed, \(vanished.count) pruned under \(root, privacy: .public)")
-        appLog.write("Catalog merge (\(volName)): \(targetRecords.count) added/refreshed, \(vanished.count) pruned")
+        scanMergeLog.info("Scan merge for \(volName, privacy: .public): +\(targetRecords.count) added/refreshed, \(genuinelyGone.count) pruned, \(retainedInvisible.count) retained-invisible under \(root, privacy: .public)")
+        appLog.write("Catalog merge (\(volName)): \(targetRecords.count) added/refreshed, \(genuinelyGone.count) pruned, \(retainedInvisible.count) retained (files on disk, invisible to scan options)")
         return outcome
     }
 

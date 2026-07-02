@@ -177,23 +177,35 @@ struct ScanMergeScopeTests {
 
     // MARK: - 4. Merge-scope unit tests (commitScanResults directly)
 
+    // Fixture note (Fix 2, retained-invisible): complete-scan pruning is now
+    // existence-checked, and an unreachable root retains everything — so the
+    // scanned root must be a REAL directory and the to-be-pruned seed must
+    // point at a file that genuinely does not exist under it. (The old
+    // synthetic /Volumes/X root simulated a scan that can no longer happen:
+    // a nonexistent root can't complete a scan.)
     @Test @MainActor
-    func commitReplacesOnlyUnderRootAtComponentBoundary() {
+    func commitReplacesOnlyUnderRootAtComponentBoundary() throws {
+        let vol = try makeTempDir("commitscope")
+        defer { try? FileManager.default.removeItem(at: vol) }
+        let rootA = vol.appendingPathComponent("A", isDirectory: true)
+        try FileManager.default.createDirectory(at: rootA, withIntermediateDirectories: true)
+
         let model = VideoScanModel()
-        let oldA  = makeRecord(path: "/Volumes/X/A/old.mov")
-        let keepB = makeRecord(path: "/Volumes/X/B/keep.mov")
-        let trap  = makeRecord(path: "/Volumes/X/ABackup/trap.mov") // hasPrefix trap
+        let oldA  = makeRecord(path: rootA.appendingPathComponent("old.mov").path) // no file → genuinely gone
+        let keepB = makeRecord(path: vol.appendingPathComponent("B/keep.mov").path)
+        let trap  = makeRecord(path: vol.appendingPathComponent("ABackup/trap.mov").path) // hasPrefix trap
         model.records = [oldA, keepB, trap]
 
-        let fresh = makeRecord(path: "/Volumes/X/A/new.mov")
+        let fresh = makeRecord(path: rootA.appendingPathComponent("new.mov").path)
         let outcome = model.commitScanResults(
-            root: "/Volumes/X/A", volName: "X",
+            root: rootA.path, volName: "X",
             targetRecords: [fresh], scanWasComplete: true)
 
         let paths = Set(model.records.map(\.fullPath))
-        #expect(paths == ["/Volumes/X/B/keep.mov", "/Volumes/X/ABackup/trap.mov", "/Volumes/X/A/new.mov"],
+        #expect(paths == [keepB.fullPath, trap.fullPath, fresh.fullPath],
                 "Replace must be scoped to the scanned root at a path-component boundary")
         #expect(outcome.pruned == 1 && outcome.added == 1 && !outcome.tripwireFired)
+        #expect(outcome.retainedInvisible == 0)
     }
 
     // MARK: - 5. Partial scan (abort) never prunes
@@ -250,20 +262,25 @@ struct ScanMergeScopeTests {
     func tripwireFiresOnMassRemovalAndSnapshots() throws {
         let dir = try makeTempDir("store")
         defer { try? FileManager.default.removeItem(at: dir) }
+        // Real on-disk scan root (see the Fix-2 fixture note above); the
+        // seeded clips are never created, so the vanished 200 are all
+        // genuinely gone and the tripwire must judge them.
+        let vids = try makeTempDir("vids")
+        defer { try? FileManager.default.removeItem(at: vids) }
 
         let model = VideoScanModel()
         model.catalogStore = CatalogStore(directory: dir)
         var seeds: [VideoRecord] = []
         for i in 0..<300 {
-            seeds.append(makeRecord(path: "/Volumes/X/vids/clip\(i).mov"))
+            seeds.append(makeRecord(path: vids.appendingPathComponent("clip\(i).mov").path))
         }
         model.records = seeds
         model.catalogStore.saveNow(records: seeds)   // catalog.json to snapshot
 
         // "Complete" scan that only re-found 100 of 300 — incident shape.
-        let fresh = (0..<100).map { makeRecord(path: "/Volumes/X/vids/clip\($0).mov") }
+        let fresh = (0..<100).map { makeRecord(path: vids.appendingPathComponent("clip\($0).mov").path) }
         let outcome = model.commitScanResults(
-            root: "/Volumes/X/vids", volName: "X",
+            root: vids.path, volName: "X",
             targetRecords: fresh, scanWasComplete: true)
 
         #expect(outcome.tripwireFired, "Removing 200 of 300 (67%) must trip the tripwire")
@@ -290,21 +307,23 @@ struct ScanMergeScopeTests {
     func tripwireStaysQuietOnNormalMerge() throws {
         let dir = try makeTempDir("store2")
         defer { try? FileManager.default.removeItem(at: dir) }
+        let vids = try makeTempDir("vids2")   // real root, seeds never created
+        defer { try? FileManager.default.removeItem(at: vids) }
 
         let model = VideoScanModel()
         model.catalogStore = CatalogStore(directory: dir)
         var seeds: [VideoRecord] = []
         for i in 0..<300 {
-            seeds.append(makeRecord(path: "/Volumes/X/vids/clip\(i).mov"))
+            seeds.append(makeRecord(path: vids.appendingPathComponent("clip\(i).mov").path))
         }
         model.records = seeds
         model.catalogStore.saveNow(records: seeds)
 
         // Routine rescan: 40 files genuinely deleted (13%, and under the
         // 50-record floor is irrelevant here — 40 < 50 anyway).
-        let fresh = (0..<260).map { makeRecord(path: "/Volumes/X/vids/clip\($0).mov") }
+        let fresh = (0..<260).map { makeRecord(path: vids.appendingPathComponent("clip\($0).mov").path) }
         let outcome = model.commitScanResults(
-            root: "/Volumes/X/vids", volName: "X",
+            root: vids.path, volName: "X",
             targetRecords: fresh, scanWasComplete: true)
 
         #expect(!outcome.tripwireFired, "40 of 300 removed must NOT fire the tripwire")
@@ -330,15 +349,17 @@ struct ScanMergeScopeTests {
         for c in cases {
             let dir = try makeTempDir("boundary")
             defer { try? FileManager.default.removeItem(at: dir) }
+            let vids = try makeTempDir("boundaryvids")   // real root, seeds never created
+            defer { try? FileManager.default.removeItem(at: vids) }
             let model = VideoScanModel()
             model.catalogStore = CatalogStore(directory: dir)
-            let seeds = (0..<c.seeds).map { makeRecord(path: "/Volumes/X/vids/clip\($0).mov") }
+            let seeds = (0..<c.seeds).map { makeRecord(path: vids.appendingPathComponent("clip\($0).mov").path) }
             model.records = seeds
             model.catalogStore.saveNow(records: seeds)
 
-            let fresh = (0..<c.refound).map { makeRecord(path: "/Volumes/X/vids/clip\($0).mov") }
+            let fresh = (0..<c.refound).map { makeRecord(path: vids.appendingPathComponent("clip\($0).mov").path) }
             let outcome = model.commitScanResults(
-                root: "/Volumes/X/vids", volName: "X",
+                root: vids.path, volName: "X",
                 targetRecords: fresh, scanWasComplete: true)
 
             #expect(outcome.tripwireFired == c.fires, "\(c.why)")
@@ -424,5 +445,168 @@ struct ScanMergeScopeTests {
         #expect(refreshed.sceneCaptions.first?.text == "porch summer 1985")
         #expect(refreshed.detectedPeople == ["Donna"])
         #expect(refreshed.notes == "curated")
+    }
+
+    // MARK: - 9. RESUMED scan preserves dossier + user fields (pipeline)
+
+    // regression (testing agent, 2026-07-02): snapshotPreservedFieldsForRescan
+    // was called only from startTarget — resumeTarget never snapshotted. Since
+    // 0a6fd3c, resume re-verifies the FULL checkpoint list and finalize
+    // performs a complete-scan replace, so a resumed-to-completion scan
+    // replaced every re-seen record with a fresh probe carrying NO dossier or
+    // user fields (applyPreservedFieldsAfterRescan found an empty map;
+    // pendingPreservedFields is in-memory only, so a crash/relaunch → resume
+    // had nothing to restore from). Mirror of test 8, driven through
+    // resumeTarget instead of startTarget.
+    @Test @MainActor
+    func dossierAndUserFieldsSurviveResumedScan() async throws {
+        let dir = try makeTempDir("resume")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let filePath = dir.appendingPathComponent("keeper.mov").path
+        // Junk bytes: ffprobe fails but extensioned damaged media is still
+        // cataloged, so the path IS re-seen and replaced by the merge.
+        try Data(repeating: 0, count: 64).write(to: URL(fileURLWithPath: filePath))
+
+        let model = makePipelineModel()
+        let seed = makeRecord(path: filePath)
+        seed.sizeBytes = 999_999                      // stale scan-derived value
+        seed.lifecycleStage = .archived
+        seed.mediaDisposition = .important
+        seed.sceneCaptions = [SceneCaption(timestamp: 1.0, text: "porch summer 1985")]
+        seed.notes = "curated"
+        model.records = [seed]
+
+        // Checkpoint as an interrupted scan of this root would leave it
+        // (production storage, UUID temp path key — RobustScanTests convention).
+        ScanCheckpointStorage.save(ScanCheckpoint(
+            volumePath: dir.path,
+            startedAt: Date(),
+            discoveredPaths: [filePath],
+            totalDiscovered: 1,
+            skipChecksums: true))
+        defer { ScanCheckpointStorage.delete(for: dir.path) }
+
+        let target = CatalogScanTarget(searchPath: dir.path)
+        model.scanTargets = [target]
+        model.resumeTarget(target)
+        _ = await target.scanTask?.value
+
+        let refreshed = try #require(model.records.first { $0.fullPath == filePath },
+                                     "Re-seen path must still be cataloged after the resumed scan")
+        #expect(refreshed !== seed,
+                "The completion merge must have REPLACED the record with a freshly-probed instance")
+        #expect(refreshed.sizeBytes == 64,
+                "Scan-derived fields must be refreshed from disk (got \(refreshed.sizeBytes))")
+        // The irreplaceable fields must survive a resume exactly as they
+        // survive a fresh startTarget rescan (RED before resumeTarget
+        // snapshots preserved fields).
+        #expect(refreshed.lifecycleStage == .archived)
+        #expect(refreshed.mediaDisposition == .important)
+        #expect(refreshed.sceneCaptions.first?.text == "porch summer 1985")
+        #expect(refreshed.notes == "curated")
+    }
+
+    // MARK: - 10. Complete rescan keeps records INVISIBLE to the scan's options
+
+    // "Not re-seen" conflates two very different things: "file deleted from
+    // disk" (prune — correct) and "file invisible to this scan's options"
+    // (probeExtensionless OFF here — the t3-v shape; same class as
+    // skipSmallFiles, scanAudioFiles off, skip-listed subtrees). Discovery is
+    // NON-EMPTY (a normal .mov sits next to the blob) so the empty-discovery
+    // guard does not apply, and 1 vanished record slips far under the >50
+    // tripwire floor — only a per-record existence check can save it.
+    @Test @MainActor
+    func completeRescanRetainsOnDiskRecordInvisibleToScanOptions() async throws {
+        let dir = try makeTempDir("invisible")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // On disk: a normal .mov (discovery non-empty) and an extensionless
+        // blob the walker cannot see while probeExtensionless is off.
+        try Data(repeating: 0, count: 64).write(to: dir.appendingPathComponent("visible.mov"))
+        let blobPath = dir.appendingPathComponent("rescued-noext").path
+        try Data(repeating: 0, count: 64).write(to: URL(fileURLWithPath: blobPath))
+
+        let model = makePipelineModel()   // probeExtensionless = false
+        let blobRecord = makeRecord(path: blobPath)               // file still on disk
+        let deleted = makeRecord(path: dir.appendingPathComponent("deleted.mov").path) // no file
+        model.records = [blobRecord, deleted]
+
+        let target = CatalogScanTarget(searchPath: dir.path)
+        model.scanTargets = [target]
+        model.startTarget(target)
+        _ = await target.scanTask?.value
+
+        let paths = Set(model.records.map(\.fullPath))
+        #expect(paths.contains(blobPath),
+                "Record whose file is STILL ON DISK but invisible to this scan's options must survive a complete rescan (RED pre-fix)")
+        #expect(!paths.contains(deleted.fullPath),
+                "Record whose file is genuinely gone must still be pruned in the same merge")
+        #expect(paths.contains(dir.appendingPathComponent("visible.mov").path),
+                "The visible file must be (re)cataloged")
+    }
+
+    // MARK: - 11. Unreachable root: never prune based on an unreachable disk
+
+    // If the scan root itself is gone/unmounted at merge time, the
+    // existence checks would report EVERY file as missing — a complete
+    // merge would prune the lot. The root check must catch this first and
+    // retain all vanished records.
+    @Test @MainActor
+    func unreachableRootAtMergeTimeRetainsAllVanished() throws {
+        let vol = try makeTempDir("unmounted")
+        defer { try? FileManager.default.removeItem(at: vol) }
+        let root = vol.appendingPathComponent("gone", isDirectory: true).path // never created
+
+        let model = VideoScanModel()
+        let seeds = (0..<3).map {
+            makeRecord(path: (root as NSString).appendingPathComponent("clip\($0).mov"))
+        }
+        model.records = seeds
+
+        let outcome = model.commitScanResults(
+            root: root, volName: "gone",
+            targetRecords: [], scanWasComplete: true)
+
+        #expect(model.records.count == 3,
+                "All records under an unreachable root must be retained (got \(model.records.count)/3)")
+        #expect(outcome.pruned == 0 && outcome.retainedInvisible == 3 && !outcome.tripwireFired)
+    }
+
+    // MARK: - 12. Tripwire judges only the genuinely-gone set
+
+    // 200 of 300 vanish from a complete scan, but 150 of them are still on
+    // disk (invisible to the scan's options): only 50 are genuinely gone —
+    // not MORE than 50, so the tripwire stays quiet and no snapshot is
+    // written. Pre-fix this merge would have pruned all 200 AND fired.
+    @Test @MainActor
+    func tripwireJudgesOnlyGenuinelyGoneRecords() throws {
+        let dir = try makeTempDir("store3")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let vids = try makeTempDir("vids3")
+        defer { try? FileManager.default.removeItem(at: vids) }
+
+        let model = VideoScanModel()
+        model.catalogStore = CatalogStore(directory: dir)
+        let seeds = (0..<300).map { makeRecord(path: vids.appendingPathComponent("clip\($0).mov").path) }
+        model.records = seeds
+        model.catalogStore.saveNow(records: seeds)
+
+        // Files 100..<250 exist on disk but are not re-seen (invisible);
+        // 250..<300 are genuinely gone; 0..<100 are re-found by the scan.
+        for i in 100..<250 {
+            try Data(repeating: 0, count: 64).write(to: vids.appendingPathComponent("clip\(i).mov"))
+        }
+        let fresh = (0..<100).map { makeRecord(path: vids.appendingPathComponent("clip\($0).mov").path) }
+        let outcome = model.commitScanResults(
+            root: vids.path, volName: "X",
+            targetRecords: fresh, scanWasComplete: true)
+
+        #expect(outcome.pruned == 50 && outcome.retainedInvisible == 150)
+        #expect(!outcome.tripwireFired,
+                "Tripwire must judge the genuinely-gone set (50 — not MORE than 50), not all 200 vanished")
+        #expect(model.records.count == 250,
+                "100 fresh + 150 retained-invisible = 250 (got \(model.records.count))")
+        let snapshots = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+            .filter { $0.hasPrefix("catalog.pre-merge.") }
+        #expect(snapshots.isEmpty, "No pre-merge snapshot when the tripwire stays quiet")
     }
 }

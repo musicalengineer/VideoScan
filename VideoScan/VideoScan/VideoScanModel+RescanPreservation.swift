@@ -163,8 +163,11 @@ extension VideoScanModel {
 
     // MARK: - Snapshot helpers
     //
-    // Called by startTarget() when the scan begins, and by the
-    // scan-complete codepath in ScanExecution right before
+    // Snapshot is taken by startTarget() AND resumeTarget() when the scan
+    // begins (resume re-verifies the full checkpoint list, so its
+    // completion merge replaces re-seen records exactly like a fresh scan
+    // — it needs the same snapshot); applied by the scan-complete codepath
+    // in ScanExecution right before
     // commitScanResults performs the root-scoped replace (2026-07-02:
     // the old wipe-at-scan-start is gone — see VideoScanModel+ScanMerge).
     // The intermediate storage `pendingPreservedFields` is keyed by the

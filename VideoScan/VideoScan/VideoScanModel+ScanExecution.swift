@@ -368,6 +368,17 @@ extension VideoScanModel {
             log("  ⚠ Checkpoint is \(staleHours)h old — file list may be stale")
         }
 
+        // Snapshot dossier + user-edit fields BEFORE the resumed probes run —
+        // mirror of startTarget. Since the 2026-07-02 merge restructure,
+        // resume re-verifies the FULL checkpoint list and finalize performs a
+        // complete-scan replace, so without this snapshot a resumed-to-
+        // completion scan replaced every re-seen record with a fresh probe
+        // carrying no dossier/user fields (pendingPreservedFields is
+        // in-memory only; after a crash/relaunch → resume, the map was
+        // empty). Found by the testing agent 2026-07-02; pinned by
+        // ScanMergeScopeTests.dossierAndUserFieldsSurviveResumedScan.
+        snapshotPreservedFieldsForRescan(of: target)
+
         target.status = .scanning
         target.filesFound = checkpoint.totalDiscovered
         target.filesScanned = 0
