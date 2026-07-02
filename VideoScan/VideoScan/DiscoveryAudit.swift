@@ -85,6 +85,11 @@ struct DiscoveryAudit: Codable, Equatable, Sendable {
     /// files are still on disk, so an unprobed-but-present file can never be
     /// pruned — the audit just has to say it exists.
     var unreadableFiles: Int = 0
+    /// Entries that are neither directories nor regular files (symlinks,
+    /// fifos, sockets, device nodes). The walker does not follow symlinks;
+    /// until the 2026-07-02 subtree-loss fix these vanished with NO audit
+    /// trace. Visibility only — never forces scan-incomplete.
+    var skippedNonRegularEntries: Int = 0
 
     var sniffRejectedPaths: [String] = []
     var probeRejectedPaths: [String] = []
@@ -92,6 +97,9 @@ struct DiscoveryAudit: Codable, Equatable, Sendable {
     var unreadableDirectories: [String] = []
     /// Unreadable-entry paths (capped like the other lists; count stays exact).
     var unreadableFilePaths: [String] = []
+    /// Non-regular entry paths (capped; count stays exact). Someone may ask
+    /// "where did my file go?" about a symlinked movie — this is the answer.
+    var nonRegularEntryPaths: [String] = []
     /// True when any per-path list hit the recording cap (counts stay exact).
     var pathListsTruncated: Bool = false
 
@@ -167,6 +175,10 @@ final class DiscoveryAuditCollector: @unchecked Sendable {
     func unreadableFile(path: String) {
         with { $0.unreadableFiles += 1 }
         append(path, to: \.unreadableFilePaths)
+    }
+    func nonRegularEntry(path: String) {
+        with { $0.skippedNonRegularEntries += 1 }
+        append(path, to: \.nonRegularEntryPaths)
     }
 
     // ── Resume hook ──

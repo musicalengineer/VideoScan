@@ -239,6 +239,22 @@ enum ProcessRunner {
 
         let stdoutHandle = stdoutPipe.fileHandleForReading
         let stderrHandle = stderrPipe.fileHandleForReading
+
+        // fd-lifecycle box (walker-subtree-loss incident, 2026-07-02): owns
+        // the deadline/escalation work items and closes the parent-side pipe
+        // fds at the FIRST terminal event. Before this existed, the deadline
+        // was a plain un-cancellable asyncAfter closure that pinned both
+        // FileHandles (2 fds) for the full deadline — 300 s per ffprobe —
+        // after the child had already exited. A fast rescan bursts hundreds
+        // of probes inside that window, exhausting the GUI-app default
+        // RLIMIT_NOFILE of 256; from then on contentsOfDirectory fails with
+        // Cocoa error 256 (the scan walker loses whole subtrees) and new
+        // Pipe()/spawn calls fail with EBADF. Pinned by
+        // ProcessRunnerFdLifecycleTests.
+        let lifecycle = PipeLifecycle(
+            readHandles: [stdoutHandle, stderrHandle],
+            writeHandles: [stdoutPipe.fileHandleForWriting, stderrPipe.fileHandleForWriting]
+        )
         stdoutHandle.readabilityHandler = { handle in
             let data = handle.availableData
             if !data.isEmpty {
@@ -257,71 +273,26 @@ enum ProcessRunner {
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 completion.setContinuation(continuation)
-                proc.terminationHandler = { process in
+                proc.terminationHandler = makeTerminationHandler(
+                    stdoutHandle: stdoutHandle, stderrHandle: stderrHandle,
+                    stdoutCollector: stdoutCollector, stderrCollector: stderrCollector,
+                    stdoutStreamer: stdoutStreamer, stderrStreamer: stderrStreamer,
+                    completion: completion, lifecycle: lifecycle
+                )
+                guard !Task.isCancelled, launchState.markLaunchingUnlessCancelled() else {
                     stdoutHandle.readabilityHandler = nil
                     stderrHandle.readabilityHandler = nil
-
-                    let remainingOut = stdoutHandle.readDataToEndOfFile()
-                    if !remainingOut.isEmpty {
-                        stdoutCollector.append(remainingOut)
-                        stdoutStreamer.append(remainingOut)
-                    }
-                    stdoutStreamer.finish()
-
-                    let remainingErr = stderrHandle.readDataToEndOfFile()
-                    if !remainingErr.isEmpty {
-                        stderrCollector.append(remainingErr)
-                        stderrStreamer.append(remainingErr)
-                    }
-                    stderrStreamer.finish()
-
-                    completion.resume(
-                        Result(
-                            stdout: stdoutCollector.string,
-                            stderr: stderrCollector.string ?? "",
-                            exitCode: process.terminationStatus
-                        )
-                    )
-                }
-                guard !Task.isCancelled else {
-                    stdoutHandle.readabilityHandler = nil
-                    stderrHandle.readabilityHandler = nil
+                    lifecycle.finishNeverLaunched()
                     completion.resume(Result(stdout: nil, stderr: "cancelled", exitCode: -1))
                     return
                 }
-                guard launchState.markLaunchingUnlessCancelled() else {
-                    stdoutHandle.readabilityHandler = nil
-                    stderrHandle.readabilityHandler = nil
-                    completion.resume(Result(stdout: nil, stderr: "cancelled", exitCode: -1))
-                    return
-                }
-                do {
-                    try proc.run()
-                    if let deadlineSeconds {
-                        scheduleDeadline(
-                            afterSeconds: deadlineSeconds,
-                            killGraceSeconds: killGraceSeconds,
-                            proc: proc,
-                            executable: executable,
-                            stdoutHandle: stdoutHandle,
-                            stderrHandle: stderrHandle,
-                            completion: completion
-                        )
-                    }
-                    if launchState.isCancelled, proc.isRunning {
-                        proc.terminate()
-                        escalateAfterTerminate(
-                            proc: proc, executable: executable,
-                            killGraceSeconds: killGraceSeconds,
-                            stdoutHandle: stdoutHandle, stderrHandle: stderrHandle,
-                            completion: completion, reason: "cancelled"
-                        )
-                    }
-                } catch {
-                    stdoutHandle.readabilityHandler = nil
-                    stderrHandle.readabilityHandler = nil
-                    completion.resume(Result(stdout: nil, stderr: error.localizedDescription, exitCode: -1))
-                }
+                launchAndArm(
+                    proc: proc, executable: executable,
+                    deadlineSeconds: deadlineSeconds, killGraceSeconds: killGraceSeconds,
+                    stdoutHandle: stdoutHandle, stderrHandle: stderrHandle,
+                    completion: completion, lifecycle: lifecycle,
+                    launchState: launchState
+                )
             }
         } onCancel: {
             launchState.markCancelled()
@@ -334,9 +305,110 @@ enum ProcessRunner {
                     proc: proc, executable: executable,
                     killGraceSeconds: killGraceSeconds,
                     stdoutHandle: stdoutHandle, stderrHandle: stderrHandle,
-                    completion: completion, reason: "cancelled"
+                    completion: completion, lifecycle: lifecycle,
+                    reason: "cancelled"
                 )
             }
+        }
+    }
+
+    /// Build the Process terminationHandler: drain both pipes, release the
+    /// per-run fd lifecycle, resume the caller. Extracted from `runProcess`
+    /// purely for function-length hygiene — behavior is identical.
+    private static func makeTerminationHandler(
+        stdoutHandle: FileHandle,
+        stderrHandle: FileHandle,
+        stdoutCollector: DataCollector,
+        stderrCollector: DataCollector,
+        stdoutStreamer: LineStreamer,
+        stderrStreamer: LineStreamer,
+        completion: CompletionBox<Result>,
+        lifecycle: PipeLifecycle
+    ) -> (@Sendable (Process) -> Void) {
+        return { process in
+            stdoutHandle.readabilityHandler = nil
+            stderrHandle.readabilityHandler = nil
+
+            // If the abandon path already closed the handles (child was
+            // declared unkillable but eventually exited), the drain below
+            // would raise on a closed fd — skip it; the caller was already
+            // resumed with the timed-out Result.
+            guard lifecycle.beginDraining() else { return }
+
+            let remainingOut = stdoutHandle.readDataToEndOfFile()
+            if !remainingOut.isEmpty {
+                stdoutCollector.append(remainingOut)
+                stdoutStreamer.append(remainingOut)
+            }
+            stdoutStreamer.finish()
+
+            let remainingErr = stderrHandle.readDataToEndOfFile()
+            if !remainingErr.isEmpty {
+                stderrCollector.append(remainingErr)
+                stderrStreamer.append(remainingErr)
+            }
+            stderrStreamer.finish()
+
+            // Child exited: cancel any pending deadline/escalation work
+            // items and close the parent-side READ fds NOW — not 300 s from
+            // now when the deadline block fires.
+            lifecycle.finishAfterChildExit()
+
+            completion.resume(
+                Result(
+                    stdout: stdoutCollector.string,
+                    stderr: stderrCollector.string ?? "",
+                    exitCode: process.terminationStatus
+                )
+            )
+        }
+    }
+
+    /// Launch the child and arm the deadline/cancellation escalation.
+    /// Extracted from `runProcess` for function-length hygiene.
+    private static func launchAndArm(
+        proc: Process,
+        executable: String,
+        deadlineSeconds: Double?,
+        killGraceSeconds: Double,
+        stdoutHandle: FileHandle,
+        stderrHandle: FileHandle,
+        completion: CompletionBox<Result>,
+        lifecycle: PipeLifecycle,
+        launchState: ProcessLaunchState
+    ) {
+        do {
+            try proc.run()
+            if let deadlineSeconds {
+                scheduleDeadline(
+                    afterSeconds: deadlineSeconds,
+                    killGraceSeconds: killGraceSeconds,
+                    proc: proc,
+                    executable: executable,
+                    stdoutHandle: stdoutHandle,
+                    stderrHandle: stderrHandle,
+                    completion: completion,
+                    lifecycle: lifecycle
+                )
+            }
+            if launchState.isCancelled, proc.isRunning {
+                proc.terminate()
+                escalateAfterTerminate(
+                    proc: proc, executable: executable,
+                    killGraceSeconds: killGraceSeconds,
+                    stdoutHandle: stdoutHandle, stderrHandle: stderrHandle,
+                    completion: completion, lifecycle: lifecycle,
+                    reason: "cancelled"
+                )
+            }
+        } catch {
+            stdoutHandle.readabilityHandler = nil
+            stderrHandle.readabilityHandler = nil
+            // The child never spawned, so every pipe end is still
+            // parent-owned — close all four or a misconfigured tool path
+            // leaks fds on every attempt.
+            lifecycle.finishNeverLaunched()
+            completion.resume(Result(stdout: nil, stderr: error.localizedDescription, exitCode: -1))
         }
     }
 
@@ -352,10 +424,15 @@ enum ProcessRunner {
         executable: String,
         stdoutHandle: FileHandle,
         stderrHandle: FileHandle,
-        completion: CompletionBox<Result>
+        completion: CompletionBox<Result>,
+        lifecycle: PipeLifecycle
     ) {
         let tool = (executable as NSString).lastPathComponent
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + afterSeconds) {
+        // Cancellable work item, NOT a bare asyncAfter closure: when the
+        // child exits normally, finishAfterChildExit() cancels this item so
+        // it cannot pin the Process + FileHandles (and their fds) for the
+        // remaining deadline (walker-subtree-loss incident, 2026-07-02).
+        lifecycle.schedule(on: DispatchQueue.global(qos: .utility), after: afterSeconds) {
             guard proc.isRunning else { return }
             processRunnerLog.warning("\(tool, privacy: .public) pid \(proc.processIdentifier) exceeded \(afterSeconds, format: .fixed(precision: 0), privacy: .public)s deadline — sending SIGTERM")
             proc.terminate()
@@ -363,7 +440,8 @@ enum ProcessRunner {
                 proc: proc, executable: executable,
                 killGraceSeconds: killGraceSeconds,
                 stdoutHandle: stdoutHandle, stderrHandle: stderrHandle,
-                completion: completion, reason: "deadline \(Int(afterSeconds))s"
+                completion: completion, lifecycle: lifecycle,
+                reason: "deadline \(Int(afterSeconds))s"
             )
         }
     }
@@ -387,22 +465,29 @@ enum ProcessRunner {
         stdoutHandle: FileHandle,
         stderrHandle: FileHandle,
         completion: CompletionBox<Result>,
+        lifecycle: PipeLifecycle,
         reason: String
     ) {
         let tool = (executable as NSString).lastPathComponent
         let queue = DispatchQueue.global(qos: .utility)
-        queue.asyncAfter(deadline: .now() + killGraceSeconds) {
+        lifecycle.schedule(on: queue, after: killGraceSeconds) {
             guard proc.isRunning else { return }
             processRunnerLog.warning("\(tool, privacy: .public) pid \(proc.processIdentifier) ignored SIGTERM (\(reason, privacy: .public)) — sending SIGKILL")
             kill(proc.processIdentifier, SIGKILL)
-            queue.asyncAfter(deadline: .now() + killGraceSeconds) {
+            lifecycle.schedule(on: queue, after: killGraceSeconds) {
                 guard proc.isRunning else { return }
                 processRunnerLog.error("\(tool, privacy: .public) pid \(proc.processIdentifier) survived SIGKILL (uninterruptible I/O?) — abandoning process and resuming caller")
                 stdoutHandle.readabilityHandler = nil
                 stderrHandle.readabilityHandler = nil
-                completion.resume(Result(stdout: nil,
-                                         stderr: "timed out (\(reason)); process unkillable, abandoned",
-                                         exitCode: -1))
+                // Abandon also RELEASES the parent-side read fds — the whole
+                // point is that a wedged child must not pin scan resources.
+                // beginDraining()/abandon() are mutually exclusive, so a
+                // child that exits after abandonment cannot double-drain.
+                if lifecycle.abandon() {
+                    completion.resume(Result(stdout: nil,
+                                             stderr: "timed out (\(reason)); process unkillable, abandoned",
+                                             exitCode: -1))
+                }
             }
         }
     }
@@ -431,6 +516,100 @@ enum ProcessRunner {
             stderrLine("Could not launch: \(executable) — \(result.stderr)")
         }
         return result.stdout
+    }
+
+    /// Per-run fd lifecycle: owns the deadline/escalation DispatchWorkItems
+    /// and the parent-side pipe FileHandles, and guarantees the fds are
+    /// released at the FIRST terminal event instead of when the last
+    /// asyncAfter block fires (walker-subtree-loss incident, 2026-07-02 —
+    /// see the note in `runProcess` and ProcessRunnerFdLifecycleTests).
+    ///
+    /// For Rick: a mutex-guarded state machine —
+    ///   running → draining → closed   (normal child exit)
+    ///   running → closed              (abandon / never launched)
+    /// `draining` exists so the abandon block and the terminationHandler can
+    /// never both operate on the handles: whoever transitions first wins.
+    private final class PipeLifecycle: @unchecked Sendable {
+        private enum State { case running, draining, closed }
+
+        private let lock = NSLock()
+        private var state: State = .running
+        private var workItems: [DispatchWorkItem] = []
+        private let readHandles: [FileHandle]
+        private let writeHandles: [FileHandle]
+
+        init(readHandles: [FileHandle], writeHandles: [FileHandle]) {
+            self.readHandles = readHandles
+            self.writeHandles = writeHandles
+        }
+
+        /// Schedule a cancellable deadline/escalation block. No-op when the
+        /// run already reached a terminal state (e.g. the deadline fired,
+        /// SIGTERM worked, terminationHandler finished the run, and only
+        /// then the escalation tries to arm the SIGKILL stage).
+        func schedule(on queue: DispatchQueue, after seconds: Double,
+                      _ body: @escaping @Sendable () -> Void) {
+            let item = DispatchWorkItem(block: body)
+            lock.lock()
+            guard state == .running else {
+                lock.unlock()
+                return
+            }
+            workItems.append(item)
+            lock.unlock()
+            queue.asyncAfter(deadline: .now() + seconds, execute: item)
+        }
+
+        /// terminationHandler entry gate: running → draining. Returns false
+        /// when the run was already closed (abandoned) — the handles are
+        /// gone, so the caller must not touch them.
+        func beginDraining() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard state == .running else { return false }
+            state = .draining
+            return true
+        }
+
+        /// Normal child exit (after draining): cancel pending work items and
+        /// close the parent-side READ fds. The write ends were handed to the
+        /// child at spawn — Foundation already closed the parent's copies,
+        /// so they are deliberately NOT touched here (double-close hazard).
+        func finishAfterChildExit() {
+            close(alsoWriteEnds: false, expected: .draining)
+        }
+
+        /// The child never spawned (pre-launch cancel, `run()` throw): every
+        /// pipe end is still parent-owned, so all four fds are closed.
+        func finishNeverLaunched() {
+            close(alsoWriteEnds: true, expected: .running)
+        }
+
+        /// Unkillable-child abandonment: release the read fds so a wedged
+        /// child cannot pin scan resources. Returns false if the child beat
+        /// us to terminationHandler (that path owns cleanup + resume).
+        func abandon() -> Bool {
+            close(alsoWriteEnds: false, expected: .running)
+        }
+
+        @discardableResult
+        private func close(alsoWriteEnds: Bool, expected: State) -> Bool {
+            lock.lock()
+            guard state == expected else {
+                lock.unlock()
+                return false
+            }
+            state = .closed
+            let items = workItems
+            workItems = []
+            lock.unlock()
+            for item in items { item.cancel() }
+            for handle in readHandles { try? handle.close() }
+            if alsoWriteEnds {
+                for handle in writeHandles { try? handle.close() }
+            }
+            return true
+        }
     }
 
     /// Thread-safe collector for pipe data arriving via readabilityHandler.

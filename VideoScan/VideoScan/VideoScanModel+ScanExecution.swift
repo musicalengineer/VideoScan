@@ -343,6 +343,9 @@ extension VideoScanModel {
         if audit.unreadableFiles > 0 {
             lines.append("  ⚠ \(audit.unreadableFiles) file(s) could not be read (permissions) — recorded in the audit, never probed")
         }
+        if audit.skippedNonRegularEntries > 0 {
+            lines.append("  \(audit.skippedNonRegularEntries) non-regular entr\(audit.skippedNonRegularEntries == 1 ? "y" : "ies") (symlink/fifo/socket) skipped — recorded in the audit")
+        }
         if audit.directoryEnumerationErrors > 0 {
             lines.append("  ⚠ \(audit.directoryEnumerationErrors) directories could not be read — discovery was INCOMPLETE")
         }

@@ -119,11 +119,20 @@ enum FilesystemWalker {
 
             let contents: [URL]
             do {
-                contents = try fm.contentsOfDirectory(
-                    at: currentDir,
-                    includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isReadableKey, .fileSizeKey],
-                    options: [.skipsHiddenFiles]
-                )
+                // Bounded retry (walker-subtree-loss incident, 2026-07-02):
+                // under process-wide fd pressure, contentsOfDirectory fails
+                // with Cocoa error 256 on directories that read fine moments
+                // later — and ONE transient failure on a top-level directory
+                // used to cost the entire subtree for the scan. Two short
+                // retries ride out the transient class; a genuinely
+                // unreadable directory still lands in the audit below.
+                contents = try listDirectoryWithRetry(at: currentDir) { dir in
+                    try fm.contentsOfDirectory(
+                        at: dir,
+                        includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isReadableKey, .fileSizeKey],
+                        options: [.skipsHiddenFiles]
+                    )
+                }
             } catch {
                 // Discovery-completeness: an unreadable directory means the
                 // scan CANNOT claim it saw everything. Record it (the audit
@@ -167,9 +176,50 @@ enum FilesystemWalker {
                         // visibility-only treatment as above.
                         audit?.unreadableFile(path: url.path)
                     }
+                } else {
+                    // Neither a directory nor a regular file: symlink, fifo,
+                    // socket, device node. The walker deliberately does not
+                    // follow symlinks (cycle risk), but until 2026-07-02 this
+                    // branch didn't exist and such entries vanished with NO
+                    // audit trace — a silent hole in the completeness
+                    // contract ("visit every reachable entry or say why
+                    // not"). Visibility only; never forces scan-incomplete.
+                    audit?.nonRegularEntry(path: url.path)
                 }
             }
         }
+    }
+
+    /// List a directory with a bounded retry budget. Transient failures —
+    /// the fd-exhaustion / Cocoa-256 class from the 2026-07-02 incident —
+    /// recover on a later attempt instead of costing the whole subtree;
+    /// persistent failures rethrow the LAST error for the audit. The delays
+    /// are synchronous (`usleep`) by design: the walker runs on a detached
+    /// task doing blocking FileManager I/O already, and worst case adds
+    /// ~0.5 s per genuinely unreadable directory.
+    ///
+    /// `list` is injectable so tests can pin the retry contract without
+    /// filesystem games; production passes `fm.contentsOfDirectory`.
+    static func listDirectoryWithRetry(
+        at dir: URL,
+        retryDelaysMicroseconds: [UInt32] = [100_000, 400_000],
+        list: (URL) throws -> [URL]
+    ) throws -> [URL] {
+        var lastError: Error
+        do {
+            return try list(dir)
+        } catch {
+            lastError = error
+        }
+        for delay in retryDelaysMicroseconds {
+            usleep(delay)
+            do {
+                return try list(dir)
+            } catch {
+                lastError = error
+            }
+        }
+        throw lastError
     }
 
     /// Classify one regular file, apply the .ts and small-file guards, and
