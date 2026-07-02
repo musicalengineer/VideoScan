@@ -11,6 +11,37 @@ extension VideoScanModel {
     // engine model id + date for provenance. Re-transcribing replaces
     // the text wholesale — we don't merge transcripts from different
     // models. (Matches the sceneCaptions "re-caption replaces" rule.)
+    //
+    // Provenance stamp (fix 2026-07-01): every apply variant also stamps
+    // `dossierProcessedAt` (backfill-only — see stampDossierProvenance).
+    // The smear-cleanup signature in VideoScanModel+DossierPropagation
+    // treats "unreadable + has dossier content + dossierProcessedAt==nil"
+    // as corruption to blank. A record with an unplayable legacy VIDEO
+    // codec (svq3/cinepak/... → isLikelyUnanalyzable) can still carry a
+    // perfectly legitimate Whisper AUDIO transcript — ffmpeg decodes the
+    // audio fine even when AVFoundation can't touch the video. Without
+    // the stamp, a direct transcript write onto such a record matched the
+    // corruption signature and the one-shot cleanup would destroy it.
+
+    /// Backfill the dossier provenance stamp after a direct transcript
+    /// write. Only fills the stamp when it's missing: a record that
+    /// already carries a FULL dossier stamp (VLM+Whisper stack, from
+    /// `applyDossier`) keeps that attribution — the audio channel's own
+    /// provenance is already carried by audioTranscriptModel/Date, so
+    /// overwriting `dossierProcessedBy` with a whisper-only id would
+    /// erase the record of the VLM pass.
+    /// `// fileprivate` ≈ C++ file-static: helper visible to this
+    /// translation unit only.
+    @MainActor
+    fileprivate func stampDossierProvenance(
+        on record: VideoRecord,
+        modelID: String,
+        at date: Date
+    ) {
+        guard record.dossierProcessedAt == nil else { return }
+        record.dossierProcessedAt = date
+        record.dossierProcessedBy = modelID
+    }
 
     /// Apply a fresh audio transcript to a single catalog record by
     /// reference. Replaces any prior transcript on that record (the
@@ -31,9 +62,12 @@ extension VideoScanModel {
         to record: VideoRecord
     ) {
         guard !modelID.isEmpty else { return }
+        let now = Date()
         record.audioTranscript = transcript
         record.audioTranscriptModel = modelID
-        record.audioTranscriptDate = Date()
+        record.audioTranscriptDate = now
+        // Smear-signature exclusion — see the section comment above.
+        stampDossierProvenance(on: record, modelID: modelID, at: now)
         // Propagate to MD5-identical siblings so search finds this
         // transcript via any copy of the file (Phase 0).
         propagateDossierToMD5Duplicates(of: record)
@@ -104,6 +138,8 @@ extension VideoScanModel {
             record.audioTranscript = transcript
             record.audioTranscriptModel = model
             record.audioTranscriptDate = now
+            // Smear-signature exclusion — see the section comment above.
+            stampDossierProvenance(on: record, modelID: model, at: now)
             propagateDossierToMD5Duplicates(of: record)
             updated += 1
             totalChars += transcript.count

@@ -545,4 +545,140 @@ struct DossierPropagationTests {
         #expect(entry.ocrTextCount == 1)
         #expect(entry.ocrDateCount == 1)
     }
+
+    // MARK: - 7. Direct transcript writeback carries provenance (latent bug, 2026-07-01)
+    //
+    // The smear-cleanup signature is "unreadable + has dossier content +
+    // dossierProcessedAt == nil". A record with an unplayable legacy VIDEO
+    // codec (svq3 etc. → isLikelyUnanalyzable) can still have a perfectly
+    // legitimate Whisper AUDIO transcript — ffmpeg decodes the audio fine.
+    // If a caller writes that transcript via the applyAudioTranscript
+    // family (which historically never stamped dossierProcessedAt), the
+    // cleanup would classify the legit transcript as smear and blank it.
+    // Every apply variant must stamp provenance so directly-applied
+    // transcripts are excluded from the signature.
+
+    /// Realistic at-risk record: Sorenson video (AVFoundation can't decode
+    /// → isLikelyUnanalyzable → excluded-from-propagation / smear-signature
+    /// candidate) but ordinary PCM audio that Whisper CAN transcribe.
+    private func makeLegacyVideoCodecRecord(path: String, md5: String) -> VideoRecord {
+        let r = makeRecord(path: path, md5: md5, streamType: .videoAndAudio)
+        r.videoCodec = "svq3"       // unplayable legacy video
+        r.audioCodec = "pcm_s16le"  // fine audio — transcribable
+        return r
+    }
+
+    @Test func applyAudioTranscript_direct_stampsProvenance_survivesSmearCleanup() {
+        let model = VideoScanModel()
+        let rec = makeLegacyVideoCodecRecord(path: "/Vols/T/thanksgiving.mov", md5: "LGC1")
+        model.records = [rec]
+        #expect(VideoScanModel.isExcludedFromPropagation(rec),
+                "Precondition: legacy-codec record must be in the at-risk class")
+
+        model.applyAudioTranscript("pass the gravy please",
+                                   modelID: "whisper-medium-mlx-q4",
+                                   to: rec)
+
+        #expect(rec.dossierProcessedAt != nil,
+                "Direct transcript writeback must stamp dossierProcessedAt provenance")
+
+        let cleared = model.clearSmearedDossiers()
+        #expect(cleared.isEmpty,
+                "A directly-applied transcript is legitimate content, not smear")
+        #expect(rec.audioTranscript == "pass the gravy please",
+                "Legit Whisper transcript on an unplayable-video record must survive cleanup")
+    }
+
+    @Test func applyAudioTranscript_byPath_stampsProvenance_survivesSmearCleanup() {
+        let model = VideoScanModel()
+        let rec = makeLegacyVideoCodecRecord(path: "/Vols/T/parade.mov", md5: "LGC2")
+        model.records = [rec]
+
+        let matched = model.applyAudioTranscript(
+            "look at that balloon", to: "/Vols/T/parade.mov",
+            model: "whisper-medium-mlx-q4")
+        #expect(matched)
+
+        #expect(rec.dossierProcessedAt != nil,
+                "Path-keyed transcript writeback must stamp dossierProcessedAt provenance")
+
+        let cleared = model.clearSmearedDossiers()
+        #expect(cleared.isEmpty)
+        #expect(rec.audioTranscript == "look at that balloon")
+    }
+
+    @Test func applyAudioTranscripts_bulk_stampsProvenance_survivesSmearCleanup() {
+        let model = VideoScanModel()
+        let a = makeLegacyVideoCodecRecord(path: "/Vols/T/a.mov", md5: "LGC3")
+        let b = makeLegacyVideoCodecRecord(path: "/Vols/T/b.mov", md5: "LGC4")
+        model.records = [a, b]
+
+        let updated = model.applyAudioTranscripts(
+            ["/Vols/T/a.mov": "happy birthday donna",
+             "/Vols/T/b.mov": "blow out the candles"],
+            model: "whisper-medium-mlx-q4")
+        #expect(updated == 2)
+
+        #expect(a.dossierProcessedAt != nil && b.dossierProcessedAt != nil,
+                "Bulk transcript writeback must stamp dossierProcessedAt on every updated record")
+
+        let cleared = model.clearSmearedDossiers()
+        #expect(cleared.isEmpty)
+        #expect(a.audioTranscript == "happy birthday donna")
+        #expect(b.audioTranscript == "blow out the candles")
+    }
+
+    /// Re-transcribing a record that already carries a FULL dossier stamp
+    /// must not overwrite that provenance — dossierProcessedAt/By record
+    /// when/which stack produced the whole dossier (VLM + Whisper), and
+    /// the audio channel's own provenance lives in audioTranscriptModel/
+    /// Date. The stamp is only backfilled when missing.
+    @Test func applyAudioTranscript_preservesExistingFullDossierProvenance() {
+        let model = VideoScanModel()
+        let fullDossierAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let rec = makeRecord(path: "/Vols/T/dossiered.mov", md5: "LGC5",
+                             transcript: "old transcript",
+                             streamType: .videoAndAudio,
+                             dossierProcessedAt: fullDossierAt)
+        rec.dossierProcessedBy = "qwen2.5-vl-3b-4bit+whisper-medium-mlx-q4"
+        model.records = [rec]
+
+        model.applyAudioTranscript("new re-run transcript",
+                                   modelID: "whisper-large-v3",
+                                   to: rec)
+
+        #expect(rec.audioTranscript == "new re-run transcript")
+        #expect(rec.audioTranscriptModel == "whisper-large-v3")
+        #expect(rec.dossierProcessedAt == fullDossierAt,
+                "Existing full-dossier timestamp must not be overwritten by a re-transcribe")
+        #expect(rec.dossierProcessedBy == "qwen2.5-vl-3b-4bit+whisper-medium-mlx-q4",
+                "Existing full-dossier stack attribution must not be overwritten by a re-transcribe")
+    }
+
+    /// Negative control: the fix must NOT weaken smear detection. Content
+    /// that arrived WITHOUT a provenance stamp (the pre-2026-06-30 ungated
+    /// MD5 propagation) on an unreadable record is still corruption and is
+    /// still cleared — even when a legitimately-transcribed record sits in
+    /// the same catalog.
+    @Test func smearCleanup_stillDetectsGenuineSmear_alongsideDirectTranscript() {
+        let model = VideoScanModel()
+
+        // Legit: transcript arrives via the apply path → stamped → kept.
+        let legit = makeLegacyVideoCodecRecord(path: "/Vols/T/legit.mov", md5: "LGC6")
+        // Smeared: content field-assigned the way the old propagation did
+        // (copies text + model + date but never a dossierProcessedAt).
+        let smeared = makeLegacyVideoCodecRecord(path: "/Vols/T/smeared.mov", md5: "LGC7")
+        smeared.audioTranscript = "hallucinated inherited transcript"
+        smeared.audioTranscriptModel = "whisper-medium-mlx-q4"
+        smeared.audioTranscriptDate = Date(timeIntervalSince1970: 1_700_000_000)
+
+        model.records = [legit, smeared]
+        model.applyAudioTranscript("real speech", modelID: "whisper-medium-mlx-q4", to: legit)
+
+        let cleared = model.clearSmearedDossiers()
+        #expect(cleared.count == 1, "Exactly the unstamped record matches the smear signature")
+        #expect(cleared.first?.fullPath == "/Vols/T/smeared.mov")
+        #expect(smeared.audioTranscript == nil, "Genuine smear must still be blanked")
+        #expect(legit.audioTranscript == "real speech", "Stamped direct transcript must survive")
+    }
 }
