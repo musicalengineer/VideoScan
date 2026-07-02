@@ -60,6 +60,43 @@ public struct ProbeResult: Sendable {
 
 // MARK: - VideoRecord.apply
 
+extension ProbeResult {
+    /// Inverse of `VideoRecord.apply(_:)` below: lift the 19 metadata fields
+    /// back OUT of a record. Used by the scan-merge move/rename adoption
+    /// (2026-07-02) to transplant a freshly-probed record's technical fields
+    /// onto the surviving old record without inventing a second field list —
+    /// this init and `apply` are the two directions of the SAME list.
+    ///
+    /// MAINTENANCE: adding a field to `ProbeResult` means updating BOTH this
+    /// init and `apply(_:)` — keep them adjacent and in the same order.
+    ///
+    /// `// @MainActor ≈ "reads the mutable heap object, so UI-thread only" —
+    /// // same convention as RescanPreservedFields.init(from:).`
+    @MainActor
+    public init(scanDerivedFrom rec: VideoRecord) {
+        self.init()
+        container           = rec.container
+        durationSeconds     = rec.durationSeconds
+        duration            = rec.duration
+        totalBitrate        = rec.totalBitrate
+        timecode            = rec.timecode
+        tapeName            = rec.tapeName
+        materialPackageUMID = rec.materialPackageUMID
+        videoCodec          = rec.videoCodec
+        resolution          = rec.resolution
+        frameRate           = rec.frameRate
+        videoBitrate        = rec.videoBitrate
+        colorSpace          = rec.colorSpace
+        bitDepth            = rec.bitDepth
+        scanType            = rec.scanType
+        audioCodec          = rec.audioCodec
+        audioChannels       = rec.audioChannels
+        audioSampleRate     = rec.audioSampleRate
+        streamTypeRaw       = rec.streamTypeRaw
+        isPlayable          = rec.isPlayable
+    }
+}
+
 extension VideoRecord {
     /// Copy every `ProbeResult` field into `self`. This is the SINGLE
     /// authoritative copy point from the Sendable probe value into the

@@ -74,6 +74,43 @@ public struct ProbeOutcome: Sendable {
     public init() {}
 }
 
+// MARK: - ProbeOutcome(scanDerivedFrom:) — the inverse lift
+
+extension ProbeOutcome {
+    /// Inverse of `VideoRecord.apply(_:)` below: lift EXACTLY the scan-derived
+    /// field set back out of a record. A freshly-scanned record's non-default
+    /// state is precisely what `apply(ProbeOutcome)` stamped onto it, so this
+    /// round-trips the technical fields and nothing else (never the dossier /
+    /// user-curation / pair / duplicate fields).
+    ///
+    /// Consumer: the scan-merge move/rename adoption (2026-07-02) — the OLD
+    /// record survives a file move with its id, and adopts the fresh probe's
+    /// technical fields via `old.apply(ProbeOutcome(scanDerivedFrom: fresh))`.
+    ///
+    /// MAINTENANCE: adding a field to `ProbeOutcome` means updating BOTH this
+    /// init and `apply(_:)` — keep them adjacent and in the same order.
+    /// (`sniffRejected` has no record counterpart; it stays false.)
+    @MainActor
+    public init(scanDerivedFrom rec: VideoRecord) {
+        self.init()
+        filename        = rec.filename
+        ext             = rec.ext
+        fullPath        = rec.fullPath
+        directory       = rec.directory
+        sizeBytes       = rec.sizeBytes
+        size            = rec.size
+        dateCreated     = rec.dateCreated
+        dateModified    = rec.dateModified
+        dateCreatedRaw  = rec.dateCreatedRaw
+        dateModifiedRaw = rec.dateModifiedRaw
+        partialMD5      = rec.partialMD5
+        notes           = rec.notes
+        probe           = ProbeResult(scanDerivedFrom: rec)
+        wasCacheHit     = rec.wasCacheHit
+        scanContext     = rec.scanContext
+    }
+}
+
 // MARK: - VideoRecord.apply(ProbeOutcome)
 
 extension VideoRecord {
