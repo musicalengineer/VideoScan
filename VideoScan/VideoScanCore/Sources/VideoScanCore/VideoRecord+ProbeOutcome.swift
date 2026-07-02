@@ -61,6 +61,16 @@ public struct ProbeOutcome: Sendable {
     public var wasCacheHit: Bool = false
     public var scanContext: ScanContext = ScanContext()
 
+    /// True when the probe engine's magic-byte content sniff rejected an
+    /// extensionless / unknown-extension candidate BEFORE ffprobe ran
+    /// (discovery-completeness feature, 2026-07-02). Purely diagnostic —
+    /// the discovery audit uses it to distinguish "no media signature"
+    /// from "ffprobe could not identify". Sniff-rejected outcomes are
+    /// always gated out of the catalog, so `VideoRecord.apply(_:)` has no
+    /// counterpart field to copy this into (same as it would be for any
+    /// never-cataloged diagnostic).
+    public var sniffRejected: Bool = false
+
     public init() {}
 }
 

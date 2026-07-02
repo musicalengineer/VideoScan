@@ -55,6 +55,15 @@ public struct ScanContext: Codable, Equatable, Sendable {
     /// "InternalRaid > Movies").
     public var scanRootLabel: String = ""
 
+    /// When the file lives INSIDE a pro-video project bundle (.fcpbundle,
+    /// .imovielibrary, .rcproject, …), this is the path of the enclosing
+    /// bundle directory. Empty for ordinary files. Additive (2026-07-02,
+    /// "Look Inside Video Project Bundles"): decodeIfPresent below means
+    /// old catalogs without the key decode cleanly to "". Path-derived
+    /// (ProVideoBundles.container(forPath:)), so it refreshes on every
+    /// probe alongside the rest of the context.
+    public var bundleContainer: String = ""
+
     /// `true` if this context has any provenance data at all. Useful for
     /// UI that wants to say "provenance not yet captured" for legacy
     /// records.
@@ -74,6 +83,7 @@ public struct ScanContext: Codable, Equatable, Sendable {
     // defaults. Mirrors the forward-compatible pattern used by VideoRecord.
     private enum CodingKeys: String, CodingKey {
         case scanHost, volumeUUID, volumeMountType, volumeName, remoteServerName, scannedAt, scanRootLabel
+        case bundleContainer
     }
 
     public init(from decoder: Decoder) throws {
@@ -85,6 +95,7 @@ public struct ScanContext: Codable, Equatable, Sendable {
         remoteServerName = try c.decodeIfPresent(String.self, forKey: .remoteServerName) ?? ""
         scannedAt        = try c.decodeIfPresent(Date.self, forKey: .scannedAt)
         scanRootLabel    = try c.decodeIfPresent(String.self, forKey: .scanRootLabel) ?? ""
+        bundleContainer  = try c.decodeIfPresent(String.self, forKey: .bundleContainer) ?? ""
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -98,6 +109,9 @@ public struct ScanContext: Codable, Equatable, Sendable {
         // Only emit scanRootLabel when populated — keeps snapshot deltas minimal
         // for whole-volume scans (the common case).
         if !scanRootLabel.isEmpty { try c.encode(scanRootLabel, forKey: .scanRootLabel) }
+        // Same emit-only-when-populated treatment: the overwhelmingly common
+        // case (file not inside a bundle) adds zero bytes to catalog.json.
+        if !bundleContainer.isEmpty { try c.encode(bundleContainer, forKey: .bundleContainer) }
     }
 }
 

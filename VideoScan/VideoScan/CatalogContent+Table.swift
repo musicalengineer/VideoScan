@@ -37,6 +37,27 @@ extension CatalogContent {
         }
     }
 
+    /// Filename-cell tooltip: directory + state suffix, plus the pro-video
+    /// bundle tag when the file lives inside a project bundle ("Look Inside
+    /// Video Project Bundles", 2026-07-02). Kept as a helper so the bundle
+    /// line composes with every existing state instead of another ternary.
+    private func filenameTooltip(for rec: VideoRecord, offline: Bool, purged: Bool) -> String {
+        var tip: String
+        if purged {
+            tip = "\(rec.directory) (removed from catalog)"
+        } else if let reason = rec.unanalyzableReason {
+            tip = "\(rec.directory)\n\n⚠️ \(reason)"
+        } else if offline {
+            tip = "\(rec.directory) (offline)"
+        } else {
+            tip = rec.directory
+        }
+        if !rec.scanContext.bundleContainer.isEmpty {
+            tip += "\n\n📦 Inside video project bundle: \(rec.scanContext.bundleContainer)"
+        }
+        return tip
+    }
+
     // MARK: - Results Table
 
     // Internal (not private): the view body in CatalogHelpers.swift embeds
@@ -93,9 +114,7 @@ extension CatalogContent {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 2)
-                .help(purged ? "\(rec.directory) (removed from catalog)"
-                      : (rec.unanalyzableReason.map { "\(rec.directory)\n\n⚠️ \($0)" }
-                         ?? (offline ? "\(rec.directory) (offline)" : rec.directory)))
+                .help(filenameTooltip(for: rec, offline: offline, purged: purged))
             }
             .width(min: 180, ideal: 260)
 

@@ -5,30 +5,197 @@ import Foundation
 
 /// Directory-tree walking utilities for discovering video files.
 /// All methods are static and nonisolated — safe to call from any context.
+///
+/// Discovery-completeness (2026-07-02): both walkers now
+///   * optionally admit files with UNRECOGNIZED extensions ("Scan
+///     Unrecognized File Types" — the magic-byte sniff in the probe engine
+///     then gates them before ffprobe),
+///   * report every skip decision and — critically — every DIRECTORY THE
+///     ENUMERATOR COULD NOT READ to an optional `DiscoveryAuditCollector`.
+///     The old code swallowed `contentsOfDirectory` errors with a bare
+///     `continue`, which is exactly how a scan silently walks 181 of 5,694
+///     files and looks healthy (the LaCieWorkspace incident class).
 enum FilesystemWalker {
 
-    /// Whether a regular file is a scan candidate. Normal scans admit only
-    /// known media extensions. The extensionless-probe scan (Rick's "Scan
-    /// files with no extension") instead admits files that have NO extension
-    /// at all and lets ffprobe arbitrate downstream — recovering media written
-    /// without an extension (Avid/QuickTime video-only exports, etc.) that the
-    /// allowlist silently dropped. It deliberately excludes already-extensioned
-    /// files since the normal scan already covers them.
-    /// Admission is ADDITIVE: the normal video allowlist is always honored, and
-    /// each opt-in toggle adds a category on top — `scanAudioFiles` admits audio
-    /// files, `probeExtensionless` admits files with no extension (ffprobe then
-    /// arbitrates). So enabling several toggles in one scan does what the user
-    /// expects rather than one overriding another.
+    /// Admission decision for one regular file. `reject` carries the reason
+    /// so the audit can count each rule separately.
+    enum FileAdmission: Equatable {
+        case admit
+        case reject(RejectionReason)
+    }
+
+    enum RejectionReason: Equatable {
+        /// Known-non-media extension (.txt, .jpg, …), or an unrecognized
+        /// extension while "Scan Unrecognized File Types" is off.
+        case nonMediaExtension
+        /// Audio extension while "Scan For Audio Files" is off.
+        case audioScanningOff
+        /// No extension while "Scan Files With No Extension" is off.
+        case extensionlessScanningOff
+    }
+
+    /// Classify a regular file by extension. Normal scans admit only known
+    /// media extensions. Admission is ADDITIVE: the video allowlist is always
+    /// honored and each opt-in toggle adds a category on top —
+    ///   * `scanAudioFiles` admits audio extensions,
+    ///   * `probeExtensionless` admits files with NO extension (Rick's
+    ///     "Scan files with no extension" — recovers Avid/QuickTime
+    ///     video-only exports the allowlist silently dropped),
+    ///   * `scanUnknownExtensions` admits extensions in NO list (not video,
+    ///     not audio, not known-junk) — the probe engine's magic-byte sniff
+    ///     then decides whether ffprobe is worth running.
+    /// So enabling several toggles in one scan does what the user expects
+    /// rather than one overriding another. ffprobe remains the arbiter for
+    /// everything the allowlist can't vouch for.
+    static func classifyFile(extension ext: String,
+                             videoExtensions: Set<String>,
+                             audioExtensions: Set<String> = [],
+                             probeExtensionless: Bool = false,
+                             scanAudioFiles: Bool = false,
+                             scanUnknownExtensions: Bool = false,
+                             knownNonMediaExtensions: Set<String> = SkipCategories.knownNonMediaExtensions
+    ) -> FileAdmission {
+        if videoExtensions.contains(ext) { return .admit }
+        if audioExtensions.contains(ext) {
+            return scanAudioFiles ? .admit : .reject(.audioScanningOff)
+        }
+        if ext.isEmpty {
+            return probeExtensionless ? .admit : .reject(.extensionlessScanningOff)
+        }
+        if scanUnknownExtensions, !knownNonMediaExtensions.contains(ext) {
+            return .admit
+        }
+        return .reject(.nonMediaExtension)
+    }
+
+    /// Boolean shim over `classifyFile` — kept for the walker-admission
+    /// regression tests and any caller that only needs yes/no.
     static func shouldAdmitFile(extension ext: String,
                                 videoExtensions: Set<String>,
                                 audioExtensions: Set<String> = [],
                                 probeExtensionless: Bool = false,
-                                scanAudioFiles: Bool = false) -> Bool {
-        if videoExtensions.contains(ext) { return true }
-        if scanAudioFiles, audioExtensions.contains(ext) { return true }
-        if probeExtensionless, ext.isEmpty { return true }
-        return false
+                                scanAudioFiles: Bool = false,
+                                scanUnknownExtensions: Bool = false) -> Bool {
+        classifyFile(extension: ext, videoExtensions: videoExtensions,
+                     audioExtensions: audioExtensions,
+                     probeExtensionless: probeExtensionless,
+                     scanAudioFiles: scanAudioFiles,
+                     scanUnknownExtensions: scanUnknownExtensions) == .admit
     }
+
+    // MARK: - Shared walk core
+
+    /// Everything one walk needs to decide skip/admit. Value type so the
+    /// detached walker task captures an immutable snapshot of the policy.
+    private struct WalkPolicy: Sendable {
+        let videoExtensions: Set<String>
+        let audioExtensions: Set<String>
+        let skipDirs: Set<String>
+        let skipBundleExtensions: Set<String>
+        let minFileBytes: Int
+        let probeExtensionless: Bool
+        let scanAudioFiles: Bool
+        let scanUnknownExtensions: Bool
+    }
+
+    /// Synchronous iterative depth-first walk. Both public walkers run this
+    /// on their detached task; only the `emit` sink differs (collect vs
+    /// stream). One implementation ⇒ the admission/audit rules can never
+    /// drift between the two.
+    private static func walkTree(
+        root: String,
+        policy: WalkPolicy,
+        audit: DiscoveryAuditCollector?,
+        onDirectoryEntered: ((URL) -> Void)?,
+        emit: (URL) -> Void
+    ) {
+        let fm = FileManager.default
+        var dirStack: [URL] = [URL(fileURLWithPath: root)]
+
+        while !dirStack.isEmpty {
+            if Task.isCancelled { break }
+            let currentDir = dirStack.removeLast()
+            onDirectoryEntered?(currentDir)
+
+            let contents: [URL]
+            do {
+                contents = try fm.contentsOfDirectory(
+                    at: currentDir,
+                    includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isReadableKey, .fileSizeKey],
+                    options: [.skipsHiddenFiles]
+                )
+            } catch {
+                // Discovery-completeness: an unreadable directory means the
+                // scan CANNOT claim it saw everything. Record it (the audit
+                // forces scanWasComplete=false downstream) instead of the
+                // old silent `continue`.
+                audit?.directoryEnumerationFailed(path: currentDir.path, error: error)
+                continue
+            }
+
+            for url in contents {
+                if Task.isCancelled { break }
+                guard let rv = try? url.resourceValues(
+                    forKeys: [.isDirectoryKey, .isRegularFileKey, .isReadableKey, .fileSizeKey]
+                ) else { continue }
+
+                if rv.isDirectory == true {
+                    let dirName = url.lastPathComponent.lowercased()
+                    let dirExt = url.pathExtension.lowercased()
+                    if policy.skipDirs.contains(dirName) {
+                        audit?.skippedSystemTreeDir()
+                    } else if policy.skipBundleExtensions.contains(dirExt) {
+                        audit?.skippedBundleDir()
+                    } else {
+                        dirStack.append(url)
+                    }
+                } else if rv.isRegularFile == true && rv.isReadable == true {
+                    processRegularFile(url, fileSize: rv.fileSize, policy: policy,
+                                       audit: audit, emit: emit)
+                }
+            }
+        }
+    }
+
+    /// Classify one regular file, apply the .ts and small-file guards, and
+    /// either emit it or record the skip reason. Split from `walkTree` so
+    /// each function stays a readable size.
+    private static func processRegularFile(
+        _ url: URL,
+        fileSize: Int?,
+        policy: WalkPolicy,
+        audit: DiscoveryAuditCollector?,
+        emit: (URL) -> Void
+    ) {
+        audit?.fileEnumerated()
+        let ext = url.pathExtension.lowercased()
+        switch classifyFile(extension: ext,
+                            videoExtensions: policy.videoExtensions,
+                            audioExtensions: policy.audioExtensions,
+                            probeExtensionless: policy.probeExtensionless,
+                            scanAudioFiles: policy.scanAudioFiles,
+                            scanUnknownExtensions: policy.scanUnknownExtensions) {
+        case .admit:
+            if ext == "ts" && !isMpegTS(url) {
+                audit?.skippedNonMediaExtension()   // TypeScript, not MPEG-TS
+                return
+            }
+            if policy.minFileBytes > 0, let sz = fileSize, sz < policy.minFileBytes {
+                audit?.skippedSmallFile()
+                return
+            }
+            audit?.fileAdmitted()
+            emit(url)
+        case .reject(.nonMediaExtension):
+            audit?.skippedNonMediaExtension()
+        case .reject(.audioScanningOff):
+            audit?.skippedAudioExtensionOff()
+        case .reject(.extensionlessScanningOff):
+            audit?.skippedExtensionlessOff()
+        }
+    }
+
+    // MARK: - Public walkers
 
     /// Walk a single directory tree and return all video file URLs.
     /// Runs on a detached task to avoid blocking the cooperative thread pool
@@ -42,61 +209,32 @@ enum FilesystemWalker {
         probeExtensionless: Bool = false,
         audioExtensions: Set<String> = [],
         scanAudioFiles: Bool = false,
+        scanUnknownExtensions: Bool = false,
+        audit: DiscoveryAuditCollector? = nil,
         onProgress: (@Sendable (_ currentDir: URL, _ filesFoundSoFar: Int, _ lastFile: URL?) -> Void)? = nil
     ) async -> [URL] {
-        let minFileBytes: Int = skipSmallFiles ? 1_048_576 : 0
+        let policy = WalkPolicy(
+            videoExtensions: videoExtensions,
+            audioExtensions: audioExtensions,
+            skipDirs: skipDirs,
+            skipBundleExtensions: skipBundleExtensions,
+            minFileBytes: skipSmallFiles ? 1_048_576 : 0,
+            probeExtensionless: probeExtensionless,
+            scanAudioFiles: scanAudioFiles,
+            scanUnknownExtensions: scanUnknownExtensions
+        )
         let result = await Task.detached(priority: .userInitiated) {
             var videoFiles: [URL] = []
-            let fm = FileManager.default
-            var dirStack: [URL] = [URL(fileURLWithPath: root)]
-
-            while !dirStack.isEmpty {
-                if Task.isCancelled { break }
-                let currentDir = dirStack.removeLast()
-                onProgress?(currentDir, videoFiles.count, nil)
-
-                let contents: [URL]
-                do {
-                    contents = try fm.contentsOfDirectory(
-                        at: currentDir,
-                        includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isReadableKey, .fileSizeKey],
-                        options: [.skipsHiddenFiles]
-                    )
-                } catch {
-                    continue
-                }
-
-                for url in contents {
-                    if Task.isCancelled { break }
-                    guard let rv = try? url.resourceValues(
-                        forKeys: [.isDirectoryKey, .isRegularFileKey, .isReadableKey, .fileSizeKey]
-                    ) else { continue }
-
-                    if rv.isDirectory == true {
-                        let dirName = url.lastPathComponent.lowercased()
-                        let dirExt = url.pathExtension.lowercased()
-                        if !skipDirs.contains(dirName)
-                            && !skipBundleExtensions.contains(dirExt) {
-                            dirStack.append(url)
-                        }
-                    } else if rv.isRegularFile == true && rv.isReadable == true {
-                        let ext = url.pathExtension.lowercased()
-                        if shouldAdmitFile(extension: ext, videoExtensions: videoExtensions,
-                                           audioExtensions: audioExtensions,
-                                           probeExtensionless: probeExtensionless,
-                                           scanAudioFiles: scanAudioFiles) {
-                            if ext == "ts" && !isMpegTS(url) {
-                                continue
-                            }
-                            if minFileBytes > 0, let sz = rv.fileSize, sz < minFileBytes {
-                                continue
-                            }
-                            videoFiles.append(url)
-                            onProgress?(currentDir, videoFiles.count, url)
-                        }
-                    }
-                }
-            }
+            var lastDir = URL(fileURLWithPath: root)
+            walkTree(root: root, policy: policy, audit: audit,
+                     onDirectoryEntered: { dir in
+                         lastDir = dir
+                         onProgress?(dir, videoFiles.count, nil)
+                     },
+                     emit: { url in
+                         videoFiles.append(url)
+                         onProgress?(lastDir, videoFiles.count, url)
+                     })
             return videoFiles
         }.value
         return result
@@ -117,59 +255,25 @@ enum FilesystemWalker {
         probeExtensionless: Bool = false,
         audioExtensions: Set<String> = [],
         scanAudioFiles: Bool = false,
+        scanUnknownExtensions: Bool = false,
+        audit: DiscoveryAuditCollector? = nil,
         onDirectoryEntered: (@Sendable (_ currentDir: URL) -> Void)? = nil
     ) -> AsyncStream<URL> {
-        let minFileBytes: Int = skipSmallFiles ? 1_048_576 : 0
+        let policy = WalkPolicy(
+            videoExtensions: videoExtensions,
+            audioExtensions: audioExtensions,
+            skipDirs: skipDirs,
+            skipBundleExtensions: skipBundleExtensions,
+            minFileBytes: skipSmallFiles ? 1_048_576 : 0,
+            probeExtensionless: probeExtensionless,
+            scanAudioFiles: scanAudioFiles,
+            scanUnknownExtensions: scanUnknownExtensions
+        )
         return AsyncStream(URL.self, bufferingPolicy: .unbounded) { continuation in
             let walker = Task.detached(priority: .userInitiated) {
-                let fm = FileManager.default
-                var dirStack: [URL] = [URL(fileURLWithPath: root)]
-                while !dirStack.isEmpty {
-                    if Task.isCancelled { break }
-                    let currentDir = dirStack.removeLast()
-                    onDirectoryEntered?(currentDir)
-
-                    let contents: [URL]
-                    do {
-                        contents = try fm.contentsOfDirectory(
-                            at: currentDir,
-                            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey, .isReadableKey, .fileSizeKey],
-                            options: [.skipsHiddenFiles]
-                        )
-                    } catch {
-                        continue
-                    }
-
-                    for url in contents {
-                        if Task.isCancelled { break }
-                        guard let rv = try? url.resourceValues(
-                            forKeys: [.isDirectoryKey, .isRegularFileKey, .isReadableKey, .fileSizeKey]
-                        ) else { continue }
-
-                        if rv.isDirectory == true {
-                            let dirName = url.lastPathComponent.lowercased()
-                            let dirExt = url.pathExtension.lowercased()
-                            if !skipDirs.contains(dirName)
-                                && !skipBundleExtensions.contains(dirExt) {
-                                dirStack.append(url)
-                            }
-                        } else if rv.isRegularFile == true && rv.isReadable == true {
-                            let ext = url.pathExtension.lowercased()
-                            if shouldAdmitFile(extension: ext, videoExtensions: videoExtensions,
-                                               audioExtensions: audioExtensions,
-                                               probeExtensionless: probeExtensionless,
-                                               scanAudioFiles: scanAudioFiles) {
-                                if ext == "ts" && !isMpegTS(url) {
-                                    continue
-                                }
-                                if minFileBytes > 0, let sz = rv.fileSize, sz < minFileBytes {
-                                    continue
-                                }
-                                continuation.yield(url)
-                            }
-                        }
-                    }
-                }
+                walkTree(root: root, policy: policy, audit: audit,
+                         onDirectoryEntered: { onDirectoryEntered?($0) },
+                         emit: { continuation.yield($0) })
                 continuation.finish()
             }
             continuation.onTermination = { @Sendable _ in

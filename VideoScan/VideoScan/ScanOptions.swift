@@ -41,6 +41,25 @@ struct ScanOptions: Equatable {
     /// to catalog audio for Repair Audio / A-V correlation. See audioExtensions.
     var scanAudioFiles: Bool = false
 
+    /// Polarity exception (additive "Scan X"): when ON, the scan ALSO admits
+    /// files whose extension is in NO list — not a video extension, not an
+    /// audio extension, not known-junk (.txt/.jpg/…). Recovers media saved
+    /// with home-grown or mangled extensions. Cheap despite the wide net: a
+    /// magic-byte sniff in the probe engine (MediaSignatures) gates every
+    /// such candidate BEFORE ffprobe, so a volume of .dat blobs costs a
+    /// 264-byte read each, not an ffprobe subprocess each. OFF by default.
+    var scanUnknownExtensions: Bool = false
+
+    /// Polarity exception (additive "Scan X"): when ON, the walker descends
+    /// into PRO-VIDEO project bundles (.fcpbundle, .imovielibrary,
+    /// .rcproject, …) even when "Skip Media Bundles" would skip them —
+    /// project bundles are where FCP/iMovie hide the family's source clips.
+    /// Photo/music libraries (.photoslibrary, .lrdata, …) are NEVER
+    /// unlocked by this toggle; they stay governed by skipMediaBundles.
+    /// Media found inside a bundle is tagged with the bundle path
+    /// (ScanContext.bundleContainer). OFF by default.
+    var scanVideoProjectBundles: Bool = false
+
     // MARK: Persistence
     // UserDefaults.standard is documented thread-safe (CFPreferences-backed
     // with internal locking). nonisolated(unsafe) tells strict concurrency
@@ -57,6 +76,8 @@ struct ScanOptions: Equatable {
         if d.object(forKey: "\(p)skipChecksums") != nil { s.skipChecksums    = d.bool(forKey: "\(p)skipChecksums") }
         if d.object(forKey: "\(p)probeExtensionless") != nil { s.probeExtensionless = d.bool(forKey: "\(p)probeExtensionless") }
         if d.object(forKey: "\(p)scanAudioFiles") != nil { s.scanAudioFiles = d.bool(forKey: "\(p)scanAudioFiles") }
+        if d.object(forKey: "\(p)scanUnknownExtensions") != nil { s.scanUnknownExtensions = d.bool(forKey: "\(p)scanUnknownExtensions") }
+        if d.object(forKey: "\(p)scanVideoProjectBundles") != nil { s.scanVideoProjectBundles = d.bool(forKey: "\(p)scanVideoProjectBundles") }
         return s
     }
 
@@ -68,6 +89,8 @@ struct ScanOptions: Equatable {
         d.set(skipChecksums, forKey: "\(p)skipChecksums")
         d.set(probeExtensionless, forKey: "\(p)probeExtensionless")
         d.set(scanAudioFiles, forKey: "\(p)scanAudioFiles")
+        d.set(scanUnknownExtensions, forKey: "\(p)scanUnknownExtensions")
+        d.set(scanVideoProjectBundles, forKey: "\(p)scanVideoProjectBundles")
     }
 
     /// True when the user has deviated from the recommended fast-path
@@ -122,8 +145,42 @@ enum SkipCategories {
         "pluginkit", "systemextension", "appex"
     ]
     /// User-media libraries. IN by default (opt-out via skipMediaLibraries).
+    /// `lrdata` (Lightroom previews/caches) added 2026-07-02 with the
+    /// pro-video-bundle work: it rides with the photo-library class and is
+    /// never unlocked by "Look Inside Video Project Bundles".
     static let mediaLibraryExtensions: Set<String> = [
         "photoslibrary", "imovielibrary", "fcpbundle", "musiclibrary",
-        "tvlibrary", "aplibrary", "finalcutprojectlibrary"
+        "tvlibrary", "aplibrary", "finalcutprojectlibrary", "lrdata"
+    ]
+    /// Pro-video PROJECT bundles — the subset of media libraries that
+    /// "Look Inside Video Project Bundles" carves back OUT of the skip set.
+    /// Canonical list lives in VideoScanCore (ProVideoBundles) so the
+    /// walker's skip logic and ScanContext.bundleContainer tagging can
+    /// never disagree.
+    static var proVideoBundleExtensions: Set<String> { ProVideoBundles.bundleExtensions }
+    /// Extensions that are definitively NOT media — documents, images,
+    /// archives, code, fonts. "Scan Unrecognized File Types" consults this
+    /// so it never wastes even a 264-byte sniff on a .txt or .jpg. An
+    /// extension missing from this list is merely "unknown", which is the
+    /// class that toggle exists to admit (the sniff arbitrates).
+    static let knownNonMediaExtensions: Set<String> = [
+        // documents / text
+        "txt", "md", "rtf", "pdf", "doc", "docx", "xls", "xlsx", "ppt",
+        "pptx", "pages", "numbers", "key", "csv", "log",
+        // structured data / code / web. (No "ts" here — that's MPEG-TS vs
+        // TypeScript, already arbitrated by the walker's isMpegTS sniff.)
+        "json", "xml", "plist", "yml", "yaml", "html", "htm", "css", "js",
+        "py", "sh", "c", "h", "cpp", "hpp", "swift", "java", "rb",
+        "sql", "db", "sqlite", "sqlite3",
+        // images (stills — Vision/Photos territory, not ffprobe's)
+        "jpg", "jpeg", "png", "gif", "tif", "tiff", "bmp", "heic", "heif",
+        "webp", "psd", "svg", "ico", "icns", "raw", "cr2", "nef", "arw", "dng",
+        // archives / disk images / packages. (No "iso" — a DVD-video image
+        // is plausibly media; leave it "unknown" so the sniff/ffprobe judge.)
+        "zip", "gz", "bz2", "xz", "7z", "rar", "tar", "sit", "sitx", "dmg",
+        "pkg",
+        // binaries / fonts / misc
+        "exe", "dll", "dylib", "so", "o", "a", "class", "jar",
+        "ttf", "otf", "woff", "woff2", "nib", "strings", "ds_store"
     ]
 }

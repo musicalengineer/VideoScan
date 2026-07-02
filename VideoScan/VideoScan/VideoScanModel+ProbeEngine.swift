@@ -16,6 +16,13 @@ import Darwin
 //
 // The two probe-engine stored constants (prefetchBytes, probeTimeoutSeconds)
 // stay in the main class because extensions can't add stored properties.
+//
+// Discovery-completeness (2026-07-02): extensionless and unknown-extension
+// candidates now pass a magic-byte content sniff (MediaSignatures) BEFORE
+// ffprobe — sniff-fails skip the subprocess, surface as the same
+// gated-out ffprobeFailed shape the junk gate already handles, and are
+// counted in the per-scan DiscoveryAudit. Known media extensions never
+// sniff: zero behavior change for normal scans.
 
 extension VideoScanModel {
 
@@ -27,7 +34,8 @@ extension VideoScanModel {
         volName: String,
         rootIsNetwork: Bool,
         ramMountPoint: String?,
-        keepalive: VolumeKeepalive? = nil
+        keepalive: VolumeKeepalive? = nil,
+        audit: DiscoveryAuditCollector? = nil
     ) async -> (records: [VideoRecord], discovered: Int, completed: Int) {
         let probesLimit = perfSettings.probesPerVolume
         let sem = AsyncSemaphore(limit: probesLimit)
@@ -40,6 +48,7 @@ extension VideoScanModel {
         var consecutiveNotAccessible = 0
         let abortAfter = rootIsNetwork ? 100 : 50
         var allDiscoveredPaths: [String] = []
+        let knownMediaExtensions = videoExtensions.union(audioExtensions)
 
         let stream = walkDirectoryStream(
             root: root,
@@ -47,7 +56,9 @@ extension VideoScanModel {
             skipBundleExtensions: skipBundleExtensionsSnapshot(),
             skipSmallFiles: scanOptions.skipSmallFiles,
             probeExtensionless: scanOptions.probeExtensionless,
-            scanAudioFiles: scanOptions.scanAudioFiles
+            scanAudioFiles: scanOptions.scanAudioFiles,
+            scanUnknownExtensions: scanOptions.scanUnknownExtensions,
+            audit: audit
         ) { [weak self] currentDir in
             Task { @MainActor in
                 guard let self else { return }
@@ -141,7 +152,8 @@ extension VideoScanModel {
                 // failures on a healthy volume keep the quieter appLog-only
                 // treatment instead of a console FAILED line per junk blob).
                 let shouldCatalog = Self.shouldCatalogProbeResult(
-                    ext: outcome.ext, streamTypeRaw: outcome.probe.streamTypeRaw)
+                    ext: outcome.ext, streamTypeRaw: outcome.probe.streamTypeRaw,
+                    knownMediaExtensions: knownMediaExtensions)
 
                 let shouldAbort = processTargetProbeResult(
                     outcome: outcome,
@@ -168,7 +180,7 @@ extension VideoScanModel {
                     rec.apply(outcome)
                     targetRecords.append(rec)
                 } else {
-                    appLog.write("NOT CATALOGED — no extension, ffprobe could not identify as media: \(outcome.fullPath)")
+                    recordGatedOutcome(outcome, audit: audit)
                 }
 
                 if shouldAbort {
@@ -180,17 +192,50 @@ extension VideoScanModel {
         return (targetRecords, discoveredCount, completedCount)
     }
 
-    /// Whether a probed file should get a catalog record. Drops files that have
-    /// NO extension AND that ffprobe could not identify as media — the data-blob
-    /// noise the "Scan Files With No Extension" pass admits (e.g. ~4.9k junk
-    /// rows on a backup-drive sweep). Extensioned damaged media (a real but
-    /// unreadable Avid .mxf, say) is STILL cataloged so it stays visible. Each
-    /// drop is logged to videoscan.log at the call site, so "why isn't this
-    /// file cataloged?" always has an answer.
-    nonisolated static func shouldCatalogProbeResult(ext: String, streamTypeRaw: String) -> Bool {
-        let extensionless = ext.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    /// Whether a probed file should get a catalog record. Drops files that
+    /// ffprobe (or the pre-ffprobe content sniff) could not identify as media
+    /// AND whose extension can't vouch for them — the data-blob noise the
+    /// "Scan Files With No Extension" / "Scan Unrecognized File Types" passes
+    /// admit (e.g. ~4.9k junk rows on a backup-drive sweep). Extensioned
+    /// damaged media (a real but unreadable Avid .mxf, say) is STILL cataloged
+    /// so it stays visible. Each drop is logged at the call site, so "why
+    /// isn't this file cataloged?" always has an answer (and, since
+    /// 2026-07-02, an audit entry).
+    ///
+    /// - Parameter knownMediaExtensions: lowercased extensions that vouch for
+    ///   a file even when ffprobe fails (the video+audio allowlists). Pass
+    ///   nil (the default, and the pre-2026-07-02 behavior) to gate ONLY
+    ///   extensionless failures — kept so the original contract stays pinned
+    ///   by ProbeResultCatalogingTests. The scan drain loops pass the real
+    ///   sets so unknown-extension junk admitted by the new toggle can't
+    ///   flood the catalog as "damaged media".
+    nonisolated static func shouldCatalogProbeResult(
+        ext: String,
+        streamTypeRaw: String,
+        knownMediaExtensions: Set<String>? = nil
+    ) -> Bool {
         let unidentified = streamTypeRaw == StreamType.ffprobeFailed.rawValue
-        return !(extensionless && unidentified)
+        guard unidentified else { return true }
+        let trimmed = ext.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return false }
+        if let known = knownMediaExtensions, !known.contains(trimmed.lowercased()) {
+            return false
+        }
+        return true
+    }
+
+    /// Shared drain-point bookkeeping for a gated-out (never-cataloged)
+    /// outcome: the quiet appLog line (fa24921 etiquette — file log, not
+    /// console) plus the discovery-audit entry, classified by whether the
+    /// content sniff or ffprobe did the rejecting.
+    func recordGatedOutcome(_ outcome: ProbeOutcome, audit: DiscoveryAuditCollector?) {
+        if outcome.sniffRejected {
+            appLog.write("NOT CATALOGED — no media signature in file header (ffprobe skipped): \(outcome.fullPath)")
+            audit?.sniffRejected(path: outcome.fullPath)
+        } else {
+            appLog.write("NOT CATALOGED — extension can't vouch for it and ffprobe could not identify as media: \(outcome.fullPath)")
+            audit?.probeRejected(path: outcome.fullPath)
+        }
     }
 
     /// Probe a pre-discovered file list (from a checkpoint). Skips the walk
@@ -203,7 +248,8 @@ extension VideoScanModel {
         rootIsNetwork: Bool,
         ramMountPoint: String?,
         keepalive: VolumeKeepalive?,
-        skipChecksums: Bool
+        skipChecksums: Bool,
+        audit: DiscoveryAuditCollector? = nil
     ) async -> (records: [VideoRecord], discovered: Int, completed: Int) {
         let probesLimit = perfSettings.probesPerVolume
         let sem = AsyncSemaphore(limit: probesLimit)
@@ -214,6 +260,7 @@ extension VideoScanModel {
         var consecutiveNotAccessible = 0
         let abortAfter = rootIsNetwork ? 100 : 50
         let totalFiles = filePaths.count
+        let knownMediaExtensions = videoExtensions.union(audioExtensions)
 
         target.filesFound = totalFiles
         dashboard.volumeProgress.append(
@@ -265,7 +312,8 @@ extension VideoScanModel {
                 // comment in runTargetProbeGroup); also feeds the accounting
                 // call so healthy-volume gated-out junk stays off the console.
                 let shouldCatalog = Self.shouldCatalogProbeResult(
-                    ext: outcome.ext, streamTypeRaw: outcome.probe.streamTypeRaw)
+                    ext: outcome.ext, streamTypeRaw: outcome.probe.streamTypeRaw,
+                    knownMediaExtensions: knownMediaExtensions)
 
                 let shouldAbort = processTargetProbeResult(
                     outcome: outcome,
@@ -288,7 +336,7 @@ extension VideoScanModel {
                     rec.apply(outcome)
                     targetRecords.append(rec)
                 } else {
-                    appLog.write("NOT CATALOGED — no extension, ffprobe could not identify as media: \(outcome.fullPath)")
+                    recordGatedOutcome(outcome, audit: audit)
                 }
 
                 if shouldAbort {
@@ -316,6 +364,8 @@ extension VideoScanModel {
         skipSmallFiles: Bool,
         probeExtensionless: Bool = false,
         scanAudioFiles: Bool = false,
+        scanUnknownExtensions: Bool = false,
+        audit: DiscoveryAuditCollector? = nil,
         onDirectoryEntered: (@Sendable (_ currentDir: URL) -> Void)? = nil
     ) -> AsyncStream<URL> {
         FilesystemWalker.walkDirectoryStream(
@@ -327,6 +377,8 @@ extension VideoScanModel {
             probeExtensionless: probeExtensionless,
             audioExtensions: audioExtensions,
             scanAudioFiles: scanAudioFiles,
+            scanUnknownExtensions: scanUnknownExtensions,
+            audit: audit,
             onDirectoryEntered: onDirectoryEntered
         )
     }
@@ -486,6 +538,37 @@ extension VideoScanModel {
             cached.wasCacheHit = true
             cached.scanContext = ScanContext.capture(for: url, scanRootPath: scanRootPath)
             return cached
+        }
+
+        // Magic-byte sniff gate (discovery-completeness, 2026-07-02): a file
+        // whose extension can't vouch for it (none, or unrecognized) must
+        // show a media signature in its first bytes before we pay for an
+        // ffprobe subprocess. Placement matters:
+        //   * AFTER the existence check + cache lookup — vanished files keep
+        //     producing the "File not found" trail the unmount-abort
+        //     accounting depends on, and previously-identified media skips
+        //     both sniff and ffprobe via the cache;
+        //   * BEFORE hashing/prefetch/ffprobe — junk costs a 264-byte read,
+        //     not a 64 KB hash + subprocess.
+        // `.unreadable` deliberately falls THROUGH to ffprobe: the sniff only
+        // ever rejects on evidence, never on an I/O hiccup.
+        let extLower = url.pathExtension.lowercased()
+        if MediaSignatures.needsSniff(pathExtension: extLower,
+                                      videoExtensions: videoExtensions,
+                                      audioExtensions: audioExtensions),
+           case .noMediaSignature = MediaSignatures.sniff(path: path) {
+            var o = ProbeOutcome()
+            o.filename            = url.lastPathComponent
+            o.ext                 = url.pathExtension.uppercased()
+            o.fullPath            = path
+            o.directory           = url.deletingLastPathComponent().path
+            o.sizeBytes           = fileSize
+            o.size                = Formatting.humanSize(fileSize)
+            o.probe.isPlayable    = "No media signature"
+            o.notes               = "Content sniff found no media container signature in the file header — ffprobe skipped"
+            o.probe.streamTypeRaw = StreamType.ffprobeFailed.rawValue
+            o.sniffRejected       = true
+            return o
         }
 
         // autoreleasepool drains Obj-C bridged objects (DateFormatter, NSString,

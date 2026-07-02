@@ -56,6 +56,12 @@ extension ScanContext {
            let label = subfolderLabel(forScanRootPath: rootPath) {
             ctx.scanRootLabel = label
         }
+
+        // Tag files living INSIDE a pro-video project bundle ("Look Inside
+        // Video Project Bundles", 2026-07-02). Pure path-component scan —
+        // no filesystem I/O — and recomputed on every capture, so the tag
+        // self-heals on rescan like the rest of the context.
+        ctx.bundleContainer = ProVideoBundles.container(forPath: url.path) ?? ""
         return ctx
     }
 }

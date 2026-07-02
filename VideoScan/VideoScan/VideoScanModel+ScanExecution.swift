@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // MARK: - Scan Execution (orchestration around the probe engine)
 //
@@ -12,6 +13,13 @@ import Foundation
 // prefetch — lives one floor down in VideoScanModel+ProbeEngine.swift.
 //
 // This file is "the recipe"; ProbeEngine is "the kitchen tools".
+//
+// Discovery-completeness (2026-07-02): every scan carries a
+// DiscoveryAuditCollector from walk through finalize. Finalize emits ONE
+// audit summary block (console + os.log discoveryAudit category), writes the
+// machine-readable scan-audit-<stamp>.json sidecar, and — the honesty hook —
+// refuses to call a scan COMPLETE if any directory could not be enumerated,
+// which routes the catalog merge onto the upsert-never-prune path.
 
 extension VideoScanModel {
 
@@ -163,11 +171,17 @@ extension VideoScanModel {
         targetRecords: [VideoRecord],
         completedCount: Int,
         discoveredCount: Int,
-        rootIsNetwork: Bool
+        rootIsNetwork: Bool,
+        audit: DiscoveryAuditCollector?
     ) async {
         target.filesScanned = completedCount
         if discoveredCount == 0 {
             log("  No video files found on \(volName).")
+            // Discovery audit still runs for empty discovery — an unreadable
+            // ROOT looks exactly like "no files found", and the audit block
+            // is what says so out loud. (This branch never prunes, so the
+            // catalog is safe either way.)
+            finishDiscoveryAudit(audit, volName: volName, cataloged: 0)
             // Empty discovery NEVER prunes: an empty walk over a tree the
             // catalog knows is populated is the LaCieWorkspace incident
             // shape (2026-07-01) — keep the existing records and say so.
@@ -217,10 +231,20 @@ extension VideoScanModel {
         if restored > 0 {
             appLog.write("Rescan preservation: restored dossier+user fields onto \(restored) of \(targetRecords.count) freshly-scanned records on \(volName)")
         }
+        // Discovery honesty (2026-07-02): a scan whose enumerator could not
+        // read one or more directories has NOT seen the whole tree — even if
+        // every admitted file was probed. Treat it exactly like a mid-probe
+        // abort: the merge below upserts and never prunes. This is the flag
+        // that would have made the June-30 incident shape visible AND
+        // harmless.
+        let enumerationErrors = audit?.directoryEnumerationErrors ?? 0
+        if enumerationErrors > 0 {
+            log("  ⚠ \(enumerationErrors) director\(enumerationErrors == 1 ? "y" : "ies") could not be read on \(volName) — treating this scan as INCOMPLETE (no records will be pruned).")
+        }
         // Atomic root-scoped replace + mass-deletion tripwire — see
         // VideoScanModel+ScanMerge.swift. An aborted scan (completed <
         // discovered: volume died mid-probe) upserts without pruning.
-        let scanWasComplete = completedCount >= discoveredCount
+        let scanWasComplete = completedCount >= discoveredCount && enumerationErrors == 0
         commitScanResults(
             root: target.searchPath,
             volName: volName,
@@ -238,6 +262,7 @@ extension VideoScanModel {
             log("  💾 Scan checkpoint kept for \(volName) — the scan aborted before completing, so it stays resumable.")
         }
         logTargetScanSummary(volName: volName, records: targetRecords)
+        finishDiscoveryAudit(audit, volName: volName, cataloged: targetRecords.count)
         appLog.write("Completed catalog scan of volume \(volName): \(completedCount) file(s) scanned, \(targetRecords.count) catalogued")
         target.status = .complete
         target.lastScannedDate = Date()
@@ -250,6 +275,50 @@ extension VideoScanModel {
             dashboard.stopThroughputTimer()
             dashboard.scanPhase = .complete
         }
+    }
+
+    /// Snapshot the audit, publish it (`lastDiscoveryAudit`), write the
+    /// sidecar JSON, and emit the ONE summary block per scan (fa24921
+    /// console etiquette — never per-file lines).
+    fileprivate func finishDiscoveryAudit(
+        _ collector: DiscoveryAuditCollector?,
+        volName: String,
+        cataloged: Int
+    ) {
+        guard let collector else { return }
+        let audit = collector.finish(cataloged: cataloged)
+        lastDiscoveryAudit = audit
+
+        // Sidecar destination: ~/Library/Logs/VideoScan in production;
+        // NOWHERE in a test host unless a test injects an override directory
+        // (settings-pollution class — tests must not write to real logs).
+        var sidecarPath: String?
+        if let dir = discoveryAuditDirectoryOverride {
+            sidecarPath = DiscoveryAuditSidecar.write(audit, to: dir)
+        } else if !TestEnvironment.isTestHost {
+            sidecarPath = DiscoveryAuditSidecar.write(audit, to: PersistentLog.logDir)
+        }
+
+        var lines: [String] = []
+        lines.append("  ── Discovery audit — \(volName) ──")
+        lines.append("  Enumerated \(audit.filesEnumerated) file(s) · admitted \(audit.filesAdmitted) · cataloged \(audit.filesCataloged)")
+        lines.append("  Skipped: \(audit.skippedNonMediaExtension) non-media ext · \(audit.skippedExtensionlessOff) extensionless (option off) · \(audit.skippedAudioExtensionOff) audio (option off) · \(audit.skippedSmallFile) small · \(audit.skippedSystemTreeDirs) system dir(s) · \(audit.skippedBundleDirs) bundle dir(s)")
+        if audit.sniffRejected > 0 || audit.probeRejected > 0 {
+            lines.append("  Not cataloged: \(audit.sniffRejected) no media signature (sniff) · \(audit.probeRejected) unidentified by ffprobe")
+        }
+        if audit.directoryEnumerationErrors > 0 {
+            lines.append("  ⚠ \(audit.directoryEnumerationErrors) directories could not be read — discovery was INCOMPLETE")
+        }
+        if let sidecarPath {
+            lines.append("  Audit JSON: \(sidecarPath)")
+        }
+        log(lines.joined(separator: "\n"))
+
+        discoveryAuditLog.info("Discovery audit \(volName, privacy: .public): enumerated=\(audit.filesEnumerated) admitted=\(audit.filesAdmitted) cataloged=\(audit.filesCataloged) sniffRejected=\(audit.sniffRejected) probeRejected=\(audit.probeRejected) enumErrors=\(audit.directoryEnumerationErrors)")
+        if audit.directoryEnumerationErrors > 0 {
+            discoveryAuditLog.warning("Discovery INCOMPLETE for \(volName, privacy: .public): \(audit.directoryEnumerationErrors) unreadable directories — scan finalized as not-complete (upsert, no prune)")
+        }
+        appLog.write("Discovery audit (\(volName)): enumerated \(audit.filesEnumerated), admitted \(audit.filesAdmitted), cataloged \(audit.filesCataloged), sniff-rejected \(audit.sniffRejected), probe-rejected \(audit.probeRejected), unreadable dirs \(audit.directoryEnumerationErrors)\(sidecarPath.map { "; sidecar: \($0)" } ?? "")")
     }
 
     /// Mount the RAM disk for network scans if any root needs it.
@@ -342,13 +411,18 @@ extension VideoScanModel {
         dashboard.scanPhase = .probing
         target.status = .scanning
 
+        // Discovery audit rides the whole scan: walker skip/error hooks,
+        // probe-engine gate hooks, finalize summary + sidecar.
+        let audit = DiscoveryAuditCollector(scanRoot: root, volumeName: volName)
+
         let result = await runTargetProbeGroup(
             target: target,
             root: root,
             volName: volName,
             rootIsNetwork: rootIsNetwork,
             ramMountPoint: ramMountPoint,
-            keepalive: keepalive
+            keepalive: keepalive,
+            audit: audit
         )
 
         if let ka = keepalive { await ka.stop() }
@@ -359,7 +433,8 @@ extension VideoScanModel {
             targetRecords: result.records,
             completedCount: result.completed,
             discoveredCount: result.discovered,
-            rootIsNetwork: rootIsNetwork
+            rootIsNetwork: rootIsNetwork,
+            audit: audit
         )
     }
 
@@ -438,6 +513,11 @@ extension VideoScanModel {
                 keepalive = ka
             }
 
+            // Resumed scans skip the walk phase, so the audit carries no
+            // enumeration stats — but the probe-gate hooks (sniff-rejected /
+            // probe-rejected) and the finalize summary still apply.
+            let audit = DiscoveryAuditCollector(scanRoot: root, volumeName: volName)
+
             let result = await runResumedProbeGroup(
                 target: target,
                 filePaths: remainingPaths,
@@ -446,7 +526,8 @@ extension VideoScanModel {
                 rootIsNetwork: rootIsNetwork,
                 ramMountPoint: ramMountPoint,
                 keepalive: keepalive,
-                skipChecksums: checkpoint.skipChecksums
+                skipChecksums: checkpoint.skipChecksums,
+                audit: audit
             )
 
             if let ka = keepalive { await ka.stop() }
@@ -463,7 +544,8 @@ extension VideoScanModel {
                 targetRecords: result.records,
                 completedCount: result.completed,
                 discoveredCount: result.discovered,
-                rootIsNetwork: rootIsNetwork
+                rootIsNetwork: rootIsNetwork,
+                audit: audit
             )
         }
     }

@@ -278,12 +278,28 @@ final class VideoScanModel: ObservableObject {
     /// Snapshot the current skip-bundle-extensions set from scanOptions.
     /// App bundles fold into "system files"; media bundles are a separate
     /// toggle (since media libraries are where user content often lives).
+    /// "Look Inside Video Project Bundles" then carves the PRO-VIDEO subset
+    /// (.fcpbundle, .imovielibrary, .rcproject, …) back OUT of whatever the
+    /// skips added — photo/music libraries (.photoslibrary, .lrdata, …) are
+    /// never unlocked by it.
     func skipBundleExtensionsSnapshot() -> Set<String> {
         var s = Set<String>()
         if scanOptions.skipSystemFiles { s.formUnion(SkipCategories.appBundleExtensions) }
         if scanOptions.skipMediaBundles { s.formUnion(SkipCategories.mediaLibraryExtensions) }
+        if scanOptions.scanVideoProjectBundles { s.subtract(SkipCategories.proVideoBundleExtensions) }
         return s
     }
+
+    /// Discovery audit of the most recently FINALIZED scan (one entry per
+    /// finished target; the sidecar JSON under ~/Library/Logs/VideoScan/
+    /// keeps the full history). Read by tests and available to future UI.
+    var lastDiscoveryAudit: DiscoveryAudit?
+
+    /// Test seam: where finalize writes the scan-audit sidecar. nil (the
+    /// default) → ~/Library/Logs/VideoScan in production, and NOWHERE in a
+    /// test host (same narrow gate as CatalogStore.saveNow) — tests that
+    /// want to see the JSON point this at a temp directory.
+    var discoveryAuditDirectoryOverride: URL?
 
     var combineTask: Task<Void, Never>?
     var backfillTask: Task<Void, Never>?

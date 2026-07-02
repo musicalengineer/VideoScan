@@ -236,6 +236,13 @@ struct ScanOptionsMenu: View {
                 .help("Also examine extensionless files (e.g. iMovie/Avid video-only exports) and catalog the ones ffprobe identifies as media. Targeted recovery pass — leave off for normal scans.")
             Toggle("Scan For Audio Files", isOn: toggle(\.scanAudioFiles))
                 .help("Also catalog standalone audio files (wav, aif, mp3, …). Off by default — archives hold many scratch/temp audio files. Turn on to find audio for Repair Audio / A-V correlation.")
+            // Widest gap-recovery net: extensions in NO list (not video, not
+            // audio, not obvious junk like .txt/.jpg). A cheap header sniff
+            // keeps ffprobe off genuine junk, so this stays affordable.
+            Toggle("Scan Unrecognized File Types", isOn: toggle(\.scanUnknownExtensions))
+                .help("Also examine files whose extension VideoScan doesn't recognize (not video, audio, or an obvious document/image type). Each candidate's first bytes are checked for a media signature before ffprobe runs, so junk stays cheap. Targeted recovery pass — leave off for normal scans.")
+            Toggle("Look Inside Video Project Bundles", isOn: toggle(\.scanVideoProjectBundles))
+                .help("Descend into Final Cut and iMovie project bundles (.fcpbundle, .imovielibrary, .rcproject, …) and catalog the media inside, even when Skip Media Bundles is on. Photo libraries stay skipped. Cataloged files are tagged with their enclosing bundle.")
 
             Divider()
 
