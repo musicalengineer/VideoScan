@@ -182,9 +182,12 @@ extension VideoScanModel {
         if target.status == .complete || target.status == .stopped || target.status == .error {
             target.status = .idle
         }
-        let before = records.count
-        records.removeAll { PathScope.contains($0.fullPath, within: path) } // regression: codex C2
-        let removed = before - records.count
+        // Guarded removal (2026-07-03): coverage check + >50-record
+        // snapshot tripwire + fail-safe degrade — same helper as
+        // resetTarget. "Delete Catalog" is explicit, but the multi-select
+        // path bypasses the confirmation dialog, and records nested under
+        // ANOTHER registered target's root are not this target's to delete.
+        let outcome = removeCatalogRecords(underTargetRoot: path, action: "delete catalog")
         // If any of the banner-tracked rows lived on this volume, the
         // banner's Undo would now skip them — drop the banner to avoid the
         // partial-restore confusion.
@@ -193,7 +196,7 @@ extension VideoScanModel {
         persistScanDates()
         saveCatalogNow()
         notifyTargetsChanged()
-        log("Deleted \(removed) catalog record(s) for \(volName).")
+        log("Deleted \(outcome.removed) catalog record(s) for \(volName).")
     }
 
     /// Export volume info as CSV via a save panel.

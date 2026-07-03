@@ -710,8 +710,14 @@ final class VideoScanModel: ObservableObject {
     func resetTarget(_ target: CatalogScanTarget) {
         target.reset()
         clearCacheForTarget(target)
-        // Also drop in-memory records that came from this target so the table reflects the reset
-        records.removeAll { PathScope.contains($0.fullPath, within: target.searchPath) } // regression: codex C2
+        // Drop in-memory records that came from this target so the table
+        // reflects the reset — through the guarded helper (2026-07-03):
+        // records still covered by another registered target's root are
+        // KEPT, and any removal >50 records lands a
+        // catalog.pre-target-removal snapshot first (or degrades to
+        // no-removal). The bare removeAll that used to live here is the
+        // hole QA flagged after the 2,720-record folder-target loss.
+        removeCatalogRecords(underTargetRoot: target.searchPath, action: "reset")
     }
 
     // MARK: - Probe-cache count (memoized)

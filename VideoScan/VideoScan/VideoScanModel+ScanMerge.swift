@@ -454,22 +454,36 @@ extension VideoScanModel {
     /// CatalogStore(directory:) to exercise the real snapshot.
     @discardableResult
     func snapshotCatalogPreMerge() -> String? {
+        let snap = snapshotCatalog(prefix: "pre-merge")
+        if snap == nil {
+            log("  ⚠ Pre-merge snapshot failed — a tripwired merge will now degrade to no-prune (fail safe)")
+            scanMergeLog.error("Pre-merge snapshot failed")
+        }
+        return snap
+    }
+
+    /// Write the CURRENT in-memory records to a timestamped sibling
+    /// `catalog.<prefix>.<stamp>.json`. Shared core of the scan-merge
+    /// tripwire (`pre-merge`) and the target-removal safety net
+    /// (`pre-target-removal`, 2026-07-03). Same test gate and same
+    /// same-second uniquify behavior as always. Returns nil on failure —
+    /// callers treat that as "no recovery copy → do not destroy".
+    @discardableResult
+    func snapshotCatalog(prefix: String) -> String? {
         if TestEnvironment.isTestHost && catalogStore === CatalogStore.shared { return nil }
         let dir = (catalogStore.fileLocation as NSString).deletingLastPathComponent
         let stamp = ISO8601DateFormatter().string(from: Date())
             .replacingOccurrences(of: ":", with: "-")
-        var snap = (dir as NSString).appendingPathComponent("catalog.pre-merge.\(stamp).json")
-        // Two tripwires in the same second: uniquify rather than fail.
+        var snap = (dir as NSString).appendingPathComponent("catalog.\(prefix).\(stamp).json")
+        // Two snapshots in the same second: uniquify rather than fail.
         var n = 1
         while FileManager.default.fileExists(atPath: snap) {
-            snap = (dir as NSString).appendingPathComponent("catalog.pre-merge.\(stamp).\(n).json")
+            snap = (dir as NSString).appendingPathComponent("catalog.\(prefix).\(stamp).\(n).json")
             n += 1
         }
         if catalogStore.writeSnapshot(records: records, toPath: snap) {
             return snap
         }
-        log("  ⚠ Pre-merge snapshot failed (could not encode/write \(snap)) — a tripwired merge will now degrade to no-prune (fail safe)")
-        scanMergeLog.error("Pre-merge snapshot failed at \(snap, privacy: .public)")
         return nil
     }
 }

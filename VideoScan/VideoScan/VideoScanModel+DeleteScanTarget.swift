@@ -76,3 +76,93 @@ extension VideoScanModel {
         return true
     }
 }
+
+// MARK: - Guarded record removal under a target root (2026-07-03)
+//
+// Safety net for the 2026-07-01 incident: removing two folder targets
+// silently deleted 2,720 catalog records including dossier enrichment.
+// Every record-removal scoped to a target's root now goes through ONE
+// helper that (a) keeps records still covered by ANOTHER registered
+// target's root (component-boundary PathScope — a folder target nested
+// under a volume target does not own its records exclusively), (b) writes
+// a catalog.pre-target-removal.<stamp>.json recovery snapshot before any
+// removal larger than the threshold, degrading to NO removal if the
+// snapshot cannot be written (same fail-safe contract as the scan-merge
+// tripwire), and (c) emits one prominent log line carrying the count.
+
+/// Outcome of a guarded target-scoped record removal.
+struct TargetRecordRemovalOutcome {
+    var removed = 0
+    /// Records under the root that were KEPT because another registered
+    /// scan target's root also covers them.
+    var keptCoveredByOtherTargets = 0
+    var snapshotPath: String?
+    /// True when >threshold records should have been removed but the
+    /// safety snapshot could not be written — nothing was removed.
+    var degradedNoSnapshot = false
+}
+
+extension VideoScanModel {
+
+    /// Removals larger than this must land a recovery snapshot first.
+    static let targetRemovalSnapshotThreshold = 50
+
+    /// Remove catalog records under `root`, honoring the coverage check,
+    /// snapshot tripwire, and fail-safe degrade described above.
+    /// `action` names the caller for the log trail ("reset",
+    /// "delete catalog", …).
+    @discardableResult
+    func removeCatalogRecords(underTargetRoot root: String, action: String) -> TargetRecordRemovalOutcome {
+        var outcome = TargetRecordRemovalOutcome()
+        let normRoot = PathScope.normalize(root)
+        // Every OTHER registered target root that could cover a record.
+        // Retired targets count: retire deliberately keeps records, so
+        // their roots still own them.
+        let otherRoots = scanTargets.map(\.searchPath)
+            .filter { PathScope.normalize($0) != normRoot }
+
+        var doomed = Set<ObjectIdentifier>()
+        for rec in records where PathScope.contains(rec.fullPath, within: root) {
+            if otherRoots.contains(where: { PathScope.contains(rec.fullPath, within: $0) }) {
+                outcome.keptCoveredByOtherTargets += 1
+            } else {
+                doomed.insert(ObjectIdentifier(rec))
+            }
+        }
+
+        guard !doomed.isEmpty else {
+            if outcome.keptCoveredByOtherTargets > 0 {
+                log("Target \(action) (\(root)): removed 0 record(s) — all \(outcome.keptCoveredByOtherTargets) under this root are still covered by other scan target(s).")
+            }
+            return outcome
+        }
+
+        if doomed.count > Self.targetRemovalSnapshotThreshold {
+            outcome.snapshotPath = snapshotCatalog(prefix: "pre-target-removal")
+            if outcome.snapshotPath == nil {
+                // FAIL SAFE: no recovery copy → no destruction. Mirrors the
+                // scan-merge tripwire degrade.
+                outcome.degradedNoSnapshot = true
+                log("""
+                  ⚠️⚠️ TARGET \(action.uppercased()) DEGRADED — \(root)
+                  This would remove \(doomed.count) catalog record(s), but the pre-removal safety snapshot could NOT be written.
+                  NOTHING was removed. Fix the catalog directory and retry to remove for real.
+                  """)
+                appLog.write("TARGET \(action.uppercased()) (DEGRADED): could not write catalog.pre-target-removal snapshot; kept all \(doomed.count) record(s) under \(root)")
+                return outcome
+            }
+        }
+
+        records.removeAll { doomed.contains(ObjectIdentifier($0)) }
+        outcome.removed = doomed.count
+
+        // (b) THE one prominent line — count first, context after.
+        let keptNote = outcome.keptCoveredByOtherTargets > 0
+            ? " — kept \(outcome.keptCoveredByOtherTargets) record(s) still covered by other scan target(s)"
+            : ""
+        let snapNote = outcome.snapshotPath.map { " — recovery snapshot: \($0)" } ?? ""
+        log("⚠️ Target \(action): removed \(outcome.removed) catalog record(s) under \(root)\(keptNote)\(snapNote)")
+        appLog.write("Target \(action) (\(root)): removed \(outcome.removed) record(s), kept \(outcome.keptCoveredByOtherTargets) covered by other targets\(snapNote)")
+        return outcome
+    }
+}
