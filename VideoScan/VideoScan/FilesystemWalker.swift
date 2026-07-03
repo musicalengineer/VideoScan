@@ -124,8 +124,9 @@ enum FilesystemWalker {
                 // with Cocoa error 256 on directories that read fine moments
                 // later — and ONE transient failure on a top-level directory
                 // used to cost the entire subtree for the scan. Two short
-                // retries ride out the transient class; a genuinely
-                // unreadable directory still lands in the audit below.
+                // retries ride out the transient fd-pressure class ONLY
+                // (Cocoa 256 / EMFILE); deterministic failures such as
+                // permission-denied land in the audit below immediately.
                 contents = try listDirectoryWithRetry(at: currentDir) { dir in
                     try fm.contentsOfDirectory(
                         at: dir,
@@ -190,13 +191,17 @@ enum FilesystemWalker {
         }
     }
 
-    /// List a directory with a bounded retry budget. Transient failures —
-    /// the fd-exhaustion / Cocoa-256 class from the 2026-07-02 incident —
-    /// recover on a later attempt instead of costing the whole subtree;
-    /// persistent failures rethrow the LAST error for the audit. The delays
-    /// are synchronous (`usleep`) by design: the walker runs on a detached
-    /// task doing blocking FileManager I/O already, and worst case adds
-    /// ~0.5 s per genuinely unreadable directory.
+    /// List a directory with a bounded retry budget. ONLY transient failures
+    /// — the fd-exhaustion / Cocoa-256 class from the 2026-07-02 incident
+    /// (see `isRetryableListingError`) — are retried; they recover on a
+    /// later attempt instead of costing the whole subtree. Deterministic
+    /// failures (permission-denied 257 etc.) throw straight to the audit on
+    /// the first attempt: retrying them can never succeed, and 3 attempts +
+    /// 0.5 s of sleep per directory adds up to minutes on foreign-ownership
+    /// volumes (QA 2026-07-02). Persistent retryable failures rethrow the
+    /// LAST error for the audit. The delays are synchronous (`usleep`) by
+    /// design: the walker runs on a detached task doing blocking FileManager
+    /// I/O already, and worst case adds ~0.5 s per fd-starved directory.
     ///
     /// `list` is injectable so tests can pin the retry contract without
     /// filesystem games; production passes `fm.contentsOfDirectory`.
@@ -209,6 +214,7 @@ enum FilesystemWalker {
         do {
             return try list(dir)
         } catch {
+            guard isRetryableListingError(error) else { throw error }
             lastError = error
         }
         for delay in retryDelaysMicroseconds {
@@ -216,10 +222,32 @@ enum FilesystemWalker {
             do {
                 return try list(dir)
             } catch {
+                guard isRetryableListingError(error) else { throw error }
                 lastError = error
             }
         }
         throw lastError
+    }
+
+    /// The transient fd-pressure error class — the ONLY class worth
+    /// retrying in `listDirectoryWithRetry`:
+    ///   * `NSCocoaErrorDomain` code 256 (`NSFileReadUnknownError`) — the
+    ///     2026-07-02 incident signature: what `contentsOfDirectory` throws
+    ///     when the process fd table is full. Retryable even without an
+    ///     underlying error (Foundation doesn't always attach one).
+    ///   * Any Cocoa error whose underlying POSIX error is EMFILE/ENFILE —
+    ///     the same fd-pressure class when Foundation DOES surface errno.
+    /// Everything else (notably 257 / EACCES permission-denied) is
+    /// deterministic and must fail immediately.
+    static func isRetryableListingError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        if let underlying = nsError.userInfo[NSUnderlyingErrorKey] as? NSError,
+           underlying.domain == NSPOSIXErrorDomain,
+           underlying.code == Int(EMFILE) || underlying.code == Int(ENFILE) {
+            return true
+        }
+        return nsError.domain == NSCocoaErrorDomain
+            && nsError.code == NSFileReadUnknownError
     }
 
     /// Classify one regular file, apply the .ts and small-file guards, and

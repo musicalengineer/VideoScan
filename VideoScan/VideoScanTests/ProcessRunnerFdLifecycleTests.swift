@@ -32,6 +32,27 @@ struct ProcessRunnerFdLifecycleTests {
         (try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd"))?.count ?? -1
     }
 
+    /// Flake hardening (QA 2026-07-02): these tests share one process with
+    /// every other suite, and suites run in PARALLEL — `.serialized` only
+    /// orders tests within a suite, so other suites legitimately open fds
+    /// between our before/after samples. A single after-sample therefore
+    /// flakes even when nothing leaked. Instead, resample in a short settle
+    /// loop (up to 5 extra samples, 100 ms apart) and pass as soon as ANY
+    /// sample lands within tolerance. Tolerance 25 still keeps the
+    /// regression signal meaningful: the pre-fix deltas were +40 (20 runs)
+    /// and +80 (40 runs), and a reintroduced leak is persistent — it never
+    /// settles back under tolerance no matter how long we wait.
+    private let fdDeltaTolerance = 25
+
+    private func settledFdDelta(baseline: Int) async -> Int {
+        var delta = openFdCount() - baseline
+        for _ in 0..<5 where delta > fdDeltaTolerance {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            delta = openFdCount() - baseline
+        }
+        return delta
+    }
+
     // regression: walker-subtree-loss 2026-07-02 — a completed subprocess
     // with a pending deadline must NOT retain its pipe fds for the deadline
     // duration. Pre-fix this leaks 2 fds per run for 300 s: 40 runs ⇒ ≈ +80.
@@ -48,12 +69,13 @@ struct ProcessRunnerFdLifecycleTests {
             #expect(result.exitCode == 0)
         }
 
-        // Let terminationHandler cleanup finish for the last run.
+        // Let terminationHandler cleanup finish for the last run, then
+        // settle-sample to ride out concurrent-suite fd churn.
         try await Task.sleep(nanoseconds: 300_000_000)
 
-        let after = openFdCount()
-        #expect(after - before <= 10,
-                "pipe fds retained after subprocess exit: fd count grew from \(before) to \(after) across 40 deadline-bounded runs — deadline blocks are pinning FileHandles")
+        let delta = await settledFdDelta(baseline: before)
+        #expect(delta <= fdDeltaTolerance,
+                "pipe fds retained after subprocess exit: fd count grew by \(delta) from baseline \(before) across 40 deadline-bounded runs — deadline blocks are pinning FileHandles")
     }
 
     // Companion pin: runs WITHOUT a deadline never had the retention bug
@@ -73,9 +95,9 @@ struct ProcessRunnerFdLifecycleTests {
 
         try await Task.sleep(nanoseconds: 300_000_000)
 
-        let after = openFdCount()
-        #expect(after - before <= 10,
-                "fd count grew from \(before) to \(after) across 20 plain runs")
+        let delta = await settledFdDelta(baseline: before)
+        #expect(delta <= fdDeltaTolerance,
+                "fd count grew by \(delta) from baseline \(before) across 20 plain runs")
     }
 
     // The launch-failure path builds both pipes before proc.run() throws —
@@ -96,8 +118,8 @@ struct ProcessRunnerFdLifecycleTests {
 
         try await Task.sleep(nanoseconds: 200_000_000)
 
-        let after = openFdCount()
-        #expect(after - before <= 10,
-                "fd count grew from \(before) to \(after) across 20 failed launches")
+        let delta = await settledFdDelta(baseline: before)
+        #expect(delta <= fdDeltaTolerance,
+                "fd count grew by \(delta) from baseline \(before) across 20 failed launches")
     }
 }

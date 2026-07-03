@@ -255,15 +255,29 @@ enum ProcessRunner {
             readHandles: [stdoutHandle, stderrHandle],
             writeHandles: [stdoutPipe.fileHandleForWriting, stderrPipe.fileHandleForWriting]
         )
+        // CRASH-RACE GUARD (QA 2026-07-02): these handlers run on a GCD
+        // thread and can be IN FLIGHT at the instant PipeLifecycle closes the
+        // read fd (finishAfterChildExit / abandon). On a closed FileHandle,
+        // a bare `handle.availableData` raises NSFileHandleOperationException
+        // — an uncaught ObjC exception on a dispatch thread, i.e. a hard
+        // crash of the whole app. `lifecycle.readAvailableData(from:)` makes
+        // the read and the close MUTUALLY EXCLUSIVE (shared lock + state
+        // check), so the race cannot occur at all. Do NOT "simplify" these
+        // closures to a direct `handle.availableData` — the lifecycle gate
+        // is load-bearing. (The throwing `read(upToCount:)` API is NOT a
+        // usable alternative: on Darwin it blocks until count-or-EOF, which
+        // stalls live progress streaming — verified empirically 2026-07-02.)
         stdoutHandle.readabilityHandler = { handle in
-            let data = handle.availableData
+            let data = lifecycle.readAvailableData(from: handle)
             if !data.isEmpty {
                 stdoutCollector.append(data)
                 stdoutStreamer.append(data)
             }
         }
         stderrHandle.readabilityHandler = { handle in
-            let data = handle.availableData
+            // Same crash-race guard as stdout above: reads must go through
+            // the lifecycle gate, never a direct `availableData`.
+            let data = lifecycle.readAvailableData(from: handle)
             if !data.isEmpty {
                 stderrCollector.append(data)
                 stderrStreamer.append(data)
@@ -533,6 +547,10 @@ enum ProcessRunner {
         private enum State { case running, draining, closed }
 
         private let lock = NSLock()
+        /// Serializes readabilityHandler reads against the explicit read-fd
+        /// close (crash-race guard, QA 2026-07-02) — separate from `lock` so
+        /// a read in progress never blocks state transitions or scheduling.
+        private let readLock = NSLock()
         private var state: State = .running
         private var workItems: [DispatchWorkItem] = []
         private let readHandles: [FileHandle]
@@ -541,6 +559,27 @@ enum ProcessRunner {
         init(readHandles: [FileHandle], writeHandles: [FileHandle]) {
             self.readHandles = readHandles
             self.writeHandles = writeHandles
+        }
+
+        /// Crash-race guard for the readabilityHandler closures: an in-flight
+        /// handler invocation can otherwise race the explicit read-fd close
+        /// in `finishAfterChildExit()`/`abandon()`, and `availableData` on a
+        /// closed FileHandle raises NSFileHandleOperationException — an
+        /// uncaught ObjC exception on a GCD thread, i.e. a hard app crash.
+        /// Holding `readLock` across BOTH this read and the close (see
+        /// `close(alsoWriteEnds:expected:)`) makes them mutually exclusive:
+        /// once the state is `.closed` the handler sees it here and returns
+        /// empty instead of touching a dead handle. `availableData` cannot
+        /// stall the lock: dispatch only invokes the handler when the fd is
+        /// readable (data or EOF), so the read returns immediately.
+        func readAvailableData(from handle: FileHandle) -> Data {
+            readLock.lock()
+            defer { readLock.unlock() }
+            lock.lock()
+            let isClosed = state == .closed
+            lock.unlock()
+            guard !isClosed else { return Data() }
+            return handle.availableData
         }
 
         /// Schedule a cancellable deadline/escalation block. No-op when the
@@ -604,7 +643,14 @@ enum ProcessRunner {
             workItems = []
             lock.unlock()
             for item in items { item.cancel() }
+            // readLock pairs with readAvailableData(from:): wait out any
+            // in-flight readabilityHandler read before closing its fd, and
+            // any handler arriving after this sees state == .closed and
+            // never touches the handle. (`lock` is NOT held here, so the
+            // handler's brief lock/unlock state check cannot deadlock.)
+            readLock.lock()
             for handle in readHandles { try? handle.close() }
+            readLock.unlock()
             if alsoWriteEnds {
                 for handle in writeHandles { try? handle.close() }
             }

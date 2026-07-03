@@ -35,7 +35,29 @@ struct DirectoryListingRetryTests {
 
     private struct FakeListingError: Error {}
 
-    @Test("Transient failure recovers on retry — subtree is NOT lost")
+    /// The incident signature: Cocoa 256 (NSFileReadUnknownError), which is
+    /// what `contentsOfDirectory` throws under process-wide fd pressure —
+    /// optionally wrapping the underlying POSIX EMFILE.
+    private static func fdPressureError(underlyingPosixCode: Int32? = EMFILE) -> NSError {
+        var userInfo: [String: Any] = [:]
+        if let code = underlyingPosixCode {
+            userInfo[NSUnderlyingErrorKey] = NSError(domain: NSPOSIXErrorDomain,
+                                                     code: Int(code))
+        }
+        return NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnknownError,
+                       userInfo: userInfo)
+    }
+
+    /// Deterministic failure: Cocoa 257 (NSFileReadNoPermissionError) with
+    /// underlying EACCES — a genuinely permission-denied directory. Retrying
+    /// this can never succeed.
+    private static func permissionDeniedError() -> NSError {
+        NSError(domain: NSCocoaErrorDomain, code: NSFileReadNoPermissionError,
+                userInfo: [NSUnderlyingErrorKey: NSError(domain: NSPOSIXErrorDomain,
+                                                         code: Int(EACCES))])
+    }
+
+    @Test("Transient fd-pressure failure (Cocoa 256) recovers on retry — subtree is NOT lost")
     func transientFailureRecoversOnRetry() throws {
         let dir = URL(fileURLWithPath: "/tmp/fake")
         let expected = [URL(fileURLWithPath: "/tmp/fake/a.mov")]
@@ -45,27 +67,78 @@ struct DirectoryListingRetryTests {
             retryDelaysMicroseconds: [1, 1]   // keep the test fast
         ) { _ in
             attempts += 1
-            if attempts == 1 { throw FakeListingError() }
+            if attempts == 1 { throw Self.fdPressureError() }
             return expected
         }
         #expect(contents == expected)
         #expect(attempts == 2)
     }
 
-    @Test("Persistent failure throws after the bounded attempt budget")
+    @Test("Bare Cocoa 256 with no underlying error is still retried")
+    func bareCocoa256IsRetried() throws {
+        var attempts = 0
+        let contents = try FilesystemWalker.listDirectoryWithRetry(
+            at: URL(fileURLWithPath: "/tmp/fake"),
+            retryDelaysMicroseconds: [1, 1]
+        ) { _ in
+            attempts += 1
+            if attempts == 1 { throw Self.fdPressureError(underlyingPosixCode: nil) }
+            return []
+        }
+        #expect(contents.isEmpty)
+        #expect(attempts == 2)
+    }
+
+    @Test("Persistent fd-pressure failure throws after the bounded attempt budget")
     func persistentFailureThrowsAfterBoundedAttempts() {
         let dir = URL(fileURLWithPath: "/tmp/fake")
         var attempts = 0
-        #expect(throws: FakeListingError.self) {
+        #expect(throws: (any Error).self) {
             try FilesystemWalker.listDirectoryWithRetry(
                 at: dir,
+                retryDelaysMicroseconds: [1, 1]
+            ) { _ in
+                attempts += 1
+                throw Self.fdPressureError()
+            }
+        }
+        #expect(attempts == 3, "one initial attempt + one per retry delay")
+    }
+
+    /// regression: QA 2026-07-02 — retry is for the TRANSIENT fd-pressure
+    /// class only. A permission-denied directory (Cocoa 257 / EACCES) is
+    /// deterministic; retrying burns 3 attempts + 0.5 s of sleep per
+    /// directory, which adds up to minutes on foreign-ownership volumes.
+    /// It must fail straight to the audit on the first attempt.
+    @Test("Permission-denied (Cocoa 257) fails immediately — no retry, no sleep")
+    func permissionDeniedFailsImmediately() {
+        var attempts = 0
+        #expect(throws: (any Error).self) {
+            try FilesystemWalker.listDirectoryWithRetry(
+                at: URL(fileURLWithPath: "/tmp/fake"),
+                retryDelaysMicroseconds: [1, 1]
+            ) { _ in
+                attempts += 1
+                throw Self.permissionDeniedError()
+            }
+        }
+        #expect(attempts == 1,
+                "deterministic errors must not consume the retry budget")
+    }
+
+    @Test("Unrecognized error classes fail immediately — retry is 256/EMFILE-only")
+    func unknownErrorClassFailsImmediately() {
+        var attempts = 0
+        #expect(throws: FakeListingError.self) {
+            try FilesystemWalker.listDirectoryWithRetry(
+                at: URL(fileURLWithPath: "/tmp/fake"),
                 retryDelaysMicroseconds: [1, 1]
             ) { _ in
                 attempts += 1
                 throw FakeListingError()
             }
         }
-        #expect(attempts == 3, "one initial attempt + one per retry delay")
+        #expect(attempts == 1)
     }
 
     @Test("First-try success never sleeps or retries")
