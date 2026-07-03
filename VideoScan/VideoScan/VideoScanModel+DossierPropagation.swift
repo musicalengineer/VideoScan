@@ -191,6 +191,9 @@ extension VideoScanModel {
         guard record.dossierProcessedAt == nil else { return }
         record.dossierProcessedAt = date
         record.dossierProcessedBy = modelID
+        // In-place write — the records array didn't change, so its didSet
+        // can't see this. Keep the cached chrome counts honest.
+        noteCatalogChangedForDossierCounts()
     }
 
     // MARK: - One-shot cleanup of pre-fix smear corruption

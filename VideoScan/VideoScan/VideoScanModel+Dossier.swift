@@ -101,6 +101,9 @@ extension VideoScanModel {
         record.dossierProcessedBy = stackID
 
         objectWillChange.send()
+        // In-place write — the records array didn't change, so its didSet
+        // can't see this. Keep the cached chrome counts honest.
+        noteCatalogChangedForDossierCounts()
         saveCatalogDebounced()
 
         // Narrative log — one line per file. Same shape as applyCaptions

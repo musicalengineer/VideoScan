@@ -90,12 +90,72 @@ final class DashboardState: ObservableObject {
     @Published var scanRecentFiles: [String] = []
     private let maxRecentFiles = 14
 
+    // Scan-progress batching (2026-07-02 feedback-storm fix): recordScanFile
+    // used to hit three @Published setters PER SCANNED FILE. During the
+    // 14.5h RicksBackups crawl every probe poked objectWillChange, every
+    // poke invalidated the toolbar chrome, and (pre DossierToolbarChip
+    // cache) every invalidation recounted the 90k-record catalog — the scan
+    // starved itself through its own UI. Per-file updates now land in the
+    // non-published pending state below and flush at ≤4 Hz OR every 50
+    // files, whichever comes first, plus a guaranteed trailing flush so the
+    // last file always lands after the burst ends. Pinned by
+    // ScanProgressBatchingTests.
+    private var pendingScanVolume: String?
+    private var pendingScanFile: String?
+    private var pendingRecentFiles: [String] = []
+    private var pendingScanFileEvents = 0
+    private var scanProgressFlushScheduled = false
+    private var lastScanProgressFlush: TimeInterval = -.greatestFiniteMagnitude
+    private static let scanProgressFlushInterval: TimeInterval = 0.25  // ≤4 Hz
+    private static let scanProgressFlushFileCount = 50
+
     func recordScanFile(volume: String, filename: String) {
-        scanCurrentVolume = volume
-        scanCurrentFile = filename
-        scanRecentFiles.append(filename)
-        if scanRecentFiles.count > maxRecentFiles {
-            scanRecentFiles.removeFirst(scanRecentFiles.count - maxRecentFiles)
+        pendingScanVolume = volume
+        pendingScanFile = filename
+        pendingRecentFiles.append(filename)
+        if pendingRecentFiles.count > maxRecentFiles {
+            pendingRecentFiles.removeFirst(pendingRecentFiles.count - maxRecentFiles)
+        }
+        pendingScanFileEvents += 1
+
+        let now = ProcessInfo.processInfo.systemUptime
+        if pendingScanFileEvents >= Self.scanProgressFlushFileCount
+            || now - lastScanProgressFlush >= Self.scanProgressFlushInterval {
+            flushScanProgress()
+        } else if !scanProgressFlushScheduled {
+            // Trailing flush: guarantees the final file/volume publishes
+            // within one throttle window even if no further call arrives
+            // (scan end, stop, or a stalling probe).
+            scanProgressFlushScheduled = true
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                self?.scanProgressFlushScheduled = false
+                self?.flushScanProgress()
+            }
+        }
+    }
+
+    /// Publish any pending scan-progress state now. Safe to call at any
+    /// time — no-ops when nothing is pending, so a trailing flush that
+    /// fires after `resetForScan()` cannot resurrect stale state.
+    func flushScanProgress() {
+        guard pendingScanFileEvents > 0 else { return }
+        lastScanProgressFlush = ProcessInfo.processInfo.systemUptime
+        pendingScanFileEvents = 0
+        if let vol = pendingScanVolume, vol != scanCurrentVolume {
+            scanCurrentVolume = vol
+        }
+        if let file = pendingScanFile {
+            scanCurrentFile = file
+        }
+        pendingScanVolume = nil
+        pendingScanFile = nil
+        if !pendingRecentFiles.isEmpty {
+            scanRecentFiles.append(contentsOf: pendingRecentFiles)
+            pendingRecentFiles.removeAll(keepingCapacity: true)
+            if scanRecentFiles.count > maxRecentFiles {
+                scanRecentFiles.removeFirst(scanRecentFiles.count - maxRecentFiles)
+            }
         }
     }
 
@@ -194,6 +254,9 @@ final class DashboardState: ObservableObject {
     func stopThroughputTimer() {
         throughputTimer?.invalidate()
         throughputTimer = nil
+        // Scan-end funnel: make the final batched file/volume visible
+        // immediately rather than waiting out the trailing flush window.
+        flushScanProgress()
     }
 
     // MARK: - System Metrics (always-on)
@@ -263,6 +326,13 @@ final class DashboardState: ObservableObject {
         scanCurrentFile = ""
         scanCurrentVolume = ""
         scanRecentFiles = []
+        // Drop pending batched progress too, or a trailing flush scheduled
+        // before this reset would resurrect pre-reset state.
+        pendingScanVolume = nil
+        pendingScanFile = nil
+        pendingRecentFiles.removeAll()
+        pendingScanFileEvents = 0
+        lastScanProgressFlush = -.greatestFiniteMagnitude
         netPrefetchCount = 0
         netPrefetchTotalMB = 0
         netPrefetchTotalSeconds = 0

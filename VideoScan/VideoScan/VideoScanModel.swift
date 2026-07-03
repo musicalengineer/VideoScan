@@ -9,7 +9,14 @@ import SQLite3
 
 @MainActor
 final class VideoScanModel: ObservableObject {
-    @Published var records: [VideoRecord] = []
+    @Published var records: [VideoRecord] = [] {
+        // Keeps the O(1) chrome counters honest — see `dossierCounts`.
+        // Covers every array-level mutation (scan commit, import, delete,
+        // purge, live-reload append). In-place field writes that don't
+        // touch the array (dossier writeback, provenance stamping) call
+        // noteCatalogChangedForDossierCounts() at their own sites.
+        didSet { noteCatalogChangedForDossierCounts() }
+    }
     /// True when the app is running on a non-master Mac (viewer mode).
     /// Set by the sync engine at launch via `applyReadOnlyMode(_:)` so
     /// views can disable Combine / Archive / Delete affordances. The
@@ -138,6 +145,56 @@ final class VideoScanModel: ObservableObject {
     /// mutation of `records` that doesn't change overall count.
     func notifyVolumeAggregatesStale() {
         volumeAggregatesRevision &+= 1
+    }
+
+    // MARK: - Cached chrome counts (2026-07-02 feedback-storm fix)
+    //
+    // Always-visible toolbar chrome (DossierToolbarChip) used to reduce
+    // over the whole `records` array INSIDE view body per invalidation.
+    // At 90k records × per-file dashboard invalidations during a scan,
+    // that recount was one leg of the three-leg feedback storm that
+    // stretched the RicksBackups sweep to 14.5h. Rule: NO O(records)
+    // work in view bodies — chrome reads this cached value; the model
+    // recomputes it (debounced, 250 ms) on catalog mutation. Pinned by
+    // DossierCountsCacheTests.
+
+    struct DossierCounts: Equatable {
+        var dossiered: Int = 0
+        var total: Int = 0
+    }
+
+    /// O(1) dossier progress for chrome views. Never compute this from
+    /// `records` inside a view body.
+    @Published private(set) var dossierCounts = DossierCounts()
+    /// Test hook: proves reads never recompute (N reads between
+    /// mutations = 1 computation).
+    private(set) var dossierCountsRecomputeCount = 0
+    private var dossierCountsRefreshScheduled = false
+
+    /// Debounced invalidation — cheap enough to call from per-record
+    /// loops. Coalesces any burst of catalog mutations into ONE
+    /// recompute 250 ms later.
+    func noteCatalogChangedForDossierCounts() {
+        guard !dossierCountsRefreshScheduled else { return }
+        dossierCountsRefreshScheduled = true
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            self?.dossierCountsRefreshScheduled = false
+            self?.refreshDossierCountsNow()
+        }
+    }
+
+    /// Immediate recompute — the ONLY place the O(records) count runs.
+    func refreshDossierCountsNow() {
+        dossierCountsRecomputeCount += 1
+        var dossiered = 0
+        for record in records where record.dossierProcessedAt != nil {
+            dossiered += 1
+        }
+        let fresh = DossierCounts(dossiered: dossiered, total: records.count)
+        if fresh != dossierCounts {
+            dossierCounts = fresh
+        }
     }
 
     // MARK: - Backup status (Export Everything tracking)

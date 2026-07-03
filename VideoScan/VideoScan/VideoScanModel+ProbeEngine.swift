@@ -11,8 +11,17 @@ import Darwin
 //   - cancelledProbeRecord — sentinel for cancelled-before-permit cases
 //
 // All of this is nonisolated so probe tasks can run off the main actor
-// without bouncing back. The recipe layer that orchestrates these tools
-// lives in VideoScanModel+ScanExecution.swift.
+// without bouncing back — and the two per-file workhorses
+// (probeFileOutcome, probeFileWithTimeoutOutcome) are additionally
+// `@concurrent`: under Approachable Concurrency
+// (NonisolatedNonsendingByDefault) a plain `nonisolated async` runs on
+// its CALLER's actor, and the scan pipeline calls them from main-actor
+// probeAndRecord. Without `@concurrent` the pre-race stat, existence
+// check, cache lookup, sniff, and 64 KB hash all ran ON THE MAIN ACTOR
+// per scanned file (2026-07-02 feedback storm — 207/222 main-thread
+// samples in lstat during the 14.5h RicksBackups crawl). The recipe
+// layer that orchestrates these tools lives in
+// VideoScanModel+ScanExecution.swift.
 //
 // The two probe-engine stored constants (prefetchBytes, probeTimeoutSeconds)
 // stay in the main class because extensions can't add stored properties.
@@ -440,6 +449,14 @@ extension VideoScanModel {
     /// VolumeComparer `(filename, size)` fallback can still match it against
     /// other volumes — without that, every timed-out file would be flagged as
     /// "unique to this volume" in Compare & Rescue.
+    /// LOAD-BEARING SEAM — `@concurrent` keeps the per-file probe work off
+    /// the main actor. Under Approachable Concurrency, `nonisolated async`
+    /// alone runs on the caller's actor (main-actor `probeAndRecord`), which
+    /// put the pre-race stat below on the main thread once per scanned file
+    /// and starved the scan (2026-07-02, 14.5h RicksBackups crawl). Do not
+    /// remove the attribute; the main-actor slice per file must stay
+    /// lightweight bookkeeping only.
+    @concurrent
     nonisolated func probeFileWithTimeoutOutcome(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false, scanRootPath: String? = nil, catalogedPaths: Set<String> = []) async -> ProbeOutcome {
         // Best-effort stat before the race. stat() is metadata-only and
         // usually fast even on SMB when content reads stall. We use this only
@@ -519,6 +536,13 @@ extension VideoScanModel {
     /// here — that now happens only at the main-actor drain points and the
     /// `@MainActor` shims. This is what closes the off-actor reference-mutation
     /// hole: the whole probe stage trafficks in Sendable values.
+    /// LOAD-BEARING SEAM — `@concurrent` for the same reason as
+    /// `probeFileWithTimeoutOutcome`: the parallel-scan path
+    /// (`probeAndRecord` with useTimeout=false) and the @MainActor shims
+    /// call this directly from the main actor, and without the attribute
+    /// the existence check, attributes fetch, cache lookup, sniff, and
+    /// partial-MD5 hash all ran on the main thread per file.
+    @concurrent
     nonisolated func probeFileOutcome(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false, scanRootPath: String? = nil, catalogedPaths: Set<String> = []) async -> ProbeOutcome {
         let fm = FileManager.default
         let path = url.path

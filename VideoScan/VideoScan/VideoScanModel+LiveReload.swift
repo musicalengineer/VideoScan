@@ -204,6 +204,13 @@ extension VideoScanModel {
             for rec in newRecords { searchIndex.update(rec) }
             liveReloadLogger.info("Live reload: appended \(added, privacy: .public) new record(s) from disk snapshot")
         }
+        if changed > 0 {
+            // The merged-in dossier stamps above are in-place writes the
+            // records didSet can't see — refresh the cached chrome counts.
+            // (Appends are covered by didSet, but the call is debounced so
+            // an extra nudge here is free.)
+            noteCatalogChangedForDossierCounts()
+        }
         return changed + added
     }
 }

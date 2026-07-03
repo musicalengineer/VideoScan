@@ -12,9 +12,12 @@ import Combine
 // AngularGradient as the full dashboard's DialRing for visual
 // consistency — they're the same data, different sizes.
 //
-// Refresh: observed via the @ObservedObject model. SwiftUI auto-
-// recomputes the counts when records change, which happens via the
-// live-reload poll (every 30s) AND the in-app sweep's writeback.
+// Refresh: observed via the @ObservedObject model. The counts are READ
+// from the model's cached `dossierCounts` (recomputed on catalog
+// mutation, debounced) — never computed over `records` here. This chip
+// sits in the catalog toolbar, whose hosting view re-evaluates body on
+// every sibling invalidation; an O(records) reduce in body was one leg
+// of the 2026-07-02 scan/UI feedback storm at 90k records.
 
 struct DossierToolbarChip: View {
 
@@ -72,11 +75,11 @@ struct DossierToolbarChip: View {
 
     // MARK: - Derived
 
-    private var dossieredCount: Int {
-        model.records.reduce(0) { $0 + ($1.dossierProcessedAt != nil ? 1 : 0) }
-    }
+    // O(1) reads off the model's cache — NO O(records) work in view
+    // bodies (see VideoScanModel.dossierCounts).
+    private var dossieredCount: Int { model.dossierCounts.dossiered }
 
-    private var totalCount: Int { model.records.count }
+    private var totalCount: Int { model.dossierCounts.total }
 
     private var progress: Double {
         guard totalCount > 0 else { return 0 }

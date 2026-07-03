@@ -98,12 +98,19 @@ struct SiliconChipView: View {
         }
         .onReceive(pulseTimer) { _ in
             pulse += 1.0 / Self.pulseHz
-            // Decay match flash
+            // Decay match flash. Write the @State only when the value
+            // actually changes — an idle chip must not depend on SwiftUI's
+            // same-value skip to avoid an extra 8 Hz invalidation source
+            // (2026-07-02 feedback-storm hygiene).
+            let strength: Double
             if let last = dashboard.lastMatchFlashAt {
                 let age = Date().timeIntervalSince(last)
-                matchFlashStrength = age < 0.7 ? max(0, 1.0 - age / 0.7) : 0
+                strength = age < 0.7 ? max(0, 1.0 - age / 0.7) : 0
             } else {
-                matchFlashStrength = 0
+                strength = 0
+            }
+            if strength != matchFlashStrength {
+                matchFlashStrength = strength
             }
         }
     }
@@ -224,11 +231,19 @@ struct MiniSiliconChipView: View {
         .frame(width: 32, height: 18)
         .help(dashboard.chipName.isEmpty ? "Apple Silicon" : dashboard.chipName)
         .onReceive(pulseTimer) { _ in
+            // Same change-guard as SiliconChipView: this mini chip lives in
+            // the always-visible toolbar, so its 8 Hz tick must be a no-op
+            // (no @State write → no invalidation) whenever no match flash
+            // is decaying. During catalog scans that is 100% of ticks.
+            let strength: Double
             if let last = dashboard.lastMatchFlashAt {
                 let age = Date().timeIntervalSince(last)
-                matchFlashStrength = age < 0.7 ? max(0, 1.0 - age / 0.7) : 0
+                strength = age < 0.7 ? max(0, 1.0 - age / 0.7) : 0
             } else {
-                matchFlashStrength = 0
+                strength = 0
+            }
+            if strength != matchFlashStrength {
+                matchFlashStrength = strength
             }
         }
     }
