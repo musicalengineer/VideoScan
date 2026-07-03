@@ -31,7 +31,10 @@ struct PersistentLogTestIsolationTests {
     /// the appLog DI default has regressed and every future test run
     /// will pollute the user's real log.
     @Test func writingToAppLogDoesNotGrowVideoscanLog() throws {
-        let videoscanLog = PersistentLog.logDir.appendingPathComponent("videoscan.log")
+        // productionLogDir on purpose: the assertion is about the REAL
+        // on-disk log (PersistentLog.logDir now routes to a temp dir under
+        // test hosts — 2026-07-03 log-pollution fix).
+        let videoscanLog = PersistentLog.productionLogDir.appendingPathComponent("videoscan.log")
         let fm = FileManager.default
 
         let beforeSize: Int = {
@@ -77,7 +80,9 @@ struct PersistentLogTestIsolationTests {
     /// the global `appLog` defaults to NullLogSink. Regression guard
     /// against over-broad gating (e.g. someone makes PersistentLog
     /// itself refuse to open under tests and breaks every other log
-    /// fixture).
+    /// fixture). Since 2026-07-03 `logDir` routes to a per-process temp
+    /// dir under test hosts, so "still work" means "still write, at the
+    /// routed location" (see TestHostLogRoutingTests for the routing pins).
     @Test func otherPersistentLogInstancesStillWorkUnderTests() throws {
         let uniqueName = "ephemeral_writable_log_\(UUID().uuidString.prefix(8))"
         let path = PersistentLog.logDir.appendingPathComponent("\(uniqueName).log")
