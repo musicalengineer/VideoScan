@@ -93,7 +93,18 @@ struct RealtimeCatalogScanContent: View {
                 Text(dashboard.scanPhase.rawValue.uppercased())
                     .font(.system(size: 17, weight: .bold, design: .rounded))
                     .foregroundColor(phaseColor)
-                if dashboard.scanTotal > 0 {
+                if isActive && !dashboard.scanDiscoveryFinal {
+                    // Denominator still growing — a percent here hovered at
+                    // ~99% for entire scans (2026-07-03). Count-only until
+                    // the walk finishes.
+                    Text(dashboard.scanCompleted > 0
+                         ? "\(dashboard.scanCompleted) probed — discovering more…"
+                         : "Walking volumes…")
+                        .font(.system(size: 14, design: .monospaced))
+                        .foregroundColor(.orange)
+                } else if dashboard.scanTotal > 0 {
+                    // Unclamped: an invariant breach shows as >100%, never
+                    // masked (DashboardState's counter seam also asserts).
                     Text("\(dashboard.scanCompleted) / \(dashboard.scanTotal)  (\(Int(fraction * 100))%)")
                         .font(.system(size: 14, design: .monospaced))
                         .foregroundColor(.secondary)

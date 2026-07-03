@@ -15,7 +15,12 @@ struct ExpandedDashboard: View {
     private var completed: Int { isScanning ? dashboard.scanCompleted : dashboard.combineCompleted }
     private var total: Int { isScanning ? dashboard.scanTotal : dashboard.combineTotal }
     private var startTime: Date? { isScanning ? dashboard.scanStartTime : dashboard.combineStartTime }
+    // Unclamped on purpose — see CompactDashboard.fraction.
     private var fraction: Double { total > 0 ? Double(completed) / Double(total) : 0 }
+
+    /// Walk still streaming URLs → the denominator isn't final; percent and
+    /// N/M would be misleading (~99% for the whole scan). Count-only display.
+    private var discovering: Bool { isScanning && !dashboard.scanDiscoveryFinal }
 
     private var elapsed: TimeInterval {
         guard let start = startTime else { return 0 }
@@ -23,7 +28,7 @@ struct ExpandedDashboard: View {
     }
 
     private var eta: String {
-        guard dashboard.scanPhase != .paused,
+        guard dashboard.scanPhase != .paused, !discovering,
               completed > 0, total > 0, fraction < 1.0 else { return "" }
         let secsPerItem = elapsed / Double(completed)
         let remaining = secsPerItem * Double(total - completed)
@@ -243,11 +248,19 @@ struct ExpandedDashboard: View {
                             .foregroundColor(barColor)
                     }
                     HStack(spacing: 10) {
-                        Text("\(completed) / \(total)")
-                            .font(.system(size: 15, weight: .medium, design: .monospaced))
-                        Text("(\(Int(fraction * 100))%)")
-                            .font(.system(size: 14, design: .monospaced))
-                            .foregroundColor(barColor)
+                        if discovering {
+                            Text("\(completed) probed")
+                                .font(.system(size: 15, weight: .medium, design: .monospaced))
+                            Text("finding files…")
+                                .font(.system(size: 14, design: .monospaced))
+                                .foregroundColor(.orange)
+                        } else {
+                            Text("\(completed) / \(total)")
+                                .font(.system(size: 15, weight: .medium, design: .monospaced))
+                            Text("(\(Int(fraction * 100))%)")
+                                .font(.system(size: 14, design: .monospaced))
+                                .foregroundColor(barColor)
+                        }
                     }
                 }
                 Spacer()
@@ -263,23 +276,32 @@ struct ExpandedDashboard: View {
                 }
             }
 
-            // Overall progress bar
-            ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: 3)
-                    .fill(Color.gray.opacity(0.15))
-                    .frame(height: 6)
-                GeometryReader { geo in
+            // Overall progress bar — indeterminate while the denominator is
+            // still growing (a determinate bar would snap to ~99% and stall
+            // there for the whole scan, hiding real progress).
+            if discovering {
+                ProgressView()
+                    .progressViewStyle(.linear)
+                    .controlSize(.small)
+                    .tint(.orange)
+            } else {
+                ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 3)
-                        .fill(
-                            LinearGradient(
-                                colors: [.blue, .cyan, .green],
-                                startPoint: .leading, endPoint: .trailing
+                        .fill(Color.gray.opacity(0.15))
+                        .frame(height: 6)
+                    GeometryReader { geo in
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(
+                                LinearGradient(
+                                    colors: [.blue, .cyan, .green],
+                                    startPoint: .leading, endPoint: .trailing
+                                )
                             )
-                        )
-                        .frame(width: max(geo.size.width * fraction, 0), height: 6)
-                        .animation(.easeInOut(duration: 0.3), value: fraction)
+                            .frame(width: max(geo.size.width * fraction, 0), height: 6)
+                            .animation(.easeInOut(duration: 0.3), value: fraction)
+                    }
+                    .frame(height: 6)
                 }
-                .frame(height: 6)
             }
         }
     }

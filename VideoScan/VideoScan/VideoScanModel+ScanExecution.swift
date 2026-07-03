@@ -34,6 +34,12 @@ extension VideoScanModel {
     ///   scan), false → `probeFileOutcome` (parallel multi-root scan).
     /// - Parameter echoFilename: true → log `[vol] filename` before probing
     ///   (matches the old parallel-scan UX).
+    /// - Parameter scanGeneration: the dashboard scan generation captured at
+    ///   ENQUEUE time (the same actor turn as this file's discovery
+    ///   increment). Completion counting passes it to the DashboardState
+    ///   seam, which drops stale-generation events — a straggler probe from
+    ///   a stopped scan must never tick the NEXT scan's counters (the
+    ///   "PROBING 18,456/18,450" invariant breach, 2026-07-03).
     func probeAndRecord(
         url: URL,
         volName: String,
@@ -43,7 +49,8 @@ extension VideoScanModel {
         skipHashing: Bool,
         useTimeout: Bool,
         echoFilename: Bool,
-        catalogedPaths: Set<String> = []
+        catalogedPaths: Set<String> = [],
+        scanGeneration: UInt64
     ) async -> ProbeOutcome {
         if Task.isCancelled {
             var skip = ProbeOutcome()
@@ -55,7 +62,9 @@ extension VideoScanModel {
             if echoFilename {
                 self.log("  [\(volName)] \(url.lastPathComponent)")
             }
-            self.dashboard.recordScanFile(volume: volName, filename: url.lastPathComponent)
+            self.dashboard.recordScanFile(volume: volName,
+                                          filename: url.lastPathComponent,
+                                          generation: scanGeneration)
         }
         let outcome: ProbeOutcome
         if useTimeout {
@@ -78,8 +87,6 @@ extension VideoScanModel {
             )
         }
         await MainActor.run {
-            let ds = self.dashboard
-            ds.scanCompleted += 1
             // Sniff-rejected outcomes are junk CLASSIFICATION, not probe
             // errors (QA 2026-07-02): ffprobe never ran, nothing failed —
             // the file simply isn't media. They carry the ffprobeFailed
@@ -89,24 +96,18 @@ extension VideoScanModel {
             // ffprobe-failed outcomes that PASSED the sniff still count.
             let isProbeError = outcome.probe.streamTypeRaw == StreamType.ffprobeFailed.rawValue
                 && !outcome.sniffRejected
-            if let idx = ds.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
-                ds.volumeProgress[idx].completedFiles += 1
-                if outcome.wasCacheHit {
-                    ds.volumeProgress[idx].cacheHits += 1
-                }
-                if isProbeError {
-                    ds.volumeProgress[idx].errors += 1
-                }
-            }
-            if outcome.wasCacheHit {
-                ds.scanCacheHits += 1
-            } else {
-                ds.scanCacheMisses += 1
-            }
-            if isProbeError {
-                ds.scanErrors += 1
-            }
-            ds.liveStreamCounts[outcome.probe.streamTypeRaw, default: 0] += 1
+            // Single batched seam (item-4 leg-2): scanCompleted, cache
+            // hit/miss, error, stream-type, and per-volume row updates all
+            // ride DashboardState's ≤4 Hz / 50-event flush machinery —
+            // the direct @Published writes that used to live here were the
+            // remaining per-file publish storm.
+            self.dashboard.recordProbeCompletion(
+                volumeRoot: root,
+                wasCacheHit: outcome.wasCacheHit,
+                isProbeError: isProbeError,
+                streamTypeRaw: outcome.probe.streamTypeRaw,
+                generation: scanGeneration
+            )
         }
         return outcome
     }
@@ -423,10 +424,11 @@ extension VideoScanModel {
         let rootIsNetwork = CombineVerifier.isNetworkPath(root)
         target.status = .discovering
         // Register this volume in the dashboard so the Realtime Catalog Scan
-        // window can show per-volume progress for per-target scans.
-        dashboard.volumeProgress.append(
-            VolumeProgress(rootPath: root, volumeName: volName)
-        )
+        // window can show per-volume progress for per-target scans. Replaces
+        // any stale row for the same root (rescan of A while B is active
+        // used to append a duplicate row the per-file updates never found).
+        dashboard.beginVolumeWalk(volumeRoot: root, volumeName: volName,
+                                  generation: dashboard.scanGeneration)
         if rootIsNetwork {
             log("Discovering files on \(volName) (network volume — this may take a moment)…")
         } else {

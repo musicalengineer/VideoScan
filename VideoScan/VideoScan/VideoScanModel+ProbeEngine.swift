@@ -58,6 +58,13 @@ extension VideoScanModel {
         let abortAfter = rootIsNetwork ? 100 : 50
         var allDiscoveredPaths: [String] = []
         let knownMediaExtensions = videoExtensions.union(audioExtensions)
+        // Counter-integrity stamp (2026-07-03): captured ONCE, on the main
+        // actor, before any probe is enqueued. Every discovery increment and
+        // every completion from this scan carries it; if the user stops this
+        // scan and starts another (resetForScan → new generation), our
+        // in-flight stragglers are dropped at the DashboardState seam
+        // instead of corrupting the new scan's counters.
+        let scanGen = dashboard.scanGeneration
         // Sniff-gate exemption (QA 2026-07-02): paths that ALREADY have a
         // catalog record reach ffprobe even if their first bytes match no
         // signature — ffprobe once vouched for them, and a 264-byte sniff
@@ -90,14 +97,13 @@ extension VideoScanModel {
                 if Task.isCancelled { break }
                 discoveredCount += 1
                 allDiscoveredPaths.append(url.path)
-                let currentDiscovered = discoveredCount
-                await MainActor.run {
-                    let ds = self.dashboard
-                    ds.scanTotal += 1
-                    if let idx = ds.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
-                        ds.volumeProgress[idx].totalFiles = currentDiscovered
-                    }
-                }
+                // Discovery increment SYNCHRONOUSLY before the enqueue —
+                // this loop is @MainActor-isolated, so there is no actor
+                // hop (the old `await MainActor.run` here suspended between
+                // the increment and the enqueue) and no probe can possibly
+                // complete before its discovery is visible. The invariant
+                // completed ≤ discovered is structural from here on.
+                dashboard.recordFileDiscovered(volumeRoot: root, generation: scanGen)
                 probeGroup.addTask { [self] in
                     await target.pauseGate.waitIfPaused()
                     do {
@@ -111,7 +117,8 @@ extension VideoScanModel {
                                 skipHashing: skipHashingCaptured,
                                 useTimeout: true,
                                 echoFilename: false,
-                                catalogedPaths: catalogedPaths
+                                catalogedPaths: catalogedPaths,
+                                scanGeneration: scanGen
                             )
                         }
                     } catch {
@@ -122,11 +129,10 @@ extension VideoScanModel {
 
             let totalFiles = discoveredCount
             target.filesFound = totalFiles
-            await MainActor.run {
-                if let idx = self.dashboard.volumeProgress.firstIndex(where: { $0.rootPath == root }) {
-                    self.dashboard.volumeProgress[idx].isWalking = false
-                }
-            }
+            // Denominator is now FINAL — flips the row out of isWalking so
+            // the UI may switch from "N probed — finding files…" to a true
+            // N/M percentage (scanDiscoveryFinal).
+            dashboard.markVolumeWalkComplete(volumeRoot: root, totalFiles: totalFiles, generation: scanGen)
             log("  Found \(totalFiles) video files on \(volName)")
 
             // Save checkpoint after walk completes so a crash during probing
@@ -160,16 +166,9 @@ extension VideoScanModel {
                 // mid-scan unmount in an Avid extensionless tree never
                 // tripped the consecutive-failures abort and the scan ground
                 // through the whole dead volume.)
-                //
-                // If keepalive detected volume recovery, reset the consecutive
-                // failure counter so transient outages don't accumulate toward
-                // the abort threshold.
-                if let ka = keepalive {
-                    let volDown = await ka.volumeIsDown
-                    if !volDown && consecutiveNotAccessible > 0 && outcome.probe.streamTypeRaw != StreamType.ffprobeFailed.rawValue {
-                        consecutiveNotAccessible = 0
-                    }
-                }
+                await resetAbortStreakIfVolumeRecovered(
+                    keepalive: keepalive, outcome: outcome,
+                    consecutiveNotAccessible: &consecutiveNotAccessible)
 
                 // Catalog-admission gate — the SAME junk gate as the
                 // network-resume path (runResumedProbeGroup). Computed ONCE
@@ -214,7 +213,27 @@ extension VideoScanModel {
                 }
             }
         }
+        // Deterministic final flush: the batched counters must be fully
+        // published the moment the probe group returns (finalize and tests
+        // read them synchronously; the trailing-timer flush alone would
+        // leave up to one throttle window of lag).
+        dashboard.flushScanProgress()
         return (targetRecords, discoveredCount, completedCount)
+    }
+
+    /// If keepalive reports the volume healthy again, clear the consecutive
+    /// not-accessible streak so transient outages don't accumulate toward
+    /// the abort threshold. Shared by both probe-group drain loops.
+    func resetAbortStreakIfVolumeRecovered(
+        keepalive: VolumeKeepalive?,
+        outcome: ProbeOutcome,
+        consecutiveNotAccessible: inout Int
+    ) async {
+        guard let keepalive, consecutiveNotAccessible > 0 else { return }
+        let volDown = await keepalive.volumeIsDown
+        if !volDown && outcome.probe.streamTypeRaw != StreamType.ffprobeFailed.rawValue {
+            consecutiveNotAccessible = 0
+        }
     }
 
     /// Whether a probed file should get a catalog record. Drops files that
@@ -291,17 +310,24 @@ extension VideoScanModel {
         let catalogedPaths = Set(records.lazy
             .map(\.fullPath)
             .filter { PathScope.contains($0, within: root) })
+        // Counter-integrity stamp — same contract as runTargetProbeGroup.
+        let scanGen = dashboard.scanGeneration
 
         target.filesFound = totalFiles
-        dashboard.volumeProgress.append(
-            VolumeProgress(rootPath: root, volumeName: volName)
-        )
+        // Resumed scans have no walk: the checkpoint list IS the final
+        // denominator, so the row starts with isWalking=false and a known
+        // total (the pre-fix row stayed isWalking=true forever and showed
+        // the walking treatment for the whole resume).
+        dashboard.beginVolumeWalk(volumeRoot: root, volumeName: volName,
+                                  generation: scanGen, knownTotal: totalFiles)
 
         await withTaskGroup(of: ProbeOutcome.self) { probeGroup in
             for path in filePaths {
                 if Task.isCancelled { break }
                 let url = URL(fileURLWithPath: path)
-                dashboard.scanTotal += 1
+                // Strictly before the enqueue — same invariant as the
+                // streaming walk path.
+                dashboard.recordFileDiscovered(volumeRoot: root, generation: scanGen)
 
                 probeGroup.addTask { [self] in
                     await target.pauseGate.waitIfPaused()
@@ -316,7 +342,8 @@ extension VideoScanModel {
                                 skipHashing: skipChecksums,
                                 useTimeout: true,
                                 echoFilename: false,
-                                catalogedPaths: catalogedPaths
+                                catalogedPaths: catalogedPaths,
+                                scanGeneration: scanGen
                             )
                         }
                     } catch {
@@ -324,6 +351,8 @@ extension VideoScanModel {
                     }
                 }
             }
+            // Publish the final discovered total for this root right away.
+            dashboard.markVolumeWalkComplete(volumeRoot: root, totalFiles: totalFiles, generation: scanGen)
 
             for await outcome in probeGroup {
                 completedCount += 1
@@ -332,12 +361,9 @@ extension VideoScanModel {
                 // matching comment in runTargetProbeGroup. The gate controls
                 // catalog admission only; the not-accessible abort counter
                 // and filesScanned must tick for gated-out outcomes too.
-                if let ka = keepalive {
-                    let volDown = await ka.volumeIsDown
-                    if !volDown && consecutiveNotAccessible > 0 && outcome.probe.streamTypeRaw != StreamType.ffprobeFailed.rawValue {
-                        consecutiveNotAccessible = 0
-                    }
-                }
+                await resetAbortStreakIfVolumeRecovered(
+                    keepalive: keepalive, outcome: outcome,
+                    consecutiveNotAccessible: &consecutiveNotAccessible)
 
                 // Catalog-admission gate — computed ONCE (see the matching
                 // comment in runTargetProbeGroup); also feeds the accounting
@@ -376,6 +402,8 @@ extension VideoScanModel {
                 }
             }
         }
+        // Deterministic final flush — same contract as runTargetProbeGroup.
+        dashboard.flushScanProgress()
         return (targetRecords, totalFiles, completedCount)
     }
 

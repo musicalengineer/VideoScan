@@ -18,6 +18,15 @@ struct CompactDashboard: View {
     private var total: Int { isScanning ? dashboard.scanTotal : dashboard.combineTotal }
     private var startTime: Date? { isScanning ? dashboard.scanStartTime : dashboard.combineStartTime }
 
+    /// True while a scan's walker is still streaming URLs: the denominator
+    /// (scanTotal) grows alongside completed, so a percentage would hover at
+    /// ~99–100% for the whole scan and tell the user nothing. Show a running
+    /// processed count + "finding files…" until the walk finishes.
+    private var discovering: Bool { isScanning && !dashboard.scanDiscoveryFinal }
+
+    // Deliberately UNCLAMPED: if the completed ≤ discovered invariant ever
+    // breaks again, this shows >100% instead of silently masking it (the
+    // seam in DashboardState also logs/asserts).
     private var fraction: Double {
         total > 0 ? Double(completed) / Double(total) : 0
     }
@@ -30,7 +39,7 @@ struct CompactDashboard: View {
     }
 
     private var eta: String {
-        guard dashboard.scanPhase != .paused,
+        guard dashboard.scanPhase != .paused, !discovering,
               completed > 0, total > 0, fraction < 1.0 else { return "" }
         let secsPerItem = elapsed / Double(completed)
         let remaining = secsPerItem * Double(total - completed)
@@ -80,20 +89,27 @@ struct CompactDashboard: View {
                 .font(.system(size: 14))
                 .foregroundColor(barColor)
 
-            // Progress ring
-            ZStack {
-                Circle()
-                    .stroke(Color.gray.opacity(0.2), lineWidth: 3.5)
-                Circle()
-                    .trim(from: 0, to: fraction)
-                    .stroke(barColor, style: StrokeStyle(lineWidth: 3.5, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                    .animation(.easeInOut(duration: 0.3), value: fraction)
-                Text("\(percent)%")
-                    .font(.system(size: 8, weight: .bold, design: .monospaced))
-                    .foregroundColor(barColor)
+            // Progress ring — indeterminate while discovering (no honest
+            // percent exists until the denominator is final)
+            if discovering {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 32, height: 32)
+            } else {
+                ZStack {
+                    Circle()
+                        .stroke(Color.gray.opacity(0.2), lineWidth: 3.5)
+                    Circle()
+                        .trim(from: 0, to: fraction)
+                        .stroke(barColor, style: StrokeStyle(lineWidth: 3.5, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .animation(.easeInOut(duration: 0.3), value: fraction)
+                    Text("\(percent)%")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .foregroundColor(barColor)
+                }
+                .frame(width: 32, height: 32)
             }
-            .frame(width: 32, height: 32)
 
             // Stats
             VStack(alignment: .leading, spacing: 1) {
@@ -101,8 +117,14 @@ struct CompactDashboard: View {
                     Text(phaseLabel)
                         .font(.system(size: 10, weight: .semibold))
                         .foregroundColor(barColor)
-                    Text("\(completed)/\(total)")
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    if discovering {
+                        Text("\(completed) probed · finding files…")
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundColor(.orange)
+                    } else {
+                        Text("\(completed)/\(total)")
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    }
                 }
                 HStack(spacing: 6) {
                     Text(elapsedStr)
