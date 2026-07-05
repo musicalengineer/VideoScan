@@ -4,16 +4,18 @@
 # Source code stays on SSD; only the build cache lives in RAM. Re-run any time
 # /Volumes/XcodeRAM (or your chosen name) is missing — e.g. after a reboot.
 #
-# Defaults: 4 GB, volume name "XcodeRAM". Override with --size N (GB) and
+# Defaults: 16 GB, volume name "XcodeRAM". Override with --size N (GB) and
 # --name LABEL. Idempotent: bails if the target volume is already mounted.
 #
+# 16 GB is the standard (2026-07-02): 8 GB overflowed under parallel agent builds.
+#
 # Usage:
-#   setup-xcoderam.sh                 # 4 GB, /Volumes/XcodeRAM
+#   setup-xcoderam.sh                 # 16 GB, /Volumes/XcodeRAM
 #   setup-xcoderam.sh --size 8        # 8 GB
 #   setup-xcoderam.sh --size 6 --name ProjectXRAM
 set -euo pipefail
 
-SIZE_GB=8
+SIZE_GB=16
 NAME="XcodeRAM"
 
 while [ $# -gt 0 ]; do
