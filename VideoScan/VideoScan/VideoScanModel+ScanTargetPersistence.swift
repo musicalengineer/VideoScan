@@ -14,6 +14,16 @@ import Foundation
 extension VideoScanModel {
 
     func restoreScanTargets() {
+        // Test hosts must never inherit the machine's REAL persisted scan
+        // targets — the read-side mirror of the persist gates below.
+        // Nightly 2026-07-05: M5/M1 defaults held "/" as a saved target, so
+        // every test-created model restored it and the init backfill vacuumed
+        // all prior fixture probes out of the shared per-process metadata
+        // cache (foreign records → ScanMergeMoveIdentityTests count failures),
+        // plus a ~1.3–2.3 s per-test reachability stall over 20+ stale
+        // targets. Restore LOGIC stays covered by PhaseConsistencyTests via
+        // ScanTargetPersistence.restore with per-test unique keys.
+        if Self.isRunningTests { return }
         let restored = ScanTargetPersistence.restore(
             existing: scanTargets,
             savedTargetsKey: Self.savedTargetsKey,
