@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import CoreGraphics
 import CoreImage
+import ImageIO
 import os
 
 #if canImport(MLXVLM)
@@ -176,9 +177,16 @@ private let captionLogger = Logger(subsystem: "Rick-Breen.VideoScan", category: 
 
 /// Result of extracting a single frame. Decode failures yield
 /// `.failed` so the caller can log + skip without aborting the batch.
-private enum FrameExtraction {
+/// `internal` (was private) since 2026-07-05 — returned by the now-
+/// testable `extractFramesForCaptioning`.
+enum FrameExtraction {
     case success(CGImage)
     case failed(reason: String)
+
+    var isSuccess: Bool {
+        if case .success = self { return true }
+        return false
+    }
 }
 
 /// Extracts one CGImage per timestamp. Returns the same number of
@@ -187,8 +195,49 @@ private enum FrameExtraction {
 /// (100 ms) to keep captions aligned with what the user would see if
 /// they scrubbed to that point in the video.
 ///
+/// Two-tier (2026-07-05): AVFoundation is the fast path; when it can't
+/// open the container at all — Rick's FFV1/Matroska digitized-tape
+/// masters, which AVFoundation has zero support for — or decodes zero
+/// of the requested frames, fall back to ffmpeg frame ripping. Same
+/// clamping contract, same per-slot result shape. Pinned by
+/// MKVDossierPipelineTests.
+///
 /// Swift's `[(Double, FrameExtraction)]` ≈ a C++ `std::vector<std::pair<double, ...>>`.
-private func extractFrames(
+///
+/// `internal` (not `private`): MKVDossierPipelineTests exercises it
+/// directly against an FFV1/Matroska fixture.
+func extractFramesForCaptioning(
+    from videoURL: URL,
+    atTimestamps timestamps: [Double]
+) async throws -> [(timestamp: Double, frame: FrameExtraction)] {
+    do {
+        let avf = try await extractFramesViaAVFoundation(from: videoURL,
+                                                         atTimestamps: timestamps)
+        // Opened but decoded nothing (codec-hostile inside a readable
+        // container): give ffmpeg the same chance before reporting all-failed.
+        if !timestamps.isEmpty && !avf.contains(where: { $0.frame.isSuccess }) {
+            captionLogger.notice("AVFoundation decoded 0/\(timestamps.count) frames from \(videoURL.lastPathComponent, privacy: .public) — retrying via ffmpeg")
+            return try await extractFramesViaFFmpeg(from: videoURL,
+                                                    atTimestamps: timestamps)
+        }
+        return avf
+    } catch let error as CaptionRunnerError {
+        // AVFoundation couldn't open the asset. If the file exists, the
+        // container is likely just AVFoundation-hostile (mkv / FFV1) —
+        // ffmpeg is the arbiter before we call it unreadable.
+        guard case .videoUnreadable = error,
+              FileManager.default.fileExists(atPath: videoURL.path) else {
+            throw error
+        }
+        captionLogger.notice("AVFoundation can't open \(videoURL.lastPathComponent, privacy: .public) — falling back to ffmpeg frame extraction")
+        return try await extractFramesViaFFmpeg(from: videoURL,
+                                                atTimestamps: timestamps)
+    }
+}
+
+/// The original AVFoundation fast path — one-shot generateCGImage per
+/// timestamp with tight (100 ms) tolerances.
+private func extractFramesViaAVFoundation(
     from videoURL: URL,
     atTimestamps timestamps: [Double]
 ) async throws -> [(timestamp: Double, frame: FrameExtraction)] {
@@ -248,6 +297,74 @@ private func extractFrames(
         }
     }
 
+    return results
+}
+
+/// ffmpeg fallback for AVFoundation-hostile media (Matroska containers,
+/// FFV1 essence — the digitized-tape master recipe). Seeks with `-ss`
+/// before `-i` (input seeking: fast, keyframe-then-decode-forward, well
+/// within the AVF path's alignment tolerance for captioning), decodes
+/// exactly one frame per timestamp to a PNG temp file, and loads it as a
+/// CGImage. Per-frame failures land as `.failed` slots per the contract;
+/// zero successes throws `videoUnreadable` so the caller's whole-file
+/// accounting matches the AVFoundation path.
+private func extractFramesViaFFmpeg(
+    from videoURL: URL,
+    atTimestamps timestamps: [Double]
+) async throws -> [(timestamp: Double, frame: FrameExtraction)] {
+    let ffmpeg = ToolLocator.ffmpegPath
+    let ffprobe = ToolLocator.ffprobePath
+    guard FileManager.default.isExecutableFile(atPath: ffmpeg) else {
+        captionLogger.error("ffmpeg fallback unavailable (no executable at \(ffmpeg, privacy: .public))")
+        throw CaptionRunnerError.videoUnreadable(path: videoURL.path)
+    }
+    // Duration via ffprobe — same clamp-to-range contract as the AVF path.
+    // Deadline guards against the classic dead-network-volume hang.
+    let durResult = await ProcessRunner.runProcess(
+        executable: ffprobe,
+        arguments: ["-v", "error",
+                    "-show_entries", "format=duration",
+                    "-of", "csv=p=0",
+                    videoURL.path],
+        deadlineSeconds: 30)
+    guard let durStr = durResult.stdout?.trimmingCharacters(in: .whitespacesAndNewlines),
+          let durSec = Double(durStr), durSec.isFinite, durSec > 0 else {
+        throw CaptionRunnerError.videoUnreadable(path: videoURL.path)
+    }
+
+    let tmpDir = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("vs_caption_frames_\(UUID().uuidString)", isDirectory: true)
+    try? FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: tmpDir) }
+
+    var results: [(Double, FrameExtraction)] = []
+    results.reserveCapacity(timestamps.count)
+    for (index, ts) in timestamps.enumerated() {
+        try Task.checkCancellation()
+        let clamped = max(0.0, min(ts, max(0.0, durSec - 0.05)))
+        let framePNG = tmpDir.appendingPathComponent("frame_\(index).png")
+        let rip = await ProcessRunner.runProcess(
+            executable: ffmpeg,
+            arguments: ["-v", "error",
+                        "-ss", String(format: "%.3f", clamped),
+                        "-i", videoURL.path,
+                        "-frames:v", "1",
+                        "-y", framePNG.path],
+            deadlineSeconds: 120)
+        if rip.exitCode == 0,
+           let data = try? Data(contentsOf: framePNG),
+           let source = CGImageSourceCreateWithData(data as CFData, nil),
+           let cg = CGImageSourceCreateImageAtIndex(source, 0, nil) {
+            results.append((ts, .success(cg)))
+        } else {
+            captionLogger.warning("ffmpeg frame extract failed at \(String(format: "%.2f", clamped))s in \(videoURL.lastPathComponent, privacy: .public): \(rip.stderr, privacy: .public)")
+            results.append((ts, .failed(reason: "ffmpeg could not decode frame at \(String(format: "%.2f", clamped))s")))
+        }
+        try? FileManager.default.removeItem(at: framePNG)
+    }
+    if !timestamps.isEmpty && !results.contains(where: { $0.1.isSuccess }) {
+        throw CaptionRunnerError.videoUnreadable(path: videoURL.path)
+    }
     return results
 }
 
@@ -398,7 +515,7 @@ actor MLXVLMCaptionRunner: CaptionRunner {
         // 1. Extract frames first. This is cheap relative to model
         //    loading, and failing here means we never paid the load
         //    cost. Order preserved; failed slots will be skipped below.
-        let frames = try await extractFrames(from: videoURL, atTimestamps: timestamps)
+        let frames = try await extractFramesForCaptioning(from: videoURL, atTimestamps: timestamps)
 
         // 2. Resolve the VLM container. Lazily loaded the first time;
         //    subsequent files in the same batch hit the actor-cached
@@ -522,7 +639,7 @@ actor MLXVLMCaptionRunner: CaptionRunner {
             throw CaptionRunnerError.videoUnreadable(path: videoPath)
         }
 
-        let frames = try await extractFrames(from: videoURL, atTimestamps: timestamps)
+        let frames = try await extractFramesForCaptioning(from: videoURL, atTimestamps: timestamps)
         let container = try await ensureContainer()
 
         // Per-prompt token budgets diverge from caption's flat

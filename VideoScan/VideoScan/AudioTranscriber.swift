@@ -162,6 +162,12 @@ private let transcribeLogger = Logger(subsystem: "Rick-Breen.VideoScan",
 ///
 /// Swift's `async` on a free function ≈ a C++ coroutine — caller does
 /// `try await` to consume.
+/// Two-tier (2026-07-05): AVFoundation answers for the containers it
+/// can parse; when it can't open the file at all — Rick's FFV1+PCM
+/// Matroska masters, which AVFoundation has zero support for — ffprobe
+/// is the arbiter. The downstream decode is mlx-whisper's own internal
+/// ffmpeg, so "ffprobe sees audio" is exactly the right admission test.
+/// Pinned by MKVDossierPipelineTests.
 func audioTrackIsPresent(at videoPath: String) async throws -> Bool {
     guard FileManager.default.fileExists(atPath: videoPath) else {
         throw AudioTranscriberError.audioUnreadable(path: videoPath)
@@ -169,10 +175,41 @@ func audioTrackIsPresent(at videoPath: String) async throws -> Bool {
     let asset = AVURLAsset(url: URL(fileURLWithPath: videoPath))
     do {
         let tracks = try await asset.loadTracks(withMediaType: .audio)
-        return !tracks.isEmpty
+        if !tracks.isEmpty { return true }
+        // Container parsed, zero audio tracks: usually a genuinely
+        // video-only clip — but some AVF versions report "no tracks"
+        // instead of throwing for containers they can't fully read.
+        // ffprobe settles it either way (video-only stays false).
+        return await ffprobeReportsAudioStream(at: videoPath)
     } catch {
+        // AVFoundation can't open the container. If ffprobe can see an
+        // audio stream, the file is fine — the container is just
+        // AVFoundation-hostile (mkv / FFV1).
+        if await ffprobeReportsAudioStream(at: videoPath) {
+            transcribeLogger.notice("AVFoundation can't open \((videoPath as NSString).lastPathComponent, privacy: .public) — ffprobe confirms an audio stream, admitting for transcription")
+            return true
+        }
         throw AudioTranscriberError.audioUnreadable(path: videoPath)
     }
+}
+
+/// ffprobe arbiter for the preflight above: does the file contain at
+/// least one audio stream? Missing ffprobe or a probe failure returns
+/// false (callers keep AVFoundation's verdict). Deadline guards the
+/// classic dead-network-volume hang.
+private func ffprobeReportsAudioStream(at videoPath: String) async -> Bool {
+    let ffprobe = ToolLocator.ffprobePath
+    guard FileManager.default.isExecutableFile(atPath: ffprobe) else { return false }
+    let result = await ProcessRunner.runProcess(
+        executable: ffprobe,
+        arguments: ["-v", "error",
+                    "-select_streams", "a",
+                    "-show_entries", "stream=index",
+                    "-of", "csv=p=0",
+                    videoPath],
+        deadlineSeconds: 30)
+    guard result.exitCode == 0, let out = result.stdout else { return false }
+    return !out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 }
 
 // MARK: - MLX Whisper engine (stub awaiting upstream Swift port)
