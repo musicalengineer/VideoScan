@@ -223,10 +223,10 @@ extension VideoScanModel {
                     total[i] += 1
                     if rec.isManuallyDeleted {
                         disposed[i] += 1
-                        if parsedWitnesses == nil {
-                            parsedWitnesses = parseWitnessesFromNote(rec.notes ?? "")
-                        }
-                        for w in parsedWitnesses! { witnesses[i].insert(w) }
+                        let parsed = parsedWitnesses
+                            ?? parseWitnessesFromNote(rec.notes ?? "")
+                        parsedWitnesses = parsed
+                        for w in parsed { witnesses[i].insert(w) }
                     }
                 }
                 // Origination — legacy predicate verbatim.
