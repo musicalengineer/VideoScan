@@ -41,7 +41,7 @@ public enum VolumePhase: String, CaseIterable, Codable {
 
 // MARK: - Volume Role
 
-public enum VolumeRole: String, CaseIterable, Codable {
+public enum VolumeRole: String, CaseIterable, Codable, Sendable {
     case unassigned  = "Unassigned"
     case system      = "System"
     case original    = "Original"
@@ -51,7 +51,7 @@ public enum VolumeRole: String, CaseIterable, Codable {
     case retired     = "Retired"
 }
 
-public enum VolumeTrust: String, CaseIterable, Codable {
+public enum VolumeTrust: String, CaseIterable, Codable, Sendable {
     case unknown    = "Unknown"
     case reliable   = "Reliable"
     case aging      = "Aging"

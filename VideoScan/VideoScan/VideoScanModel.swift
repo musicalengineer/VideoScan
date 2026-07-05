@@ -15,7 +15,10 @@ final class VideoScanModel: ObservableObject {
         // purge, live-reload append). In-place field writes that don't
         // touch the array (dossier writeback, provenance stamping) call
         // noteCatalogChangedForDossierCounts() at their own sites.
-        didSet { noteCatalogChangedForDossierCounts() }
+        didSet {
+            noteCatalogChangedForDossierCounts()
+            noteVolumeStatusesStale()
+        }
     }
     /// True when the app is running on a non-master Mac (viewer mode).
     /// Set by the sync engine at launch via `applyReadOnlyMode(_:)` so
@@ -128,6 +131,9 @@ final class VideoScanModel: ObservableObject {
     /// this is the nuclear option that works through NSSplitView hosting.
     func notifyTargetsChanged() {
         scanTargets = scanTargets
+        // Role/trust/retire edits change the safe-witness resolution, so
+        // the cached retire statuses are stale too.
+        noteVolumeStatusesStale()
     }
 
     /// Revision counter for in-place mutations of `records` that don't
@@ -145,6 +151,10 @@ final class VideoScanModel: ObservableObject {
     /// mutation of `records` that doesn't change overall count.
     func notifyVolumeAggregatesStale() {
         volumeAggregatesRevision &+= 1
+        // In-place fullPath/archiveStage rewrites (Bucket-D adoption,
+        // Relocate disposal) shift records between volumes without an
+        // array-level mutation — the retire-status cache must follow.
+        noteVolumeStatusesStale()
     }
 
     // MARK: - Cached chrome counts (2026-07-02 feedback-storm fix)
@@ -194,6 +204,51 @@ final class VideoScanModel: ObservableObject {
         let fresh = DossierCounts(dossiered: dossiered, total: records.count)
         if fresh != dossierCounts {
             dossierCounts = fresh
+        }
+    }
+
+    // MARK: - Cached per-volume retire statuses (2026-07-05 beachball fix)
+    //
+    // VolumesWindow used to compute retire readiness INSIDE its body: four
+    // full-catalog sweeps per volume row per body evaluation (~8M
+    // PathScope comparisons per keystroke in the notes field — 91% of a
+    // 20 s main-thread sample). Same rule as dossierCounts above: NO
+    // O(records) work in view bodies. Rows read this cache; the model
+    // rebuilds it off the main thread (debounced 300 ms) whenever the
+    // catalog or the scan targets change. Pinned by VolumeStatusCacheTests.
+
+    /// O(1) per-volume retire readiness for the Volumes window, keyed by
+    /// the target's `searchPath`. Never compute retire status from
+    /// `records` inside a view body — read this.
+    @Published private(set) var volumeStatusCache: [String: VolumeRetireStatus] = [:]
+    /// Test hook: proves reads never recompute (mirrors
+    /// `dossierCountsRecomputeCount`).
+    private(set) var volumeStatusRecomputeCount = 0
+    /// Debounce flag for `noteVolumeStatusesStale()`.
+    var volumeStatusRefreshScheduled = false
+    /// Generation stamp: a rebuild that finishes after a NEWER
+    /// invalidation must not publish its stale result.
+    var volumeStatusGeneration: UInt64 = 0
+
+    /// Cache lookup for a volume row. Missing entry (cache still warming
+    /// up) returns `.empty` — fail-safe: `canRetire` is false, so a cold
+    /// cache can never enable a destructive action it shouldn't.
+    func volumeStatus(for searchPath: String) -> VolumeRetireStatus {
+        volumeStatusCache[PathScope.normalize(searchPath)] ?? .empty
+    }
+
+    /// Bookkeeping for the test hook — called by the rebuild in
+    /// VideoScanModel+VolumeStatusCache.swift when it actually recomputes.
+    func countVolumeStatusRecompute() {
+        volumeStatusRecomputeCount += 1
+    }
+
+    /// Publish a freshly-computed status dictionary. Same-file setter for
+    /// the `private(set)` cache — ONLY the rebuild in
+    /// VideoScanModel+VolumeStatusCache.swift may call this.
+    func publishVolumeStatuses(_ fresh: [String: VolumeRetireStatus]) {
+        if fresh != volumeStatusCache {
+            volumeStatusCache = fresh
         }
     }
 
@@ -479,6 +534,7 @@ final class VideoScanModel: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             self?.saveCatalogDebounced()
+            self?.noteVolumeStatusesStale()
             self?.objectWillChange.send()
         }
         // When scans hit the RAM floor (MemoryPressureMonitor auto-pause),
@@ -560,6 +616,10 @@ final class VideoScanModel: ObservableObject {
         detectResumableTargets()
         installVolumeMountObservers()
         refreshTargetReachability()
+        // Warm the per-volume retire-status cache so the Volumes window
+        // has real numbers on first open (until then rows read .empty —
+        // fail-safe but blank).
+        noteVolumeStatusesStale()
         // Build the per-record haystack cache once the catalog is fully
         // assembled (restored + backfilled). All subsequent search
         // operations route through this index — see searchIndex above.

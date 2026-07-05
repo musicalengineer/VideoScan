@@ -51,11 +51,27 @@ struct DossierDashboardView: View {
     /// time. Rick 2026-06-13: 5s felt static — files complete every few
     /// seconds on a healthy run, and a 5s sample window means the rate
     /// tracker stays on "—" for 5 seconds after the first completion.
-    /// Polling 15k records per second is a few hundred microseconds on
-    /// M-series silicon — cheap enough that we don't need to subscribe
-    /// to model.objectWillChange and risk a render storm during heavy
-    /// dossier writeback.
+    /// 2026-07-05: the tick itself stays at 1 s, but the O(records ×
+    /// volumes) refilter now runs only when the catalog actually changed
+    /// (see `coverageKey`) — at 103k records the unconditional per-second
+    /// refilter was 52% of an idle main-thread sample (beachball fix).
     private let refreshTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    /// Change signature for the coverage refilter gate. Moves when any
+    /// catalog mutation lands (dossier writes bump the debounced
+    /// dossier-counts recompute; array-level changes move `records.count`;
+    /// in-place path rewrites bump `volumeAggregatesRevision`) or when the
+    /// visible volume-row set changes (mount/unmount/retire).
+    private var coverageKey: [Int] {
+        [model.dossierCountsRecomputeCount,
+         model.volumeAggregatesRevision,
+         model.records.count,
+         reachableVolumes.count]
+    }
+
+    /// Last signature we refiltered for. `-1` sentinel forces the first
+    /// pass on appear.
+    @State private var lastCoverageKey: [Int] = [-1]
 
     /// Number of reserved slots under "Now Analyzing". Rick 2026-06-13:
     /// the area should NOT resize as lanes come and go (jitters the
@@ -254,16 +270,26 @@ struct DossierDashboardView: View {
         }
     }
 
-    /// Refresh every per-volume coverage stat from the catalog. Cheap
-    /// on M-series: ~15k records × a few field reads = sub-millisecond.
-    /// Also nudges the per-volume rate tracker so rate/ETA tick along
-    /// with the analyzing volume.
+    /// Refresh per-volume coverage stats from the catalog, and nudge the
+    /// per-volume rate tracker so rate/ETA tick along with the analyzing
+    /// volume. The O(records × volumes) refilter is GATED on `coverageKey`
+    /// — a 1 s tick with an unchanged catalog only updates the (cheap)
+    /// rate trackers from cached coverage. At 103k records the ungated
+    /// refilter was the dominant idle main-thread cost (2026-07-05).
     private func refreshCounts() {
+        let key = coverageKey
+        let catalogChanged = key != lastCoverageKey
+        if catalogChanged { lastCoverageKey = key }
         for vol in reachableVolumes {
             let prefix = vol.searchPath
-            let subset = model.records.filter { $0.fullPath.hasPrefix(prefix) }
-            let cov = CatalogCoverage(records: subset)
-            volumeCoverage[prefix] = cov
+            let cov: CatalogCoverage
+            if catalogChanged || volumeCoverage[prefix] == nil {
+                let subset = model.records.filter { $0.fullPath.hasPrefix(prefix) }
+                cov = CatalogCoverage(records: subset)
+                volumeCoverage[prefix] = cov
+            } else {
+                cov = volumeCoverage[prefix] ?? .empty
+            }
             var tracker = volumeRates[prefix] ?? RateTracker()
             tracker.record(count: cov.dossiered, at: Date())
             volumeRates[prefix] = tracker

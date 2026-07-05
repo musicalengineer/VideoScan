@@ -290,9 +290,8 @@ struct VolumesWindow: View {
         // §2 Provenance — "Show where files went…" works on both retired
         // and active volumes. Enabled as long as the catalog has any
         // record originally cataloged on or relocated from this volume.
-        let hasRecords = VideoScanModel.totalRecordsOn(
-            volumeRootPath: target.searchPath, in: model.records
-        ) > 0
+        // Cache read — context menus are re-evaluated with the row body.
+        let hasRecords = retireStatus(for: target).totalRecords > 0
         Button("Show where files went…") {
             provenanceTarget = model.makeVolumeProvenance(for: target)
         }
@@ -348,9 +347,9 @@ struct VolumesWindow: View {
         // during scans), not a "this is undeleteable" assertion, so it
         // does not gate this action.
         let isBootRoot = target.searchPath == "/"
-        let orphanCount = VideoScanModel.totalRecordsOn(
-            volumeRootPath: target.searchPath, in: model.records
-        )
+        // Cache read (see retireStatus) — this used to be a full-catalog
+        // sweep inside the context-menu builder.
+        let orphanCount = retireStatus(for: target).totalRecords
         Button(role: .destructive) {
             deleteTarget = DeleteTarget(
                 id: target.id,
@@ -395,83 +394,15 @@ struct VolumesWindow: View {
         )
     }
 
-    /// Compute the retire-readiness status for a target. Drives:
-    ///   - Mark Retired enabled / disabled
-    ///   - Tooltip when disabled
-    ///   - The sidebar row badge (Safe to retire / Disposed degraded)
-    ///
-    /// Covers three Migrate outcomes:
-    ///   - Bucket E (safelyRedundant): records stay under this volume's
-    ///     path with `.manuallyDeleted` and audit-trail witnesses
-    ///   - Bucket B (source not found): same archiveStage, no witnesses
-    ///   - Bucket A (copied) / Bucket D (adopted): records' fullPath is
-    ///     rewritten away from this volume entirely — `total` drops to
-    ///     zero, the originated set tracks where they went
+    /// Retire-readiness status for a target — an O(1) read of the model's
+    /// per-volume status cache (2026-07-05 beachball fix). The cache is
+    /// rebuilt off the main thread whenever records or targets change;
+    /// the Bucket E/B/A/D semantics live in
+    /// `VideoScanModel.computeVolumeStatuses` (pinned by
+    /// VolumeStatusCacheTests). NO O(records) work may return to this
+    /// view — a keystroke in the notes pane re-evaluates every row.
     private func retireStatus(for target: CatalogScanTarget) -> VolumeRetireStatus {
-        let total = VideoScanModel.totalRecordsOn(
-            volumeRootPath: target.searchPath, in: model.records
-        )
-        let disposed = VideoScanModel.manuallyDeletedOn(
-            volumeRootPath: target.searchPath, in: model.records
-        )
-        // Pull originated count — records whose origin was this volume,
-        // even if their current fullPath is elsewhere (Bucket A/D moved).
-        let originated = VideoScanModel.originatedOnCount(
-            volumeRootPath: target.searchPath, in: model.records
-        )
-        // canRetire: every record currently under this path is disposed
-        // AND the volume has been used at some point. If total == 0 due
-        // to Bucket A/D moves, originated > 0 saves us.
-        let usedAtSomePoint = total > 0 || originated > 0
-        let allDisposed = usedAtSomePoint && (disposed == total)
-        // Safe-witness aggregate — two sources:
-        //   1. Bucket E audit notes (witnesses list)
-        //   2. Bucket A/D migration destination — for records that moved
-        //      away from this volume, check whether their current host
-        //      volume passes the safe-witness rule (role != .retired AND
-        //      trust != .unreliable). This is what makes Bucket-D-adopted
-        //      volumes retire-eligible.
-        let witnesses = VideoScanModel.aggregateRetiredWitnesses(
-            volumeRootPath: target.searchPath, in: model.records
-        )
-        let resolver = model.makeVolumeSafetyResolver()
-        let hasSafeWitness = witnesses.contains { path in
-            let (role, trust) = resolver(path)
-            return role != .retired && trust != .unreliable
-        } || hasSafeMigratedDestination(target: target, resolver: resolver)
-        return VolumeRetireStatus(
-            totalRecords: total,
-            disposedRecords: disposed,
-            allDisposed: allDisposed,
-            hasSafeWitness: hasSafeWitness
-        )
-    }
-
-    /// For records that originated on `target` but whose current fullPath
-    /// lives on a different volume (Bucket A copied / Bucket D adopted),
-    /// check whether at least one such destination volume is safe per the
-    /// §1A.2 safe-witness rule. Returns true if so — that destination is
-    /// effectively the "safe copy" for retire purposes.
-    private func hasSafeMigratedDestination(
-        target: CatalogScanTarget,
-        resolver: (String) -> (VolumeRole, VolumeTrust)
-    ) -> Bool {
-        let name = (target.searchPath as NSString).lastPathComponent
-        let pathPrefix = target.searchPath.hasSuffix("/")
-            ? target.searchPath : target.searchPath + "/"
-        for r in model.records {
-            // Only consider records that originated on this volume…
-            let originatedHere = (r.originVolume == name)
-                || (r.originalFullPath?.hasPrefix(pathPrefix) ?? false)
-            guard originatedHere else { continue }
-            // …and whose current fullPath has moved off this volume.
-            guard !r.fullPath.hasPrefix(pathPrefix) else { continue }
-            let (role, trust) = resolver(r.fullPath)
-            if role != .retired && trust != .unreliable {
-                return true
-            }
-        }
-        return false
+        model.volumeStatus(for: target.searchPath)
     }
 
     private var placeholder: some View {
@@ -492,47 +423,10 @@ struct VolumesWindow: View {
     }
 }
 
-// MARK: - Retire-readiness status (UI-only)
-
-/// Per-volume readiness signal. Computed by `VolumesWindow.retireStatus`
-/// from the model's records + scan targets. Drives badge + menu state.
-/// Internal struct — not part of the persisted model.
-struct VolumeRetireStatus {
-    let totalRecords: Int
-    let disposedRecords: Int
-    let allDisposed: Bool
-    let hasSafeWitness: Bool
-
-    /// "Safe to retire" — every record is disposed AND there's a safe
-    /// witness backing up the contents. Matches Rick's description of
-    /// the green-pill state.
-    var isSafeToRetire: Bool { allDisposed && hasSafeWitness }
-
-    /// "Disposed but degraded" — every record disposed, but no safe
-    /// witness yet. Yellow-pill state.
-    var isDegradedDisposed: Bool { allDisposed && !hasSafeWitness }
-
-    /// Predicate gating the Mark Retired action. We require BOTH 100%
-    /// disposed AND at least one safe witness — otherwise the user could
-    /// retire a drive whose only backup is on another retiring drive,
-    /// which is exactly the regression Rick called out.
-    var canRetire: Bool { isSafeToRetire }
-
-    /// Tooltip shown on the disabled Mark Retired menu item. Tells the
-    /// user what's missing without making them guess.
-    var tooltipForRetireAction: String {
-        if totalRecords == 0 {
-            return "No catalogued files on this volume yet."
-        }
-        if !allDisposed {
-            return "Not all files on this volume are accounted for yet — run Migrate first."
-        }
-        if !hasSafeWitness {
-            return "Files are marked disposed, but no backup copies are confirmed on safer drives."
-        }
-        return "Mark this volume retired."
-    }
-}
+// MARK: - Retire-readiness status
+//
+// VolumeRetireStatus moved to VideoScanModel+VolumeStatusCache.swift
+// (2026-07-05) — the model computes it now; this window only reads.
 
 // MARK: - Sidebar Row
 
