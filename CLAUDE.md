@@ -79,9 +79,19 @@ Finding "Donna" across a large family home video collection. The project is dedi
 - Core features operational: cataloging, face detection, clip extraction, compilation
 - Recent work focused on PersonFinderModel and PersonFinderView
 
+## Feature-test checklist (adopted 2026-07-05 — see docs/testing_retrospective_2026_07_05.md)
+Every feature/fix ships with tests along FIVE dimensions, not just the first:
+1. **Logic** — ordinary unit tests
+2. **Scale** — if it iterates `records`: 100k synthetic records + explicit time budget
+3. **Media matrix** — if it opens media files: mp4/h264, mov/prores, mkv/ffv1+pcm, mxf, avi/dv (synthetic ffmpeg fixtures, `test_*` prefix)
+4. **Isolation** — if it reads global state (UserDefaults/shared caches/real paths): a poisoned-state test
+5. **Sensor** — leave a regression sensor pinning the fixed behavior at production scale
+
+Rationale: escaped bugs are boundary bugs (environment, cost, capability) — the suite already catches function-level logic errors. NO O(records) work in view bodies. Integration-test ladder: GH #105–#108.
+
 ## Known Issues / TODOs
 <!-- Add items here as they come up -->
--
+- Beachballs on Correlate All / catalog-wide dup detection — parked, GH #104 (fix template: VolumeStatusCache pattern)
 
 ## Design Decisions
 <!-- Document non-obvious choices here -->
