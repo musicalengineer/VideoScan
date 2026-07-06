@@ -32,6 +32,7 @@ struct CatalogToolbar<Dashboard: View>: View {
     let onCorrelateAll: () -> Void
     let onCorrelateSelected: () -> Void
     let onCorrelateAcrossVolumes: () -> Void
+    let onClearAndRecorrelateAll: () -> Void
     let onAnalyzeDuplicatesAll: () -> Void
     let onAnalyzeDuplicatesSelected: () -> Void
     let volumesWithDeletableDups: [(path: String, count: Int)]
@@ -203,6 +204,13 @@ struct CatalogToolbar<Dashboard: View>: View {
                     Divider()
                     Button("Find A/V Pairs Across Volumes", action: onCorrelateAcrossVolumes)
                         .accessibilityIdentifier("catalog.correlate.findPairsAcrossVolumes")
+                    Divider()
+                    // Analysis-ledger (2026-07-05): Correlate All is
+                    // incremental — existing pairs are never touched. This
+                    // is the ONLY from-scratch redo, and it confirms first.
+                    Button("Clear && Re-correlate All…", role: .destructive,
+                           action: onClearAndRecorrelateAll)
+                        .accessibilityIdentifier("catalog.correlate.clearAndRecorrelate")
                     Divider()
                     Toggle("Show Pairs Only", isOn: $showPairsOnly)
                         .disabled(!hasCorrelatedPairs)

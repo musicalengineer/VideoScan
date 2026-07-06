@@ -139,6 +139,58 @@ struct CorrelateLedgerTests {
         #expect(nv.pairedWith === na, "…and rebuilds evidence-based pairs")
     }
 
+    // MARK: - 6. Avid cross-volume correlator under the ledger
+
+    private func makeAvid(_ name: String, dir: String, video: Bool,
+                          size: Int64 = 1000) -> VideoRecord {
+        let r = VideoRecord()
+        r.filename = name
+        r.fullPath = dir + "/" + name
+        r.directory = dir
+        r.streamTypeRaw = (video ? StreamType.videoOnly : StreamType.audioOnly).rawValue
+        r.sizeBytes = size
+        r.isPlayable = "Yes"
+        return r
+    }
+
+    @Test func avidCorrelatePreservesExistingPairsAndSkipsTheirClips() async {
+        let model = VideoScanModel()
+        // Clip 14D1BBD3F: v1↔a1 already paired (an earlier run picked
+        // them); worse copies v2/a2 of the SAME clip exist unpaired.
+        let v1 = makeAvid("00001.V14D1BBD3F.mxf", dir: "/volA", video: true, size: 9000)
+        let a1 = makeAvid("00001.A14D1BBD3F.mxf", dir: "/volA", video: false, size: 9000)
+        let gid = UUID()
+        v1.pairedWith = a1; v1.pairGroupID = gid; v1.pairConfidence = .high
+        a1.pairedWith = v1; a1.pairGroupID = gid; a1.pairConfidence = .high
+        let v2 = makeAvid("00002.V14D1BBD3F.mxf", dir: "/volB", video: true, size: 100)
+        let a2 = makeAvid("00002.A14D1BBD3F.mxf", dir: "/volB", video: false, size: 100)
+        // A brand-new clip that SHOULD get paired.
+        let nv = makeAvid("00003.VAAAA1111.mxf", dir: "/volC", video: true)
+        let na = makeAvid("00003.AAAAA1111.mxf", dir: "/volC", video: false)
+        model.records = [v1, a1, v2, a2, nv, na]
+
+        await model.correlateAcrossVolumes()
+
+        #expect(v1.pairedWith === a1 && v1.pairGroupID == gid,
+                "An existing pair is settled — the Avid pass must not wipe and re-derive it (RED pre-fix: cleared all pairs first)")
+        #expect(v2.pairedWith == nil && a2.pairedWith == nil,
+                "Duplicate copies of an already-paired clip stay unpaired (one pair per clip, as before)")
+        #expect(nv.pairedWith === na, "New clips still get paired")
+    }
+
+    @Test func avidCorrelatePairsBestUnpairedCopy() async {
+        let model = VideoScanModel()
+        // Two copies of a fresh clip — bigger one must win, same as legacy.
+        let vBig = makeAvid("00001.VBB22CC33.mxf", dir: "/volA", video: true, size: 9000)
+        let vSmall = makeAvid("00002.VBB22CC33.mxf", dir: "/volB", video: true, size: 10)
+        let a = makeAvid("00001.ABB22CC33.mxf", dir: "/volA", video: false)
+        model.records = [vBig, vSmall, a]
+
+        await model.correlateAcrossVolumes()
+
+        #expect(vBig.pairedWith === a, "Best copy (larger) wins the pairing")
+        #expect(vSmall.pairedWith == nil)
+    }
 }
 
 // MARK: - 5. Main thread stays responsive at scale (the beachball pin)

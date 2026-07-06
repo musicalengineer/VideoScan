@@ -193,7 +193,7 @@ struct CombinePipelineIntegrationTests {
         print("[INTEG] Loaded \(model.records.count) records")
 
         // Run the real correlator across the real catalog.
-        model.correlateAcrossVolumes()
+        await model.correlateAcrossVolumes()
         print("[INTEG] Correlate: \(model.correlateStatus)")
         let totalPairs = model.correlatedPairs.count
         try #require(totalPairs > 0, "Catalog produced zero correlated pairs — can't run combine")
@@ -260,7 +260,7 @@ struct CombinePipelineIntegrationTests {
             Issue.record("Copied catalog loaded empty")
             return
         }
-        model.correlateAcrossVolumes()
+        await model.correlateAcrossVolumes()
 
         // Look for any pair where ONE side is currently offline AND the
         // offline side has a UMID-matched substitute that IS reachable.
@@ -367,7 +367,7 @@ struct CombinePipelineIntegrationTests {
             Issue.record("Copied catalog loaded empty")
             return
         }
-        model.correlateAcrossVolumes()
+        await model.correlateAcrossVolumes()
 
         let preCombineRecordCount = model.records.count
         let picks = Self.pickRunnablePairs(

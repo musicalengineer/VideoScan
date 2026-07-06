@@ -186,4 +186,99 @@ extension CorrelationScorer {
         }
         return out
     }
+
+    // MARK: - Avid cross-volume pipeline (off-main)
+
+    /// Snapshot for the Avid clip-ID correlator: identity + the best-copy
+    /// ranking signals + the ledger flag.
+    struct AvidSnap: Sendable {
+        let id: UUID
+        let filename: String
+        let fullPath: String
+        let isPlayable: String
+        let sizeBytes: Int64
+        let isPaired: Bool
+    }
+
+    @MainActor
+    static func avidSnap(_ r: VideoRecord) -> AvidSnap {
+        AvidSnap(id: r.id,
+                 filename: r.filename,
+                 fullPath: r.fullPath,
+                 isPlayable: r.isPlayable,
+                 sizeBytes: r.sizeBytes,
+                 isPaired: r.pairedWith != nil)
+    }
+
+    struct AvidResult: Sendable {
+        let assignments: [PairAssignment]
+        let clipIDCount: Int
+        let alreadyPairedClips: Int
+        let videoOrphans: Int
+        let audioOrphans: Int
+    }
+
+    /// Clip-ID grouping + best-copy selection, off the main actor (the
+    /// reachability probe stats every candidate path — kernel I/O that
+    /// has NO business on the main thread). Ledger semantics: a clip with
+    /// ANY paired member is settled — skipped entirely, preserving the
+    /// legacy one-pair-per-clip invariant across incremental runs.
+    @concurrent
+    static func assignAvidPairs(_ snaps: [AvidSnap]) async -> AvidResult {
+        var videosByClip: [String: [AvidSnap]] = [:]
+        var audiosByClip: [String: [AvidSnap]] = [:]
+        for s in snaps {
+            guard let (clipID, isVideo) = avidClipID(from: s.filename) else { continue }
+            if isVideo {
+                videosByClip[clipID, default: []].append(s)
+            } else {
+                audiosByClip[clipID, default: []].append(s)
+            }
+        }
+
+        func bestSnapCopy(_ candidates: [AvidSnap]) -> AvidSnap? {
+            candidates.sorted { a, b in
+                let aOnline = VolumeReachability.isReachable(path: a.fullPath)
+                let bOnline = VolumeReachability.isReachable(path: b.fullPath)
+                if aOnline != bOnline { return aOnline }
+                if a.isPlayable != b.isPlayable { return a.isPlayable == "Yes" }
+                return a.sizeBytes > b.sizeBytes
+            }.first
+        }
+
+        let allClipIDs = Set(videosByClip.keys).union(audiosByClip.keys)
+        var assignments: [PairAssignment] = []
+        var alreadyPaired = 0
+        var videoOrphans = 0
+        var audioOrphans = 0
+        for clipID in allClipIDs {
+            let videos = videosByClip[clipID] ?? []
+            let audios = audiosByClip[clipID] ?? []
+            // Ledger: a clip any of whose copies is already paired is
+            // settled history — never re-derived, never double-paired.
+            if videos.contains(where: { $0.isPaired }) ||
+               audios.contains(where: { $0.isPaired }) {
+                alreadyPaired += 1
+                continue
+            }
+            guard !videos.isEmpty, !audios.isEmpty else {
+                if videos.isEmpty { audioOrphans += audios.count }
+                if audios.isEmpty { videoOrphans += videos.count }
+                continue
+            }
+            guard let bestVideo = bestSnapCopy(videos),
+                  let bestAudio = bestSnapCopy(audios) else { continue }
+            assignments.append(PairAssignment(videoID: bestVideo.id,
+                                              audioID: bestAudio.id,
+                                              confidence: .high,
+                                              reasons: ["clipID"],
+                                              videoFilename: bestVideo.filename,
+                                              audioFilename: bestAudio.filename))
+        }
+        return AvidResult(assignments: assignments,
+                          clipIDCount: allClipIDs.count,
+                          alreadyPairedClips: alreadyPaired,
+                          videoOrphans: videoOrphans,
+                          audioOrphans: audioOrphans)
+    }
 }

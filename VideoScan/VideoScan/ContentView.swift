@@ -201,6 +201,9 @@ struct CatalogView: View {
     /// keystroke so only the trailing edge lands.
     @State private var searchDebounceTask: Task<Void, Never>? = nil
     @State private var showDeleteDuplicatesConfirm = false
+    /// Analysis-ledger (2026-07-05): Correlate All is incremental; the
+    /// from-scratch redo is destructive to manual pairs, so it confirms.
+    @State private var showClearRecorrelateConfirm = false
     @State private var deleteTargetVolume: String = ""
     @State private var deleteTargetCount: Int = 0
     @State var showDiscoverVolumes = false
@@ -351,7 +354,10 @@ struct CatalogView: View {
                 },
                 onCorrelateAcrossVolumes: {
                     model.log("\n━━ Finding Avid A/V pairs across all volumes ━━")
-                    model.correlateAcrossVolumes()
+                    Task { await model.correlateAcrossVolumes() }
+                },
+                onClearAndRecorrelateAll: {
+                    showClearRecorrelateConfirm = true
                 },
                 onAnalyzeDuplicatesAll: {
                     model.log("\nAnalyzing duplicate candidates across all scanned media...")
@@ -602,6 +608,15 @@ struct CatalogView: View {
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("This will permanently delete \(deleteTargetCount) high-confidence duplicate(s) on:\n\n\(deleteTargetVolume)\n\nOnly duplicates whose keeper is also on this same volume will be deleted. Cross-volume duplicates are never touched.\n\nAre you sure? Do you have backups and/or are these really junk or duplicates?")
+        }
+        .alert("Clear & Re-correlate All", isPresented: $showClearRecorrelateConfirm) {
+            Button("Clear All Pairs & Re-correlate", role: .destructive) {
+                model.log("\nClearing ALL pairs and re-correlating from scratch...")
+                Task { await model.clearAndRecorrelateAll() }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("This wipes EVERY A/V pairing — including pairs you made by hand — and re-derives them all from file evidence.\n\nNormal \"Correlate All\" already handles new files and never touches existing pairs. Only use this if the pairings themselves are wrong.")
         }
         .sheet(isPresented: $showDiscoverVolumes) {
             DiscoverVolumesSheet(model: model)

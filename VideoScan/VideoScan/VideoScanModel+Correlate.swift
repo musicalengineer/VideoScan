@@ -23,59 +23,42 @@ extension VideoScanModel {
 
     // MARK: - Cross-Volume Avid Correlator
 
-    /// Correlate Avid MXF A/V pairs across all volumes using clip ID matching.
-    func correlateAcrossVolumes() {
+    /// Correlate Avid MXF A/V pairs across all volumes using clip ID
+    /// matching — under the analysis-ledger contract (2026-07-05):
+    /// existing pairs are settled, a clip with any paired copy is skipped
+    /// (one pair per clip, preserved across incremental runs), and the
+    /// grouping + best-copy reachability probes run OFF the main actor.
+    /// Full from-scratch redo: `clearAndRecorrelateAll()` only.
+    func correlateAcrossVolumes() async {
         isCorrelating = true
         correlateStatus = ""
         defer { isCorrelating = false }
 
-        // Clear existing pairs
-        for r in records {
-            r.pairedWith = nil
-            r.pairGroupID = nil
-            r.pairConfidence = nil
-        }
+        let snaps = records.map(CorrelationScorer.avidSnap)
+        let result = await CorrelationScorer.assignAvidPairs(snaps)
 
-        // Group by Avid clip ID
-        var videosByClip: [String: [VideoRecord]] = [:]
-        var audiosByClip: [String: [VideoRecord]] = [:]
-
-        for r in records {
-            guard let (clipID, isVideo) = CorrelationScorer.avidClipID(from: r.filename) else { continue }
-            if isVideo {
-                videosByClip[clipID, default: []].append(r)
-            } else {
-                audiosByClip[clipID, default: []].append(r)
-            }
-        }
-
-        let allClipIDs = Set(videosByClip.keys).union(audiosByClip.keys)
+        // Apply in one main-actor batch; guard against records that
+        // paired or left the catalog during the await.
+        var byID: [UUID: VideoRecord] = [:]
+        byID.reserveCapacity(records.count)
+        for r in records { byID[r.id] = r }
         var paired = 0
-        var videoOnlyOrphans = 0
-        var audioOnlyOrphans = 0
-
-        for clipID in allClipIDs {
-            let videos = videosByClip[clipID] ?? []
-            let audios = audiosByClip[clipID] ?? []
-
-            guard !videos.isEmpty, !audios.isEmpty else {
-                if videos.isEmpty { audioOnlyOrphans += audios.count }
-                if audios.isEmpty { videoOnlyOrphans += videos.count }
-                continue
-            }
-
-            guard let bestVideo = CorrelationScorer.bestCopy(from: videos),
-                  let bestAudio = CorrelationScorer.bestCopy(from: audios) else { continue }
-
+        var pairLogLines: [String] = []
+        for asg in result.assignments {
+            guard let v = byID[asg.videoID], let a = byID[asg.audioID],
+                  v.pairedWith == nil, a.pairedWith == nil else { continue }
             let gid = UUID()
-            bestVideo.pairedWith = bestAudio
-            bestVideo.pairGroupID = gid
-            bestVideo.pairConfidence = .high
-            bestAudio.pairedWith = bestVideo
-            bestAudio.pairGroupID = gid
-            bestAudio.pairConfidence = .high
+            v.pairedWith = a
+            v.pairGroupID = gid
+            v.pairConfidence = .high
+            a.pairedWith = v
+            a.pairGroupID = gid
+            a.pairConfidence = .high
             paired += 1
-            log("  Paired [high] (clipID): \(bestVideo.filename) ↔ \(bestAudio.filename)")
+            pairLogLines.append("  Paired [high] (clipID): \(asg.videoFilename) ↔ \(asg.audioFilename)")
+        }
+        if !pairLogLines.isEmpty {
+            log(pairLogLines.joined(separator: "\n"))
         }
 
         // Enrich with Avid bin metadata if bins have been scanned
@@ -83,20 +66,19 @@ extension VideoScanModel {
             crossReferenceAvidBins()
         }
 
-        correlateStatus = "\(paired) pairs · \(videoOnlyOrphans)V + \(audioOnlyOrphans)A orphans"
+        correlateStatus = "\(paired) new pairs · \(result.videoOrphans)V + \(result.audioOrphans)A orphans"
         log("""
 
-        Cross-volume Avid correlation complete:
-          \(allClipIDs.count) unique clip IDs
-          \(paired) pairs matched
-          \(videoOnlyOrphans) video-only orphans (no audio found)
-          \(audioOnlyOrphans) audio-only orphans (no video found)
+        Cross-volume Avid correlation complete (incremental):
+          \(result.clipIDCount) unique clip IDs (\(result.alreadyPairedClips) already paired — untouched)
+          \(paired) new pairs matched
+          \(result.videoOrphans) video-only orphans (no audio found)
+          \(result.audioOrphans) audio-only orphans (no video found)
         """)
 
-        // Force table refresh
-        let tmp = records
-        records = []
-        records = tmp
+        // One mutation notification (debounced save + cache invalidation
+        // + view refresh) replaces the records=[]/records=tmp storm.
+        NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
     }
 
     /// Correlate under the analysis-ledger contract
