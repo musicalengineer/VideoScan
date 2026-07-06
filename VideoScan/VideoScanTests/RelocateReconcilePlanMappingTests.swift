@@ -186,6 +186,41 @@ struct RelocateReconcilePlanMappingTests {
         #expect(viaAdapter.sourceSideMoves.first?.rec.id == r.id)
     }
 
+    // MARK: - Progress reporting (2026-07-06 honest-progress fix)
+
+    // regression: the classify loop must stream (done, total) — the
+    // reconcile used to run minutes behind a modal with no indication
+    // whether it would take 20 minutes or 2 weeks (Rick, LACIE500 dry run).
+    @Test func reconcilePlan_reportsMonotonicProgressEndingComplete() {
+        let dest = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("vs-recon-progress-\(UUID().uuidString)")
+        // 60 records → ticks at 0, 25, 50, and the final (60, 60). Files
+        // need not exist — Bucket B classification is fine; only the
+        // progress contract is under test.
+        let inputs = (0..<60).map { i in
+            rec("clip\(i).mov",
+                path: "/Volumes/GoneVolume/clip\(i).mov",
+                size: Int64(1000 + i),
+                md5: "m\(i)").asReconcileInput
+        }
+        var ticks: [(done: Int, total: Int)] = []
+        _ = RelocateReconcile.reconcilePlan(
+            records: inputs, witnesses: [],
+            sourceVolumeRootPath: "/Volumes/GoneVolume",
+            destinationRoot: dest,
+            sourceFiles: [], destFiles: [],
+            skipDupsOnOtherVolumes: false,
+            hash: { _ in "" },
+            progress: { done, total in ticks.append((done, total)) }
+        )
+        #expect(ticks.count >= 3, "Stride ticks plus the completion tick")
+        #expect(ticks.first?.done == 0, "Reports before the first record so the UI leaves 'enumerating' immediately")
+        #expect(ticks.last?.done == 60 && ticks.last?.total == 60,
+                "Final tick is (total, total) — the bar completes")
+        #expect(ticks.map(\.done) == ticks.map(\.done).sorted(), "Monotonic")
+        #expect(ticks.allSatisfy { $0.total == 60 })
+    }
+
     // MARK: - skipAlreadyRelocated at the plan level (QA fix 2026-07-01)
 
     // regression: the previouslyRelocated short-circuit used to be

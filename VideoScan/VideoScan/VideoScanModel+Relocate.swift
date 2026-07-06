@@ -278,12 +278,32 @@ extension VideoScanModel {
         let scopeInputs = scope.map(\.asReconcileInput)
         let witnessInputs = records.map(\.asReconcileInput)
         let resolver = makeVolumeSafetyResolver()
+        // Honest progress (2026-07-06): the classify loop reports
+        // (done, total) — the UI gets a determinate bar ≤4 Hz and
+        // relocate.log gets a heartbeat every 5 s, so neither the modal
+        // nor a log-watcher is ever left guessing "2 weeks or 20 minutes".
+        reconcileProgress = (0, scopeInputs.count)
+        relocateLog.write("Reconcile: enumerating volumes, then classifying \(scopeInputs.count) record(s)…")
+        let throttle = ReconcileProgressThrottle()
+        let progressSink: @Sendable (Int, Int) -> Void = { [weak self] done, total in
+            let gates = throttle.gate()
+            guard gates.ui || gates.log || done == total else { return }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.reconcileProgress = (done, total)
+                if gates.log && total > 0 {
+                    relocateLog.write("Reconcile progress: \(done)/\(total) (\(done * 100 / total)%)")
+                }
+            }
+        }
         let plan = await Task.detached(priority: .userInitiated) {
             Self.performReconcilePlanOffActor(scopeInputs: scopeInputs,
                                               witnessInputs: witnessInputs,
                                               options: options,
-                                              resolveVolumeSafety: resolver)
+                                              resolveVolumeSafety: resolver,
+                                              progress: progressSink)
         }.value
+        reconcileProgress = nil
         let reconcile = RelocateReconcile.materialize(plan, scope: scope)
         logReconcileSummary(reconcile)
         relocateLog.write("Reconcile: ready=\(reconcile.ready.count) adopted=\(reconcile.adopted.count) sourceMoves=\(reconcile.sourceSideMoves.count) safelyRedundant=\(reconcile.safelyRedundant.count) manuallyDeleted=\(reconcile.manuallyDeleted.count) previouslyRelocated=\(reconcile.previouslyRelocated.count)")
@@ -759,7 +779,8 @@ extension VideoScanModel {
         scopeInputs: [ReconcileRecordInput],
         witnessInputs: [ReconcileRecordInput],
         options: RelocateOptions,
-        resolveVolumeSafety: @escaping VolumeSafetyResolver
+        resolveVolumeSafety: @escaping VolumeSafetyResolver,
+        progress: (@Sendable (Int, Int) -> Void)? = nil
     ) -> ReconcilePlan {
         let sourceFiles = enumerateFiles(at: options.sourceVolumeRootPath)
         let destFiles = enumerateFiles(at: options.destinationRoot.path)
@@ -773,8 +794,27 @@ extension VideoScanModel {
             skipDupsOnOtherVolumes: options.skipDupsOnOtherVolumes,
             skipAlreadyRelocated: options.skipAlreadyRelocated,
             resolveVolumeSafety: resolveVolumeSafety,
-            hash: { FileHasher.partialMD5(path: $0) }
+            hash: { FileHasher.partialMD5(path: $0) },
+            progress: progress
         )
+    }
+
+    /// Sequentially-called throttle for reconcile progress (the classify
+    /// loop is single-threaded, so plain vars are safe — @unchecked
+    /// Sendable only because the box crosses into the detached task).
+    /// UI updates ≤4 Hz; relocate.log heartbeat every 5 s (Rick's rule:
+    /// long ops show honest progress in BOTH the UI and the log).
+    final class ReconcileProgressThrottle: @unchecked Sendable {
+        private var lastUI = Date.distantPast
+        private var lastLog = Date.distantPast
+        func gate() -> (ui: Bool, log: Bool) {
+            let now = Date()
+            let ui = now.timeIntervalSince(lastUI) >= 0.25
+            if ui { lastUI = now }
+            let log = now.timeIntervalSince(lastLog) >= 5.0
+            if log { lastLog = now }
+            return (ui, log)
+        }
     }
 
     /// Build the witness-path → host-volume `(role, trust)` resolver from

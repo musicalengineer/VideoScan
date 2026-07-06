@@ -429,6 +429,11 @@ enum RelocateReconcile {
     ///   build the (size, partialMD5) → other-volume witness index for
     ///   Bucket E. Pass `records` itself for no cross-volume check.
     /// All other parameters match `reconcile`.
+    /// - Parameter progress: optional per-record progress sink
+    ///   `(done, total)` — called every `progressStride` records plus once
+    ///   at completion (2026-07-06, Rick's rule: any op that can outlive
+    ///   ~15 s shows honest progress, ESPECIALLY behind a modal). Invoked
+    ///   on the caller's thread; callers hop to the main actor themselves.
     static func reconcilePlan(
         records: [ReconcileRecordInput],
         witnesses: [ReconcileRecordInput],
@@ -439,7 +444,8 @@ enum RelocateReconcile {
         skipDupsOnOtherVolumes: Bool,
         skipAlreadyRelocated: Bool = true,
         resolveVolumeSafety: VolumeSafetyResolver = permissiveResolver,
-        hash: (String) -> String
+        hash: (String) -> String,
+        progress: ((_ done: Int, _ total: Int) -> Void)? = nil
     ) -> ReconcilePlan {
 
         // Build size-indexed lookup tables. The whole point is to avoid
@@ -484,7 +490,14 @@ enum RelocateReconcile {
 
         var plan = ReconcilePlan()
 
+        let progressStride = 25
+        var processed = 0
+
         for rec in records {
+            if let progress, processed % progressStride == 0 {
+                progress(processed, records.count)
+            }
+            processed += 1
             // Already-migrated records (originalFullPath != nil — success
             // provenance from a prior hop) short-circuit ONLY when the
             // skipAlreadyRelocated option is on (the default). With the
@@ -602,6 +615,7 @@ enum RelocateReconcile {
             plan.manuallyDeletedIDs.append(rec.id)
         }
 
+        progress?(records.count, records.count)
         return plan
     }
 

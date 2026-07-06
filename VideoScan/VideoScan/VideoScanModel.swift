@@ -79,6 +79,12 @@ final class VideoScanModel: ObservableObject {
     /// summary before the Retire prompt can appear. See
     /// docs/relocate_volume_plan.md (§1A summary-sheet note).
     @Published var pendingRelocateSummary: RelocateSummary?
+    /// Live (done, total) of the reconcile classify loop — nil when no
+    /// reconcile is running. One channel serves both the Jobs panel and
+    /// the progress sheet because the relocate queue is strictly serial.
+    /// (2026-07-06: the reconcile used to run minutes with an
+    /// indeterminate bar and a silent log — "2 weeks or 20 minutes".)
+    @Published var reconcileProgress: (done: Int, total: Int)?
     @Published var isCorrelating: Bool = false
     @Published var isAnalyzingDuplicates: Bool = false
     @Published var isDeletingDuplicates: Bool = false

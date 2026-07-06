@@ -40,14 +40,44 @@ struct RelocateSheet: View {
     /// change can cancel it; the result is applied only if not cancelled.
     @State private var previewTask: Task<Void, Never>?
 
-    // MARK: - Pre-flight stats (recomputed reactively)
+    /// Live (done, total) from the preview's classify loop — nil while
+    /// enumerating or when idle. Drives the determinate narration next to
+    /// the preview spinner (2026-07-06 honest-progress fix).
+    @State private var previewProgress: (done: Int, total: Int)?
 
-    private var scopedRecords: [VideoRecord] {
-        VideoScanModel.recordsScoped(to: sourceVolumePath, in: model.records)
+    // MARK: - Pre-flight stats (cached — 2026-07-06 livelock fix)
+    //
+    // These were COMPUTED properties running a full-catalog PathScope
+    // sweep per access — and one body evaluation reads them ~9 times.
+    // At 103k records that's ~a second of scanning per render, so every
+    // @Published model change ground the modal into a livelock (the
+    // "dry run that never starts" Rick hit on LACIE500). Same class as
+    // the VolumesWindow beachball: NO O(records) work in view bodies.
+    // Cached on appear + debounced source-path edits; the real migrate/
+    // preview re-derives its own scope at run time regardless.
+
+    @State private var cachedScope: [VideoRecord] = []
+    @State private var cachedTotalBytes: Int64 = 0
+    @State private var scopeRefreshTask: Task<Void, Never>?
+
+    private var scopedRecords: [VideoRecord] { cachedScope }
+
+    private var totalBytes: Int64 { cachedTotalBytes }
+
+    private func refreshScopeStats() {
+        cachedScope = VideoScanModel.recordsScoped(to: sourceVolumePath, in: model.records)
+        cachedTotalBytes = cachedScope.reduce(0) { $0 + $1.sizeBytes }
     }
 
-    private var totalBytes: Int64 {
-        scopedRecords.reduce(0) { $0 + $1.sizeBytes }
+    /// Debounced refresh for TextField edits — one sweep 250 ms after
+    /// typing settles, not one per keystroke.
+    private func scheduleScopeRefresh() {
+        scopeRefreshTask?.cancel()
+        scopeRefreshTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled else { return }
+            refreshScopeStats()
+        }
     }
 
     private var totalBytesString: String {
@@ -115,6 +145,7 @@ struct RelocateSheet: View {
         }
         .padding(20)
         .frame(minWidth: 560)
+        .onAppear { refreshScopeStats() }
     }
 
     // MARK: - Sections
@@ -135,6 +166,7 @@ struct RelocateSheet: View {
                             UserDefaults.standard.set(new, forKey: relocateSourceVolumeKey)
                             // Source change invalidates any prior preview.
                             invalidatePreview()
+                            scheduleScopeRefresh()
                         }
                     Button("Browse…") { chooseSourceVolume() }
                         .accessibilityIdentifier("relocateSheet.browseSource")
@@ -258,7 +290,11 @@ struct RelocateSheet: View {
                         .accessibilityIdentifier("relocateSheet.reconcilePreview")
                     if isPreviewing {
                         ProgressView().controlSize(.small)
-                        Text("Scanning & matching files…")
+                        // Determinate narration (2026-07-06): the classify
+                        // loop reports (done, total) — no more silent
+                        // minutes behind a modal.
+                        Text(previewProgress.map { "Comparing \($0.done) / \($0.total) files…" }
+                             ?? "Enumerating volumes…")
                             .font(.caption)
                             .foregroundColor(.secondary)
                             .accessibilityIdentifier("relocateSheet.previewSpinner")
@@ -445,6 +481,17 @@ struct RelocateSheet: View {
 
         previewTask?.cancel()
         isPreviewing = true
+        previewProgress = nil
+        // Determinate progress from the classify loop, throttled to ≤4 Hz
+        // on the main actor (2026-07-06 — Rick's honest-progress rule).
+        let throttle = VideoScanModel.ReconcileProgressThrottle()
+        let progressSink: @Sendable (Int, Int) -> Void = { done, total in
+            let gates = throttle.gate()
+            guard gates.ui || done == total else { return }
+            Task { @MainActor in
+                previewProgress = (done, total)
+            }
+        }
         previewTask = Task {
             let plan = await Task.detached(priority: .userInitiated) { () -> ReconcilePlan in
                 let sourceFiles = Self.enumerateFiles(at: src)
@@ -460,11 +507,13 @@ struct RelocateSheet: View {
                     // Must mirror handleRelocate()'s hardcoded value so the
                     // preview counts match what the run will actually do.
                     skipAlreadyRelocated: true,
-                    hash: { FileHasher.partialMD5(path: $0) }
+                    hash: { FileHasher.partialMD5(path: $0) },
+                    progress: progressSink
                 )
             }.value
             if Task.isCancelled { return }   // superseded by a newer preview/invalidation
             previewResult = RelocateReconcile.materialize(plan, scope: scope)
+            previewProgress = nil
             isPreviewing = false
         }
     }
@@ -477,6 +526,7 @@ struct RelocateSheet: View {
         previewTask = nil
         isPreviewing = false
         previewResult = nil
+        previewProgress = nil
     }
 
     /// Mirror of VideoScanModel.enumerateFiles — local copy because that

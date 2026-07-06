@@ -188,18 +188,27 @@ struct RelocateJobsPanel: View {
         }
     }
 
-    /// Reconcile-phase indicator. The reconcile does a full-volume FS walk +
-    /// per-file hash matching with no natural done/total until it finishes —
-    /// and on a slow drive it can run minutes. An indeterminate bar tells the
-    /// user it's actively working rather than stalled (the phase that used to
-    /// show only an elapsed clock).
+    /// Reconcile-phase indicator. Determinate since 2026-07-06: the
+    /// classify loop publishes (done, total) through
+    /// `model.reconcileProgress`, so the user sees "Comparing 12,500 /
+    /// 49,000" instead of guessing whether a minutes-long pass is alive.
+    /// Falls back to indeterminate during the enumeration phase (before
+    /// the classify loop starts) — still honest: "actively working".
     private var reconcilingBlock: some View {
         VStack(alignment: .leading, spacing: 2) {
-            ProgressView()
-                .progressViewStyle(.linear)
-            Text("Scanning & matching files…")
-                .font(.system(.caption2, design: .monospaced))
-                .foregroundColor(.secondary)
+            if let p = model.reconcileProgress, p.total > 0 {
+                ProgressView(value: Double(p.done), total: Double(p.total))
+                    .progressViewStyle(.linear)
+                Text("Comparing \(p.done) / \(p.total) files…")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundColor(.secondary)
+            } else {
+                ProgressView()
+                    .progressViewStyle(.linear)
+                Text("Enumerating volumes…")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundColor(.secondary)
+            }
         }
         .accessibilityIdentifier("relocateJobsPanel.row.reconciling")
     }
