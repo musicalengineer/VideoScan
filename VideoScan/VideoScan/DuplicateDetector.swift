@@ -203,29 +203,82 @@ enum DuplicateDetector {
         }
     }
 
+    /// The three bucket keys a record can pair under — hash, timecode,
+    /// and normalized-stem, each namespaced so families never collide.
+    /// Shared by `buildIndices` (grouping) and `affectedSubset` (the
+    /// analysis-ledger delta expansion) so they can never drift.
+    static func bucketKeys(_ record: VideoRecord) -> [String] {
+        var keys: [String] = []
+        if !record.partialMD5.isEmpty && record.sizeBytes > 0 {
+            keys.append("h|\(record.streamTypeRaw)|\(record.sizeBytes)|\(record.partialMD5)")
+        }
+        if !record.timecode.isEmpty {
+            keys.append("t|\(record.streamTypeRaw)|\(record.timecode)|\(durationBucket(record.durationSeconds))")
+        }
+        let stem = normalizedStem(record.filename)
+        if !stem.isEmpty {
+            keys.append("s|\(record.streamTypeRaw)|\(stem)|\(durationBucket(record.durationSeconds))")
+        }
+        return keys
+    }
+
     private static func buildIndices(records: [VideoRecord]) -> [[VideoRecord]] {
-        var byHash: [String: [VideoRecord]] = [:]
-        var byTimecode: [String: [VideoRecord]] = [:]
-        var byStem: [String: [VideoRecord]] = [:]
-
+        var buckets: [String: [VideoRecord]] = [:]
         for record in records {
-            if !record.partialMD5.isEmpty && record.sizeBytes > 0 {
-                let key = "\(record.streamTypeRaw)|\(record.sizeBytes)|\(record.partialMD5)"
-                byHash[key, default: []].append(record)
-            }
-            if !record.timecode.isEmpty {
-                let key = "\(record.streamTypeRaw)|\(record.timecode)|\(durationBucket(record.durationSeconds))"
-                byTimecode[key, default: []].append(record)
-            }
-
-            let stem = normalizedStem(record.filename)
-            if !stem.isEmpty {
-                let key = "\(record.streamTypeRaw)|\(stem)|\(durationBucket(record.durationSeconds))"
-                byStem[key, default: []].append(record)
+            for key in bucketKeys(record) {
+                buckets[key, default: []].append(record)
             }
         }
+        return Array(buckets.values)
+    }
 
-        return Array(byHash.values) + Array(byTimecode.values) + Array(byStem.values)
+    // MARK: - Analysis-ledger support (2026-07-05)
+
+    /// The minimal re-analysis subset for a pending delta: the delta
+    /// records themselves, every active record sharing a bucket key with
+    /// one (a potential new partner), and the FULL existing group of any
+    /// such record — a partial group re-derivation would fragment group
+    /// identities. Everything outside this subset provably cannot change,
+    /// so its groups are never touched (docs/analysis_ledger_design.md).
+    static func affectedSubset(delta: [VideoRecord],
+                               allActive: [VideoRecord]) -> [VideoRecord] {
+        guard !delta.isEmpty else { return [] }
+        var deltaKeys = Set<String>()
+        var affectedGroupIDs = Set<UUID>()
+        var included = Set<UUID>()
+        var out: [VideoRecord] = []
+        for r in delta where included.insert(r.id).inserted {
+            out.append(r)
+            for k in bucketKeys(r) { deltaKeys.insert(k) }
+            // An invalidated record that WAS grouped drags its old group in.
+            if let g = r.duplicateGroupID { affectedGroupIDs.insert(g) }
+        }
+        for r in allActive where !included.contains(r.id) {
+            if bucketKeys(r).contains(where: deltaKeys.contains) {
+                included.insert(r.id)
+                out.append(r)
+                if let g = r.duplicateGroupID { affectedGroupIDs.insert(g) }
+            }
+        }
+        if !affectedGroupIDs.isEmpty {
+            for r in allActive where !included.contains(r.id) {
+                if let g = r.duplicateGroupID, affectedGroupIDs.contains(g) {
+                    included.insert(r.id)
+                    out.append(r)
+                }
+            }
+        }
+        return out
+    }
+
+    /// Run `analyze` OFF the main actor over exclusively-owned clones
+    /// (`snapshotClone` — the same contract CatalogStore's off-main save
+    /// uses). The caller clones on main, hands the clones here, and copies
+    /// the six result fields back on main; the live record graph is never
+    /// touched off-actor.
+    @concurrent
+    static func analyzeDetached(_ clones: [VideoRecord]) async -> DuplicateAnalysisSummary {
+        analyze(records: clones)
     }
 
     // MARK: - Scoring rules

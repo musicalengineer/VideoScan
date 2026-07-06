@@ -194,17 +194,36 @@ final class VideoScanModel: ObservableObject {
         }
     }
 
+    /// O(1) "any A/V pairs exist" flag for toolbar chrome (Show Pairs
+    /// Only toggle). Body evals used to build the FULL correlatedPairs
+    /// array just to ask isEmpty (2026-07-05 beachball arc).
+    @Published private(set) var hasAnyPairs = false
+
+    /// Cached "Delete duplicates on volume X" menu payload. Was computed
+    /// in ContentView's body — two full-catalog passes with per-record
+    /// volumeRoot() string work, per body evaluation (2026-07-05 arc).
+    @Published private(set) var deletableDupVolumes: [(path: String, count: Int)] = []
+
     /// Immediate recompute — the ONLY place the O(records) count runs.
+    /// Piggybacked (2026-07-05): the pair flag and the deletable-dups
+    /// menu payload ride the same debounced catalog-change pass, so
+    /// chrome reads stay O(1) with no extra invalidation machinery.
     func refreshDossierCountsNow() {
         dossierCountsRecomputeCount += 1
         var dossiered = 0
-        for record in records where record.dossierProcessedAt != nil {
-            dossiered += 1
+        var anyPairs = false
+        for record in records {
+            if record.dossierProcessedAt != nil { dossiered += 1 }
+            if record.pairedWith != nil { anyPairs = true }
         }
         let fresh = DossierCounts(dossiered: dossiered, total: records.count)
         if fresh != dossierCounts {
             dossierCounts = fresh
         }
+        if anyPairs != hasAnyPairs {
+            hasAnyPairs = anyPairs
+        }
+        deletableDupVolumes = volumesWithDeletableDuplicates()
     }
 
     // MARK: - Cached per-volume retire statuses (2026-07-05 beachball fix)

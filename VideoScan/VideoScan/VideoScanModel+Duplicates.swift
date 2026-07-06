@@ -11,7 +11,24 @@ import Foundation
 
 extension VideoScanModel {
 
-    func analyzeDuplicates(selectedIDs: Set<UUID>? = nil) {
+    /// Duplicate analysis under the analysis-ledger contract
+    /// (docs/analysis_ledger_design.md, 2026-07-05):
+    ///
+    ///   - `selectedIDs == nil` (Analyze All): INCREMENTAL. Only records
+    ///     never stamped (`dupAnalyzedAt == nil` — new files, or records
+    ///     invalidated by a content change) are pending. The pass examines
+    ///     the pending delta plus everything it could possibly group with
+    ///     (`DuplicateDetector.affectedSubset`); all other groups are
+    ///     settled history and keep their identity. An unchanged catalog
+    ///     is an instant no-op.
+    ///   - `selectedIDs` non-empty: explicit "redo THESE" — cleared and
+    ///     re-derived (legacy semantics).
+    ///
+    /// The grouping pass runs OFF the main actor over `snapshotClone`d
+    /// records (the CatalogStore off-main contract); results copy back in
+    /// one main-actor batch. Pre-fix, a full-catalog pass ran synchronously
+    /// on main — the "Analyze duplicates on all" beachball (GH #104).
+    func analyzeDuplicates(selectedIDs: Set<UUID>? = nil) async {
         isAnalyzingDuplicates = true
         duplicateStatus = ""
         defer {
@@ -20,31 +37,57 @@ extension VideoScanModel {
                 if self?.isAnalyzingDuplicates == false { self?.duplicateStatus = "" }
             }
         }
+
         let scope: [VideoRecord]
+        let deltaCount: Int
         if let ids = selectedIDs, !ids.isEmpty {
             scope = records.filter { ids.contains($0.id) }
             DuplicateDetector.clear(records: scope)
+            deltaCount = scope.count
         } else {
-            scope = records
+            let active = pfActiveRecords(records)
+            let delta = active.filter { $0.dupAnalyzedAt == nil }
+            guard !delta.isEmpty else {
+                duplicateStatus = "Duplicates up to date"
+                log("Duplicate analysis: nothing new since the last pass — 0 records pending.")
+                return
+            }
+            deltaCount = delta.count
+            scope = DuplicateDetector.affectedSubset(delta: delta, allActive: active)
         }
 
-        duplicateStatus = "Analyzing \(scope.count) files…"
+        duplicateStatus = "Analyzing \(scope.count) files (\(deltaCount) new/changed)…"
 
-        let summary = DuplicateDetector.analyze(records: scope)
+        // Clone on main (snapshotClone contract), group OFF main, copy the
+        // six result fields back in one batch. Position-zipped: the clone
+        // array mirrors `scope` element for element.
+        let clones = scope.map { $0.snapshotClone() }
+        let summary = await DuplicateDetector.analyzeDetached(clones)
+        let stamp = Date()
+        for (original, clone) in zip(scope, clones) {
+            original.duplicateGroupID = clone.duplicateGroupID
+            original.duplicateConfidence = clone.duplicateConfidence
+            original.duplicateDisposition = clone.duplicateDisposition
+            original.duplicateReasons = clone.duplicateReasons
+            original.duplicateBestMatchFilename = clone.duplicateBestMatchFilename
+            original.duplicateGroupCount = clone.duplicateGroupCount
+            // Ledger stamp — including "checked, found unique".
+            original.dupAnalyzedAt = stamp
+        }
 
         duplicateStatus = "\(summary.extraCopies) duplicates in \(summary.groups) groups"
 
         log("""
 
-        Duplicate analysis complete:
+        Duplicate analysis complete (examined \(scope.count) of \(records.count) — \(deltaCount) new/changed):
           \(summary.groups) groups
           \(summary.highConfidenceGroups) high, \(summary.mediumConfidenceGroups) medium, \(summary.lowConfidenceGroups) low confidence
           \(summary.extraCopies) extra copy candidates, \(summary.reviewItems) review items
         """)
 
-        let tmp = records
-        records = []
-        records = tmp
+        // One mutation notification (debounced save + cache invalidation +
+        // view refresh) replaces the records=[]/records=tmp double-republish.
+        NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
     }
 
     /// Delete high-confidence duplicate files on a given volume, but ONLY when

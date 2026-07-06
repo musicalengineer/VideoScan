@@ -88,6 +88,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let duplicateReasons: String
     public let duplicateBestMatchFilename: String
     public let duplicateGroupCount: Int
+    public let dupAnalyzedAt: Date?
     public let sourceHost: String
     public let lifecycleStage: LifecycleStage
     public let mediaDisposition: MediaDisposition
@@ -181,6 +182,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
         duplicateReasons            = r.duplicateReasons
         duplicateBestMatchFilename  = r.duplicateBestMatchFilename
         duplicateGroupCount         = r.duplicateGroupCount
+        dupAnalyzedAt               = r.dupAnalyzedAt
         sourceHost                  = r.sourceHost
         lifecycleStage              = r.lifecycleStage
         mediaDisposition            = r.mediaDisposition
@@ -278,6 +280,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
         try c.encode(duplicateReasons, forKey: .duplicateReasons)
         try c.encode(duplicateBestMatchFilename, forKey: .duplicateBestMatchFilename)
         try c.encode(duplicateGroupCount, forKey: .duplicateGroupCount)
+        try c.encodeIfPresent(dupAnalyzedAt, forKey: .dupAnalyzedAt)
         try c.encode(sourceHost, forKey: .sourceHost)
         try c.encode(lifecycleStage, forKey: .lifecycleStage)
         try c.encode(mediaDisposition, forKey: .mediaDisposition)

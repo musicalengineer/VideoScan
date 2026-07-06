@@ -44,6 +44,7 @@ extension VideoRecord {
         case pairedWithID, pairGroupID, pairConfidence
         case duplicateGroupID, duplicateConfidence, duplicateDisposition
         case duplicateReasons, duplicateBestMatchFilename, duplicateGroupCount
+        case dupAnalyzedAt
         case lifecycleStage, mediaDisposition, archiveStage, masterLocation, backupDestinations
         case junkScore, junkReasons
         case starRating, detectedPeople, suspectedPeople, combinedFromPairID

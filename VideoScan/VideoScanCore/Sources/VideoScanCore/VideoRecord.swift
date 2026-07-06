@@ -100,6 +100,13 @@ public class VideoRecord: Identifiable, Decodable {
     public var duplicateReasons: String = ""
     public var duplicateBestMatchFilename: String = ""
     public var duplicateGroupCount: Int = 0
+    /// Analysis-ledger stamp (2026-07-05): when this record last went
+    /// through duplicate analysis. nil = pending — never analyzed, or
+    /// invalidated by a content change (rescan refresh). "Checked and
+    /// found unique" persists too: a loner is stamped, not re-examined
+    /// on every Analyze click. Legacy catalogs decode as nil = pending —
+    /// exactly the right migration.
+    public var dupAnalyzedAt: Date?
 
     // Media lifecycle
     public var lifecycleStage: LifecycleStage = .cataloged
@@ -342,6 +349,7 @@ public class VideoRecord: Identifiable, Decodable {
         duplicateReasons            = try c.decodeIfPresent(String.self, forKey: .duplicateReasons) ?? ""
         duplicateBestMatchFilename  = try c.decodeIfPresent(String.self, forKey: .duplicateBestMatchFilename) ?? ""
         duplicateGroupCount         = try c.decodeIfPresent(Int.self, forKey: .duplicateGroupCount) ?? 0
+        dupAnalyzedAt               = try c.decodeIfPresent(Date.self, forKey: .dupAnalyzedAt)
         sourceHost                  = try c.decodeIfPresent(String.self, forKey: .sourceHost) ?? ""
         lifecycleStage              = try c.decodeIfPresent(LifecycleStage.self, forKey: .lifecycleStage) ?? .cataloged
         mediaDisposition            = try c.decodeIfPresent(MediaDisposition.self, forKey: .mediaDisposition) ?? .unreviewed

@@ -333,7 +333,7 @@ struct CatalogView: View {
                 videoOnlyCount: streamTypeCounts.videoOnly,
                 audioOnlyCount: streamTypeCounts.audioOnly,
                 hasRecords: !model.records.isEmpty,
-                hasCorrelatedPairs: !model.correlatedPairs.isEmpty,
+                hasCorrelatedPairs: model.hasAnyPairs,
                 outputCSVPath: model.outputCSVPath,
                 selectedIDs: selectedIDs,
                 showCombineSheet: $showCombineSheet,
@@ -361,13 +361,13 @@ struct CatalogView: View {
                 },
                 onAnalyzeDuplicatesAll: {
                     model.log("\nAnalyzing duplicate candidates across all scanned media...")
-                    model.analyzeDuplicates()
+                    Task { await model.analyzeDuplicates() }
                 },
                 onAnalyzeDuplicatesSelected: {
                     model.log("\nAnalyzing duplicate candidates in \(selectedIDs.count) selected files...")
-                    model.analyzeDuplicates(selectedIDs: selectedIDs)
+                    Task { await model.analyzeDuplicates(selectedIDs: selectedIDs) }
                 },
-                volumesWithDeletableDups: model.volumesWithDeletableDuplicates(),
+                volumesWithDeletableDups: model.deletableDupVolumes,
                 onDeleteDuplicates: { path, count in
                     deleteTargetVolume = path
                     deleteTargetCount = count

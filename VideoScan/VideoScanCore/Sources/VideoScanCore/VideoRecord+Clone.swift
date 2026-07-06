@@ -85,6 +85,7 @@ extension VideoRecord {
         c.duplicateReasons = duplicateReasons
         c.duplicateBestMatchFilename = duplicateBestMatchFilename
         c.duplicateGroupCount = duplicateGroupCount
+        c.dupAnalyzedAt = dupAnalyzedAt
         c.lifecycleStage = lifecycleStage
         c.mediaDisposition = mediaDisposition
         c.archiveStage = archiveStage
