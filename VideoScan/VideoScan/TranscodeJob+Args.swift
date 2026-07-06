@@ -30,10 +30,9 @@ extension TranscodeJob {
                                           output: String,
                                           sourceAudioIsPCM: Bool = false) -> [String] {
         switch preset {
-        case .editing:
-            // ProRes 422 HQ via Apple Silicon hardware encoder.
-            //   - prores_videotoolbox profile 3 = 422 HQ (the FCP timeline
-            //     default).
+        case .editingLT, .editing:
+            // ProRes 422 LT/HQ via Apple Silicon hardware encoder.
+            //   - prores_videotoolbox profile 1 = 422 LT; profile 3 = HQ.
             //   - yuv422p10le matches the profile's chroma + bit depth.
             //   - pcm_s24le is the lossless audio FCP expects in a ProRes
             //     timeline source.
@@ -41,6 +40,7 @@ extension TranscodeJob {
             //     so FCP doesn't second-guess the color space.
             //   - +write_colr writes the QuickTime 'colr' atom so
             //     AVFoundation reads the tags back correctly.
+            let profile = preset == .editingLT ? "1" : "3"
             return [
                 "-hide_banner",
                 "-nostdin",
@@ -48,7 +48,7 @@ extension TranscodeJob {
                 "-hwaccel", "videotoolbox",
                 "-i", input,
                 "-c:v", "prores_videotoolbox",
-                "-profile:v", "3",
+                "-profile:v", profile,
                 "-pix_fmt", "yuv422p10le",
                 "-c:a", "pcm_s24le",
                 "-ar", "48000",

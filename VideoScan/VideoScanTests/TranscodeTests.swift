@@ -61,6 +61,22 @@ struct TranscodeTests {
         #expect(adjacentPair(args, "-progress", "pipe:2"))
     }
 
+    @Test("editing LT uses VideoToolbox ProRes profile 1 with PCM audio")
+    func transcodePreset_editingLTArgsContainProResAndPCM() {
+        let args = TranscodeJob.transcodeArgs(
+            preset: .editingLT,
+            input: "/tmp/in.mov",
+            output: "/tmp/out.vs.edit.mov"
+        )
+
+        #expect(args.contains("prores_videotoolbox"))
+        #expect(adjacentPair(args, "-profile:v", "1"),
+                "editing LT must specify profile 1")
+        #expect(args.contains("yuv422p10le"))
+        #expect(args.contains("pcm_s24le"))
+        #expect(adjacentPair(args, "-hwaccel", "videotoolbox"))
+    }
+
     // MARK: - Archival preset
 
     @Test("archival args contain HEVC 10-bit codec, AAC audio, hvc1 tag, faststart, BT.709 color tags")
@@ -100,9 +116,13 @@ struct TranscodeTests {
     @Test("neither preset ever uses -c:a copy (QDM2-trap guard)")
     func transcodePreset_neverPassesThroughAudio() {
         // The historical bug: passing through a dead audio codec like
-        // QDM2 silently produced FCP-unplayable derivatives. Both
-        // presets must hard-code their audio codec (PCM or AAC).
-        for preset in [TranscodePreset.editing, TranscodePreset.archival] {
+        // QDM2 silently produced FCP-unplayable derivatives. Every
+        // playback preset must hard-code its audio codec (PCM or AAC).
+        for preset in [
+            TranscodePreset.editingLT,
+            TranscodePreset.editing,
+            TranscodePreset.archival
+        ] {
             let args = TranscodeJob.transcodeArgs(
                 preset: preset,
                 input: "/tmp/in.mov",
@@ -249,7 +269,11 @@ struct TranscodeTests {
     func transcodePreset_copyAudioOnlyForPreservationPCM() {
         // Editing + archival: never -c:a copy, regardless of the PCM flag
         // (they ignore it — pinning that they ignore it is the point).
-        for preset in [TranscodePreset.editing, TranscodePreset.archival] {
+        for preset in [
+            TranscodePreset.editingLT,
+            TranscodePreset.editing,
+            TranscodePreset.archival
+        ] {
             for pcm in [false, true] {
                 let args = TranscodeJob.transcodeArgs(
                     preset: preset,
@@ -275,8 +299,10 @@ struct TranscodeTests {
 
     // MARK: - fileExtension property
 
-    @Test("fileExtension is mov for editing/archival and mkv for preservation")
+    @Test("fileExtension is mov for editing variants/archival and mkv for preservation")
     func transcodePreset_fileExtension() {
+        #expect(TranscodePreset.editingLT.fileExtension == "mov",
+                "editing LT container must be .mov (ProRes in QuickTime)")
         #expect(TranscodePreset.editing.fileExtension == "mov",
                 "editing container must be .mov (ProRes in QuickTime)")
         #expect(TranscodePreset.archival.fileExtension == "mov",
@@ -292,33 +318,67 @@ struct TranscodeTests {
     // by default, so we hop to the main actor here. (Marking the suite
     // itself MainActor would force the same hop on every test, including
     // the pure args tests above which don't need it.)
-    @Test("output URL ends in .vs.edit.mov for editing preset and .vs.archive.mov for archival preset")
+    @Test("TranscodeJob preserves the explicitly selected destination")
     @MainActor
     func transcodeOutputSuffix() {
-        // Build minimal VideoRecords; we just need fullPath set so the
-        // TranscodeJob init can derive the output URL beside the source.
         let recA = VideoRecord()
         recA.fullPath = "/Volumes/Crucial2TB/family/thanksgiving_1998.mov"
-        let editingJob = TranscodeJob(record: recA, preset: .editing, model: VideoScanModel())
+        let editingURL = URL(fileURLWithPath: "/Volumes/FastSSD/Edits/thanksgiving_1998.vs.edit.mov")
+        let editingJob = TranscodeJob(
+            record: recA,
+            preset: .editing,
+            outputURL: editingURL,
+            model: VideoScanModel()
+        )
         #expect(editingJob.outputURL.lastPathComponent == "thanksgiving_1998.vs.edit.mov",
                 "editing output should be <stem>.vs.edit.mov; got \(editingJob.outputURL.lastPathComponent)")
+        #expect(editingJob.outputURL.deletingLastPathComponent().path == "/Volumes/FastSSD/Edits")
 
         let recB = VideoRecord()
         recB.fullPath = "/Volumes/Crucial2TB/family/thanksgiving_1998.mov"
-        let archivalJob = TranscodeJob(record: recB, preset: .archival, model: VideoScanModel())
+        let archivalJob = TranscodeJob(
+            record: recB,
+            preset: .archival,
+            outputURL: URL(fileURLWithPath: "/tmp/thanksgiving_1998.vs.archive.mov"),
+            model: VideoScanModel()
+        )
         #expect(archivalJob.outputURL.lastPathComponent == "thanksgiving_1998.vs.archive.mov",
                 "archival output should be <stem>.vs.archive.mov; got \(archivalJob.outputURL.lastPathComponent)")
 
         let recC = VideoRecord()
         recC.fullPath = "/Volumes/Crucial2TB/family/thanksgiving_1998.mov"
-        let preserveJob = TranscodeJob(record: recC, preset: .preservation, model: VideoScanModel())
+        let preserveJob = TranscodeJob(
+            record: recC,
+            preset: .preservation,
+            outputURL: URL(fileURLWithPath: "/tmp/thanksgiving_1998.vs.preserve.mkv"),
+            model: VideoScanModel()
+        )
         #expect(preserveJob.outputURL.lastPathComponent == "thanksgiving_1998.vs.preserve.mkv",
                 "preservation output should be <stem>.vs.preserve.mkv; got \(preserveJob.outputURL.lastPathComponent)")
+    }
 
-        // All three must land beside the source.
-        #expect(editingJob.outputURL.deletingLastPathComponent().path == "/Volumes/Crucial2TB/family")
-        #expect(archivalJob.outputURL.deletingLastPathComponent().path == "/Volumes/Crucial2TB/family")
-        #expect(preserveJob.outputURL.deletingLastPathComponent().path == "/Volumes/Crucial2TB/family")
+    @Test("destination naming and extension enforcement match each preset")
+    @MainActor
+    func transcodeDestinationNaming() {
+        let record = VideoRecord()
+        record.fullPath = "/Volumes/SlowHDD/Cape/tape.01.mkv"
+
+        #expect(
+            TranscodeDestination.suggestedFilename(for: record, preset: .editing)
+                == "tape.01.vs.edit.mov"
+        )
+        #expect(
+            TranscodeDestination.enforcingFileExtension(
+                URL(fileURLWithPath: "/Volumes/FastSSD/custom-name.mp4"),
+                preset: .editing
+            ).path == "/Volumes/FastSSD/custom-name.mov"
+        )
+        #expect(
+            TranscodeDestination.enforcingFileExtension(
+                URL(fileURLWithPath: "/Volumes/FastSSD/master.MKV"),
+                preset: .preservation
+            ).path == "/Volumes/FastSSD/master.MKV"
+        )
     }
 
     // MARK: - compareFrameMD5 (safety-critical lossless proof)

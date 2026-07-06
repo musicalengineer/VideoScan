@@ -12,10 +12,13 @@ import Foundation
 /// (`.vs.edit.mov` / `.vs.archive.mov` / `.vs.preserve.mkv`), and the
 /// subtitle text. (Swift's `String`-raw-value enum ≈ a C++ enum class with
 /// a `to_string` member built in.)
-enum TranscodePreset: String {
+enum TranscodePreset: String, CaseIterable, Identifiable {
+    case editingLT
     case editing
     case archival
     case preservation
+
+    var id: String { rawValue }
 
     /// Tag used in the derived-file naming convention.
     ///
@@ -25,6 +28,7 @@ enum TranscodePreset: String {
     /// Finder.
     var codecTag: String {
         switch self {
+        case .editingLT:    return "prores422lt"
         case .editing:      return "prores422hq"
         case .archival:     return "hevc10bit"
         case .preservation: return "ffv1v3"
@@ -35,7 +39,7 @@ enum TranscodePreset: String {
     /// Finder search anchor ("show me all my archive derivatives").
     var purposeTag: String {
         switch self {
-        case .editing:      return "edit"
+        case .editingLT, .editing: return "edit"
         case .archival:     return "archive"
         case .preservation: return "preserve"
         }
@@ -49,7 +53,7 @@ enum TranscodePreset: String {
     /// can't hold FFV1).
     var fileExtension: String {
         switch self {
-        case .editing, .archival: return "mov"
+        case .editingLT, .editing, .archival: return "mov"
         case .preservation:       return "mkv"
         }
     }
@@ -57,6 +61,7 @@ enum TranscodePreset: String {
     /// Live subtitle in the operations window while the encode runs.
     var subtitle: String {
         switch self {
+        case .editingLT:    return "Transcoding to ProRes 422 LT…"
         case .editing:      return "Transcoding to ProRes 422 HQ…"
         case .archival:     return "Transcoding to HEVC 10-bit…"
         case .preservation: return "Encoding FFV1 v3 preservation master…"
@@ -67,9 +72,23 @@ enum TranscodePreset: String {
     /// in the context-menu button.
     var humanLabel: String {
         switch self {
+        case .editingLT:    return "Editing — ProRes 422 LT"
         case .editing:      return "Editing (ProRes 422 HQ)"
         case .archival:     return "Archival (HEVC 10-bit)"
         case .preservation: return "Preservation Master (FFV1 v3, verified)"
+        }
+    }
+
+    var configurationDescription: String {
+        switch self {
+        case .editingLT:
+            return "Recommended for VHS and other standard-definition sources. Fast editing with substantially smaller files than HQ."
+        case .editing:
+            return "Higher data rate for demanding multigeneration or high-detail workflows. Usually unnecessary for VHS."
+        case .archival:
+            return "Compact hardware-encoded HEVC access copy for viewing and sharing. Not an editing intermediate."
+        case .preservation:
+            return "Mathematically lossless FFV1 master with bit-exact verification. Software encoded and much slower."
         }
     }
 }

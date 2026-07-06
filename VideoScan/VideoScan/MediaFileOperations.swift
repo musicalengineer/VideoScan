@@ -382,8 +382,14 @@ final class MediaFileOperationsCenter: ObservableObject {
     @discardableResult
     func startTranscode(record: VideoRecord,
                         preset: TranscodePreset,
+                        outputURL: URL,
                         model: VideoScanModel) -> TranscodeJob {
-        let job = TranscodeJob(record: record, preset: preset, model: model)
+        let job = TranscodeJob(
+            record: record,
+            preset: preset,
+            outputURL: outputURL,
+            model: model
+        )
         add(job)
         job.start()
         fileOpsLog.info("transcode started: \(record.filename, privacy: .public) preset=\(preset.rawValue, privacy: .public) → \(job.outputURL.lastPathComponent, privacy: .public)")

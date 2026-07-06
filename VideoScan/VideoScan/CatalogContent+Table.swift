@@ -359,9 +359,8 @@ extension CatalogContent {
                                   || captionOrchestrator.currentStatus.isActive)
                         .accessibilityIdentifier("catalog.row.analyze")
 
-                        // Transcode — Pass C (Rick 2026-06-14). Two-preset
-                        // faithful conversion: ProRes 422 HQ for FCP edit
-                        // sessions, HEVC 10-bit for long-term archive.
+                        // Transcode — opens a configuration sheet for format
+                        // and destination instead of assuming the source disk.
                         // Disabled when the file is offline OR another
                         // transcode is already running for this same record
                         // (the per-file disable prevents the user from
@@ -373,8 +372,8 @@ extension CatalogContent {
                         let transcodeBlocked = !VolumeReachability.isReachable(path: rec.fullPath)
                             || transcodeRunning
                         Menu("Transcode") {
-                            Button("For Editing (ProRes 422 HQ)") {
-                                requestTranscode(for: rec, preset: .editing)
+                            Button("For Editing…") {
+                                configureTranscode(for: rec, preset: .editingLT)
                             }
                             .disabled(transcodeBlocked)
                             .accessibilityIdentifier("catalog.row.transcodeEditing")
@@ -387,13 +386,13 @@ extension CatalogContent {
                             // intents read as a pair.
                             Menu("For Archival…") {
                                 Button("Access Copy (HEVC 10-bit)") {
-                                    requestTranscode(for: rec, preset: .archival)
+                                    configureTranscode(for: rec, preset: .archival)
                                 }
                                 .disabled(transcodeBlocked)
                                 .accessibilityIdentifier("catalog.row.transcodeArchival")
 
                                 Button("Preservation Master (FFV1 v3, verified)") {
-                                    requestTranscode(for: rec, preset: .preservation)
+                                    configureTranscode(for: rec, preset: .preservation)
                                 }
                                 .disabled(transcodeBlocked)
                                 .accessibilityIdentifier("catalog.row.transcodePreservation")
@@ -741,15 +740,10 @@ extension CatalogContent {
         }
     }
 
-    /// "Transcode" handler — kicks off a TranscodeJob with the chosen
-    /// preset and opens the Media File Operations window so the user
-    /// can watch progress. Pass C (Rick 2026-06-14): no preset sheet —
-    /// the menu's two entries ARE the UI. Lineage (`derivedFrom`) and
-    /// the workspace tint (`workspaceActive = true`) are wired up by
-    /// TranscodeJob.catalogTranscodeOutput.
-    private func requestTranscode(for rec: VideoRecord, preset: TranscodePreset) {
-        fileOpsCenter.startTranscode(record: rec, preset: preset, model: model)
-        openWindow(id: "combine")
+    /// Present the Transcode configuration sheet with a useful initial
+    /// format. The sheet owns destination selection and starts the job.
+    private func configureTranscode(for rec: VideoRecord, preset: TranscodePreset) {
+        transcodeRequest = TranscodeRequest(record: rec, initialPreset: preset)
     }
 
     /// Surface a result alert ONLY when something interesting happened —
@@ -964,4 +958,3 @@ extension CatalogContent {
         }
     }
 }
-

@@ -4,17 +4,16 @@ import os
 
 // MARK: - TranscodeJob
 //
-// "Transcode" — Rick 2026-06-14 (Pass C). Faithful conversion to one of
-// three derivative recipes. Unlike ReformatJob (which deinterlaces +
+// "Transcode" — Rick 2026-06-14 (Pass C). Faithful conversion to an
+// editing, access, or preservation derivative. Unlike ReformatJob (which deinterlaces +
 // denoises + analyses), Transcode does NO filtering and does NOT
 // auto-queue Analyze: the user clicked Transcode because they want a
 // derivative for editing, access, or preservation — auto-analysis would
 // just step on the workflow.
 //
 // Why these presets and not a generic codec picker:
-//   - Editing       → drop into FCP, let FCP own the export. Big file,
-//     deleted after the edit. Wants ProRes 422 HQ + PCM (FCP's preferred
-//     timeline codec on Apple Silicon).
+//   - Editing       → drop into FCP, let FCP own the export. ProRes 422 LT
+//     is the default for VHS; HQ remains available for demanding sources.
 //   - Archival      → "access copy" for everyday viewing / sharing.
 //     Wants HEVC 10-bit (5-10× smaller than ProRes for the same
 //     perceptual quality) + AAC. Universal AVFoundation playback.
@@ -66,12 +65,10 @@ final class TranscodeJob: MediaFileOperationJob {
     /// Which preset's args + suffix this job runs.
     let preset: TranscodePreset
 
-    /// Where the derivative lands. Computed once at init using the
-    /// project-wide DerivedFileNaming convention, then patched to guarantee
-    /// the suffix invariants the TranscodeTests assert (`.vs.edit.mov` for
-    /// editing, `.vs.archive.mov` for archival, `.vs.preserve.mkv` for
-    /// preservation). The extension is preset-driven via
-    /// `TranscodePreset.fileExtension`.
+    /// User-selected destination for the derivative. Transcode output is
+    /// intentionally not derived from the source directory: large ProRes
+    /// writes should be able to target a fast SSD while reading from a slow
+    /// source volume.
     let outputURL: URL
 
     /// Weak refs — the model holds Jobs via MediaFileOperationsCenter, the
@@ -125,23 +122,17 @@ final class TranscodeJob: MediaFileOperationJob {
 
     // MARK: Init / start
 
-    init(record: VideoRecord, preset: TranscodePreset, model: VideoScanModel) {
+    init(
+        record: VideoRecord,
+        preset: TranscodePreset,
+        outputURL: URL,
+        model: VideoScanModel
+    ) {
         self.record = record
         self.preset = preset
+        self.outputURL = outputURL.standardizedFileURL
         self.model = model
         self.subtitleText = preset.subtitle
-
-        // Build a derived URL using the project-wide convention, then
-        // overlay the simple-suffix form the Pass C spec requires. The
-        // extension is preset-driven (`fileExtension`) so the suffix is
-        // `.vs.edit.mov`, `.vs.archive.mov`, or `.vs.preserve.mkv`. We keep
-        // the convention helper for the directory + stem extraction so the
-        // file lands beside the source, with the source's stem.
-        let srcURL = URL(fileURLWithPath: record.fullPath)
-        let stem = srcURL.deletingPathExtension().lastPathComponent
-        let dir = srcURL.deletingLastPathComponent()
-        let suffix = "\(stem).vs.\(preset.purposeTag).\(preset.fileExtension)"
-        self.outputURL = dir.appendingPathComponent(suffix)
     }
 
     /// Start the transcode. Idempotent — a second call is a no-op.

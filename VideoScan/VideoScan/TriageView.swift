@@ -81,6 +81,7 @@ struct TriageView: View {
     // pattern as JunkSheet to avoid chained-.sheet races. Set by the
     // Import button's NSOpenPanel callback once the probe completes.
     @State private var importSheet: WorkspaceImportSheet? = nil
+    @State private var transcodeRequest: TranscodeRequest?
     // Disables the Import button while a probe is in flight so the
     // user can't queue up half-a-dozen overlapping probes by mashing
     // the button.
@@ -375,6 +376,9 @@ struct TriageView: View {
                     }
                 )
             }
+        }
+        .sheet(item: $transcodeRequest) { request in
+            TranscodeSheet(request: request)
         }
     }
 
@@ -704,10 +708,9 @@ struct TriageView: View {
             || transcodeRunning
 
         Menu {
-            Button("For Editing (ProRes 422 HQ)") {
+            Button("For Editing…") {
                 if let r = singleRec {
-                    fileOpsCenter.startTranscode(record: r, preset: .editing, model: model)
-                    openWindow(id: "combine")
+                    configureTranscode(for: r, preset: .editingLT)
                 }
             }
             .disabled(transcodeBlocked)
@@ -718,8 +721,7 @@ struct TriageView: View {
             Menu("For Archival…") {
                 Button("Access Copy (HEVC 10-bit)") {
                     if let r = singleRec {
-                        fileOpsCenter.startTranscode(record: r, preset: .archival, model: model)
-                        openWindow(id: "combine")
+                        configureTranscode(for: r, preset: .archival)
                     }
                 }
                 .disabled(transcodeBlocked)
@@ -727,8 +729,7 @@ struct TriageView: View {
 
                 Button("Preservation Master (FFV1 v3, verified)") {
                     if let r = singleRec {
-                        fileOpsCenter.startTranscode(record: r, preset: .preservation, model: model)
-                        openWindow(id: "combine")
+                        configureTranscode(for: r, preset: .preservation)
                     }
                 }
                 .disabled(transcodeBlocked)
@@ -813,6 +814,10 @@ struct TriageView: View {
     }
 
     // MARK: - Import to Workspace (Pass B)
+
+    private func configureTranscode(for record: VideoRecord, preset: TranscodePreset) {
+        transcodeRequest = TranscodeRequest(record: record, initialPreset: preset)
+    }
 
     /// Drives the full import flow: NSOpenPanel → ffprobe → lineage sheet.
     /// Single-file only this pass — see spec "Out of scope: multi-file".

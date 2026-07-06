@@ -97,6 +97,8 @@ struct CatalogContent: View {
     /// Internal (not private): set by the row context menu in
     /// CatalogContent+Table.swift.
     @State var ripAllFramesTarget: VideoRecord?
+    /// Non-nil presents format + destination choices before a transcode.
+    @State var transcodeRequest: TranscodeRequest?
 
     /// "Find Online Version" came up empty — non-nil drives an alert
     /// explaining where copies exist (all offline) or that this is the
@@ -410,6 +412,9 @@ struct CatalogContent: View {
         // present/dismiss cycle directly.
         .sheet(item: $ripAllFramesTarget) { rec in
             RipAllFramesSheet(record: rec)
+        }
+        .sheet(item: $transcodeRequest) { request in
+            TranscodeSheet(request: request)
         }
         .alert(
             "Find Online Version",
@@ -818,4 +823,3 @@ enum MediaOpener {
                                 configuration: NSWorkspace.OpenConfiguration())
     }
 }
-
