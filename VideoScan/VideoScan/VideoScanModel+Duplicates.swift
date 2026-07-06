@@ -64,7 +64,11 @@ extension VideoScanModel {
         let clones = scope.map { $0.snapshotClone() }
         let summary = await DuplicateDetector.analyzeDetached(clones)
         let stamp = Date()
+        // QA P2-3: a record pruned during the await gets no ghost writes
+        // and no stamp (symmetric with the correlate atomicity guard).
+        let liveInstances = Set(records.map(ObjectIdentifier.init))
         for (original, clone) in zip(scope, clones) {
+            guard liveInstances.contains(ObjectIdentifier(original)) else { continue }
             original.duplicateGroupID = clone.duplicateGroupID
             original.duplicateConfidence = clone.duplicateConfidence
             original.duplicateDisposition = clone.duplicateDisposition

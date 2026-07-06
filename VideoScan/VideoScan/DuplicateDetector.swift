@@ -234,41 +234,56 @@ enum DuplicateDetector {
 
     // MARK: - Analysis-ledger support (2026-07-05)
 
-    /// The minimal re-analysis subset for a pending delta: the delta
-    /// records themselves, every active record sharing a bucket key with
-    /// one (a potential new partner), and the FULL existing group of any
-    /// such record — a partial group re-derivation would fragment group
-    /// identities. Everything outside this subset provably cannot change,
-    /// so its groups are never touched (docs/analysis_ledger_design.md).
+    /// The re-analysis subset for a pending delta: the delta records plus
+    /// the TRANSITIVE closure of bucket-key adjacency (grouping walks
+    /// connected components, so one hop is not enough — QA P1-3), plus the
+    /// FULL existing group of every included record (a partial group
+    /// re-derivation would fragment identities). Everything outside this
+    /// closure provably cannot change: a record with no bucket-key chain
+    /// to any delta record can never share a component with it.
     static func affectedSubset(delta: [VideoRecord],
                                allActive: [VideoRecord]) -> [VideoRecord] {
         guard !delta.isEmpty else { return [] }
-        var deltaKeys = Set<String>()
+        // Index once: bucket key → member indices, and per-record keys.
+        var byKey: [String: [Int]] = [:]
+        var keysOf: [[String]] = []
+        keysOf.reserveCapacity(allActive.count)
+        for (i, r) in allActive.enumerated() {
+            let keys = bucketKeys(r)
+            keysOf.append(keys)
+            for k in keys { byKey[k, default: []].append(i) }
+        }
+        var indexOfID: [UUID: Int] = [:]
+        for (i, r) in allActive.enumerated() { indexOfID[r.id] = i }
+
+        // BFS over bucket-key adjacency to a fixpoint.
+        var includedIdx = Set<Int>()
+        var frontier: [Int] = []
+        for r in delta {
+            guard let i = indexOfID[r.id], includedIdx.insert(i).inserted else { continue }
+            frontier.append(i)
+        }
+        var visitedKeys = Set<String>()
         var affectedGroupIDs = Set<UUID>()
-        var included = Set<UUID>()
-        var out: [VideoRecord] = []
-        for r in delta where included.insert(r.id).inserted {
-            out.append(r)
-            for k in bucketKeys(r) { deltaKeys.insert(k) }
-            // An invalidated record that WAS grouped drags its old group in.
-            if let g = r.duplicateGroupID { affectedGroupIDs.insert(g) }
-        }
-        for r in allActive where !included.contains(r.id) {
-            if bucketKeys(r).contains(where: deltaKeys.contains) {
-                included.insert(r.id)
-                out.append(r)
-                if let g = r.duplicateGroupID { affectedGroupIDs.insert(g) }
-            }
-        }
-        if !affectedGroupIDs.isEmpty {
-            for r in allActive where !included.contains(r.id) {
-                if let g = r.duplicateGroupID, affectedGroupIDs.contains(g) {
-                    included.insert(r.id)
-                    out.append(r)
+        while let i = frontier.popLast() {
+            if let g = allActive[i].duplicateGroupID { affectedGroupIDs.insert(g) }
+            for key in keysOf[i] where visitedKeys.insert(key).inserted {
+                for j in byKey[key] ?? [] where includedIdx.insert(j).inserted {
+                    frontier.append(j)
                 }
             }
         }
-        return out
+        // Pull the FULL groups of everything reached (group members with
+        // no shared bucket key — e.g. star members admitted via a key the
+        // delta chain didn't touch — must still re-derive together).
+        if !affectedGroupIDs.isEmpty {
+            for (i, r) in allActive.enumerated() where !includedIdx.contains(i) {
+                if let g = r.duplicateGroupID, affectedGroupIDs.contains(g) {
+                    includedIdx.insert(i)
+                }
+            }
+        }
+        return includedIdx.sorted().map { allActive[$0] }
     }
 
     /// Run `analyze` OFF the main actor over exclusively-owned clones

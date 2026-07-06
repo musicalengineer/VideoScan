@@ -123,6 +123,52 @@ struct DuplicateLedgerTests {
         #expect(a.duplicateGroupID != nil && a.duplicateGroupID == b.duplicateGroupID,
                 "Explicit selection re-derives the subset (fresh group id is fine — the user asked for a redo)")
     }
+    // MARK: - 7. affectedSubset walks bucket adjacency TRANSITIVELY (QA P1-3)
+
+    @Test func affectedSubsetIncludesTransitiveBucketNeighbors() {
+        // A(delta) shares a stem key with B; B shares an md5 key with C;
+        // C shares NOTHING with A. Grouping walks connected components,
+        // so C's disposition can change — it must be in the subset.
+        let a = makeTwin("family tape.mov", md5: "k1", size: 1111)
+        let b = makeTwin("family tape copy.mov", md5: "k2", size: 2222, dir: "/vol/b")
+        let c = makeTwin("othername.mov", md5: "k2", size: 2222, dir: "/vol/c")
+        b.dupAnalyzedAt = Date()
+        c.dupAnalyzedAt = Date()
+
+        let subset = DuplicateDetector.affectedSubset(delta: [a], allActive: [a, b, c])
+        let ids = Set(subset.map(\.id))
+        #expect(ids.contains(a.id) && ids.contains(b.id),
+                "One-hop neighbors must be included")
+        #expect(ids.contains(c.id),
+                "TRANSITIVE neighbor (via B's second bucket key) must be included — a one-hop expansion elects keepers over truncated components (QA P1-3)")
+    }
+
+    // MARK: - 8. The mutation notification refreshes chrome caches (QA P0-1)
+
+    @Test func catalogMutatedNotificationRefreshesChromeCaches() async throws {
+        let model = VideoScanModel()
+        let v = makeTwin("v.mxf", md5: "n1")
+        v.streamTypeRaw = StreamType.videoOnly.rawValue
+        let a = makeTwin("a.mxf", md5: "n2")
+        a.streamTypeRaw = StreamType.audioOnly.rawValue
+        model.records = [v, a]
+        // Let the didSet-triggered debounce settle with NO pairs.
+        try await Task.sleep(nanoseconds: 400_000_000)
+        #expect(model.hasAnyPairs == false)
+
+        // Field-level pair mutation (what the ledger correlators do) +
+        // the notification they post — NO array republish.
+        v.pairedWith = a; a.pairedWith = v
+        NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
+        var refreshed = false
+        for _ in 0..<20 {   // debounce is 250 ms; allow up to 1 s
+            try await Task.sleep(nanoseconds: 50_000_000)
+            if model.hasAnyPairs { refreshed = true; break }
+        }
+        #expect(refreshed,
+                "The catalog-mutated notification must refresh the chrome caches — the ledger paths publish through it, not through array didSet (QA P0-1)")
+    }
+
     // MARK: - 6. Chrome flags ride the debounced pass — never view bodies
 
     @Test func cachedChromeFlagsUpdateOnCatalogRefresh() async {

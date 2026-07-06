@@ -219,10 +219,11 @@ extension CorrelationScorer {
     }
 
     /// Clip-ID grouping + best-copy selection, off the main actor (the
-    /// reachability probe stats every candidate path — kernel I/O that
-    /// has NO business on the main thread). Ledger semantics: a clip with
-    /// ANY paired member is settled — skipped entirely, preserving the
-    /// legacy one-pair-per-clip invariant across incremental runs.
+    /// reachability answers come from the SWR cache — cheap — but the
+    /// regex grouping over every filename is still CPU the main thread
+    /// shouldn't pay). Ledger semantics: a clip with ANY paired member is
+    /// settled — skipped entirely, preserving the legacy one-pair-per-clip
+    /// invariant across incremental runs.
     @concurrent
     static func assignAvidPairs(_ snaps: [AvidSnap]) async -> AvidResult {
         var videosByClip: [String: [AvidSnap]] = [:]
@@ -236,14 +237,19 @@ extension CorrelationScorer {
             }
         }
 
+        // QA P2-1: reachability is answered ONCE per candidate before the
+        // sort — a background SWR-cache refresh flipping mid-comparison
+        // would violate strict weak ordering (the std::sort-with-
+        // inconsistent-operator< hazard).
         func bestSnapCopy(_ candidates: [AvidSnap]) -> AvidSnap? {
-            candidates.sorted { a, b in
-                let aOnline = VolumeReachability.isReachable(path: a.fullPath)
-                let bOnline = VolumeReachability.isReachable(path: b.fullPath)
-                if aOnline != bOnline { return aOnline }
-                if a.isPlayable != b.isPlayable { return a.isPlayable == "Yes" }
-                return a.sizeBytes > b.sizeBytes
-            }.first
+            let ranked = candidates.map {
+                (snap: $0, online: VolumeReachability.isReachable(path: $0.fullPath))
+            }
+            return ranked.sorted { a, b in
+                if a.online != b.online { return a.online }
+                if a.snap.isPlayable != b.snap.isPlayable { return a.snap.isPlayable == "Yes" }
+                return a.snap.sizeBytes > b.snap.sizeBytes
+            }.first?.snap
         }
 
         let allClipIDs = Set(videosByClip.keys).union(audiosByClip.keys)

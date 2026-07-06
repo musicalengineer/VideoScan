@@ -231,6 +231,13 @@ enum CorrelationScorer {
 
     /// Select records to re-correlate (all or the selected subset) and clear
     /// their prior pairing so they can be re-paired from scratch.
+    ///
+    /// QA P1-2 (2026-07-05): clearing a selected record must also clear its
+    /// PARTNER's back-reference, even when the partner is outside the
+    /// selection — otherwise the partner dangles as "paired" forever under
+    /// the incremental ledger (legacy full recompute used to self-heal
+    /// this; nothing does now). The freed partner honestly returns to
+    /// "pending" for the next incremental pass.
     static func resolveCorrelateScope(
         records: [VideoRecord],
         selectedIDs: Set<UUID>?
@@ -242,6 +249,11 @@ enum CorrelationScorer {
             scope = records
         }
         for r in scope {
+            if let partner = r.pairedWith, partner.pairedWith === r {
+                partner.pairedWith = nil
+                partner.pairGroupID = nil
+                partner.pairConfidence = nil
+            }
             r.pairedWith = nil
             r.pairGroupID = nil
             r.pairConfidence = nil

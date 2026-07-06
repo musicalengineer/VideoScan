@@ -139,6 +139,26 @@ struct CorrelateLedgerTests {
         #expect(nv.pairedWith === na, "…and rebuilds evidence-based pairs")
     }
 
+    // MARK: - 5b. Selected redo frees the unselected partner (QA P1-2)
+
+    @Test func correlateSelectedClearsPartnerBackReferenceOutsideSelection() async {
+        let model = VideoScanModel()
+        let (v, a) = makeAV(filenameV: "V0EE55.mxf", filenameA: "A0EE55.mxf")
+        let gid = UUID()
+        v.pairedWith = a; v.pairGroupID = gid; v.pairConfidence = .low
+        a.pairedWith = v; a.pairGroupID = gid; a.pairConfidence = .low
+        model.records = [v, a]
+
+        // Redo ONLY the video: with no candidates in scope it stays
+        // unpaired — and the audio must NOT dangle at the old instance.
+        await model.correlate(selectedIDs: [v.id])
+
+        #expect(v.pairedWith == nil, "Selected record cleared and (no candidates in scope) unpaired")
+        #expect(a.pairedWith == nil,
+                "The unselected partner's back-reference must be freed — a dangling 'settled' partner can never re-pair under the incremental ledger (QA P1-2)")
+        #expect(a.pairGroupID == nil && a.pairConfidence == nil)
+    }
+
     // MARK: - 6. Avid cross-volume correlator under the ledger
 
     private func makeAvid(_ name: String, dir: String, video: Bool,

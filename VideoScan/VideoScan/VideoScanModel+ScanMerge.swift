@@ -322,6 +322,22 @@ extension VideoScanModel {
                                  genuinelyGone: &genuinelyGone,
                                  outcome: &outcome)
 
+        // QA P1-4 (2026-07-05, analysis-ledger): pairs must survive the
+        // re-seen replacement below (fresh instances carry no pair fields
+        // — RescanPreservedFields never covered them), and a genuinely
+        // pruned record's partner must return HONESTLY to "pending"
+        // rather than dangling as "settled" forever under the incremental
+        // correlate. Capture before the sweep, rewire after the append.
+        let pairCarry = capturePairCarryover(existingUnderRoot: existingUnderRoot,
+                                             newPaths: newPaths)
+        for rec in genuinelyGone {
+            if let partner = rec.pairedWith, partner.pairedWith === rec {
+                partner.pairedWith = nil
+                partner.pairGroupID = nil
+                partner.pairConfidence = nil
+            }
+        }
+
         // Remove only what the scan re-saw (replaced by the fresh instance)
         // or what is genuinely gone from disk — retained-invisible records
         // stay untouched (original instances, so their dossier/user fields
@@ -346,9 +362,82 @@ extension VideoScanModel {
             // ONE summary line per merge (fa24921) — never per-record spam.
             log("  ↪ \(adoptions.count) record(s) followed their files to new locations (rename/move detected — catalog identity, dossier and tags preserved).")
         }
+        let pairsCarried = rewirePairCarryover(pairCarry, targetRecords: targetRecords)
+        if pairsCarried > 0 {
+            log("  ↪ \(pairsCarried) A/V pairing(s) carried across the rescan (pair identity preserved).")
+        }
         scanMergeLog.info("Scan merge for \(volName, privacy: .public): +\(targetRecords.count) upserted (\(outcome.refreshed) refreshed), \(genuinelyGone.count) pruned, \(adoptions.count) moved, \(retainedInvisible.count) retained-invisible under \(root, privacy: .public)")
         appLog.write("Catalog merge (\(volName)): \(targetRecords.count) upserted (\(outcome.refreshed) refreshed), \(genuinelyGone.count) pruned, \(adoptions.count) moved (followed their files), \(retainedInvisible.count) retained (files on disk, invisible to scan options)")
         return outcome
+    }
+
+    // MARK: - Pair carryover across record replacement (QA P1-4, 2026-07-05)
+
+    /// One re-seen record's pair wiring, captured before the replace sweep.
+    private struct PairCarry {
+        let partner: VideoRecord    // OLD partner instance (may itself be replaced)
+        let partnerPath: String
+        let gid: UUID?
+        let confidence: PairConfidence?
+    }
+
+    /// Capture the pair wiring of every re-seen record (keyed by path —
+    /// the fresh instance lands at the same path).
+    private func capturePairCarryover(
+        existingUnderRoot: [VideoRecord],
+        newPaths: Set<String>
+    ) -> [String: PairCarry] {
+        var carry: [String: PairCarry] = [:]
+        for rec in existingUnderRoot where newPaths.contains(rec.fullPath) {
+            if let partner = rec.pairedWith {
+                carry[rec.fullPath] = PairCarry(partner: partner,
+                                                partnerPath: partner.fullPath,
+                                                gid: rec.pairGroupID,
+                                                confidence: rec.pairConfidence)
+            }
+        }
+        return carry
+    }
+
+    /// Rewire captured pairs onto the post-merge instances. The partner
+    /// resolves to its OWN fresh replacement when both sides were re-seen,
+    /// or to the surviving original (cross-root partner). A partner that
+    /// was pruned this merge stays unwired — the pair dies honestly and
+    /// both sides read as pending. Idempotent under the both-sides double
+    /// visit (second direction sees pairedWith already set and skips).
+    /// Returns the number of pairings wired.
+    private func rewirePairCarryover(
+        _ carry: [String: PairCarry],
+        targetRecords: [VideoRecord]
+    ) -> Int {
+        guard !carry.isEmpty else { return 0 }
+        var freshByPath: [String: VideoRecord] = [:]
+        freshByPath.reserveCapacity(targetRecords.count)
+        for r in targetRecords { freshByPath[r.fullPath] = r }
+        let liveInstances = Set(records.map(ObjectIdentifier.init))
+        var wired = 0
+        for (path, c) in carry {
+            guard let fresh = freshByPath[path],
+                  liveInstances.contains(ObjectIdentifier(fresh)),
+                  fresh.pairedWith == nil else { continue }
+            let partner: VideoRecord
+            if let freshPartner = freshByPath[c.partnerPath],
+               liveInstances.contains(ObjectIdentifier(freshPartner)) {
+                partner = freshPartner
+            } else if liveInstances.contains(ObjectIdentifier(c.partner)) {
+                partner = c.partner
+            } else {
+                continue    // partner pruned this merge — pair dies honestly
+            }
+            fresh.pairedWith = partner
+            fresh.pairGroupID = c.gid
+            fresh.pairConfidence = c.confidence
+            partner.pairedWith = fresh
+            partner.pairGroupID = c.gid
+            partner.pairConfidence = c.confidence
+            wired += 1
+        }
+        return wired
     }
 
     /// Partial scan (aborted mid-probe). Evidence is incomplete, so pruning
@@ -371,10 +460,18 @@ extension VideoScanModel {
         let vanished = existingUnderRoot.filter { !newPaths.contains($0.fullPath) }
         outcome.refreshed = existingUnderRoot.count - vanished.count
         outcome.retainedStale = vanished.count
+        // QA P1-4: pairs survive the re-seen replacement on the partial
+        // path too (no pruning here, so no partner-clearing needed).
+        let pairCarry = capturePairCarryover(existingUnderRoot: existingUnderRoot,
+                                             newPaths: newPaths)
         records.removeAll {
             PathScope.contains($0.fullPath, within: root) && newPaths.contains($0.fullPath)
         }
         records.append(contentsOf: targetRecords)
+        let pairsCarried = rewirePairCarryover(pairCarry, targetRecords: targetRecords)
+        if pairsCarried > 0 {
+            log("  ↪ \(pairsCarried) A/V pairing(s) carried across the partial rescan.")
+        }
         if !vanished.isEmpty {
             log("  ⚠ Scan of \(volName) did not complete — kept \(vanished.count) existing record(s) under \(root) that were not re-verified (no pruning on partial scans).")
         }

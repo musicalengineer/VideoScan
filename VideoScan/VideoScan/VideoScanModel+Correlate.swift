@@ -133,9 +133,12 @@ extension VideoScanModel {
         // Apply in ONE main-actor batch. The catalog may have moved during
         // the await — a record that got paired or removed in the meantime
         // is skipped (its pairing is settled; ours is stale evidence).
+        // QA P1-1: build the map from the CURRENT records array, never the
+        // pre-await snapshot — a record pruned during the suspension must
+        // not be re-paired into the catalog as a ghost.
         var byID: [UUID: VideoRecord] = [:]
-        byID.reserveCapacity(needsPairing.count)
-        for r in needsPairing { byID[r.id] = r }
+        byID.reserveCapacity(records.count)
+        for r in records { byID[r.id] = r }
         var applied = 0
         var runHigh = 0, runMed = 0, runLow = 0
         var pairLogLines: [String] = []
@@ -182,12 +185,19 @@ extension VideoScanModel {
     /// 2026-07-05): wipe EVERY pair — including manual ones — and
     /// re-derive the world. This is the only sanctioned full recompute;
     /// `correlate()` itself is incremental.
+    ///
+    /// QA P1-5: the redo runs the HIGH-confidence Avid clip-ID pass FIRST
+    /// (best-copy election, one-pair-per-clip), then the fuzzy scorer over
+    /// the remainder — otherwise the fuzzy pass greedily pairs every MXF
+    /// copy and those degraded pairs would then read as "settled" to the
+    /// Avid pass forever.
     func clearAndRecorrelateAll() async {
         for r in records {
             r.pairedWith = nil
             r.pairGroupID = nil
             r.pairConfidence = nil
         }
+        await correlateAcrossVolumes()
         await correlate()
     }
 }

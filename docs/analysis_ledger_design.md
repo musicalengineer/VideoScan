@@ -66,6 +66,14 @@ For every derived fact `F(record)` or relation `R(record, record)`:
 Everything not listed: **keep**. When in doubt: keep, and give the user
 an explicit re-analyze action.
 
+Implementation status (2026-07-05): "record pruned → partner returns to
+pending" is implemented for A/V pairs (scan-merge clears the survivor's
+back-reference; QA P1-4). "Record pruned → dup group shrinks" is
+**deferred**: surviving group members keep a stale
+`duplicateGroupCount`/`duplicateBestMatchFilename` until something else
+invalidates them. Tracked for a follow-up; the deletion policy is
+unaffected (keeper lookups re-check membership at delete time).
+
 ## Immich patterns we adopt (from docs/immich_ideas.md, verified against source 2026-06-20)
 
 - **QueueAll → per-asset jobs**: "analyze everything" enqueues only assets

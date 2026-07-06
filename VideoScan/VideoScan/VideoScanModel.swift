@@ -223,7 +223,17 @@ final class VideoScanModel: ObservableObject {
         if anyPairs != hasAnyPairs {
             hasAnyPairs = anyPairs
         }
-        deletableDupVolumes = volumesWithDeletableDuplicates()
+        // QA P2-2: diff before publishing — tuples aren't Equatable, so
+        // compare element-wise rather than invalidating dependents on
+        // every debounced tick.
+        let freshDeletable = volumesWithDeletableDuplicates()
+        let changed = freshDeletable.count != deletableDupVolumes.count
+            || !zip(freshDeletable, deletableDupVolumes).allSatisfy {
+                $0.path == $1.path && $0.count == $1.count
+            }
+        if changed {
+            deletableDupVolumes = freshDeletable
+        }
     }
 
     // MARK: - Cached per-volume retire statuses (2026-07-05 beachball fix)
@@ -554,6 +564,12 @@ final class VideoScanModel: ObservableObject {
         ) { [weak self] _ in
             self?.saveCatalogDebounced()
             self?.noteVolumeStatusesStale()
+            // QA P0-1 (2026-07-05): the correlate/duplicate ledger paths
+            // publish through THIS notification instead of republishing the
+            // records array — the debounced chrome caches (dossierCounts,
+            // hasAnyPairs, deletableDupVolumes) must refresh here too, or
+            // "Show Pairs Only" / the delete-dups menu go stale.
+            self?.noteCatalogChangedForDossierCounts()
             self?.objectWillChange.send()
         }
         // When scans hit the RAM floor (MemoryPressureMonitor auto-pause),
