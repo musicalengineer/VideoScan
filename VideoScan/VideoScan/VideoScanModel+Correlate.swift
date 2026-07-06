@@ -99,61 +99,113 @@ extension VideoScanModel {
         records = tmp
     }
 
-    /// Correlate all records, or only those whose IDs are in `selectedIDs` (if non-nil/non-empty).
-    func correlate(selectedIDs: Set<UUID>? = nil) {
+    /// Correlate under the analysis-ledger contract
+    /// (docs/analysis_ledger_design.md, 2026-07-05):
+    ///
+    ///   - `selectedIDs == nil` (Correlate All): INCREMENTAL. Existing
+    ///     pairs are settled history — only unpaired A/V-only orphans are
+    ///     scored. Re-running after a scan processes just the delta; an
+    ///     unchanged catalog is a fast no-op. The record IS the ledger
+    ///     row: `pairedWith == nil` means "correlation pending".
+    ///   - `selectedIDs` non-empty: the user's explicit "redo THESE" —
+    ///     the selection is cleared and re-derived (legacy semantics).
+    ///   - Full from-scratch redo: `clearAndRecorrelateAll()` only.
+    ///
+    /// Scoring runs OFF the main actor (CorrelationScorer.assignPairs,
+    /// @concurrent) over value snapshots; assignments apply back here in
+    /// one batch. Pre-fix this loop blocked the main thread 15.3 s at a
+    /// mere 12k records (CorrelateLedgerPerfTests RED run) — a minute+
+    /// at catalog scale, all beachball.
+    func correlate(selectedIDs: Set<UUID>? = nil) async {
         isCorrelating = true
         correlateStatus = ""
         defer { isCorrelating = false }
 
-        let scope = CorrelationScorer.resolveCorrelateScope(records: records, selectedIDs: selectedIDs)
-        let needsPairing = scope.filter { $0.streamType.needsCorrelation }
-        let allVideos = needsPairing.filter { $0.streamType == .videoOnly }
-        let allAudios = needsPairing.filter { $0.streamType == .audioOnly }
-
-        correlateStatus = "\(allVideos.count) video + \(allAudios.count) audio candidates"
-        log("  Correlating \(allVideos.count) video-only + \(allAudios.count) audio-only files...")
-
-        let pools = CorrelationScorer.buildAudioPools(from: allAudios)
-        var candidates: [CorrelationScorer.Candidate] = []
-        for v in allVideos {
-            let vKey = CorrelationScorer.filenameCorrelationKey(v.filename)
-            let audioPool = CorrelationScorer.gatherCandidateAudios(
-                for: v, vKey: vKey, allAudios: allAudios,
-                byKey: pools.byKey, byDir: pools.byDir,
-                durationTolerance: Self.durationTolerance,
-                timestampTolerance: Self.timestampTolerance
-            )
-            for a in audioPool {
-                if let candidate = CorrelationScorer.scoreCorrelatePair(
-                    video: v, audio: a, vKey: vKey,
-                    durationTolerance: Self.durationTolerance,
-                    timestampTolerance: Self.timestampTolerance
-                ) {
-                    candidates.append(candidate)
-                }
+        let needsPairing: [VideoRecord]
+        if let ids = selectedIDs, !ids.isEmpty {
+            // Explicit selection: clear + re-derive that subset.
+            let subset = CorrelationScorer.resolveCorrelateScope(records: records,
+                                                                 selectedIDs: ids)
+            needsPairing = subset.filter { $0.streamType.needsCorrelation }
+        } else {
+            // Incremental: unpaired orphans only. No clearing, ever.
+            needsPairing = records.filter {
+                $0.streamType.needsCorrelation && $0.pairedWith == nil
             }
         }
+        let videoSnaps = needsPairing.filter { $0.streamType == .videoOnly }
+            .map(CorrelationScorer.snap)
+        let audioSnaps = needsPairing.filter { $0.streamType == .audioOnly }
+            .map(CorrelationScorer.snap)
 
-        var matched = Set<UUID>()
-        let logLines = CorrelationScorer.assignCandidates(candidates, matched: &matched)
-        for line in logLines { log(line) }
+        correlateStatus = "\(videoSnaps.count) video + \(audioSnaps.count) audio candidates"
+        log("  Correlating \(videoSnaps.count) video-only + \(audioSnaps.count) audio-only files (existing pairs preserved)...")
 
-        let totalPairs     = matched.count / 2
-        let highCount      = records.filter { $0.pairConfidence == .high }.count / 2
-        let medCount       = records.filter { $0.pairConfidence == .medium }.count / 2
-        let lowCount       = records.filter { $0.pairConfidence == .low }.count / 2
-        let stillUnmatched = needsPairing.filter { !matched.contains($0.id) }.count
-        correlateStatus = "\(totalPairs) pairs · \(stillUnmatched) unmatched"
+        // Heavy pass off the main actor.
+        let assignments = await CorrelationScorer.assignPairs(
+            videos: videoSnaps, audios: audioSnaps,
+            durationTolerance: Self.durationTolerance,
+            timestampTolerance: Self.timestampTolerance
+        )
+
+        // Apply in ONE main-actor batch. The catalog may have moved during
+        // the await — a record that got paired or removed in the meantime
+        // is skipped (its pairing is settled; ours is stale evidence).
+        var byID: [UUID: VideoRecord] = [:]
+        byID.reserveCapacity(needsPairing.count)
+        for r in needsPairing { byID[r.id] = r }
+        var applied = 0
+        var runHigh = 0, runMed = 0, runLow = 0
+        var pairLogLines: [String] = []
+        for asg in assignments {
+            guard let v = byID[asg.videoID], let a = byID[asg.audioID],
+                  v.pairedWith == nil, a.pairedWith == nil else { continue }
+            let gid = UUID()
+            v.pairedWith = a
+            v.pairGroupID = gid
+            v.pairConfidence = asg.confidence
+            a.pairedWith = v
+            a.pairGroupID = gid
+            a.pairConfidence = asg.confidence
+            applied += 1
+            switch asg.confidence {
+            case .high: runHigh += 1
+            case .medium: runMed += 1
+            case .low: runLow += 1
+            }
+            pairLogLines.append("  Paired [\(asg.confidence.rawValue)] (\(asg.reasons.joined(separator: "+"))): \(asg.videoFilename)  \u{2194}  \(asg.audioFilename)")
+        }
+        // Narrate as ONE log call — per-line log() published the console
+        // per pair (the 10ae1be feedback-storm class).
+        if !pairLogLines.isEmpty {
+            log(pairLogLines.joined(separator: "\n"))
+        }
+
+        let stillUnmatched = needsPairing.filter { $0.pairedWith == nil }.count
+        correlateStatus = "\(applied) new pairs · \(stillUnmatched) unmatched"
         log("""
 
-        Correlation complete:
-          \(totalPairs) pairs — \(highCount) high, \(medCount) medium, \(lowCount) low confidence
-          \(stillUnmatched) unmatched
+        Correlation complete (incremental):
+          \(applied) new pairs — \(runHigh) high, \(runMed) medium, \(runLow) low confidence
+          \(stillUnmatched) orphans remain pending (re-run after more media is ingested)
         """)
 
-        // Force table refresh
-        let tmp = records
-        records = []
-        records = tmp
+        // One mutation notification replaces the records=[]/records=tmp
+        // double-republish: debounced catalog save + dependent-cache
+        // invalidation + view refresh all hang off it.
+        NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
+    }
+
+    /// The explicit from-scratch action (analysis-ledger design,
+    /// 2026-07-05): wipe EVERY pair — including manual ones — and
+    /// re-derive the world. This is the only sanctioned full recompute;
+    /// `correlate()` itself is incremental.
+    func clearAndRecorrelateAll() async {
+        for r in records {
+            r.pairedWith = nil
+            r.pairGroupID = nil
+            r.pairConfidence = nil
+        }
+        await correlate()
     }
 }

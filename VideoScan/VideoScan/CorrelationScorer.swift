@@ -110,29 +110,19 @@ enum CorrelationScorer {
         durationTolerance: Double,
         timestampTolerance: TimeInterval
     ) -> Candidate? {
-        var score = 0
-        var reasons: [String] = []
-
-        if vKey == filenameCorrelationKey(audio.filename) { score += 4; reasons.append("filename") }
-        if video.durationSeconds > 0 && audio.durationSeconds > 0 &&
-           abs(video.durationSeconds - audio.durationSeconds) <= durationTolerance {
-            score += 3; reasons.append("duration")
-        }
-        if let vDate = video.dateCreatedRaw, let aDate = audio.dateCreatedRaw,
-           abs(vDate.timeIntervalSince(aDate)) <= timestampTolerance {
-            score += 3; reasons.append("timestamp")
-        }
-        if !video.timecode.isEmpty && video.timecode == audio.timecode {
-            score += 2; reasons.append("timecode")
-        }
-        if video.directory == audio.directory { score += 1; reasons.append("directory") }
-        if !video.tapeName.isEmpty && video.tapeName == audio.tapeName {
-            score += 1; reasons.append("tape")
-        }
-        guard score >= 3 else { return nil }
-
-        let confidence: PairConfidence
-        if score >= 7 { confidence = .high } else if score >= 4 { confidence = .medium } else { confidence = .low }
+        // Delegates to the shared rubric in CorrelationScorer+Snaps.swift
+        // (2026-07-05) — the record path and the off-main snap path must
+        // never drift apart.
+        guard let (score, confidence, reasons) = scoreParts(
+            vKey: vKey, audioFilename: audio.filename,
+            vDuration: video.durationSeconds, aDuration: audio.durationSeconds,
+            vDate: video.dateCreatedRaw, aDate: audio.dateCreatedRaw,
+            vTimecode: video.timecode, aTimecode: audio.timecode,
+            vDirectory: video.directory, aDirectory: audio.directory,
+            vTape: video.tapeName, aTape: audio.tapeName,
+            durationTolerance: durationTolerance,
+            timestampTolerance: timestampTolerance
+        ) else { return nil }
         return Candidate(
             video: video, audio: audio,
             score: score, confidence: confidence, reasons: reasons

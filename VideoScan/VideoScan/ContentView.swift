@@ -343,11 +343,11 @@ struct CatalogView: View {
                 onStopCombine: { model.stopCombine() },
                 onCorrelateAll: {
                     model.log("\nCorrelating all audio-only and video-only files...")
-                    model.correlate()
+                    Task { await model.correlate() }
                 },
                 onCorrelateSelected: {
                     model.log("\nCorrelating \(selectedIDs.count) selected files...")
-                    model.correlate(selectedIDs: selectedIDs)
+                    Task { await model.correlate(selectedIDs: selectedIDs) }
                 },
                 onCorrelateAcrossVolumes: {
                     model.log("\n━━ Finding Avid A/V pairs across all volumes ━━")
