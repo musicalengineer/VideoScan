@@ -30,7 +30,17 @@ extension VideoRecord {
     /// FOUR places: CodingKeys, init(from:), encode(to:), and this clone.
     /// CatalogStoreAsyncSaveTests.cloneEncodesIdenticallyToOriginal pins the
     /// parity for every field its fixture populates.
-    public func snapshotClone() -> VideoRecord {
+    ///
+    /// `sending` result (2026-07-07): the clone is a freshly-allocated
+    /// object holding only value-type copies (the compiler verifies this —
+    /// copying any reference-typed field here would be a build error), so
+    /// callers receive it in a DISCONNECTED region and may legally ship it
+    /// across an actor boundary. That turns the "exclusively-owned clone"
+    /// contract from a comment into something region analysis can prove.
+    /// Purely additive for existing callers: merging the result back into
+    /// the caller's own region (deepCopySnapshot's pairedWith rewiring)
+    /// remains fine.
+    public func snapshotClone() -> sending VideoRecord {
         let c = VideoRecord(id: id)
         c.filename = filename
         c.ext = ext

@@ -567,7 +567,13 @@ final class MediaPairComparator: ObservableObject {
     /// HDD (or an 8 MB read loop over a multi-GB file) never blocks
     /// the UI. (C++ analogy: without it, the "worker" is inlined into
     /// the UI thread's event loop.)
+    // #if guard: the nightly CI's Xcode 16.4 (Swift 6.1) knows
+    // `@concurrent` only as a deprecated alias of `@Sendable` and warns;
+    // pre-6.2 has no NonisolatedNonsendingByDefault, so a nonisolated
+    // async already runs off-actor there — identical semantics.
+    #if compiler(>=6.2)
     @concurrent
+    #endif
     nonisolated static func fileSize(atPath path: String) async throws -> Int64 {
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
               let size = (attrs[.size] as? NSNumber)?.int64Value else {
@@ -584,7 +590,10 @@ final class MediaPairComparator: ObservableObject {
     /// thread. Worst-case resident memory ≈ 2 × chunkSize.
     /// `@concurrent`: see `fileSize` — without it this loop runs on
     /// the main actor under Approachable Concurrency.
+    // #if guard: see fileSize above.
+    #if compiler(>=6.2)
     @concurrent
+    #endif
     nonisolated static func sha256OfFile(
         atPath path: String,
         chunkSize: Int,
@@ -633,7 +642,10 @@ final class MediaPairComparator: ObservableObject {
     /// `@concurrent`: see `fileSize` — without it the demux wait and
     /// output parsing run on the main actor under Approachable
     /// Concurrency.
+    // #if guard: see fileSize above.
+    #if compiler(>=6.2)
     @concurrent
+    #endif
     nonisolated static func streamHashes(
         ffmpegPath: String,
         path: String,

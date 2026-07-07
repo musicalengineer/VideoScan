@@ -484,7 +484,12 @@ extension VideoScanModel {
     /// and starved the scan (2026-07-02, 14.5h RicksBackups crawl). Do not
     /// remove the attribute; the main-actor slice per file must stay
     /// lightweight bookkeeping only.
+    // #if guard: the nightly CI's Xcode 16.4 (Swift 6.1) knows
+    // `@concurrent` only as a deprecated alias of `@Sendable` and warns;
+    // pre-6.2 a nonisolated async already runs off-actor.
+    #if compiler(>=6.2)
     @concurrent
+    #endif
     nonisolated func probeFileWithTimeoutOutcome(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false, scanRootPath: String? = nil, catalogedPaths: Set<String> = []) async -> ProbeOutcome {
         // Best-effort stat before the race. stat() is metadata-only and
         // usually fast even on SMB when content reads stall. We use this only
@@ -570,7 +575,10 @@ extension VideoScanModel {
     /// call this directly from the main actor, and without the attribute
     /// the existence check, attributes fetch, cache lookup, sniff, and
     /// partial-MD5 hash all ran on the main thread per file.
+    // #if guard: see probeFileWithTimeoutOutcome above.
+    #if compiler(>=6.2)
     @concurrent
+    #endif
     nonisolated func probeFileOutcome(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false, scanRootPath: String? = nil, catalogedPaths: Set<String> = []) async -> ProbeOutcome {
         let fm = FileManager.default
         let path = url.path

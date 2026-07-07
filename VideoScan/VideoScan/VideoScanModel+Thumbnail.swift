@@ -57,7 +57,12 @@ extension VideoScanModel {
     /// detached tasks (safe), but a future main-actor caller would
     /// silently pull AVAsset open/decode onto the UI thread. Pin it to
     /// the global pool. (Same trap QA caught in MediaPairComparator.)
+    // #if guard: the nightly CI's Xcode 16.4 (Swift 6.1) knows
+    // `@concurrent` only as a deprecated alias of `@Sendable` and warns;
+    // pre-6.2 a nonisolated async already runs off-actor.
+    #if compiler(>=6.2)
     @concurrent
+    #endif
     nonisolated static func renderThumbnailCGImage(path: String) async throws -> CGImage {
         let asset = AVURLAsset(url: URL(fileURLWithPath: path))
         let generator = AVAssetImageGenerator(asset: asset)

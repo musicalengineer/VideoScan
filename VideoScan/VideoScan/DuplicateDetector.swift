@@ -291,9 +291,26 @@ enum DuplicateDetector {
     /// uses). The caller clones on main, hands the clones here, and copies
     /// the six result fields back on main; the live record graph is never
     /// touched off-actor.
+    ///
+    /// `sending` in/out (2026-07-07): the clones cross the main-actor →
+    /// @concurrent boundary and back. Declaring the transfer lets region
+    /// analysis PROVE what the snapshotClone contract already guarantees
+    /// (exclusively-owned disconnected copies) instead of warning about
+    /// it. The caller must use the RETURNED array for the copy-back —
+    /// its argument is consumed by the send. Same objects, so the
+    /// position-zip against `scope` is unchanged.
+    // #if guard: the nightly CI's Xcode 16.4 (Swift 6.1) knows
+    // `@concurrent` only as a deprecated alias of `@Sendable` and warns;
+    // pre-6.2 a nonisolated async static already runs off-actor, so
+    // omitting the attribute there is behavior-identical.
+    #if compiler(>=6.2)
     @concurrent
-    static func analyzeDetached(_ clones: [VideoRecord]) async -> DuplicateAnalysisSummary {
-        analyze(records: clones)
+    #endif
+    static func analyzeDetached(
+        _ clones: sending [VideoRecord]
+    ) async -> sending (analyzed: [VideoRecord], summary: DuplicateAnalysisSummary) {
+        let summary = analyze(records: clones)
+        return (clones, summary)
     }
 
     // MARK: - Scoring rules

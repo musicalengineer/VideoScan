@@ -61,8 +61,19 @@ extension VideoScanModel {
         // Clone on main (snapshotClone contract), group OFF main, copy the
         // six result fields back in one batch. Position-zipped: the clone
         // array mirrors `scope` element for element.
-        let clones = scope.map { $0.snapshotClone() }
-        let summary = await DuplicateDetector.analyzeDetached(clones)
+        //
+        // Built with an explicit loop, NOT `scope.map { $0.snapshotClone() }`:
+        // region analysis tracks "fresh array + appends of `sending` results
+        // stays disconnected", but a generic `map` erases the `sending`-ness
+        // of the closure result and conservatively merges the array into the
+        // main-actor region — which made the transfer into the @concurrent
+        // analyzer warn under Swift 6 checking. `analyzeDetached` consumes
+        // its argument and returns the SAME clones back (sending both ways);
+        // everything below reads the returned `clones` array.
+        var freshClones: [VideoRecord] = []
+        freshClones.reserveCapacity(scope.count)
+        for rec in scope { freshClones.append(rec.snapshotClone()) }
+        let (clones, summary) = await DuplicateDetector.analyzeDetached(freshClones)
         let stamp = Date()
         // QA P2-3: a record pruned during the await gets no ghost writes
         // and no stamp (symmetric with the correlate atomicity guard).
