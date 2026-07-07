@@ -31,9 +31,24 @@
 #     - Every row now carries a `nightly_script_v` field so future me can
 #       tell at a glance which version produced a given row.
 
+#   2026-07-07 (r1):
+#     - Skip the VideoScanUITests target at the xcodebuild level
+#       (-skip-testing:VideoScanUITests). Every UI test class is already
+#       skipped by VideoScan-CI.xctestplan (skippedTests since bfc1c24,
+#       2026-05-29), so the runner app launched each night only to execute
+#       ZERO tests — and in the 2 AM launchd context (locked screen,
+#       ProcessType=Background) it cannot enable automation mode, times out
+#       after 60s, forces rc=65, and stamped every green row since
+#       2026-06-15 with reason:"ui-runner-hung". Skipping the target drops
+#       no coverage. The UI_RUNNER_HUNG grep below stays as a sensor in
+#       case the skip flag is ever removed. UI tests need an interactive
+#       Aqua session with Automation/Accessibility TCC grants; if they are
+#       ever re-enabled for nightly, that session problem must be solved
+#       first (see docs / GH issue from 2026-07-07 investigation).
+
 set -u
 
-NIGHTLY_SCRIPT_VERSION="2026-06-14-r2"
+NIGHTLY_SCRIPT_VERSION="2026-07-07-r1"
 REPO="$HOME/dev/VideoScan"
 LOGDIR="$HOME/Library/Logs/VideoScan"
 LOGFILE="$LOGDIR/nightly_test_$(date +%Y%m%d_%H%M%S).log"
@@ -304,6 +319,8 @@ log "Build done in $((BUILD_END - BUILD_START))s"
 # ── Test ────────────────────────────────────────────────────────────
 rm -rf /tmp/nightly-results.xcresult /tmp/nightly-test-output.log
 log "Running ALL tests with coverage..."
+log "  (VideoScanUITests target skipped: all its tests are plan-skipped, and the"
+log "   locked-screen launchd session can't enable automation mode — see 2026-07-07-r1)"
 TEST_START=$(date +%s)
 # Trap any unexpected error during xcodebuild so we still publish.
 xcodebuild test-without-building \
@@ -314,6 +331,7 @@ xcodebuild test-without-building \
     -derivedDataPath "$NIGHTLY_DD" \
     -enableCodeCoverage YES \
     -resultBundlePath /tmp/nightly-results.xcresult \
+    -skip-testing:VideoScanUITests \
     CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS= \
     2>&1 | tee /tmp/nightly-test-output.log
 TEST_RC="${PIPESTATUS[0]:-$?}"
