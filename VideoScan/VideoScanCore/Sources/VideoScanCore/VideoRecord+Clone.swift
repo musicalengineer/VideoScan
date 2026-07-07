@@ -116,6 +116,8 @@ extension VideoRecord {
         c.drmProtected = drmProtected
         c.needsReformat = needsReformat
         c.derivedFrom = derivedFrom
+        c.cleanupRecipeID = cleanupRecipeID
+        c.cleanupRecipeVersion = cleanupRecipeVersion
         c.workspaceActive = workspaceActive
         c.scanContext = scanContext
         return c

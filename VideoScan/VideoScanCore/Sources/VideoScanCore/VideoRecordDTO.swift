@@ -119,6 +119,8 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let purgedAt: Date?
     public let needsReformat: Bool
     public let derivedFrom: UUID?
+    public let cleanupRecipeID: String?
+    public let cleanupRecipeVersion: Int?
     public let workspaceActive: Bool
     public let drmProtected: Bool
     public let originalFullPath: String?
@@ -213,6 +215,8 @@ public struct VideoRecordDTO: Sendable, Encodable {
         purgedAt                    = r.purgedAt
         needsReformat               = r.needsReformat
         derivedFrom                 = r.derivedFrom
+        cleanupRecipeID             = r.cleanupRecipeID
+        cleanupRecipeVersion        = r.cleanupRecipeVersion
         workspaceActive             = r.workspaceActive
         drmProtected                = r.drmProtected
         originalFullPath            = r.originalFullPath
@@ -353,6 +357,11 @@ public struct VideoRecordDTO: Sendable, Encodable {
             try c.encode(needsReformat, forKey: .needsReformat)
         }
         try c.encodeIfPresent(derivedFrom, forKey: .derivedFrom)
+        // Cleanup provenance: only written for cleanup outputs — adds
+        // zero bytes to every pre-existing record, preserving the
+        // byte-identity golden for legacy catalogs.
+        try c.encodeIfPresent(cleanupRecipeID, forKey: .cleanupRecipeID)
+        try c.encodeIfPresent(cleanupRecipeVersion, forKey: .cleanupRecipeVersion)
         // Only write workspaceActive when true — keeps catalog.json deltas
         // minimal for the majority of records that are never imported into
         // the workspace. Legacy decode treats absence as false (same shape

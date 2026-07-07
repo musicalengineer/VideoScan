@@ -399,6 +399,31 @@ extension CatalogContent {
                             }
                         }
 
+                        // Clean Up Video — named cleanup RECIPES (v1:
+                        // "VHS Quick Clean"). Selecting one opens a
+                        // friendly confirmation sheet; the render runs as
+                        // a CleanupJob in the operations window. Needs a
+                        // video stream, an online volume, and no cleanup
+                        // already running against this same record.
+                        // Registry is a tiny compile-time constant array —
+                        // no O(records) work here.
+                        let cleanupRunning = fileOpsCenter.jobs.contains { job in
+                            guard job.state.isActive, let c = job as? CleanupJob else { return false }
+                            return c.record.id == rec.id
+                        }
+                        let cleanupBlocked = !VolumeReachability.isReachable(path: rec.fullPath)
+                            || cleanupRunning
+                            || !(rec.streamType == .videoAndAudio || rec.streamType == .videoOnly)
+                        Menu("Clean Up Video") {
+                            ForEach(CleanupRecipeRegistry.builtIn) { recipe in
+                                Button("\(recipe.displayName)…") {
+                                    cleanupRequest = CleanupRequest(record: rec, recipe: recipe)
+                                }
+                                .disabled(cleanupBlocked)
+                                .accessibilityIdentifier("catalog.row.cleanup.\(recipe.id)")
+                            }
+                        }
+
                         // Rick 2026-06-14: grey out (don't hide) when
                         // the file lacks the relevant stream. More
                         // discoverable than absent — the user learns

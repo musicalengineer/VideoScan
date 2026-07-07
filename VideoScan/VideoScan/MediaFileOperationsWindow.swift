@@ -532,6 +532,9 @@ extension MediaFileOperationKind {
         // the user reads "transcode → workspace" as the same
         // visual lineage.
         case .transcode: return .mint
+        // Clean Up shares transcode's derivative-producing nature but
+        // gets its own hue so the two verbs read apart at a glance.
+        case .cleanup: return .teal
         }
     }
 }

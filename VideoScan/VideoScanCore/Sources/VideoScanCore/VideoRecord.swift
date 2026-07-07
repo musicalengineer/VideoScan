@@ -270,6 +270,21 @@ public class VideoRecord: Identifiable, Decodable {
     /// via decodeIfPresent so legacy catalogs round-trip cleanly.
     public var derivedFrom: UUID?
 
+    /// Cleanup provenance (Clean Up Video, 2026-07-07): the stable id of
+    /// the `CleanupRecipe` that produced this record's file, e.g.
+    /// "vhs-quick-clean". nil for every record that is not a cleanup
+    /// output. Pairs with `derivedFrom` (which carries the SOURCE
+    /// record's id) so the catalog can answer "cleaned from what, with
+    /// what". Additive optional — legacy catalogs decode as nil, and
+    /// the DTO only encodes the key when present, so old catalog.json
+    /// files round-trip byte-identical.
+    public var cleanupRecipeID: String?
+
+    /// Version of the recipe that produced this file (recipes bump their
+    /// version whenever steps/parameters change). nil whenever
+    /// `cleanupRecipeID` is nil.
+    public var cleanupRecipeVersion: Int?
+
     /// True when this record represents a file currently being actively
     /// worked on with external tools (transcode in another app, Topaz,
     /// FCP edit in progress). Independent of `lifecycleStage` — a file
@@ -405,6 +420,10 @@ public class VideoRecord: Identifiable, Decodable {
         drmProtected                = try c.decodeIfPresent(Bool.self, forKey: .drmProtected) ?? false
         needsReformat               = try c.decodeIfPresent(Bool.self, forKey: .needsReformat) ?? false
         derivedFrom                 = try c.decodeIfPresent(UUID.self, forKey: .derivedFrom)
+        // Cleanup provenance — additive optional, same migration pattern
+        // as derivedFrom: legacy catalogs (no keys) decode as nil.
+        cleanupRecipeID             = try c.decodeIfPresent(String.self, forKey: .cleanupRecipeID)
+        cleanupRecipeVersion        = try c.decodeIfPresent(Int.self, forKey: .cleanupRecipeVersion)
         // Workspace-active flag. decodeIfPresent so legacy catalogs (no key)
         // come back as false — i.e. "not in workspace." Import-to-workspace
         // (Pass B) is the only writer that sets this true.

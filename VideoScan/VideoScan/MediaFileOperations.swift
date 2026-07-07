@@ -65,6 +65,11 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// leaving VideoScan. Unlike Reformat, NO deinterlace/denoise and
     /// NO auto-queue Analyze.
     case transcode
+    /// "Clean Up Video" — applies a named CleanupRecipe (v1: VHS Quick
+    /// Clean single-pass ffmpeg filtergraph) and writes
+    /// `<stem>_cleaned.mov` (ProRes LT, audio copied) BESIDE the
+    /// original, which is never modified. Rick 2026-07-07.
+    case cleanup
 
     /// Badge text — rendered in small caps by the row view.
     /// `.extract` says "Faces" (not "Extract") since the verb split:
@@ -79,6 +84,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .reformat: return "Reformat"
         case .analyze: return "Analyze"
         case .transcode: return "Transcode"
+        case .cleanup: return "Clean Up"
         }
     }
 }
@@ -393,6 +399,22 @@ final class MediaFileOperationsCenter: ObservableObject {
         add(job)
         job.start()
         fileOpsLog.info("transcode started: \(record.filename, privacy: .public) preset=\(preset.rawValue, privacy: .public) → \(job.outputURL.lastPathComponent, privacy: .public)")
+        return job
+    }
+
+    /// Kick off "Clean Up Video" with a named recipe. The job renders in
+    /// scratch (RAM disk when the estimate fits), atomically publishes
+    /// `<stem>_cleaned.mov` beside the original, and catalogs the output
+    /// with provenance (derivedFrom + recipe id/version). The original
+    /// file is never modified. Rick 2026-07-07.
+    @discardableResult
+    func startCleanup(record: VideoRecord,
+                      recipe: CleanupRecipe,
+                      model: VideoScanModel) -> CleanupJob {
+        let job = CleanupJob(record: record, recipe: recipe, model: model)
+        add(job)
+        job.start()
+        fileOpsLog.info("cleanup started: \(record.filename, privacy: .public) recipe=\(recipe.id, privacy: .public) v\(recipe.version) → \(job.outputURL.lastPathComponent, privacy: .public)")
         return job
     }
 

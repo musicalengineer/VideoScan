@@ -60,6 +60,8 @@ extension VideoRecord {
         case drmProtected
         case needsReformat
         case derivedFrom
+        case cleanupRecipeID
+        case cleanupRecipeVersion
         case workspaceActive
     }
 }

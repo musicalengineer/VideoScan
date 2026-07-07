@@ -99,6 +99,8 @@ struct CatalogContent: View {
     @State var ripAllFramesTarget: VideoRecord?
     /// Non-nil presents format + destination choices before a transcode.
     @State var transcodeRequest: TranscodeRequest?
+    /// Non-nil presents the "Clean Up Video" recipe confirmation sheet.
+    @State var cleanupRequest: CleanupRequest?
 
     /// "Find Online Version" came up empty — non-nil drives an alert
     /// explaining where copies exist (all offline) or that this is the
@@ -415,6 +417,11 @@ struct CatalogContent: View {
         }
         .sheet(item: $transcodeRequest) { request in
             TranscodeSheet(request: request)
+        }
+        // "Clean Up Video" recipe confirmation. Same .sheet(item:) shape
+        // as the transcode sheet above (never chained isPresented).
+        .sheet(item: $cleanupRequest) { request in
+            CleanupSheet(request: request)
         }
         .alert(
             "Find Online Version",
