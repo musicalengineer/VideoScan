@@ -115,6 +115,7 @@ enum ScanJobsStorage {
         if env["XCTestConfigurationFilePath"] != nil { return true }
         if env["XCTestBundlePath"] != nil { return true }
         if env["SWIFT_TESTING_ENABLED"] != nil { return true }
+        if env["VS_UI_TEST"] == "1" { return true } // UI-test target — see TestEnvironment.detect
         if Bundle.allBundles.contains(where: { $0.bundlePath.hasSuffix(".xctest") }) {
             return true
         }
