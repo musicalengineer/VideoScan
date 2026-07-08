@@ -496,3 +496,193 @@ struct MediaPairComparatorFileTests {
         #expect(recorder.values == [3])
     }
 }
+
+// MARK: - Duration short-circuit (A/V pair pre-check, 2026-07-08)
+//
+// When BOTH cataloged durations are known-positive and more than five
+// minutes apart, the comparator must skip every content tier and land
+// on an honest .differentMedia verdict — the orphaned-MXF correlation
+// flow feeds it audio/video pairs, and two recordings whose lengths
+// differ by 5+ minutes cannot be the same content. FAIL OPEN: an
+// unknown/zero/negative duration (ffprobe failure — Avid RGBA MXF,
+// extensionless media) always gets the full compare; those are exactly
+// the records that need content evidence.
+//
+// Probe technique ("machinery not invoked", by construction): the
+// records point at DISTINCT paths that do not exist. Tier 0 — the very
+// first disk touch — throws cantReadFile for a missing file, so a run
+// that ends in lastError provably reached the content machinery, and a
+// run that ends in a verdict with NO error provably never did.
+
+@MainActor
+@Suite("MediaPairComparator duration short-circuit")
+struct DurationShortCircuitTests {
+
+    private func record(name: String, duration: Double,
+                        streamType: StreamType) -> VideoRecord {
+        let r = VideoRecord()
+        r.filename = name
+        r.fullPath = "/nonexistent/duration-shortcircuit-\(UUID().uuidString)/\(name)"
+        r.durationSeconds = duration
+        r.streamTypeRaw = streamType.rawValue
+        return r
+    }
+
+    /// Run one compare and hand back the comparator for inspection.
+    private func runCompare(durationA: Double, durationB: Double,
+                            typeA: StreamType = .videoOnly,
+                            typeB: StreamType = .audioOnly) async -> MediaPairComparator {
+        let comparator = MediaPairComparator()
+        await comparator.run(
+            recordA: record(name: "video.mxf", duration: durationA, streamType: typeA),
+            recordB: record(name: "audio.mxf", duration: durationB, streamType: typeB))
+        return comparator
+    }
+
+    // (a) 301 s apart → short-circuit: honest "different" verdict, no
+    // error, no content tier ever ran (files don't exist — see header).
+    @Test func over5MinutesApartShortCircuitsToDifferentMedia() async {
+        let comparator = await runCompare(durationA: 60, durationB: 361)
+        #expect(comparator.verdict == .differentMedia)
+        #expect(comparator.lastError == nil,
+                "Short-circuit must not surface as an error")
+        #expect(!comparator.isRunning)
+    }
+
+    // (a2) truth in UI: the finished subtitle must carry the skip
+    // reason, not the generic "content doesn't match" line — that line
+    // implies the content tiers actually examined the files.
+    @Test func shortCircuitSubtitleIsNotTheGenericContentLine() async {
+        let comparator = await runCompare(durationA: 60, durationB: 361)
+        #expect(comparator.finishedSubtitle != nil)
+        #expect(comparator.finishedSubtitle != PairCompareVerdict.differentMedia.detail,
+                "Subtitle must record the duration-mismatch reason, not claim a content comparison ran")
+    }
+
+    // (b) 299 s apart → inside the threshold, full compare proceeds
+    // (probe: reaching Tier 0 on missing files errors, never verdicts).
+    @Test func under5MinutesApartRunsFullCompare() async {
+        let comparator = await runCompare(durationA: 60, durationB: 359)
+        #expect(comparator.verdict == nil)
+        #expect(comparator.lastError != nil)
+    }
+
+    // (b2) exactly AT the threshold → full compare. The skip requires
+    // strictly greater-than; the boundary itself stays conservative.
+    @Test func exactlyAtThresholdRunsFullCompare() async {
+        let comparator = await runCompare(durationA: 60, durationB: 360)
+        #expect(comparator.verdict == nil)
+        #expect(comparator.lastError != nil)
+    }
+
+    // (c) FAIL OPEN: duration A unknown (0) — even with a huge delta,
+    // the full compare must run. Zero-duration records are the ffprobe
+    // failures that need content evidence most.
+    @Test func unknownDurationFailsOpenToFullCompare() async {
+        let comparator = await runCompare(durationA: 0, durationB: 7200)
+        #expect(comparator.verdict == nil)
+        #expect(comparator.lastError != nil)
+    }
+
+    // (c2) FAIL OPEN on corrupt metadata: a negative duration is
+    // "unknown", not "very short".
+    @Test func negativeDurationFailsOpenToFullCompare() async {
+        let comparator = await runCompare(durationA: -5, durationB: 7200)
+        #expect(comparator.verdict == nil)
+        #expect(comparator.lastError != nil)
+    }
+
+    // (d) FAIL OPEN: both durations unknown → full compare.
+    @Test func bothDurationsUnknownFailsOpenToFullCompare() async {
+        let comparator = await runCompare(durationA: 0, durationB: 0)
+        #expect(comparator.verdict == nil)
+        #expect(comparator.lastError != nil)
+    }
+
+    // The published reason: a short-circuit records WHICH durations
+    // clashed (the banner and subtitle render from this), and the
+    // subtitle is the mismatch summary verbatim.
+    @Test func shortCircuitPublishesTheDurationMismatchReason() async {
+        let comparator = await runCompare(durationA: 60, durationB: 361)
+        let mismatch = comparator.durationMismatch
+        #expect(mismatch == PairCompareLogic.DurationMismatch(durationA: 60,
+                                                              durationB: 361))
+        #expect(comparator.finishedSubtitle == mismatch?.summary)
+    }
+
+    // Negative: a full compare must NOT leave a stale mismatch reason
+    // behind (it is reset per run and only set on the skip path).
+    @Test func fullCompareLeavesNoDurationMismatch() async {
+        let comparator = await runCompare(durationA: 60, durationB: 359)
+        #expect(comparator.durationMismatch == nil)
+    }
+}
+
+// MARK: - Duration short-circuit — pure decision logic
+
+@Suite("PairCompareLogic.shouldSkipForDurationMismatch")
+struct ShouldSkipForDurationMismatchTests {
+
+    private func skip(_ a: Double, _ b: Double) -> Bool {
+        PairCompareLogic.shouldSkipForDurationMismatch(durationA: a, durationB: b)
+    }
+
+    // The threshold is a named constant and is the agreed 5 minutes.
+    @Test func thresholdIsFiveMinutes() {
+        #expect(PairCompareLogic.durationShortCircuitThreshold == 300)
+    }
+
+    // Positive: strictly past the threshold skips, either order.
+    @Test func pastThresholdSkips() {
+        #expect(skip(60, 361))
+        #expect(skip(361, 60))          // symmetric
+        #expect(skip(10, 7200))         // way past
+        #expect(skip(60, 360.5))        // barely past
+    }
+
+    // Boundary: exactly AT the threshold does NOT skip (strict >).
+    @Test func exactlyAtThresholdDoesNotSkip() {
+        #expect(!skip(60, 360))
+        #expect(!skip(360, 60))
+    }
+
+    // Negative: inside the threshold never skips.
+    @Test func insideThresholdDoesNotSkip() {
+        #expect(!skip(60, 359))
+        #expect(!skip(90, 90))
+    }
+
+    // FAIL OPEN (safety-critical): unknown / zero / negative /
+    // non-finite durations never skip, no matter how big the delta —
+    // ffprobe-failed records are the ones that need the content tiers.
+    @Test func unknownDurationsFailOpen() {
+        #expect(!skip(0, 7200))
+        #expect(!skip(7200, 0))
+        #expect(!skip(0, 0))
+        #expect(!skip(-5, 7200))
+        #expect(!skip(Double.nan, 7200))
+        #expect(!skip(Double.infinity, 60))
+    }
+
+    // The custom threshold parameter honors the same strict-> contract
+    // (used nowhere in production yet, but pins the seam for tuning).
+    @Test func customThresholdIsRespected() {
+        #expect(PairCompareLogic.shouldSkipForDurationMismatch(
+            durationA: 0, durationB: 11, threshold: 10) == false)  // fail open still wins
+        #expect(PairCompareLogic.shouldSkipForDurationMismatch(
+            durationA: 1, durationB: 12, threshold: 10))
+        #expect(!PairCompareLogic.shouldSkipForDurationMismatch(
+            durationA: 1, durationB: 11, threshold: 10))
+    }
+
+    // Summary formatting: h:mm:ss on all three numbers, truthful "skipped"
+    // wording (the UI shows this string verbatim).
+    @Test func mismatchSummaryIsTruthfulAndFormatted() {
+        let m = PairCompareLogic.DurationMismatch(durationA: 130, durationB: 3830)
+        #expect(m.delta == 3700)
+        #expect(m.summary.contains("1:01:40"))   // delta
+        #expect(m.summary.contains("0:02:10"))   // A
+        #expect(m.summary.contains("1:03:50"))   // B
+        #expect(m.summary.contains("skipped"))
+    }
+}

@@ -623,7 +623,11 @@ struct PairCompareDetailView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(verdict.title)
                     .font(.headline)
-                Text(verdict.detail)
+                // Duration short-circuit: the honest story is "lengths
+                // are 5+ minutes apart, content tiers skipped" — the
+                // generic differentMedia detail ("content doesn't
+                // match") would falsely imply the content was examined.
+                Text(job.comparator.durationMismatch?.summary ?? verdict.detail)
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
