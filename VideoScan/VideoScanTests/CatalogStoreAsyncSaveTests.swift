@@ -462,6 +462,37 @@ struct CatalogStoreAsyncSaveTests {
                 "CatalogSnapshotDTO drifted from the catalog.json wrapper golden — see step 5b guard")
     }
 
+    // regression sensor (Clean Up Video, 2026-07-07): the golden constant
+    // below was captured BEFORE the cleanupRecipeID/cleanupRecipeVersion
+    // provenance fields existed, which makes it a true LEGACY-catalog
+    // fixture. Decoding it and re-encoding through the DTO must reproduce
+    // the exact same bytes — proving the additive fields cost legacy
+    // records zero bytes and zero churn. If a future field is added with
+    // an unconditional encode (instead of encodeIfPresent / gated), this
+    // fails loudly.
+    @Test
+    func legacyGoldenRoundTripsByteIdenticalWithoutCleanupKeys() throws {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let record = try decoder.decode(VideoRecord.self,
+                                        from: Data(Self.videoRecordGolden.utf8))
+        // Legacy JSON has no cleanup keys → nil provenance after decode.
+        #expect(record.cleanupRecipeID == nil)
+        #expect(record.cleanupRecipeVersion == nil)
+        // pairedWithID decodes into pendingPairedWithID; the DTO encodes
+        // pairedWith?.id — resolve the partner the way CatalogStore.load
+        // does so the key round-trips.
+        if let pid = record.pendingPairedWithID {
+            record.pairedWith = VideoRecord(id: pid)
+        }
+        let reencoded = String(decoding: try Self.goldenEncoder()
+            .encode(VideoRecordDTO(record)), as: UTF8.self)
+        #expect(reencoded == Self.videoRecordGolden,
+                "Legacy catalog JSON no longer round-trips byte-identical — a field decode/encode drifted")
+        #expect(!reencoded.contains("cleanupRecipe"),
+                "cleanup provenance keys leaked into a legacy record's JSON")
+    }
+
     // MARK: Golden constants (captured 2026-06-29 via goldenEncoder())
 
     private static let videoRecordGolden =
