@@ -13,6 +13,12 @@ import os
 // feature — this is a targeted pair check, not a fleet audit.
 //
 // Three-tier comparison (cheapest evidence first):
+//   Pre-check — duration short-circuit (no I/O at all): when BOTH
+//            cataloged durations are known-positive and more than
+//            `PairCompareLogic.durationShortCircuitThreshold` apart,
+//            the files cannot be the same recording — verdict
+//            `differentMedia` immediately, reason published via
+//            `durationMismatch`. FAILS OPEN on unknown durations.
 //   Tier 0 — file sizes (stat only). Different sizes can't be
 //            byte-identical, so Tier 1 is skipped.
 //   Tier 1 — chunked full-file SHA-256 of both files. Equal digests
@@ -200,6 +206,60 @@ enum PairCompareLogic {
         return .differentMedia
     }
 
+    // MARK: Duration short-circuit (A/V pair pre-check)
+
+    /// Skip the content tiers when the cataloged durations are further
+    /// apart than this many seconds. Deliberately GENEROUS — same-content
+    /// copies (rewraps, re-encodes, A/V halves of one Avid capture)
+    /// differ by seconds at most, so five minutes leaves a huge safety
+    /// margin. Tunable: every skip logs both durations and the delta
+    /// (category "pairCompare"), so if the logs show real pairs never
+    /// come anywhere near the margin, tighten it empirically.
+    static let durationShortCircuitThreshold: TimeInterval = 300  // 5 min
+
+    /// Why a compare skipped the content tiers. Mirrors the role
+    /// `PerceptualMatchResult` plays for Tier 3: supplementary evidence
+    /// published alongside the verdict so the row subtitle and banner
+    /// can tell the truthful story ("lengths 5+ min apart, comparison
+    /// skipped") instead of implying the content was examined.
+    struct DurationMismatch: Equatable, Sendable {
+        let durationA: Double
+        let durationB: Double
+
+        var delta: Double { abs(durationA - durationB) }
+
+        /// Family-friendly one-liner for the finished row / banner.
+        var summary: String {
+            "The two files run \(Self.hms(delta)) apart in length "
+            + "(\(Self.hms(durationA)) vs \(Self.hms(durationB))) — "
+            + "too far apart to be the same recording, so the content "
+            + "comparison was skipped."
+        }
+
+        /// Seconds → "h:mm:ss" (matches the catalog's Length column style).
+        static func hms(_ seconds: Double) -> String {
+            let total = Int(seconds.rounded())
+            return String(format: "%d:%02d:%02d",
+                          total / 3600, (total % 3600) / 60, total % 60)
+        }
+    }
+
+    /// Decide the short-circuit. FAILS OPEN on missing metadata: an
+    /// unknown / zero / negative / non-finite duration means ffprobe
+    /// couldn't read the file (Avid RGBA MXF, extensionless media) —
+    /// precisely the records that NEED a content comparison, so they
+    /// always get the full run. Strictly greater-than: exactly at the
+    /// threshold still compares.
+    static func shouldSkipForDurationMismatch(
+        durationA: Double,
+        durationB: Double,
+        threshold: TimeInterval = durationShortCircuitThreshold
+    ) -> Bool {
+        guard durationA.isFinite, durationB.isFinite,
+              durationA > 0, durationB > 0 else { return false }
+        return abs(durationA - durationB) > threshold
+    }
+
     // MARK: Metadata diff
 
     /// One side-by-side row for the sheet's metadata table.
@@ -311,13 +371,24 @@ final class MediaPairComparator: ObservableObject {
     /// verdict so Rick can see how close the call was).
     @Published var perceptualStats: PerceptualMatchResult?
 
+    /// Non-nil when the duration short-circuit fired: the verdict is
+    /// `differentMedia`, but the content tiers never ran — the cataloged
+    /// lengths were more than the threshold apart. Published so the UI
+    /// can say so truthfully (and so tests can pin the reason).
+    @Published var durationMismatch: PairCompareLogic.DurationMismatch?
+
     /// What the finished row's subtitle should say. For the perceptual
     /// verdict the stats line IS the story ("31/32 frames agree …");
+    /// a duration short-circuit leads with the skip reason ("content
+    /// doesn't match" would falsely imply the content tiers ran);
     /// every other verdict keeps its plain-language detail.
     var finishedSubtitle: String? {
         guard let verdict else { return nil }
         if verdict == .samePerceptualContent, let stats = perceptualStats {
             return stats.summary
+        }
+        if verdict == .differentMedia, let mismatch = durationMismatch {
+            return mismatch.summary
         }
         return verdict.detail
     }
@@ -345,6 +416,7 @@ final class MediaPairComparator: ObservableObject {
         fraction = 0
         isIndeterminate = false
         perceptualStats = nil
+        durationMismatch = nil
         statusText = "Checking file sizes…"
 
         let pathA = recordA.fullPath
@@ -368,12 +440,37 @@ final class MediaPairComparator: ObservableObject {
             finish(with: .sameFile)
             return
         }
+        // MARK: Pre-check — duration short-circuit (no I/O)
+        //
+        // The A/V correlation flow feeds this compare orphaned audio/
+        // video candidate pairs; two recordings whose known lengths are
+        // 5+ minutes apart cannot be the same content, so skip the
+        // expensive tiers (Tier 1 reads both files end to end, Tiers
+        // 2–3 each run ffmpeg over them). FAILS OPEN — see
+        // `shouldSkipForDurationMismatch`: any unknown duration gets
+        // the full compare, because ffprobe-failed records (Avid RGBA
+        // MXF, extensionless media) are exactly the ones that need
+        // content evidence. Every skip logs both files and durations so
+        // a "mysteriously never matched" pair stays diagnosable.
+        if PairCompareLogic.shouldSkipForDurationMismatch(durationA: durationA,
+                                                          durationB: durationB) {
+            let mismatch = PairCompareLogic.DurationMismatch(durationA: durationA,
+                                                             durationB: durationB)
+            pairCompareLog.info("duration short-circuit: \(pathA, privacy: .public) (\(durationA, format: .fixed(precision: 1))s) vs \(pathB, privacy: .public) (\(durationB, format: .fixed(precision: 1))s) — Δ\(mismatch.delta, format: .fixed(precision: 1))s > \(PairCompareLogic.durationShortCircuitThreshold, format: .fixed(precision: 0))s; content compare skipped")
+            durationMismatch = mismatch
+            finish(with: .differentMedia)
+            return
+        }
+
         // Duration hint feeds Tier 2's progress fraction (ffmpeg reports
         // out_time, we know roughly how long the media runs). Catalog
         // metadata only — never re-probed.
         let durationHint = max(recordA.durationSeconds, recordB.durationSeconds)
 
-        pairCompareLog.info("pair compare start: \(pathA, privacy: .public) vs \(pathB, privacy: .public)")
+        // Durations (and their delta) ride along on the start line for
+        // full compares — empirical fodder for tuning the short-circuit
+        // threshold from the logs later.
+        pairCompareLog.info("pair compare start: \(pathA, privacy: .public) vs \(pathB, privacy: .public) (durations \(durationA, format: .fixed(precision: 1))s / \(durationB, format: .fixed(precision: 1))s, Δ\(abs(durationA - durationB), format: .fixed(precision: 1))s)")
 
         do {
             // MARK: Tier 0 — sizes (stat the real files; catalog could be stale)
