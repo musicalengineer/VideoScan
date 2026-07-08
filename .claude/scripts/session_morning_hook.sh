@@ -25,4 +25,31 @@ find "$STAMP_DIR" -maxdepth 1 -name '.morning_shown_*' ! -name "$(basename "$STA
 
 echo "=== Daily VideoScan test-metrics digest (first session of the day) ==="
 bash "$REPO_ROOT/scripts/morning_metrics.sh" 2>/dev/null || echo "(morning_metrics.sh unavailable)"
-echo "=== end digest — surface this to Rick and flag anything marked 'Needs a look'. ==="
+
+# ── Branch hygiene (Rick 2026-07-08: decide purges first thing each day) ──
+# Read-only; every git call tolerant so a weird repo state never kills the digest.
+echo ""
+echo "── Branch hygiene ──"
+MERGED=$(git -C "$REPO_ROOT" branch --merged main 2>/dev/null \
+    | sed 's/^ *[*+]* *//' | grep -vE '^(main|metrics|worktree-agent-)' || true)
+UNMERGED=$(git -C "$REPO_ROOT" branch --no-merged main 2>/dev/null \
+    | sed 's/^ *[*+]* *//' | grep -vE '^(main|metrics|worktree-agent-)' || true)
+if [ -n "$MERGED" ]; then
+    echo "Fully merged into main (purge candidates, local — check origin twins too):"
+    echo "$MERGED" | sed 's/^/   • /'
+else
+    echo "No merged-and-undeleted local branches."
+fi
+if [ -n "$UNMERGED" ]; then
+    echo "NOT merged (age = last commit):"
+    while IFS= read -r b; do
+        [ -n "$b" ] || continue
+        when=$(git -C "$REPO_ROOT" log -1 --format='%cr' "$b" 2>/dev/null || echo '?')
+        echo "   • $b ($when)"
+    done <<< "$UNMERGED"
+fi
+echo "=== end digest — surface this to Rick and flag anything marked 'Needs a look'."
+echo "Then, per Rick's standing request: report how overnight tests went, and ASK him"
+echo "whether yesterday's spot-testing passed — if yes, propose purging the merged"
+echo "branches (local + origin) and triaging stale unmerged ones. He wants to make"
+echo "this call first thing each day. ==="
