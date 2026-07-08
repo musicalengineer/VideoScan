@@ -241,7 +241,9 @@ final class PairCompareJob: MediaFileOperationJob {
     /// (Note: an in-process Tier-1 hash read blocked in uninterruptible
     /// kernel I/O is detected here but can't be force-unblocked — only the
     /// ffmpeg-subprocess tiers, including the perceptual tier, are killable.)
-    private func handleStall(silentFor: Double) {
+    /// Internal (not private) so tests can drive the stall path directly —
+    /// the StallMonitor wiring is timer-based and nondeterministic in tests.
+    func handleStall(silentFor: Double) {
         guard state.isActive, stallReason == nil, !wasCancelled else { return }
         let attribution = StallMonitor.attribution(forPaths: [recordA.fullPath, recordB.fullPath])
         let reason = "Stalled — no compare progress for \(Int(silentFor))s. \(attribution)"
@@ -249,5 +251,9 @@ final class PairCompareJob: MediaFileOperationJob {
         fileOpsLog.error("compare WATCHDOG: killing \(self.title, privacy: .public) — \(reason, privacy: .public)")
         appLog.write("compare watchdog: \(title) stalled \(Int(silentFor))s — \(attribution); killing")
         task?.cancel()
+        // stallReason just flipped the derived state to .failed, and if the
+        // stalled read is blocked in uninterruptible kernel I/O the run Task
+        // may never unwind to deliver its stamp — freeze the clock here.
+        stampFinishedIfTerminal()
     }
 }

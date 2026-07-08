@@ -537,6 +537,26 @@ struct MediaFileOperationFinishedAtTests {
         }
     }
 
+    /// Stall watchdog path: `handleStall` flips the derived state to
+    /// `.failed` IMMEDIATELY (stallReason wins the derivation), but a
+    /// Tier-1 hash read blocked in uninterruptible kernel I/O means the
+    /// run Task may NEVER unwind to deliver the task-end stamp — so
+    /// handleStall itself must stamp, or a volume-drop "failed" row's
+    /// clock keeps growing (the original 2026-07-07 bug on the one path
+    /// the watchdog exists for).
+    @Test func compareJobStallStampsFinishedAtImmediately() {
+        let job = PairCompareJob(recordA: record("/tmp/x.mov"),
+                                 recordB: record("/tmp/y.mov"),
+                                 gates: [])
+        // No start(): models the blocked run Task that never returns.
+        job.handleStall(silentFor: 90)
+        if case .failed = job.state {
+            #expect(job.finishedAt != nil)
+        } else {
+            Issue.record("expected .failed after stall, got \(job.state)")
+        }
+    }
+
     /// Cancelled BEFORE start(): the job is terminal instantly and no
     /// run Task will ever end — cancel() itself must stamp, otherwise
     /// finishedAt stays nil and the clock would fall back to "now".
