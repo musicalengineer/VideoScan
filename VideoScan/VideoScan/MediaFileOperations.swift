@@ -113,6 +113,56 @@ enum MediaFileOperationState: Equatable {
     }
 }
 
+// MARK: - Duration clock (pure)
+
+/// PURE duration math for the operations window's row clock — no I/O
+/// and no `Date()` of its own (callers inject `now`), so tests can
+/// evaluate it at any simulated wall-clock time.
+///
+/// Semantics (regression fix 2026-07-07):
+///   - active job   → live elapsed, `now − startedAt` (keeps ticking)
+///   - terminal job → frozen run duration, `finishedAt − startedAt`
+/// A terminal job missing its stamp (shouldn't happen — conformers
+/// stamp at the transition) falls back to `now`, i.e. best effort.
+enum MediaFileOperationClock {
+
+    static func duration(state: MediaFileOperationState,
+                         startedAt: Date,
+                         finishedAt: Date?,
+                         at now: Date) -> TimeInterval {
+        if state.isActive {
+            return max(0, now.timeIntervalSince(startedAt))
+        }
+        return max(0, (finishedAt ?? now).timeIntervalSince(startedAt))
+    }
+
+    /// Formatted duration for a row: "5s" / "5m 12s" / "1h 5m" — same
+    /// shape as the combine section's formatter so the two sections in
+    /// the operations window read alike.
+    static func text(state: MediaFileOperationState,
+                     startedAt: Date,
+                     finishedAt: Date?,
+                     at now: Date) -> String {
+        format(duration(state: state, startedAt: startedAt,
+                        finishedAt: finishedAt, at: now))
+    }
+
+    /// Convenience for the row view — pulls the three fields off the
+    /// job existential.
+    @MainActor
+    static func text(for job: any MediaFileOperationJob, at now: Date) -> String {
+        text(state: job.state, startedAt: job.startedAt,
+             finishedAt: job.finishedAt, at: now)
+    }
+
+    static func format(_ interval: TimeInterval) -> String {
+        let s = max(0, Int(interval))
+        if s < 60 { return "\(s)s" }
+        if s < 3600 { return "\(s / 60)m \(s % 60)s" }
+        return "\(s / 3600)h \((s % 3600) / 60)m"
+    }
+}
+
 // MARK: - Job protocol
 
 /// One row in the Media File Operations window. Conformers are
@@ -138,6 +188,14 @@ where ObjectWillChangePublisher == ObservableObjectPublisher, ID == UUID {
     var isIndeterminate: Bool { get }
     var state: MediaFileOperationState { get }
     var startedAt: Date { get }
+    /// When the job reached a terminal state (finished / failed /
+    /// cancelled); nil while active. Conformers stamp it exactly once
+    /// at the terminal transition. The window uses it to FREEZE the
+    /// row clock (regression 2026-07-07: the clock kept ticking after
+    /// completion, so a 5-minute job read "45 min" when glanced at 40
+    /// minutes later). Deliberately a hard requirement with no default
+    /// — the compiler forces every future verb to carry the stamp.
+    var finishedAt: Date? { get }
     func cancel()
 
     // Optional pause capability — defaulted off below.

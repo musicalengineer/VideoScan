@@ -62,6 +62,12 @@ final class RipAllFramesJob: MediaFileOperationJob {
     /// statusText (string-sniffing state is how subtle bugs happen).
     @Published private(set) var wasCancelled = false
 
+    /// Terminal-transition stamp — freezes the row clock (see
+    /// MediaFileOperationClock). `state` is DERIVED here, so the run
+    /// Task's completion and the immediate-cancel path in `cancel()`
+    /// both stamp via `stampFinishedIfTerminal()` — first stamp wins.
+    @Published private(set) var finishedAt: Date?
+
     /// Non-nil while queued behind another job on a gated volume.
     @Published private(set) var waitingForVolumeLabel: String?
 
@@ -97,7 +103,17 @@ final class RipAllFramesJob: MediaFileOperationJob {
         task = Task { [weak self] in
             guard let self else { return }
             await self.runHoldingGates(self.gates[...])
+            // The derived `state` is terminal once the run unwinds —
+            // this is the terminal transition for clock purposes.
+            self.stampFinishedIfTerminal()
         }
+    }
+
+    /// Freeze the row clock at the terminal transition. Nil-guarded so
+    /// the first stamp wins (cancel-before-start stamps here first;
+    /// the run Task's completion is then a no-op).
+    private func stampFinishedIfTerminal() {
+        if !state.isActive, finishedAt == nil { finishedAt = Date() }
     }
 
     /// Acquire each gate in order (recursing so `withPermit` can
@@ -213,6 +229,9 @@ final class RipAllFramesJob: MediaFileOperationJob {
         // the ffmpeg SIGTERM in the cancellation handler.
         ripper.markCancelling()
         task?.cancel()
+        // Cancelled before start() (no run Task will ever end): the
+        // derived state is ALREADY .cancelled — stamp the clock now.
+        stampFinishedIfTerminal()
         fileOpsLog.info("ripFrames cancelled by user: \(self.title, privacy: .public)")
     }
 }

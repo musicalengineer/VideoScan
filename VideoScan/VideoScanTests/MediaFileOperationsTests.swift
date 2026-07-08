@@ -33,6 +33,7 @@ private final class FakeOperationJob: MediaFileOperationJob {
     var fraction: Double = 0
     var isIndeterminate = false
     let startedAt = Date()
+    var finishedAt: Date?
 
     @Published var settableState: MediaFileOperationState
     var state: MediaFileOperationState { settableState }
@@ -375,5 +376,263 @@ struct MediaFileOperationStateTests {
         #expect(!MediaFileOperationState.finished(summary: "ok").isActive)
         #expect(!MediaFileOperationState.failed(message: "x").isActive)
         #expect(!MediaFileOperationState.cancelled.isActive)
+    }
+}
+
+// MARK: - Duration clock (regression 2026-07-07)
+//
+// Bug: the operations window rendered `Text(job.startedAt, style:
+// .relative)` on EVERY row regardless of state — a self-updating
+// counter that never stops, so a 5-minute job read "45 min" when
+// glanced at 40 minutes later. Fix: jobs stamp `finishedAt` at their
+// terminal transition and `MediaFileOperationClock` freezes the
+// duration there. The clock is PURE (injected `now`) so these tests
+// evaluate it at a simulated wall-clock 40+ minutes after completion.
+
+@Suite("MediaFileOperationClock — duration freezing")
+struct MediaFileOperationClockTests {
+
+    private let t0 = Date(timeIntervalSinceReferenceDate: 800_000_000)
+
+    /// The exact bug report: a 5-minute job read 40 minutes later must
+    /// say 5 minutes, not 45.
+    @Test func finishedJobReadsRunDurationNotWallClock() {
+        let d = MediaFileOperationClock.duration(
+            state: .finished(summary: "ok"),
+            startedAt: t0,
+            finishedAt: t0.addingTimeInterval(300),
+            at: t0.addingTimeInterval(2700))
+        #expect(d == 300)
+    }
+
+    @Test func failedJobDurationIsFrozen() {
+        let d = MediaFileOperationClock.duration(
+            state: .failed(message: "boom"),
+            startedAt: t0,
+            finishedAt: t0.addingTimeInterval(42),
+            at: t0.addingTimeInterval(2700))
+        #expect(d == 42)
+    }
+
+    @Test func cancelledJobDurationIsFrozen() {
+        let d = MediaFileOperationClock.duration(
+            state: .cancelled,
+            startedAt: t0,
+            finishedAt: t0.addingTimeInterval(7),
+            at: t0.addingTimeInterval(2700))
+        #expect(d == 7)
+    }
+
+    // Positive counterpart: ACTIVE jobs keep ticking live.
+    @Test func runningJobTicksLive() {
+        let d = MediaFileOperationClock.duration(
+            state: .running, startedAt: t0, finishedAt: nil,
+            at: t0.addingTimeInterval(120))
+        #expect(d == 120)
+    }
+
+    /// `.cancelling` is still active (task unwinding) — live clock.
+    @Test func cancellingJobTicksLive() {
+        let d = MediaFileOperationClock.duration(
+            state: .cancelling, startedAt: t0, finishedAt: nil,
+            at: t0.addingTimeInterval(65))
+        #expect(d == 65)
+    }
+
+    // Negative: clock skew / bad stamp must never show a negative
+    // duration.
+    @Test func negativeIntervalsClampToZero() {
+        #expect(MediaFileOperationClock.duration(
+            state: .running, startedAt: t0, finishedAt: nil,
+            at: t0.addingTimeInterval(-5)) == 0)
+        #expect(MediaFileOperationClock.duration(
+            state: .cancelled, startedAt: t0,
+            finishedAt: t0.addingTimeInterval(-5),
+            at: t0.addingTimeInterval(2700)) == 0)
+    }
+
+    @Test func formatMatchesCombineSectionShape() {
+        #expect(MediaFileOperationClock.format(5) == "5s")
+        #expect(MediaFileOperationClock.format(312) == "5m 12s")
+        #expect(MediaFileOperationClock.format(3900) == "1h 5m")
+    }
+
+    @Test func textFormatsFrozenTerminalDuration() {
+        let s = MediaFileOperationClock.text(
+            state: .finished(summary: "ok"),
+            startedAt: t0,
+            finishedAt: t0.addingTimeInterval(312),
+            at: t0.addingTimeInterval(2700))
+        #expect(s == "5m 12s")
+    }
+}
+
+// MARK: - finishedAt stamping (regression 2026-07-07, model side)
+//
+// The clock can only freeze if every conformer actually stamps
+// `finishedAt` at its terminal transition — including jobs that were
+// already terminal before the window ever rendered (the stamp lives in
+// the MODEL, not the view, precisely for that case).
+
+@MainActor
+@Suite("MediaFileOperationJob finishedAt stamping")
+struct MediaFileOperationFinishedAtTests {
+
+    private func record(_ path: String) -> VideoRecord {
+        let r = VideoRecord()
+        r.filename = (path as NSString).lastPathComponent
+        r.fullPath = path
+        return r
+    }
+
+    /// Derived-state job (PairCompareJob) run to a REAL `.finished`
+    /// via two byte-identical temp files (Tier 1 — no ffmpeg), then
+    /// the duration is read at a simulated now 40 minutes later: it
+    /// must equal the stamped run duration, not the inflated one.
+    @Test func compareJobStampsFinishedAtAndClockFreezes() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MFOClockTests-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir,
+                                                withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bytes = Data(repeating: 0x42, count: 64 * 1024)
+        let a = dir.appendingPathComponent("a.bin").path
+        let b = dir.appendingPathComponent("b.bin").path
+        FileManager.default.createFile(atPath: a, contents: bytes)
+        FileManager.default.createFile(atPath: b, contents: bytes)
+
+        let job = PairCompareJob(recordA: record(a), recordB: record(b),
+                                 gates: [])
+        job.start()
+        await job.task?.value
+
+        #expect(!job.state.isActive)
+        let stamped = try #require(job.finishedAt)
+        let runDuration = stamped.timeIntervalSince(job.startedAt)
+        #expect(runDuration >= 0)
+        #expect(runDuration < 60)   // a 64 KB Tier-1 compare is seconds at most
+
+        // Glance 40 minutes later — the row must still read the run
+        // duration.
+        let later = stamped.addingTimeInterval(2400)
+        let shown = MediaFileOperationClock.duration(
+            state: job.state, startedAt: job.startedAt,
+            finishedAt: job.finishedAt, at: later)
+        #expect(shown == runDuration)
+    }
+
+    /// Derived-state job driven to `.failed` (missing file, Tier 0
+    /// stat failure) — the failure path must stamp too.
+    @Test func compareJobStampsFinishedAtOnFailure() async throws {
+        let missing = "/tmp/MFOClockTests-\(UUID().uuidString)-missing.bin"
+        let job = PairCompareJob(recordA: record(missing),
+                                 recordB: record(missing + "2"),
+                                 gates: [])
+        job.start()
+        await job.task?.value
+        if case .failed = job.state {
+            #expect(job.finishedAt != nil)
+        } else {
+            Issue.record("expected .failed, got \(job.state)")
+        }
+    }
+
+    /// Cancelled BEFORE start(): the job is terminal instantly and no
+    /// run Task will ever end — cancel() itself must stamp, otherwise
+    /// finishedAt stays nil and the clock would fall back to "now".
+    @Test func compareJobCancelledBeforeStartStampsFinishedAt() {
+        let job = PairCompareJob(recordA: record("/tmp/x.mov"),
+                                 recordB: record("/tmp/y.mov"),
+                                 gates: [])
+        job.cancel()
+        #expect(job.state == .cancelled)
+        #expect(job.finishedAt != nil)
+    }
+
+    @Test func extractJobCancelledBeforeStartStampsFinishedAt() {
+        let job = ExtractFramesJob(record: record("/tmp/x.mov"),
+                                   destinationParent: FileManager.default.temporaryDirectory,
+                                   gates: [])
+        job.cancel()
+        #expect(job.state == .cancelled)
+        #expect(job.finishedAt != nil)
+    }
+
+    @Test func ripAllFramesJobCancelledBeforeStartStampsFinishedAt() {
+        let job = RipAllFramesJob(record: record("/tmp/x.mov"),
+                                  destinationParent: FileManager.default.temporaryDirectory,
+                                  gates: [],
+                                  options: AllFramesRipper.Options())
+        job.cancel()
+        #expect(job.state == .cancelled)
+        #expect(job.finishedAt != nil)
+    }
+
+    /// Stored-state job (TranscodeJob — same `didSet` hook as
+    /// Reformat/Analyze/Cleanup): a missing source fails fast, before
+    /// any ffmpeg launch, and the terminal transition must stamp. The
+    /// frozen reading at +40 min pins the didSet path end-to-end.
+    @Test func transcodeJobStampsFinishedAtOnFailure() async throws {
+        let missing = "/tmp/MFOClockTests-\(UUID().uuidString)-missing.mov"
+        let out = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MFOClockTests-\(UUID().uuidString).mov")
+        let job = TranscodeJob(record: record(missing),
+                               preset: .editing,
+                               outputURL: out,
+                               model: VideoScanModel())
+        job.start()
+        await job.task?.value
+
+        if case .failed = job.state {
+            let stamped = try #require(job.finishedAt)
+            let later = stamped.addingTimeInterval(2400)
+            let shown = MediaFileOperationClock.duration(
+                state: job.state, startedAt: job.startedAt,
+                finishedAt: job.finishedAt, at: later)
+            #expect(shown == stamped.timeIntervalSince(job.startedAt))
+        } else {
+            Issue.record("expected .failed, got \(job.state)")
+        }
+    }
+
+    /// Stored-state job #2 (ReformatJob — identical `didSet` hook):
+    /// missing source fails fast before ffmpeg; the terminal
+    /// transition must stamp.
+    @Test func reformatJobStampsFinishedAtOnFailure() async throws {
+        let missing = "/tmp/MFOClockTests-\(UUID().uuidString)-missing.mov"
+        let job = ReformatJob(record: record(missing),
+                              model: VideoScanModel(),
+                              orchestrator: nil)
+        job.start()
+        await job.task?.value
+
+        if case .failed = job.state {
+            #expect(job.finishedAt != nil)
+        } else {
+            Issue.record("expected .failed, got \(job.state)")
+        }
+    }
+
+    /// Stored-state job #3 (CleanupJob — identical `didSet` hook):
+    /// missing source fails fast at the early guard; stamp must fire
+    /// there too. (AnalyzeJob shares the same one-line didSet but
+    /// needs a live CaptionOrchestrator to run — the compiler-enforced
+    /// protocol member plus these three siblings pin the pattern.)
+    @Test func cleanupJobStampsFinishedAtOnFailure() async throws {
+        let missing = "/tmp/MFOClockTests-\(UUID().uuidString)-missing.mov"
+        let source = makeCleanupSourceRecord(path: missing,
+                                             durationSeconds: 0,
+                                             fieldOrder: "tt")
+        let job = CleanupJob(record: source,
+                             recipe: CleanupRecipeRegistry.vhsQuickClean,
+                             model: VideoScanModel())
+        job.start()
+        await job.task?.value
+
+        if case .failed = job.state {
+            #expect(job.finishedAt != nil)
+        } else {
+            Issue.record("expected .failed, got \(job.state)")
+        }
     }
 }

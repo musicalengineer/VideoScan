@@ -88,7 +88,14 @@ final class CleanupJob: MediaFileOperationJob {
     /// suspend/resume contract through ffmpeg's subprocess state).
     let canPause = false
 
-    @Published private(set) var state: MediaFileOperationState = .running
+    @Published private(set) var state: MediaFileOperationState = .running {
+        didSet {
+            if !state.isActive, finishedAt == nil { finishedAt = Date() }
+        }
+    }
+    /// Terminal-transition stamp — freezes the row clock (see
+    /// MediaFileOperationClock). Set exactly once by state's didSet.
+    @Published private(set) var finishedAt: Date?
     @Published private(set) var subtitleText: String
     @Published private(set) var fractionValue: Double = 0
     @Published private(set) var isIndeterminateValue: Bool = true

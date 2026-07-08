@@ -61,6 +61,14 @@ final class PairCompareJob: MediaFileOperationJob {
     /// statusText (string-sniffing state is how subtle bugs happen).
     @Published private(set) var wasCancelled = false
 
+    /// Terminal-transition stamp — freezes the row clock (see
+    /// MediaFileOperationClock). `state` is DERIVED here, so there is
+    /// no single setter to observe; the run Task's completion (which
+    /// is exactly when the derived state settles terminal) and the
+    /// immediate-cancel path in `cancel()` both stamp via
+    /// `stampFinishedIfTerminal()`. Nil-guarded — first stamp wins.
+    @Published private(set) var finishedAt: Date?
+
     /// Set by the stall watchdog when the comparator stops making progress
     /// (a sleeping /Volumes drive mid-read during an ffmpeg streamhash /
     /// perceptual tier). Surfaced as `.failed` with volume-drop attribution
@@ -107,7 +115,17 @@ final class PairCompareJob: MediaFileOperationJob {
         task = Task { [weak self] in
             guard let self else { return }
             await self.runHoldingGates(self.gates[...])
+            // The derived `state` is terminal once the run unwinds —
+            // this is the terminal transition for clock purposes.
+            self.stampFinishedIfTerminal()
         }
+    }
+
+    /// Freeze the row clock at the terminal transition. Nil-guarded so
+    /// the first stamp wins (cancel-before-start stamps here first;
+    /// the run Task's completion is then a no-op).
+    private func stampFinishedIfTerminal() {
+        if !state.isActive, finishedAt == nil { finishedAt = Date() }
     }
 
     /// Acquire each gate in order (recursing so `withPermit` can
@@ -207,6 +225,10 @@ final class PairCompareJob: MediaFileOperationJob {
         guard state.isActive, !wasCancelled else { return }
         wasCancelled = true
         task?.cancel()
+        // Cancelled before start(), or while not mid-comparator: the
+        // derived state is ALREADY .cancelled and no run Task will end
+        // (or it ends without another transition) — stamp now.
+        stampFinishedIfTerminal()
         fileOpsLog.info("compare cancelled: \(self.title, privacy: .public)")
     }
 

@@ -403,10 +403,22 @@ struct MediaFileOperationRow: View {
                 }
             }
 
-            // Relative start time, live-updating ("2 min ago" style).
-            Text(job.startedAt, style: .relative)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundColor(.secondary)
+            // Row clock. Active job: live elapsed via SwiftUI's
+            // self-updating relative style. Terminal job: FROZEN run
+            // duration (finishedAt − startedAt) — `style: .relative`
+            // on every row was the 2026-07-07 bug where a finished
+            // 5-minute job read "45 min" when glanced at 40 minutes
+            // later (it counts up from startedAt forever).
+            if job.state.isActive {
+                Text(job.startedAt, style: .relative)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.secondary)
+            } else {
+                Text(MediaFileOperationClock.text(for: job, at: Date()))
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .help("Run duration — started \(job.startedAt.formatted(date: .abbreviated, time: .shortened))")
+            }
         }
     }
 
