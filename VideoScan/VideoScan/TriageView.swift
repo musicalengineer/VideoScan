@@ -15,6 +15,12 @@ enum TriageFilter: String, CaseIterable {
     // AND workspace-active. Lives in its own sidebar section so the
     // user reads it as "workflow state" rather than "disposition pick."
     case workspace    = "In Workspace"
+    // Cleaned-filter pass (Rick 2026-07-08) — DERIVED filter, not a
+    // stored tag: a record is "Cleaned up" iff CleanupJob stamped
+    // provenance on it (cleanupRecipeID != nil). Like .workspace it's
+    // a flag rather than a disposition pick, so it lives in the
+    // WORKFLOW sidebar section.
+    case cleaned      = "Cleaned up"
 
     var icon: String {
         switch self {
@@ -25,6 +31,7 @@ enum TriageFilter: String, CaseIterable {
         case .confirmedJunk: return "xmark.circle.fill"
         case .recoverable:   return "wrench.and.screwdriver.fill"
         case .workspace:     return "hammer.fill"
+        case .cleaned:       return "sparkles"
         }
     }
 
@@ -37,6 +44,29 @@ enum TriageFilter: String, CaseIterable {
         case .confirmedJunk: return .red
         case .recoverable:   return .teal
         case .workspace:     return .mint
+        case .cleaned:       return .purple
+        }
+    }
+
+    /// The per-record predicate for this filter. BOTH the table
+    /// (`filteredRecords`) and the sidebar count badges (`countFor`)
+    /// route through here, so the row set and the badge number can
+    /// never drift apart — previously they were two hand-duplicated
+    /// switches that had to be edited in lockstep. Pure function
+    /// (≈ a C++ free function: no view state), so it's unit-testable
+    /// without SwiftUI — see TriageCleanedFilterTests.
+    func matches(_ record: VideoRecord) -> Bool {
+        switch self {
+        case .all:           return true
+        case .untriaged:     return record.mediaDisposition == .unreviewed
+        case .important:     return record.mediaDisposition == .important
+        case .suspectedJunk: return record.mediaDisposition == .suspectedJunk
+        case .confirmedJunk: return record.mediaDisposition == .confirmedJunk
+        case .recoverable:   return record.mediaDisposition == .recoverable
+        case .workspace:     return record.workspaceActive
+        // Derived provenance: cleanupRecipeID is the stamp CleanupJob
+        // writes when it catalogs a recipe's output file.
+        case .cleaned:       return record.cleanupRecipeID != nil
         }
     }
 }
@@ -126,23 +156,11 @@ struct TriageView: View {
     }
 
     private var filteredRecords: [VideoRecord] {
-        let base: [VideoRecord]
-        switch selectedFilter {
-        case .all:
-            base = triageRecords
-        case .untriaged:
-            base = triageRecords.filter { $0.mediaDisposition == .unreviewed }
-        case .important:
-            base = triageRecords.filter { $0.mediaDisposition == .important }
-        case .suspectedJunk:
-            base = triageRecords.filter { $0.mediaDisposition == .suspectedJunk }
-        case .confirmedJunk:
-            base = triageRecords.filter { $0.mediaDisposition == .confirmedJunk }
-        case .recoverable:
-            base = triageRecords.filter { $0.mediaDisposition == .recoverable }
-        case .workspace:
-            base = triageRecords.filter { $0.workspaceActive }
-        }
+        // One pass through the shared TriageFilter.matches(_:) predicate;
+        // .all keeps its no-copy short-circuit from the old switch.
+        let base: [VideoRecord] = selectedFilter == .all
+            ? triageRecords
+            : triageRecords.filter { selectedFilter.matches($0) }
 
         // Apply the "Online volumes only" toggle BEFORE the search filter
         // so the search runs over the smaller set. The reachability check
@@ -210,6 +228,10 @@ struct TriageView: View {
                     // as an alternative to Important / Suspected Junk.
                     sidebarSection("WORKFLOW") {
                         filterRow(.workspace)
+                        // Derived from cleanup provenance (recipeID
+                        // stamp), so it sits with the workflow flags —
+                        // it isn't an alternative to Important/Junk.
+                        filterRow(.cleaned)
                     }
 
                     Divider().padding(.vertical, 6)
@@ -278,15 +300,14 @@ struct TriageView: View {
     }
 
     private func countFor(_ filter: TriageFilter) -> Int {
-        switch filter {
-        case .all:           return triageRecords.count
-        case .untriaged:     return triageRecords.filter { $0.mediaDisposition == .unreviewed }.count
-        case .important:     return triageRecords.filter { $0.mediaDisposition == .important }.count
-        case .suspectedJunk: return triageRecords.filter { $0.mediaDisposition == .suspectedJunk }.count
-        case .confirmedJunk: return triageRecords.filter { $0.mediaDisposition == .confirmedJunk }.count
-        case .recoverable:   return triageRecords.filter { $0.mediaDisposition == .recoverable }.count
-        case .workspace:     return triageRecords.filter { $0.workspaceActive }.count
-        }
+        // Same mechanism as the sibling filters: computed per render via
+        // the shared matches(_:) predicate (one plain property read per
+        // record — no I/O, no stat()). If sidebar counts ever need the
+        // cached/off-main treatment, that's the VolumeStatusCache
+        // pattern, applied to ALL rows at once, not just one case.
+        filter == .all
+            ? triageRecords.count
+            : triageRecords.filter { filter.matches($0) }.count
     }
 
     private var triageProgress: some View {
