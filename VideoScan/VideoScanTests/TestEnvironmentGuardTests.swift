@@ -33,6 +33,23 @@ struct TestEnvironmentDetectTests {
             loadedBundlePaths: [], hasXCTestCaseClass: false))
     }
 
+    // UI-test target signal — SmokeUITests injects this via
+    // launchEnvironment so the app under XCUITest gets the same
+    // settings-pollution gates as a unit-test host.
+    @Test func uiTestTargetEnvDetected() {
+        #expect(TestEnvironment.detect(
+            environment: ["VS_UI_TEST": "1"],
+            loadedBundlePaths: [], hasXCTestCaseClass: false))
+    }
+
+    // "0" (or any non-"1" value) must NOT arm the gates — the check is
+    // an explicit opt-in, not a mere key-presence test.
+    @Test func uiTestTargetEnvZeroNotDetected() {
+        #expect(!TestEnvironment.detect(
+            environment: ["VS_UI_TEST": "0"],
+            loadedBundlePaths: [], hasXCTestCaseClass: false))
+    }
+
     @Test func xctestCaseClassDetected() {
         #expect(TestEnvironment.detect(
             environment: [:], loadedBundlePaths: [], hasXCTestCaseClass: true))

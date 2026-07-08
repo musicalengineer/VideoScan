@@ -1,0 +1,39 @@
+{
+  "configurations": [
+    {
+      "id": "EDE35A3E-9D43-4676-AA65-D2193265F119",
+      "name": "UI Smoke",
+      "options": {}
+    }
+  ],
+  "defaultOptions": {
+    "codeCoverage": false,
+    "environmentVariableEntries": [
+      {
+        "key": "VS_UI_SMOKE",
+        "value": "1"
+      }
+    ],
+    "targetForVariableExpansion": {
+      "containerPath": "container:VideoScan.xcodeproj",
+      "identifier": "0DC193272F676647006295E7",
+      "name": "VideoScan"
+    },
+    "testExecutionOrdering": "alphabetical",
+    "testTimeoutsEnabled": true
+  },
+  "testTargets": [
+    {
+      "parallelizable": false,
+      "selectedTests": [
+        "SmokeUITests"
+      ],
+      "target": {
+        "containerPath": "container:VideoScan.xcodeproj",
+        "identifier": "0DC1933E2F676648006295E7",
+        "name": "VideoScanUITests"
+      }
+    }
+  ],
+  "version": 1
+}

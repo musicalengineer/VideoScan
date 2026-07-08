@@ -59,6 +59,7 @@ private let appLogIsRunningUnderTests: Bool = {
     if env["XCTestConfigurationFilePath"] != nil { return true }
     if env["XCTestBundlePath"] != nil { return true }
     if env["SWIFT_TESTING_ENABLED"] != nil { return true }
+    if env["VS_UI_TEST"] == "1" { return true } // UI-test target — see TestEnvironment.detect
     if Bundle.allBundles.contains(where: { $0.bundlePath.hasSuffix(".xctest") }) {
         return true
     }
@@ -103,7 +104,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        guard !Self.isRunningTests else { return }
+        // Second check covers the UI-test target (VS_UI_TEST=1): the app
+        // under XCUITest runs this delegate for real, and the RAM-disk
+        // reap below force-detaches EVERY /Volumes/VideoScan_Temp* —
+        // including one belonging to a concurrently running production
+        // instance. Skip all launch side effects under UI tests.
+        guard !Self.isRunningTests, !TestEnvironment.isTestHost else { return }
         let startLine = "app started — \(BuildInfo.summary) (pid \(ProcessInfo.processInfo.processIdentifier))"
         NSLog("VideoScan: %@", startLine)
         appLog.write(startLine)
@@ -153,7 +159,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ///      awaits; the reply is guaranteed within `vlmDrainDeadline`.
     /// Extends — doesn't replace — the existing willTerminate cleanup.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard !Self.isRunningTests else { return .terminateNow }
+        // UI-test target (VS_UI_TEST=1): quit immediately, no alerts —
+        // nothing real is running and a modal would hang the test runner.
+        guard !Self.isRunningTests, !TestEnvironment.isTestHost else { return .terminateNow }
         // Delegate callbacks arrive on the main thread; assumeIsolated
         // lets us touch the MainActor-bound center and NSAlert without
         // an async hop (same pattern as applicationWillTerminate).
@@ -229,10 +237,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             catalogModel?.saveCatalogNow()
         }
         // Synchronous on purpose — Cmd-Q must not return before the RAM disk
-        // is gone, otherwise it survives in /Volumes.
-        let detached = RAMDisk.cleanupStaleMounts()
-        if !detached.isEmpty {
-            NSLog("VideoScan: detached %d RAM disk(s) on exit", detached.count)
+        // is gone, otherwise it survives in /Volumes. Skipped under a UI-test
+        // target: the test app never creates a RAM disk, and the force-detach
+        // would hit a live one owned by a concurrently running real instance.
+        if !TestEnvironment.isTestHost {
+            let detached = RAMDisk.cleanupStaleMounts()
+            if !detached.isEmpty {
+                NSLog("VideoScan: detached %d RAM disk(s) on exit", detached.count)
+            }
         }
 
         // MLX teardown (see MLXShutdown.swift). Only when in-process
@@ -698,6 +710,10 @@ struct AboutView: View {
             VStack(spacing: 4) {
                 Text("VideoScan")
                     .font(.largeTitle.bold())
+                    // XCUITest hook — SmokeUITests asserts the About window's
+                    // content actually rendered, not just that a window with
+                    // the right title exists.
+                    .accessibilityIdentifier("about.title")
                 Text("Find friends and family in all your home videos.")
                     .font(.callout)
                     .foregroundStyle(.secondary)

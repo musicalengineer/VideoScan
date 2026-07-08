@@ -34,6 +34,9 @@
             reference = "container:VideoScan-CI.xctestplan"
             default = "YES">
          </TestPlanReference>
+         <TestPlanReference
+            reference = "container:VideoScan-UI.xctestplan">
+         </TestPlanReference>
       </TestPlans>
       <Testables>
          <TestableReference

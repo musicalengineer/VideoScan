@@ -18,6 +18,16 @@ enum TestEnvironment {
     /// Pure detection over injected inputs — unit-testable without faking
     /// real process state. Checks both XCTest (legacy) and Swift Testing
     /// signals: Swift Testing tests don't necessarily link XCTest.
+    ///
+    /// VS_UI_TEST=1 is the UI-test-target signal: under XCUITest the app
+    /// under test is the REAL app in a separate process, so NONE of the
+    /// XCTest markers below are present in it (they live in the runner
+    /// process). SmokeUITests injects VS_UI_TEST=1 via launchEnvironment
+    /// so all the settings-pollution gates keyed off this predicate
+    /// (catalog load/save, scan-target restore/persist, sync, caches)
+    /// apply to the app under UI test exactly as they do to a unit-test
+    /// host. Note: main.swift's test-HOST gate deliberately does NOT
+    /// check VS_UI_TEST — the UI must still launch fully.
     static func detect(environment: [String: String],
                        loadedBundlePaths: [String],
                        hasXCTestCaseClass: Bool) -> Bool {
@@ -25,6 +35,7 @@ enum TestEnvironment {
         if environment["XCTestConfigurationFilePath"] != nil { return true }
         if environment["XCTestBundlePath"] != nil { return true }
         if environment["SWIFT_TESTING_ENABLED"] != nil { return true }
+        if environment["VS_UI_TEST"] == "1" { return true }
         return loadedBundlePaths.contains { $0.hasSuffix(".xctest") }
     }
 
