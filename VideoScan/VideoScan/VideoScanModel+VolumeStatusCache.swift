@@ -160,7 +160,12 @@ extension VideoScanModel {
     ///
     /// Cost: records × targets prefix checks on pre-normalized strings
     /// (~2M memcmp for 103k × 19 — tens of ms on a background core).
+    // #if guard: the nightly CI's Xcode 16.4 (Swift 6.1) knows
+    // `@concurrent` only as a deprecated alias of `@Sendable` and warns;
+    // pre-6.2 a nonisolated async already runs off-actor.
+    #if compiler(>=6.2)
     @concurrent
+    #endif
     nonisolated static func computeVolumeStatuses(
         records: [VolumeStatusRecordSnap],
         targets: [VolumeStatusTargetSnap]

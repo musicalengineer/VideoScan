@@ -40,7 +40,12 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 30
     outputs:
-      warning_count: ${{ steps.count.outputs.warnings }}
+      # warning_count = concurrency-class findings only. The raw grep total
+      # includes -warn-long-* perf-timing lines whose embedded millisecond
+      # values jitter run-to-run on shared runners, so sort -u re-counts
+      # them and the "trend" is ~2/3 noise (found 2026-07-07).
+      warning_count: ${{ steps.count.outputs.concurrency }}
+      warning_total: ${{ steps.count.outputs.warnings }}
 
     steps:
       - name: Checkout
@@ -114,6 +119,7 @@ jobs:
           O_COUNT=$(wc -l < other-findings.txt | tr -d ' ')
           TOTAL=$(wc -l < all-warnings.txt | tr -d ' ')
           echo "warnings=$TOTAL" >> "$GITHUB_OUTPUT"
+          echo "concurrency=$C_COUNT" >> "$GITHUB_OUTPUT"
 
           {
             echo "## Swift strict concurrency (max)"
@@ -517,6 +523,7 @@ jobs:
       - name: Build aggregate row + push
         env:
           CONCURRENCY_WARNINGS: ${{ needs.strict-concurrency.outputs.warning_count }}
+          STRICT_WARNING_TOTAL: ${{ needs.strict-concurrency.outputs.warning_total }}
           CODEQL_FINDINGS: ${{ needs.codeql.outputs.finding_count }}
           TSAN_ISSUES: ${{ needs.thread-sanitizer.outputs.issue_count }}
           SWIFTLINT_STRICT: ${{ needs.lint-strict.outputs.swiftlint_count }}
@@ -525,9 +532,10 @@ jobs:
           set -e
           TS="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           SHA="${GITHUB_SHA:0:8}"
-          ROW=$(printf '{"ts":"%s","sha":"%s","run_kind":"nightly","concurrency_warnings":%s,"codeql_findings":%s,"tsan_issues":%s,"swiftlint_strict":%s,"periphery_aggressive":%s}' \
+          ROW=$(printf '{"ts":"%s","sha":"%s","run_kind":"nightly","concurrency_warnings":%s,"strict_warning_total":%s,"codeql_findings":%s,"tsan_issues":%s,"swiftlint_strict":%s,"periphery_aggressive":%s}' \
                 "$TS" "$SHA" \
                 "${CONCURRENCY_WARNINGS:-null}" \
+                "${STRICT_WARNING_TOTAL:-null}" \
                 "${CODEQL_FINDINGS:-null}" \
                 "${TSAN_ISSUES:-null}" \
                 "${SWIFTLINT_STRICT:-null}" \

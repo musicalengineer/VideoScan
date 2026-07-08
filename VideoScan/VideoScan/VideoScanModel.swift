@@ -559,39 +559,7 @@ final class VideoScanModel: ObservableObject {
     }
 
     init() {
-        // Listen for catalog-mutation pings from InspectorFamilyTagsView
-        // (and any other downstream view that mutates a VideoRecord's
-        // class-typed fields, which can't fire @Published didSet on
-        // the records array). Triggers the debounced save path.
-        NotificationCenter.default.addObserver(
-            forName: .videoScanCatalogMutated,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.saveCatalogDebounced()
-            self?.noteVolumeStatusesStale()
-            // QA P0-1 (2026-07-05): the correlate/duplicate ledger paths
-            // publish through THIS notification instead of republishing the
-            // records array — the debounced chrome caches (dossierCounts,
-            // hasAnyPairs, deletableDupVolumes) must refresh here too, or
-            // "Show Pairs Only" / the delete-dups menu go stale.
-            self?.noteCatalogChangedForDossierCounts()
-            self?.objectWillChange.send()
-        }
-        // When scans hit the RAM floor (MemoryPressureMonitor auto-pause),
-        // drop the thumbnail cache wholesale — it's pure derived data and
-        // the cheapest several GB we can hand back. NSCache would shed
-        // entries on its own eventually; this makes it immediate. Also
-        // stop any in-flight prewarm so it doesn't refill what we just
-        // freed.
-        NotificationCenter.default.addObserver(
-            forName: .memoryPressureAutoPause,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.thumbnailCache.removeAllObjects()
-            self?.thumbnailPrecacher.cancel(reason: "memory pressure")
-        }
+        installLifecycleObservers()
         restoreScanTargets()
         // Restore previously-scanned records so the user can browse the
         // catalog even when source volumes are offline.
@@ -696,10 +664,62 @@ final class VideoScanModel: ObservableObject {
         refreshCacheCountSoon()
     }
 
+    /// The two NotificationCenter observers installed at init. Extracted
+    /// from `init` verbatim (2026-07-07, concurrency-warning pass). Both
+    /// observers use `queue: .main`, so the blocks are GUARANTEED to run
+    /// on the main thread — `MainActor.assumeIsolated` makes that
+    /// guarantee visible to the compiler (and enforces it with a runtime
+    /// check) instead of calling MainActor-isolated methods from a
+    /// nominally nonisolated closure. Same pattern as the app-delegate
+    /// callbacks in VideoScanApp. NO async hop: everything below still
+    /// executes synchronously inside the notification delivery, exactly
+    /// as before.
+    private func installLifecycleObservers() {
+        // Listen for catalog-mutation pings from InspectorFamilyTagsView
+        // (and any other downstream view that mutates a VideoRecord's
+        // class-typed fields, which can't fire @Published didSet on
+        // the records array). Triggers the debounced save path.
+        NotificationCenter.default.addObserver(
+            forName: .videoScanCatalogMutated,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.saveCatalogDebounced()
+                self.noteVolumeStatusesStale()
+                // QA P0-1 (2026-07-05): the correlate/duplicate ledger paths
+                // publish through THIS notification instead of republishing the
+                // records array — the debounced chrome caches (dossierCounts,
+                // hasAnyPairs, deletableDupVolumes) must refresh here too, or
+                // "Show Pairs Only" / the delete-dups menu go stale.
+                self.noteCatalogChangedForDossierCounts()
+                self.objectWillChange.send()
+            }
+        }
+        // When scans hit the RAM floor (MemoryPressureMonitor auto-pause),
+        // drop the thumbnail cache wholesale — it's pure derived data and
+        // the cheapest several GB we can hand back. NSCache would shed
+        // entries on its own eventually; this makes it immediate. Also
+        // stop any in-flight prewarm so it doesn't refill what we just
+        // freed.
+        NotificationCenter.default.addObserver(
+            forName: .memoryPressureAutoPause,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.thumbnailCache.removeAllObjects()
+                self.thumbnailPrecacher.cancel(reason: "memory pressure")
+            }
+        }
+    }
+
     // Internal (not private) so VideoScanModel+VolumeLifecycle can mutate it.
     // mountObservers stays in the main class because extensions can't add
     // stored properties.
-    var mountObservers: [NSObjectProtocol] = []
+    var mountObservers: [any NSObjectProtocol] = []
 
 
 

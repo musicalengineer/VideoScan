@@ -137,7 +137,12 @@ enum PerceptualFingerprinter {
     /// under Approachable Concurrency a plain nonisolated async func
     /// would run on the CALLER's (main) actor; this pins the decode
     /// wait and byte-shuffling to the global pool.
+    // #if guard: the nightly CI's Xcode 16.4 (Swift 6.1) knows
+    // `@concurrent` only as a deprecated alias of `@Sendable` and warns;
+    // pre-6.2 a nonisolated async already runs off-actor.
+    #if compiler(>=6.2)
     @concurrent
+    #endif
     nonisolated static func fingerprint(
         ffmpegPath: String,
         path: String,

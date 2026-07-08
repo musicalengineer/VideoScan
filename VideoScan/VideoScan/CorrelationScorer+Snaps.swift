@@ -102,7 +102,12 @@ extension CorrelationScorer {
     /// Mirrors the legacy pipeline exactly: same pools (by key, by dir,
     /// thin-pool duration/timestamp fallback), same rubric, same
     /// greedy-by-score claim order.
+    // #if guard: the nightly CI's Xcode 16.4 (Swift 6.1) knows
+    // `@concurrent` only as a deprecated alias of `@Sendable` and warns;
+    // pre-6.2 a nonisolated async static already runs off-actor.
+    #if compiler(>=6.2)
     @concurrent
+    #endif
     static func assignPairs(
         videos: [Snap],
         audios: [Snap],
@@ -224,7 +229,10 @@ extension CorrelationScorer {
     /// shouldn't pay). Ledger semantics: a clip with ANY paired member is
     /// settled — skipped entirely, preserving the legacy one-pair-per-clip
     /// invariant across incremental runs.
+    // #if guard: see assignPairs above.
+    #if compiler(>=6.2)
     @concurrent
+    #endif
     static func assignAvidPairs(_ snaps: [AvidSnap]) async -> AvidResult {
         var videosByClip: [String: [AvidSnap]] = [:]
         var audiosByClip: [String: [AvidSnap]] = [:]
@@ -245,11 +253,15 @@ extension CorrelationScorer {
             let ranked = candidates.map {
                 (snap: $0, online: VolumeReachability.isReachable(path: $0.fullPath))
             }
-            return ranked.sorted { a, b in
+            // min(by:) with the same ordering — picks the element that
+            // would have sorted first, without the O(n log n) sort (and
+            // satisfies swiftlint sorted_first_last). Tie behavior is
+            // identical: both keep the EARLIEST minimal element.
+            return ranked.min { a, b in
                 if a.online != b.online { return a.online }
                 if a.snap.isPlayable != b.snap.isPlayable { return a.snap.isPlayable == "Yes" }
                 return a.snap.sizeBytes > b.snap.sizeBytes
-            }.first?.snap
+            }?.snap
         }
 
         let allClipIDs = Set(videosByClip.keys).union(audiosByClip.keys)
