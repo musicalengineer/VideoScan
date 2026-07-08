@@ -404,14 +404,19 @@ final class MediaFileOperationsCenter: ObservableObject {
 
     /// Kick off "Clean Up Video" with a named recipe. The job renders in
     /// scratch (RAM disk when the estimate fits), atomically publishes
-    /// `<stem>_cleaned.mov` beside the original, and catalogs the output
-    /// with provenance (derivedFrom + recipe id/version). The original
-    /// file is never modified. Rick 2026-07-07.
+    /// `<stem>_cleaned.mov` beside the original (non-clobbering,
+    /// re-uniquified at publish time), and catalogs the output with
+    /// provenance (derivedFrom + recipe id/version). The original file is
+    /// never modified. `plannedOutput` carries the destination the
+    /// confirmation sheet displayed (m3); nil computes it fresh.
+    /// Rick 2026-07-07.
     @discardableResult
     func startCleanup(record: VideoRecord,
                       recipe: CleanupRecipe,
-                      model: VideoScanModel) -> CleanupJob {
-        let job = CleanupJob(record: record, recipe: recipe, model: model)
+                      model: VideoScanModel,
+                      plannedOutput: URL? = nil) -> CleanupJob {
+        let job = CleanupJob(record: record, recipe: recipe, model: model,
+                             plannedOutput: plannedOutput)
         add(job)
         job.start()
         fileOpsLog.info("cleanup started: \(record.filename, privacy: .public) recipe=\(recipe.id, privacy: .public) v\(recipe.version) → \(job.outputURL.lastPathComponent, privacy: .public)")

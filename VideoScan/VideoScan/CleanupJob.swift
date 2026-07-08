@@ -4,9 +4,11 @@ import os
 
 // MARK: - CleanupJob
 //
-// "Clean Up Video" — Rick 2026-07-07. Applies a named CleanupRecipe (v1:
-// "VHS Quick Clean") to one catalog record and writes the result NEXT TO
-// THE ORIGINAL as `<stem>_cleaned.mov` (ProRes 422 LT, audio copied).
+// "Clean Up Video" — Rick 2026-07-07 (QA remediation pass same day).
+// Applies a named CleanupRecipe (v1: "VHS Quick Clean") to one catalog
+// record and writes the result NEXT TO THE ORIGINAL as
+// `<stem>_cleaned.mov` (ProRes 422 LT; audio copied when playback-safe,
+// modernized to PCM otherwise — see CleanupFFmpegEngine's allowlist).
 // The original is NEVER modified — the whole pipeline only reads it.
 //
 // Division of labor (see CleanupEngine.swift in VideoScanCore for the
@@ -17,23 +19,34 @@ import os
 //     publish next to the original, catalog registration, and the
 //     provenance stamp (derivedFrom + cleanupRecipeID/Version).
 //
-// Atomic output: the scratch render is copied to a `.vs-partial` sibling
-// of the final name (same directory ⇒ same volume), then promoted with
-// ReformatJob.atomicPublish's single rename. A crash/cancel at any point
-// leaves either nothing or a clearly-named partial — never a
-// half-written `<stem>_cleaned.mov`.
+// Atomic, NON-CLOBBERING output (B1+M3, QA 2026-07-07): the scratch
+// render is copied — in 8 MB chunks, off the main actor, cancellable,
+// with byte progress driving the bar AND the stall watchdog — to a
+// `.vs-partial` sibling of the final name (same directory ⇒ same
+// volume), then promoted with a rename that FAILS if the destination
+// exists. The destination name is re-uniquified at publish time (the
+// init-time name is only a plan — a multi-hour render is a wide TOCTOU
+// window), so a cleanup can never overwrite an existing file, its own
+// planned name included. A crash/cancel at any point leaves either
+// nothing or a clearly-named partial — never a half-written
+// `<stem>_cleaned.mov`. (The scan walker skips `.vs-partial.` files, so
+// a concurrent scan can't catalog the transient copy.)
 //
-// Memory / scratch sizing: ffmpeg streams (no media buffered in-process;
-// worst case in RAM here is a ~200-byte progress line). The scratch FILE
-// can be large — ProRes LT of a 2 h SD tape is ~25-30 GB — so the RAM
-// disk is only used when `estimatedOutputBytes` fits in 60% of the
-// configured RAM-disk size; otherwise scratch falls back to the system
-// temp directory (SSD). Worst-case RAM footprint is therefore bounded by
-// perfSettings.ramDiskGB, and only when the estimate says it fits.
+// Memory / scratch sizing: ffmpeg streams, and the publish copy holds at
+// most ONE 8 MB chunk in flight (released per iteration via
+// autoreleasepool) — worst case in-process RAM is ~8 MB + progress
+// lines. The scratch FILE can be large — ProRes LT of a 2 h SD tape is
+// ~25-30 GB — so the RAM disk is only used when `estimatedOutputBytes`
+// fits in 60% of the configured RAM-disk size; otherwise scratch falls
+// back to the system temp directory (SSD). Worst-case RAM footprint is
+// therefore bounded by perfSettings.ramDiskGB, and only when the
+// estimate says it fits.
 //
 // Stall watchdog: same StallMonitor contract as Reformat/Transcode —
-// silence on ffmpeg's progress stream past the threshold kills the child
-// and fails with volume-drop attribution instead of hanging.
+// silence on ffmpeg's progress stream OR the publish copy's byte
+// progress past the threshold kills the job with volume-drop
+// attribution instead of hanging (a destination-volume drop mid-copy
+// must fail loudly, not wedge).
 
 private let cleanupLog = Logger(subsystem: "Rick-Breen.VideoScan",
                                 category: "cleanup")
@@ -51,10 +64,18 @@ final class CleanupJob: MediaFileOperationJob {
     /// The recipe this job applies (id+version become provenance).
     let recipe: CleanupRecipe
 
-    /// Final destination — `<stem>_cleaned.mov` beside the original,
-    /// uniquified (`<stem>_cleaned 2.mov`, …) if the name is taken.
-    /// Computed once at init so the sheet can display it.
+    /// PLANNED destination — `<stem>_cleaned.mov` beside the original,
+    /// uniquified against files existing at init. Shared with the sheet
+    /// via CleanupRequest (m3) so the UI never promises a name the job
+    /// doesn't plan to use. The publish step re-uniquifies (M3), so the
+    /// ACTUAL destination can differ when a collision appears mid-render
+    /// — see `publishedURL`.
     let outputURL: URL
+
+    /// Where the cleaned copy actually landed. nil until publish
+    /// succeeds. Equals `outputURL` unless a publish-time collision
+    /// forced a bump.
+    private(set) var publishedURL: URL?
 
     /// The rendering engine. v1 always the ffmpeg filtergraph engine;
     /// injectable so tests can stub and future dispatchers can route.
@@ -86,16 +107,21 @@ final class CleanupJob: MediaFileOperationJob {
 
     // MARK: Init / start
 
+    /// `plannedOutput` lets the confirmation sheet hand over the exact
+    /// destination it displayed (computed once in CleanupRequest — m3).
+    /// nil (programmatic callers, tests) computes it here.
     init(record: VideoRecord,
          recipe: CleanupRecipe,
          model: VideoScanModel,
-         engine: any CleanupRecipeEngine = CleanupFFmpegEngine()) {
+         engine: any CleanupRecipeEngine = CleanupFFmpegEngine(),
+         plannedOutput: URL? = nil) {
         self.record = record
         self.recipe = recipe
         self.model = model
         self.engine = engine
         self.subtitleText = "Preparing \(recipe.displayName)…"
-        self.outputURL = Self.cleanedOutputURL(forSourcePath: record.fullPath)
+        self.outputURL = plannedOutput
+            ?? Self.cleanedOutputURL(forSourcePath: record.fullPath)
     }
 
     /// Start the cleanup. Idempotent — a second call is a no-op.
@@ -107,8 +133,9 @@ final class CleanupJob: MediaFileOperationJob {
         }
     }
 
-    /// Cancel the in-flight render. Task.cancel propagates through the
-    /// engine into ProcessRunner, which terminates the ffmpeg child.
+    /// Cancel the in-flight render/copy. Task.cancel propagates through
+    /// the engine into ProcessRunner (killing the ffmpeg child) and into
+    /// the publish copy's per-chunk checkCancellation.
     func cancel() {
         guard state.isActive else { return }
         state = .cancelling
@@ -124,6 +151,13 @@ final class CleanupJob: MediaFileOperationJob {
         cleanupLog.info("cleanup START: \(self.record.filename, privacy: .public) recipe=\(self.recipe.id, privacy: .public) v\(self.recipe.version, privacy: .public) on \(volumeLabel, privacy: .public) → \(self.outputURL.lastPathComponent, privacy: .public)")
         appLog.write("cleanup: \(record.filename) — \(recipe.displayName) (\(recipe.id) v\(recipe.version)) → \(outputURL.lastPathComponent)")
 
+        // Loud early guard (QA note): the menu already gates on a video
+        // stream, but programmatic callers must not slip an audio-only /
+        // unknown record into a video pipeline.
+        guard record.streamType == .videoAndAudio || record.streamType == .videoOnly else {
+            finish(failed: "Clean Up Video needs a video stream — \(record.filename) has none (\(record.streamTypeRaw.isEmpty ? "unknown streams" : record.streamTypeRaw))")
+            return
+        }
         guard FileManager.default.fileExists(atPath: inputPath) else {
             finish(failed: "Source file missing on disk")
             return
@@ -134,12 +168,14 @@ final class CleanupJob: MediaFileOperationJob {
         }
 
         // Engine input, built ONLY from the record's existing ffprobe
-        // metadata (no re-probe).
+        // metadata (no re-probe). hasAudio is videoAndAudio only — the
+        // audio-only case was rejected above.
         let source = CleanupSource(
             path: inputPath,
             durationSeconds: max(0, record.durationSeconds),
             fieldOrder: record.scanType,
-            hasAudio: record.streamType == .videoAndAudio || record.streamType == .audioOnly
+            hasAudio: record.streamType == .videoAndAudio,
+            audioCodec: record.audioCodec
         )
 
         // ---- Scratch: RAM disk when the estimate fits, temp dir otherwise.
@@ -170,7 +206,9 @@ final class CleanupJob: MediaFileOperationJob {
         subtitleText = "Cleaning up — \(recipe.displayName)…"
         isIndeterminateValue = (source.durationSeconds == 0)
 
-        // Stall watchdog: every engine progress beat kicks it.
+        // Stall watchdog: armed across BOTH long phases — the ffmpeg
+        // render and the publish copy (B1). Every progress beat of either
+        // phase kicks it.
         let monitor = StallMonitor(label: "cleanup \(record.filename)") { [weak self] silentFor in
             Task { @MainActor [weak self] in
                 self?.handleStall(silentFor: silentFor)
@@ -178,12 +216,9 @@ final class CleanupJob: MediaFileOperationJob {
         }
         let progressSink: @Sendable (CleanupProgress) -> Void = { [weak self] beat in
             monitor.tick()
-            guard let self else { return }
+            guard let self, let fraction = beat.fraction else { return }
             Task { @MainActor in
-                if let fraction = beat.fraction {
-                    self.fractionValue = fraction
-                    self.isIndeterminateValue = false
-                }
+                self.applyProgressFraction(fraction)
             }
         }
 
@@ -199,65 +234,109 @@ final class CleanupJob: MediaFileOperationJob {
                                                     progress: progressSink)
         } catch {
             monitor.stop()
-            if let stallReason {
-                cleanupLog.error("cleanup FAILED (stall): \(self.record.filename, privacy: .public) — \(stallReason, privacy: .public)")
-                finish(failed: stallReason)
-            } else if error is CancellationError || Task.isCancelled || state == .cancelling {
-                cleanupLog.info("cleanup cancelled: \(self.record.filename, privacy: .public)")
-                finish(cancelled: true)
-            } else {
-                finish(failed: Self.describe(error))
+            failOrCancel(error, phase: "render")
+            return
+        }
+        let renderElapsed = Date().timeIntervalSince(renderStart)
+
+        if let stallReason {
+            monitor.stop()
+            finish(failed: stallReason)
+            return
+        }
+        if Task.isCancelled || state == .cancelling {
+            monitor.stop()
+            finishCancelled()
+            return
+        }
+
+        // ---- Publish (B1+M3): chunked off-main copy to a same-volume
+        // partial, then a NON-CLOBBERING rename at a freshly-uniquified
+        // name. Byte progress restarts the bar for this phase (a 30 GB
+        // copy onto an HDD easily exceeds the 15-30 s progress rule) and
+        // keeps the watchdog fed.
+        subtitleText = "Moving cleaned copy next to the original…"
+        fractionValue = 0
+        isIndeterminateValue = false
+        let copyProgress: @Sendable (Double) -> Void = { [weak self] fraction in
+            monitor.tick()
+            guard let self else { return }
+            Task { @MainActor in
+                self.applyProgressFraction(fraction)
             }
+        }
+        let published: URL
+        do {
+            published = try await Self.publishOffMain(renderedPath: rendered.path,
+                                                      sourcePath: inputPath,
+                                                      preferredOutput: outputURL,
+                                                      progress: copyProgress)
+        } catch {
+            monitor.stop()
+            failOrCancel(error, phase: "publish")
             return
         }
         monitor.stop()
-        let renderElapsed = Date().timeIntervalSince(renderStart)
+        publishedURL = published
 
         if let stallReason {
             finish(failed: stallReason)
             return
         }
         if Task.isCancelled || state == .cancelling {
-            finish(cancelled: true)
+            // The publish completed before the cancel landed — the file
+            // is whole and correctly named; leave it, report cancelled.
+            finishCancelled()
             return
         }
-
-        // ---- Atomic publish: scratch → same-volume partial → rename.
-        subtitleText = "Moving cleaned copy next to the original…"
-        isIndeterminateValue = true
-        let partialPath = ReformatJob.partialURL(for: outputURL).path
-        do {
-            try? FileManager.default.removeItem(atPath: partialPath)
-            // Cross-volume copy (RAM disk / tmp → the original's volume)…
-            try FileManager.default.copyItem(atPath: rendered.path, toPath: partialPath)
-            // …then a same-volume metadata-only rename: atomic.
-            try ReformatJob.atomicPublish(from: partialPath, to: outputURL.path)
-        } catch {
-            try? FileManager.default.removeItem(atPath: partialPath)
-            finish(failed: "Could not place the cleaned copy: \(error.localizedDescription)")
-            return
+        if published != outputURL {
+            cleanupLog.notice("cleanup publish: planned name \(self.outputURL.lastPathComponent, privacy: .public) was taken mid-render — published as \(published.lastPathComponent, privacy: .public)")
         }
 
-        let attrs = try? FileManager.default.attributesOfItem(atPath: outputURL.path)
+        let attrs = try? FileManager.default.attributesOfItem(atPath: published.path)
         let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
 
-        // ---- Catalog + provenance.
-        await catalogCleanupOutput()
+        // ---- Catalog + provenance + persistence.
+        await catalogCleanupOutput(publishedURL: published)
 
-        cleanupLog.info("cleanup DONE: \(self.record.filename, privacy: .public) → \(self.outputURL.lastPathComponent, privacy: .public) (\(Self.humanBytes(size), privacy: .public)) render \(renderElapsed, format: .fixed(precision: 1), privacy: .public)s")
-        appLog.write("cleanup done: \(outputURL.lastPathComponent) (\(Self.humanBytes(size))) — original untouched")
-        finish(success: "Cleaned → \(outputURL.lastPathComponent) (\(Self.humanBytes(size))). Original untouched.")
+        cleanupLog.info("cleanup DONE: \(self.record.filename, privacy: .public) → \(published.lastPathComponent, privacy: .public) (\(Self.humanBytes(size), privacy: .public)) render \(renderElapsed, format: .fixed(precision: 1), privacy: .public)s")
+        appLog.write("cleanup done: \(published.lastPathComponent) (\(Self.humanBytes(size))) — original untouched")
+        finish(success: "Cleaned → \(published.lastPathComponent) (\(Self.humanBytes(size))). Original untouched.")
     }
 
-    // MARK: Off-main render hop
+    /// Shared error terminal for the two long phases: watchdog stall wins
+    /// (specific reason), then user cancel, then the described failure.
+    private func failOrCancel(_ error: Error, phase: String) {
+        if let stallReason {
+            cleanupLog.error("cleanup FAILED (stall, \(phase, privacy: .public)): \(self.record.filename, privacy: .public) — \(stallReason, privacy: .public)")
+            finish(failed: stallReason)
+        } else if error is CancellationError || Task.isCancelled || state == .cancelling {
+            cleanupLog.info("cleanup cancelled (\(phase, privacy: .public)): \(self.record.filename, privacy: .public)")
+            finishCancelled()
+        } else {
+            finish(failed: Self.describe(error))
+        }
+    }
+
+    /// m2: single, state-guarded write path for progress fractions. Beats
+    /// arrive via unstructured Tasks and can land AFTER the job reached a
+    /// terminal state — a straggler must never drag a finished bar back
+    /// below 1.0. Internal so tests can pin the guard.
+    func applyProgressFraction(_ fraction: Double) {
+        guard state.isActive else { return }
+        fractionValue = fraction
+        isIndeterminateValue = false
+    }
+
+    // MARK: Off-main hops
     //
     // This repo's Approachable Concurrency configuration makes
     // `nonisolated async` run on the CALLER's actor — calling the engine
-    // straight from this @MainActor job would run its body on main (the
-    // documented 14.5 h-crawl trap). `@concurrent` forces the global
-    // executor; the engine's own `nonisolated(nonsending)` render then
-    // inherits THAT context, so argument building + subprocess supervision
-    // stay off-main and only the progress beats hop back.
+    // (or a 30 GB file copy!) straight from this @MainActor job would run
+    // on main (the documented 14.5 h-crawl trap). `@concurrent` forces
+    // the global executor; nested `nonisolated(nonsending)` calls inherit
+    // THAT context, so subprocess supervision and the copy loop stay
+    // off-main and only the progress beats hop back.
     // #if guard: the nightly CI's older Xcode (Swift 6.1) knows
     // `@concurrent` only as a deprecated alias and warns; pre-6.2 a
     // nonisolated async static already runs off-actor. Same idiom as
@@ -276,6 +355,130 @@ final class CleanupJob: MediaFileOperationJob {
                                 source: source,
                                 scratchDirectory: scratchDirectory,
                                 progress: progress)
+    }
+
+    // MARK: Publish (B1 + M3)
+
+    /// Copy the finished render next to the original and promote it —
+    /// entirely off the main actor.
+    ///
+    ///   1. Re-uniquify the destination NOW (M3): the name planned at
+    ///      init/sheet time is stale after a long render. The preferred
+    ///      name is kept when still free so the sheet's promise holds in
+    ///      the common case. A name whose `.vs-partial` sibling exists is
+    ///      treated as taken (another job is mid-publish on it).
+    ///   2. Chunked copy scratch → `.vs-partial` sibling of the candidate
+    ///      (cross-volume; 8 MB chunks; per-chunk cancellation; byte
+    ///      progress feeds the bar + watchdog).
+    ///   3. NON-CLOBBERING promote: FileManager.moveItem FAILS if the
+    ///      destination exists — it never deletes. If a collision raced
+    ///      in anyway, re-uniquify and retry the (same-volume, instant)
+    ///      rename; the copy is not redone. Cleanup deliberately does NOT
+    ///      use ReformatJob.atomicPublish — that helper replaces an
+    ///      existing destination, which is correct for Reformat's
+    ///      timestamped names and wrong here.
+    ///
+    /// Returns the URL the file actually landed at.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    private static func publishOffMain(
+        renderedPath: String,
+        sourcePath: String,
+        preferredOutput: URL,
+        progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> URL {
+        let fm = FileManager.default
+        let taken: (String) -> Bool = { path in
+            fm.fileExists(atPath: path)
+                || fm.fileExists(atPath: ReformatJob.partialURL(for: URL(fileURLWithPath: path)).path)
+        }
+
+        // 1. Publish-time re-uniquify (M3 TOCTOU guard).
+        var candidate = preferredOutput
+        if taken(candidate.path) {
+            candidate = cleanedOutputURL(forSourcePath: sourcePath, fileExists: taken)
+        }
+
+        // 2. Chunked copy to the candidate's partial sibling.
+        let partialPath = ReformatJob.partialURL(for: candidate).path
+        do {
+            try await chunkedCopy(from: renderedPath, to: partialPath, progress: progress)
+        } catch {
+            try? fm.removeItem(atPath: partialPath)
+            throw error
+        }
+
+        // 3. Non-clobbering promote, retrying the uniquify on a raced-in
+        // collision. Bounded so a pathological filesystem can't loop us.
+        var attempts = 0
+        while true {
+            do {
+                try fm.moveItem(atPath: partialPath, toPath: candidate.path)
+                return candidate
+            } catch {
+                attempts += 1
+                guard attempts < 100, fm.fileExists(atPath: candidate.path) else {
+                    try? fm.removeItem(atPath: partialPath)
+                    throw error
+                }
+                // Somebody claimed the name between uniquify and rename —
+                // pick the next free one and retry (rename only; the
+                // copied bytes are reused).
+                candidate = cleanedOutputURL(forSourcePath: sourcePath, fileExists: taken)
+            }
+        }
+    }
+
+    /// Streaming file copy: 8 MB chunks, cancellation checked per chunk,
+    /// byte-fraction progress, and a per-chunk `Task.yield()` so a
+    /// multi-minute copy never pins one cooperative-pool thread (the same
+    /// concern that puts RAMDisk's hdiutil calls on detached tasks).
+    /// Memory: exactly one chunk in flight, released each iteration via
+    /// autoreleasepool (worst case ~8 MB). Internal so tests can exercise
+    /// it directly. Async + nonisolated: runs on the CALLER's executor —
+    /// reach it through a `@concurrent` frame (publishOffMain), never
+    /// directly from @MainActor.
+    nonisolated static func chunkedCopy(
+        from source: String,
+        to destination: String,
+        chunkBytes: Int = 8 << 20,
+        progress: @Sendable (Double) -> Void
+    ) async throws {
+        let fm = FileManager.default
+        try? fm.removeItem(atPath: destination)
+        guard fm.createFile(atPath: destination, contents: nil) else {
+            throw CocoaError(.fileWriteUnknown,
+                             userInfo: [NSFilePathErrorKey: destination])
+        }
+        let totalBytes = ((try? fm.attributesOfItem(atPath: source))?[.size] as? NSNumber)?
+            .doubleValue ?? 0
+
+        let input = try FileHandle(forReadingFrom: URL(fileURLWithPath: source))
+        let output = try FileHandle(forWritingTo: URL(fileURLWithPath: destination))
+        defer {
+            try? input.close()
+            try? output.close()
+        }
+
+        var copied: Int64 = 0
+        while true {
+            // A cancel (user or watchdog) lands here within one chunk.
+            try Task.checkCancellation()
+            let finished = try autoreleasepool { () -> Bool in
+                guard let chunk = try input.read(upToCount: chunkBytes),
+                      !chunk.isEmpty else { return true }
+                try output.write(contentsOf: chunk)
+                copied += Int64(chunk.count)
+                return false
+            }
+            if finished { break }
+            if totalBytes > 0 {
+                progress(min(1.0, Double(copied) / totalBytes))
+            }
+            // Give the executor a scheduling point between chunks.
+            await Task.yield()
+        }
     }
 
     // MARK: Scratch acquisition
@@ -321,7 +524,8 @@ final class CleanupJob: MediaFileOperationJob {
 
     /// `<stem>_cleaned.mov` beside the original; on collision, Finder-style
     /// counters: `<stem>_cleaned 2.mov`, `<stem>_cleaned 3.mov`, …
-    /// `fileExists` is injected so the uniquify loop is pure-testable.
+    /// `fileExists` is injected so the uniquify loop is pure-testable (and
+    /// so the publish path can fold "partial exists" into "taken").
     nonisolated static func cleanedOutputURL(
         forSourcePath path: String,
         fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
@@ -343,32 +547,45 @@ final class CleanupJob: MediaFileOperationJob {
     private func handleStall(silentFor: Double) {
         guard state.isActive, stallReason == nil else { return }
         let attribution = StallMonitor.attribution(forPaths: [record.fullPath, outputURL.path])
-        let reason = "Stalled — no ffmpeg progress for \(Int(silentFor))s during cleanup. \(attribution)"
+        let reason = "Stalled — no progress for \(Int(silentFor))s during cleanup. \(attribution)"
         stallReason = reason
         subtitleText = "Stalled — stopping…"
         cleanupLog.error("cleanup WATCHDOG: killing \(self.record.filename, privacy: .public) — \(reason, privacy: .public)")
-        appLog.write("cleanup watchdog: \(record.filename) stalled \(Int(silentFor))s — \(attribution); killing ffmpeg")
+        appLog.write("cleanup watchdog: \(record.filename) stalled \(Int(silentFor))s — \(attribution); killing job")
         task?.cancel()
     }
 
     // MARK: Catalog + provenance
 
-    /// Probe the cleaned file and append it to the catalog with full
-    /// provenance: `derivedFrom` = source record id, plus the recipe
-    /// id+version — and File Journey notes on BOTH records (the same
-    /// convention Reformat/Transcode established).
-    private func catalogCleanupOutput() async {
+    /// Probe the cleaned file and register it in the catalog with full
+    /// provenance: `derivedFrom` = source record id, the recipe
+    /// id+version, File Journey notes on BOTH records (recording whether
+    /// the audio was copied or modernized — M4), a search-index update so
+    /// the new file is findable immediately (M1), and a catalog-mutated
+    /// notification so the debounced save persists it (M2 — a crash after
+    /// a multi-hour render must not orphan the output).
+    private func catalogCleanupOutput(publishedURL: URL) async {
         guard let model else { return }
-        let newURL = outputURL
-        let newRec = await model.probeFile(url: newURL)
+        let newRec = await model.probeFile(url: publishedURL)
 
         newRec.derivedFrom = record.id
         newRec.cleanupRecipeID = recipe.id
         newRec.cleanupRecipeVersion = recipe.version
 
+        // M4: the journey records which audio path ran, so provenance
+        // answers "why does the copy's audio codec differ".
+        let audioNote: String
+        if record.streamType == .videoAndAudio {
+            audioNote = CleanupFFmpegEngine.audioCopyAllowed(codec: record.audioCodec)
+                ? "; audio copied unchanged"
+                : "; audio modernized to PCM (source \(record.audioCodec.isEmpty ? "unknown codec" : record.audioCodec) is not playback-safe)"
+        } else {
+            audioNote = ""
+        }
+
         let stamp = ISO8601DateFormatter().string(from: Date())
-        let sourceNote = "Cleanup \(stamp): Created cleaned copy \(newURL.lastPathComponent) with \(recipe.displayName) (\(recipe.id) v\(recipe.version))"
-        let derivedNote = "Cleanup \(stamp): Cleaned from \(record.filename) with \(recipe.displayName) (\(recipe.id) v\(recipe.version))"
+        let sourceNote = "Cleanup \(stamp): Created cleaned copy \(publishedURL.lastPathComponent) with \(recipe.displayName) (\(recipe.id) v\(recipe.version))\(audioNote)"
+        let derivedNote = "Cleanup \(stamp): Cleaned from \(record.filename) with \(recipe.displayName) (\(recipe.id) v\(recipe.version))\(audioNote)"
 
         record.notes = record.notes.isEmpty
             ? sourceNote
@@ -377,12 +594,23 @@ final class CleanupJob: MediaFileOperationJob {
             ? derivedNote
             : "\(newRec.notes)\n\(derivedNote)"
 
-        if let existing = model.records.firstIndex(where: { $0.fullPath == newURL.path }) {
+        if let existing = model.records.firstIndex(where: { $0.fullPath == publishedURL.path }) {
             model.records[existing] = newRec
         } else {
             model.records.append(newRec)
         }
-        cleanupLog.info("cleanup: catalogued \(newURL.lastPathComponent, privacy: .public) (derivedFrom=\(self.record.id.uuidString, privacy: .public), recipe=\(self.recipe.id, privacy: .public) v\(self.recipe.version, privacy: .public))")
+        // M1: index the new record (and the source's updated notes) so
+        // the cleaned file is searchable without a relaunch — same
+        // pattern as VideoScanModel+LiveReload's append path.
+        model.searchIndex.update(newRec)
+        model.searchIndex.update(record)
+
+        // M2: one mutation notification → debounced catalog save + cache
+        // refresh (the Correlate precedent). Without this, the record —
+        // and a multi-hour render's provenance — lives only in memory.
+        NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
+
+        cleanupLog.info("cleanup: catalogued \(publishedURL.lastPathComponent, privacy: .public) (derivedFrom=\(self.record.id.uuidString, privacy: .public), recipe=\(self.recipe.id, privacy: .public) v\(self.recipe.version, privacy: .public))")
     }
 
     // MARK: Finish helpers
@@ -401,7 +629,7 @@ final class CleanupJob: MediaFileOperationJob {
         cleanupLog.warning("cleanup failed: \(failed, privacy: .public)")
     }
 
-    private func finish(cancelled: Bool) {
+    private func finishCancelled() {
         state = .cancelled
         subtitleText = "Cancelled"
         isIndeterminateValue = false

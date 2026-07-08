@@ -261,6 +261,16 @@ enum FilesystemWalker {
         emit: (URL) -> Void
     ) {
         audit?.fileEnumerated()
+        // In-flight Media File Operation partials (m1, 2026-07-07):
+        // Reformat/Transcode/Cleanup write to a `<stem>.vs-partial.<ext>`
+        // sibling and atomically rename on completion. A concurrent scan
+        // must never catalog the half-written transient — skip on the
+        // marker substring. (Counted as a non-media skip in the audit:
+        // it is not a media file to catalog.)
+        if url.lastPathComponent.contains(".vs-partial.") {
+            audit?.skippedNonMediaExtension()
+            return
+        }
         let ext = url.pathExtension.lowercased()
         switch classifyFile(extension: ext,
                             videoExtensions: policy.videoExtensions,

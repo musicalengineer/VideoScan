@@ -218,7 +218,12 @@ func makeCleanupSourceRecord(path: String,
                              durationSeconds: Double,
                              fieldOrder: String,
                              streamType: StreamType = .videoAndAudio,
-                             resolution: String = "720x480") -> VideoRecord {
+                             resolution: String = "720x480",
+                             // M4: the copy-vs-modernize gate reads the
+                             // record's audio codec. "aac" matches this
+                             // suite's default fixture audio (allowlisted
+                             // → stream-copied).
+                             audioCodec: String = "aac") -> VideoRecord {
     let r = VideoRecord()
     r.filename = (path as NSString).lastPathComponent
     r.fullPath = path
@@ -227,6 +232,7 @@ func makeCleanupSourceRecord(path: String,
     r.scanType = fieldOrder
     r.streamTypeRaw = streamType.rawValue
     r.resolution = resolution
+    r.audioCodec = audioCodec
     let attrs = (try? FileManager.default.attributesOfItem(atPath: path)) ?? [:]
     r.sizeBytes = (attrs[.size] as? NSNumber)?.int64Value ?? 0
     return r

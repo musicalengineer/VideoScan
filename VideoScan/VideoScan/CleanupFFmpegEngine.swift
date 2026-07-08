@@ -7,12 +7,15 @@ import os
 // filtergraph. Every step compiles to a filter chain segment; segments
 // join in recipe order. Output is ProRes 422 LT via the Apple Silicon
 // hardware encoder (matches TranscodePreset.editingLT's codec choice) in
-// a .mov container, with the AUDIO STREAM COPIED VERBATIM — a cleanup
-// pass must not add an audio generation loss (per the feature spec; this
-// is a deliberate, documented exception to the transcode presets'
-// "never -c:a copy" rule, which exists to keep undecodable codecs out of
-// playback derivatives — a cleanup output sits beside its original, so
-// the original remains the playback fallback).
+// a .mov container. AUDIO (M4, QA+Manager amendment 2026-07-07):
+// stream-copied VERBATIM only for an ALLOWLIST of playback-safe codecs
+// (pcm_*, aac, alac, mp3, mp2, ac3, eac3, adpcm_ima_qt); everything else
+// is re-encoded to pcm_s16le/48k. Default-deny — vorbis/opus/cook fail
+// the .mov mux outright, and QDM2-class codecs mux silently but produce
+// unplayable files (the historical QDM2 trap). The allowlisted copy is
+// still a documented exception to the transcode presets' blanket
+// "never -c:a copy" rule: a cleanup output sits beside its original, so
+// the original remains the fallback.
 //
 // Filter choices (all conservative — when in doubt, weaker):
 //   - bwdif=mode=send_field:parity=auto   deinterlace, one frame per
@@ -123,6 +126,24 @@ struct CleanupFFmpegEngine: CleanupRecipeEngine {
 
     // MARK: - Pure builders (unit-tested, no I/O)
 
+    /// Playback-safe audio codecs the cleanup output may STREAM-COPY into
+    /// a .mov (M4). Everything outside this set — vorbis/opus/cook (mux
+    /// failure), qdm2/qdmc/mace (the silent-unplayable QDM2 trap), and
+    /// the unknown "" — is re-encoded to pcm_s16le. Default-deny: this
+    /// ALLOWLIST is the mechanism; `unplayableLegacyAudioCodecs` documents
+    /// only the worst offenders and is deliberately NOT the gate.
+    static let audioCopyAllowlist: Set<String> = [
+        "aac", "alac", "mp3", "mp2", "ac3", "eac3", "adpcm_ima_qt"
+    ]
+
+    /// True when `codec` (raw ffprobe name) may be stream-copied: any
+    /// `pcm_*` variant plus the explicit allowlist above. Pure — tested.
+    nonisolated static func audioCopyAllowed(codec: String) -> Bool {
+        let c = codec.trimmingCharacters(in: .whitespaces).lowercased()
+        if c.hasPrefix("pcm_") { return true }
+        return audioCopyAllowlist.contains(c)
+    }
+
     /// True when the catalog's ffprobe field_order marks the source
     /// progressive. "tt"/"bb"/"tb"/"bt" are interlaced; ""/"unknown" is
     /// treated as NOT progressive (VHS captures frequently probe as
@@ -177,7 +198,8 @@ struct CleanupFFmpegEngine: CleanupRecipeEngine {
     }
 
     /// Full ffmpeg argument vector: filtergraph + ProRes 422 LT
-    /// (hardware) + verbatim audio copy + `-progress pipe:2`. Pure.
+    /// (hardware) + allowlist-gated audio copy-or-modernize +
+    /// `-progress pipe:2`. Pure.
     nonisolated static func ffmpegArgs(recipe: CleanupRecipe,
                                        source: CleanupSource,
                                        input: String,
@@ -204,10 +226,17 @@ struct CleanupFFmpegEngine: CleanupRecipeEngine {
             "-pix_fmt", "yuv422p10le"
         ]
         if source.hasAudio {
-            // Verbatim audio copy — see the file-header note for why
-            // this recipe is a sanctioned exception to the transcode
-            // presets' no-copy rule.
-            args += ["-c:a", "copy"]
+            if audioCopyAllowed(codec: source.audioCodec) {
+                // Verbatim audio copy — see the file-header note for why
+                // this allowlisted copy is a sanctioned exception to the
+                // transcode presets' no-copy rule.
+                args += ["-c:a", "copy"]
+            } else {
+                // Modernize: non-allowlisted codec (vorbis/opus/qdm2/…)
+                // or unknown "". pcm_s16le/48k mirrors the ProRes+PCM
+                // editing idiom and always muxes + plays everywhere.
+                args += ["-c:a", "pcm_s16le", "-ar", "48000"]
+            }
         }
         // Carry source metadata (timecode, tape name) into the clean copy.
         args += [

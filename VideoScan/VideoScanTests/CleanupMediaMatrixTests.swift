@@ -148,7 +148,11 @@ struct CleanupMediaMatrixTests {
         let source = CleanupSource(path: srcPath,
                                    durationSeconds: sourceProbe.durationSeconds,
                                    fieldOrder: sourceFieldOrder,
-                                   hasAudio: sourceAudioCodec != nil)
+                                   hasAudio: sourceAudioCodec != nil,
+                                   // M4 plumbing: the matrix's fixtures all
+                                   // use allowlisted codecs, so the copy
+                                   // expectations below are unchanged.
+                                   audioCodec: sourceAudioCodec ?? "")
         let scratch = dir.appendingPathComponent("scratch", isDirectory: true)
         try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
 

@@ -16,10 +16,29 @@ import SwiftUI
 /// A pending sheet presentation. Fresh ID per menu click so choosing a
 /// different recipe while a prior sheet is dismissing creates a new
 /// presentation cycle (same shape as TranscodeRequest).
+///
+/// m3: the destination is computed ONCE here and handed to BOTH the sheet
+/// (display) and the job (planned output), so the sheet never promises a
+/// name the job doesn't use. The job's publish step re-uniquifies as the
+/// last word if a collision appears mid-render.
 struct CleanupRequest: Identifiable {
     let id = UUID()
     let record: VideoRecord
     let recipe: CleanupRecipe
+    /// Planned `<stem>_cleaned.mov` beside the original, uniquified
+    /// against files existing right now.
+    let destinationURL: URL
+
+    /// @MainActor on the INIT only (the stored lets stay nonisolated so
+    /// the Identifiable conformance doesn't cross actors): construction
+    /// reads the record and lists the destination directory once.
+    @MainActor
+    init(record: VideoRecord, recipe: CleanupRecipe) {
+        self.record = record
+        self.recipe = recipe
+        self.destinationURL = CleanupJob.cleanedOutputURL(
+            forSourcePath: record.fullPath)
+    }
 }
 
 struct CleanupSheet: View {
@@ -33,20 +52,24 @@ struct CleanupSheet: View {
 
     let request: CleanupRequest
 
-    /// Computed ONCE at init (one directory listing per collision) — not
-    /// in `body`, which SwiftUI re-evaluates freely.
-    private let destinationURL: URL
-
-    init(request: CleanupRequest) {
-        self.request = request
-        self.destinationURL = CleanupJob.cleanedOutputURL(
-            forSourcePath: request.record.fullPath)
-    }
+    /// Computed once in CleanupRequest (m3) — the same URL the job
+    /// receives as its planned output.
+    private var destinationURL: URL { request.destinationURL }
 
     /// Whether the deinterlace step will auto-skip (source already
     /// progressive) — surfaced so the step list is honest.
     private var deinterlaceSkipped: Bool {
         CleanupFFmpegEngine.isProgressive(fieldOrder: request.record.scanType)
+    }
+
+    /// M4: whether the source's audio codec is playback-safe to copy —
+    /// drives the honest audio row below.
+    private var audioWillBeCopied: Bool {
+        CleanupFFmpegEngine.audioCopyAllowed(codec: request.record.audioCodec)
+    }
+
+    private var sourceHasAudio: Bool {
+        request.record.streamType == .videoAndAudio
     }
 
     var body: some View {
@@ -71,6 +94,9 @@ struct CleanupSheet: View {
                         .font(.headline)
                     ForEach(request.recipe.steps) { step in
                         stepRow(step)
+                    }
+                    if sourceHasAudio {
+                        audioRow
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -138,10 +164,37 @@ struct CleanupSheet: View {
         }
     }
 
+    /// M4: honest audio disposition. Copy for allowlisted playback-safe
+    /// codecs; everything else is modernized to PCM so the cleaned copy
+    /// plays everywhere (vorbis/opus would fail the .mov mux, QDM2-class
+    /// codecs would mux silently but not play).
+    private var audioRow: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: audioWillBeCopied
+                  ? "speaker.wave.2.circle.fill"
+                  : "speaker.wave.2.circle")
+                .foregroundColor(.accentColor)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(audioWillBeCopied
+                     ? "Sound: kept exactly as it is"
+                     : "Sound: audio will be modernized so it plays everywhere")
+                    .font(.body)
+                if !audioWillBeCopied {
+                    Text("This tape's audio format is too old for today's players; the picture cleanup is unaffected.")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .accessibilityIdentifier("cleanupSheet.audioRow")
+    }
+
     private func startCleanup() {
         fileOpsCenter.startCleanup(record: request.record,
                                    recipe: request.recipe,
-                                   model: model)
+                                   model: model,
+                                   plannedOutput: request.destinationURL)
         dismiss()
         // Same handoff TranscodeSheet uses: open the operations window
         // (progress + Cancel live there) after the sheet's dismissal

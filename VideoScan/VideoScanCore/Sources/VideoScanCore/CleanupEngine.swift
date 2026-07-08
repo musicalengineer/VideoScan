@@ -47,15 +47,24 @@ public struct CleanupSource: Sendable, Equatable {
     public var fieldOrder: String
     /// Whether the source carries an audio stream (drives -map/copy).
     public var hasAudio: Bool
+    /// Raw ffprobe audio codec name as stored in the catalog
+    /// (`VideoRecord.audioCodec`, e.g. "pcm_s16le", "aac", "vorbis",
+    /// "qdm2"); "" when unknown/absent. Drives the copy-vs-modernize
+    /// audio decision (M4, 2026-07-07): engines stream-copy ONLY
+    /// allowlisted playback-safe codecs and re-encode everything else —
+    /// default-deny, so unknown ("") re-encodes.
+    public var audioCodec: String
 
     public init(path: String,
                 durationSeconds: Double,
                 fieldOrder: String,
-                hasAudio: Bool) {
+                hasAudio: Bool,
+                audioCodec: String = "") {
         self.path = path
         self.durationSeconds = durationSeconds
         self.fieldOrder = fieldOrder
         self.hasAudio = hasAudio
+        self.audioCodec = audioCodec
     }
 }
 
