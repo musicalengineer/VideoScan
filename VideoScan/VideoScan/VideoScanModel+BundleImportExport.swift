@@ -269,7 +269,10 @@ extension VideoScanModel {
         // sidebar (grayed out until the drive is connected on this Mac).
         var updated = 0
         var addedVolumes = 0
-        for snap in payload.volumes.volumes {
+        // Screen the RAM-disk scratch volume — the exporter has excluded it
+        // since 2026-05, but bundles written by older builds may still
+        // carry a VideoScan_Temp snapshot.
+        for snap in payload.volumes.volumes where !CatalogScanTarget.isScratchVolumePath(snap.searchPath) {
             if let existing = scanTargets.first(where: { $0.searchPath == snap.searchPath }) {
                 applyVolumeSnapshot(snap, to: existing)
                 updated += 1

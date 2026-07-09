@@ -264,11 +264,12 @@ struct RelocateRetireVolumeTests {
         retired.retiredAt = Date()
         retired.retiredReason = "Test"
 
-        // The filter logic in startAllTargets: skip retired + skip
-        // VideoScan_Temp + require reachable. We exercise the predicate
-        // composition directly here.
+        // The filter logic in startAllTargets: skip retired + skip the
+        // RAM-disk scratch volume (canonical isScratchVolume predicate) +
+        // require reachable. We exercise the predicate composition
+        // directly here.
         let scanCandidates = model.scanTargets.filter { t in
-            !t.searchPath.contains("VideoScan_Temp")
+            !t.isScratchVolume
             && !t.isRetired
         }
         #expect(scanCandidates.contains { $0.searchPath == "/Volumes/Active" })

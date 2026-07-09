@@ -177,6 +177,58 @@ final class CatalogScanTarget: ObservableObject, Identifiable {
     }
 }
 
+// MARK: - Scratch-Volume Screening (RAM disk)
+
+/// The app's own RAM-disk scratch volume (`/Volumes/VideoScan_Temp*`,
+/// created by RAMDisk.swift as the network-prefetch cache) is internal
+/// plumbing — it must NEVER appear as a catalog/analysis target. This
+/// extension is the ONE canonical predicate; every target-list filter and
+/// every scan-target ingestion point routes through it.
+///
+/// History: screening used to be six scattered ad-hoc
+/// `contains("VideoScan_Temp")` filters, so each NEW enumeration surface
+/// (the Analyze dashboard, 2026-07-08) shipped unscreened and the bug
+/// kept regressing. See ScratchVolumeScreeningTests for the sensors.
+extension CatalogScanTarget {
+
+    /// RAM-disk naming convention — keep in sync with `RAMDisk.mount`
+    /// (`let name = "VideoScan_Temp"`, RAMDisk.swift) and the
+    /// `RAMDisk.cleanupStaleMounts` reap pattern (`VideoScan_Temp*`).
+    nonisolated static let scratchVolumeNamePrefix = "VideoScan_Temp"
+
+    /// True when any path component STARTS WITH the RAM-disk prefix.
+    /// Covers the whole family macOS can produce on mount-name collision
+    /// (`VideoScan_Temp`, `VideoScan_Temp 1`, `VideoScan_Temp2`, …) plus
+    /// any path beneath one. Anchored on path components, not a bare
+    /// substring — a user folder named "MyVideoScan_TempStuff" is legit
+    /// and stays visible (the old `contains` filters would have hidden it).
+    nonisolated static func isScratchVolumePath(_ path: String) -> Bool {
+        path.split(separator: "/").contains { $0.hasPrefix(scratchVolumeNamePrefix) }
+    }
+
+    /// Canonical per-target form of the predicate.
+    var isScratchVolume: Bool { Self.isScratchVolumePath(searchPath) }
+
+    /// Analyze/dossier candidate gate — the ONE definition shared by the
+    /// dossier dashboard rows, the catalog-wide caption sweep, and the
+    /// dossier queue, so what the user sees as a row always matches what
+    /// Analyze will queue.
+    var isAnalyzeCandidate: Bool {
+        isReachable && !searchPath.isEmpty && !isRetired && !isScratchVolume
+    }
+
+    /// Extracted, testable filters — house rule: inline closures in
+    /// `ForEach`/view bodies can't be unit-tested (and no O(records)
+    /// work belongs in view bodies anyway).
+    static func analyzeCandidates(_ targets: [CatalogScanTarget]) -> [CatalogScanTarget] {
+        targets.filter { $0.isAnalyzeCandidate }
+    }
+
+    static func excludingScratch(_ targets: [CatalogScanTarget]) -> [CatalogScanTarget] {
+        targets.filter { !$0.isScratchVolume }
+    }
+}
+
 // MARK: - Dashboard Types
 
 enum ScanPhase: String {

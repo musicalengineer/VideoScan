@@ -22,6 +22,12 @@ extension VideoScanModel {
         if panel.runModal() == .OK {
             for url in panel.urls {
                 let path = url.path
+                // Ingestion screen: the RAM-disk scratch volume is plumbing,
+                // never a scan target — even if hand-picked in the panel.
+                guard !CatalogScanTarget.isScratchVolumePath(path) else {
+                    log("Skipped \(path) — that's VideoScan's own RAM-disk scratch volume, not a scannable target.")
+                    continue
+                }
                 if !scanTargets.contains(where: { $0.searchPath == path }) {
                     scanTargets.append(CatalogScanTarget(searchPath: path))
                 }
@@ -82,6 +88,11 @@ extension VideoScanModel {
         return contents.compactMap { name in
             guard !systemExclusions.contains(name) else { return nil }
             let path = "/Volumes/\(name)"
+            // Never offer the app's own RAM-disk scratch volume
+            // (VideoScan_Temp*) — it's mounted during network scans and
+            // used to leak into the discovery sheet, which is how it got
+            // added as a scan target in the first place.
+            guard !CatalogScanTarget.isScratchVolumePath(path) else { return nil }
 
             // Resolve symlinks — /Volumes/Macintosh HD is a symlink to /
             let resolved = (path as NSString).resolvingSymlinksInPath
@@ -111,9 +122,11 @@ extension VideoScanModel {
         }
     }
 
-    /// Add discovered volumes as scan targets
+    /// Add discovered volumes as scan targets. Screens the RAM-disk
+    /// scratch volume again here (belt to discoverVolumes' suspenders) so
+    /// no caller can inject it.
     func addDiscoveredVolumes(_ volumes: [DiscoveredVolume]) {
-        for vol in volumes {
+        for vol in volumes where !CatalogScanTarget.isScratchVolumePath(vol.path) {
             if !scanTargets.contains(where: { $0.searchPath == vol.path }) {
                 scanTargets.append(CatalogScanTarget(searchPath: vol.path))
             }
@@ -144,6 +157,10 @@ extension VideoScanModel {
 
         var restored = 0
         for root in volumeRoots.sorted() where !existingPaths.contains(root) {
+            // If scratch-volume records ever slipped into the catalog
+            // (pre-screening builds), don't resurrect the RAM disk as a
+            // target from their paths.
+            guard !CatalogScanTarget.isScratchVolumePath(root) else { continue }
             let target = CatalogScanTarget(searchPath: root)
             scanTargets.append(target)
             restored += 1

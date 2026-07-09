@@ -319,7 +319,7 @@ extension CatalogView {
             let reachableCaptionable = pfCatalogWideCaptionCandidates(
                 pfCatalogWideMetadataCandidates(
                     records: model.records,
-                    reachableVolumePaths: model.scanTargets.filter { $0.isReachable && !$0.searchPath.isEmpty && !$0.isRetired }.map { $0.searchPath }
+                    reachableVolumePaths: CatalogScanTarget.analyzeCandidates(model.scanTargets).map { $0.searchPath }
                 )
             ).count
             Button(action: {

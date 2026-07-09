@@ -41,6 +41,16 @@ extension VideoScanModel {
             savedRetiredWitnessesKey: Self.savedRetiredWitnessesKey
         )
         scanTargets.append(contentsOf: restored)
+
+        // One-time heal for pre-fix pollution: if the persisted path list
+        // still carries RAM-disk scratch entries (ScanTargetPersistence
+        // .restore screens them out of `restored`), rewrite it without
+        // them now rather than waiting for the next incidental persist.
+        let savedPaths = UserDefaults.standard.stringArray(forKey: Self.savedTargetsKey) ?? []
+        if savedPaths.contains(where: { CatalogScanTarget.isScratchVolumePath($0) }) {
+            log("Removed the RAM-disk scratch volume from the saved scan-target list (one-time cleanup).")
+            persistScanTargets()
+        }
     }
 
     func persistScanTargets() {

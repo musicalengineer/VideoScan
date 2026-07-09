@@ -43,7 +43,11 @@ import Foundation
         let retiredWitnesses = UserDefaults.standard.dictionary(forKey: savedRetiredWitnessesKey) as? [String: [String]] ?? [:]
 
         var result: [CatalogScanTarget] = []
-        for p in paths where !p.isEmpty {
+        // Restore-time screen + heal: pre-fix builds could persist the
+        // RAM-disk scratch volume (VideoScan_Temp*) into the saved target
+        // list. Never restore it — the next persistPaths call rewrites the
+        // list without it, so polluted state heals itself.
+        for p in paths where !p.isEmpty && !CatalogScanTarget.isScratchVolumePath(p) {
             if !existing.contains(where: { $0.searchPath == p }) {
                 let t = CatalogScanTarget(searchPath: p)
                 t.lastScannedDate = dates[p]

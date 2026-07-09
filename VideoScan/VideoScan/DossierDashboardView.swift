@@ -261,13 +261,14 @@ struct DossierDashboardView: View {
 
     // MARK: - Per-volume coverage
 
-    /// The list of volumes shown as rows. Only reachable, non-retired,
-    /// non-empty scan targets — matches the candidate filter's gate so
-    /// what the user sees in a row matches what Analyze will queue.
+    /// The list of volumes shown as rows. Shares the canonical
+    /// `isAnalyzeCandidate` gate (reachable, non-retired, non-empty,
+    /// NOT the RAM-disk scratch volume) with the caption sweep and the
+    /// dossier queue, so what the user sees in a row matches what
+    /// Analyze will queue. The scratch volume showing up here was the
+    /// 2026-07-08 regression — see ScratchVolumeScreeningTests.
     private var reachableVolumes: [CatalogScanTarget] {
-        model.scanTargets.filter {
-            $0.isReachable && !$0.searchPath.isEmpty && !$0.isRetired
-        }
+        CatalogScanTarget.analyzeCandidates(model.scanTargets)
     }
 
     /// Refresh per-volume coverage stats from the catalog, and nudge the

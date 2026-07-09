@@ -74,7 +74,9 @@ struct ArchiveView: View {
                     Divider().padding(.vertical, 8)
 
                     sidebarSection("VOLUMES") {
-                        ForEach(model.scanTargets, id: \.id) { target in
+                        // Screen the RAM-disk scratch volume — plumbing,
+                        // not an archive target.
+                        ForEach(CatalogScanTarget.excludingScratch(model.scanTargets), id: \.id) { target in
                             volumeRoleRow(target)
                         }
                     }

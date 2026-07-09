@@ -105,7 +105,7 @@ extension CaptionOrchestrator {
             return
         }
 
-        let reachable = model.scanTargets.filter { $0.isReachable && !$0.searchPath.isEmpty && !$0.isRetired }
+        let reachable = CatalogScanTarget.analyzeCandidates(model.scanTargets)
         captionOrchLog.info("Catalog-wide caption: \(reachable.count) reachable target(s)")
         appLog.write("Analyzing catalog: starting across \(reachable.count) reachable volume(s)")
 

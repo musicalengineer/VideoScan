@@ -165,9 +165,7 @@ extension CatalogView {
     /// Always hides the RAM disk (VideoScan_Temp). Also hides "never scanned"
     /// targets unless `showUnscannedTargets` is on — strict-catalog policy.
     private var filteredScanTargets: [CatalogScanTarget] {
-        let base = model.scanTargets.filter {
-            !$0.searchPath.contains("VideoScan_Temp")
-        }
+        let base = CatalogScanTarget.excludingScratch(model.scanTargets)
 
         // Strict-catalog default: hide targets that have never been scanned.
         // The user can flip the toggle to see the full list (useful right
@@ -274,7 +272,7 @@ extension CatalogView {
                         }
                         .disabled(model.scanTargets.isEmpty)
 
-                        ForEach(model.scanTargets.filter { $0.status.isIdle && $0.isReachable && !$0.searchPath.contains("VideoScan_Temp") && !$0.isRetired }) { target in
+                        ForEach(model.scanTargets.filter { $0.status.isIdle && $0.isReachable && !$0.isScratchVolume && !$0.isRetired }) { target in
                             Button(action: {
                                 if target.status == .resumable {
                                     model.resumeTarget(target)

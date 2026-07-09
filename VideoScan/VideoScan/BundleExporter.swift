@@ -116,8 +116,7 @@ enum BundleExporter {
 
         // 2. Volumes — exclude the RAM scratch volume (it's plumbing, not
         //    archive metadata, and its path is machine-specific anyway).
-        let volumeSnapshots = scanTargets
-            .filter { !$0.searchPath.contains("VideoScan_Temp") }
+        let volumeSnapshots = CatalogScanTarget.excludingScratch(scanTargets)
             .map(VolumeMetadataSnapshot.init(from:))
         let volumesSnapshot = VolumesSnapshot(savedAt: Date(), volumes: volumeSnapshots)
         try encoder.encode(volumesSnapshot)

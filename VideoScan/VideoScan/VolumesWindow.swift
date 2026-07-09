@@ -72,8 +72,7 @@ struct VolumesWindow: View {
     /// §1B: retired volumes sort to the bottom; hidden entirely when the
     /// `Show retired` toggle is OFF.
     private var sortedTargets: [CatalogScanTarget] {
-        model.scanTargets
-            .filter { !$0.searchPath.contains("VideoScan_Temp") }
+        CatalogScanTarget.excludingScratch(model.scanTargets)
             .filter { showRetired || !$0.isRetired }
             .sorted { a, b in
                 // Retired-vs-active first: active before retired.

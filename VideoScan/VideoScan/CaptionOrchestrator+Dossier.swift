@@ -159,8 +159,7 @@ extension CaptionOrchestrator {
             return PythonSubprocessAudioTranscriber(pythonPath: py, scriptPath: sc)
         }()
 
-        let reachablePaths = model.scanTargets
-            .filter { $0.isReachable && !$0.searchPath.isEmpty && !$0.isRetired }
+        let reachablePaths = CatalogScanTarget.analyzeCandidates(model.scanTargets)
             .map { $0.searchPath }
         let base = pfCatalogWideMetadataCandidates(
             records: model.records,

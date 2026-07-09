@@ -33,6 +33,14 @@ extension VideoScanModel {
             log("--- Scan refused: \(URL(fileURLWithPath: target.searchPath).lastPathComponent) is retired. Reinstate via Volumes window to enable scanning. ---")
             return
         }
+        // Defense in depth: the RAM-disk scratch volume must never be
+        // scanned into the catalog, even if a polluted persisted list or a
+        // stale checkpoint resurrects it as a target. Every ingestion point
+        // screens it too — this is the last gate before real side effects.
+        guard !target.isScratchVolume else {
+            log("--- Scan refused: \(target.searchPath) is VideoScan's own RAM-disk scratch volume. ---")
+            return
+        }
         if let missing = DependencyChecker.checkScan() {
             missingDependency = missing
             log("--- Scan blocked: \(missing.displayName) not installed (\(missing.installHint)) ---")
@@ -129,7 +137,7 @@ extension VideoScanModel {
             return
         }
         for target in scanTargets where target.status.isIdle || target.status == .stopped {
-            guard !target.searchPath.contains("VideoScan_Temp") else { continue }
+            guard !target.isScratchVolume else { continue }
             guard target.isReachable else { continue }
             // §1B: skip retired volumes. They're not coming back; the
             // catalog already has whatever they held. Reinstate (via the

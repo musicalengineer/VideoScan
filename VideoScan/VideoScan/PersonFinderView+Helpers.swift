@@ -53,8 +53,10 @@ extension PersonFinderView {
         guard let vols = fm.mountedVolumeURLs(includingResourceValuesForKeys: keys,
                                                options: [.skipHiddenVolumes]) else { return [] }
         return vols.filter { url in
-            // Skip the boot volume (/) and system partials
+            // Skip the boot volume (/), system partials, and the app's own
+            // RAM-disk scratch volume (network-prefetch plumbing).
             url.path != "/" && !url.path.hasPrefix("/System")
+                && !CatalogScanTarget.isScratchVolumePath(url.path)
         }
     }
 
