@@ -178,6 +178,49 @@ struct ScratchVolumeScreeningTests {
         #expect(UserDefaults.standard.stringArray(forKey: k.paths) == ["/Volumes/TestKeeper"])
     }
 
+    // MARK: - Resume path sensor: a stale checkpoint can't resurrect scratch
+
+    /// resumeTarget bypasses startTarget entirely when a checkpoint
+    /// exists, so it needs its OWN scratch guard (QA 2026-07-08 —
+    /// mirrors the retire-guard precedent at the same site). Unique
+    /// scratch-family path + defer delete so the real checkpoint
+    /// directory is left exactly as found.
+    @Test func resumeTargetRefusesScratchEvenWithCheckpoint() async {
+        let model = VideoScanModel()
+        let path = "/Volumes/VideoScan_Temp Sensor-\(UUID().uuidString.prefix(8))"
+        let scratch = CatalogScanTarget(searchPath: path)
+        scratch.isReachable = true
+        model.scanTargets = [scratch]
+
+        ScanCheckpointStorage.save(ScanCheckpoint(
+            volumePath: path,
+            startedAt: Date(),
+            discoveredPaths: ["\(path)/a.mov"],
+            totalDiscovered: 1))
+        defer { ScanCheckpointStorage.delete(for: path) }
+
+        model.resumeTarget(scratch)
+        // Refused BEFORE the checkpoint is consumed: no state mutation,
+        // no scan task. (Unfixed, this reads .scanning with a live task.)
+        #expect(scratch.status.isIdle)
+        #expect(scratch.scanTask == nil)
+        #expect(!model.isScanning)
+        await scratch.scanTask?.value   // drain if a regression spawned one
+    }
+
+    // MARK: - Browse-path sensor: re-pointing a target can't smuggle scratch
+
+    /// The ninth ingestion vector: Browse… on an existing target row
+    /// assigns searchPath directly, bypassing every add-time screen.
+    @Test func browsedPathRefusesScratchVolume() {
+        let target = CatalogScanTarget(searchPath: "/Volumes/Old")
+        #expect(!CatalogView.applyBrowsedPath("/Volumes/VideoScan_Temp", to: target))
+        #expect(target.searchPath == "/Volumes/Old")
+
+        #expect(CatalogView.applyBrowsedPath("/Volumes/NewDrive", to: target))
+        #expect(target.searchPath == "/Volumes/NewDrive")
+    }
+
     // MARK: - Last-gate sensor: bulk scan start skips scratch
 
     /// startAllTargets' loop guard, exercised as predicate composition

@@ -501,6 +501,14 @@ extension VideoScanModel {
             log("--- Resume refused: \(URL(fileURLWithPath: target.searchPath).lastPathComponent) is retired. Reinstate via Volumes window to enable scanning. ---")
             return
         }
+        // Same scratch guard as startTarget (QA 2026-07-08): when a
+        // checkpoint exists, resume never reaches startTarget's gate, so
+        // without this a stale checkpoint could resurrect the RAM-disk
+        // scratch volume as a scannable target.
+        guard !target.isScratchVolume else {
+            log("--- Resume refused: \(target.searchPath) is VideoScan's own RAM-disk scratch volume. ---")
+            return
+        }
         guard let checkpoint = ScanCheckpointStorage.load(for: target.searchPath) else {
             log("No checkpoint found for \(target.searchPath) — starting fresh scan")
             startTarget(target)

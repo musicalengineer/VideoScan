@@ -143,8 +143,21 @@ extension CatalogView {
         panel.message = "Select a volume or folder to scan"
         panel.prompt = "Select"
         if panel.runModal() == .OK, let url = panel.url {
-            target.searchPath = url.path
+            Self.applyBrowsedPath(url.path, to: target)
         }
+    }
+
+    /// Apply a user-browsed path to an existing target. Extracted from
+    /// browsePath so the decision is unit-testable (NSOpenPanel isn't).
+    /// This was the ninth ingestion vector (QA 2026-07-08): re-pointing
+    /// an existing target was the one remaining path that could smuggle
+    /// a scratch entry into `scanTargets` and persisted state — the row
+    /// would vanish from every screened list while still being scanned.
+    @discardableResult
+    static func applyBrowsedPath(_ path: String, to target: CatalogScanTarget) -> Bool {
+        guard !CatalogScanTarget.isScratchVolumePath(path) else { return false }
+        target.searchPath = path
+        return true
     }
 
     /// Strict-catalog policy predicate. A target counts as "scanned" if either:
