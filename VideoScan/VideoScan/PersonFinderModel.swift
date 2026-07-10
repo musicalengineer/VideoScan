@@ -50,6 +50,15 @@ final class ScanJob: ObservableObject, Identifiable {
 
     /// Per-job person assignment — nil means use global person.
     @Published var assignedProfile: POIProfile?
+
+    /// Monotonic guard for the async identity-annotation pass (see
+    /// PersonFinderModel+Identity.swift). Every annotate call bumps this
+    /// on the MainActor before hopping off to score; when the scores come
+    /// back, a pass whose captured value no longer matches knows a newer
+    /// pass superseded it (priors edited / re-annotated mid-flight) and
+    /// drops its now-stale scores instead of stomping fresher ones.
+    var identityAnnotationEpoch: UInt64 = 0
+
     var assignedFaces: [ReferenceFace] = []
     /// ArcFace reference embeddings, computed once per job and reused
     /// across every video. Empty until the first scan video populates it.
@@ -590,6 +599,12 @@ final class PersonFinderModel: ObservableObject {
         for job in jobs where job.assignedProfile?.name.lowercased() == target {
             job.assignedProfile = updated
             annotateIdentityPlausibility(for: job)
+        }
+        // Same value-snapshot staleness, different holder: the person
+        // picker for NEW jobs. Without this, jobs created after the edit
+        // are assigned the pre-edit priors until the person is re-picked.
+        if selectedPersonForNewJobs?.name.lowercased() == target {
+            selectedPersonForNewJobs = updated
         }
     }
 

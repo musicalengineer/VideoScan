@@ -25,8 +25,32 @@ struct IdentityAnnotationScaleTests {
 
     // MARK: - Shared synthetic fixtures
 
+    /// Caption bank shaped like real VLM output (~80 chars each, cue
+    /// words included so hair/eye/age paths are exercised). Evidence-
+    /// bearing records carry 15 of these — the previous ONE-caption
+    /// fixture is exactly how the per-row scoring cost escaped this
+    /// sensor (perf review 2026-07-09).
+    private static let captionBank: [String] = [
+        "a young boy in a red shirt playing with a garden hose in the backyard",
+        "an elderly woman with gray hair sitting at a table beside a birthday cake",
+        "two children running across a snowy front lawn while a dog chases them",
+        "a middle-aged man with brown hair grilling hamburgers at a family cookout",
+        "a blonde woman holding a baby wrapped in a white blanket near a christmas tree",
+        "a group of teenagers gathered around a picnic table at a lakeside campsite",
+        "a young girl with blonde hair riding a bicycle down a suburban driveway",
+        "a man and a woman dancing in a living room decorated with streamers",
+        "a toddler taking wobbly steps across a hardwood floor toward open arms",
+        "an old man with white hair telling a story to children seated on a rug",
+        "a woman with brown hair and blue eyes smiling at the camera on a beach",
+        "kids splashing in an above-ground pool while adults watch from lawn chairs",
+        "a boy of about eight opening presents beneath a lit christmas tree",
+        "a grandmother teaching a young child to roll cookie dough at a counter",
+        "a father helping his son learn to ride a two-wheeler on a quiet street"
+    ]
+
     /// 100k catalog records shaped like real ones; every 4th carries
-    /// dossier evidence (inferred date + a scene caption).
+    /// dossier evidence (inferred date + 15 scene captions of ~80 chars,
+    /// matching real dossier'd records).
     private func syntheticRecords(_ n: Int) -> [VideoRecord] {
         (0..<n).map { i in
             let r = VideoRecord()
@@ -35,7 +59,10 @@ struct IdentityAnnotationScaleTests {
             if i % 4 == 0 {
                 // ~1989 + a spread, so ages land in sane buckets.
                 r.inferredRecordDate = Date(timeIntervalSince1970: 600_000_000 + Double(i))
-                r.sceneCaptions = [SceneCaption(timestamp: 0, text: "a boy playing in the yard")]
+                r.sceneCaptions = (0..<15).map { j in
+                    SceneCaption(timestamp: Double(j) * 10,
+                                 text: Self.captionBank[(i + j) % Self.captionBank.count])
+                }
             }
             return r
         }
@@ -109,7 +136,7 @@ struct IdentityAnnotationScaleTests {
 
     @Test("annotate with 1,000 result rows against 100k records calls the provider once and stays inside budget",
           .timeLimit(.minutes(2)))
-    func annotateAt100kRecordsIsOnePassWithinBudget() {
+    func annotateAt100kRecordsIsOnePassWithinBudget() async {
         let records = syntheticRecords(100_000)
         let realProvider = makeProvider(records: records)
 
@@ -126,20 +153,35 @@ struct IdentityAnnotationScaleTests {
         }
         providerCalls = 0  // discard any didSet-triggered calls (job isn't in model.jobs)
 
-        let clock = SuspendingClock()
-        let elapsed = clock.measure {
-            model.annotateIdentityPlausibility(for: job)
-        }
+        // END-TO-END timing: phase 1 (MainActor sync return) AND total
+        // until the async scores land. Re-pinned 2026-07-09 after the
+        // one-caption fixture let a ~1 ms/row scoring cost escape:
+        //   • pre-fix code (sync scoring, 15-caption rows): ~0.95-1.3 ms
+        //     per row ⇒ ~1.9 s here (M4, -O replica ~0.96 s; Debug ~2×)
+        //     — fails the 900 ms budget.
+        //   • post-fix (single-pass tokenizer + off-main scoring):
+        //     replica scoring 99 ms/1,000 rows (9.6× on Fix A alone);
+        //     this test measures ~0.15-0.3 s end-to-end Debug on M4.
+        // The MainActor-blocking portion must stay provider-walk-sized
+        // (tens of ms) — that's the beachball sensor.
+        let start = SuspendingClock.now
+        let task = model.annotateIdentityPlausibility(for: job)
+        let mainActorBlocking = SuspendingClock.now - start
+        await task?.value
+        let endToEnd = SuspendingClock.now - start
 
         #expect(providerCalls == 1,
                 "annotate must do ONE batch evidence lookup, not per-row — saw \(providerCalls)")
         #expect(job.results.allSatisfy { $0.plausibility != nil },
                 "every evidence-backed row must be scored")
-        // Healthy shape: one O(100k) walk + 1,000 pure scoring calls.
-        // A per-row provider regression is 1,000 × O(100k) record
-        // touches and lands far past this.
-        #expect(elapsed < .seconds(2),
-                "annotate took \(elapsed) at 100k records × 1,000 rows — smells like O(records×rows)")
+        // Healthy shape: one O(100k) walk + 1,000 pure scoring calls
+        // off-main. A per-row provider regression is 1,000 × O(100k)
+        // record touches; a scoring regression is ~1 ms × 1,000 rows —
+        // both land past this.
+        #expect(endToEnd < .milliseconds(900),
+                "annotate took \(endToEnd) end-to-end at 100k records × 1,000 15-caption rows — scoring or provider walk has regressed")
+        #expect(mainActorBlocking < .milliseconds(250),
+                "annotate blocked the MainActor for \(mainActorBlocking) — scoring must stay off-main (beachball regression)")
     }
 }
 
@@ -171,7 +213,17 @@ struct AnnotateIdentityPlausibilityTests {
         { paths in table.filter { paths.contains($0.key) } }
     }
 
-    @Test func rowsGetScoredAndNoEvidenceRowsGetNilPlusReason() {
+    /// Bounded wait for a fire-and-forget annotate pass (didSet sweep /
+    /// refreshJobsForUpdatedProfile) whose Task handle the caller doesn't
+    /// get. Polls on the MainActor; ~2 s ceiling, then the assertion that
+    /// follows fails with the real diagnostic.
+    private func waitUntil(_ condition: @MainActor () -> Bool) async {
+        for _ in 0..<400 where !condition() {
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    @Test func rowsGetScoredAndNoEvidenceRowsGetNilPlusReason() async {
         let model = PersonFinderModel()
         let job = ScanJob(searchPath: "/tmp")
         job.assignedProfile = POIProfile(
@@ -190,7 +242,7 @@ struct AnnotateIdentityPlausibilityTests {
                 recordDate: nil, sceneDescriptions: ["a boy"])
         ])
 
-        model.annotateIdentityPlausibility(for: job)
+        await model.annotateIdentityPlausibility(for: job)?.value
 
         // Evidence-backed row: scored (son, age 11, "a boy" → 1.0).
         #expect(job.results[0].plausibility == 1.0)
@@ -208,7 +260,7 @@ struct AnnotateIdentityPlausibilityTests {
         }
     }
 
-    @Test func annotateIsIdempotent() {
+    @Test func annotateIsIdempotent() async {
         let model = PersonFinderModel()
         let job = ScanJob(searchPath: "/tmp")
         job.assignedProfile = POIProfile(
@@ -224,10 +276,10 @@ struct AnnotateIdentityPlausibilityTests {
                 recordDate: date(1994), sceneDescriptions: ["a boy"])
         ])
 
-        model.annotateIdentityPlausibility(for: job)
+        await model.annotateIdentityPlausibility(for: job)?.value
         let first = job.results.map { ($0.plausibility, $0.plausibilityReason) }
 
-        model.annotateIdentityPlausibility(for: job)
+        await model.annotateIdentityPlausibility(for: job)?.value
         let second = job.results.map { ($0.plausibility, $0.plausibilityReason) }
 
         #expect(first.count == second.count)
@@ -237,9 +289,11 @@ struct AnnotateIdentityPlausibilityTests {
         }
     }
 
-    @Test func settingProviderAnnotatesAlreadyLoadedJobs() {
+    @Test func settingProviderAnnotatesAlreadyLoadedJobs() async {
         // Jobs restored from disk can finish rehydrating before
         // ContentView wires the provider — the didSet must sweep them.
+        // The sweep is fire-and-forget (scores land a beat later), so
+        // wait for the async pass rather than asserting synchronously.
         let model = PersonFinderModel()
         let job = ScanJob(searchPath: "/tmp")
         job.assignedProfile = POIProfile(
@@ -256,6 +310,7 @@ struct AnnotateIdentityPlausibilityTests {
                 recordDate: date(1994), sceneDescriptions: ["a boy"])
         ])
 
+        await waitUntil { job.results[0].plausibility != nil }
         #expect(job.results[0].plausibility == 1.0,
                 "provider didSet must annotate existing jobs without an explicit call")
     }
@@ -273,7 +328,9 @@ struct AnnotateIdentityPlausibilityTests {
                 recordDate: date(1994), sceneDescriptions: ["a boy"])
         ])
 
-        model.annotateIdentityPlausibility(for: job)
+        // Skip path is synchronous: no scoring Task is even started.
+        #expect(model.annotateIdentityPlausibility(for: job) == nil,
+                "no-signal profile must not launch a scoring pass")
 
         #expect(job.results[0].plausibility == nil)
         #expect(job.results[0].plausibilityReason == nil)
@@ -287,7 +344,9 @@ struct AnnotateIdentityPlausibilityTests {
         )
         job.results = [makeRow(path: "/v/scored.mov")]
 
-        model.annotateIdentityPlausibility(for: job)  // provider is nil
+        // Provider is nil — skip is synchronous, no Task started.
+        #expect(model.annotateIdentityPlausibility(for: job) == nil,
+                "provider-less annotate must not launch a scoring pass")
 
         #expect(job.results[0].plausibility == nil)
         #expect(job.results[0].plausibilityReason == nil)
@@ -308,7 +367,7 @@ struct AnnotateIdentityPlausibilityTests {
     // (see the pollution note at the bottom of PersonFinderLifecycleTests).
     // updateProfile delegates the in-memory refresh to this method.
 
-    @Test func editingProfilePriorsRescoresExistingJobsWithoutRestart() {
+    @Test func editingProfilePriorsRescoresExistingJobsWithoutRestart() async {
         let model = PersonFinderModel()
 
         // Donna's birthdate is WRONG (1996) — the 1994 video scores 0.0.
@@ -327,13 +386,19 @@ struct AnnotateIdentityPlausibilityTests {
         sonJob.results = [makeRow(path: "/v/son.mov")]
 
         model.jobs = [donnaJob, sonJob]
+        // The new-jobs person picker holds the same pre-edit snapshot.
+        model.selectedPersonForNewJobs = donnaJob.assignedProfile
+
         model.identityEvidenceProvider = stubProvider([
             "/v/donna.mov": PFIdentityEvidence(
                 recordDate: date(1994), sceneDescriptions: ["a woman"]),
             "/v/son.mov": PFIdentityEvidence(
                 recordDate: date(1994), sceneDescriptions: ["a boy"])
         ])
-        // didSet annotated both jobs against the WRONG priors.
+        // didSet annotated both jobs (async) against the WRONG priors.
+        await waitUntil {
+            donnaJob.results[0].plausibility != nil && sonJob.results[0].plausibility != nil
+        }
         #expect(donnaJob.results[0].plausibility == 0.0,
                 "precondition: wrong 1996 birthdate must score 'born after video' = 0.0")
         let sonBefore = sonJob.results[0].plausibility
@@ -344,10 +409,14 @@ struct AnnotateIdentityPlausibilityTests {
         corrected.birthdate = date(1959)
         model.refreshJobsForUpdatedProfile(corrected)
 
-        // The job's snapshot AND its Fit badges must reflect the edit
-        // immediately — no app restart.
+        // The job's snapshot must reflect the edit synchronously…
         #expect(donnaJob.assignedProfile?.birthdate == date(1959),
                 "job's assignedProfile snapshot must be refreshed")
+        // …and the picker snapshot for NEW jobs too (same staleness class).
+        #expect(model.selectedPersonForNewJobs?.birthdate == date(1959),
+                "selectedPersonForNewJobs must be refreshed so new jobs get post-edit priors")
+        // …and the Fit badges re-score without an app restart (async).
+        await waitUntil { donnaJob.results[0].plausibility != 0.0 }
         let rescored = donnaJob.results[0].plausibility
         #expect(rescored != nil && rescored! > 0.5,
                 "corrected birthdate (age 35, 'a woman') must re-score well — got \(String(describing: rescored))")
@@ -360,7 +429,7 @@ struct AnnotateIdentityPlausibilityTests {
         #expect(sonJob.assignedProfile?.birthdate == date(1983))
     }
 
-    @Test func renamedProfileStillRefreshesJobsViaOldName() {
+    @Test func renamedProfileStillRefreshesJobsViaOldName() async {
         // Jobs hold the PRE-edit name in their snapshots; the refresh must
         // match on oldName when the edit renamed the person.
         let model = PersonFinderModel()
@@ -375,6 +444,7 @@ struct AnnotateIdentityPlausibilityTests {
             "/v/donna.mov": PFIdentityEvidence(
                 recordDate: date(1994), sceneDescriptions: ["a woman"])
         ])
+        await waitUntil { job.results[0].plausibility != nil }
         #expect(job.results[0].plausibility == 0.0, "precondition")
 
         var edited = job.assignedProfile!
@@ -384,6 +454,7 @@ struct AnnotateIdentityPlausibilityTests {
 
         #expect(job.assignedProfile?.name == "Donna B.",
                 "rename must propagate to the job snapshot via oldName match")
+        await waitUntil { job.results[0].plausibility != 0.0 }
         let rescored = job.results[0].plausibility
         #expect(rescored != nil && rescored! > 0.5,
                 "rescore must run for the renamed profile — got \(String(describing: rescored))")
