@@ -490,10 +490,10 @@ extension CatalogView {
 
     /// Backup-status pill rendered in the scan-targets header. Color
     /// hints at recency at a glance: green < 7 days, yellow 7–30,
-    /// orange > 30, red when never. Click reveals the last bundle in
-    /// Finder when present, or fires Export Everything when no backup
-    /// has happened yet (cheaper one-click path than digging through
-    /// the app menu).
+    /// orange > 30, red when never. The pill IS the "back up now"
+    /// button — clicking always runs the same Back Up Catalog… flow as
+    /// the File menu (the nag is the button). Reveal-in-Finder of the
+    /// last backup moved to the right-click context menu.
     @ViewBuilder
     var backupStatusBadge: some View {
         let now = Date()
@@ -544,27 +544,39 @@ extension CatalogView {
         }
         .buttonStyle(.plain)
         .help(backupBadgeTooltip())
+        .contextMenu {
+            Button("Show Last Backup in Finder") {
+                if let p = model.lastBackupPath {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: p)])
+                }
+            }
+            .disabled(!lastBackupExistsOnDisk)
+        }
+    }
+
+    /// True when the last recorded backup bundle is still present on
+    /// disk — gates the context-menu reveal so we never point Finder at
+    /// a deleted/ejected destination.
+    private var lastBackupExistsOnDisk: Bool {
+        guard let p = model.lastBackupPath else { return false }
+        return FileManager.default.fileExists(atPath: p)
     }
 
     private func backupBadgeAction() {
-        if let p = model.lastBackupPath,
-           FileManager.default.fileExists(atPath: p) {
-            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: p)])
-        } else {
-            // No backup yet — kick off the export panel directly.
-            model.exportBundleViaPanel()
-        }
+        // Always back up — same single code path as File ▸ Back Up
+        // Catalog… (⌘E). A stale badge is a nag; the nag is the button.
+        model.exportBundleViaPanel()
     }
 
     private func backupBadgeTooltip() -> String {
         guard let last = model.lastBackupAt else {
-            return "No catalog backup yet. Click to run Export Everything…"
+            return "No catalog backup yet. Click to back up now."
         }
         let fmt = DateFormatter()
         fmt.dateStyle = .medium
         fmt.timeStyle = .short
         let where_ = model.lastBackupPath ?? "(unknown location)"
-        return "Last Export Everything: \(fmt.string(from: last))\n\(where_)\n\nClick to reveal in Finder."
+        return "Last backed up \(fmt.string(from: last)) → \(where_)\n\nClick to back up now. Right-click to show the last backup in Finder."
     }
 
     /// Shorten a bundle path to its containing folder name + ".../leaf",

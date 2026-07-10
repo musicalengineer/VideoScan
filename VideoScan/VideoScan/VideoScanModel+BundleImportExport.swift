@@ -19,16 +19,46 @@ import UniformTypeIdentifiers
 
 extension VideoScanModel {
 
+    /// Parent folder of the last successful backup, iff that folder still
+    /// exists as a directory — used to pre-aim the save panel so the
+    /// nagged user's flow is: click badge (or ⌘E), press Return, done.
+    /// Returns nil when there's no prior backup or its folder is gone
+    /// (drive ejected, folder deleted) so the panel falls back to its
+    /// own default.
+    ///
+    /// Pure given (path, FileManager) so tests can drive it with temp
+    /// dirs. `nonisolated` ≈ opting this static out of the class's
+    /// @MainActor lock — in C++ terms, a free function that merely
+    /// lives in the class's namespace and touches no member state.
+    nonisolated static func defaultBackupDirectory(
+        lastBackupPath: String?,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        guard let path = lastBackupPath, !path.isEmpty else { return nil }
+        let parent = URL(fileURLWithPath: path).deletingLastPathComponent()
+        var isDir: ObjCBool = false
+        guard fileManager.fileExists(atPath: parent.path, isDirectory: &isDir),
+              isDir.boolValue else { return nil }
+        return parent
+    }
+
     /// UI entry point: show a save panel, write the bundle, summarize.
+    /// Single backup code path — both File ▸ Back Up Catalog… (⌘E) and
+    /// the catalog-header backup badge land here.
     func exportBundleViaPanel() {
         let panel = NSSavePanel()
-        panel.title = "Export Everything"
-        panel.message = "Save a VideoScan bundle containing the catalog, volume metadata, settings, and reference photos for every person."
+        panel.title = "Back Up Catalog"
+        panel.message = "Save a backup containing the catalog, volume metadata, settings, and reference photos for every person."
         panel.canCreateDirectories = true
         panel.allowedContentTypes = [.directory]
         let host = CatalogHost.currentName.replacingOccurrences(of: " ", with: "_")
         let dateStr = ISO8601DateFormatter().string(from: Date()).prefix(10)
         panel.nameFieldStringValue = "VideoScan_\(host)_\(dateStr).videoscanbundle"
+        // Default to wherever the last backup landed (when that folder
+        // still exists) so repeat backups are click → Return → done.
+        if let dir = Self.defaultBackupDirectory(lastBackupPath: lastBackupPath) {
+            panel.directoryURL = dir
+        }
         guard panel.runModal() == .OK, var url = panel.url else { return }
         // NSSavePanel can drop our extension if the user retypes the name.
         if url.pathExtension != "videoscanbundle" {
@@ -96,7 +126,7 @@ extension VideoScanModel {
                 missingProfileBanner = ""
             }
             let alert = NSAlert()
-            alert.messageText = "Exported Everything"
+            alert.messageText = "Backup Complete"
             let deltaLines = m.counts.dossierDeltaLines ?? 0
             let deltaBytes = m.sizes.dossierDeltaBytes ?? 0
             let deltaLine: String
@@ -129,8 +159,8 @@ extension VideoScanModel {
     /// main actor; the polling loop is `await`ed off the main thread.
     func importBundleViaPanel() {
         let panel = NSOpenPanel()
-        panel.title = "Import Everything"
-        panel.message = "Choose a .videoscanbundle directory from another Mac."
+        panel.title = "Import Catalog"
+        panel.message = "Choose a VideoScan backup (.videoscanbundle) from another Mac."
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
@@ -148,7 +178,7 @@ extension VideoScanModel {
         // Confirmation dialog — bundles can be sizeable and this overwrites
         // POI folders, so make the user opt in deliberately.
         let confirm = NSAlert()
-        confirm.messageText = "Import Everything from this Bundle?"
+        confirm.messageText = "Import This Catalog Backup?"
         confirm.informativeText = """
         From: \(payload.manifest.exportedFromHost) on \(Self.shortDate(payload.manifest.exportedAt))
         App: v\(payload.manifest.appVersion) build \(payload.manifest.appBuild)
@@ -208,7 +238,7 @@ extension VideoScanModel {
             body += "\n\nPerson Finder settings will take effect after relaunching VideoScan."
 
             let done = NSAlert()
-            done.messageText = "Bundle Imported"
+            done.messageText = "Backup Imported"
             done.informativeText = body
             done.addButton(withTitle: "OK")
             done.runModal()

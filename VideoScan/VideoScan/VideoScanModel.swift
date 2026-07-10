@@ -287,27 +287,30 @@ final class VideoScanModel: ObservableObject {
         }
     }
 
-    // MARK: - Backup status (Export Everything tracking)
+    // MARK: - Backup status (Back Up Catalog tracking)
     //
-    // The "Export Everything…" menu writes a .videoscanbundle that's the
-    // canonical disaster-recovery snapshot — catalog records, scan-target
-    // metadata, POI profiles + photos, manifest with SHA-256s. Persisting
-    // when/where the user last exported makes the badge in the catalog
-    // header honest about recency, so Rick can see at a glance whether
-    // today's Migrate work is safely captured off the Mac Studio.
+    // "Back Up Catalog…" (File menu ⌘E and the catalog-header badge —
+    // one code path, exportBundleViaPanel) writes a .videoscanbundle
+    // that's the canonical disaster-recovery snapshot — catalog records,
+    // scan-target metadata, POI profiles + photos, manifest with
+    // SHA-256s. Persisting when/where the user last backed up makes the
+    // badge in the catalog header honest about recency, so Rick can see
+    // at a glance whether today's Migrate work is safely captured off
+    // the Mac Studio.
     //
     // Persisted via UserDefaults so the badge survives app restarts.
 
-    /// Date of the most recent successful Export Everything, or nil if
+    /// Date of the most recent successful catalog backup, or nil if
     /// the catalog has never been bundle-exported on this machine.
     @Published var lastBackupAt: Date? = {
         let t = UserDefaults.standard.double(forKey: "VideoScan.lastBackupAt")
         return t > 0 ? Date(timeIntervalSince1970: t) : nil
     }()
 
-    /// Filesystem path of the most recent successful Export Everything
-    /// destination. Used to render "→ iCloud Drive" or similar in the
-    /// badge and to power click-to-reveal in Finder.
+    /// Filesystem path of the most recent successful backup destination.
+    /// Used to render "→ iCloud Drive" or similar in the badge, to power
+    /// the badge's reveal-in-Finder context menu, and to pre-aim the
+    /// save panel at the same folder next time.
     @Published var lastBackupPath: String? = UserDefaults.standard.string(forKey: "VideoScan.lastBackupPath")
 
     /// Call from `exportBundleViaPanel` after a successful bundle write.

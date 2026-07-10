@@ -456,38 +456,22 @@ struct VideoScanApp: App {
             // Close.
             CommandGroup(after: .newItem) {
                 Divider()
-                // Whole-shebang bundle — the "make this Mac look like the
-                // other one" entry point. Use this when moving between
-                // Rick's Mac Studio and MBP.
-                Button("Export Everything…") {
+                // One backup action, two entry points (2026-07): this menu
+                // item and the badge in the catalog header both run
+                // exportBundleViaPanel() — the whole-shebang bundle
+                // (catalog + volume metadata + settings + POI photos).
+                // The old partial menu items (Volume CSV, Catalog Only)
+                // are gone from the menu; their functions remain in
+                // VideoScanModel unreferenced, for scripted/diagnostic use.
+                Button("Back Up Catalog…") {
                     catalogModel.exportBundleViaPanel()
                 }
                 .keyboardShortcut("e", modifiers: [.command])
 
-                Button("Import Everything…") {
+                Button("Import Catalog…") {
                     catalogModel.importBundleViaPanel()
                 }
                 .keyboardShortcut("i", modifiers: [.command])
-
-                Divider()
-
-                // Partial exports — kept for callers who want just the
-                // catalog (smaller file, AirDrop-friendly) or just a CSV
-                // summary of volume status.
-                Button("Export Volume Info (CSV)…") {
-                    catalogModel.exportVolumeInfo()
-                }
-                .keyboardShortcut("e", modifiers: [.command, .shift])
-
-                Button("Export Catalog Only…") {
-                    catalogModel.exportCatalogViaPanel()
-                }
-                .keyboardShortcut("e", modifiers: [.command, .option])
-
-                Button("Import Catalog Only…") {
-                    catalogModel.importCatalogViaPanel()
-                }
-                .keyboardShortcut("i", modifiers: [.command, .option])
             }
             CommandGroup(after: .windowArrangement) {
                 WindowMenuItems()
