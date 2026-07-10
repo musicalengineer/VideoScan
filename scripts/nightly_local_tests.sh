@@ -379,14 +379,27 @@ log "Tests completed in ${ELAPSED}s (rc=$TEST_RC)"
 # Patterns are deliberately unanchored on the symbol markers: swift-testing
 # indents nested lines with U+200B zero-width spaces, so ^-anchored ✔/➜
 # patterns silently miss some per-test lines.
+#
+# 2026-07-09 (r2) hardenings:
+#   * Issue lines are excluded by their own shape (' recorded an issue ')
+#     — an expectation MESSAGE containing " failed after " (near-miss in
+#     the wild: MediaFileOperationsTests.swift:556 asserts a job reached
+#     .failed after the stall watchdog) must not double-count a failure
+#     or inject message text into failed_names.
+#   * The run-summary exclusion is pinned to the summary's real shape
+#     ('Test run with <N> test…') so a test whose display name merely
+#     contains the words "Test run with" still counts.
 parse_test_counts() {
     local out="$1"
     PASSED=$(grep -E '(✔ Test .* passed after |^Test Case .* passed)' "$out" 2>/dev/null \
-        | grep -cv 'Test run with ')
+        | grep -v ' recorded an issue ' \
+        | grep -Ecv 'Test run with [0-9]+ test')
     FAILED=$(grep -E '(✘ Test .* failed after |^Test Case .* failed)' "$out" 2>/dev/null \
-        | grep -cv 'Test run with ')
+        | grep -v ' recorded an issue ' \
+        | grep -Ecv 'Test run with [0-9]+ test')
     SKIPPED=$(grep -E '(➜ Test .* skipped|^Test Case .* skipped)' "$out" 2>/dev/null \
-        | grep -cv 'Test run with ')
+        | grep -v ' recorded an issue ' \
+        | grep -Ecv 'Test run with [0-9]+ test')
     PASSED=${PASSED:-0}
     FAILED=${FAILED:-0}
     SKIPPED=${SKIPPED:-0}
@@ -394,7 +407,8 @@ parse_test_counts() {
     # python3 does the JSON escaping; on any hiccup fall back to [] so the
     # published row stays valid JSON.
     FAILED_NAMES_JSON=$(grep -E '(✘ Test .* failed after |^Test Case .* failed)' "$out" 2>/dev/null \
-        | grep -v 'Test run with ' \
+        | grep -v ' recorded an issue ' \
+        | grep -Ev 'Test run with [0-9]+ test' \
         | sed -E -e 's/.*✘ Test (.+) failed after .*/\1/' \
                  -e "s/^Test Case '(.+)' failed.*/\1/" \
         | sort -u \

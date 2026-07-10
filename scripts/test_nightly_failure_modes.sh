@@ -305,6 +305,15 @@ done
 # are saved excerpts of real nightly xcodebuild output (including the
 # zero-width-space-indented "➜ Test … skipped:" lines and started-lines
 # whose display names contain the word "skipped").
+#
+# r2 hardenings additionally pinned by the one-failure fixture:
+#   * an XCTest-shape failure ("Test Case '-[X y]' failed (0.052 s).")
+#     exercises the XCTest failed alternation + the second sed branch;
+#   * an issue line whose expectation MESSAGE contains " failed after "
+#     (near-miss in the wild: MediaFileOperationsTests.swift:556 asserts
+#     a job reached .failed after the stall watchdog) contributes 0 —
+#     only its test's own "failed after N seconds" line counts the 1,
+#     and no message text leaks into failed_names.
 # ───────────────────────────────────────────────────────────────────
 echo
 echo "== Test 8: parse_test_counts fixture counts =="
@@ -324,14 +333,18 @@ run_parse() {
 if [ ! -s "$PARSE_LIB" ]; then
     fail "parse_test_counts could not be extracted from nightly_local_tests.sh"
 else
-    # 8a: single-failure excerpt — the diagnosed inflation case. FAILED
-    # MUST be exactly 1 (old pattern said 3), names must carry the test.
+    # 8a: failure excerpt — the diagnosed inflation case plus the r2
+    # hardenings. Exactly 3 real failures (1 Swift Testing perf test,
+    # 1 Swift Testing test whose ISSUE MESSAGE contains " failed after "
+    # — must not double-count to 4 — and 1 XCTest-shape failure pinning
+    # the second sed branch). Names must be the three test names only,
+    # no issue-message fragments.
     got=$(run_parse "$FIXTURE_DIR/nightly_excerpt_one_failure.log")
-    want='8|1|4|["performanceRebuildUnderBudget()"]'
+    want='8|3|4|["-[VideoScanTests.MediaFileOperationsTests testStallWatchdogFreezesDurationClock]", "performanceRebuildUnderBudget()", "stallWatchdogStampsFinishedAt()"]'
     if [ "$got" = "$want" ]; then
-        pass "one-failure fixture: PASSED=8 FAILED=1 SKIPPED=4, failed_names correct"
+        pass "failure fixture: PASSED=8 FAILED=3 SKIPPED=4, failed_names correct (issue line excluded, XCTest branch pinned)"
     else
-        fail "one-failure fixture: got '$got', want '$want'"
+        fail "failure fixture: got '$got', want '$want'"
     fi
 
     # 8b: green excerpt — the "✔ Test run with …" summary and started-
