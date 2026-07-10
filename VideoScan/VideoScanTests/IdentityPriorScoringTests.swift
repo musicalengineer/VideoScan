@@ -210,6 +210,103 @@ struct IdentityPriorScoringTests {
                 "eye mismatch penalized: \(without?.plausibility ?? -1) vs \(withWrongEyes?.plausibility ?? -1)")
     }
 
+    // MARK: - Phrase adjacency (pins pfScanWords word-pair semantics)
+    //
+    // Doctrine: a color word and "hair"/"haired"/"eyes"/"eyed" pair up
+    // ONLY when joined by spaces and/or hyphens. Any other punctuation
+    // between them breaks adjacency, and the second word must be exact —
+    // longer words sharing the prefix ("hairstyle", "eyeshadow") never
+    // count. All boost-only assertions on the neutral 0.5 base, same
+    // shape as the color tests above.
+    //
+    // Record-keeping: commit c0dab76's message claimed "brown, hair" now
+    // matches — it does not, and never did; the comma-breaks test below
+    // pins the code's actual (correct) behavior.
+
+    @Test func hyphenatedHairFormBoosts() {
+        // "brown-haired" — hyphen bridges the pair exactly like a space.
+        let c = score(
+            "a brown-haired figure waving from the porch",
+            prior: IdentityPrior(name: "Donna", birthdate: date(1959), hairColor: .brown),
+            at: date(1994)
+        )
+        #expect(near(c?.plausibility, 0.65),
+                "'brown-haired' must boost 0.5 → 0.65, got \(c?.plausibility ?? -1)")
+        #expect(c?.reason.contains("hair") == true)
+    }
+
+    @Test func hyphenatedEyeFormBoosts() {
+        let c = score(
+            "blue-eyed and smiling at the camera",
+            prior: IdentityPrior(name: "Donna", birthdate: date(1959), eyeColor: .blue),
+            at: date(1994)
+        )
+        #expect(near(c?.plausibility, 0.6),
+                "'blue-eyed' must boost 0.5 → 0.6, got \(c?.plausibility ?? -1)")
+        #expect(c?.reason.contains("eyes") == true)
+    }
+
+    @Test func doubleSpaceStillBridgesColorAdjacency() {
+        // Two spaces between "brown" and "hair" (VLM output is not
+        // whitespace-tidy) — a separator RUN of spaces/hyphens bridges.
+        let c = score(
+            "brown  hair blowing in the wind",
+            prior: IdentityPrior(name: "Donna", birthdate: date(1959), hairColor: .brown),
+            at: date(1994)
+        )
+        #expect(near(c?.plausibility, 0.65),
+                "double-spaced 'brown  hair' must still boost, got \(c?.plausibility ?? -1)")
+    }
+
+    @Test func commaBreaksColorAdjacency() {
+        // "brown, hair" — a brown *something* and then hair as a new
+        // clause, NOT brown hair. Neutral base, no boost.
+        let c = score(
+            "the dog was brown, hair covered the couch",
+            prior: IdentityPrior(name: "Donna", birthdate: date(1959), hairColor: .brown),
+            at: date(1994)
+        )
+        #expect(c?.plausibility == 0.5,
+                "'brown, hair' must NOT boost — comma breaks adjacency, got \(c?.plausibility ?? -1)")
+    }
+
+    @Test func periodBreaksColorAdjacency() {
+        // Sentence boundary between the color and "hair" — same rule as
+        // the comma; mirrors the original substring-scan semantics.
+        let c = score(
+            "the fence was painted brown. hair clips lay on the bench",
+            prior: IdentityPrior(name: "Donna", birthdate: date(1959), hairColor: .brown),
+            at: date(1994)
+        )
+        #expect(c?.plausibility == 0.5,
+                "'brown. hair' must NOT boost — period breaks adjacency, got \(c?.plausibility ?? -1)")
+    }
+
+    @Test func hairstyleSuffixDoesNotCountAsHair() {
+        // Suffix exactness: "hairstyle" is not "hair". The pre-c0dab76
+        // substring scan wrongly matched this ("brown hair" lives inside
+        // "brown hairstyle"); the word-pair scan must not.
+        let c = score(
+            "a stylish brown hairstyle from the salon",
+            prior: IdentityPrior(name: "Donna", birthdate: date(1959), hairColor: .brown),
+            at: date(1994)
+        )
+        #expect(c?.plausibility == 0.5,
+                "'brown hairstyle' must NOT boost — suffix must be exact, got \(c?.plausibility ?? -1)")
+    }
+
+    @Test func eyeshadowSuffixDoesNotCountAsEyes() {
+        // Same correction on the eye side: "blue eyeshadow" is makeup on
+        // a counter, not an eye color.
+        let c = score(
+            "shimmering blue eyeshadow on the counter",
+            prior: IdentityPrior(name: "Donna", birthdate: date(1959), eyeColor: .blue),
+            at: date(1994)
+        )
+        #expect(c?.plausibility == 0.5,
+                "'blue eyeshadow' must NOT boost — suffix must be exact, got \(c?.plausibility ?? -1)")
+    }
+
     // MARK: - Neutral / impossible paths via the prior signature
 
     @Test func noBirthdateScoresNeutral() {
