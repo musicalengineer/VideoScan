@@ -116,6 +116,24 @@ struct ContentView: View {
                     person: person
                 )
             }
+
+            // Bridge the catalog's dossier evidence (inferred record date +
+            // VLM scene captions) into PersonFinder's identity-narrowing
+            // pass. Batch shape: one O(records) walk per annotate call,
+            // NOT per result row. Assigning this closure also fires its
+            // didSet, which annotates any jobs already restored from disk.
+            personFinderModel.identityEvidenceProvider = { [weak model] paths in
+                guard let model, !paths.isEmpty else { return [:] }
+                var out: [String: PFIdentityEvidence] = [:]
+                out.reserveCapacity(paths.count)
+                for rec in model.records where paths.contains(rec.fullPath) {
+                    out[rec.fullPath] = PFIdentityEvidence(
+                        recordDate: rec.inferredRecordDate,
+                        sceneDescriptions: rec.sceneCaptions.map(\.text)
+                    )
+                }
+                return out
+            }
         }
     }
 }

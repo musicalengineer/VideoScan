@@ -351,6 +351,27 @@ final class PersonFinderModel: ObservableObject {
         ) -> Void
     )?
 
+    /// Batch evidence lookup for identity narrowing: given the set of
+    /// matched video paths, return each path's inferred record date +
+    /// VLM scene captions from the catalog. Closure form for the same
+    /// reason as `onScanComplete` — keeps PersonFinderModel decoupled
+    /// from VideoScanModel. Wired in ContentView.onAppear.
+    ///
+    /// Batch (not per-path) on purpose: the provider does ONE O(records)
+    /// pass over the catalog per annotate call instead of one per row.
+    ///
+    /// didSet: jobs restored from disk at init may finish rehydrating
+    /// before ContentView wires this — annotate everything already
+    /// loaded the moment the provider arrives.
+    var identityEvidenceProvider: (
+        @MainActor (_ paths: Set<String>) -> [String: PFIdentityEvidence]
+    )? {
+        didSet {
+            guard identityEvidenceProvider != nil else { return }
+            for job in jobs { annotateIdentityPlausibility(for: job) }
+        }
+    }
+
     /// Name of the person being actively scanned — set at scan start, cleared when all jobs finish.
     @Published var scanningPersonName: String?
     /// The person that will be assigned to newly created jobs.

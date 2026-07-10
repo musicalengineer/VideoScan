@@ -201,6 +201,11 @@ extension PersonFinderModel {
         // The closure's `@MainActor` annotation makes its type Sendable
         // across the actor hop.
         let onComplete = self.onScanComplete
+        // Identity-narrowing annotation for the restored rows — same
+        // capture pattern as onComplete.
+        let onAnnotate: @MainActor (ScanJob) -> Void = { [weak self] finishedJob in
+            self?.annotateIdentityPlausibility(for: finishedJob)
+        }
 
         job.scanTask = Task.detached(priority: .utility) {
             let skipBundles = jobSettings.skipBundles
@@ -262,6 +267,7 @@ extension PersonFinderModel {
                     validResults, threshold: threshold
                 )
                 onComplete?(job.personLabel, confirmed, suspected)
+                onAnnotate(job)
             }
         }
     }
@@ -427,13 +433,18 @@ extension PersonFinderModel {
         // Capture writeback on MainActor so the static nonisolated runScan
         // can invoke it inside its own MainActor.run completion hop.
         let onComplete = self.onScanComplete
+        // Identity-narrowing annotation, same capture pattern. Weak self:
+        // the closure runs at scan completion, possibly after teardown.
+        let onAnnotate: @MainActor (ScanJob) -> Void = { [weak self] finishedJob in
+            self?.annotateIdentityPlausibility(for: finishedJob)
+        }
         job.scanTask = Task { [weak self, weak job] in
             guard let job else { return }
             await MainActor.run {
                 dash?.visionActive = settings.recognitionEngine == .vision || settings.recognitionEngine == .arcface
                 dash?.activeEngineLabel = settings.recognitionEngine == .arcface ? "ArcFace / CoreML + ANE" : "Vision / ANE"
             }
-            await PersonFinderModel.runScan(job: job, prints: prints, settings: settings, refFilenames: refCacheIdentifiers, dashboard: dash, onComplete: onComplete)
+            await PersonFinderModel.runScan(job: job, prints: prints, settings: settings, refFilenames: refCacheIdentifiers, dashboard: dash, onComplete: onComplete, onAnnotate: onAnnotate)
             await MainActor.run {
                 dash?.visionActive = false; dash?.visionFPS = 0; dash?.visionMsPerFrame = 0
                 // Clear scanningPersonName when no jobs are still scanning
@@ -980,7 +991,8 @@ extension PersonFinderModel {
                 _ confirmed: [pfVideoResult],
                 _ suspected: [pfVideoResult]
             ) -> Void
-        )?
+        )?,
+        onAnnotate: (@MainActor (ScanJob) -> Void)? = nil
     ) async {
         let path = await job.searchPath
         let scanThreshold = settings.recognitionEngine == .arcface
@@ -1117,6 +1129,12 @@ extension PersonFinderModel {
                     validResults, threshold: scanThreshold
                 )
                 onComplete?(person, confirmed, suspected)
+
+                // Identity narrowing: stamp plausibility + reason on each
+                // result row from the POI's priors × the catalog's dossier
+                // evidence (inferred date, scene captions). After
+                // finalizeResults so it annotates the canonical row list.
+                onAnnotate?(job)
             }
         }
     }
@@ -1228,6 +1246,13 @@ extension PersonFinderModel {
         // benefit much past 3 (they fight over the same I/O bandwidth) so
         // 3 is the knee of the curve.
         let maxConcurrentRehydrations = 3
+        // Identity-narrowing annotation for rehydrated rows. Weak self —
+        // rehydration can outlive the model under test teardown. (The
+        // provider may not be wired yet at app launch; its didSet
+        // re-annotates all jobs when it arrives, so both orderings work.)
+        let onAnnotate: @MainActor (ScanJob) -> Void = { [weak self] finishedJob in
+            self?.annotateIdentityPlausibility(for: finishedJob)
+        }
         Task.detached(priority: .utility) {
             await withTaskGroup(of: Void.self) { group in
                 var slotIndex = 0
@@ -1235,7 +1260,7 @@ extension PersonFinderModel {
                 while slotIndex < min(maxConcurrentRehydrations, pendingRehydrations.count) {
                     let pair = pendingRehydrations[slotIndex]
                     group.addTask {
-                        await Self.rehydrateResultsFromCache(job: pair.0, descriptor: pair.1)
+                        await Self.rehydrateResultsFromCache(job: pair.0, descriptor: pair.1, onAnnotate: onAnnotate)
                     }
                     slotIndex += 1
                 }
@@ -1245,7 +1270,7 @@ extension PersonFinderModel {
                     if slotIndex < pendingRehydrations.count {
                         let pair = pendingRehydrations[slotIndex]
                         group.addTask {
-                            await Self.rehydrateResultsFromCache(job: pair.0, descriptor: pair.1)
+                            await Self.rehydrateResultsFromCache(job: pair.0, descriptor: pair.1, onAnnotate: onAnnotate)
                         }
                         slotIndex += 1
                     }
@@ -1303,7 +1328,8 @@ extension PersonFinderModel {
     /// reachability — this method just doesn't crash).
     private nonisolated static func rehydrateResultsFromCache(
         job: ScanJob,
-        descriptor: PersistedJobDescriptor
+        descriptor: PersistedJobDescriptor,
+        onAnnotate: (@MainActor (ScanJob) -> Void)? = nil
     ) async {
         let fm = FileManager.default
         guard fm.fileExists(atPath: descriptor.searchPath) else { return }
@@ -1338,6 +1364,9 @@ extension PersonFinderModel {
             ))
         }
         guard !cachedRows.isEmpty else { return }
-        await MainActor.run { job.results = cachedRows }
+        await MainActor.run {
+            job.results = cachedRows
+            onAnnotate?(job)
+        }
     }
 }

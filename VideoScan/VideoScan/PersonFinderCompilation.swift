@@ -680,7 +680,21 @@ extension PersonFinderModel {
         osLog.info("Extraction done: \(foundClips) clip file(s) — entering compile phase")
 
         await MainActor.run {
-            job.results = clipResults
+            // Carry identity-plausibility annotations over from the rows
+            // being replaced — the extraction rebuild only adds clipFiles,
+            // the identity evidence for each video hasn't changed.
+            let priorAnnotations = Dictionary(
+                job.results.map { ($0.videoPath, ($0.plausibility, $0.plausibilityReason)) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            var annotated = clipResults
+            for i in annotated.indices {
+                if let prior = priorAnnotations[annotated[i].videoPath] {
+                    annotated[i].plausibility = prior.0
+                    annotated[i].plausibilityReason = prior.1
+                }
+            }
+            job.results = annotated
             job.clipsFound = foundClips
         }
 
