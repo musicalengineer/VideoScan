@@ -348,6 +348,63 @@ struct PersonFinderSettings: Equatable {
     }
 }
 
+// MARK: - Identity metadata (POI priors)
+//
+// Small fixed palettes for the identity fields on POIProfile. The raw
+// String value is what lands in profile.json, so renaming a case is a
+// persistence-format change — don't do it casually.
+//
+// These feed pfIdentityCandidates (IdentityNarrowing.swift) as
+// plausibility priors: sex mismatches demote, hair/eye matches boost.
+// See that file's header for the scoring doctrine.
+
+/// Binary by explicit design decision (Rick, 2026-07) — family archive
+/// priors, not a demographic form. nil ⇒ not set / no filtering.
+enum PersonSex: String, Codable, CaseIterable, Sendable {
+    case female, male
+
+    var label: String {
+        switch self {
+        case .female: return "Female"
+        case .male:   return "Male"
+        }
+    }
+}
+
+/// Coarse hair-color palette. Scoring only ever BOOSTS on a match —
+/// hair changes across decades (gold in 1979, gray in 2010) and old
+/// B&W/faded footage lies about color, so a mismatch never penalizes.
+enum HairColor: String, Codable, CaseIterable, Sendable {
+    case blonde, brown, black, red, gray, white, bald
+
+    var label: String {
+        switch self {
+        case .blonde: return "Blonde"
+        case .brown:  return "Brown"
+        case .black:  return "Black"
+        case .red:    return "Red"
+        case .gray:   return "Gray"
+        case .white:  return "White"
+        case .bald:   return "Bald"
+        }
+    }
+}
+
+/// Eye-color palette. Same boost-only rule as HairColor.
+enum EyeColor: String, Codable, CaseIterable, Sendable {
+    case blue, brown, green, hazel, gray
+
+    var label: String {
+        switch self {
+        case .blue:  return "Blue"
+        case .brown: return "Brown"
+        case .green: return "Green"
+        case .hazel: return "Hazel"
+        case .gray:  return "Gray"
+        }
+    }
+}
+
 // MARK: - POI Profile (Person of Interest)
 
 struct POIProfile: Codable, Identifiable, Equatable {
@@ -383,6 +440,21 @@ struct POIProfile: Codable, Identifiable, Equatable {
     /// the upper end — a person who died in 2010 cannot be in a 2024
     /// video. nil ⇒ alive or unknown.
     var deathdate: Date?
+    /// Sex, used by pfIdentityCandidates to demote (never eliminate)
+    /// candidates when a VLM scene description clearly says the other
+    /// ("a boy", "a woman"). nil ⇒ not set, no sex signal.
+    var sex: PersonSex?
+    /// Hair color prior — boost-only signal (a match raises plausibility,
+    /// a mismatch never lowers it; hair changes across decades and
+    /// B&W footage lies). nil ⇒ not set.
+    var hairColor: HairColor?
+    /// Eye color prior — same boost-only rule as hairColor.
+    var eyeColor: EyeColor?
+    /// Free-text identity notes ("blonde hair blue eyes, always wore
+    /// glasses"). Stored for Rick's own reference and future evidence
+    /// fusion — NOT consumed by any algorithm yet. Separate from `notes`
+    /// (relationship / maiden name) on purpose.
+    var identityNotes: String?
 
     // MARK: Codable — tolerate missing keys from older JSON files
 
@@ -392,7 +464,9 @@ struct POIProfile: Codable, Identifiable, Equatable {
          minFaceConfidence: Float = 0.55, largestFaceOnly: Bool = false,
          coverImageFilename: String? = nil, notes: String = "", aliases: [String] = [],
          coverCropOffsetX: Double = 0, coverCropOffsetY: Double = 0, coverCropScale: Double = 1.0,
-         sortOrder: Int = Int.max, birthdate: Date? = nil, deathdate: Date? = nil) {
+         sortOrder: Int = Int.max, birthdate: Date? = nil, deathdate: Date? = nil,
+         sex: PersonSex? = nil, hairColor: HairColor? = nil, eyeColor: EyeColor? = nil,
+         identityNotes: String? = nil) {
         self.name = name
         self.referencePath = referencePath
         self.rejectedFiles = rejectedFiles
@@ -410,6 +484,10 @@ struct POIProfile: Codable, Identifiable, Equatable {
         self.sortOrder = sortOrder
         self.birthdate = birthdate
         self.deathdate = deathdate
+        self.sex = sex
+        self.hairColor = hairColor
+        self.eyeColor = eyeColor
+        self.identityNotes = identityNotes
     }
 
     init(from decoder: Decoder) throws {
@@ -431,6 +509,14 @@ struct POIProfile: Codable, Identifiable, Equatable {
         sortOrder         = try c.decodeIfPresent(Int.self, forKey: .sortOrder) ?? Int.max
         birthdate         = try c.decodeIfPresent(Date.self, forKey: .birthdate)
         deathdate         = try c.decodeIfPresent(Date.self, forKey: .deathdate)
+        // Identity metadata (2026-07) — all decodeIfPresent so profile.json
+        // files written before the feature load unchanged. An unrecognized
+        // rawValue (future palette addition) throws, so map to nil instead
+        // via try? — a bad color must never brick a profile load.
+        sex               = try? c.decodeIfPresent(PersonSex.self, forKey: .sex)
+        hairColor         = try? c.decodeIfPresent(HairColor.self, forKey: .hairColor)
+        eyeColor          = try? c.decodeIfPresent(EyeColor.self, forKey: .eyeColor)
+        identityNotes     = try c.decodeIfPresent(String.self, forKey: .identityNotes)
     }
 
     // MARK: File-based persistence
@@ -684,6 +770,24 @@ struct ClipResult: Identifiable {
     let bestDistance: Float
     var clipFiles: [String]
     let outputDir: String
+
+    // MARK: Identity plausibility (POI priors × dossier evidence)
+    //
+    // Computed AFTER the face-match pipeline by
+    // PersonFinderModel.annotateIdentityPlausibility — never in a view
+    // body (GH #104 rule). nil ⇒ not evaluated (no priors set, no
+    // catalog evidence, or the annotate pass hasn't run yet).
+    /// 0.0 = impossible (born after / died before the video's inferred
+    /// date); higher = scene cues fit this person better. See
+    /// IdentityNarrowing.swift for the scoring doctrine.
+    var plausibility: Float?
+    /// Human-readable explanation for the score — surfaced as a tooltip
+    /// on the results row ("born 1983 — after video date 1981").
+    var plausibilityReason: String?
+
+    /// Sort key for the results table: unevaluated rows sort as neutral
+    /// (0.5) so they sit between "likely" and "demoted" rows.
+    var plausibilitySortKey: Float { plausibility ?? 0.5 }
 }
 
 // MARK: - Compiled Output (one per bucket — see docs/compilation-bucketing.md)
