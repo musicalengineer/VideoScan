@@ -54,14 +54,20 @@ extension PersonFinderModel {
         let paths = Set(job.results.map(\.videoPath))
         let evidence = provider(paths)
 
+        // Annotate a LOCAL copy and assign job.results exactly once at the
+        // end: each in-place `job.results[i].x =` write fires the job's
+        // objectWillChange, so the old per-element loop sent 2N publisher
+        // events per annotate pass. Single assignment = one event (same
+        // pattern as PersonFinderCompilation's results republish).
+        var annotated = job.results
         var scored = 0
-        for i in job.results.indices {
-            let path = job.results[i].videoPath
+        for i in annotated.indices {
+            let path = annotated[i].videoPath
             guard let ev = evidence[path], let date = ev.recordDate else {
                 // No triangulated date (or file not in catalog) — neutral,
                 // visibly explained, never silently dropped.
-                job.results[i].plausibility = nil
-                job.results[i].plausibilityReason = "no date/scene evidence for this file"
+                annotated[i].plausibility = nil
+                annotated[i].plausibilityReason = "no date/scene evidence for this file"
                 continue
             }
             // pfIdentityCandidates is pure + synchronous — calling it here
@@ -71,10 +77,11 @@ extension PersonFinderModel {
                 sceneDescriptions: ev.sceneDescriptions,
                 priors: [prior]
             )
-            job.results[i].plausibility = candidates.first?.plausibility
-            job.results[i].plausibilityReason = candidates.first?.reason
+            annotated[i].plausibility = candidates.first?.plausibility
+            annotated[i].plausibilityReason = candidates.first?.reason
             scored += 1
         }
+        job.results = annotated
         identityLog.info("Identity narrowing: scored \(scored)/\(job.results.count) row(s) for \(profile.name, privacy: .public)")
     }
 }

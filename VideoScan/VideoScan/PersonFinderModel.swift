@@ -566,6 +566,31 @@ final class PersonFinderModel: ObservableObject {
             settings.applyProfile(updated)
             settings.save()
         }
+
+        refreshJobsForUpdatedProfile(updated, oldName: oldName)
+    }
+
+    /// POIProfile is a struct (value type — C++ analogy: each job holds a
+    /// COPY, not a pointer), so saving an edited profile does NOT update
+    /// the snapshot any existing job carries in `assignedProfile`. Refresh
+    /// those copies and re-run the identity-plausibility pass so the Fit
+    /// badges reflect the edited priors immediately. Without this, editing
+    /// a birthdate with results on screen leaves stale (or absent) badges
+    /// until app restart — worst case, a corrected birthdate keeps showing
+    /// an authoritative-looking "Not possible" badge that is now wrong.
+    ///
+    /// Internal (not private) and separate from updateProfile so the
+    /// regression test can exercise the refresh without writing to the
+    /// real ~/Library/Application Support POI store (see the App-Support
+    /// pollution note at the bottom of PersonFinderLifecycleTests).
+    func refreshJobsForUpdatedProfile(_ updated: POIProfile, oldName: String? = nil) {
+        // Match on the PRE-edit name: if the edit renamed the person, the
+        // jobs' snapshots still carry the old name.
+        let target = (oldName ?? updated.name).lowercased()
+        for job in jobs where job.assignedProfile?.name.lowercased() == target {
+            job.assignedProfile = updated
+            annotateIdentityPlausibility(for: job)
+        }
     }
 
     // MARK: - Undo state for the most recent delete

@@ -10,6 +10,15 @@ import Foundation
 import Vision
 import CoreGraphics
 import SwiftUI
+import os
+
+/// Same subsystem/category as PersonFinderModel+Identity.swift's logger
+/// (file-private there), so identity-metadata events land in one place
+/// in videoscan.log.
+private let identityLog = Logger(
+    subsystem: "Rick-Breen.VideoScan",
+    category: "identity"
+)
 
 // MARK: - Perf accumulator
 
@@ -511,12 +520,32 @@ struct POIProfile: Codable, Identifiable, Equatable {
         deathdate         = try c.decodeIfPresent(Date.self, forKey: .deathdate)
         // Identity metadata (2026-07) — all decodeIfPresent so profile.json
         // files written before the feature load unchanged. An unrecognized
-        // rawValue (future palette addition) throws, so map to nil instead
-        // via try? — a bad color must never brick a profile load.
-        sex               = try? c.decodeIfPresent(PersonSex.self, forKey: .sex)
-        hairColor         = try? c.decodeIfPresent(HairColor.self, forKey: .hairColor)
-        eyeColor          = try? c.decodeIfPresent(EyeColor.self, forKey: .eyeColor)
+        // rawValue (future palette addition) throws, so degrade that FIELD
+        // to nil — a bad color must never brick a profile load — but log
+        // the drop so a vanishing value is visible, not silent.
+        sex               = Self.decodeIdentityField(PersonSex.self, forKey: .sex, from: c)
+        hairColor         = Self.decodeIdentityField(HairColor.self, forKey: .hairColor, from: c)
+        eyeColor          = Self.decodeIdentityField(EyeColor.self, forKey: .eyeColor, from: c)
         identityNotes     = try c.decodeIfPresent(String.self, forKey: .identityNotes)
+    }
+
+    /// Lenient per-field decode for the identity enums. Replaces bare
+    /// `try?` (which degraded silently): the load still succeeds with the
+    /// field nil'd, but the drop leaves a notice in videoscan.log so a
+    /// future-palette value disappearing on load can be diagnosed.
+    /// Generic over the key type because the compiler-synthesized
+    /// CodingKeys enum can't be named in another member's signature.
+    private static func decodeIdentityField<T: Decodable, K: CodingKey>(
+        _ type: T.Type,
+        forKey key: K,
+        from c: KeyedDecodingContainer<K>
+    ) -> T? {
+        do {
+            return try c.decodeIfPresent(T.self, forKey: key)
+        } catch {
+            identityLog.notice("POIProfile load: dropped unrecognized '\(key.stringValue, privacy: .public)' value (written by a newer app version?) — field left unset. \(String(describing: error), privacy: .public)")
+            return nil
+        }
     }
 
     // MARK: File-based persistence

@@ -199,6 +199,15 @@ private nonisolated func pfScoreCandidate(
     }
 
     // 4. Hair/eye color — boost on match ONLY. No mismatch penalty, ever.
+    //
+    // DOCTRINE — ordering is deliberate: color boosts apply AFTER the sex
+    // demote (step 3) and are ADDITIVE, so a hair+eye match can lift a
+    // sex-mismatched candidate from 0.15 back up to 0.40. That's intended,
+    // not a bug: evidence is evidence — a demote records doubt, it doesn't
+    // veto, and corroborating physical cues should be able to buy back
+    // standing (VLMs misread sex more often than they misread hair color).
+    // If the boosts moved BEFORE the demote they'd be multiplied by 0.3
+    // and could never meaningfully rehabilitate a candidate.
     if let hair = prior.hairColor, cues.hairColors.contains(hair) {
         score = min(1.0, score + hairMatchBoost)
         reasons.append("scene mentions \(hair.rawValue) hair — matches")

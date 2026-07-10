@@ -292,4 +292,100 @@ struct AnnotateIdentityPlausibilityTests {
         #expect(job.results[0].plausibility == nil)
         #expect(job.results[0].plausibilityReason == nil)
     }
+
+    // MARK: - Stale priors after profile edit (QA 2026-07-09 MAJOR)
+    //
+    // POIProfile is a struct — every job holds a VALUE SNAPSHOT in
+    // assignedProfile. Pre-fix, updateProfile() saved the edited profile
+    // to disk but never refreshed those snapshots or re-annotated, so
+    // editing a birthdate with results on screen left stale Fit badges
+    // until app restart — worst case, a CORRECTED birthdate kept showing
+    // a wrong, authoritative-looking "Not possible" (0.0) badge.
+    //
+    // These tests drive refreshJobsForUpdatedProfile directly rather than
+    // updateProfile: updateProfile also persists to the real
+    // ~/Library/Application Support POI store, which tests must not touch
+    // (see the pollution note at the bottom of PersonFinderLifecycleTests).
+    // updateProfile delegates the in-memory refresh to this method.
+
+    @Test func editingProfilePriorsRescoresExistingJobsWithoutRestart() {
+        let model = PersonFinderModel()
+
+        // Donna's birthdate is WRONG (1996) — the 1994 video scores 0.0.
+        let donnaJob = ScanJob(searchPath: "/tmp/donna")
+        donnaJob.assignedProfile = POIProfile(
+            name: "Donna", referencePath: "/tmp/ref",
+            birthdate: date(1996), sex: .female
+        )
+        donnaJob.results = [makeRow(path: "/v/donna.mov")]
+
+        // Control: a job for someone else must be left untouched.
+        let sonJob = ScanJob(searchPath: "/tmp/son")
+        sonJob.assignedProfile = POIProfile(
+            name: "Son", referencePath: "/tmp/ref2", birthdate: date(1983), sex: .male
+        )
+        sonJob.results = [makeRow(path: "/v/son.mov")]
+
+        model.jobs = [donnaJob, sonJob]
+        model.identityEvidenceProvider = stubProvider([
+            "/v/donna.mov": PFIdentityEvidence(
+                recordDate: date(1994), sceneDescriptions: ["a woman"]),
+            "/v/son.mov": PFIdentityEvidence(
+                recordDate: date(1994), sceneDescriptions: ["a boy"])
+        ])
+        // didSet annotated both jobs against the WRONG priors.
+        #expect(donnaJob.results[0].plausibility == 0.0,
+                "precondition: wrong 1996 birthdate must score 'born after video' = 0.0")
+        let sonBefore = sonJob.results[0].plausibility
+        let sonReasonBefore = sonJob.results[0].plausibilityReason
+
+        // Rick corrects the birthdate to 1959 and saves the edit.
+        var corrected = donnaJob.assignedProfile!
+        corrected.birthdate = date(1959)
+        model.refreshJobsForUpdatedProfile(corrected)
+
+        // The job's snapshot AND its Fit badges must reflect the edit
+        // immediately — no app restart.
+        #expect(donnaJob.assignedProfile?.birthdate == date(1959),
+                "job's assignedProfile snapshot must be refreshed")
+        let rescored = donnaJob.results[0].plausibility
+        #expect(rescored != nil && rescored! > 0.5,
+                "corrected birthdate (age 35, 'a woman') must re-score well — got \(String(describing: rescored))")
+        #expect(donnaJob.results[0].plausibilityReason?.contains("after video date") != true,
+                "the stale 'Not possible' reason must be gone")
+
+        // Control job: same scores, same snapshot — untouched.
+        #expect(sonJob.results[0].plausibility == sonBefore)
+        #expect(sonJob.results[0].plausibilityReason == sonReasonBefore)
+        #expect(sonJob.assignedProfile?.birthdate == date(1983))
+    }
+
+    @Test func renamedProfileStillRefreshesJobsViaOldName() {
+        // Jobs hold the PRE-edit name in their snapshots; the refresh must
+        // match on oldName when the edit renamed the person.
+        let model = PersonFinderModel()
+        let job = ScanJob(searchPath: "/tmp")
+        job.assignedProfile = POIProfile(
+            name: "Donna", referencePath: "/tmp/ref",
+            birthdate: date(1996), sex: .female
+        )
+        job.results = [makeRow(path: "/v/donna.mov")]
+        model.jobs = [job]
+        model.identityEvidenceProvider = stubProvider([
+            "/v/donna.mov": PFIdentityEvidence(
+                recordDate: date(1994), sceneDescriptions: ["a woman"])
+        ])
+        #expect(job.results[0].plausibility == 0.0, "precondition")
+
+        var edited = job.assignedProfile!
+        edited.name = "Donna B."
+        edited.birthdate = date(1959)
+        model.refreshJobsForUpdatedProfile(edited, oldName: "Donna")
+
+        #expect(job.assignedProfile?.name == "Donna B.",
+                "rename must propagate to the job snapshot via oldName match")
+        let rescored = job.results[0].plausibility
+        #expect(rescored != nil && rescored! > 0.5,
+                "rescore must run for the renamed profile — got \(String(describing: rescored))")
+    }
 }
