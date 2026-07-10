@@ -255,9 +255,10 @@ struct CorrelateLedgerTests {
         try await Task.sleep(nanoseconds: 50_000_000)   // let it start
         var worstHop: Double = 0
         for _ in 0..<10 {
-            let t0 = ContinuousClock.now
+            // SuspendingClock: hop bound must not tick across machine sleep.
+            let t0 = SuspendingClock.now
             await MainActor.run {}                       // round-trip through main
-            let elapsed = ContinuousClock.now - t0
+            let elapsed = SuspendingClock.now - t0
             let hop = Double(elapsed.components.seconds)
                 + Double(elapsed.components.attoseconds) / 1e18
             worstHop = max(worstHop, hop)

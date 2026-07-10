@@ -104,7 +104,10 @@ struct ProcessRunnerConsolidationTests {
     // and out of scope here — this test pins the TERM→KILL escalation only.
     @Test func cancellationEscalatesToSIGKILLAfterGrace() async throws {
         let box = LineBox()
-        let started = ContinuousClock.now
+        // SuspendingClock: elapsed bound must not tick across machine sleep
+        // (M5 nightly 2026-07-09 — a mid-test sleep turns ContinuousClock
+        // elapsed into minutes and falsely fails the bound).
+        let started = SuspendingClock.now
         let task = Task {
             await ProcessRunner.runProcess(
                 executable: shellPath,
@@ -120,7 +123,7 @@ struct ProcessRunnerConsolidationTests {
         #expect(box.lines.contains("ready"), "child never reported ready")
         task.cancel()
         let result = await task.value
-        let elapsed = ContinuousClock.now - started
+        let elapsed = SuspendingClock.now - started
         // SIGKILL == 9; Process.terminationStatus reports the signal number
         // for uncaught-signal exits.
         #expect(result.exitCode == SIGKILL)

@@ -1,0 +1,19 @@
+✔ Test mixedCatalogProcessAndModelLoadWorkloadsReachTerminalState() passed after 0.001 seconds.
+✔ Test everyFrameUsesPassthroughAndNoFilter() passed after 0.001 seconds.
+✔ Test everyNthBuildsEscapedSelectFilter() passed after 0.001 seconds.
+✔ Test framesPerSecondUsesFpsFilter() passed after 0.001 seconds.
+✔ Test commonFlagsPresentInAllModes() passed after 0.001 seconds.
+✔ Test destinationDirNameNeverCollidesWithFacialRipper() passed after 0.001 seconds.
+◇ Test "skipLane during a slow Whisper banks VLM-only with the 'user skipped' note" started.
+◇ Test "records already dossiered with the current stack are skipped" started.
+◇ Test "records pre-stamped with a DIFFERENT stackID are still skipped" started.
+​➜ Suite "ArcFace MLE5 Crash Provocation" skipped: "Stress suite — set VS_RUN_STRESS=1 to enable."
+​​➜ Test "provoke MLE5 crash with unlocked shared-model concurrent predictions" skipped: "Stress suite — set VS_RUN_STRESS=1 to enable."
+​​➜ Test "provoke MLE5 crash simulating multiple simultaneous job starts" skipped: "Stress suite — set VS_RUN_STRESS=1 to enable."
+​​➜ Test "provoke MLE5 crash via rapid model load-predict-discard cycles" skipped: "Stress suite — set VS_RUN_STRESS=1 to enable."
+​​➜ Test "provoke MLE5 crash via concurrent arcfaceLoadReferenceEmbeddings on real POI photos" skipped: "Stress suite — set VS_RUN_STRESS=1 to enable."
+Test Case '-[VideoScanTests.DossierWindowClampTests testBarelyVisibleWindowIsRecentered]' started.
+Test Case '-[VideoScanTests.DossierWindowClampTests testDegenerateZeroSizeGetsFallbackSize]' started.
+Test Case '-[VideoScanTests.DossierWindowClampTests testBarelyVisibleWindowIsRecentered]' passed (0.001 seconds).
+Test Case '-[VideoScanTests.DossierWindowClampTests testDegenerateZeroSizeGetsFallbackSize]' passed (0.000 seconds).
+✔ Test run with 2472 tests in 355 suites passed after 2540.934 seconds.

@@ -297,6 +297,66 @@ for reason in "off-main:feature/foo" "dirty-tree:scripts/x.sh,VideoScan/y.swift"
 done
 
 # ───────────────────────────────────────────────────────────────────
+# Test 8: parse_test_counts — fixture-driven count + failed_names check.
+#
+# Regression for 2026-07-09: one failing Swift Testing test published
+# failed:3 because the old grep matched the issue line, the per-test
+# "failed after" line AND the "✘ Test run with …" summary. The fixtures
+# are saved excerpts of real nightly xcodebuild output (including the
+# zero-width-space-indented "➜ Test … skipped:" lines and started-lines
+# whose display names contain the word "skipped").
+# ───────────────────────────────────────────────────────────────────
+echo
+echo "== Test 8: parse_test_counts fixture counts =="
+PARSE_LIB="$SANDBOX/parse_lib.sh"
+awk '/^parse_test_counts\(\) \{/,/^}$/' "$SCRIPT_DIR/nightly_local_tests.sh" > "$PARSE_LIB"
+FIXTURE_DIR="$SCRIPT_DIR/../tests/fixtures/logs"
+
+# Runs parse_test_counts on a log in a subshell and echoes
+# "PASSED|FAILED|SKIPPED|FAILED_NAMES_JSON" for main-shell comparison.
+run_parse() {
+    # shellcheck disable=SC1090
+    ( source "$PARSE_LIB"
+      parse_test_counts "$1"
+      echo "$PASSED|$FAILED|$SKIPPED|$FAILED_NAMES_JSON" )
+}
+
+if [ ! -s "$PARSE_LIB" ]; then
+    fail "parse_test_counts could not be extracted from nightly_local_tests.sh"
+else
+    # 8a: single-failure excerpt — the diagnosed inflation case. FAILED
+    # MUST be exactly 1 (old pattern said 3), names must carry the test.
+    got=$(run_parse "$FIXTURE_DIR/nightly_excerpt_one_failure.log")
+    want='8|1|4|["performanceRebuildUnderBudget()"]'
+    if [ "$got" = "$want" ]; then
+        pass "one-failure fixture: PASSED=8 FAILED=1 SKIPPED=4, failed_names correct"
+    else
+        fail "one-failure fixture: got '$got', want '$want'"
+    fi
+
+    # 8b: green excerpt — the "✔ Test run with …" summary and started-
+    # lines with "skipped" in their display names must NOT count;
+    # failed_names must be [].
+    got=$(run_parse "$FIXTURE_DIR/nightly_excerpt_green.log")
+    want='8|0|4|[]'
+    if [ "$got" = "$want" ]; then
+        pass "green fixture: PASSED=8 FAILED=0 SKIPPED=4, failed_names=[]"
+    else
+        fail "green fixture: got '$got', want '$want'"
+    fi
+
+    # 8c: empty input — counts must be plain integer zeros (the
+    # 2026-06-14 "0\n0" arithmetic-crash guard), names must be [].
+    : > "$SANDBOX/empty.log"
+    got=$(run_parse "$SANDBOX/empty.log")
+    if [ "$got" = "0|0|0|[]" ]; then
+        pass "empty log: all counts 0, failed_names=[]"
+    else
+        fail "empty log parsing broke: got '$got' (counts must be plain integers)"
+    fi
+fi
+
+# ───────────────────────────────────────────────────────────────────
 # Summary
 # ───────────────────────────────────────────────────────────────────
 echo

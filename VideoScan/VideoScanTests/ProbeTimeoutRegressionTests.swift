@@ -73,7 +73,11 @@ struct ProbeTimeoutRegressionTests {
         model.ffprobePath = fakeFFProbe.path
         model.probeTimeoutSeconds = 2
 
-        let start = ContinuousClock.now
+        // SuspendingClock, not ContinuousClock: elapsed-bound assertions must
+        // stop ticking while the machine sleeps. On 2026-07-09 the M5 nightly
+        // slept ~7 min mid-test and ContinuousClock reported 419 s for a run
+        // whose suspending duration was 7.9 s — a false failure.
+        let start = SuspendingClock.now
         let rec = await model.probeFileWithTimeout(url: media, skipHashing: true)
         let elapsed = start.duration(to: .now)
 
@@ -99,7 +103,8 @@ struct ProcessRunnerDeadlineTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         let tool = try makeStuckTool(sleepSeconds: 30, in: dir)
 
-        let start = ContinuousClock.now
+        // SuspendingClock — sleep-immune elapsed bound (see note above).
+        let start = SuspendingClock.now
         let result = await ProcessRunner.runProcess(
             executable: tool.path, arguments: [],
             deadlineSeconds: 1, killGraceSeconds: 1)

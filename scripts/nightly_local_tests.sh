@@ -31,6 +31,21 @@
 #     - Every row now carries a `nightly_script_v` field so future me can
 #       tell at a glance which version produced a given row.
 
+#   2026-07-09 (r1):
+#     - Fixed 3x-inflated FAILED count: the old pattern matched the
+#       per-failure ISSUE line ("recorded an issue … Expectation failed"),
+#       the per-test summary ("✘ Test x() failed after …") AND the run
+#       summary ("✘ Test run with N tests failed after …") — one failing
+#       test published failed:3 (digest said "failed-tests:3" on a
+#       single-failure night). PASSED had the same +1 from the green run
+#       summary, and SKIPPED counted "◇ … started." lines whose display
+#       names merely CONTAIN the word "skipped" while missing the real
+#       "➜ Test … skipped:" lines entirely. Parsing now lives in
+#       parse_test_counts() (extractable by the test harness) and counts
+#       only real per-test terminal lines.
+#     - Rows gain an ADDITIVE "failed_names" field: JSON array of failing
+#       test names, [] on green runs. No existing field renamed/removed.
+#
 #   2026-07-07 (r1):
 #     - Skip the VideoScanUITests target at the xcodebuild level
 #       (-skip-testing:VideoScanUITests). Every UI test class is already
@@ -48,7 +63,7 @@
 
 set -u
 
-NIGHTLY_SCRIPT_VERSION="2026-07-07-r1"
+NIGHTLY_SCRIPT_VERSION="2026-07-09-r1"
 REPO="$HOME/dev/VideoScan"
 LOGDIR="$HOME/Library/Logs/VideoScan"
 LOGFILE="$LOGDIR/nightly_test_$(date +%Y%m%d_%H%M%S).log"
@@ -340,24 +355,58 @@ ELAPSED=$((TEST_END - TEST_START))
 log "Tests completed in ${ELAPSED}s (rc=$TEST_RC)"
 
 # ── Parse results ───────────────────────────────────────────────────
-# Swift Testing markers.
+# Swift Testing + XCTest markers. Extracted into a function so
+# scripts/test_nightly_failure_modes.sh can source and fixture-test it.
 #
-# 2026-06-14: dropped the prior `grep -cE ... || echo 0` idiom. When
-# grep matched nothing it emitted "0" AND returned 1, so the `|| echo 0`
-# also fired, capturing "0\n0" into PASSED. The next line's $(( ))
-# arithmetic blew up with "syntax error in expression (error token is
-# '0')" and the script crashed BEFORE publishing a row — which is
-# exactly why the dashboard stayed stuck on 2026-06-09 for 5 days
-# despite the nightly running fine otherwise. Using `grep | wc -l`
-# instead always produces a single-line integer, even on empty input.
-PASSED=$(grep -cE '^(✔ Test |Test Case .*passed)' /tmp/nightly-test-output.log 2>/dev/null | head -1)
-FAILED=$(grep -cE '^(✘ Test .*failed|Test Case .*failed)' /tmp/nightly-test-output.log 2>/dev/null | head -1)
-SKIPPED=$(grep -cE '^(◇ Test .*skipped|Test Case .*skipped)' /tmp/nightly-test-output.log 2>/dev/null | head -1)
-PASSED=${PASSED:-0}
-FAILED=${FAILED:-0}
-SKIPPED=${SKIPPED:-0}
+# 2026-06-14 (still applies): never use `grep -cE ... || echo 0` — when
+# grep matched nothing it emitted "0" AND returned 1, the `|| echo 0`
+# also fired, and "0\n0" crashed the $(( )) arithmetic BEFORE a row was
+# published (dashboard stuck for 5 days from 2026-06-09). grep -c always
+# emits exactly one integer, even on empty input, so no fallback needed.
+#
+# 2026-07-09 (r1): count only REAL per-test terminal lines.
+#   FAILED  old pattern matched 3 lines per Swift Testing failure:
+#           the issue line   "✘ Test x() recorded an issue …: Expectation failed: …"
+#           the test line    "✘ Test x() failed after 1.786 seconds with 1 issue."
+#           the run summary  "✘ Test run with 2472 tests … failed after …"
+#           → one failure published failed:3. Now: only " failed after "
+#           per-test lines, excluding the "Test run with" summary.
+#   PASSED  same +1 from "✔ Test run with … passed after …" on green runs.
+#   SKIPPED the old '^◇ Test .*skipped' matched STARTED lines whose
+#           display names contain the word "skipped" (9 such tests) and
+#           missed the actual skip lines, which use "➜ Test … skipped:"
+#           (with leading zero-width indent chars — hence no ^ anchor).
+# Patterns are deliberately unanchored on the symbol markers: swift-testing
+# indents nested lines with U+200B zero-width spaces, so ^-anchored ✔/➜
+# patterns silently miss some per-test lines.
+parse_test_counts() {
+    local out="$1"
+    PASSED=$(grep -E '(✔ Test .* passed after |^Test Case .* passed)' "$out" 2>/dev/null \
+        | grep -cv 'Test run with ')
+    FAILED=$(grep -E '(✘ Test .* failed after |^Test Case .* failed)' "$out" 2>/dev/null \
+        | grep -cv 'Test run with ')
+    SKIPPED=$(grep -E '(➜ Test .* skipped|^Test Case .* skipped)' "$out" 2>/dev/null \
+        | grep -cv 'Test run with ')
+    PASSED=${PASSED:-0}
+    FAILED=${FAILED:-0}
+    SKIPPED=${SKIPPED:-0}
+    # failed_names: JSON array of failing test names ([] on green runs).
+    # python3 does the JSON escaping; on any hiccup fall back to [] so the
+    # published row stays valid JSON.
+    FAILED_NAMES_JSON=$(grep -E '(✘ Test .* failed after |^Test Case .* failed)' "$out" 2>/dev/null \
+        | grep -v 'Test run with ' \
+        | sed -E -e 's/.*✘ Test (.+) failed after .*/\1/' \
+                 -e "s/^Test Case '(.+)' failed.*/\1/" \
+        | sort -u \
+        | python3 -c 'import json,sys; print(json.dumps([l.rstrip("\n") for l in sys.stdin if l.strip()]))' \
+        2>/dev/null)
+    FAILED_NAMES_JSON=${FAILED_NAMES_JSON:-[]}
+}
+
+parse_test_counts /tmp/nightly-test-output.log
 TOTAL=$((PASSED + FAILED + SKIPPED))
 log "Results: ${PASSED}p / ${FAILED}f / ${SKIPPED}s (${TOTAL} total)"
+[ "$FAILED" -gt 0 ] && log "Failed tests: $FAILED_NAMES_JSON"
 
 # Look for the UI test runner timeout/hang marker — the unit-test pass
 # count is still honest, but we want the row to flag this so a sudden
@@ -426,10 +475,13 @@ if [ "$COV_LOGIC" != "null" ]; then
     COV_FIELD=",\"coverage_logic_pct\":$COV_LOGIC"
 fi
 
-ROW=$(printf '{"ts":"%s","source":"nightly-local","host":"%s","branch":"%s","commit":"%s","commit_date":"%s","app_version":"1.0","dirty":%s,"passed":%d,"failed":%d,"skipped":%d,"total":%d,"elapsed_s":%.3f,"status":"%s","reason":"%s","nightly_script_v":"%s"%s}' \
+# "failed_names" is ADDITIVE (2026-07-09-r1): [] on green runs. Do not
+# rename/remove existing fields — the dashboard reads this schema.
+ROW=$(printf '{"ts":"%s","source":"nightly-local","host":"%s","branch":"%s","commit":"%s","commit_date":"%s","app_version":"1.0","dirty":%s,"passed":%d,"failed":%d,"skipped":%d,"total":%d,"elapsed_s":%.3f,"status":"%s","reason":"%s","nightly_script_v":"%s","failed_names":%s%s}' \
     "$TS" "$HOST" "$BRANCH" "$COMMIT" "$COMMIT_DATE" "$DIRTY" \
     "$PASSED" "$FAILED" "$SKIPPED" "$TOTAL" \
-    "$ELAPSED" "$STATUS" "$REASON" "$NIGHTLY_SCRIPT_VERSION" "$COV_FIELD")
+    "$ELAPSED" "$STATUS" "$REASON" "$NIGHTLY_SCRIPT_VERSION" \
+    "$FAILED_NAMES_JSON" "$COV_FIELD")
 
 publish_row "$ROW"
 PUBLISH_RC=$?
