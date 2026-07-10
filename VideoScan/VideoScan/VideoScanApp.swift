@@ -483,6 +483,11 @@ struct VideoScanApp: App {
         }
         .windowResizability(.contentSize)
         .defaultPosition(.center)
+        // Keep About out of the Window menu — it's reachable from
+        // VideoScan ▸ About VideoScan and doesn't belong in the list of
+        // working windows. (commandsRemoved strips the scene's auto-added
+        // menu items; openWindow(id: "about") still works.)
+        .commandsRemoved()
 
         Window("VideoScan Dashboard", id: "dashboard") {
             DashboardWindow()
