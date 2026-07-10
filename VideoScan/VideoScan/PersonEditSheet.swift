@@ -17,6 +17,14 @@ struct PersonEditSheet: View {
     @State private var aliasText: String
     @State private var coverFilename: String?
     @State private var referencePath: String
+    // Identity metadata (feeds match plausibility ranking — see
+    // IdentityNarrowing.swift). All optional; nil = not set.
+    @State private var birthdate: Date?
+    @State private var deathdate: Date?
+    @State private var sex: PersonSex?
+    @State private var hairColor: HairColor?
+    @State private var eyeColor: EyeColor?
+    @State private var identityNotes: String
     // Photo import
     @State private var photosPickerItems: [PhotosPickerItem] = []
     @State private var isImporting = false
@@ -40,6 +48,12 @@ struct PersonEditSheet: View {
         _referencePath = State(initialValue: profile.referencePath)
         _cropScale = State(initialValue: profile.coverCropScale)
         _cropOffset = State(initialValue: CGSize(width: profile.coverCropOffsetX, height: profile.coverCropOffsetY))
+        _birthdate = State(initialValue: profile.birthdate)
+        _deathdate = State(initialValue: profile.deathdate)
+        _sex = State(initialValue: profile.sex)
+        _hairColor = State(initialValue: profile.hairColor)
+        _eyeColor = State(initialValue: profile.eyeColor)
+        _identityNotes = State(initialValue: profile.identityNotes ?? "")
     }
 
     private var imageFilenames: [String] {
@@ -61,6 +75,13 @@ struct PersonEditSheet: View {
         p.coverCropScale = cropScale
         p.coverCropOffsetX = cropOffset.width
         p.coverCropOffsetY = cropOffset.height
+        p.birthdate = birthdate
+        p.deathdate = deathdate
+        p.sex = sex
+        p.hairColor = hairColor
+        p.eyeColor = eyeColor
+        let trimmedIdentity = identityNotes.trimmingCharacters(in: .whitespacesAndNewlines)
+        p.identityNotes = trimmedIdentity.isEmpty ? nil : trimmedIdentity
         return p
     }
 
@@ -98,6 +119,8 @@ struct PersonEditSheet: View {
                         .textFieldStyle(.roundedBorder)
                         .help("Alternate names that might appear in video filenames or metadata")
                 }
+
+                aboutSection
 
                 Section("Notes") {
                     TextEditor(text: $notes)
@@ -203,7 +226,7 @@ struct PersonEditSheet: View {
             .padding(16)
             .background(Color(NSColor.windowBackgroundColor))
         }
-        .frame(width: 560, height: 720)
+        .frame(width: 560, height: 780)
         .alert(
             "Delete this reference photo?",
             isPresented: Binding(
@@ -221,6 +244,110 @@ struct PersonEditSheet: View {
             }
         } message: { filename in
             Text("\(filename) will be moved to the Trash. This photo will no longer be used when scanning for \(name.isEmpty ? "this person" : name).")
+        }
+    }
+
+    // MARK: About section (identity metadata)
+    //
+    // Feeds the search-results plausibility ranking: birth/death dates
+    // rule people out of videos they can't be in, sex + hair + eyes
+    // re-rank against the video's scene description. Family language,
+    // generous text size (title3 — Rick reads at a distance).
+
+    /// A sensible starting point when Rick clicks "Add" — mid-century,
+    /// matches the archive's era better than today's date would.
+    private static let defaultBirthdate: Date = {
+        var dc = DateComponents(); dc.year = 1970; dc.month = 1; dc.day = 1
+        return Calendar.current.date(from: dc) ?? Date()
+    }()
+
+    /// Bridge Date? state into the non-optional Binding a DatePicker
+    /// wants. ≈ C++: a proxy accessor pair over an std::optional<Date>.
+    private func requiredDate(_ source: Binding<Date?>) -> Binding<Date> {
+        Binding(
+            get: { source.wrappedValue ?? Self.defaultBirthdate },
+            set: { source.wrappedValue = $0 }
+        )
+    }
+
+    @ViewBuilder
+    private var aboutSection: some View {
+        Section {
+            Group {
+                // Born — day precision offered, but scoring only uses years.
+                if birthdate != nil {
+                    HStack {
+                        DatePicker("Born", selection: requiredDate($birthdate),
+                                   displayedComponents: .date)
+                        Button {
+                            birthdate = nil
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Clear birthday")
+                    }
+                } else {
+                    LabeledContent("Born") {
+                        Button("Add birthday\u{2026}") { birthdate = Self.defaultBirthdate }
+                    }
+                }
+
+                // Passed away — quiet affordance; most profiles never
+                // show a date field here, just a small link-style button.
+                if deathdate != nil {
+                    HStack {
+                        DatePicker("Passed away", selection: requiredDate($deathdate),
+                                   displayedComponents: .date)
+                        Button {
+                            deathdate = nil
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Clear date")
+                    }
+                } else {
+                    Button("Add a date of passing\u{2026}") { deathdate = Date() }
+                        .buttonStyle(.link)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                Picker("Sex", selection: $sex) {
+                    Text("Not set").tag(PersonSex?.none)
+                    ForEach(PersonSex.allCases, id: \.self) { s in
+                        Text(s.label).tag(PersonSex?.some(s))
+                    }
+                }
+
+                Picker("Hair", selection: $hairColor) {
+                    Text("Not set").tag(HairColor?.none)
+                    ForEach(HairColor.allCases, id: \.self) { c in
+                        Text(c.label).tag(HairColor?.some(c))
+                    }
+                }
+                .help("A match with the scene description boosts ranking — a mismatch never counts against them (hair changes over the decades)")
+
+                Picker("Eyes", selection: $eyeColor) {
+                    Text("Not set").tag(EyeColor?.none)
+                    ForEach(EyeColor.allCases, id: \.self) { c in
+                        Text(c.label).tag(EyeColor?.some(c))
+                    }
+                }
+
+                TextField("Details", text: $identityNotes,
+                          prompt: Text("e.g. blonde hair, blue eyes, always wore glasses"))
+                    .textFieldStyle(.roundedBorder)
+                    .help("Anything that helps recognize them on screen — kept for your reference")
+            }
+            .font(.title3)
+        } header: {
+            Text("About \(name.isEmpty ? "this person" : name)")
+        } footer: {
+            Text("Helps rank search matches — someone born after a video was filmed can't be in it. Just the year is enough.")
         }
     }
 

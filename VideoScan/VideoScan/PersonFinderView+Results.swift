@@ -21,6 +21,38 @@ extension PersonFinderView {
         return .orange
     }
 
+    // MARK: Identity plausibility badge
+    //
+    // Display-only: the score + reason were computed and cached on the
+    // row by PersonFinderModel.annotateIdentityPlausibility (never in
+    // view bodies — GH #104 rule). Impossible candidates are DEMOTED
+    // with a visible red badge + tooltip reason, never hidden.
+
+    private func plausibilityGlyph(_ p: Float?) -> (icon: String, color: Color, label: String) {
+        guard let p else { return ("minus.circle", .secondary, "Not checked") }
+        if p == 0.0  { return ("exclamationmark.octagon.fill", .red, "Not possible") }
+        if p < 0.35  { return ("questionmark.circle.fill", .orange, "Unlikely") }
+        if p >= 0.75 { return ("checkmark.seal.fill", .green, "Good fit") }
+        return ("person.fill.questionmark", .secondary, "Possible")
+    }
+
+    private func plausibilityHelp(_ r: ClipResult) -> String {
+        let glyph = plausibilityGlyph(r.plausibility)
+        if let reason = r.plausibilityReason, !reason.isEmpty {
+            return "\(glyph.label): \(reason)"
+        }
+        return "No date or scene evidence for this file yet — run Generate Dossier to enable the fit check."
+    }
+
+    @ViewBuilder
+    private func plausibilityBadge(_ r: ClipResult) -> some View {
+        let glyph = plausibilityGlyph(r.plausibility)
+        Image(systemName: glyph.icon)
+            .font(.body)
+            .foregroundColor(glyph.color)
+            .help(plausibilityHelp(r))
+    }
+
     private var resultTableView: some View {
         resultTableCore
             .onChange(of: resultSortOrder) {
@@ -87,6 +119,14 @@ extension PersonFinderView {
                     .foregroundColor(matchColor(r.bestDistance))
             }
             .width(min: 80, ideal: 90)
+
+            // Identity fit — sortable so demoted/impossible rows sink to
+            // the bottom when sorted descending. Tooltip carries the
+            // human-readable reason ("born 1983 — after video date 1981").
+            TableColumn("Fit", value: \.plausibilitySortKey) { r in
+                plausibilityBadge(r)
+            }
+            .width(min: 40, ideal: 50)
         }
     }
 
@@ -178,6 +218,18 @@ extension PersonFinderView {
                     Text(String(format: "%.3f", rec.bestDistance))
                         .font(.system(size: 16, weight: .medium, design: .monospaced))
                         .foregroundColor(rec.bestDistance < 0.5 ? .green : rec.bestDistance < 0.65 ? .yellow : .orange)
+                }
+                if rec.plausibility != nil {
+                    let glyph = plausibilityGlyph(rec.plausibility)
+                    VStack(spacing: 2) {
+                        Text("Fit")
+                            .font(.system(size: 13))
+                            .foregroundColor(.secondary)
+                        Label(glyph.label, systemImage: glyph.icon)
+                            .font(.system(size: 16, weight: .medium))
+                            .foregroundColor(glyph.color)
+                    }
+                    .help(plausibilityHelp(rec))
                 }
             }
 
@@ -313,6 +365,9 @@ extension PersonFinderView {
             infoRow("Presence", pfFormatDuration(rec.presenceSecs))
             infoRow("Segments", "\(rec.segmentCount)")
             infoRow("Best Match", String(format: "%.3f", rec.bestDistance))
+            if let reason = rec.plausibilityReason {
+                infoRow("Fit", reason)
+            }
             if !rec.outputDir.isEmpty {
                 infoRow("Output Dir", rec.outputDir)
             }
