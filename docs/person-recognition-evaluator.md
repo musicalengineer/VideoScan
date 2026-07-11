@@ -41,6 +41,17 @@ production adapter invokes a narrow headless mode in the built VideoScan
 executable, which in turn calls the same Vision, ArcFace, dlib, or hybrid
 functions used by `PersonFinderModel`. This prevents benchmark drift.
 
+The headless app adapter also supports a reference-free face-presence probe:
+
+```bash
+/path/to/VideoScan.app/Contents/MacOS/VideoScan \
+  --person-eval --face-presence-only --video /path/to/video.mov
+```
+
+It uses the production Vision decoder, frame sampler, orientation handling,
+face detector, watchdog, and counter, but supplies no identity feature prints.
+Every observed face is therefore counted without being assigned a name.
+
 During evaluator development, a case may name a checked-in result JSON instead
 of launching an engine. That mode makes scoring tests deterministic and does
 not claim recognition accuracy.

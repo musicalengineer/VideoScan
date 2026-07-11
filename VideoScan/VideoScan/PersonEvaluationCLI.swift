@@ -14,6 +14,7 @@ enum PersonEvaluationCLI {
         var frameStep: Int?
         var minFaceConfidence: Float?
         var largestFaceOnly = false
+        var facePresenceOnly = false
     }
 
     private struct SegmentOutput: Codable {
@@ -62,7 +63,7 @@ enum PersonEvaluationCLI {
         guard FileManager.default.fileExists(atPath: options.video) else {
             throw CLIError("video does not exist: \(options.video)")
         }
-        guard FileManager.default.fileExists(atPath: options.references) else {
+        guard options.facePresenceOnly || FileManager.default.fileExists(atPath: options.references) else {
             throw CLIError("reference path does not exist: \(options.references)")
         }
 
@@ -83,12 +84,18 @@ enum PersonEvaluationCLI {
         // closures. The mutable setup variable never crosses concurrency.
         let configuredSettings = settings
 
-        let (faces, failures, referenceError) = await Task.detached(priority: .userInitiated) {
-            pfLoadReferencePhotos(from: options.references, largestFaceOnly: options.largestFaceOnly)
-        }.value
-        guard !faces.isEmpty else {
-            let detail = referenceError ?? failures.map { "\($0.filename): \($0.reason)" }.joined(separator: "; ")
-            throw CLIError("no usable reference faces: \(detail)")
+        let faces: [ReferenceFace]
+        if options.facePresenceOnly {
+            faces = []
+        } else {
+            let loaded = await Task.detached(priority: .userInitiated) {
+                pfLoadReferencePhotos(from: options.references, largestFaceOnly: options.largestFaceOnly)
+            }.value
+            guard !loaded.0.isEmpty else {
+                let detail = loaded.2 ?? loaded.1.map { "\($0.filename): \($0.reason)" }.joined(separator: "; ")
+                throw CLIError("no usable reference faces: \(detail)")
+            }
+            faces = loaded.0
         }
 
         let log: @Sendable (String) async -> Void = { line in
@@ -134,18 +141,24 @@ enum PersonEvaluationCLI {
         }
 
         let result: pfVideoResult?
-        switch options.engine {
+        if options.facePresenceOnly {
+            // An empty reference-print array deliberately makes every observed
+            // face an unmatched face while preserving the production decoder,
+            // sampling, orientation, detector, watchdog, and face counter.
+            result = await vision()
+        } else { switch options.engine {
         case .vision: result = await vision()
         case .arcface: result = await arcface()
         case .dlib: result = await dlib()
         case .hybrid:
             let first = await vision()
             result = (first?.segments.isEmpty == false) ? first : await dlib()
-        }
+        } }
         guard let result else { throw CLIError("recognition engine returned no result") }
 
         return Output(
-            schemaVersion: 1, person: options.person, engine: options.engine.displayName,
+            schemaVersion: 1, person: options.facePresenceOnly ? "" : options.person,
+            engine: options.facePresenceOnly ? "FacePresence/Vision" : options.engine.displayName,
             video: options.video, facesDetected: result.facesDetected, hits: result.totalHits,
             bestDistance: result.segments.map(\.bestDistance).min(),
             segments: result.segments.map {
@@ -188,12 +201,13 @@ enum PersonEvaluationCLI {
                 guard let number = Float(try value(after: argument)) else { throw CLIError("invalid face confidence") }
                 options.minFaceConfidence = number
             case "--largest-face-only": options.largestFaceOnly = true
+            case "--face-presence-only": options.facePresenceOnly = true
             default: throw CLIError("unknown argument: \(argument)")
             }
             index += 1
         }
-        guard !options.person.isEmpty else { throw CLIError("--person is required") }
-        guard !options.references.isEmpty else { throw CLIError("--references is required") }
+        guard options.facePresenceOnly || !options.person.isEmpty else { throw CLIError("--person is required") }
+        guard options.facePresenceOnly || !options.references.isEmpty else { throw CLIError("--references is required") }
         guard !options.video.isEmpty else { throw CLIError("--video is required") }
         return options
     }
