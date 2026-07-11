@@ -734,7 +734,7 @@ struct AboutView: View {
                             HStack(spacing: 4) {
                                 Image(systemName: "cpu.fill")
                                     .font(.system(size: 10))
-                                Text(aboutChipName())
+                                Text(ChipInfo.line)
                                     .font(.system(.caption, design: .monospaced))
                             }
                             .foregroundStyle(.secondary)
@@ -751,16 +751,6 @@ struct AboutView: View {
         }
         .frame(width: 520, height: 620)
     }
-}
-
-private func aboutChipName() -> String {
-    var size = 0
-    sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0)
-    guard size > 0 else { return "Apple Silicon" }
-    var buf = [CChar](repeating: 0, count: size)
-    sysctlbyname("machdep.cpu.brand_string", &buf, &size, nil, 0)
-    let s = String(cString: buf).trimmingCharacters(in: .whitespacesAndNewlines)
-    return s.isEmpty ? "Apple Silicon" : s
 }
 
 struct AboutSection<Content: View>: View {
