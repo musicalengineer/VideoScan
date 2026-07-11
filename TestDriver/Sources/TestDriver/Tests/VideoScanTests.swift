@@ -65,6 +65,7 @@ enum VideoScanTests {
             smokeAppBinaryExists,
             smokeArcFaceModelPresent,
             smokeReachabilityCachePresent,
+            integrationPersonRecognitionEvaluator,
             // Diagnostic
             diagnosticDefaultsPollutionCheck,
             diagnosticRecentCrashScan,
@@ -180,6 +181,74 @@ enum VideoScanTests {
                                duration: elapsed)
             }
             return .passed(elapsed, log: "All cache-related symbols present")
+        }
+    }
+
+    /// Black-box accuracy sensor: TestDriver builds VideoScan, then the
+    /// standalone evaluator drives the app executable's headless production
+    /// Vision path against one generated positive and one generated negative.
+    /// The suite is deliberately smoke-tier, so it proves plumbing without
+    /// masquerading as the future private Donna quality score.
+    static var integrationPersonRecognitionEvaluator: TestEntry {
+        TestEntry(
+            group: .integration,
+            module: "Person Recognition",
+            name: "Headless production-pipeline evaluator",
+            description: "Builds VideoScan and scores the checked-in Rick positive/no-person negative manifest"
+        ) { host, log in
+            guard host == .local else {
+                return .skipped("Person evaluator remote adapter is not wired yet")
+            }
+            let started = Date()
+            let dd = sharedDerivedDataPath
+            let project = projectDir + "/VideoScan/VideoScan.xcodeproj"
+            log("Building VideoScan evaluator adapter...")
+            let build = await Subprocess.run(
+                "/usr/bin/xcodebuild",
+                ["build", "-quiet", "-project", project, "-scheme", "VideoScan",
+                 "-configuration", "Debug", "-destination", "platform=macOS,arch=arm64",
+                 "-derivedDataPath", dd, "CODE_SIGNING_ALLOWED=NO"],
+                timeoutSeconds: 900,
+                stdoutLine: log,
+                stderrLine: log
+            )
+            guard build.didSucceed else {
+                return .failed("VideoScan build failed", duration: Date().timeIntervalSince(started),
+                               log: build.stdout + "\n" + build.stderr)
+            }
+
+            let app = dd + "/Build/Products/Debug/VideoScan.app/Contents/MacOS/VideoScan"
+            let evaluator = projectDir + "/tools/person-eval/person_eval.py"
+            let manifest = projectDir + "/tests/fixtures/person_eval/videoscan_rick_smoke.json"
+            let reportBase = NSTemporaryDirectory() + "testdriver-person-eval"
+            log("Driving production Vision pipeline via \(app)")
+            let run = await Subprocess.run(
+                "/usr/bin/python3",
+                [evaluator, manifest, "--app", app,
+                 "--json", reportBase + ".json",
+                 "--markdown", reportBase + ".md"],
+                timeoutSeconds: 180,
+                stdoutLine: log,
+                stderrLine: log
+            )
+            guard run.didSucceed else {
+                return .failed("Person evaluator failed", duration: Date().timeIntervalSince(started),
+                               log: run.stdout + "\n" + run.stderr)
+            }
+            guard let data = try? Data(contentsOf: URL(fileURLWithPath: reportBase + ".json")),
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let score = json["score"] as? Double,
+                  score == 100.0 else {
+                return .failed("Evaluator report missing or smoke score regressed",
+                               duration: Date().timeIntervalSince(started), log: run.stdout)
+            }
+            let publishEligible = json["publishEligible"] as? Bool ?? true
+            guard !publishEligible else {
+                return .failed("Smoke suite must never be publication-eligible",
+                               duration: Date().timeIntervalSince(started), log: run.stdout)
+            }
+            return .passed(Date().timeIntervalSince(started),
+                           log: run.stdout + "\nReport: \(reportBase).md")
         }
     }
 

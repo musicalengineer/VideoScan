@@ -1,13 +1,18 @@
 {
   "schemaVersion": 1,
   "suite": "Donna development set",
+  "publication": {
+    "tier": "development",
+    "datasetVersion": "donna-development-v1",
+    "holdout": false
+  },
   "engine": {
     "name": "Vision",
     "person": "Donna",
     "referencePath": "/path/to/private/donna/references",
     "timeoutSeconds": 3600,
     "command": [
-      "/path/to/DerivedData/Build/Products/Debug/VideoScan.app/Contents/MacOS/VideoScan",
+      "{app}",
       "--person-eval",
       "--engine", "vision",
       "--person", "{person}",

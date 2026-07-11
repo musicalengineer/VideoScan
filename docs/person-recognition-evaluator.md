@@ -65,13 +65,18 @@ Private manifests and media do not need to be committed.
 {
   "schemaVersion": 1,
   "suite": "Donna golden holdout",
+  "publication": {
+    "tier": "quality",
+    "datasetVersion": "donna-golden-v1",
+    "holdout": true
+  },
   "engine": {
     "name": "ArcFace",
     "person": "Donna",
     "referencePath": "/private/path/to/donna/references",
     "timeoutSeconds": 3600,
     "command": [
-      "/path/to/VideoScan",
+      "{app}",
       "--person-eval",
       "--engine", "arcface",
       "--person", "{person}",
@@ -166,6 +171,29 @@ python3 tools/person-eval/person_eval.py \
   --markdown /tmp/person-eval.md
 ```
 
+For a live VideoScan manifest, supply the current build without editing the
+manifest:
+
+```bash
+python3 tools/person-eval/person_eval.py private/donna-manifest.json \
+  --app /path/to/VideoScan.app/Contents/MacOS/VideoScan \
+  --json /tmp/donna-eval.json --markdown /tmp/donna-eval.md
+```
+
+The checked-in production-pipeline smoke suite uses generated Rick-positive
+and no-person-negative media, so it is safe to run anywhere the app builds:
+
+```bash
+python3 tools/person-eval/person_eval.py \
+  tests/fixtures/person_eval/videoscan_rick_smoke.json \
+  --app /path/to/VideoScan.app/Contents/MacOS/VideoScan \
+  --json /tmp/person-eval-smoke.json \
+  --markdown /tmp/person-eval-smoke.md
+```
+
+This is an integration sensor, not evidence of family-recognition quality. The
+private Donna holdout will supply that evidence once labeled.
+
 Python tests:
 
 ```bash
@@ -192,3 +220,11 @@ row. Suggested fields are:
 Nightly publication is intentionally deferred until the real VideoScan adapter
 and a useful private holdout exist. Empty or fixture-only suites must never
 publish a production-looking accuracy score.
+
+The evaluator enforces that boundary. A report is `publishEligible` only when
+the manifest explicitly declares a versioned quality-tier holdout, all cases
+ran a live engine, the suite contains both identity-positive and
+identity-negative cases, and no result reports an engine error. Development
+and smoke suites can never publish a production quality score. Automation can
+add `--require-publishable`; an ineligible report is still written for
+diagnosis, but the command exits 4 so it cannot be mistaken for a nightly score.

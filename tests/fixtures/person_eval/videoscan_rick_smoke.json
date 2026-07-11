@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "suite": "VideoScan production-pipeline Rick smoke",
+  "publication": {
+    "tier": "smoke",
+    "datasetVersion": "rick-generated-smoke-v1",
+    "holdout": false
+  },
+  "engine": {
+    "name": "Vision",
+    "person": "Rick",
+    "referencePath": "../photos/rick_reference.jpg",
+    "timeoutSeconds": 120,
+    "command": [
+      "{app}",
+      "--person-eval",
+      "--engine", "vision",
+      "--person", "{person}",
+      "--references", "{references}",
+      "--video", "{video}",
+      "--frame-step", "5"
+    ]
+  },
+  "cases": [
+    {
+      "id": "rick-generated-positive",
+      "video": "../videos/test_face_3s.mp4",
+      "tags": ["positive", "generated", "smoke"],
+      "expected": {
+        "anyFace": true,
+        "targetPerson": true,
+        "segments": [{"start": 0.0, "end": 3.0}]
+      }
+    },
+    {
+      "id": "generated-no-person-negative",
+      "video": "../videos/test_video_audio.mp4",
+      "tags": ["negative", "generated", "no-people", "smoke"],
+      "expected": {
+        "anyFace": false,
+        "targetPerson": false
+      }
+    }
+  ]
+}

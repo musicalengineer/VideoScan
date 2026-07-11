@@ -130,7 +130,8 @@ def _resolve(base: pathlib.Path, value: str) -> pathlib.Path:
 
 
 def _run_case(
-    case: dict[str, Any], engine: dict[str, Any], base: pathlib.Path
+    case: dict[str, Any], engine: dict[str, Any], base: pathlib.Path,
+    app_path: pathlib.Path | None,
 ) -> tuple[dict[str, Any], float]:
     if "result" in case:
         result_path = _resolve(base, case["result"])
@@ -141,17 +142,34 @@ def _run_case(
         raise EvaluationError(f"case {case['id']}: no result fixture and engine has no command")
     video = _resolve(base, case["video"])
     references = _resolve(base, engine.get("referencePath", ""))
+    if not video.exists():
+        raise EvaluationError(f"case {case['id']}: video does not exist: {video}")
     values = {
         "video": str(video), "references": str(references),
         "person": str(engine.get("person", "")),
         "engine": str(engine.get("name", "")),
+        "app": str(app_path or engine.get("appPath", "")),
     }
-    args = [part.format(**values) for part in command]
+    # Replace only the evaluator's explicit tokens. Do not use str.format:
+    # commands may legitimately contain braces (Python snippets, JSON, regex).
+    args = []
+    for part in command:
+        expanded = part
+        for key, value in values.items():
+            expanded = expanded.replace("{" + key + "}", value)
+        args.append(expanded)
+    if not args[0]:
+        raise EvaluationError(f"case {case['id']}: command requires --app or engine.appPath")
     started = time.monotonic()
-    completed = subprocess.run(
-        args, cwd=base, capture_output=True, text=True,
-        timeout=float(engine.get("timeoutSeconds", 3600)), check=False,
-    )
+    try:
+        completed = subprocess.run(
+            args, cwd=base, capture_output=True, text=True,
+            timeout=float(engine.get("timeoutSeconds", 3600)), check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise EvaluationError(
+            f"case {case['id']}: engine timed out after {exc.timeout:g}s"
+        ) from exc
     elapsed = time.monotonic() - started
     if completed.returncode != 0:
         raise EvaluationError(
@@ -164,16 +182,21 @@ def _run_case(
         raise EvaluationError(f"case {case['id']}: invalid engine JSON: {exc}") from exc
 
 
-def evaluate(manifest_path: pathlib.Path) -> dict[str, Any]:
+def evaluate(
+    manifest_path: pathlib.Path, app_path: pathlib.Path | None = None
+) -> dict[str, Any]:
     manifest = json.loads(manifest_path.read_text())
     if manifest.get("schemaVersion") != SCHEMA_VERSION:
         raise EvaluationError(f"unsupported schemaVersion: {manifest.get('schemaVersion')}")
     base = manifest_path.parent
     engine = manifest["engine"]
+    cases = manifest.get("cases", [])
+    if not cases:
+        raise EvaluationError("manifest has no cases")
     results: list[dict[str, Any]] = []
 
-    for case in manifest["cases"]:
-        observed, elapsed = _run_case(case, engine, base)
+    for case in cases:
+        observed, elapsed = _run_case(case, engine, base, app_path)
         expected_face = bool(case["expected"]["anyFace"])
         expected_identity = bool(case["expected"]["targetPerson"])
         predicted_face = int(observed.get("facesDetected", observed.get("faces_detected", 0))) > 0
@@ -218,12 +241,41 @@ def evaluate(manifest_path: pathlib.Path) -> dict[str, Any]:
         tags[tag] = {"cases": len(tagged), **counts.as_dict()}
 
     peak_values = [float(r["peakRSSMB"]) for r in results if r["peakRSSMB"] is not None]
+    has_fixture_results = any("result" in case for case in cases)
+    has_identity_positive = any(bool(case["expected"]["targetPerson"]) for case in cases)
+    has_identity_negative = any(not bool(case["expected"]["targetPerson"]) for case in cases)
+    ineligibility_reasons: list[str] = []
+    publication = manifest.get("publication", {})
+    publication_tier = publication.get("tier", "development")
+    dataset_version = publication.get("datasetVersion")
+    is_holdout = publication.get("holdout") is True
+    if publication_tier != "quality":
+        ineligibility_reasons.append("suite is not marked as quality-tier")
+    if not dataset_version:
+        ineligibility_reasons.append("suite has no stable datasetVersion")
+    if not is_holdout:
+        ineligibility_reasons.append("suite is not marked as a holdout")
+    if has_fixture_results:
+        ineligibility_reasons.append("contains prerecorded result fixtures")
+    if not has_identity_positive:
+        ineligibility_reasons.append("has no identity-positive cases")
+    if not has_identity_negative:
+        ineligibility_reasons.append("has no identity-negative cases")
+    if any(result["error"] for result in results):
+        ineligibility_reasons.append("one or more engine results reported errors")
+
     report = {
         "schemaVersion": SCHEMA_VERSION,
         "generatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
         "suite": manifest.get("suite", manifest_path.stem),
         "person": engine.get("person", ""), "engine": engine.get("name", ""),
         "caseCount": len(results),
+        "publicationTier": publication_tier,
+        "datasetVersion": dataset_version,
+        "holdout": is_holdout,
+        "resultSource": "fixture" if has_fixture_results else "live-engine",
+        "publishEligible": not ineligibility_reasons,
+        "ineligibilityReasons": ineligibility_reasons,
         "facePresence": face_counts.as_dict(),
         "identityPresence": identity_counts.as_dict(),
         "segment": {
@@ -253,12 +305,16 @@ def markdown(report: dict[str, Any]) -> str:
         f"# Person Recognition Evaluation — {report['person']}", "",
         f"**Score:** {report['score'] if report['score'] is not None else 'n/a'}/100 (identity F1)", "",
         f"Engine: **{report['engine']}** · Cases: **{report['caseCount']}** · Generated: {report['generatedAt']}", "",
+        f"Dataset: **{report['datasetVersion'] or 'unversioned'}** · Tier: **{report['publicationTier']}** · Holdout: **{'yes' if report['holdout'] else 'no'}**", "",
+        f"Metrics publication: **{'eligible' if report['publishEligible'] else 'NOT ELIGIBLE'}**", "",
         "| Signal | Precision | Recall | F1 | Accuracy | FP | FN |", "|---|---:|---:|---:|---:|---:|---:|",
         f"| Any face | {_pct(face['precision'])} | {_pct(face['recall'])} | {_pct(face['f1'])} | {_pct(face['accuracy'])} | {face['fp']} | {face['fn']} |",
         f"| {report['person']} present | {_pct(identity['precision'])} | {_pct(identity['recall'])} | {_pct(identity['f1'])} | {_pct(identity['accuracy'])} | {identity['fp']} | {identity['fn']} |",
         f"| Screen-time segments | {_pct(segment['precision'])} | {_pct(segment['recall'])} | — | — | — | — |", "",
-        "## Cases", "", "| Case | Expected | Predicted | Result | Tags |", "|---|---|---|---|---|",
     ]
+    if report["ineligibilityReasons"]:
+        lines.extend(["Reasons: " + "; ".join(report["ineligibilityReasons"]), ""])
+    lines.extend(["## Cases", "", "| Case | Expected | Predicted | Result | Tags |", "|---|---|---|---|---|"])
     for case in report["cases"]:
         expected = "present" if case["expected"]["targetPerson"] else "absent"
         predicted = "present" if case["predicted"]["targetPerson"] else "absent"
@@ -272,9 +328,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("manifest", type=pathlib.Path)
     parser.add_argument("--json", type=pathlib.Path)
     parser.add_argument("--markdown", type=pathlib.Path)
+    parser.add_argument("--app", type=pathlib.Path,
+                        help="VideoScan executable used by {app} in engine.command")
+    parser.add_argument("--require-publishable", action="store_true",
+                        help="exit 4 unless the suite is safe for metrics publication")
     args = parser.parse_args(argv)
     try:
-        report = evaluate(args.manifest.resolve())
+        report = evaluate(args.manifest.resolve(), args.app.resolve() if args.app else None)
     except (OSError, KeyError, ValueError, EvaluationError, json.JSONDecodeError) as exc:
         print(f"person-eval: {exc}", file=sys.stderr)
         return 2
@@ -286,6 +346,10 @@ def main(argv: list[str] | None = None) -> int:
         args.markdown.parent.mkdir(parents=True, exist_ok=True)
         args.markdown.write_text(markdown(report))
     print(f"{report['person']} / {report['engine']}: {report['score']}/100 identity F1 ({report['caseCount']} cases)")
+    if args.require_publishable and not report["publishEligible"]:
+        print("person-eval: report is not publication-eligible: "
+              + "; ".join(report["ineligibilityReasons"]), file=sys.stderr)
+        return 4
     return 0
 
 
