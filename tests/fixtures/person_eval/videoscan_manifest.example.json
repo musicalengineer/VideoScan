@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "suite": "Donna development set",
+  "engine": {
+    "name": "Vision",
+    "person": "Donna",
+    "referencePath": "/path/to/private/donna/references",
+    "timeoutSeconds": 3600,
+    "command": [
+      "/path/to/DerivedData/Build/Products/Debug/VideoScan.app/Contents/MacOS/VideoScan",
+      "--person-eval",
+      "--engine", "vision",
+      "--person", "{person}",
+      "--references", "{references}",
+      "--video", "{video}",
+      "--frame-step", "5"
+    ]
+  },
+  "cases": [
+    {
+      "id": "replace-with-stable-private-id",
+      "video": "/path/to/private/video.mov",
+      "tags": ["positive", "adult", "group"],
+      "expected": {
+        "anyFace": true,
+        "targetPerson": true,
+        "segments": [{"start": 12.0, "end": 34.0}]
+      }
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "suite": "deterministic evaluator self-test",
+  "engine": {"name": "fixture", "person": "Donna"},
+  "cases": [
+    {"id": "clear-positive", "video": "positive.mov", "result": "positive_result.json", "tags": ["positive", "1980s"], "expected": {"anyFace": true, "targetPerson": true, "segments": [{"start": 10, "end": 20}]}},
+    {"id": "hard-negative", "video": "relative.mov", "result": "false_positive_result.json", "tags": ["negative", "hard-negative", "family-similarity"], "expected": {"anyFace": true, "targetPerson": false}},
+    {"id": "empty-scene", "video": "empty.mov", "result": "negative_result.json", "tags": ["negative", "no-people"], "expected": {"anyFace": false, "targetPerson": false}}
+  ]
+}

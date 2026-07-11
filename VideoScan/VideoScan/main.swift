@@ -17,7 +17,22 @@ let isTestHost: Bool = {
         || env["XCTestSessionIdentifier"] != nil
 }()
 
-if isTestHost {
+let isPersonEvaluation = CommandLine.arguments.contains("--person-eval")
+
+if isPersonEvaluation {
+    // Vision/CoreML require an Aqua application context even though the
+    // evaluator has no windows. `.prohibited` keeps the process out of the
+    // Dock and avoids activating the normal VideoScan scenes.
+    let evaluationApp = NSApplication.shared
+    evaluationApp.setActivationPolicy(.prohibited)
+    Task {
+        let code = await PersonEvaluationCLI.run(arguments: Array(CommandLine.arguments.dropFirst()))
+        fflush(stdout)
+        fflush(stderr)
+        exit(code)
+    }
+    RunLoop.main.run()
+} else if isTestHost {
     // Forensic logging for CI test runs — every line is captured by
     // xcodebuild's StandardOutputAndStandardError.txt and uploaded as an
     // artifact, giving us an audit trail independent of xcresulttool's

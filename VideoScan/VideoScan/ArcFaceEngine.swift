@@ -765,7 +765,8 @@ nonisolated func pfProcessVideoWithArcFace(
     guard !hits.isEmpty else {
         await logFn("  [\(index)/\(total)] \(filename) → no match  (faces: \(totalFacesDetected), best cosine: \(cosStr), threshold: \(String(format: "%.2f", cosineThreshold)))  [ArcFace]")
         return pfVideoResult(filename: filename, filePath: filePath,
-                             durationSeconds: ctx.duration, fps: ctx.fps, totalHits: 0, segments: [])
+                             durationSeconds: ctx.duration, fps: ctx.fps, totalHits: 0,
+                             segments: [], facesDetected: totalFacesDetected)
     }
 
     let segs = arcFaceClusterSegments(hits: hits, settings: settings, fps: ctx.fps, duration: ctx.duration)
@@ -774,5 +775,6 @@ nonisolated func pfProcessVideoWithArcFace(
 
     return pfVideoResult(filename: filename, filePath: filePath,
                          durationSeconds: ctx.duration, fps: ctx.fps,
-                         totalHits: hits.count, segments: segs)
+                         totalHits: hits.count, segments: segs,
+                         facesDetected: totalFacesDetected)
 }

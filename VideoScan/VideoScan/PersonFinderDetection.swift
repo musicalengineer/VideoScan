@@ -650,7 +650,8 @@ nonisolated func pfProcessVideo(
     guard !hits.isEmpty else {
         await logFn("  [\(index)/\(total)] \(filename) → no match  (faces detected: \(totalFacesDetected), best dist: \(distStr), threshold: \(String(format: "%.3f", settings.threshold)))")
         return pfVideoResult(filename: filename, filePath: filePath,
-                             durationSeconds: ctx.duration, fps: ctx.fps, totalHits: 0, segments: [])
+                             durationSeconds: ctx.duration, fps: ctx.fps, totalHits: 0,
+                             segments: [], facesDetected: totalFacesDetected)
     }
 
     let segs = pfVisionClusterSegments(hits: hits, settings: settings, fps: ctx.fps, duration: ctx.duration)
@@ -660,5 +661,6 @@ nonisolated func pfProcessVideo(
 
     return pfVideoResult(filename: filename, filePath: filePath,
                          durationSeconds: ctx.duration, fps: ctx.fps,
-                         totalHits: hits.count, segments: segs)
+                         totalHits: hits.count, segments: segs,
+                         facesDetected: totalFacesDetected)
 }

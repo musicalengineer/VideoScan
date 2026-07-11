@@ -115,7 +115,7 @@ nonisolated func pfProcessVideoWithDlib(
         await logFn("  [\(index)/\(total)] \(filename) — error: \(err)")
         return pfVideoResult(filename: filename, filePath: filePath,
                              durationSeconds: result.duration, fps: result.fps,
-                             totalHits: 0, segments: [])
+                             totalHits: 0, segments: [], facesDetected: result.facesDetected)
     }
 
     if let bd = result.bestDist { await distFn(bd) }
@@ -130,7 +130,8 @@ nonisolated func pfProcessVideoWithDlib(
 
     return pfVideoResult(filename: filename, filePath: filePath,
                          durationSeconds: result.duration, fps: result.fps,
-                         totalHits: result.hits, segments: segs)
+                         totalHits: result.hits, segments: segs,
+                         facesDetected: result.facesDetected)
 }
 
 // MARK: - ArcFace engine dispatch

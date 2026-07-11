@@ -17,6 +17,7 @@ developer who needs to understand a non-obvious decision.
 | [settings-apple-menu.md](settings-apple-menu.md) | Settings window via Cmd+, (not SwiftUI Settings scene) | Shipped |
 | [compilation-bucketing.md](compilation-bucketing.md) | Person Finder → compilation output | Implemented (initial cut), under test |
 | [catalog-aided-face-detection.md](catalog-aided-face-detection.md) | Catalog metadata → face-detection priors, negative cache, junk triage | Idea / design exploration |
+| [person-recognition-evaluator.md](person-recognition-evaluator.md) | Headless production-engine accuracy benchmark, fixture labels, scoring and reports | Initial implementation |
 
 ## Conventions
 

@@ -844,7 +844,24 @@ struct pfVideoResult {
     let fps: Double
     let totalHits: Int
     let segments: [pfSegment]
+    /// Total face observations examined while sampling this video, regardless
+    /// of identity match. Kept separate from totalHits so the evaluator can
+    /// distinguish "no people" from "people, but not the target person."
+    let facesDetected: Int
     var clipFiles: [String] = []
+
+    init(filename: String, filePath: String, durationSeconds: Double, fps: Double,
+         totalHits: Int, segments: [pfSegment], facesDetected: Int = 0,
+         clipFiles: [String] = []) {
+        self.filename = filename
+        self.filePath = filePath
+        self.durationSeconds = durationSeconds
+        self.fps = fps
+        self.totalHits = totalHits
+        self.segments = segments
+        self.facesDetected = facesDetected
+        self.clipFiles = clipFiles
+    }
 
     nonisolated var totalPresenceSecs: Double { segments.map { $0.endSecs - $0.startSecs }.reduce(0, +) }
 }
