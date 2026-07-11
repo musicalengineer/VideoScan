@@ -5,6 +5,18 @@ import Darwin
 /// production per-video recognition functions directly: no SwiftUI scene, no
 /// catalog mutation, no clips, and no result-cache shortcut.
 enum PersonEvaluationCLI {
+    private actor BestDistanceAccumulator {
+        private var best: Float?
+        func record(_ value: Float) {
+            if let current = best {
+                if value < current { best = value }
+            } else {
+                best = value
+            }
+        }
+        func value() -> Float? { best }
+    }
+
     private struct Options {
         var engine = RecognitionEngine.vision
         var person = ""
@@ -102,7 +114,10 @@ enum PersonEvaluationCLI {
             FileHandle.standardError.write(Data((line + "\n").utf8))
         }
         let noopString: @Sendable (String) async -> Void = { _ in }
-        let noopDistance: @Sendable (Float) async -> Void = { _ in }
+        let distanceAccumulator = BestDistanceAccumulator()
+        let recordDistance: @Sendable (Float) async -> Void = { value in
+            await distanceAccumulator.record(value)
+        }
         let pauseGate = PauseGate()
 
         @Sendable func vision() async -> pfVideoResult? {
@@ -110,7 +125,8 @@ enum PersonEvaluationCLI {
                 filePath: options.video, prints: faces.map(\.featurePrint), settings: configuredSettings,
                 index: 1, total: 1, pauseGate: pauseGate, logFn: log,
                 progressFn: noopString, frameFn: { _, _, _ in },
-                distFn: noopDistance, visionStatsFn: { _, _ in }, previewRateFn: { Int.max }
+                distFn: recordDistance, distFnFinal: recordDistance,
+                visionStatsFn: { _, _ in }, previewRateFn: { Int.max }
             )
         }
 
@@ -129,14 +145,15 @@ enum PersonEvaluationCLI {
                 filePath: options.video, referenceEmbeddings: embeddings, settings: configuredSettings,
                 model: model, index: 1, total: 1, pauseGate: pauseGate,
                 logFn: log, progressFn: noopString, frameFn: { _, _, _ in },
-                distFn: noopDistance, visionStatsFn: { _, _ in }, previewRateFn: { Int.max }
+                distFn: recordDistance, distFnFinal: recordDistance,
+                visionStatsFn: { _, _ in }, previewRateFn: { Int.max }
             )
         }
 
         @Sendable func dlib() async -> pfVideoResult? {
             await pfProcessVideoWithDlib(
                 filePath: options.video, settings: configuredSettings, index: 1, total: 1,
-                pauseGate: pauseGate, logFn: log, progressFn: noopString, distFn: noopDistance
+                pauseGate: pauseGate, logFn: log, progressFn: noopString, distFn: recordDistance
             )
         }
 
@@ -160,7 +177,7 @@ enum PersonEvaluationCLI {
             schemaVersion: 1, person: options.facePresenceOnly ? "" : options.person,
             engine: options.facePresenceOnly ? "FacePresence/Vision" : options.engine.displayName,
             video: options.video, facesDetected: result.facesDetected, hits: result.totalHits,
-            bestDistance: result.segments.map(\.bestDistance).min(),
+            bestDistance: await distanceAccumulator.value() ?? result.segments.map(\.bestDistance).min(),
             segments: result.segments.map {
                 SegmentOutput(start: $0.startSecs, end: $0.endSecs,
                               bestDistance: $0.bestDistance, averageDistance: $0.avgDistance)

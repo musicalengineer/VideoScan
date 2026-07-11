@@ -203,11 +203,12 @@ def evaluate(
         predicted_segments = _segments(observed.get("segments", []))
         predicted_identity = bool(predicted_segments) or int(observed.get("hits", 0)) > 0
         expected_segments = _segments(case["expected"].get("segments", []))
+        segment_evaluable = (not expected_identity) or bool(expected_segments)
         expected_duration = _interval_union_length(expected_segments)
         predicted_duration = _interval_union_length(predicted_segments)
         overlap = _intersection_length(expected_segments, predicted_segments)
-        segment_recall = _ratio(overlap, expected_duration)
-        segment_precision = _ratio(overlap, predicted_duration)
+        segment_recall = _ratio(overlap, expected_duration) if segment_evaluable else None
+        segment_precision = _ratio(overlap, predicted_duration) if segment_evaluable else None
         results.append({
             "id": case["id"], "video": case.get("video", ""),
             "tags": sorted(set(case.get("tags", []))),
@@ -218,6 +219,7 @@ def evaluate(
             "expectedPresenceSeconds": expected_duration,
             "predictedPresenceSeconds": predicted_duration,
             "overlapSeconds": overlap,
+            "segmentEvaluable": segment_evaluable,
             "segmentRecall": segment_recall,
             "segmentPrecision": segment_precision,
             "elapsedSeconds": float(observed.get("elapsedSeconds", elapsed)),
@@ -230,9 +232,10 @@ def evaluate(
 
     face_counts = _sum_counts([Counts(**{k: r["faceClass"][k] for k in ("tp", "fp", "tn", "fn")}) for r in results])
     identity_counts = _sum_counts([Counts(**{k: r["identityClass"][k] for k in ("tp", "fp", "tn", "fn")}) for r in results])
-    segment_expected = sum(r["expectedPresenceSeconds"] for r in results)
-    segment_predicted = sum(r["predictedPresenceSeconds"] for r in results)
-    segment_overlap = sum(r["overlapSeconds"] for r in results)
+    segment_cases = [r for r in results if r["segmentEvaluable"]]
+    segment_expected = sum(r["expectedPresenceSeconds"] for r in segment_cases)
+    segment_predicted = sum(r["predictedPresenceSeconds"] for r in segment_cases)
+    segment_overlap = sum(r["overlapSeconds"] for r in segment_cases)
 
     tags: dict[str, Any] = {}
     for tag in sorted({tag for result in results for tag in result["tags"]}):
@@ -279,6 +282,7 @@ def evaluate(
         "facePresence": face_counts.as_dict(),
         "identityPresence": identity_counts.as_dict(),
         "segment": {
+            "evaluableCases": len(segment_cases),
             "expectedSeconds": segment_expected, "predictedSeconds": segment_predicted,
             "overlapSeconds": segment_overlap,
             "recall": _ratio(segment_overlap, segment_expected),

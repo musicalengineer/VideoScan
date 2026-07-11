@@ -50,6 +50,25 @@ class PersonEvaluationTests(unittest.TestCase):
         self.assertIsNone(counts.f1)
         self.assertEqual(counts.accuracy, 1.0)
 
+    def test_positive_without_timeline_labels_is_excluded_from_segment_metrics(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "result.json").write_text(json.dumps({
+                "facesDetected": 2, "hits": 1,
+                "segments": [{"start": 5, "end": 9}],
+            }))
+            manifest = {
+                "schemaVersion": 1, "engine": {"name": "fixture", "person": "Donna"},
+                "cases": [{"id": "p", "result": "result.json",
+                           "expected": {"anyFace": True, "targetPerson": True}}],
+            }
+            path = root / "manifest.json"
+            path.write_text(json.dumps(manifest))
+            report = person_eval.evaluate(path)
+            self.assertEqual(report["segment"]["evaluableCases"], 0)
+            self.assertIsNone(report["segment"]["precision"])
+            self.assertIsNone(report["cases"][0]["segmentPrecision"])
+
     def test_overlapping_segments_use_union_not_double_counting(self):
         intervals = [(0.0, 10.0), (5.0, 15.0)]
         self.assertEqual(person_eval._interval_union_length(intervals), 15.0)

@@ -160,6 +160,43 @@ Private media and labels should live outside git or in a gitignored private
 fixture root. Stable IDs, labels, and non-sensitive tags can be committed if
 desired.
 
+### Building the private review queue
+
+Catalog confirmations seed positive candidates; other-family detections only
+seed *possible* hard negatives and remain unlabeled until a human reviews them:
+
+```bash
+python3 tools/person-eval/build_label_queue.py \
+  --catalog "$HOME/Library/Application Support/VideoScan/catalog.json" \
+  --poi-root "$HOME/Library/Application Support/VideoScan/POI" \
+  --target Donna --output /tmp/donna-label-queue.json \
+  --csv /tmp/donna-label-review.csv
+```
+
+The queue excludes long/derived media from holdout eligibility, groups likely
+duplicates, and flags a source appearing under conflicting suggestions. After
+editing the CSV in Numbers/Excel, apply it back to the queue:
+
+```bash
+python3 tools/person-eval/apply_label_csv.py \
+  --queue /tmp/donna-label-queue.json \
+  --csv /tmp/donna-label-review.csv \
+  --output /tmp/donna-reviewed-queue.json
+```
+
+Then export a development or quality manifest:
+
+```bash
+python3 tools/person-eval/label_queue_to_manifest.py \
+  --queue /tmp/donna-label-queue.json \
+  --output /tmp/donna-vision.json --engine Vision \
+  --references "$HOME/Library/Application Support/VideoScan/POI/donna" \
+  --dataset-version donna-development-v1
+```
+
+`--quality --set holdout` additionally requires a balanced, reviewed,
+holdout-eligible set with no unresolved leakage warnings.
+
 ## Usage
 
 Deterministic evaluator self-test:
