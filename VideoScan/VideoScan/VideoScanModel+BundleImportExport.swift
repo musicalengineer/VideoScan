@@ -190,8 +190,9 @@ extension VideoScanModel {
         Catalog records merge by content identity (no duplicates). \
         Volume metadata for matching paths is overwritten. \
         For each person, the version with MORE reference photos wins \
-        (ties broken by newest first). Replaced POI folders are moved \
-        to ~/dev/VideoScan/.trash/ for recovery.
+        (ties broken by newest first) — but details like birthdays and \
+        notes are kept from both copies either way. Replaced POI folders \
+        are moved to ~/dev/VideoScan/.trash/ for recovery.
         """
         confirm.addButton(withTitle: "Import")
         confirm.addButton(withTitle: "Cancel")
@@ -210,9 +211,10 @@ extension VideoScanModel {
                 "\(result.recordsAdded) new records, \(result.recordsSkipped) duplicates skipped, " +
                 "\(result.volumesUpdated) volume(s) updated, \(result.volumesAdded) added, " +
                 "\(result.peopleInstalled.count) person profile(s) installed, " +
-                "\(result.peopleSkipped.count) skipped, \(result.peopleFailed.count) failed.")
+                "\(result.peopleSkipped.count) skipped, \(result.peopleFailed.count) failed, " +
+                "\(result.peopleFieldMerged.count) with details filled in from the other copy.")
 
-            // Build the user-visible alert body with all three POI buckets,
+            // Build the user-visible alert body with all the POI buckets,
             // plus the audit log path.
             let installedLine = Self.formatPOIBucket(label: "Installed",
                                                      count: result.peopleInstalled.count,
@@ -220,6 +222,7 @@ extension VideoScanModel {
             let skippedLine = Self.formatPOIBucket(label: "Skipped (local copy preferred)",
                                                    count: result.peopleSkipped.count,
                                                    names: result.peopleSkipped.map { $0.name })
+            let mergedLine = Self.formatFieldMerges(result.peopleFieldMerged)
             let failedLine = Self.formatPOIFailures(result.peopleFailed)
             var body = """
             Imported from \(url.lastPathComponent).
@@ -228,6 +231,7 @@ extension VideoScanModel {
             • \(result.volumesUpdated) volume(s) updated, \(result.volumesAdded) new volume(s) added
             • \(installedLine)
             • \(skippedLine)
+            • \(mergedLine)
             """
             if !failedLine.isEmpty {
                 body += "\n• \(failedLine)"
@@ -256,6 +260,10 @@ extension VideoScanModel {
         var peopleSkipped: [(name: String, reason: String)]
         /// POI folder names that errored during materialize/copy/validate.
         var peopleFailed: [(name: String, reason: String)]
+        /// POIs where identity details (birthdate, notes, …) from the losing
+        /// side filled gaps on the winning side — the 2026-07-10 lost-birthdate
+        /// fix. Surfaced in the alert so merges never hide in the log again.
+        var peopleFieldMerged: [(name: String, fields: [String])]
         /// Path to the per-import audit log under ~/Library/Logs/VideoScan/.
         /// nil only if writing the log itself failed.
         var auditLogURL: URL?
@@ -351,6 +359,7 @@ extension VideoScanModel {
             peopleInstalled: poiResult.installed,
             peopleSkipped: poiResult.skipped,
             peopleFailed: poiResult.failed,
+            peopleFieldMerged: poiResult.fieldMerged,
             auditLogURL: auditURL
         )
     }
@@ -368,6 +377,21 @@ extension VideoScanModel {
             return "\(label): \(count) (\(shown), …)"
         }
         return "\(label): \(count) (\(shown))"
+    }
+
+    /// Render the field-merge bucket: which people got details (birthday,
+    /// notes, …) filled in from whichever copy lost the folder contest.
+    /// Casual wording on purpose — this is good news, not a warning.
+    fileprivate static func formatFieldMerges(_ merges: [(name: String, fields: [String])]) -> String {
+        let label = "Details filled in from the other copy"
+        if merges.isEmpty { return "\(label): 0" }
+        let shown = merges.prefix(8)
+            .map { "\($0.name): \($0.fields.joined(separator: ", "))" }
+            .joined(separator: "; ")
+        if merges.count > 8 {
+            return "\(label): \(merges.count) (\(shown); …see audit log)"
+        }
+        return "\(label): \(merges.count) (\(shown))"
     }
 
     /// Render the failed bucket with reasons inline — Rick needs the "why"
@@ -426,6 +450,7 @@ extension VideoScanModel {
         Summary:
           installed: \(poiResult.installed.count) — \(poiResult.installed.joined(separator: ", "))
           skipped:   \(poiResult.skipped.count) — \(poiResult.skipped.map { "\($0.name) (\($0.reason))" }.joined(separator: "; "))
+          merged:    \(poiResult.fieldMerged.count) — \(poiResult.fieldMerged.map { "\($0.name): \($0.fields.joined(separator: ", "))" }.joined(separator: "; "))
           failed:    \(poiResult.failed.count) — \(poiResult.failed.map { "\($0.name): \($0.reason)" }.joined(separator: "; "))
         ─────────────────────────────────────────────
         """

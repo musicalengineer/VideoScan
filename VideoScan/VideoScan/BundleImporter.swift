@@ -166,6 +166,11 @@ enum BundleImporter {
         var skipped: [(name: String, reason: String)]
         /// Names that errored during materialize/copy/validate.
         var failed: [(name: String, reason: String)]
+        /// POIs where identity fields (birthdate, notes, …) from the LOSING
+        /// side filled gaps on the winning side — the folder-level winner
+        /// stays, but profile-only edits from the loser aren't dropped.
+        /// One entry per POI, with the field names that were filled.
+        var fieldMerged: [(name: String, fields: [String])]
         /// Per-POI decisions, in bundle-iteration order, suitable for an
         /// audit log line. One string per POI.
         var auditLines: [String]
@@ -180,18 +185,25 @@ enum BundleImporter {
     ///
     /// This is `async` because iCloud materialization is a polling wait that
     /// MUST NOT block the main actor. Callers `await` it from a Task.
+    ///
+    /// `storeDir` / `trashDir` default to the real POI store and the repo
+    /// .trash/ — tests point both at temp dirs (same storeOverride pattern
+    /// as POIStorage) so they never touch Rick's real profiles.
     static func installPOIs(from poiFoldersInBundle: [URL],
-                            bundleExportedAt: Date) async -> POIInstallResult {
+                            bundleExportedAt: Date,
+                            storeDir: URL = POIStorage.storeDir,
+                            trashDir: URL? = nil) async -> POIInstallResult {
         let fm = FileManager.default
         var installed: [String] = []
         var skipped: [(String, String)] = []
         var failed: [(String, String)] = []
+        var fieldMerged: [(String, [String])] = []
         var auditLines: [String] = []
 
         for src in poiFoldersInBundle {
             let folderName = src.lastPathComponent
-            let dest = POIStorage.storeDir.appendingPathComponent(folderName,
-                                                                  isDirectory: true)
+            let dest = storeDir.appendingPathComponent(folderName,
+                                                       isDirectory: true)
 
             // -- Part 1.A: materialize iCloud-evicted contents --
             //
@@ -232,15 +244,37 @@ enum BundleImporter {
             case .preferLocal(let reason):
                 skipped.append((folderName, reason))
                 auditLines.append("\(auditPrefix) → chose LOCAL (\(reason))")
+                // -- Part 3: field-level identity merge --
+                // The bundle lost the folder, but a profile-only edit
+                // (birthdate etc.) on the bundle side must still land.
+                // This is the 2026-07-10 data-loss bug: decideWinner is
+                // structurally blind to profile.json-only changes.
+                if let filled = mergeProfileOnDisk(winnerDir: dest,
+                                                   loser: loadProfile(at: src),
+                                                   auditLines: &auditLines) {
+                    fieldMerged.append((folderName, filled))
+                }
                 continue
             case .preferBundle(let reason):
                 auditLines.append("\(auditPrefix) → chose BUNDLE (\(reason))")
             }
 
+            // Capture the local profile BEFORE the swap moves it to .trash —
+            // it's the "loser" in the field merge below.
+            let priorLocalProfile = loadProfile(at: dest)
+
             // -- Part 1.C: copy-then-rename with .trash/ safe-swap + 1.D validate --
             do {
-                try safeInstallPOI(src: src, dest: dest, folderName: folderName)
+                try safeInstallPOI(src: src, dest: dest, folderName: folderName,
+                                   trashDir: trashDir)
                 installed.append(folderName)
+                // -- Part 3: field-level identity merge (mirror direction) --
+                // Bundle folder won; local-only identity fields survive.
+                if let filled = mergeProfileOnDisk(winnerDir: dest,
+                                                   loser: priorLocalProfile,
+                                                   auditLines: &auditLines) {
+                    fieldMerged.append((folderName, filled))
+                }
             } catch {
                 failed.append((folderName, error.localizedDescription))
                 auditLines.append("[import]   ↳ install failed: \(error.localizedDescription)")
@@ -250,6 +284,7 @@ enum BundleImporter {
         return POIInstallResult(installed: installed,
                                 skipped: skipped,
                                 failed: failed,
+                                fieldMerged: fieldMerged,
                                 auditLines: auditLines)
     }
 
@@ -330,7 +365,8 @@ enum BundleImporter {
     /// On any failure between copy and swap, the temp dir is removed and
     /// `dest` is left untouched. This is what was missing before — the old
     /// path destroyed `dest` first and then a no-op copy left an empty hole.
-    private static func safeInstallPOI(src: URL, dest: URL, folderName: String) throws {
+    private static func safeInstallPOI(src: URL, dest: URL, folderName: String,
+                                       trashDir: URL? = nil) throws {
         let fm = FileManager.default
         let temp = dest.deletingLastPathComponent()
             .appendingPathComponent("\(folderName).import-\(UUID().uuidString)",
@@ -355,7 +391,7 @@ enum BundleImporter {
 
         // Swap. Move-aside (NOT rm -rf) any existing dest, then move temp into place.
         if fm.fileExists(atPath: dest.path) {
-            let trashURL = trashTarget(forPOI: folderName)
+            let trashURL = trashTarget(forPOI: folderName, trashDir: trashDir)
             try fm.createDirectory(at: trashURL.deletingLastPathComponent(),
                                    withIntermediateDirectories: true)
             do {
@@ -410,27 +446,123 @@ enum BundleImporter {
 
     /// Build a unique target inside the project-local .trash/ for the
     /// displaced POI dir. Format: ~/dev/VideoScan/.trash/POI-<name>-<isoTimestamp>/
-    private static func trashTarget(forPOI folderName: String) -> URL {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let stamp = isoStamp(Date())
-        return home
+    /// Tests pass an explicit `trashDir` so displaced fixtures stay in temp.
+    private static func trashTarget(forPOI folderName: String,
+                                    trashDir: URL? = nil) -> URL {
+        let root = trashDir ?? FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("dev/VideoScan/.trash", isDirectory: true)
+        let stamp = isoStamp(Date())
+        return root
             .appendingPathComponent("POI-\(folderName)-\(stamp)", isDirectory: true)
+    }
+
+    // MARK: - Part 3: field-level identity merge
+
+    /// Pure merge decision — easy to unit-test independently, mirroring
+    /// `decideWinner`. Fills nil/empty identity fields on the WINNING
+    /// profile with non-nil/non-empty values from the LOSING profile.
+    /// When both sides have a value and they differ, the winner's value is
+    /// kept — no silent overwrite. Returns the merged profile plus the
+    /// names of fields that were filled (empty ⇒ nothing changed).
+    ///
+    /// Merge set = person-identity metadata only: birthdate, deathdate,
+    /// sex, hairColor, eyeColor, identityNotes, notes, aliases. These are
+    /// hand-entered facts about the PERSON that live solely in profile.json
+    /// — exactly what `decideWinner`'s photo-count/mtime heuristic is blind
+    /// to (the 2026-07-10 lost-birthdates bug). Deliberately EXCLUDED:
+    /// engine/thresholds/largestFaceOnly (tuning tied to each machine's
+    /// photo set), referencePath/coverImageFilename/coverCrop*/rejectedFiles
+    /// (tied to the winning folder's actual files), and sortOrder (per-Mac
+    /// gallery layout). All of those also have non-nil defaults, so "unset"
+    /// isn't even distinguishable from "chosen".
+    static func mergeIdentityFields(winner: POIProfile,
+                                    loser: POIProfile) -> (merged: POIProfile, filled: [String]) {
+        var merged = winner
+        var filled: [String] = []
+
+        // Optional fields: nil ⇒ unset. (≈ a C++ std::optional value_or
+        // pull from the loser, recorded by name for the audit trail.)
+        func fill<T>(_ keyPath: WritableKeyPath<POIProfile, T?>, _ name: String) {
+            if merged[keyPath: keyPath] == nil, let v = loser[keyPath: keyPath] {
+                merged[keyPath: keyPath] = v
+                filled.append(name)
+            }
+        }
+        fill(\.birthdate, "birthdate")
+        fill(\.deathdate, "deathdate")
+        fill(\.sex, "sex")
+        fill(\.hairColor, "hairColor")
+        fill(\.eyeColor, "eyeColor")
+
+        // String-ish fields: empty ⇒ unset (identityNotes is Optional but a
+        // "" is just as unset as nil; notes/aliases default to ""/[]).
+        if (merged.identityNotes ?? "").isEmpty,
+           let v = loser.identityNotes, !v.isEmpty {
+            merged.identityNotes = v
+            filled.append("identityNotes")
+        }
+        if merged.notes.isEmpty, !loser.notes.isEmpty {
+            merged.notes = loser.notes
+            filled.append("notes")
+        }
+        if merged.aliases.isEmpty, !loser.aliases.isEmpty {
+            merged.aliases = loser.aliases
+            filled.append("aliases")
+        }
+        return (merged, filled)
+    }
+
+    /// Load a POI folder's profile.json. Returns nil when missing/undecodable
+    /// — that just means "nothing to merge from/into", not an error (the
+    /// folder-level install already validated the winner's structure).
+    private static func loadProfile(at dir: URL) -> POIProfile? {
+        let url = dir.appendingPathComponent("profile.json")
+        guard let data = try? Data(contentsOf: url), !data.isEmpty else { return nil }
+        return try? JSONDecoder().decode(POIProfile.self, from: data)
+    }
+
+    /// Disk shim around the pure merge: reads the winner's profile.json at
+    /// `winnerDir`, merges the loser's identity fields in, and writes the
+    /// result back (plain JSONEncoder — same Double-timestamp encoding the
+    /// rest of the POI store uses). Returns the filled field names, or nil
+    /// when there was nothing to fill / no loser profile. A write failure is
+    /// surfaced in `auditLines` and reported as no-merge rather than thrown —
+    /// the folder install itself already succeeded.
+    private static func mergeProfileOnDisk(winnerDir: URL,
+                                           loser: POIProfile?,
+                                           auditLines: inout [String]) -> [String]? {
+        guard let loser else { return nil }
+        guard let winner = loadProfile(at: winnerDir) else { return nil }
+        let (merged, filled) = mergeIdentityFields(winner: winner, loser: loser)
+        guard !filled.isEmpty else { return nil }
+        do {
+            let data = try JSONEncoder().encode(merged)
+            try data.write(to: winnerDir.appendingPathComponent("profile.json"),
+                           options: .atomic)
+            auditLines.append("[import]   ↳ filled missing detail(s) from the other side: " +
+                              filled.joined(separator: ", "))
+            return filled
+        } catch {
+            auditLines.append("[import]   ↳ field merge write FAILED (folder kept as-is): " +
+                              error.localizedDescription)
+            return nil
+        }
     }
 
     // MARK: - Part 2: conflict resolution
 
-    fileprivate enum Decision {
+    enum Decision {
         case preferLocal(reason: String)
         case preferBundle(reason: String)
     }
 
     /// Pure decision function — easy to unit-test independently.
-    fileprivate static func decideWinner(bundleRefCount: Int,
-                                         localRefCount: Int,
-                                         bundleMtime: Date?,
-                                         localMtime: Date?,
-                                         localExists: Bool) -> Decision {
+    /// (internal, not fileprivate, so @testable tests can pin it.)
+    static func decideWinner(bundleRefCount: Int,
+                             localRefCount: Int,
+                             bundleMtime: Date?,
+                             localMtime: Date?,
+                             localExists: Bool) -> Decision {
         // Fast path: nothing local → bundle always wins.
         if !localExists {
             return .preferBundle(reason: "no local copy")
