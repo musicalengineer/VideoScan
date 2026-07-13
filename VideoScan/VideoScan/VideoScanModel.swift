@@ -18,6 +18,7 @@ final class VideoScanModel: ObservableObject {
         didSet {
             noteCatalogChangedForDossierCounts()
             noteVolumeStatusesStale()
+            noteVolumeRenameCandidatesStale()
         }
     }
     /// True when the app is running on a non-master Mac (viewer mode).
@@ -284,6 +285,81 @@ final class VideoScanModel: ObservableObject {
     func publishVolumeStatuses(_ fresh: [String: VolumeRetireStatus]) {
         if fresh != volumeStatusCache {
             volumeStatusCache = fresh
+        }
+    }
+
+    // MARK: - Cached volume-rename candidates (feature/volume-rename-migration)
+    //
+    // "Crucial2TB was renamed to CrucialX9" detection — an offline scan
+    // target whose records' consensus volumeUUID matches a currently
+    // mounted volume at a different path. Same shape as volumeStatusCache
+    // above: NO O(records) work in view bodies; rows read the dictionary
+    // (O(1)), the model rebuilds it off-main (debounced 500 ms) when the
+    // catalog changes or volumes mount/unmount. Detection, migration, and
+    // the value types live in VideoScanModel+VolumeRenameMigration.swift;
+    // the stored properties are here because extensions can't add them.
+
+    /// O(1) per-target rename candidates for the scan-targets table badge,
+    /// keyed by the target's NORMALIZED searchPath. Never compute rename
+    /// detection from `records` inside a view body — read this.
+    @Published private(set) var volumeRenameCache: [String: VolumeRenameCandidate] = [:]
+    /// Test hook: proves reads never recompute (mirrors
+    /// `volumeStatusRecomputeCount`).
+    private(set) var volumeRenameRecomputeCount = 0
+    /// Debounce flag for `noteVolumeRenameCandidatesStale()`.
+    var volumeRenameRefreshScheduled = false
+    /// Generation stamp: a rebuild that finishes after a NEWER invalidation
+    /// must not publish its stale result.
+    var volumeRenameGeneration: UInt64 = 0
+    /// Normalized old searchPath of the migration currently running, or
+    /// nil. Serializes migrations (one at a time — they rewrite `records`
+    /// in place).
+    @Published var volumeRenameMigrationInFlight: String?
+    /// Scan-target id of the migration currently running — drives the
+    /// row-level SpinningRing (the row's path flips old→new mid-flight,
+    /// so the path-keyed cache can't anchor the indicator; the id can).
+    @Published var volumeRenameMigrationInFlightTargetID: UUID?
+    /// Auto/ask dialog payload (informational after an auto-migration,
+    /// question for the ask tier, refusal for a failed manual check).
+    /// The UI binds an alert to this; the model's accept/dismiss/undo
+    /// handlers clear it.
+    @Published var pendingVolumeRenameNotice: VolumeRenameNotice?
+    /// Normalized old paths the AUTO pass must leave alone this session:
+    /// set after Undo and after "Not Now" so the dialog never nags. The
+    /// row badge stays as the manual affordance.
+    var volumeRenameAutoSuppressed: Set<String> = []
+    /// Kill switch for the auto-migrate/ask pass that runs after each
+    /// detection rebuild. Always true in production; detection-only tests
+    /// flip it off to observe candidates without side effects.
+    var volumeRenameAutoPassEnabled = true
+    /// Test seam (VolumeRenameMigrationTests): replaces the real
+    /// mounted-volume UUID probe so detection/migration can be exercised
+    /// against synthetic volumes. Always nil in production.
+    var mountedVolumeInfoProviderForTesting: (@Sendable () -> [MountedVolumeInfo])?
+    /// Test seam: replaces the on-disk file-size stat used by the Signal-B
+    /// spot-check (returns size in bytes, nil = missing). Always nil in
+    /// production.
+    var volumeRenameStatProviderForTesting: (@Sendable (String) -> Int64?)?
+
+    /// Cache lookup for a scan-target row. Missing entry (no rename
+    /// detected, or cache still warming) returns nil — fail-safe: no
+    /// badge, no migration offered.
+    func volumeRenameCandidate(for searchPath: String) -> VolumeRenameCandidate? {
+        volumeRenameCache[PathScope.normalize(searchPath)]
+    }
+
+    /// Bookkeeping for the test hook — called by the rebuild in
+    /// VideoScanModel+VolumeRenameMigration.swift when it actually recomputes.
+    func countVolumeRenameRecompute() {
+        volumeRenameRecomputeCount += 1
+    }
+
+    /// Publish a freshly-computed candidate dictionary. Same-file setter
+    /// for the `private(set)` cache — ONLY the rebuild/migrate code in
+    /// VideoScanModel+VolumeRenameMigration.swift may call this.
+    func publishVolumeRenameCandidates(_ fresh: [String: VolumeRenameCandidate]) {
+        if fresh != volumeRenameCache {
+            volumeRenameCache = fresh
         }
     }
 
@@ -633,6 +709,10 @@ final class VideoScanModel: ObservableObject {
         // has real numbers on first open (until then rows read .empty —
         // fail-safe but blank).
         noteVolumeStatusesStale()
+        // Warm the volume-rename detection too — an offline target whose
+        // volume was renamed while the app was closed should show its
+        // "Update catalog" badge shortly after launch.
+        noteVolumeRenameCandidatesStale()
         // Build the per-record haystack cache once the catalog is fully
         // assembled (restored + backfilled). All subsequent search
         // operations route through this index — see searchIndex above.

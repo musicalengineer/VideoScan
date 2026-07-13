@@ -37,6 +37,11 @@ extension VideoScanModel {
             }
             log("Volume mounted: \(url.lastPathComponent) (not auto-added — use Add Scan Target to catalog)")
         }
+        // A fresh mount is exactly when a RENAMED volume shows up (same
+        // UUID, new /Volumes path) — re-run the rename detection so the
+        // "Update catalog" badge appears without waiting for a catalog
+        // mutation. Debounced/off-main; see +VolumeRenameMigration.
+        noteVolumeRenameCandidatesStale()
         notifyTargetsChanged()
     }
 
@@ -71,6 +76,10 @@ extension VideoScanModel {
                 VolumeReachability.invalidateCache()
                 VolumeStatsCache.invalidate()
                 self?.refreshTargetReachability()
+                // An unmount can invalidate a rename candidate (the "new"
+                // volume just left) — re-derive so the badge never offers
+                // a migration against a volume that isn't there.
+                self?.noteVolumeRenameCandidatesStale()
                 self?.notifyTargetsChanged()
             }
         }

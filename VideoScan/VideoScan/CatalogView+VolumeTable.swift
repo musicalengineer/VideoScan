@@ -32,6 +32,24 @@ extension CatalogView {
                         .foregroundColor(volumeNameColor(for: row))
                         .lineLimit(1)
                         .help(row.path)
+                    // Volume-rename indicator/badge. Both branches are O(1)
+                    // reads (published id + the model's off-main detection
+                    // cache; NO O(records) work in view bodies).
+                    //   - migration in flight for THIS row → SpinningRing
+                    //     (rotation-based — the only animation style that
+                    //     reliably runs on macOS here). Keyed by target id,
+                    //     not path: the row's path flips old→new mid-flight.
+                    //   - rename detected → the nag badge; the badge IS the
+                    //     fix button.
+                    if model.volumeRenameMigrationInFlightTargetID == row.id {
+                        SpinningRing(color: .orange, size: 12)
+                        Text("Updating catalog…")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.orange)
+                            .lineLimit(1)
+                    } else if let candidate = model.volumeRenameCandidate(for: row.path) {
+                        volumeRenameBadge(candidate: candidate, rowID: row.id)
+                    }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -434,6 +452,25 @@ extension CatalogView {
                     Label("Wake Volume", systemImage: "bolt.fill")
                 }
             }
+            // Manual rename fallback: Rick tells us which mounted volume
+            // this offline target became; a fingerprint spot-check runs
+            // before anything is rewritten (friendly refusal on fail).
+            if single, !first.isReachable, !first.isRetired,
+               first.searchPath.hasPrefix("/Volumes/") {
+                Menu {
+                    let choices = manualRenameMountChoices()
+                    if choices.isEmpty {
+                        Text("No other connected volumes")
+                    }
+                    ForEach(choices, id: \.self) { root in
+                        Button((root as NSString).lastPathComponent) {
+                            Task { await model.manualVolumeRenameCheck(for: first, mountedRoot: root) }
+                        }
+                    }
+                } label: {
+                    Label("This Volume Was Renamed…", systemImage: "externaldrive.badge.questionmark")
+                }
+            }
             if targets.contains(where: { $0.isReachable && $0.searchPath.hasPrefix("/Volumes/") }) {
                 Button(action: {
                     for t in targets where t.isReachable && t.searchPath.hasPrefix("/Volumes/") {
@@ -589,6 +626,127 @@ extension CatalogView {
         let parent = url.deletingLastPathComponent().lastPathComponent
         if parent.isEmpty || parent == "/" { return leaf }
         return "\(parent) / \(leaf)"
+    }
+
+    /// "Volume renamed" pill on a scan-target row (nag-button pattern —
+    /// same as backupStatusBadge: the badge IS the fix, one verb, one
+    /// meaning). Shown when the model's rename detection matched this
+    /// offline target's records to a mounted volume (UUID and/or
+    /// spot-check — see VolumeRenameCandidate.action). Clicking runs the
+    /// catalog migration and raises the informational dialog (with Undo).
+    /// Friendly family language — no UUIDs in the label, the identity
+    /// proof lives in the tooltip.
+    @ViewBuilder
+    private func volumeRenameBadge(candidate: VolumeRenameCandidate, rowID: UUID) -> some View {
+        Button(action: {
+            guard let t = target(for: rowID) else { return }
+            Task { await model.userInitiatedVolumeRenameMigration(for: t) }
+        }) {
+            HStack(spacing: 4) {
+                Image(systemName: "externaldrive.badge.questionmark")
+                    .font(.system(size: 11))
+                Text("\(candidate.oldVolumeName) is now \(candidate.newVolumeName) — Update catalog")
+            }
+            .font(.system(size: 11, weight: .medium))
+            .lineLimit(1)
+            .foregroundColor(.orange)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(Color.orange.opacity(0.4), lineWidth: 1)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(Color.orange.opacity(0.08))
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(model.volumeRenameMigrationInFlight != nil)
+        .help(volumeRenameBadgeTooltip(candidate))
+    }
+
+    private func volumeRenameBadgeTooltip(_ c: VolumeRenameCandidate) -> String {
+        var text = c.uuidMatched
+            ? "The drive now connected as “\(c.newVolumeName)” looks like “\(c.oldVolumeName)” with a new name — it has the same volume ID, and a spot-check of its files matches."
+            : "The drive now connected as “\(c.newVolumeName)” looks like “\(c.oldVolumeName)” with a new name — a spot-check found its files at the same places."
+        text += "\n\nClick to update the catalog so \(c.matchingRecords) file record(s) follow the new name. Nothing on the drive itself is touched, and a safety copy of the catalog is saved first (you can Undo)."
+        if c.mismatchedRecords > 0 {
+            text += "\n\n\(c.mismatchedRecords) record(s) under \(c.oldVolumeName) can't be proven to belong to this drive — those will be left alone and reported."
+        }
+        return text
+    }
+
+    // MARK: - Volume-rename dialog pieces (alert lives in ContentView's
+    // CatalogView body; helpers are internal so the cross-file extension
+    // can reach them)
+
+    /// Alert title per notice kind. Nil notice → "" (alert not shown).
+    func volumeRenameNoticeTitle(_ notice: VolumeRenameNotice?) -> String {
+        guard let notice else { return "" }
+        switch notice.kind {
+        case .migrated: return "Volume Renamed"
+        case .ask:      return "Was This Volume Renamed?"
+        case .refused:  return "That Doesn't Look Like the Same Drive"
+        }
+    }
+
+    /// Buttons per notice kind. The drift follow-up reuses the EXISTING
+    /// per-target rescan verb ("Scan / Update Catalog" — same label as the
+    /// row context menu, same startTarget entry point; one verb, one
+    /// meaning). Undo restores the pre-migration snapshot verbatim.
+    @ViewBuilder
+    func volumeRenameNoticeButtons(_ notice: VolumeRenameNotice) -> some View {
+        switch notice.kind {
+        case .migrated:
+            Button("OK") { model.pendingVolumeRenameNotice = nil }
+            if notice.driftDetected {
+                Button("Scan / Update Catalog") { model.rescanAfterVolumeRename(notice) }
+            }
+            Button("Undo") { model.undoVolumeRenameMigration(notice) }
+        case .ask:
+            Button("Update") {
+                Task { await model.acceptVolumeRenameAsk(notice) }
+            }
+            Button("Not Now", role: .cancel) { model.dismissVolumeRenameNotice(notice) }
+        case .refused:
+            Button("OK") { model.pendingVolumeRenameNotice = nil }
+        }
+    }
+
+    /// Message per notice kind — Rick's approved wording, plus the honest
+    /// footnotes (skipped records, drift).
+    func volumeRenameNoticeMessage(_ notice: VolumeRenameNotice) -> String {
+        switch notice.kind {
+        case .migrated:
+            var text = "Volume “\(notice.oldVolumeName)” is now “\(notice.newVolumeName)”. The catalog has been updated to match."
+            if notice.mismatchedCount > 0 {
+                text += " \(notice.mismatchedCount) record(s) couldn't be proven to belong to this drive and were left alone."
+            }
+            if notice.driftDetected {
+                text += "\n\nSome files on \(notice.newVolumeName) look different since the last scan."
+            }
+            return text
+        case .ask:
+            return "It looks like “\(notice.oldVolumeName)” was renamed to “\(notice.newVolumeName)”. Update the catalog?"
+        case .refused(let reason):
+            return reason
+        }
+    }
+
+    /// Mounted /Volumes roots offered by the manual "This Volume Was
+    /// Renamed…" picker: everything currently mounted that isn't already
+    /// a registered target (and isn't our RAM-disk scratch). Reads the
+    /// KERNEL mount table only — no disk I/O in the menu builder.
+    private func manualRenameMountChoices() -> [String] {
+        let targetPaths = Set(model.scanTargets.map { PathScope.normalize($0.searchPath) })
+        return VolumeReachability.currentMountedRoots()
+            .filter {
+                $0.hasPrefix("/Volumes/")
+                    && !CatalogScanTarget.isScratchVolumePath($0)
+                    && !targetPaths.contains(PathScope.normalize($0))
+            }
+            .sorted()
     }
 
     /// One-cell renderer for the Role column. Two flavors:

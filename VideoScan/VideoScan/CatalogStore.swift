@@ -297,6 +297,20 @@ final class CatalogStore {
         }
     }
 
+    /// Decode a catalog snapshot at an ARBITRARY path — the timestamped
+    /// safety copies (`catalog.pre-merge.*.json`,
+    /// `catalog.pre-volume-rename.*.json`, …) written by snapshotCatalog.
+    /// Same decoder + pairedWith rewiring as `load()`, but with NO side
+    /// effects: no rotation, no lastLoadOutcome change, no test-host gate
+    /// (the caller passes an explicit path — there's nothing implicit to
+    /// protect). Returns nil on any failure or a newer-version snapshot.
+    /// Used by the volume-rename Undo to restore the pre-migration catalog.
+    func loadRecords(fromSnapshotAtPath path: String) -> [VideoRecord]? {
+        guard let (records, version) = decode(url: URL(fileURLWithPath: path)),
+              version <= CatalogSnapshot.currentVersion else { return nil }
+        return records
+    }
+
     /// Copy primary → .prev so the previous-good snapshot is preserved one
     /// generation back. Best-effort: errors are logged but never thrown —
     /// a load that can't make a backup still proceeds with the primary.

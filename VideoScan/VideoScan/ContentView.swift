@@ -619,6 +619,27 @@ struct CatalogView: View {
                 focusLabel = "Not migrated from \(item.volumeName)"
             }
         }
+        // Volume-rename dialogs (auto-migrated / ask / manual refusal) —
+        // see VideoScanModel+VolumeRenameMigration.swift. The binding's
+        // setter routes stray dismissals (Esc, click-away) through the
+        // model's dismiss handler so a "Not Now" on the ask tier sticks
+        // for the session instead of re-nagging on the next rebuild.
+        .alert(
+            volumeRenameNoticeTitle(model.pendingVolumeRenameNotice),
+            isPresented: Binding(
+                get: { model.pendingVolumeRenameNotice != nil },
+                set: { shown in
+                    if !shown, let n = model.pendingVolumeRenameNotice {
+                        model.dismissVolumeRenameNotice(n)
+                    }
+                }
+            ),
+            presenting: model.pendingVolumeRenameNotice
+        ) { notice in
+            volumeRenameNoticeButtons(notice)
+        } message: { notice in
+            Text(volumeRenameNoticeMessage(notice))
+        }
         .alert("Delete Duplicates", isPresented: $showDeleteDuplicatesConfirm) {
             Button("Delete \(deleteTargetCount) Files", role: .destructive) {
                 model.deleteDuplicates(onVolume: deleteTargetVolume)
