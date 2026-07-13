@@ -416,6 +416,14 @@ struct VolumeRenameMigrationTests {
                                                 store: CatalogStore(directory: dir))
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
+        // .sortedKeys — JSONEncoder guarantees NO key order: two encodes of
+        // identical values can emit different key orders even in the same
+        // process (hash-layout dependent; reproduced 2026-07-13). Canonical
+        // sorted-keys encoding makes the byte comparison deterministic while
+        // still pinning every field's value AND presence (delta-minimal
+        // keys included) plus the records-array order. Same convention as
+        // CatalogStoreAsyncSaveTests' clone-parity oracle.
+        encoder.outputFormatting = [.sortedKeys]
         let before = try encoder.encode(model.records.map(VideoRecordDTO.init))
 
         await model.rebuildVolumeRenameCandidatesNow()
@@ -427,7 +435,7 @@ struct VolumeRenameMigrationTests {
         #expect(undone)
         let after = try encoder.encode(model.records.map(VideoRecordDTO.init))
         #expect(after == before,
-                "Undo must restore the pre-migration snapshot byte-identically")
+                "Undo must restore the pre-migration snapshot byte-identically (canonical sorted-keys encoding)")
         #expect(target.searchPath == oldRoot, "The scan target's old path is restored")
         #expect(model.pendingVolumeRenameNotice == nil)
         // The very next detection rebuild re-finds the candidate but the
