@@ -32,6 +32,11 @@ enum ToolLocator {
     /// driver run by `PythonSubprocessAudioTranscriber`. Env override
     /// lets test machines / CI point at the shipped script directly.
     static let whisperScriptEnvVar = "VS_WHISPER_SCRIPT_PATH"
+    /// Path to scripts/whisper_worker.py — the persistent Whisper
+    /// worker run by `WhisperWorkerTranscriber` (one model load per
+    /// batch instead of one per file). Mirrors the whisper script
+    /// entry above.
+    static let whisperWorkerScriptEnvVar = "VS_WHISPER_WORKER_SCRIPT_PATH"
 
     static let ffmpegCandidates = [
         "/opt/homebrew/bin/ffmpeg",
@@ -64,6 +69,10 @@ enum ToolLocator {
     static let whisperScriptCandidates = [
         NSHomeDirectory() + "/dev/VideoScan/scripts/whisper_transcribe.py",
         FileManager.default.currentDirectoryPath + "/scripts/whisper_transcribe.py"
+    ]
+    static let whisperWorkerScriptCandidates = [
+        NSHomeDirectory() + "/dev/VideoScan/scripts/whisper_worker.py",
+        FileManager.default.currentDirectoryPath + "/scripts/whisper_worker.py"
     ]
 
     static func firstExecutable(
@@ -119,21 +128,42 @@ enum ToolLocator {
         resolve(envVar: mlxPythonEnvVar, candidates: mlxPythonCandidates, fallback: "")
     }
 
+    /// Resolve a SCRIPT path: file-existence check, not executable bit
+    /// — .py files aren't executable, the Python interpreter is.
+    /// Same override-then-candidates order as `resolve`, but "" on
+    /// miss (callers gate on empty). Injectable environment /
+    /// FileManager for tests; production accessors below use defaults.
+    static func resolveExistingFile(
+        envVar: String,
+        candidates: [String],
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> String {
+        if let override = environment[envVar],
+           !override.isEmpty,
+           fileManager.fileExists(atPath: override) {
+            return override
+        }
+        for candidate in candidates where fileManager.fileExists(atPath: candidate) {
+            return candidate
+        }
+        return ""
+    }
+
     /// Path to the Whisper transcription script. Empty if not findable
     /// — caller must gate. Same shape as `pythonPath` (returns "" on
     /// miss rather than fabricating a path that won't exist).
     static var whisperScriptPath: String {
-        // File-existence check, not executable bit — .py files aren't
-        // executable, the Python interpreter is.
-        if let override = ProcessInfo.processInfo.environment[whisperScriptEnvVar],
-           !override.isEmpty,
-           FileManager.default.fileExists(atPath: override) {
-            return override
-        }
-        for candidate in whisperScriptCandidates where FileManager.default.fileExists(atPath: candidate) {
-            return candidate
-        }
-        return ""
+        resolveExistingFile(envVar: whisperScriptEnvVar,
+                            candidates: whisperScriptCandidates)
+    }
+
+    /// Path to the persistent Whisper worker script. Empty if not
+    /// findable — the transcriber resolution falls back to the
+    /// per-file `whisperScriptPath` when this is missing.
+    static var whisperWorkerScriptPath: String {
+        resolveExistingFile(envVar: whisperWorkerScriptEnvVar,
+                            candidates: whisperWorkerScriptCandidates)
     }
 }
 
