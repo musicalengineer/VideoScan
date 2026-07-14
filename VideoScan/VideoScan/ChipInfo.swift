@@ -36,13 +36,7 @@ enum ChipInfo {
             parts.append("\(mem / (1 << 30)) GB")
         }
         if let ncpu = sysctlUInt64("hw.ncpu"), ncpu > 0 {
-            // P/E split exists only on Apple Silicon; omit when absent.
-            if let p = sysctlUInt64("hw.perflevel0.physicalcpu"),
-               let e = sysctlUInt64("hw.perflevel1.physicalcpu"), p > 0 {
-                parts.append("\(ncpu) CPU (\(p)P+\(e)E)")
-            } else {
                 parts.append("\(ncpu) CPU")
-            }
         }
         if let gpu = gpuCoreCount() {
             parts.append("\(gpu) GPU")

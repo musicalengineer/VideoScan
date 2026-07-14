@@ -713,20 +713,18 @@ struct AboutView: View {
             // Body
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    AboutSection(icon: "heart.fill", color: .pink, title: "Catalogs your videos so you can search for people."){}
-
-                    AboutSection(icon: "person.crop.rectangle.stack", color: .blue, title: "Repairs broken videos and updates them to a modern format.") {}
-
-                    AboutSection(icon: "externaldrive.connected.to.line.below", color: .green, title: "Finds videos on attached storage or network drives.") {}
-
-                    AboutSection(icon: "waveform.and.magnifyingglass", color: .purple, title: "Understands nearly all video formats and helps archive your favorite memories for the long-term.") {}
-
+                    AboutSection(icon: "heart.fill", color: .pink, title: "Catalogs videos so you can search for people."){}
+                    AboutSection(icon: "externaldrive.connected.to.line.below", color: .green, title: "Finds videos locally or on the network.") {}
+                    AboutSection(icon: "person.crop.rectangle.stack", color: .blue, title: "Repairs and updates videos for archive or editing.") {}
+                    AboutSection(icon: "waveform.and.magnifyingglass", color: .purple, title: "Handles nearly all video formats.") {}
+                    AboutSection(icon: "brain.head.profile", color: .indigo, title: "Uses AI to recognize people in your videos.") {}
+                    
                     Divider()
 
                     HStack {
                         Spacer()
                         VStack(spacing: 4) {
-                            Text("Developed By Rick.  Inspired by Donna.")
+                            Text("Developed By Rick, inspired by Donna.")
                                 .font(.headline)
                             Text(BuildInfo.summary)
                                 .font(.system(.caption, design: .monospaced))
