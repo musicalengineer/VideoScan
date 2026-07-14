@@ -352,11 +352,21 @@ extension CatalogContent {
                             .accessibilityIdentifier("catalog.row.repairVideo")
                         }
 
-                        Button("Analyze") {
-                            requestAnalyze(for: rec, stages: AnalyzeStage.all)
+                        // Analyze applies to the FULL selection (fix
+                        // 2026-07-14 — it used only ids.first, so
+                        // multi-selecting N files analyzed just one;
+                        // the Tag menu below is the pattern). Jobs
+                        // wait their turn behind a running batch, so
+                        // the old currentStatus.isActive disable is
+                        // gone — intent is never blocked, just queued.
+                        Button(activeRecs.count > 1
+                               ? "Analyze \(activeRecs.count) Files"
+                               : "Analyze") {
+                            requestAnalyze(forAll: activeRecs, stages: AnalyzeStage.all)
                         }
-                        .disabled(!VolumeReachability.isReachable(path: rec.fullPath)
-                                  || captionOrchestrator.currentStatus.isActive)
+                        .disabled(!activeRecs.contains {
+                            VolumeReachability.isReachable(path: $0.fullPath)
+                        })
                         .accessibilityIdentifier("catalog.row.analyze")
 
                         // Transcode — opens a configuration sheet for format
@@ -435,8 +445,7 @@ extension CatalogContent {
                             requestAnalyze(for: rec, stages: [.transcript])
                         }
                         .disabled(!hasAudio
-                                  || !VolumeReachability.isReachable(path: rec.fullPath)
-                                  || captionOrchestrator.currentStatus.isActive)
+                                  || !VolumeReachability.isReachable(path: rec.fullPath))
                         .help(hasAudio
                               ? "Run Whisper to produce a transcript of the audio track."
                               : "This file has no audio stream to transcribe.")
@@ -446,8 +455,7 @@ extension CatalogContent {
                             requestAnalyze(for: rec, stages: [.captions])
                         }
                         .disabled(!hasVideo
-                                  || !VolumeReachability.isReachable(path: rec.fullPath)
-                                  || captionOrchestrator.currentStatus.isActive)
+                                  || !VolumeReachability.isReachable(path: rec.fullPath))
                         .help(hasVideo
                               ? "Run the VLM to extract scene descriptions + OCR text/dates from video frames."
                               : "This file has no video stream to caption.")
@@ -722,6 +730,64 @@ extension CatalogContent {
     /// Rick 2026-06-14 — collapses the prior "Reformat and Analyze"
     /// + "Analyze This File" pair into a single verb with intent
     /// captured in the stage set.
+    /// Multi-selection Analyze (2026-07-14). Mirrors the Tag menu's
+    /// apply-to-every-selected-row pattern:
+    ///   - reachable modern-codec records each get an AnalyzeJob (the
+    ///     jobs serialize themselves — each waits for the orchestrator
+    ///     to free up, so N selected files means N banked dossiers,
+    ///     not 1 success + N-1 "busy" failures)
+    ///   - legacy-codec records get ONE combined confirm alert instead
+    ///     of a modal alert per file
+    ///   - offline records are silently skipped (same reachability
+    ///     rule the single-file path enforces via menu disable)
+    private func requestAnalyze(forAll recs: [VideoRecord], stages: Set<AnalyzeStage>) {
+        let reachable = recs.filter { VolumeReachability.isReachable(path: $0.fullPath) }
+        guard !reachable.isEmpty else { return }
+        if reachable.count == 1 {
+            // Single row — keep the richer per-file flow (its alert
+            // names the file and the derived output).
+            requestAnalyze(for: reachable[0], stages: stages)
+            return
+        }
+        let needsReformat = reachable.filter {
+            hasUnplayableLegacyCodec(videoCodec: $0.videoCodec, audioCodec: $0.audioCodec)
+                || $0.needsReformat
+        }
+        let modern = reachable.filter { rec in !needsReformat.contains(where: { $0.id == rec.id }) }
+
+        for rec in modern {
+            fileOpsCenter.startAnalyzeOne(
+                record: rec, model: model,
+                orchestrator: captionOrchestrator,
+                stages: stages
+            )
+        }
+        if !modern.isEmpty { openWindow(id: "combine") }
+
+        guard !needsReformat.isEmpty else { return }
+        // One combined confirm for the legacy-codec subset.
+        let alert = NSAlert()
+        alert.messageText = "Reformat Required for \(needsReformat.count) File\(needsReformat.count == 1 ? "" : "s")"
+        alert.informativeText = """
+            \(needsReformat.count) of the selected files use old codecs the analyzer can't decode directly \
+            (macOS dropped them in 2019).
+
+            Convert them to HEVC first? New files will be created next to the originals, then analyzed.
+            """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Reformat and Analyze")
+        alert.addButton(withTitle: needsReformat.count == reachable.count ? "Cancel" : "Skip These")
+        if alert.runModal() == .alertFirstButtonReturn {
+            for rec in needsReformat {
+                fileOpsCenter.startReformat(
+                    record: rec, model: model,
+                    orchestrator: captionOrchestrator
+                )
+            }
+            openWindow(id: "combine")
+        }
+    }
+
     private func requestAnalyze(for rec: VideoRecord, stages: Set<AnalyzeStage>) {
         if !hasUnplayableLegacyCodec(videoCodec: rec.videoCodec,
                                      audioCodec: rec.audioCodec)

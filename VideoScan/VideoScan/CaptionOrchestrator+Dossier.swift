@@ -820,13 +820,17 @@ extension CaptionOrchestrator {
             // in place via updateLane so the dashboard shows a single
             // row per file with the per-channel indicators lighting up.
             // Audio-class files open directly on the transcribe stage.
+            let laneStage: String = {
+                if hasNoVideo, let transcriber {
+                    return Self.stageDisplayName(forModelID: transcriber.modelID)
+                }
+                return Self.stageDisplayName(forModelID: runner.modelID)
+            }()
             let laneID = beginLane(
                 path: path,
                 filename: filename,
                 isVideoOnly: hasNoAudio,
-                stage: hasNoVideo && transcriber != nil
-                    ? Self.stageDisplayName(forModelID: transcriber!.modelID)
-                    : Self.stageDisplayName(forModelID: runner.modelID),
+                stage: laneStage,
                 verb: hasNoVideo ? "transcribing audio…" : "extracting scenes…"
             )
 

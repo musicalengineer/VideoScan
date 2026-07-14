@@ -18,10 +18,11 @@ import os
 // batch falls out for free without a new orchestrator entry point.
 //
 // Constraints:
-//   - Phase 1 caps at one orchestrator-active operation. If the
-//     orchestrator is currently busy with a volume batch, the menu
-//     item is disabled (and AnalyzeJob.start refuses with a clear
-//     failure message). Phase 2 (true parallel) could lift this.
+//   - Phase 1 caps at one orchestrator-active operation. When the
+//     orchestrator is busy (volume batch, queued volume, or a sibling
+//     multi-select AnalyzeJob), this job WAITS its turn — the row shows
+//     "Waiting for the analyzer to free up…" and retries until its
+//     single-file batch runs. Phase 2 (true parallel) could lift this.
 //   - Cancel routes through orchestrator.skipLane targeting the
 //     in-flight Whisper lane, which SIGTERMs Python within ~200ms.
 //
@@ -171,13 +172,6 @@ final class AnalyzeJob: MediaFileOperationJob {
             return
         }
 
-        // Refuse if the orchestrator is already busy — Phase 1
-        // serializes per-file behind volume-wide batches.
-        guard !orchestrator.currentStatus.isActive else {
-            await finish(failed: "Orchestrator busy — stop the current volume batch first or wait for it to finish")
-            return
-        }
-
         // Source file existence — same gate the orchestrator's loop
         // applies. Catching it here gives a cleaner row message.
         guard FileManager.default.fileExists(atPath: record.fullPath) else {
@@ -192,13 +186,46 @@ final class AnalyzeJob: MediaFileOperationJob {
 
         // startAnalyzing's candidate filter uses fullPath.hasPrefix,
         // so passing the record's exact fullPath matches only this
-        // one file. Clean single-record batch with no new
+        // one record. Clean single-record batch with no new
         // orchestrator API.
-        await orchestrator.startAnalyzing(
-            volumePrefix: record.fullPath,
-            model: model,
-            stages: stages
-        )
+        //
+        // ignoringScope: the user right-clicked THIS file — explicit
+        // per-file intent always beats the Analysis Scope defaults
+        // (e.g. "Transcribe Audio" on one mp3 must work even with
+        // audio-only files scoped out of volume batches).
+        //
+        // Wait-for-turn loop (2026-07-14, replaces the old busy-refusal):
+        // startAnalyzing returns false when another batch holds the
+        // orchestrator. That happens routinely now — multi-select
+        // Analyze starts N of these jobs at once, and a queued volume
+        // batch can slot in between. Refusing turned "select 5, click
+        // Analyze" into 1 success + 4 spurious failures; instead we
+        // poll until our single-file batch actually runs. The 400 ms
+        // poll is cheap (one MainActor bool check per tick).
+        var announcedWait = false
+        while true {
+            if Task.isCancelled || state == .cancelling {
+                await finish(cancelled: true)
+                return
+            }
+            if orchestrator.isShuttingDown {
+                await finish(cancelled: true)
+                return
+            }
+            let ran = await orchestrator.startAnalyzing(
+                volumePrefix: record.fullPath,
+                model: model,
+                stages: stages,
+                ignoringScope: true
+            )
+            if ran { break }
+            if !announcedWait {
+                announcedWait = true
+                subtitleText = "Waiting for the analyzer to free up…"
+                analyzeJobLog.info("analyze waiting: \(self.record.filename, privacy: .public) — orchestrator busy, will retry")
+            }
+            try? await Task.sleep(for: .milliseconds(400))
+        }
 
         // After the orchestrator returns, the batch is complete. Pick
         // the final state from the record's dossierProcessedAt and
