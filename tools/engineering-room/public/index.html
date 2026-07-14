@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Engineering Room · VideoScan</title>
+  <meta name="description" content="A local engineering room for Rick, Codex, and Claude.">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="masthead">
+      <div>
+        <p class="eyebrow">VIDEOSCAN · LOCAL ENGINEERING ROOM</p>
+        <h1>The Workshop</h1>
+      </div>
+      <div class="participants" aria-label="Room participants">
+        <span class="participant present"><b>R</b>Rick</span>
+        <span class="participant" id="codexParticipant"><b>C</b>Codex</span>
+        <span class="participant future" title="Claude joins after v1 is proven"><b>A</b>Claude · soon</span>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="topics-panel">
+        <div class="panel-heading">
+          <div><p class="kicker">Agenda</p><h2>Topics</h2></div>
+          <button class="icon-button" id="newTopic" aria-label="Create a topic">+</button>
+        </div>
+        <nav id="topics" aria-label="Discussion topics"></nav>
+        <div class="room-note">
+          <span class="pulse" id="statusPulse"></span>
+          <div><strong id="roomStatus">Connecting to Codex</strong><small>Discussion only · repository read-only</small></div>
+        </div>
+      </aside>
+
+      <section class="conversation">
+        <header class="conversation-heading">
+          <div><p class="kicker">Current discussion</p><h2 id="currentTopic">Topics of the day</h2></div>
+          <button class="quiet-button" id="topicMenu" aria-label="Change current topic status">Park topic</button>
+        </header>
+
+        <div class="timeline" id="timeline" aria-live="polite">
+          <div class="welcome" id="welcome">
+            <span class="workshop-mark">ER</span>
+            <h3>Pull up a chair.</h3>
+            <p>This is our private working room: decisions, disagreements, good ideas, and the occasional side conversation.</p>
+          </div>
+        </div>
+
+        <div class="typing" id="typing" hidden><span></span><span></span><span></span><em>Codex is thinking</em></div>
+        <form class="composer" id="composer">
+          <textarea id="message" rows="2" maxlength="32768" placeholder="What should we put on the table?" aria-label="Message"></textarea>
+          <div class="composer-footer">
+            <label>Send to
+              <select id="target">
+                <option value="codex">Codex</option>
+                <option value="notes">Room notes only</option>
+                <option value="claude" disabled>Claude — joins in v2</option>
+              </select>
+            </label>
+            <div class="composer-actions">
+              <button type="button" class="stop-button" id="stop" hidden>Stop</button>
+              <span class="hint">⌘ ↵ to send</span>
+              <button type="submit" class="send-button" id="send">Send message <span>↗</span></button>
+            </div>
+          </div>
+        </form>
+      </section>
+    </main>
+  </div>
+  <div class="toast" id="toast" role="status" hidden></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
