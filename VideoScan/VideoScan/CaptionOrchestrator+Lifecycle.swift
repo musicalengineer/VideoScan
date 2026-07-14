@@ -44,7 +44,11 @@ extension CaptionOrchestrator {
 
         // Capture refs we need inside the detached task — orchestrator
         // mutations happen back on MainActor via `await MainActor.run`.
-        let runner = runnerFactory()
+        // acquireRunner (keep-alive, perf item 3 2026-07-14) hands back
+        // the cached runner when a previous batch already loaded the
+        // model — the "(loading model…)" status above is then over in
+        // one status flip instead of ~30s.
+        let runner = acquireRunner()
         let force = self.force
         let frames = self.framesPerFile
 
@@ -76,6 +80,9 @@ extension CaptionOrchestrator {
         // Await the task so callers can `await startCaptioning(...)`
         // and get back when the batch settles.
         await activeTask?.value
+        // Batch settled — keep the runner warm for the next batch and
+        // start the idle-release clock (no-op if shutdown began).
+        armRunnerIdleTimer()
     }
 
     /// Catalog-wide captioning: iterate every reachable scan target in
@@ -118,7 +125,9 @@ extension CaptionOrchestrator {
             if Task.isCancelled { break }
             // Per-target invocation reuses the existing batch loop,
             // including idempotent skip + per-file cancellation. Status
-            // publishing already happens inside.
+            // publishing already happens inside. The keep-alive cache
+            // makes the target→target hand-off free: each iteration's
+            // acquireRunner returns the same cached runner.
             await startCaptioning(target: target, model: model)
             // After each target settles, currentStatus is .finished —
             // reset to idle before the next target's startCaptioning
@@ -136,6 +145,15 @@ extension CaptionOrchestrator {
     /// task observes `Task.isCancelled` / `Task.checkCancellation()` in
     /// the per-file loop (and inside the runner's per-frame loop, see
     /// CaptionRunner.swift) and exits promptly.
+    ///
+    /// cancel ≠ shutdown (keep-alive note, 2026-07-14): this method
+    /// deliberately does NOT touch `cachedRunner`. Cancel never
+    /// performed MLX/GPU teardown — pre-keep-alive, the batch-scoped
+    /// runner was simply released when the cancelled batch task
+    /// settled; the only hard teardown here is the Whisper worker
+    /// SUBPROCESS kill below. Keeping the runner means the next batch
+    /// after a Stop starts instantly instead of paying a ~30s reload.
+    /// Shutdown teardown lives in beginShutdown/drainForShutdown.
     func cancel() {
         guard currentStatus.isActive else { return }
         captionOrchLog.notice("CaptionOrchestrator cancel requested")
@@ -203,13 +221,28 @@ extension CaptionOrchestrator {
     /// start fresh VLM inference while AppKit tears down. ≈ C++
     /// `std::atomic<bool> g_shutting_down` set in the quit handler;
     /// here MainActor isolation replaces the atomic.
+    ///
+    /// Also drops the keep-alive cached runner (2026-07-14): quitting
+    /// mid-idle-window must release the orchestrator's container
+    /// reference NOW, not when a 10-minute timer fires into a
+    /// half-torn-down process.
     func beginShutdown() {
         isShuttingDown = true
+        dropCachedRunnerForShutdown()
     }
 
     @discardableResult
     func drainForShutdown(deadline: TimeInterval = 5.0) async -> Bool {
         isShuttingDown = true
+        // Keep-alive teardown FIRST — before the idle early-return
+        // below, so an idle-with-cached-runner orchestrator (the
+        // common "user quit a while after a batch" case) releases the
+        // container reference on the quit path, mid-idle-window
+        // included. A still-draining batch keeps its own local runner
+        // reference until it settles; that's the same lifetime the
+        // pre-keep-alive code had, and the _exit backstop covers a
+        // blown deadline exactly as before.
+        dropCachedRunnerForShutdown()
         guard currentStatus.isActive, let task = activeTask else { return true }
         shutdownLog.notice("drainForShutdown: cancelling active VLM batch, waiting up to \(String(format: "%.1f", deadline))s")
         currentStatus = .cancelling

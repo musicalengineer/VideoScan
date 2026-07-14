@@ -126,7 +126,10 @@ extension CaptionOrchestrator {
         currentStatus = .running(progress: 0.0, currentFile: "(loading model…)", etaSec: nil)
         self.force = force
 
-        let runner = runnerFactory()
+        // Keep-alive (perf item 3, 2026-07-14): cached-or-fresh. N
+        // multi-selected single-file AnalyzeJobs and every queued-
+        // volume hand-off used to pay a fresh ~30s model load HERE.
+        let runner = acquireRunner()
         let frames = self.framesPerFile
         let trans = resolvedTranscriber
 
@@ -144,6 +147,11 @@ extension CaptionOrchestrator {
         await activeTask?.value
         currentVolumePrefix = nil
         forgetActiveVolume(volumePrefix)
+        // Batch settled (finished OR cancelled) — keep the runner warm
+        // and start the idle-release clock. The deferred
+        // scheduleQueueAdvance below runs AFTER this; a dispatched
+        // queue head re-acquires (and un-times) the same runner.
+        armRunnerIdleTimer()
         return true
     }
 
@@ -244,7 +252,8 @@ extension CaptionOrchestrator {
         currentStatus = .running(progress: 0.0, currentFile: "(loading model…)", etaSec: nil)
         self.force = force
 
-        let runner = runnerFactory()
+        // Keep-alive: same cached-or-fresh hand-off as startAnalyzing.
+        let runner = acquireRunner()
         let frames = self.framesPerFile
         let trans = resolvedTranscriber
 
@@ -259,6 +268,9 @@ extension CaptionOrchestrator {
             )
         }
         await activeTask?.value
+        // Batch settled — arm the idle-release clock (no-op once
+        // shutdown began).
+        armRunnerIdleTimer()
     }
 
     /// Pipelined dossier batch: VLM and Whisper overlap across files.

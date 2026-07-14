@@ -15,22 +15,50 @@ import os
 // reference-photo loading, no per-frame face matching, no clip
 // extraction. The orchestrator is mostly plumbing around the engine.
 //
-// Critical design choice: session-scoped model container.
+// Critical design choice: session-scoped model container, now KEPT
+// ALIVE across batches with an idle timeout (perf item 3, 2026-07-14).
 //
-// MLXVLMCaptionRunner.caption (S6a) currently calls
-// VLMModelFactory.shared.loadContainer ONCE per call — wasted ~30s on
-// every file after the first. The orchestrator builds and reuses a
-// CaptionSession that holds the loaded container across files in the
-// same batch. Frames serialize through it; the session goes away when
-// the batch ends (or is cancelled), and a fresh session is built for
-// the next batch.
+// History. S6a's MLXVLMCaptionRunner loaded the container once per
+// caption() CALL (~30s per file). S6b scoped the container to the
+// batch: one runner actor per batch, dropped at settle. That still
+// paid a fresh ~30s model load on EVERY batch transition — N
+// multi-selected single-file Analyze jobs = N×30s, and every
+// queued-volume hand-off ate another load. 2026-07-14: Rick approved
+// reversing the batch-scoped decision (his standing RAM directive —
+// spend the 64 GB freely when it makes the app meaningfully faster).
+// The orchestrator now caches the runner actor across batch settles
+// (`cachedRunner`): every runner-creation site goes through
+// `acquireRunner()` (cached-or-factory), and a 10-minute idle timer —
+// armed on settle, cancelled on the next batch start — releases the
+// runner (and with it the ~3 GB container) when no work follows.
 //
-// Worst-case memory footprint: one ModelContainer (~3 GB for the 4-bit
-// Qwen2.5-VL-3B weights) + transient CIImage per frame (decoded video
-// frame, typically <50 MB) + KV cache (<100 MB). Total ceiling ~3.5 GB.
-// Released when the session is torn down at batch end. No per-file
-// accumulation — captions are flushed to the catalog and dropped from
-// the orchestrator's working set at each boundary.
+// SAFETY-CRITICAL: the shutdown path. `beginShutdown()` /
+// `drainForShutdown()` drop the cached runner IMMEDIATELY, even
+// mid-idle-window, and the `isShuttingDown` latch keeps any late
+// start (or a racing idle timer) from resurrecting it. Fresh VLM
+// work dispatching GPU during app teardown is exactly the
+// mid-inference exit crash (VideoScan-2026-06-11-232946.ips). The
+// process-level MLX teardown — GPU-stream synchronize + the `_exit`
+// backstop — lives in AppDelegate / MLXShutdown.swift, unchanged:
+// this cache only adds "one more strong reference to release before
+// quit", which the shutdown hooks below handle.
+//
+// `cancel()` is NOT shutdown: a cancelled batch keeps the cached
+// runner for the next batch. That preserves the pre-keep-alive
+// teardown semantics — cancel never performed any explicit MLX/GPU
+// teardown; the batch-scoped runner was simply released when the
+// batch task settled, and the whisper-worker kill in cancel() is
+// about the Python subprocess, not MLX.
+//
+// Worst-case memory footprint: one ModelContainer (~3 GB for the
+// 4-bit Qwen2.5-VL-3B weights) + transient CIImage per frame (decoded
+// video frame, typically <50 MB) + KV cache (<100 MB). Total ceiling
+// ~3.5 GB — unchanged, but now held for up to `runnerIdleTimeout`
+// (10 min) past the last batch settle instead of being released at
+// batch end. Bounded: exactly ONE cached runner, the idle timer is
+// the release valve, and shutdown drops it unconditionally. No
+// per-file accumulation — captions are flushed to the catalog and
+// dropped from the orchestrator's working set at each boundary.
 
 // `internal` (no access keyword) rather than `private`: the orchestrator's
 // methods now live across CaptionOrchestrator+Lifecycle / +Dossier /
@@ -133,8 +161,105 @@ final class CaptionOrchestrator: ObservableObject {
 
     /// Injectable engine. Default builds an MLXVLMCaptionRunner. Tests
     /// can swap in a stub runner that returns deterministic captions
-    /// without touching MLX.
+    /// without touching MLX. Batch entry points call `acquireRunner()`
+    /// (below) rather than this factory directly, so the keep-alive
+    /// cache sits in front of whatever the factory builds — injection
+    /// unchanged, existing tests unaffected.
     var runnerFactory: () -> CaptionRunner
+
+    // MARK: - VLM runner keep-alive (perf item 3, 2026-07-14)
+
+    /// The runner actor kept alive across batch settles. See the
+    /// design comment at the top of this file. Nil when never used,
+    /// after the idle window expires, or once shutdown begins.
+    /// `internal` so the +Lifecycle/+Dossier entry points (and tests)
+    /// can reach it; mutate ONLY via acquireRunner /
+    /// armRunnerIdleTimer / dropCachedRunnerForShutdown.
+    var cachedRunner: CaptionRunner?
+
+    /// Pending idle-release timer. Armed on batch settle, cancelled on
+    /// the next batch start and on shutdown. (`Task` handle ≈ C++
+    /// std::jthread with a stop_token — cancel() requests the stop,
+    /// the sleeping task observes it.)
+    var runnerIdleTimer: Task<Void, Never>?
+
+    /// Idle window before the cached runner — and the ~3 GB model
+    /// container it owns — is released. `var` purely as a test seam
+    /// (tests shrink it to milliseconds); production never reassigns.
+    var runnerIdleTimeout: TimeInterval = 600  // 10 minutes
+
+    /// Get the batch's runner: reuse the cached actor when present,
+    /// otherwise build one via `runnerFactory` and cache it. Always
+    /// cancels a pending idle timer first — a starting batch must
+    /// never have the container released out from under it.
+    ///
+    /// Callers are the three batch entry points (startCaptioning,
+    /// startAnalyzing, startCatalogWideDossier), each AFTER its
+    /// `isShuttingDown` guard — so a dead runner can never be
+    /// resurrected during app teardown.
+    func acquireRunner() -> CaptionRunner {
+        runnerIdleTimer?.cancel()
+        runnerIdleTimer = nil
+        if let cached = cachedRunner {
+            captionOrchLog.info("VLM keep-alive: reusing cached runner (\(cached.modelID, privacy: .public)) — no model reload")
+            return cached
+        }
+        let runner = runnerFactory()
+        cachedRunner = runner
+        return runner
+    }
+
+    /// Arm the idle release. Called on every batch settle path (after
+    /// `await activeTask?.value` in each entry point). No-op when
+    /// nothing is cached or when shutdown already began.
+    ///
+    /// Concurrency shape: `Task { @MainActor [weak self] ... }` — the
+    /// timer body always runs on the MainActor (this class's isolation,
+    /// so the drop is an ordinary property write, no locking), `weak
+    /// self` means it can never fire into a deallocated orchestrator,
+    /// and a cancel makes the sleep throw so a timer that lost the
+    /// race to a new batch never drops the runner that batch just
+    /// acquired.
+    func armRunnerIdleTimer() {
+        runnerIdleTimer?.cancel()
+        runnerIdleTimer = nil
+        guard cachedRunner != nil, !isShuttingDown else { return }
+        let window = runnerIdleTimeout
+        runnerIdleTimer = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: UInt64(window * 1_000_000_000))
+            } catch {
+                return  // cancelled — a new batch took the runner over
+            }
+            guard let self, !Task.isCancelled, !self.isShuttingDown else { return }
+            // Belt-and-braces: never drop mid-batch. Shouldn't be
+            // reachable (acquireRunner cancels this timer at batch
+            // start), but the guard is free and the failure mode —
+            // releasing the container under live inference — is the
+            // crash class this whole lifecycle is defending against.
+            guard !self.currentStatus.isActive else { return }
+            captionOrchLog.info("VLM keep-alive: idle window (\(Int(window))s) expired — releasing cached runner and model container")
+            self.cachedRunner = nil
+            self.runnerIdleTimer = nil
+        }
+    }
+
+    /// Shutdown teardown: cancel the idle timer and drop the cached
+    /// runner NOW. Called from beginShutdown() and drainForShutdown()
+    /// (CaptionOrchestrator+Lifecycle) — quitting mid-idle-window must
+    /// release our container reference immediately so the AppDelegate
+    /// MLX teardown (synchronize + _exit backstop, MLXShutdown.swift)
+    /// is quiescing a GPU nothing can re-dispatch to. A batch that is
+    /// still draining holds its own local `runner` reference; that one
+    /// releases when the drain settles (or is bypassed by the _exit
+    /// backstop on a blown deadline), same as before this cache.
+    func dropCachedRunnerForShutdown() {
+        runnerIdleTimer?.cancel()
+        runnerIdleTimer = nil
+        guard cachedRunner != nil else { return }
+        shutdownLog.notice("VLM keep-alive: dropping cached runner for shutdown")
+        cachedRunner = nil
+    }
 
     /// Latched true by `drainForShutdown()` when the app is quitting.
     /// Every start* entry point bails when set. Without this latch the
