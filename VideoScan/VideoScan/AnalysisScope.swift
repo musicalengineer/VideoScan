@@ -167,6 +167,27 @@ nonisolated func pfAnalysisScopeCandidates(
     }
 }
 
+/// Gate for the per-file "Generate Scene Captions" verb (QA F9,
+/// 2026-07-14). The old check trusted streamType alone — an mp3 with
+/// embedded cover art probes as Video+Audio (the EXACT
+/// misclassification AnalysisScope.classify exists to fix), so the
+/// menu enabled, then the job ran with hasNoVideo and failed with a
+/// confusing "no dossier was banked". Camera raws probing as
+/// video-only had the same problem. The menu gate must agree with
+/// what the batch loop will actually do: classification first, then
+/// the genuine video-stream check.
+nonisolated func pfCanGenerateSceneCaptions(
+    streamTypeRaw: String,
+    filename: String
+) -> Bool {
+    guard case .analyzable = AnalysisScope.classify(
+        streamTypeRaw: streamTypeRaw, filename: filename) else {
+        return false
+    }
+    return streamTypeRaw == StreamType.videoAndAudio.rawValue
+        || streamTypeRaw == StreamType.videoOnly.rawValue
+}
+
 /// Per-reason exclusion counts for the batch-start log line —
 /// "N audio, M photos" beats a silent shrink of the candidate list.
 nonisolated func pfAnalysisScopeExclusionTally(

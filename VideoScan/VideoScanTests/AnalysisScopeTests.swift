@@ -284,3 +284,51 @@ struct CatalogCoverageTallyTests {
         #expect(onCov.outOfScopeCount == 0)
     }
 }
+
+// MARK: - Per-file "Generate Scene Captions" menu gate (QA F9, 2026-07-14)
+//
+// The menu gate must agree with the batch loop's hasNoVideo decision:
+// streamType alone enables the verb for an mp3 with embedded cover art
+// (probes as Video+Audio) and for camera raws (probe as video-only) —
+// the job then runs with hasNoVideo and fails with a confusing
+// "no dossier was banked".
+
+@Suite("Generate Scene Captions menu gate")
+struct GenerateSceneCaptionsGateTests {
+
+    @Test("cover-art mp3 (probes Video+Audio) is NOT captionable")
+    func coverArtMp3Blocked() {
+        #expect(!pfCanGenerateSceneCaptions(
+            streamTypeRaw: StreamType.videoAndAudio.rawValue,
+            filename: "Highway Star.mp3"))
+    }
+
+    @Test("camera raw (probes video-only) is NOT captionable")
+    func cameraRawBlocked() {
+        #expect(!pfCanGenerateSceneCaptions(
+            streamTypeRaw: StreamType.videoOnly.rawValue,
+            filename: "IMG_0042.CR3"))
+    }
+
+    @Test("real video files ARE captionable")
+    func realVideoAllowed() {
+        #expect(pfCanGenerateSceneCaptions(
+            streamTypeRaw: StreamType.videoAndAudio.rawValue,
+            filename: "wedding_1994.mov"))
+        #expect(pfCanGenerateSceneCaptions(
+            streamTypeRaw: StreamType.videoOnly.rawValue,
+            filename: "orphan_essence.mxf"))
+    }
+
+    @Test("audio-only and no-video-stream files stay blocked")
+    func noVideoStreamBlocked() {
+        #expect(!pfCanGenerateSceneCaptions(
+            streamTypeRaw: StreamType.audioOnly.rawValue,
+            filename: "voicemail.wav"))
+        // Extensionless recovered essence is scope-ANALYZABLE, but the
+        // captions verb still needs a probed video stream.
+        #expect(!pfCanGenerateSceneCaptions(
+            streamTypeRaw: StreamType.ffprobeFailed.rawValue,
+            filename: "recovered_essence"))
+    }
+}

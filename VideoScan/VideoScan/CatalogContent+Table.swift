@@ -440,7 +440,12 @@ extension CatalogContent {
                         // "Transcribe Audio exists but this file has
                         // no audio" instead of wondering where it went.
                         let hasAudio = (rec.streamType == .videoAndAudio || rec.streamType == .audioOnly)
-                        let hasVideo = (rec.streamType == .videoAndAudio || rec.streamType == .videoOnly)
+                        // NOT raw streamType (QA F9): an mp3's cover art
+                        // probes as a video stream — classify first so
+                        // audio/photo files can't launch a captions job
+                        // that runs with hasNoVideo and fails confusingly.
+                        let hasVideo = pfCanGenerateSceneCaptions(
+                            streamTypeRaw: rec.streamTypeRaw, filename: rec.filename)
                         Button("Transcribe Audio") {
                             requestAnalyze(for: rec, stages: [.transcript])
                         }
