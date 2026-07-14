@@ -417,24 +417,24 @@ struct VideoScanApp: App {
                             Task {
                                 try? await Task.sleep(for: .seconds(3))
                                 guard !Task.isCancelled else { return }
-                                // Per-volume auto-resume (Rick 2026-06-13).
-                                // Pick up every volume that had a batch in
-                                // flight when the app last quit and run them
-                                // serially in path order. Phase 1: one at a
-                                // time. Falls back to the global pass when
-                                // no per-volume work was recorded (legacy
-                                // catalogs migrating from the old single-
-                                // batch model).
-                                let pending = captionOrchestrator.activeVolumePrefixes.sorted()
-                                if pending.isEmpty {
+                                // Per-volume auto-resume (Rick 2026-06-13;
+                                // queue-unified 2026-07-14). Interrupted
+                                // volumes (DossierActiveVolumes) AND the
+                                // pending FIFO queue (DossierQueuedVolumes)
+                                // both resume through the ONE queue path —
+                                // interrupted work first, then the queue in
+                                // its original order. The old direct loop
+                                // over startAnalyzing raced the queue's own
+                                // settle hand-off (two dispatchers, one
+                                // busy-guard → dropped volumes). Falls back
+                                // to the global pass when no per-volume work
+                                // was recorded (legacy catalogs migrating
+                                // from the old single-batch model).
+                                if captionOrchestrator.activeVolumePrefixes.isEmpty
+                                    && captionOrchestrator.queuedVolumePrefixes.isEmpty {
                                     await captionOrchestrator.startCatalogWideDossier(model: catalogModel)
                                 } else {
-                                    for prefix in pending where !Task.isCancelled {
-                                        await captionOrchestrator.startAnalyzing(
-                                            volumePrefix: prefix,
-                                            model: catalogModel
-                                        )
-                                    }
+                                    captionOrchestrator.resumePersistedWork(model: catalogModel)
                                 }
                             }
                         }

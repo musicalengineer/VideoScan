@@ -140,9 +140,27 @@ final class CaptionOrchestrator: ObservableObject {
     // (refactor 2026-06-24)
     var isShuttingDown = false
 
-    init(runnerFactory: (() -> CaptionRunner)? = nil) {
+    init(runnerFactory: (() -> CaptionRunner)? = nil,
+         defaults: UserDefaults = .standard) {
         self.framesPerFile = 3
         self.runnerFactory = runnerFactory ?? { MLXVLMCaptionRunner() }
+        self.persistenceDefaults = defaults
+        // Test-host isolation (Settings-pollution class): an orchestrator
+        // created against the REAL standard defaults inside a test host
+        // must neither read nor write them. Tests that exercise
+        // persistence semantics inject their own UserDefaults(suiteName:).
+        self.persistenceEnabled = !(TestEnvironment.isTestHost && defaults === UserDefaults.standard)
+        if persistenceEnabled {
+            self.analysisScope = AnalysisScope.restored(from: defaults)
+            self.activeVolumePrefixes = Set(defaults.stringArray(forKey: Self.activeVolumesPrefsKey) ?? [])
+            let restoredQueue = defaults.stringArray(forKey: Self.queuedVolumesPrefsKey) ?? []
+            self.queuedVolumePrefixes = restoredQueue
+            // A queue restored while DossierAutoResume is OFF shows as
+            // PAUSED instead of being silently dropped — nothing starts
+            // until the user explicitly resumes (or enqueues) work.
+            self.queuePaused = !restoredQueue.isEmpty
+                && !defaults.bool(forKey: "DossierAutoResume")
+        }
     }
 
     // MARK: - Public API
@@ -167,13 +185,27 @@ final class CaptionOrchestrator: ObservableObject {
     /// queues them for sequential processing.
     static let activeVolumesPrefsKey = "DossierActiveVolumes"
 
+    /// UserDefaults key for the pending FIFO analyze queue (feature
+    /// 2026-07: express intent on several volumes, walk away).
+    static let queuedVolumesPrefsKey = "DossierQueuedVolumes"
+
+    /// Where scope + queue persistence goes. `.standard` in the app;
+    /// tests inject a throwaway suite. Set once in init.
+    let persistenceDefaults: UserDefaults
+
+    /// False when we're a test host talking to the REAL standard
+    /// defaults — all persistence reads/writes become no-ops so tests
+    /// can never leak into (or inherit from) the user's live prefs.
+    /// `internal` so the queue/scope extension (separate file) can
+    /// honor the same gate.
+    let persistenceEnabled: Bool
+
     /// Volume prefixes currently registered as "in progress" for
     /// auto-resume purposes. @Published so the UI can echo it; the
     /// authoritative store is UserDefaults so it survives crash.
-    @Published private(set) var activeVolumePrefixes: Set<String> = {
-        let list = UserDefaults.standard.stringArray(forKey: CaptionOrchestrator.activeVolumesPrefsKey) ?? []
-        return Set(list)
-    }()
+    /// Populated from defaults in init (gated by persistenceEnabled —
+    /// the old property-initializer read real defaults even in tests).
+    @Published private(set) var activeVolumePrefixes: Set<String> = []
 
     /// `internal` (not `private`) so `startAnalyzing`
     /// (CaptionOrchestrator+Dossier) can register/unregister the active
@@ -181,13 +213,57 @@ final class CaptionOrchestrator: ObservableObject {
     /// point now lives in a separate file.
     func rememberActiveVolume(_ prefix: String) {
         activeVolumePrefixes.insert(prefix)
-        UserDefaults.standard.set(Array(activeVolumePrefixes), forKey: Self.activeVolumesPrefsKey)
+        guard persistenceEnabled else { return }
+        persistenceDefaults.set(Array(activeVolumePrefixes), forKey: Self.activeVolumesPrefsKey)
     }
 
     func forgetActiveVolume(_ prefix: String) {
         activeVolumePrefixes.remove(prefix)
-        UserDefaults.standard.set(Array(activeVolumePrefixes), forKey: Self.activeVolumesPrefsKey)
+        guard persistenceEnabled else { return }
+        persistenceDefaults.set(Array(activeVolumePrefixes), forKey: Self.activeVolumesPrefsKey)
     }
+
+    // MARK: - Volume analyze queue + analysis scope (stored state)
+    //
+    // Behavior lives in CaptionOrchestrator+Queue.swift; a cross-file
+    // extension can't add stored properties, so the state lives here.
+    // (≈ C++ partial class: data in the primary definition, methods
+    // spread across translation units.)
+
+    /// FIFO of volume prefixes waiting to analyze. Head starts when
+    /// the current batch settles (finished OR stopped). `internal`
+    /// setter (not `private(set)`) because enqueue/dequeue live in the
+    /// +Queue extension file — mutate ONLY through those methods.
+    @Published var queuedVolumePrefixes: [String] = []
+
+    /// True when a persisted queue was restored with DossierAutoResume
+    /// OFF: the queue is visible but nothing auto-starts. Cleared by
+    /// any explicit user intent (enqueue / Resume Queue).
+    @Published var queuePaused: Bool = false
+
+    /// What kinds of files Analyze spends GPU time on. Restored from
+    /// defaults in init; mutate via `updateAnalysisScope(_:)` (which
+    /// does the explicit save). `internal` setter for the same
+    /// cross-file-extension reason as the queue.
+    @Published var analysisScope: AnalysisScope = AnalysisScope()
+
+    /// Latch that closes the enqueue→dispatch race: set synchronously
+    /// (MainActor) when a queued volume is handed to a Task, cleared
+    /// when its batch settles. Without it, two rapid enqueues while
+    /// idle could each dequeue a volume and race startAnalyzing's busy
+    /// guard — the loser's volume would be silently dropped.
+    var queueDispatchInFlight = false
+
+    // MARK: - Per-reason skip/fail counters (batch observability)
+    //
+    // 2026-07-14 perf diagnosis: 1,097 wasted extraction attempts in a
+    // nightly batch produced ~1 log line total. The batch loops bump
+    // these per reason and the batch-done summary prints the split.
+    // Plain vars (not @Published): read only for the summary line.
+
+    var liveSkipAlreadyAnalyzed = 0
+    var liveSkipMissing = 0
+    var liveSkipProtected = 0
 
     // MARK: - In-flight counts
     //

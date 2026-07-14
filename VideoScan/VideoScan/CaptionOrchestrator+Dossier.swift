@@ -22,30 +22,50 @@ extension CaptionOrchestrator {
     /// otherwise behaves like `startCatalogWideDossier` — same
     /// idempotent skip, same DRM gate, same indicator pipeline.
     ///
-    /// Phase 1 (today): only one volume can be analyzing at a time.
-    /// Calling while busy is a no-op (logged). Phase 2 will allow
-    /// concurrent per-volume batches with proper subprocess pooling.
+    /// Phase 1 (today): only one volume can be ANALYZING at a time,
+    /// but intent is never blocked — the dashboard enqueues further
+    /// volumes via `enqueueAnalyze` (CaptionOrchestrator+Queue) and
+    /// this method hands off to the queue head when the batch settles.
+    /// Calling directly while busy is still a no-op (logged).
     ///
     /// Persisted to `DossierActiveVolumes` so auto-resume can pick up
     /// where we left off across launches.
+    ///
+    /// `ignoringScope`: the Analysis Scope gate applies to volume
+    /// batches; a single-file AnalyzeJob (user right-clicked THIS
+    /// file) passes true so explicit per-file intent always wins —
+    /// e.g. "Transcribe Audio" on one mp3 must work with audio scoped
+    /// out.
+    ///
+    /// Returns `true` when a batch actually ran (including the
+    /// "nothing to do" empty-candidates outcome), `false` on refusal
+    /// (shutting down / another batch active / empty prefix). AnalyzeJob
+    /// uses the distinction to wait its turn instead of reporting a
+    /// spurious failure when N single-file jobs start together.
+    @discardableResult
     func startAnalyzing(
         volumePrefix: String,
         model: VideoScanModel,
         transcriber: AudioTranscriber? = nil,
         force: Bool = false,
-        stages: Set<AnalyzeStage> = AnalyzeStage.all
-    ) async {
+        stages: Set<AnalyzeStage> = AnalyzeStage.all,
+        ignoringScope: Bool = false
+    ) async -> Bool {
         guard !isShuttingDown else {
             captionOrchLog.notice("startAnalyzing refused — app is shutting down")
-            return
+            return false
         }
+        // Queue hand-off on EVERY settle path (finished, stopped,
+        // nothing-to-do). The busy-refusal return below is covered
+        // too — scheduleQueueAdvance no-ops while a batch is active.
+        defer { scheduleQueueAdvance(model: model) }
         guard !currentStatus.isActive else {
             captionOrchLog.warning("startAnalyzing(\(volumePrefix, privacy: .public)) refused — already \(String(describing: self.currentStatus))")
-            return
+            return false
         }
         guard !volumePrefix.isEmpty else {
             captionOrchLog.warning("startAnalyzing refused — empty volumePrefix")
-            return
+            return false
         }
 
         let resolvedTranscriber: AudioTranscriber? = transcriber ?? {
@@ -57,12 +77,21 @@ extension CaptionOrchestrator {
 
         // Filter candidates to this volume only. We still go through
         // pfCatalogWideMetadataCandidates because that's where junk /
-        // DRM / purge / reachability filtering lives.
+        // DRM / purge / reachability filtering lives. The Analysis
+        // Scope gate sits right beside those gates — pure catalog
+        // metadata, ZERO disk I/O, so out-of-scope files (music, camera
+        // raws) never reach the per-file AVAsset DRM probe below.
         let base = pfCatalogWideMetadataCandidates(
             records: model.records,
             reachableVolumePaths: [volumePrefix]
         )
-        let candidates = pfCatalogWideCaptionCandidates(base)
+        let candidates = ignoringScope
+            ? base
+            : pfAnalysisScopeCandidates(base, scope: analysisScope)
+        if !ignoringScope, candidates.count != base.count {
+            let tally = pfAnalysisScopeExclusionTally(base, scope: analysisScope)
+            appLog.write("Dossier: scope set aside \(base.count - candidates.count) file(s) under \(VolumeReachability.displayLabel(forPath: volumePrefix)) — \(tally.audio) audio, \(tally.photos) photos (Analysis Scope on the dashboard re-includes audio)")
+        }
 
         captionOrchLog.info("Per-volume dossier: \(candidates.count) candidate(s) under \(volumePrefix, privacy: .public); transcriber=\(resolvedTranscriber?.modelID ?? "none", privacy: .public)")
         appLog.write("Dossier: starting volume pass — \(candidates.count) eligible under \(VolumeReachability.displayLabel(forPath: volumePrefix))")
@@ -70,7 +99,7 @@ extension CaptionOrchestrator {
         guard !candidates.isEmpty else {
             captionOrchLog.info("Per-volume dossier: nothing to do under \(volumePrefix, privacy: .public)")
             currentStatus = .finished(captioned: 0, skipped: 0, failed: 0)
-            return
+            return true
         }
 
         currentTarget = nil
@@ -90,12 +119,14 @@ extension CaptionOrchestrator {
                 candidates: candidates,
                 framesPerFile: frames,
                 force: force,
-                model: model
+                model: model,
+                stages: stages
             )
         }
         await activeTask?.value
         currentVolumePrefix = nil
         forgetActiveVolume(volumePrefix)
+        return true
     }
 
     // MARK: - Catalog-wide dossier
@@ -165,7 +196,14 @@ extension CaptionOrchestrator {
             records: model.records,
             reachableVolumePaths: reachablePaths
         )
-        let candidates = pfCatalogWideCaptionCandidates(base)
+        // Analysis Scope gate — same placement rationale as
+        // startAnalyzing: pure metadata, zero disk I/O, BEFORE the
+        // per-file loop so out-of-scope files never hit the DRM probe.
+        let candidates = pfAnalysisScopeCandidates(base, scope: analysisScope)
+        if candidates.count != base.count {
+            let tally = pfAnalysisScopeExclusionTally(base, scope: analysisScope)
+            appLog.write("Dossier: scope set aside \(base.count - candidates.count) file(s) catalog-wide — \(tally.audio) audio, \(tally.photos) photos")
+        }
 
         captionOrchLog.info("Catalog-wide dossier: \(candidates.count) candidate(s) across \(reachablePaths.count) volume(s); transcriber=\(resolvedTranscriber?.modelID ?? "none", privacy: .public)")
         appLog.write("Dossier: starting catalog-wide pass — \(candidates.count) eligible video(s), VLM=\(MLXVLMCaptionRunner().modelID), transcriber=\(resolvedTranscriber?.modelID ?? "none"), force=\(force)")
@@ -291,6 +329,7 @@ extension CaptionOrchestrator {
             // explicit escape hatch for re-dossier-with-current-stack.
             if !force, record.dossierProcessedAt != nil {
                 liveSkipped += 1
+                liveSkipAlreadyAnalyzed += 1
                 publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
                 continue
             }
@@ -306,6 +345,7 @@ extension CaptionOrchestrator {
                 // action. Rick 2026-06-13.
                 Self.flagMissingOnDisk(record)
                 liveSkipped += 1
+                liveSkipMissing += 1
                 captionOrchLog.notice("Dossier: missing on disk → auto-purged: \(path, privacy: .public)")
                 appLog.write("Dossier: auto-purged missing on disk: \(filename)")
                 publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
@@ -317,16 +357,22 @@ extension CaptionOrchestrator {
             // Encrypted m4v/m4p files (vintage iTunes purchases from
             // forgotten user accounts) would otherwise eat hours of
             // Whisper time grinding ciphertext. We mark + skip; the
-            // candidate filter excludes on subsequent runs.
+            // candidate filter excludes on subsequent runs. Note the
+            // Analysis Scope gate already ran at candidate-filter time —
+            // out-of-scope files (music, camera raws) never get here, so
+            // this probe only spends I/O on genuinely analyzable files.
             if record.drmProtected {
                 liveSkipped += 1
+                liveSkipProtected += 1
                 captionOrchLog.notice("Dossier: skip DRM-protected (cached): \(filename, privacy: .public)")
+                appLog.write("Dossier: skip protected (can't read): \(filename)")
                 publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
                 continue
             }
             if await Self.isDRMProtected(path: path) {
                 Self.flagDRMSuspectJunk(record)
                 liveSkipped += 1
+                liveSkipProtected += 1
                 captionOrchLog.notice("Dossier: skip DRM-protected (probed, → suspectedJunk): \(filename, privacy: .public)")
                 appLog.write("Dossier: skip DRM-protected: \(filename) (flagged suspectedJunk)")
                 publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
@@ -345,24 +391,42 @@ extension CaptionOrchestrator {
             // banking the no-audio VLM-only result (see below).
             let hasNoAudio = (record.streamType == .videoOnly)
 
+            // Symmetric gate for audio-classified records (in a batch
+            // only when Analysis Scope includes audio, or via a
+            // single-file AnalyzeJob): NO frame extraction / VLM.
+            // Extension-aware — an mp3 with embedded cover art probes
+            // as Video+Audio, and feeding it to the frame extractor is
+            // the exact waste the 2026-07-14 diagnosis caught.
+            let hasNoVideo = {
+                if case .audio = AnalysisScope.classify(
+                    streamTypeRaw: record.streamTypeRaw,
+                    filename: filename) { return true }
+                return false
+            }()
+
             // Open this file's dashboard lane. ONE lane per file across
             // both stages — VLM and Whisper transitions mutate it in
             // place so the user sees one row tick through the pipeline
             // with the per-channel ✓/✗/— indicators lighting up.
+            // Audio-class files open directly on the Whisper stage.
             let laneID = beginLane(
                 path: path,
                 filename: filename,
                 isVideoOnly: hasNoAudio,
-                stage: Self.stageDisplayName(forModelID: vlmModelID),
-                verb: "extracting scenes…"
+                stage: hasNoVideo
+                    ? Self.stageDisplayName(forModelID: whisperModelID)
+                    : Self.stageDisplayName(forModelID: vlmModelID),
+                verb: hasNoVideo ? "transcribing audio…" : "extracting scenes…"
             )
 
             do {
                 let vlmStart = CFAbsoluteTimeGetCurrent()
-                let extraction = try await runner.dossier(
-                    videoPath: path,
-                    atTimestamps: timestamps
-                )
+                let extraction: DossierExtraction = hasNoVideo
+                    ? .empty
+                    : try await runner.dossier(
+                        videoPath: path,
+                        atTimestamps: timestamps
+                    )
                 let vlmSec = CFAbsoluteTimeGetCurrent() - vlmStart
                 // hasCaptions reflects whether we actually got usable
                 // scene captions, NOT just that VLM completed without
@@ -384,8 +448,10 @@ extension CaptionOrchestrator {
                 // Static codec heuristic already catches known-bad
                 // codecs at catalog-read time via record.isLikelyUnanalyzable;
                 // this dynamic backstop catches unfamiliar codecs by
-                // their failure signature.
-                if !didExtractCaptions && vlmSec < 1.0 && !record.needsReformat {
+                // their failure signature. Audio-class records skipped
+                // VLM by design — "0 scenes instantly" is expected, not
+                // a decode failure, so they must not be flagged.
+                if !hasNoVideo && !didExtractCaptions && vlmSec < 1.0 && !record.needsReformat {
                     record.needsReformat = true
                     captionOrchLog.notice("Dossier: VLM bailed in \(vlmSec, format: .fixed(precision: 2), privacy: .public)s with 0 scenes — flagging \(filename, privacy: .public) needsReformat")
                     appLog.write(String(format: "Dossier: flagged needsReformat (codec couldn't be decoded): %@", filename))
@@ -603,6 +669,11 @@ extension CaptionOrchestrator {
                 endLane(laneID)
                 liveFailed += 1
                 captionOrchLog.warning("Dossier: VLM error on \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                // One visible line per failure — the 2026-07-14 perf
+                // diagnosis found 1,097 failed extraction attempts that
+                // produced ~1 log line total, which is what kept 3.1 h
+                // of nightly waste invisible.
+                appLog.write("Dossier: failed (extraction error): \(filename) — \(error.localizedDescription)")
                 publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
             }
         }
@@ -628,8 +699,10 @@ extension CaptionOrchestrator {
         let skipped = liveSkipped
         let failed = liveFailed
         captionOrchLog.info("Dossier batch done: captioned=\(captioned), skipped=\(skipped), failed=\(failed) in \(String(format: "%.1f", elapsed))s")
-        appLog.write(String(format: "Dossier: done — %d processed, %d skipped, %d failed in %.1fs (%@)",
-                            captioned, skipped, failed, elapsed, stackID))
+        appLog.write(String(format: "Dossier: done — %d processed, %d skipped (%d already analyzed, %d missing, %d protected), %d failed in %.1fs (%@)",
+                            captioned, skipped,
+                            liveSkipAlreadyAnalyzed, liveSkipMissing, liveSkipProtected,
+                            failed, elapsed, stackID))
         if Task.isCancelled {
             appLog.write("Dossier: cancelled (done \(captioned), skipped \(skipped), failed \(failed))")
         }
@@ -683,6 +756,7 @@ extension CaptionOrchestrator {
             // no longer part of this predicate.
             if !force, record.dossierProcessedAt != nil {
                 liveSkipped += 1
+                liveSkipAlreadyAnalyzed += 1
                 publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
                 continue
             }
@@ -698,6 +772,7 @@ extension CaptionOrchestrator {
                 // action. Rick 2026-06-13.
                 Self.flagMissingOnDisk(record)
                 liveSkipped += 1
+                liveSkipMissing += 1
                 captionOrchLog.notice("Dossier: missing on disk → auto-purged: \(path, privacy: .public)")
                 appLog.write("Dossier: auto-purged missing on disk: \(filename)")
                 publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
@@ -707,13 +782,16 @@ extension CaptionOrchestrator {
             // DRM gate — same semantics as the pipelined path.
             if record.drmProtected {
                 liveSkipped += 1
+                liveSkipProtected += 1
                 captionOrchLog.notice("Dossier: skip DRM-protected (cached): \(filename, privacy: .public)")
+                appLog.write("Dossier: skip protected (can't read): \(filename)")
                 publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
                 continue
             }
             if await Self.isDRMProtected(path: path) {
                 Self.flagDRMSuspectJunk(record)
                 liveSkipped += 1
+                liveSkipProtected += 1
                 captionOrchLog.notice("Dossier: skip DRM-protected (probed, → suspectedJunk): \(filename, privacy: .public)")
                 appLog.write("Dossier: skip DRM-protected: \(filename) (flagged suspectedJunk)")
                 publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
@@ -727,15 +805,29 @@ extension CaptionOrchestrator {
 
             let hasNoAudio = (record.streamType == .videoOnly)
 
+            // Symmetric no-video gate — same rationale as the pipelined
+            // path: audio-classified records (mp3 cover art probes as a
+            // video stream; here via single-file AnalyzeJob or scope-ON
+            // batches) must never reach frame extraction / VLM.
+            let hasNoVideo = {
+                if case .audio = AnalysisScope.classify(
+                    streamTypeRaw: record.streamTypeRaw,
+                    filename: filename) { return true }
+                return false
+            }()
+
             // One lane per file. Stage transitions VLM → Whisper happen
             // in place via updateLane so the dashboard shows a single
             // row per file with the per-channel indicators lighting up.
+            // Audio-class files open directly on the transcribe stage.
             let laneID = beginLane(
                 path: path,
                 filename: filename,
                 isVideoOnly: hasNoAudio,
-                stage: Self.stageDisplayName(forModelID: runner.modelID),
-                verb: "extracting scenes…"
+                stage: hasNoVideo && transcriber != nil
+                    ? Self.stageDisplayName(forModelID: transcriber!.modelID)
+                    : Self.stageDisplayName(forModelID: runner.modelID),
+                verb: hasNoVideo ? "transcribing audio…" : "extracting scenes…"
             )
 
             do {
@@ -749,7 +841,7 @@ extension CaptionOrchestrator {
 
                 let vlmStart = CFAbsoluteTimeGetCurrent()
                 let extraction: DossierExtraction
-                if runCaptions {
+                if runCaptions && !hasNoVideo {
                     extraction = try await runner.dossier(
                         videoPath: path, atTimestamps: timestamps
                     )
@@ -859,6 +951,9 @@ extension CaptionOrchestrator {
                 endLane(laneID)
                 liveFailed += 1
                 captionOrchLog.warning("Dossier: error on \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                // One visible line per failure — same observability rule
+                // as the pipelined path (2026-07-14: 1,097 silent fails).
+                appLog.write("Dossier: failed (extraction error): \(filename) — \(error.localizedDescription)")
             }
 
             publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
@@ -869,8 +964,10 @@ extension CaptionOrchestrator {
         let elapsed = CFAbsoluteTimeGetCurrent() - started
         let c = self.liveCaptioned, s = self.liveSkipped, f = self.liveFailed
         captionOrchLog.info("Dossier batch done: captioned=\(c), skipped=\(s), failed=\(f) in \(String(format: "%.1f", elapsed))s")
-        appLog.write(String(format: "Dossier: done — %d processed, %d skipped, %d failed in %.1fs (%@)",
-                            c, s, f, elapsed, stackID))
+        appLog.write(String(format: "Dossier: done — %d processed, %d skipped (%d already analyzed, %d missing, %d protected), %d failed in %.1fs (%@)",
+                            c, s,
+                            liveSkipAlreadyAnalyzed, liveSkipMissing, liveSkipProtected,
+                            f, elapsed, stackID))
         currentStatus = .finished(captioned: c, skipped: s, failed: f)
     }
 }

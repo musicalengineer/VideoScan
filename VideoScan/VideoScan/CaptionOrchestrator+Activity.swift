@@ -26,6 +26,12 @@ extension CaptionOrchestrator {
         liveCurrentIndex = 0
         liveTotal = 0
         transcriptFailures = 0
+        // Per-reason skip split (2026-07-14 observability work: 1,097
+        // failures in one nightly batch produced ~1 log line) — reset
+        // alongside the aggregate they decompose.
+        liveSkipAlreadyAnalyzed = 0
+        liveSkipMissing = 0
+        liveSkipProtected = 0
         // Stale user-skip flags from a prior batch must not leak into
         // a fresh run — a lane ID is per-batch and never reused, but
         // clearing the set keeps `userSkippedLaneIDs.contains(id)`
