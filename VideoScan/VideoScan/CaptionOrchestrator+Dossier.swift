@@ -77,8 +77,19 @@ extension CaptionOrchestrator {
             // a stub explicitly.
             guard !TestEnvironment.isTestHost else { return nil }
             let py = ToolLocator.mlxPythonPath
+            guard !py.isEmpty else { return nil }
+            // Persistent worker preferred (perf item 1, 2026-07-14):
+            // ONE model load per batch instead of one per file — a
+            // nightly batch of 888 files paid ~5 s × 888 ≈ 1.18 h in
+            // pure whisper-medium reload with the per-file spawner.
+            // The per-file script remains the automatic fallback when
+            // the worker script isn't on disk.
+            let worker = ToolLocator.whisperWorkerScriptPath
+            if !worker.isEmpty {
+                return WhisperWorkerTranscriber(pythonPath: py, scriptPath: worker)
+            }
             let sc = ToolLocator.whisperScriptPath
-            guard !py.isEmpty, !sc.isEmpty else { return nil }
+            guard !sc.isEmpty else { return nil }
             return PythonSubprocessAudioTranscriber(pythonPath: py, scriptPath: sc)
         }()
 
@@ -192,6 +203,12 @@ extension CaptionOrchestrator {
             // real whisper subprocess from a unit-test host.
             guard !TestEnvironment.isTestHost else { return nil }
             let py = ToolLocator.mlxPythonPath
+            // Persistent worker preferred — same rationale + fallback
+            // order as startAnalyzing above.
+            let worker = ToolLocator.whisperWorkerScriptPath
+            if !py.isEmpty, !worker.isEmpty {
+                return WhisperWorkerTranscriber(pythonPath: py, scriptPath: worker)
+            }
             let sc = ToolLocator.whisperScriptPath
             guard !py.isEmpty, !sc.isEmpty else {
                 captionOrchLog.notice("Dossier: no MLX Python / whisper script — running VLM-only (mlxPython='\(py, privacy: .public)', script='\(sc, privacy: .public)')")
@@ -274,6 +291,13 @@ extension CaptionOrchestrator {
         let total = candidates.count
         resetLiveCounts()
         liveTotal = total
+
+        // Register the persistent Whisper worker (if that's what the
+        // transcriber is) so cancel()/drainForShutdown() can kill its
+        // subprocess immediately. Registered BEFORE the serial-path
+        // guard so both loops are covered; cleared on every settle
+        // path via settleWhisperWorker.
+        activeWhisperWorker = transcriber as? WhisperWorkerTranscriber
 
         let stackID: String = transcriber.map { "\(runner.modelID)+\($0.modelID)" } ?? runner.modelID
         let vlmModelID = runner.modelID
@@ -703,6 +727,7 @@ extension CaptionOrchestrator {
 
         // Batch settled — nothing is in flight. History stays.
         clearActiveLanes()
+        await settleWhisperWorker(transcriber)
 
         let elapsed = CFAbsoluteTimeGetCurrent() - started
         let captioned = liveCaptioned
@@ -739,11 +764,16 @@ extension CaptionOrchestrator {
     ) async {
         let total = candidates.count
 
+        // Same worker registration as the pipelined loop (idempotent
+        // when we arrived via runDossierBatch's serial-path guard).
+        activeWhisperWorker = transcriber as? WhisperWorkerTranscriber
+
         for (idx, record) in candidates.enumerated() {
             if Task.isCancelled {
                 captionOrchLog.notice("Dossier: cancelled at file \(idx) of \(total)")
                 appLog.write("Dossier: cancelled at file \(idx) of \(total) (done \(liveCaptioned), skipped \(liveSkipped), failed \(liveFailed))")
                 clearActiveLanes()
+                await settleWhisperWorker(transcriber)
                 currentStatus = .finished(captioned: liveCaptioned, skipped: liveSkipped, failed: liveFailed)
                 return
             }
@@ -752,6 +782,7 @@ extension CaptionOrchestrator {
             }
             if Task.isCancelled {
                 clearActiveLanes()
+                await settleWhisperWorker(transcriber)
                 currentStatus = .finished(captioned: liveCaptioned, skipped: liveSkipped, failed: liveFailed)
                 return
             }
@@ -959,6 +990,7 @@ extension CaptionOrchestrator {
                 captionOrchLog.notice("Dossier: cancelled at \(filename, privacy: .public)")
                 appLog.write("Dossier: cancelled mid-file \(filename) (done \(liveCaptioned), skipped \(liveSkipped), failed \(liveFailed))")
                 clearActiveLanes()
+                await settleWhisperWorker(transcriber)
                 currentStatus = .finished(captioned: liveCaptioned, skipped: liveSkipped, failed: liveFailed)
                 return
             } catch {
@@ -974,6 +1006,7 @@ extension CaptionOrchestrator {
         }
 
         clearActiveLanes()
+        await settleWhisperWorker(transcriber)
 
         let elapsed = CFAbsoluteTimeGetCurrent() - started
         let c = self.liveCaptioned, s = self.liveSkipped, f = self.liveFailed
@@ -983,5 +1016,19 @@ extension CaptionOrchestrator {
                             liveSkipAlreadyAnalyzed, liveSkipMissing, liveSkipProtected,
                             f, elapsed, stackID))
         currentStatus = .finished(captioned: c, skipped: s, failed: f)
+    }
+
+    /// Batch-settle hook for the persistent Whisper worker (perf item
+    /// 1, 2026-07-14): terminate the worker subprocess so a settled
+    /// batch never leaves a model-loaded Python process behind, and
+    /// drop the lifecycle reference so late cancel()/drain calls are
+    /// clean no-ops. Called on EVERY settle path of both batch loops
+    /// (finish, cancel, pause-then-cancel). No-op for stub / per-file
+    /// transcribers. The worker's own 120 s idle timeout is the
+    /// backstop for any path that slips past this.
+    func settleWhisperWorker(_ transcriber: AudioTranscriber?) async {
+        activeWhisperWorker = nil
+        guard let worker = transcriber as? WhisperWorkerTranscriber else { return }
+        await worker.shutdown()
     }
 }

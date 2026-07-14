@@ -568,7 +568,7 @@ struct WhisperWorkerTranscriberTests {
             envVar: ToolLocator.whisperWorkerScriptEnvVar,
             candidates: ["/nope/a.py"],
             environment: [:]
-        ) == "")
+        ).isEmpty)
 
         // Shape pins: env-var name is persisted in launchd plists /
         // docs, and the candidate list must point at the repo script.
@@ -582,3 +582,140 @@ struct WhisperWorkerTranscriberTests {
     }
 }
 
+// MARK: - Integration: real dossier path with the fake worker
+
+@MainActor
+@Suite("Whisper worker — CaptionOrchestrator dossier integration")
+struct WhisperWorkerDossierIntegrationTests {
+
+    private func makeRecord(fullPath: String) -> VideoRecord {
+        let r = VideoRecord()
+        r.filename = (fullPath as NSString).lastPathComponent
+        r.fullPath = fullPath
+        r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        r.durationSeconds = 3.0
+        r.lifecycleStage = .cataloged
+        return r
+    }
+
+    private func makeReachableTarget(at path: String) -> CatalogScanTarget {
+        let t = CatalogScanTarget(searchPath: path)
+        t.isReachable = true
+        return t
+    }
+
+    @Test("pipelined dossier batch: per-file transcripts bank, ONE spawn, worker dead after settle")
+    func dossierBatchOneWorkerKilledOnSettle() async throws {
+        guard FileManager.default.fileExists(atPath: "/usr/bin/python3") else { return }
+        let (script, dir) = try writeFakeWorker(echoWorkerBody)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let model = VideoScanModel()
+        let tmp = NSTemporaryDirectory()
+        var paths: [String] = []
+        var recs: [VideoRecord] = []
+        for i in 0..<3 {
+            let p = tmp + "vs-worker-dossier-\(i).mp4"
+            FileManager.default.createFile(atPath: p, contents: Data("x".utf8))
+            paths.append(p)
+            recs.append(makeRecord(fullPath: p))
+        }
+        defer { for p in paths { try? FileManager.default.removeItem(atPath: p) } }
+        model.records = recs
+        model.scanTargets = [makeReachableTarget(at: tmp)]
+
+        let vlm = StubDossierRunner(modelID: "stub-d-worker")
+        let orch = CaptionOrchestrator(runnerFactory: { vlm })
+        let worker = makeWorkerTranscriber(script: script)
+
+        await orch.startCatalogWideDossier(model: model, transcriber: worker)
+
+        guard case .finished(let captioned, let skipped, let failed) = orch.currentStatus else {
+            Issue.record("Expected .finished, got \(orch.currentStatus)")
+            return
+        }
+        #expect(captioned == 3)
+        #expect(skipped == 0)
+        #expect(failed == 0)
+
+        for rec in recs {
+            #expect(rec.audioTranscript == "transcript::\(rec.fullPath)",
+                    "\(rec.filename) transcript must bank through the real applyDossier path")
+            #expect(rec.audioTranscriptModel == worker.modelID)
+            #expect(rec.dossierProcessedAt != nil)
+        }
+
+        // The two contract points of this whole feature:
+        #expect(await worker.totalSpawns == 1, "3 files, 1 worker process")
+        let died = await eventually { await !worker.isWorkerRunning }
+        #expect(died, "batch settle must terminate the worker (settleWhisperWorker)")
+        #expect(orch.activeWhisperWorker == nil, "lifecycle reference must be cleared on settle")
+    }
+
+    @Test("orchestrator cancel() kills the worker mid-batch")
+    func cancelKillsWorkerMidBatch() async throws {
+        guard FileManager.default.fileExists(atPath: "/usr/bin/python3") else { return }
+        let (script, dir) = try writeFakeWorker(hangBody)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let model = VideoScanModel()
+        let tmp = NSTemporaryDirectory()
+        // "hang" in the filename → the fake worker never answers, so
+        // the batch wedges exactly the way the BT-music-video incident
+        // did — cancel() must cut through it.
+        let p = tmp + "vs-worker-hang-cancel.mp4"
+        FileManager.default.createFile(atPath: p, contents: Data("x".utf8))
+        defer { try? FileManager.default.removeItem(atPath: p) }
+        let rec = makeRecord(fullPath: p)
+        model.records = [rec]
+        model.scanTargets = [makeReachableTarget(at: tmp)]
+
+        let vlm = StubDossierRunner(modelID: "stub-d-cancel")
+        let orch = CaptionOrchestrator(runnerFactory: { vlm })
+        let worker = makeWorkerTranscriber(script: script)
+
+        let batch = Task {
+            await orch.startCatalogWideDossier(model: model, transcriber: worker)
+        }
+        // Wait until the worker is actually mid-transcription.
+        let spawned = await eventually { await worker.isWorkerRunning }
+        #expect(spawned, "worker should be transcribing the hang file")
+
+        orch.cancel()
+        await batch.value
+
+        let died = await eventually { await !worker.isWorkerRunning }
+        #expect(died, "cancel() must terminate the worker subprocess")
+        // VLM-only banking on cancel: extraction landed, transcript didn't.
+        #expect(rec.dossierProcessedAt != nil, "VLM result must still bank when whisper is cancelled")
+        #expect(rec.audioTranscript == nil || rec.audioTranscript?.isEmpty == true)
+    }
+
+    // MARK: Isolation — test-host guard
+
+    @Test("test-host guard: nil transcriber does NOT auto-resolve the worker script (which exists in this repo)")
+    func testHostGuardBlocksAutoResolution() async {
+        // NEW risk this feature adds: scripts/whisper_worker.py ships
+        // in the repo, so on any dev box with venv-mlx the resolution
+        // closure WOULD now build a real worker — the isTestHost guard
+        // is the only thing between this suite and a 244 MB model load.
+        let model = VideoScanModel()
+        let tmp = NSTemporaryDirectory()
+        let p = tmp + "vs-worker-guard.mp4"
+        FileManager.default.createFile(atPath: p, contents: Data("x".utf8))
+        defer { try? FileManager.default.removeItem(atPath: p) }
+        let rec = makeRecord(fullPath: p)
+        model.records = [rec]
+        model.scanTargets = [makeReachableTarget(at: tmp)]
+
+        let vlm = StubDossierRunner(modelID: "stub-d-guard")
+        let orch = CaptionOrchestrator(runnerFactory: { vlm })
+
+        await orch.startCatalogWideDossier(model: model, transcriber: nil)
+
+        #expect(rec.audioTranscriptModel == nil,
+                "no transcriber may auto-resolve inside a test host")
+        #expect(rec.dossierProcessedBy?.contains("+") != true,
+                "stack id must be VLM-only — a '+' means a real transcriber was resolved")
+    }
+}

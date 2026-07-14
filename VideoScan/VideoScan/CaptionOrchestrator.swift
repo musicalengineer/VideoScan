@@ -106,6 +106,19 @@ final class CaptionOrchestrator: ObservableObject {
     var pendingWhisperTask: Task<Void, Never>?
     var pendingWhisperLaneID: UUID?
 
+    /// The active batch's persistent Whisper worker, when the batch's
+    /// transcriber is a `WhisperWorkerTranscriber` (perf item 1,
+    /// 2026-07-14). Registered by the dossier batch loops at start and
+    /// cleared on settle so `cancel()` / `drainForShutdown()` can kill
+    /// the worker subprocess IMMEDIATELY — task cancellation alone only
+    /// reaches the worker when the in-flight pipe await resumes, which
+    /// a hung transcription would postpone indefinitely.
+    ///
+    /// `internal` (not `private`): set by the batch loops
+    /// (CaptionOrchestrator+Dossier) and read by cancel / drain
+    /// (CaptionOrchestrator+Lifecycle) — separate files.
+    var activeWhisperWorker: WhisperWorkerTranscriber?
+
     /// Lane IDs the user explicitly skipped (right-click → Skip). The
     /// pipelined loop checks this set BEFORE dispatching Whisper (so a
     /// skip during the VLM phase short-circuits Whisper) and the

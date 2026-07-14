@@ -141,6 +141,13 @@ extension CaptionOrchestrator {
         captionOrchLog.notice("CaptionOrchestrator cancel requested")
         currentStatus = .cancelling
         activeTask?.cancel()
+        // Persistent Whisper worker (perf item 1, 2026-07-14): task
+        // cancellation only reaches the worker when its in-flight pipe
+        // await resumes — a hung transcription would postpone that
+        // indefinitely. Kill the subprocess NOW so Stop is immediate;
+        // the in-flight file banks VLM-only via the CancellationError
+        // path. Synchronous + idempotent; no-op when no worker.
+        activeWhisperWorker?.terminateWorkerNow()
     }
 
     /// Halt new work without cancelling in-flight tasks. The loop
@@ -207,6 +214,10 @@ extension CaptionOrchestrator {
         shutdownLog.notice("drainForShutdown: cancelling active VLM batch, waiting up to \(String(format: "%.1f", deadline))s")
         currentStatus = .cancelling
         task.cancel()
+        // Kill the persistent Whisper worker immediately — the quit
+        // path must not wait out a transcription that ignores the
+        // task-cancellation SIGTERM chain (same rationale as cancel()).
+        activeWhisperWorker?.terminateWorkerNow()
 
         // Race batch completion against the deadline with two
         // unstructured tasks + a once-latch. Deliberately NOT a
