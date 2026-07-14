@@ -69,6 +69,12 @@ extension CaptionOrchestrator {
         }
 
         let resolvedTranscriber: AudioTranscriber? = transcriber ?? {
+            // Test-host guard: a dev box with venv-mlx installed would
+            // silently upgrade a unit test that reaches this entry
+            // point (e.g. via the analyze queue) to a REAL Python
+            // whisper subprocess. Tests that want a transcriber pass
+            // a stub explicitly.
+            guard !TestEnvironment.isTestHost else { return nil }
             let py = ToolLocator.mlxPythonPath
             let sc = ToolLocator.whisperScriptPath
             guard !py.isEmpty, !sc.isEmpty else { return nil }
@@ -181,6 +187,9 @@ extension CaptionOrchestrator {
         // either tool is missing — operator can install via
         // INSTALL.md's venv-mlx instructions to enable.
         let resolvedTranscriber: AudioTranscriber? = transcriber ?? {
+            // Same test-host guard as startAnalyzing — never spawn the
+            // real whisper subprocess from a unit-test host.
+            guard !TestEnvironment.isTestHost else { return nil }
             let py = ToolLocator.mlxPythonPath
             let sc = ToolLocator.whisperScriptPath
             guard !py.isEmpty, !sc.isEmpty else {
