@@ -7,6 +7,18 @@
 // RateTrackerTests — and DossierDashboardView's @State could reach
 // them; the move is purely mechanical, no access changes.
 // (Swift file split ≈ C++ splitting a translation unit.)
+//
+// 2026-07-14 (perf/dashboard-render):
+//   - CatalogCoverage gained Equatable so the dashboard can compare
+//     before writing @State (a write of an equal value still
+//     invalidates the body).
+//   - RateTracker.record is sample-gated: a tick reporting the SAME
+//     count as the last sample no longer appends — an idle dashboard
+//     tick leaves the tracker value-identical, so the @State write
+//     (and the body re-evaluation it forces) is skipped entirely.
+//   - pfRefreshVolumeCoverage is the extracted, testable core of the
+//     view's refreshCounts: returns nil when NOTHING changed so the
+//     caller performs zero @State writes on a no-change tick.
 
 import SwiftUI
 
@@ -14,7 +26,8 @@ import SwiftUI
 
 /// `internal` (not `private`) so unit tests in CatalogCoverageTests
 /// can exercise the channel-counting logic without spinning a window.
-struct CatalogCoverage {
+/// Equatable (all-Int synthesis) for the compare-before-write gate.
+struct CatalogCoverage: Equatable {
     /// All non-junk, non-purged records on this volume. Inflated by
     /// DRM and missing-on-disk records — kept around because the
     /// catalog still has metadata about them, but the orchestrator
@@ -173,12 +186,23 @@ struct RateTracker: Equatable {
     /// If the count went down (e.g. catalog reset), we drop the
     /// stale samples and start fresh — otherwise a reset would
     /// produce a negative rate which is meaningless to the user.
+    ///
+    /// Sample-gated (2026-07-14 render-loop fix): a tick reporting the
+    /// SAME count as the last sample appends nothing — the pre-fix
+    /// behavior appended an identical-count sample every second, which
+    /// made every dashboard tick a guaranteed @State mutation even on
+    /// a fully idle catalog. Trimming still runs against `at`, so a
+    /// stalled volume's rate still decays to "—" as its samples age
+    /// out of the window (and each trim IS a value change, so the
+    /// caller's compare-before-write gate lets those through).
     mutating func record(count: Int, at: Date) {
         // Detect a reset (count went down) and clear the window.
         if let last = samples.last, count < last.count {
             samples.removeAll()
         }
-        samples.append(Sample(count: count, at: at))
+        if samples.last?.count != count {
+            samples.append(Sample(count: count, at: at))
+        }
         // Trim anything outside the window.
         let cutoff = at.addingTimeInterval(-window)
         samples.removeAll { $0.at < cutoff }
@@ -264,4 +288,71 @@ struct RateTracker: Equatable {
         let leftover = Int(hours.rounded()) - days * 24
         return leftover > 0 ? "~\(days)d \(leftover)h" : "~\(days)d"
     }
+}
+
+// MARK: - Refresh core (extracted from the view, 2026-07-14)
+
+/// The result of one coverage-refresh pass — the three pieces of
+/// @State the dashboard owns. Returned ONLY when something changed.
+struct DossierCoverageRefreshResult {
+    let coverage: [String: CatalogCoverage]
+    let rates: [String: RateTracker]
+    let lastKey: [Int]
+}
+
+/// The testable core of DossierDashboardView.refreshCounts.
+///
+/// Contract (the render-loop fix, invalidation source #2): a 1 s tick
+/// where the catalog signature (`key`) is unchanged AND every rate
+/// tracker is value-identical returns **nil**, and the caller performs
+/// ZERO @State writes — the tick costs O(volumes) tracker checks and
+/// invalidates nothing. The O(records × volumes) refilter runs only
+/// when `key` moved (same gate as before; the gate itself is
+/// unchanged, the WRITES are now conditional too).
+///
+/// NO O(records) work happens in the view body — this runs from the
+/// timer callback, and only when the key moves.
+@MainActor
+func pfRefreshVolumeCoverage(
+    coverage: [String: CatalogCoverage],
+    rates: [String: RateTracker],
+    lastKey: [Int],
+    key: [Int],
+    volumePrefixes: [String],
+    records: [VideoRecord],
+    scope: AnalysisScope,
+    now: Date
+) -> DossierCoverageRefreshResult? {
+    let catalogChanged = key != lastKey
+    var newCoverage = coverage
+    var newRates = rates
+    var changed = catalogChanged   // a moved key must persist even if
+                                   // counts happen to come out equal —
+                                   // otherwise every later tick re-runs
+                                   // the O(records) refilter.
+    for prefix in volumePrefixes {
+        let cov: CatalogCoverage
+        if catalogChanged || newCoverage[prefix] == nil {
+            let subset = records.filter { $0.fullPath.hasPrefix(prefix) }
+            let fresh = CatalogCoverage(records: subset, scope: scope)
+            if newCoverage[prefix] != fresh {
+                newCoverage[prefix] = fresh
+                changed = true
+            }
+            cov = fresh
+        } else {
+            cov = newCoverage[prefix] ?? .empty
+        }
+        var tracker = newRates[prefix] ?? RateTracker()
+        let before = newRates[prefix]
+        tracker.record(count: cov.dossiered, at: now)
+        if before == nil || tracker != before {
+            newRates[prefix] = tracker
+            changed = true
+        }
+    }
+    guard changed else { return nil }
+    return DossierCoverageRefreshResult(coverage: newCoverage,
+                                        rates: newRates,
+                                        lastKey: key)
 }

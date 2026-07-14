@@ -12,28 +12,55 @@ import os
 //      records and per-channel coverage. Updated by both the in-app
 //      orchestrator's writeback AND the live-reload poller that
 //      ingests external worker JSONL deltas via the merger.
-//   2. The orchestrator's live pipeline activity feed
-//      (`activeLanes` / `recentActivity`) — what each stage is
-//      working on right now, plus the trailing history of completed
-//      files with per-stage timings. This replaced the per-host
-//      "Participating Computers" fleet panel (2026-06-12); the
-//      FleetStats/WorkerHost machinery below is kept because the
-//      fleet may return and the parsing logic has unit tests.
+//   2. The orchestrator's dashboard SNAPSHOT
+//      (`orchestrator.dashboardSnapshot`, ≤2 Hz, Equatable-gated) —
+//      lanes, completed history, and the queue/parked/paused state.
 //
-// The dial reflects catalog-wide progress (dossier'd / total) rather
-// than the in-app sweep's per-batch progress, because in practice the
-// external worker fleet does most of the long-running work. Start/Stop
-// remain wired to the in-app orchestrator for ad-hoc sweeps from
-// within the app.
+// RENDER-LOOP FIX (perf/dashboard-render, 2026-07-14). This view used
+// to observe CaptionOrchestrator and VideoScanModel wholesale via
+// @EnvironmentObject: every per-record @Published write (skip storms,
+// lane churn, live counters, catalog mutations) re-evaluated this
+// body — 6.2 CPU-hours over a 9.8 h batch, pegging the MainActor and
+// starving the orchestrator's inter-file hops. Now:
+//   - `model` and `orchestrator` are held as PLAIN references — reads
+//     and action calls only, no observation. (≈ C++ holding a pointer
+//     vs. subscribing to its change signal.)
+//   - The ONLY observed object is DossierDashboardSnapshot (≤2 Hz).
+//   - The 1 s timer's refreshCounts performs ZERO @State writes when
+//     nothing changed (pfRefreshVolumeCoverage returns nil), so an
+//     idle tick invalidates nothing.
+//   - NO O(records) work in this body — the O(records × volumes)
+//     refilter runs in the timer callback, gated on `coverageKey`.
 //
 // Opened via Window menu → Dossier Dashboard (⌘⇧O) or
 // `openWindow(id: "dossier")`.
 
 struct DossierDashboardView: View {
 
-    @EnvironmentObject var captionOrchestrator: CaptionOrchestrator
-    @EnvironmentObject var model: VideoScanModel
+    /// Catalog access (records / scanTargets) and navigation. Plain
+    /// reference — deliberately NOT @ObservedObject/@EnvironmentObject:
+    /// the dashboard reads it on its own 1 s tick instead of being
+    /// invalidated by every catalog publish.
+    let model: VideoScanModel
+
+    /// Action target (Analyze / Pause / Stop / queue verbs / scope).
+    /// Plain reference — never observed; all rendered orchestrator
+    /// state comes through `snapshot`.
+    let orchestrator: CaptionOrchestrator
+
+    /// The ONE observed object. See DossierDashboardSnapshot.swift.
+    @ObservedObject var snapshot: DossierDashboardSnapshot
+
     @AppStorage(CaptionOrchestrator.autoResumePrefsKey) private var autoResume: Bool = false
+
+    init(model: VideoScanModel, orchestrator: CaptionOrchestrator) {
+        self.model = model
+        self.orchestrator = orchestrator
+        // Property-wrapper backing init (`_snapshot` ≈ the wrapper
+        // struct itself, not the wrapped value — C++ analogy: member
+        // initializer for the wrapper object).
+        self._snapshot = ObservedObject(wrappedValue: orchestrator.dashboardSnapshot)
+    }
 
     /// Per-volume coverage — keyed by `searchPath`. Refreshed by the
     /// 1s tick. Each value mirrors what CatalogCoverage exposes for the
@@ -55,21 +82,23 @@ struct DossierDashboardView: View {
     /// volumes) refilter now runs only when the catalog actually changed
     /// (see `coverageKey`) — at 103k records the unconditional per-second
     /// refilter was 52% of an idle main-thread sample (beachball fix).
+    /// 2026-07-14: a no-change tick now also performs ZERO @State
+    /// writes (the writes themselves used to invalidate the body 1/s).
     private let refreshTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
     /// Change signature for the coverage refilter gate. Moves when any
     /// catalog mutation lands (dossier writes bump the debounced
     /// dossier-counts recompute; array-level changes move `records.count`;
     /// in-place path rewrites bump `volumeAggregatesRevision`), when the
-    /// visible volume-row set changes (mount/unmount/retire), or when
-    /// the Analysis Scope changes (the scope decides `eligible`, so a
-    /// toggle flip must refilter).
-    private var coverageKey: [Int] {
+    /// visible volume-row set changes (mount/unmount/retire — membership,
+    /// not just count), or when the Analysis Scope changes (the scope
+    /// decides `eligible`, so a toggle flip must refilter).
+    private func coverageKey(for volumes: [CatalogScanTarget]) -> [Int] {
         [model.dossierCountsRecomputeCount,
          model.volumeAggregatesRevision,
          model.records.count,
-         reachableVolumes.count,
-         captionOrchestrator.analysisScope.hashValue]
+         volumes.map(\.searchPath).joined(separator: "|").hashValue,
+         snapshot.state.analysisScope.hashValue]
     }
 
     /// Last signature we refiltered for. `-1` sentinel forces the first
@@ -115,30 +144,34 @@ struct DossierDashboardView: View {
             // drill-down focus below). 2026-07-14: Analyze while
             // another volume runs ENQUEUES (FIFO) instead of being
             // disabled, and Analyze All lines up every volume with
-            // remaining work.
+            // remaining work. Row state (analyzing / paused /
+            // Queued (#n) / parked banners) renders from the snapshot
+            // — same definitions as the orchestrator's own helpers,
+            // ≤500 ms staleness, direct user actions echo immediately
+            // via `intent(_:)`.
             VStack(spacing: 6) {
                 HStack {
-                    if captionOrchestrator.queuePaused
-                        && !captionOrchestrator.queuedVolumePrefixes.isEmpty {
+                    if snapshot.state.queuePaused
+                        && !snapshot.state.queuedVolumePrefixes.isEmpty {
                         // Queue restored from the last session with
                         // Resume on Launch OFF — visible, never
                         // auto-started, never silently dropped.
-                        Label("\(captionOrchestrator.queuedVolumePrefixes.count) volume(s) waiting from last session",
+                        Label("\(snapshot.state.queuedVolumePrefixes.count) volume(s) waiting from last session",
                               systemImage: "pause.circle")
                             .font(.system(size: 11))
                             .foregroundColor(.orange)
                         Button("Resume the Line") {
-                            captionOrchestrator.resumeQueue(model: model)
+                            intent { orchestrator.resumeQueue(model: model) }
                         }
                         .controlSize(.small)
                     }
-                    if !captionOrchestrator.parkedVolumePrefixes.isEmpty {
+                    if !snapshot.state.parkedVolumePrefixes.isEmpty {
                         // Queued volumes whose drive is offline (QA F2):
                         // they hold their place in line but can't run —
                         // and their row may not render at all (the row
                         // list is reachable volumes only), so this
                         // banner is their visible state.
-                        Label("\(captionOrchestrator.parkedVolumePrefixes.count) volume(s) in line waiting for their drive to reconnect",
+                        Label("\(snapshot.state.parkedVolumePrefixes.count) volume(s) in line waiting for their drive to reconnect",
                               systemImage: "externaldrive.badge.exclamationmark")
                             .font(.system(size: 11))
                             .foregroundColor(.orange)
@@ -164,20 +197,22 @@ struct DossierDashboardView: View {
                         // isVolumeAnalyzing (not a raw currentVolumePrefix
                         // check) so the dequeue→batch-start dispatch
                         // window reads "analyzing", never "Queued" (QA F6).
-                        isAnalyzing: captionOrchestrator.isVolumeAnalyzing(vol.searchPath),
-                        isPaused: captionOrchestrator.currentVolumePrefix == vol.searchPath
-                            && captionOrchestrator.paused,
+                        // Derived from the snapshot with the SAME
+                        // definition as the orchestrator's helper.
+                        isAnalyzing: snapshot.state.isVolumeAnalyzing(vol.searchPath),
+                        isPaused: snapshot.state.isVolumePaused(vol.searchPath),
                         isSelected: selectedVolumePath == vol.searchPath,
-                        queuePosition: captionOrchestrator.queuePosition(of: vol.searchPath),
+                        queuePosition: snapshot.state.queuePosition(of: vol.searchPath),
                         onSelect: { selectedVolumePath = vol.searchPath },
-                        onAnalyze: { captionOrchestrator.enqueueAnalyze(
-                            volumePrefix: vol.searchPath, model: model) },
-                        onDequeue: { captionOrchestrator.dequeueAnalyze(
-                            volumePrefix: vol.searchPath) },
-                        onPause: { captionOrchestrator.pause() },
-                        onResume: { captionOrchestrator.resume() },
-                        onStop: { captionOrchestrator.cancel() }
+                        onAnalyze: { intent { orchestrator.enqueueAnalyze(
+                            volumePrefix: vol.searchPath, model: model) } },
+                        onDequeue: { intent { orchestrator.dequeueAnalyze(
+                            volumePrefix: vol.searchPath) } },
+                        onPause: { intent { orchestrator.pause() } },
+                        onResume: { intent { orchestrator.resume() } },
+                        onStop: { intent { orchestrator.cancel() } }
                     )
+                    .equatable()
                 }
                 if reachableVolumes.isEmpty {
                     Text("No reachable scan-target volumes — register volumes in the catalog tab.")
@@ -232,11 +267,14 @@ struct DossierDashboardView: View {
             //
             // Mirrors what the log shows, cleaned up: one row per
             // in-flight stage, plus the trailing completed-file
-            // history. Both lists come straight from the
-            // orchestrator's @Published activity feed; the 1s
-            // TimelineView clock below re-evaluates ONLY these
-            // subtrees so the elapsed "(Ns)" / "41s ago" readouts
-            // tick without touching the rest of the window.
+            // history. Both lists come from the SNAPSHOT (≤2 Hz); the
+            // 1s TimelineView clock below re-evaluates ONLY the
+            // Now Analyzing subtree so the elapsed "(Ns)" readout
+            // ticks without touching the rest of the window. The
+            // Recently Completed section lost its TimelineView
+            // (2026-07-14): its rows never used the clock — "how long
+            // it took", not "how long ago" — so the second 1 Hz
+            // invalidation source was pure waste.
 
             GroupBox(label: Text("Now Analyzing").font(.headline)) {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
@@ -246,8 +284,9 @@ struct DossierDashboardView: View {
                                 ActiveLaneRow(
                                     lane: drillDownLanes[i],
                                     now: context.date,
-                                    onSkip: { lane in captionOrchestrator.skipLane(lane.id) }
+                                    onSkip: { lane in orchestrator.skipLane(lane.id) }
                                 )
+                                .equatable()
                                 .frame(height: Self.activeLaneRowHeight)
                             } else if drillDownLanes.isEmpty && i == 0 {
                                 Text(idleLabel)
@@ -277,20 +316,22 @@ struct DossierDashboardView: View {
                         .padding(.vertical, 6)
                         .padding(.horizontal, 4)
                 } else {
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        VStack(alignment: .leading, spacing: 6) {
-                            ForEach(drillDownCompleted) { item in
-                                CompletedActivityRow(
-                                    item: item,
-                                    now: context.date,
-                                    onShowInCatalog: { item in showInCatalog(path: item.path) }
-                                )
-                            }
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(drillDownCompleted) { item in
+                            CompletedActivityRow(
+                                item: item,
+                                // `now` is unused by the row (kept for
+                                // signature stability); a constant means
+                                // row equality never churns on it.
+                                now: .distantPast,
+                                onShowInCatalog: { item in showInCatalog(path: item.path) }
+                            )
+                            .equatable()
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 6)
-                        .padding(.horizontal, 4)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 4)
                     .animation(.default, value: drillDownCompleted)
                 }
             }
@@ -335,19 +376,34 @@ struct DossierDashboardView: View {
         }
     }
 
+    // MARK: - Direct-intent echo
+
+    /// Run a user action against the (unobserved) orchestrator, then
+    /// publish the snapshot immediately so the click's result renders
+    /// this frame instead of waiting out the ≤2 Hz coalescing floor.
+    /// Rate stays bounded — clicks aren't a storm, and the immediate
+    /// publish resets the interval clock.
+    private func intent(_ action: () -> Void) {
+        action()
+        orchestrator.publishDashboardSnapshotNow()
+    }
+
     // MARK: - Analysis scope plumbing
 
     /// Two-way binding onto the orchestrator's scope. All writes go
     /// through updateAnalysisScope — the ONE mutation point that does
     /// the explicit save() (@Observable/@Published kill didSet
-    /// persistence; see project_settings_persistence).
+    /// persistence; see project_settings_persistence). The get side
+    /// reads the SNAPSHOT (the observed object) and the set side's
+    /// `intent` echo republishes it synchronously, so the checkbox
+    /// never visually snaps back while the coalescer waits.
     private var includeAudioBinding: Binding<Bool> {
         Binding(
-            get: { captionOrchestrator.analysisScope.includeAudioOnly },
+            get: { snapshot.state.analysisScope.includeAudioOnly },
             set: { on in
-                var scope = captionOrchestrator.analysisScope
+                var scope = snapshot.state.analysisScope
                 scope.includeAudioOnly = on
-                captionOrchestrator.updateAnalysisScope(scope)
+                intent { orchestrator.updateAnalysisScope(scope) }
             }
         )
     }
@@ -362,15 +418,17 @@ struct DossierDashboardView: View {
                 (prefix: $0.searchPath,
                  remaining: (volumeCoverage[$0.searchPath] ?? .empty).remaining)
             },
-            queued: captionOrchestrator.queuedVolumePrefixes,
-            activePrefix: captionOrchestrator.currentStatus.isActive
-                ? captionOrchestrator.currentVolumePrefix : nil
+            queued: snapshot.state.queuedVolumePrefixes,
+            activePrefix: snapshot.state.statusIsActive
+                ? snapshot.state.currentVolumePrefix : nil
         )
     }
 
     private func analyzeAll() {
-        captionOrchestrator.enqueueAnalyzeAll(
-            volumePrefixes: analyzeAllPrefixes, model: model)
+        intent {
+            orchestrator.enqueueAnalyzeAll(
+                volumePrefixes: analyzeAllPrefixes, model: model)
+        }
     }
 
     // MARK: - Per-volume coverage
@@ -381,6 +439,7 @@ struct DossierDashboardView: View {
     /// dossier queue, so what the user sees in a row matches what
     /// Analyze will queue. The scratch volume showing up here was the
     /// 2026-07-08 regression — see ScratchVolumeScreeningTests.
+    /// (Non-observed read of model.scanTargets — O(targets).)
     private var reachableVolumes: [CatalogScanTarget] {
         CatalogScanTarget.analyzeCandidates(model.scanTargets)
     }
@@ -388,34 +447,33 @@ struct DossierDashboardView: View {
     /// Refresh per-volume coverage stats from the catalog, and nudge the
     /// per-volume rate tracker so rate/ETA tick along with the analyzing
     /// volume. The O(records × volumes) refilter is GATED on `coverageKey`
-    /// — a 1 s tick with an unchanged catalog only updates the (cheap)
-    /// rate trackers from cached coverage. At 103k records the ungated
-    /// refilter was the dominant idle main-thread cost (2026-07-05).
+    /// — a 1 s tick with an unchanged catalog only checks the (cheap)
+    /// rate trackers. 2026-07-14: the WRITES are gated too — the core
+    /// (pfRefreshVolumeCoverage) returns nil on a no-change tick and we
+    /// touch no @State at all, so the tick invalidates nothing.
     private func refreshCounts() {
-        let key = coverageKey
-        let catalogChanged = key != lastCoverageKey
-        if catalogChanged { lastCoverageKey = key }
-        for vol in reachableVolumes {
-            let prefix = vol.searchPath
-            let cov: CatalogCoverage
-            if catalogChanged || volumeCoverage[prefix] == nil {
-                let subset = model.records.filter { $0.fullPath.hasPrefix(prefix) }
-                cov = CatalogCoverage(records: subset,
-                                      scope: captionOrchestrator.analysisScope)
-                volumeCoverage[prefix] = cov
-            } else {
-                cov = volumeCoverage[prefix] ?? .empty
-            }
-            var tracker = volumeRates[prefix] ?? RateTracker()
-            tracker.record(count: cov.dossiered, at: Date())
-            volumeRates[prefix] = tracker
+        let vols = reachableVolumes
+        if let out = pfRefreshVolumeCoverage(
+            coverage: volumeCoverage,
+            rates: volumeRates,
+            lastKey: lastCoverageKey,
+            key: coverageKey(for: vols),
+            volumePrefixes: vols.map(\.searchPath),
+            records: model.records,
+            scope: snapshot.state.analysisScope,
+            now: Date()
+        ) {
+            volumeCoverage = out.coverage
+            volumeRates = out.rates
+            lastCoverageKey = out.lastKey
         }
         // Default-select the currently-analyzing volume; fall back to
         // the first volume so the drill-down always shows something.
+        // Already write-gated by the nil/membership check.
         if selectedVolumePath == nil ||
-           !reachableVolumes.contains(where: { $0.searchPath == selectedVolumePath }) {
-            selectedVolumePath = captionOrchestrator.currentVolumePrefix
-                ?? reachableVolumes.first?.searchPath
+           !vols.contains(where: { $0.searchPath == selectedVolumePath }) {
+            selectedVolumePath = snapshot.state.currentVolumePrefix
+                ?? vols.first?.searchPath
         }
     }
 
@@ -441,15 +499,17 @@ struct DossierDashboardView: View {
 
     /// Active lanes filtered to the selected volume. When nothing is
     /// selected, shows all lanes (rare edge case during transitions).
+    /// O(lanes) with lanes ≤ 2 — snapshot values, not live state.
     private var drillDownLanes: [PipelineLane] {
-        guard let sel = selectedVolumePath else { return captionOrchestrator.activeLanes }
-        return captionOrchestrator.activeLanes.filter { $0.path.hasPrefix(sel) }
+        guard let sel = selectedVolumePath else { return snapshot.state.activeLanes }
+        return snapshot.state.activeLanes.filter { $0.path.hasPrefix(sel) }
     }
 
     /// Completed-activity filtered to the selected volume's prefix.
+    /// O(history) with history ≤ 8.
     private var drillDownCompleted: [CompletedActivity] {
-        guard let sel = selectedVolumePath else { return captionOrchestrator.recentActivity }
-        return captionOrchestrator.recentActivity.filter { $0.path.hasPrefix(sel) }
+        guard let sel = selectedVolumePath else { return snapshot.state.recentActivity }
+        return snapshot.state.recentActivity.filter { $0.path.hasPrefix(sel) }
     }
 
     /// Right-click → "Show in Catalog" on an active lane.
@@ -465,7 +525,8 @@ struct DossierDashboardView: View {
     ///    new focus.
     ///
     /// Silently no-ops if the record isn't in the catalog (e.g. a
-    /// lane for a file the merger has since purged).
+    /// lane for a file the merger has since purged). O(records) but
+    /// only on an explicit user click — never per render.
     private func showInCatalog(path: String) {
         guard let rec = model.records.first(where: { $0.fullPath == path }) else { return }
         UserDefaults.standard.set(1, forKey: "selectedTab")

@@ -32,7 +32,25 @@ import SwiftUI
 ///
 /// Tap anywhere on the row body (not the buttons) to select it as the
 /// drill-down focus. The selected row gets a subtle border.
-struct DossierVolumeRow: View {
+///
+/// Equatable + `.equatable()` at the call site (2026-07-14 render-loop
+/// fix): when the dashboard body re-evaluates (snapshot tick), rows
+/// whose displayed inputs didn't change skip their body entirely.
+/// Closures are excluded from `==` (they're fresh every render but
+/// behaviorally identical); `target` compares by identity — content
+/// changes on the target still repaint via its own @ObservedObject
+/// subscription, independent of this parent-diff gate.
+struct DossierVolumeRow: View, Equatable {
+
+    static func == (a: DossierVolumeRow, b: DossierVolumeRow) -> Bool {
+        a.target === b.target
+            && a.coverage == b.coverage
+            && a.isAnalyzing == b.isAnalyzing
+            && a.isPaused == b.isPaused
+            && a.isSelected == b.isSelected
+            && a.queuePosition == b.queuePosition
+    }
+
     @ObservedObject var target: CatalogScanTarget
     let coverage: CatalogCoverage
     let isAnalyzing: Bool
@@ -229,10 +247,19 @@ struct DossierVolumeRow: View {
 /// still being analyzed. The trailing-edge slot now holds the per-row
 /// action (Cancel), which is visible rather than buried in a context
 /// menu. Show in Catalog moved to the completed row's context menu.
-struct ActiveLaneRow: View {
+///
+/// Equatable (2026-07-14): two renders are equal when the lane AND the
+/// DISPLAYED elapsed second match — the enclosing 1 Hz TimelineView
+/// hands us a new `now` every tick, but sub-second differences that
+/// wouldn't change the "(Ns)" readout no longer re-render the row.
+struct ActiveLaneRow: View, Equatable {
     let lane: PipelineLane
     let now: Date
     let onSkip: (PipelineLane) -> Void
+
+    static func == (a: ActiveLaneRow, b: ActiveLaneRow) -> Bool {
+        a.lane == b.lane && a.elapsedSeconds == b.elapsedSeconds
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
@@ -351,10 +378,18 @@ private struct ChannelIndicator: View {
 /// "how long it took". The `now: Date` argument is unused but kept so
 /// the enclosing TimelineView can still trigger redraws without a
 /// signature change to every callsite.
-struct CompletedActivityRow: View {
+///
+/// Equatable (2026-07-14): equality is the item alone — `now` is
+/// deliberately ignored (the row shows "how long it took", never "how
+/// long ago"), so clock ticks can't re-render completed history.
+struct CompletedActivityRow: View, Equatable {
     let item: CompletedActivity
     let now: Date
     let onShowInCatalog: (CompletedActivity) -> Void
+
+    static func == (a: CompletedActivityRow, b: CompletedActivityRow) -> Bool {
+        a.item == b.item
+    }
 
     var body: some View {
         HStack(spacing: 10) {

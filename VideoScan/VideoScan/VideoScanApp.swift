@@ -512,9 +512,14 @@ struct VideoScanApp: App {
         .defaultPosition(.topTrailing)
 
         Window("Analyze Dashboard", id: "dossier") {
-            DossierDashboardView()
-                .environmentObject(catalogModel)
-                .environmentObject(captionOrchestrator)
+            // Direct references, NOT .environmentObject — the dashboard
+            // deliberately holds model/orchestrator unobserved and
+            // observes only the ≤2 Hz dashboardSnapshot (2026-07-14
+            // render-loop fix; see DossierDashboardSnapshot.swift).
+            // Re-adding environmentObject here would silently re-couple
+            // the window to every @Published write.
+            DossierDashboardView(model: catalogModel,
+                                 orchestrator: captionOrchestrator)
         }
         .windowResizability(.contentSize)
         .defaultPosition(.topTrailing)
