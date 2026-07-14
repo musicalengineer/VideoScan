@@ -19,6 +19,12 @@ final class VideoScanModel: ObservableObject {
             noteCatalogChangedForDossierCounts()
             noteVolumeStatusesStale()
             noteVolumeRenameCandidatesStale()
+            // Path-index staleness (ride-along 2026-07-14): fullPaths
+            // PERSIST across rescans, so a same-count array swap would
+            // stale-HIT the path map and hand back an orphaned record
+            // — a dossier writeback to it would be silently lost. O(1)
+            // un-latch; cheap enough for per-file live-reload appends.
+            recordPathIndex.invalidate()
         }
     }
     /// True when the app is running on a non-master Mac (viewer mode).
@@ -448,6 +454,23 @@ final class VideoScanModel: ObservableObject {
     /// several times per arrow-key step.
     func record(forID id: UUID) -> VideoRecord? {
         recordIndex.record(forID: id, in: records)
+    }
+
+    /// O(1) fullPath → record lookup (perf ride-along 2026-07-14); see
+    /// RecordPathIndex (CatalogPerfMemo.swift) for the staleness
+    /// contract — invalidated by records.didSet AND keyed on
+    /// volumeAggregatesRevision for in-place fullPath rewrites.
+    /// Private index — go through record(forPath:).
+    private let recordPathIndex = RecordPathIndex()
+
+    /// Fast per-file record resolution for the dossier writeback path
+    /// and single-file Analyze batches. Replaces per-file
+    /// `records.first(where: { $0.fullPath == path })` scans — on a
+    /// ~103k-record catalog an N-file multi-select Analyze paid N full
+    /// passes on the MainActor.
+    func record(forPath path: String) -> VideoRecord? {
+        recordPathIndex.record(forPath: path, in: records,
+                               revision: volumeAggregatesRevision)
     }
 
     /// Drop any cached thumbnail under `path`. Called from the rename path

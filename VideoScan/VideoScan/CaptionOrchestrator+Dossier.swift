@@ -99,10 +99,28 @@ extension CaptionOrchestrator {
         // Scope gate sits right beside those gates — pure catalog
         // metadata, ZERO disk I/O, so out-of-scope files (music, camera
         // raws) never reach the per-file AVAsset DRM probe below.
-        let base = pfCatalogWideMetadataCandidates(
-            records: model.records,
-            reachableVolumePaths: [volumePrefix]
-        )
+        //
+        // Single-file fast path (ride-along 2026-07-14): an AnalyzeJob
+        // keys its batch by the record's EXACT fullPath. The old code
+        // still ran the candidate predicate over ALL records per job —
+        // an N-file multi-select paid N full ~103k-record passes on
+        // the MainActor. When the prefix resolves to a cataloged file
+        // via the O(1) path index, gate just that ONE record through
+        // the SAME predicate (junk/purge/DRM/lifecycle semantics
+        // unchanged). Volume prefixes don't match a record's exact
+        // fullPath, so they fall through to the full pass as before.
+        let base: [VideoRecord]
+        if let exact = model.record(forPath: volumePrefix) {
+            base = pfCatalogWideMetadataCandidates(
+                records: [exact],
+                reachableVolumePaths: [volumePrefix]
+            )
+        } else {
+            base = pfCatalogWideMetadataCandidates(
+                records: model.records,
+                reachableVolumePaths: [volumePrefix]
+            )
+        }
         let candidates = ignoringScope
             ? base
             : pfAnalysisScopeCandidates(base, scope: analysisScope)

@@ -52,7 +52,10 @@ extension VideoScanModel {
         whisperModel: String?
     ) -> Bool {
         guard !path.isEmpty, !vlmModel.isEmpty else { return false }
-        guard let record = records.first(where: { $0.fullPath == path }) else {
+        // O(1) via the path index (ride-along 2026-07-14) — this runs
+        // once PER FILE inside every dossier batch, and the old linear
+        // scan was ~103k iterations per call on Rick's catalog.
+        guard let record = record(forPath: path) else {
             return false
         }
 

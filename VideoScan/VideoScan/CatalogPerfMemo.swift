@@ -8,7 +8,8 @@
 // only when their inputs actually change.
 //
 // All types here are PURE — no SwiftUI, no model references — so the
-// invalidation logic is unit-testable (CatalogPerfMemoTests).
+// invalidation logic is unit-testable (CatalogPerfMemoTests /
+// RecordPathIndexTests).
 
 import Foundation
 
@@ -120,6 +121,79 @@ final class RecordIDIndex {
         map = Dictionary(records.map { ($0.id, $0) },
                          uniquingKeysWith: { first, _ in first })
         builtForCount = records.count
+    }
+}
+
+// MARK: - RecordPathIndex
+
+/// O(1) `fullPath → VideoRecord` lookup over the model's records array
+/// (perf ride-along 2026-07-14). Replaces the per-file
+/// `records.first(where: { $0.fullPath == path })` scan in applyDossier
+/// and the full-catalog candidate pass in single-file startAnalyzing —
+/// on Rick's ~103k-record catalog every multi-selected Analyze file paid
+/// two O(records) MainActor passes.
+///
+/// Staleness contract — STRICTER than RecordIDIndex, because unlike ids,
+/// paths persist across rescans (a rescan builds NEW VideoRecord
+/// instances with the SAME fullPaths, so a same-count swap would HIT the
+/// stale map and hand back an orphaned instance — a writeback to it
+/// would be silently lost). Three layers:
+///
+///   1. Rebuild when count OR `revision` (the model's
+///      volumeAggregatesRevision) differs from what the map was built
+///      against — covers add/remove and bulk in-place fullPath rewrites.
+///   2. The model's `records.didSet` calls `invalidate()` — covers
+///      array replacement (rescan/import/restore) even at identical
+///      count with no revision bump. O(1): just un-latches the version.
+///   3. Self-verifying hit: an entry is returned only if its record's
+///      CURRENT fullPath still equals the queried path (VideoRecord is
+///      a class — `hit.fullPath` reads live state), plus the same
+///      miss-fallback linear-scan-then-rebuild as RecordIDIndex.
+///
+/// NOT thread-safe — designed to live on the @MainActor model.
+final class RecordPathIndex {
+    private var map: [String: VideoRecord] = [:]
+    private var builtForCount = -1
+    private var builtForRevision = Int.min
+
+    /// Rebuild counter, exposed for unit tests.
+    private(set) var rebuildCount = 0
+
+    func record(forPath path: String,
+                in records: [VideoRecord],
+                revision: Int) -> VideoRecord? {
+        if records.count != builtForCount || revision != builtForRevision {
+            rebuild(records, revision: revision)
+        }
+        if let hit = map[path], hit.fullPath == path {
+            return hit
+        }
+        // Miss (or a hit whose record's path moved under us): one
+        // linear scan disambiguates; if found, the index was stale —
+        // rebuild. Worst case degrades to the pre-index behavior
+        // instead of returning a stale/missing answer.
+        if let found = records.first(where: { $0.fullPath == path }) {
+            rebuild(records, revision: revision)
+            return found
+        }
+        return nil
+    }
+
+    /// O(1) un-latch — next lookup rebuilds. Called from the model's
+    /// `records.didSet`, which fires on every array-level mutation
+    /// including per-file live-reload appends, so this must stay cheap
+    /// (no map churn here; the rebuild replaces it wholesale).
+    func invalidate() {
+        builtForCount = -1
+        builtForRevision = Int.min
+    }
+
+    private func rebuild(_ records: [VideoRecord], revision: Int) {
+        rebuildCount += 1
+        map = Dictionary(records.map { ($0.fullPath, $0) },
+                         uniquingKeysWith: { first, _ in first })
+        builtForCount = records.count
+        builtForRevision = revision
     }
 }
 
