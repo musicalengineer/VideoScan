@@ -174,6 +174,10 @@ final class CaptionOrchestrator: ObservableObject {
             self.queuePaused = !restoredQueue.isEmpty
                 && !defaults.bool(forKey: Self.autoResumePrefsKey)
         }
+        // Dashboard snapshot wiring LAST — publishes the initial state
+        // (restored queue / paused flag) and subscribes the coalesced
+        // ≤2 Hz forwarder. See DossierDashboardSnapshot.swift.
+        wireDashboardSnapshot()
     }
 
     // MARK: - Public API
@@ -296,6 +300,53 @@ final class CaptionOrchestrator: ObservableObject {
     /// log-once latch so a parked volume doesn't re-log on every
     /// settle's re-advance.
     @Published var parkedVolumePrefixes: Set<String> = []
+
+    // MARK: - Dashboard snapshot (perf/dashboard-render 2026-07-14)
+    //
+    // The dashboard observes ONLY this snapshot object — never the
+    // orchestrator directly — so per-record @Published churn (skip
+    // storms, lane mutations, live counters) can't invalidate the
+    // dashboard's view graph. Publication machinery lives in
+    // DossierDashboardSnapshot.swift; the stored state lives here
+    // because a cross-file extension can't add stored properties.
+
+    /// The one object DossierDashboardView observes. Owned here so
+    /// the view can grab it off the injected orchestrator reference.
+    let dashboardSnapshot = DossierDashboardSnapshot()
+
+    /// Combine subscription for the objectWillChange → snapshot
+    /// forwarder (set up in wireDashboardSnapshot; lives as long as
+    /// the orchestrator). (`AnyCancellable` ≈ C++ RAII connection
+    /// handle — dropping it disconnects.)
+    var dashboardSnapshotForwarder: AnyCancellable?
+
+    /// Coalescing latch + interval clock for the ≤2 Hz snapshot
+    /// refresh. Plain vars — internal bookkeeping, never observed.
+    var dashboardSnapshotRefreshScheduled = false
+    var lastDashboardSnapshotPublishAt: CFAbsoluteTime = 0
+
+    // MARK: - Progress publish throttle state (perf/dashboard-render)
+    //
+    // publishProgress used to fire an UNTHROTTLED @Published write per
+    // record — a batch skipping thousands of already-analyzed records
+    // machine-gunned objectWillChange. The throttle lives in
+    // CaptionOrchestrator+Captioning.swift; the state lives here.
+
+    /// Values of the newest suppressed progress event, delivered by
+    /// the trailing flush so the last event of a burst is never lost.
+    struct PendingProgress {
+        let idx: Int
+        let total: Int
+        let currentFile: String
+        let started: CFAbsoluteTime
+    }
+    var pendingProgress: PendingProgress?
+    var progressFlushScheduled = false
+    var lastProgressPublishAt: CFAbsoluteTime = 0
+
+    /// 250 ms → ≤4 Hz, matching the AnalyzeJob/MFO forwarder cadence
+    /// (the established throttle template, AnalyzeJob.swift init).
+    static let progressPublishMinInterval: CFAbsoluteTime = 0.25
 
     // MARK: - Per-reason skip/fail counters (batch observability)
     //

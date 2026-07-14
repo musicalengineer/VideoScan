@@ -7,6 +7,17 @@
 // CaptionOrchestrator+Dossier) were widened to internal in the main file.
 // (Swift extension ≈ C++ partial class via free member functions: no new
 // stored state allowed, methods share the same `self`.)
+//
+// 2026-07-14 (perf/dashboard-render): publishProgress is now THROTTLED
+// at the source. It used to write two @Published properties per call,
+// and the dossier loops call it once per record — a batch skipping
+// thousands of already-analyzed files machine-gunned objectWillChange
+// (verified invalidation source #1 of the dashboard render loop that
+// cost 6.2 CPU-hours over a 9.8 h batch). Publishes now go out only
+// when ≥250 ms passed since the last one, PLUS an immediate publish
+// for the terminal event (idx == total) and a trailing flush that
+// delivers the newest suppressed values — the last event of a burst
+// is never lost. Throttle state lives in CaptionOrchestrator.swift.
 
 import Foundation
 import Combine
@@ -146,15 +157,74 @@ extension CaptionOrchestrator {
     /// Publish a progress update with an ETA estimate. Runs on the
     /// MainActor (the class is @MainActor) so the @Published write is
     /// already on the UI thread.
+    ///
+    /// THROTTLED (2026-07-14 render-loop fix). Rules, in order:
+    ///   1. `.cancelling` holds the status exactly as before — the
+    ///      loop tears down on its next cancellation check; only the
+    ///      raw index tracks through.
+    ///   2. Terminal event (idx == total) publishes IMMEDIATELY and
+    ///      unconditionally — batch-end truth is never coalesced away.
+    ///   3. ≥250 ms since the last publish → publish now.
+    ///   4. Otherwise the event is coalesced: its values overwrite
+    ///      `pendingProgress` and ONE trailing Task flushes the newest
+    ///      values at the throttle boundary. A skip storm therefore
+    ///      collapses to ≤4 publishes/s, but the storm's final state
+    ///      (and the "now working on X" label that follows it) lands
+    ///      within 250 ms — never frozen, never lost.
     func publishProgress(
         idx: Int, total: Int, currentFile: String, started: CFAbsoluteTime
     ) {
-        liveCurrentIndex = idx
         // If we were asked to cancel, hold the status as .cancelling
         // even mid-progress — the loop will tear down on the next
         // cancellation check. Don't overwrite the cancelling state with
-        // a stale "running" update.
-        if case .cancelling = currentStatus { return }
+        // a stale "running" update. (Index write preserved from the
+        // pre-throttle behavior; cancel storms are one iteration long.)
+        if case .cancelling = currentStatus {
+            liveCurrentIndex = idx
+            return
+        }
+
+        let now = CFAbsoluteTimeGetCurrent()
+        let isTerminal = idx >= total
+        if isTerminal || now - lastProgressPublishAt >= Self.progressPublishMinInterval {
+            pendingProgress = nil   // this event supersedes any pending one
+            applyProgressNow(idx: idx, total: total, currentFile: currentFile,
+                             started: started, now: now)
+            return
+        }
+
+        // Coalesce: newest values win; one trailing flush delivers them.
+        pendingProgress = PendingProgress(idx: idx, total: total,
+                                          currentFile: currentFile, started: started)
+        guard !progressFlushScheduled else { return }
+        progressFlushScheduled = true
+        let delay = max(0.001, Self.progressPublishMinInterval - (now - lastProgressPublishAt))
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            guard let self else { return }
+            self.progressFlushScheduled = false
+            guard let p = self.pendingProgress else { return }
+            self.pendingProgress = nil
+            // The batch may have settled (.finished) or flipped to
+            // .cancelling while this flush waited — never resurrect a
+            // stale .running status over a terminal one.
+            guard case .running = self.currentStatus else { return }
+            self.applyProgressNow(idx: p.idx, total: p.total,
+                                  currentFile: p.currentFile,
+                                  started: p.started,
+                                  now: CFAbsoluteTimeGetCurrent())
+        }
+    }
+
+    /// The actual (unthrottled) publish — index + status + ETA.
+    /// `internal` so publishProgress's flush Task (same file) and the
+    /// tests can reach it; only publishProgress should call it.
+    func applyProgressNow(
+        idx: Int, total: Int, currentFile: String,
+        started: CFAbsoluteTime, now: CFAbsoluteTime
+    ) {
+        lastProgressPublishAt = now
+        liveCurrentIndex = idx
 
         let done = idx
         let progress = total > 0 ? Double(done) / Double(total) : 0.0
@@ -164,7 +234,7 @@ extension CaptionOrchestrator {
         // per file once the model is loaded, so this is good enough.
         // Stage 6c may refine if Rick wants a better estimator.
         let etaSec: Int?
-        let elapsed = CFAbsoluteTimeGetCurrent() - started
+        let elapsed = now - started
         if done > 0, done < total, elapsed > 1.0 {
             let perFile = elapsed / Double(done)
             let remaining = perFile * Double(total - done)

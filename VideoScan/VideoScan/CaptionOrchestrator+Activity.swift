@@ -37,6 +37,11 @@ extension CaptionOrchestrator {
         // clearing the set keeps `userSkippedLaneIDs.contains(id)`
         // semantics honest under repeated batches.
         userSkippedLaneIDs.removeAll()
+        // Drop any coalesced progress event left over from the PREVIOUS
+        // batch — its trailing flush (if still scheduled) finds nothing
+        // pending and no-ops instead of writing batch A's stale
+        // current-file/index into batch B (2026-07-14 throttle).
+        pendingProgress = nil
     }
 
     /// User-initiated skip on an in-flight file. Called from the
