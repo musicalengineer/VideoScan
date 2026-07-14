@@ -22,6 +22,9 @@ h2 { font-size: 24px; }
 .participant.present { border-color: #526352; color: var(--ink); }
 .participant.present b { background: var(--green); color: #152015; }
 .participant.future { opacity: .52; border-style: dashed; }
+.audio-toggle { color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 7px 12px; background: transparent; font-size: 12px; }
+.audio-toggle:hover, .audio-toggle[aria-pressed="true"] { color: var(--ink); border-color: var(--green); background: #263026; }
+.audio-toggle:disabled { opacity: .45; cursor: not-allowed; }
 .workspace { max-width: 1500px; min-height: calc(100vh - 150px); margin: auto; display: grid; grid-template-columns: 285px minmax(0, 1fr); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; box-shadow: 0 25px 70px #0005; }
 .topics-panel { padding: 25px 18px 18px; background: #181b19cc; border-right: 1px solid var(--line); display: flex; flex-direction: column; }
 .panel-heading, .conversation-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }

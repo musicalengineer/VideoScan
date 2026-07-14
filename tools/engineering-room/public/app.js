@@ -4,7 +4,11 @@ const elements = {
   topics: $("#topics"), timeline: $("#timeline"), currentTopic: $("#currentTopic"), welcome: $("#welcome"),
   composer: $("#composer"), message: $("#message"), target: $("#target"), send: $("#send"), stop: $("#stop"),
   typing: $("#typing"), status: $("#roomStatus"), pulse: $("#statusPulse"), codex: $("#codexParticipant"), toast: $("#toast"),
+  speak: $("#speakReplies"),
 };
+const speechAvailable = "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
+let speakReplies = speechAvailable && readPreference("engineering-room-speak") === "true";
+updateSpeechButton();
 
 boot().catch(error => showError(error.message));
 
@@ -28,8 +32,10 @@ function receive(event) {
   if (type === "topic.created") { upsert(state.topics, data); if (!state.activeTopicId) state.activeTopicId = data.id; render(); }
   if (type === "topic.updated") { upsert(state.topics, data); render(); }
   if (type === "message.created") {
+    const isNew = !state.messages.some(message => message.id === data.id);
     upsert(state.messages, data);
     renderMessages();
+    if (isNew && data.author === "codex" && speakReplies) speak(data.body);
   }
   if (type === "turn.started") { state.draft = { topicId: data.topicId, text: "" }; setBusy(true); }
   if (type === "agent.message.delta") { if (state.draft) state.draft.text += data.text; renderMessages(); }
@@ -112,6 +118,13 @@ elements.message.addEventListener("keydown", event => {
 });
 elements.target.addEventListener("change", () => { elements.send.disabled = state.busy && elements.target.value === "codex"; });
 elements.stop.addEventListener("click", () => api("/api/turns/current/interrupt", { method: "POST", body: {} }).catch(error => showError(error.message)));
+elements.speak.addEventListener("click", () => {
+  if (!speechAvailable) return;
+  speakReplies = !speakReplies;
+  writePreference("engineering-room-speak", String(speakReplies));
+  if (!speakReplies) window.speechSynthesis.cancel();
+  updateSpeechButton();
+});
 $("#newTopic").addEventListener("click", async () => {
   const title = window.prompt("New topic name:");
   if (!title?.trim()) return;
@@ -134,5 +147,18 @@ async function api(url, options = {}) {
 }
 
 function upsert(list, value) { const index = list.findIndex(item => item.id === value.id); if (index === -1) list.push(value); else list[index] = value; }
+function updateSpeechButton() {
+  elements.speak.disabled = !speechAvailable;
+  elements.speak.setAttribute("aria-pressed", String(speakReplies));
+  elements.speak.textContent = speechAvailable ? `Read replies aloud: ${speakReplies ? "on" : "off"}` : "Spoken replies unavailable";
+}
+function speak(text) {
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.rate = 1;
+  window.speechSynthesis.speak(utterance);
+}
+function readPreference(key) { try { return localStorage.getItem(key); } catch { return null; } }
+function writePreference(key, value) { try { localStorage.setItem(key, value); } catch { /* Current-tab behavior still works. */ } }
 let toastTimer;
 function showError(message) { clearTimeout(toastTimer); elements.toast.textContent = message; elements.toast.hidden = false; toastTimer = setTimeout(() => { elements.toast.hidden = true; }, 7000); }

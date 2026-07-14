@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { request as httpRequest } from "node:http";
 import { createInterface } from "node:readline";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -52,6 +53,36 @@ test("local server requires its token and persists a safe round trip", async t =
   assert.equal(hostile.status, 403);
 });
 
+test("LAN mode accepts an allowed household host and rejects hostile hosts", async t => {
+  const port = 28000 + Math.floor(Math.random() * 8000);
+  const token = "automated-lan-room-token-value-12345";
+  const child = spawn(process.execPath, [join(root, "src/server.mjs")], {
+    cwd: root,
+    env: {
+      ...process.env,
+      CODEX_BIN: join(here, "fake-codex.mjs"),
+      ENGINEERING_ROOM_LAN: "1",
+      ENGINEERING_ROOM_PORT: String(port),
+      ENGINEERING_ROOM_TOKEN: token,
+      ENGINEERING_ROOM_PUBLIC_HOSTS: "room.test",
+      ENGINEERING_ROOM_DB: join(mkdtempSync(join(tmpdir(), "engineering-room-lan-")), "room.sqlite3"),
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  t.after(() => child.kill("SIGTERM"));
+  await waitForLine(child.stdout, "household LAN");
+
+  const login = await rawRequest({ port, path: `/?token=${token}`, host: `room.test:${port}` });
+  assert.equal(login.status, 302);
+  const cookie = login.headers["set-cookie"][0].split(";")[0];
+  const accepted = await rawRequest({ port, path: "/api/bootstrap", host: `room.test:${port}`, origin: `http://room.test:${port}`, cookie });
+  assert.equal(accepted.status, 200);
+  const hostileHost = await rawRequest({ port, path: "/api/bootstrap", host: `evil.example:${port}`, cookie });
+  assert.equal(hostileHost.status, 403);
+  const malformedHost = await rawRequest({ port, path: "/api/bootstrap", host: "[broken", cookie });
+  assert.equal(malformedHost.status, 403);
+});
+
 function waitForLine(stream, expected) {
   return new Promise((resolve, reject) => {
     const lines = createInterface({ input: stream });
@@ -68,4 +99,19 @@ async function waitFor(operation, timeoutMs = 3000) {
     await new Promise(resolve => setTimeout(resolve, 25));
   }
   throw new Error("Timed out waiting for room state.");
+}
+
+function rawRequest({ port, path, host, origin, cookie }) {
+  return new Promise((resolve, reject) => {
+    const headers = { Host: host };
+    if (origin) headers.Origin = origin;
+    if (cookie) headers.Cookie = cookie;
+    const request = httpRequest({ hostname: "127.0.0.1", port, path, headers }, response => {
+      const chunks = [];
+      response.on("data", chunk => chunks.push(chunk));
+      response.on("end", () => resolve({ status: response.statusCode, headers: response.headers, body: Buffer.concat(chunks).toString("utf8") }));
+    });
+    request.on("error", reject);
+    request.end();
+  });
 }

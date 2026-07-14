@@ -4,17 +4,24 @@ import { existsSync } from "node:fs";
 import { resolve, dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
+import { hostname as machineHostname, networkInterfaces } from "node:os";
 import { RoomDatabase } from "./database.mjs";
 import { CodexAppServerClient } from "./codex-client.mjs";
 import { RoomAgent } from "./room-agent.mjs";
+import { loadOrCreateAccessToken } from "./access-token.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const toolRoot = resolve(here, "..");
 const repoRoot = resolve(toolRoot, "../..");
 const publicRoot = join(toolRoot, "public");
 const port = parsePort(process.env.ENGINEERING_ROOM_PORT ?? "8765");
-const host = "127.0.0.1";
-const sessionToken = process.env.ENGINEERING_ROOM_TOKEN || randomBytes(24).toString("base64url");
+const lanMode = process.env.ENGINEERING_ROOM_LAN === "1";
+const host = lanMode ? "0.0.0.0" : "127.0.0.1";
+const lanAddresses = discoverLanAddresses();
+const allowedHosts = buildAllowedHosts();
+const sessionToken = process.env.ENGINEERING_ROOM_TOKEN || (lanMode
+  ? loadOrCreateAccessToken(process.env.ENGINEERING_ROOM_TOKEN_FILE || join(toolRoot, "var", "access-token"))
+  : randomBytes(24).toString("base64url"));
 const codexBin = findCodex();
 const database = new RoomDatabase(process.env.ENGINEERING_ROOM_DB || join(toolRoot, "var", "engineering-room.sqlite3"));
 const codex = new CodexAppServerClient({ codexBin, cwd: repoRoot });
@@ -27,8 +34,8 @@ agent.on("event", event => publish(event.type, event.data));
 const server = createServer(async (request, response) => {
   try {
     applySecurityHeaders(response);
-    const url = new URL(request.url, `http://${request.headers.host ?? `${host}:${port}`}`);
     if (!validHost(request.headers.host) || !validOrigin(request.headers.origin)) return json(response, 403, { error: "Local room request rejected." });
+    const url = new URL(request.url, `http://${request.headers.host}`);
 
     if (request.method === "GET" && url.pathname === "/" && url.searchParams.has("token")) {
       if (url.searchParams.get("token") !== sessionToken) return text(response, 403, "Invalid room token.");
@@ -96,8 +103,10 @@ const server = createServer(async (request, response) => {
 });
 
 server.listen(port, host, async () => {
-  const roomUrl = `http://${host}:${port}/?token=${encodeURIComponent(sessionToken)}`;
-  console.log(`\nEngineering Room is ready:\n${roomUrl}\n`);
+  const roomUrls = lanMode
+    ? lanAddresses.map(address => `http://${address}:${port}/?token=${encodeURIComponent(sessionToken)}`)
+    : [`http://127.0.0.1:${port}/?token=${encodeURIComponent(sessionToken)}`];
+  console.log(`\nEngineering Room is ready${lanMode ? " for the household LAN" : ""}:\n${roomUrls.join("\n")}\n`);
   try {
     await agent.initialize();
     publish("codex.connection", { state: "connected" });
@@ -139,8 +148,19 @@ function authorized(request) {
   return (request.headers.cookie ?? "").split(/;\s*/).some(value => value === `engineering_room=${sessionToken}`);
 }
 
-function validHost(value = "") { return value === `${host}:${port}` || value === `localhost:${port}`; }
-function validOrigin(value) { return !value || value === `http://${host}:${port}` || value === `http://localhost:${port}`; }
+function validHost(value = "") {
+  try {
+    const parsed = new URL(`http://${value}`);
+    return Number(parsed.port || 80) === port && allowedHosts.has(parsed.hostname.toLowerCase());
+  } catch { return false; }
+}
+function validOrigin(value) {
+  if (!value) return true;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" && Number(parsed.port || 80) === port && allowedHosts.has(parsed.hostname.toLowerCase());
+  } catch { return false; }
+}
 
 function applySecurityHeaders(response) {
   response.setHeader("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
@@ -175,6 +195,27 @@ function findCodex() {
   if (found) return found;
   if (process.env.CODEX_BIN && !process.env.CODEX_BIN.includes("/")) return process.env.CODEX_BIN;
   throw new Error("Codex was not found. Set CODEX_BIN to its absolute path.");
+}
+
+function discoverLanAddresses() {
+  const addresses = [];
+  for (const entries of Object.values(networkInterfaces())) {
+    for (const entry of entries ?? []) {
+      if (entry.family === "IPv4" && !entry.internal && isPrivateAddress(entry.address)) addresses.push(entry.address);
+    }
+  }
+  return [...new Set(addresses)];
+}
+
+function buildAllowedHosts() {
+  const name = machineHostname().toLowerCase();
+  const configured = (process.env.ENGINEERING_ROOM_PUBLIC_HOSTS ?? "").split(",").map(value => value.trim().toLowerCase()).filter(Boolean);
+  return new Set(["127.0.0.1", "localhost", name, `${name}.local`, ...lanAddresses, ...configured]);
+}
+
+function isPrivateAddress(address) {
+  const octets = address.split(".").map(Number);
+  return octets[0] === 10 || (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) || (octets[0] === 192 && octets[1] === 168);
 }
 
 function parsePort(value) {

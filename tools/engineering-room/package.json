@@ -6,6 +6,7 @@
   "description": "Local shared engineering room for Rick, Codex, and eventually Claude.",
   "scripts": {
     "start": "node src/server.mjs",
+    "lan": "ENGINEERING_ROOM_LAN=1 node src/server.mjs",
     "dev": "node --watch src/server.mjs",
     "test": "node --test test/*.test.mjs"
   },
