@@ -24,10 +24,10 @@ import SwiftUI
 
 /// One volume in the dashboard. Visible state at a glance:
 ///   - colored dot — gray (idle), blue (analyzing), yellow (paused),
-///     green (100% done), red (error/cancelled — Phase 2)
+///     orange (queued), green (100% done), red (error — Phase 2)
 ///   - filename count / % done
-///   - progress bar
-///   - status word ("idle" / "analyzing" / "paused")
+///   - progress bar + the skip-reason tallies line
+///   - status word ("idle" / "analyzing" / "paused" / "Queued (#n)")
 ///   - action buttons appropriate to the state
 ///
 /// Tap anywhere on the row body (not the buttons) to select it as the
@@ -38,13 +38,15 @@ struct DossierVolumeRow: View {
     let isAnalyzing: Bool
     let isPaused: Bool
     let isSelected: Bool
-    /// True when the orchestrator is idle (no batch running). Drives
-    /// the Analyze button's enabled state — Phase 1 caps concurrency
-    /// at one volume at a time.
-    let canStart: Bool
+    /// 1-based position in the analyze queue, nil when not queued.
+    /// Replaces the old `canStart` disable (2026-07-14): clicking
+    /// Analyze while another volume runs now ENQUEUES this one instead
+    /// of being a dead button — intent is never blocked.
+    let queuePosition: Int?
 
     let onSelect: () -> Void
     let onAnalyze: () -> Void
+    let onDequeue: () -> Void
     let onPause: () -> Void
     let onResume: () -> Void
     let onStop: () -> Void
@@ -74,6 +76,18 @@ struct DossierVolumeRow: View {
                 ProgressView(value: progressFraction)
                     .progressViewStyle(.linear)
                     .tint(statusColor)
+                // Skip-reason tallies — where did this volume's files
+                // go? Fixed order so the eye can compare rows;
+                // zero-count buckets drop out to keep the line short.
+                // "Set aside" = Analysis Scope exclusions (reversible,
+                // NOT junk). O(1) — all counts precomputed in
+                // CatalogCoverage off the cached refresh, no per-render
+                // records work.
+                Text(talliesLabel)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .help("Eligible = files Analyze will process · Done = already analyzed · Set aside = audio-only files excluded by the Analysis Scope (flip the toggle below to include them) · Photos = still images (never analyzed here) · DRM = protected files we can't read · Archived = already put away · Junk = marked for cleanup")
             }
             buttonStack
         }
@@ -112,6 +126,21 @@ struct DossierVolumeRow: View {
         "\(coverage.dossiered) / \(coverage.eligible)"
     }
 
+    /// "Eligible 4419 · Done 4228 · Set aside 812 · …" — zero buckets
+    /// drop out (except the two the user always compares).
+    private var talliesLabel: String {
+        var parts = [
+            "Eligible \(coverage.eligible)",
+            "Done \(coverage.dossiered)",
+        ]
+        if coverage.outOfScopeCount > 0 { parts.append("Set aside \(coverage.outOfScopeCount)") }
+        if coverage.photoCount > 0 { parts.append("Photos \(coverage.photoCount)") }
+        if coverage.drmCount > 0 { parts.append("DRM \(coverage.drmCount)") }
+        if coverage.archivedCount > 0 { parts.append("Archived \(coverage.archivedCount)") }
+        if coverage.junkCount > 0 { parts.append("Junk \(coverage.junkCount)") }
+        return parts.joined(separator: " · ")
+    }
+
     /// Status word matches the dot color. The complete-state language
     /// is deliberately affirmative ("Analyze Complete") so the user
     /// knows everything the orchestrator could touch IS touched —
@@ -119,6 +148,7 @@ struct DossierVolumeRow: View {
     private var statusLabel: String {
         if isPaused { return "paused" }
         if isAnalyzing { return "analyzing" }
+        if let n = queuePosition { return "Queued (#\(n))" }
         if coverage.eligible > 0 && coverage.dossiered >= coverage.eligible {
             return "Analyze Complete"
         }
@@ -128,14 +158,16 @@ struct DossierVolumeRow: View {
     private var statusColor: Color {
         if isPaused { return .yellow }
         if isAnalyzing { return .blue }
+        if queuePosition != nil { return .orange }
         if coverage.eligible > 0 && coverage.dossiered >= coverage.eligible {
             return .green
         }
         return .gray
     }
 
-    /// Action buttons on the trailing edge. Three states:
-    ///   - Idle: [Analyze] (disabled if another volume is busy)
+    /// Action buttons on the trailing edge. Four states:
+    ///   - Idle: [Analyze] (enqueues when another volume is busy)
+    ///   - Queued: [Remove from Line]
     ///   - Analyzing: [Pause] [Stop]
     ///   - Paused: [Resume] [Stop]
     @ViewBuilder
@@ -166,6 +198,14 @@ struct DossierVolumeRow: View {
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
+        } else if queuePosition != nil {
+            Button { onDequeue() } label: {
+                Label("Remove from Line", systemImage: "xmark.circle")
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .help("Take this volume out of the analyze line. Nothing else changes — you can re-add it any time.")
         } else {
             Button { onAnalyze() } label: {
                 Label("Analyze", systemImage: "play.fill")
@@ -173,10 +213,7 @@ struct DossierVolumeRow: View {
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
-            .disabled(!canStart)
-            .help(canStart
-                  ? "Run dossier analysis on this volume's media"
-                  : "Another volume is currently analyzing — pause or stop it first")
+            .help("Analyze this volume's media. If another volume is already running, this one waits its turn in line.")
         }
     }
 }

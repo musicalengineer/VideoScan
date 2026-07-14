@@ -60,13 +60,16 @@ struct DossierDashboardView: View {
     /// Change signature for the coverage refilter gate. Moves when any
     /// catalog mutation lands (dossier writes bump the debounced
     /// dossier-counts recompute; array-level changes move `records.count`;
-    /// in-place path rewrites bump `volumeAggregatesRevision`) or when the
-    /// visible volume-row set changes (mount/unmount/retire).
+    /// in-place path rewrites bump `volumeAggregatesRevision`), when the
+    /// visible volume-row set changes (mount/unmount/retire), or when
+    /// the Analysis Scope changes (the scope decides `eligible`, so a
+    /// toggle flip must refilter).
     private var coverageKey: [Int] {
         [model.dossierCountsRecomputeCount,
          model.volumeAggregatesRevision,
          model.records.count,
-         reachableVolumes.count]
+         reachableVolumes.count,
+         captionOrchestrator.analysisScope.hashValue]
     }
 
     /// Last signature we refiltered for. `-1` sentinel forces the first
@@ -109,8 +112,38 @@ struct DossierDashboardView: View {
             // big dial + global counters with a row per reachable
             // scanTarget — each volume gets its own Analyze /
             // Pause / Stop, and clicking a row sets it as the
-            // drill-down focus below).
+            // drill-down focus below). 2026-07-14: Analyze while
+            // another volume runs ENQUEUES (FIFO) instead of being
+            // disabled, and Analyze All lines up every volume with
+            // remaining work.
             VStack(spacing: 6) {
+                HStack {
+                    if captionOrchestrator.queuePaused
+                        && !captionOrchestrator.queuedVolumePrefixes.isEmpty {
+                        // Queue restored from the last session with
+                        // Resume on Launch OFF — visible, never
+                        // auto-started, never silently dropped.
+                        Label("\(captionOrchestrator.queuedVolumePrefixes.count) volume(s) waiting from last session",
+                              systemImage: "pause.circle")
+                            .font(.system(size: 11))
+                            .foregroundColor(.orange)
+                        Button("Resume the Line") {
+                            captionOrchestrator.resumeQueue(model: model)
+                        }
+                        .controlSize(.small)
+                    }
+                    Spacer()
+                    Button {
+                        analyzeAll()
+                    } label: {
+                        Label("Analyze All", systemImage: "play.circle.fill")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .controlSize(.small)
+                    .disabled(analyzeAllPrefixes.isEmpty)
+                    .help("Line up every volume that still has files to analyze. They run one at a time, top to bottom — start it at bedtime, see progress by morning.")
+                    .accessibilityIdentifier("dossier.analyzeAll")
+                }
                 ForEach(reachableVolumes, id: \.id) { vol in
                     DossierVolumeRow(
                         target: vol,
@@ -120,10 +153,12 @@ struct DossierDashboardView: View {
                         isPaused: captionOrchestrator.currentVolumePrefix == vol.searchPath
                             && captionOrchestrator.paused,
                         isSelected: selectedVolumePath == vol.searchPath,
-                        canStart: !captionOrchestrator.currentStatus.isActive,
+                        queuePosition: captionOrchestrator.queuePosition(of: vol.searchPath),
                         onSelect: { selectedVolumePath = vol.searchPath },
-                        onAnalyze: { Task { await captionOrchestrator.startAnalyzing(
-                            volumePrefix: vol.searchPath, model: model) } },
+                        onAnalyze: { captionOrchestrator.enqueueAnalyze(
+                            volumePrefix: vol.searchPath, model: model) },
+                        onDequeue: { captionOrchestrator.dequeueAnalyze(
+                            volumePrefix: vol.searchPath) },
                         onPause: { captionOrchestrator.pause() },
                         onResume: { captionOrchestrator.resume() },
                         onStop: { captionOrchestrator.cancel() }
@@ -138,6 +173,32 @@ struct DossierDashboardView: View {
                 }
             }
 
+            // MARK: Analysis Scope (2026-07-14) — what kinds of files
+            // Analyze spends GPU time on. Audio-only files (Rick's
+            // music-production archive: 81k of the 92k "remaining"
+            // files) are set aside by DEFAULT so Analyze focuses on
+            // home video. Setting aside is reversible and never
+            // touches a record's tag. Photos are never analyzed here.
+            // The AnalysisScope model has room for more categories —
+            // Rick: the skip list is "TBD, more to come".
+            GroupBox {
+                HStack(spacing: 10) {
+                    Toggle("Include music and other audio-only files", isOn: includeAudioBinding)
+                        .toggleStyle(.checkbox)
+                        .font(.system(size: 11))
+                        .help("Off (recommended): Analyze focuses on files with video. On: audio-only files (music, voice recordings) are transcribed too. Either way, nothing is tagged or removed — set-aside files just wait.")
+                        .accessibilityIdentifier("dossier.scope.includeAudio")
+                    Spacer()
+                    Text("Photos and camera raw files are never analyzed here.")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 2)
+                .padding(.horizontal, 4)
+            } label: {
+                Text("Analysis Scope").font(.headline)
+            }
+
             // Drill-down header — what volume is the activity feed
             // showing? Falls back to "all volumes" when nothing is
             // selected (legacy view during transition).
@@ -148,7 +209,7 @@ struct DossierDashboardView: View {
                 Toggle("Resume on Launch", isOn: $autoResume)
                     .toggleStyle(.checkbox)
                     .font(.system(size: 11))
-                    .help("Auto-resume any volume that was analyzing when the app last quit.")
+                    .help("Auto-resume any volume that was analyzing — or waiting in line — when the app last quit.")
             }
             .padding(.top, 6)
 
@@ -259,6 +320,44 @@ struct DossierDashboardView: View {
         }
     }
 
+    // MARK: - Analysis scope plumbing
+
+    /// Two-way binding onto the orchestrator's scope. All writes go
+    /// through updateAnalysisScope — the ONE mutation point that does
+    /// the explicit save() (@Observable/@Published kill didSet
+    /// persistence; see project_settings_persistence).
+    private var includeAudioBinding: Binding<Bool> {
+        Binding(
+            get: { captionOrchestrator.analysisScope.includeAudioOnly },
+            set: { on in
+                var scope = captionOrchestrator.analysisScope
+                scope.includeAudioOnly = on
+                captionOrchestrator.updateAnalysisScope(scope)
+            }
+        )
+    }
+
+    // MARK: - Analyze All
+
+    /// Volumes "Analyze All" would enqueue right now. O(volumes) over
+    /// the CACHED coverage — no records pass in a view body.
+    private var analyzeAllPrefixes: [String] {
+        pfAnalyzeAllPrefixes(
+            remainingByVolume: reachableVolumes.map {
+                (prefix: $0.searchPath,
+                 remaining: (volumeCoverage[$0.searchPath] ?? .empty).remaining)
+            },
+            queued: captionOrchestrator.queuedVolumePrefixes,
+            activePrefix: captionOrchestrator.currentStatus.isActive
+                ? captionOrchestrator.currentVolumePrefix : nil
+        )
+    }
+
+    private func analyzeAll() {
+        captionOrchestrator.enqueueAnalyzeAll(
+            volumePrefixes: analyzeAllPrefixes, model: model)
+    }
+
     // MARK: - Per-volume coverage
 
     /// The list of volumes shown as rows. Shares the canonical
@@ -286,7 +385,8 @@ struct DossierDashboardView: View {
             let cov: CatalogCoverage
             if catalogChanged || volumeCoverage[prefix] == nil {
                 let subset = model.records.filter { $0.fullPath.hasPrefix(prefix) }
-                cov = CatalogCoverage(records: subset)
+                cov = CatalogCoverage(records: subset,
+                                      scope: captionOrchestrator.analysisScope)
                 volumeCoverage[prefix] = cov
             } else {
                 cov = volumeCoverage[prefix] ?? .empty
