@@ -51,6 +51,7 @@ extension CaptionOrchestrator {
         stages: Set<AnalyzeStage> = AnalyzeStage.all,
         ignoringScope: Bool = false
     ) async -> Bool {
+        startAnalyzingAttempts += 1
         guard !isShuttingDown else {
             captionOrchLog.notice("startAnalyzing refused — app is shutting down")
             return false

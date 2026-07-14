@@ -151,13 +151,22 @@ final class AnalyzeJob: MediaFileOperationJob {
         state = .cancelling
         subtitleText = "Cancelling…"
         // If we have a lane for this record's path, skip it (SIGTERM
-        // the Whisper subprocess if Whisper-stage). Otherwise fall
-        // back to cancelling our own task — the orchestrator's batch
-        // loop will exit before the next iteration.
+        // the Whisper subprocess if Whisper-stage). The orchestrator-
+        // level cancel fires ONLY when the current batch is OURS —
+        // startAnalyzing keys a single-file batch by the record's
+        // exact fullPath, so currentVolumePrefix == record.fullPath
+        // means we own it (e.g. between lanes during model load).
+        //
+        // QA F3 (2026-07-14): the old unconditional fallback aborted a
+        // FOREIGN batch when this job was merely WAITING its turn —
+        // with the wait loop below, "no lane for us" routinely means
+        // "someone else's batch is running", and cancelling a waiting
+        // row must never kill it. A waiting job only cancels its own
+        // task; the wait loop sees the cancel and finishes .cancelled.
         if let orchestrator = orchestrator {
             if let lane = orchestrator.activeLanes.first(where: { $0.path == record.fullPath }) {
                 orchestrator.skipLane(lane.id)
-            } else {
+            } else if orchestrator.currentVolumePrefix == record.fullPath {
                 orchestrator.cancel()
             }
         }
@@ -202,6 +211,16 @@ final class AnalyzeJob: MediaFileOperationJob {
         // Analyze" into 1 success + 4 spurious failures; instead we
         // poll until our single-file batch actually runs. The 400 ms
         // poll is cheap (one MainActor bool check per tick).
+        //
+        // QA F5 (2026-07-14): poll the PLAIN BOOLS first and only
+        // attempt startAnalyzing when the orchestrator looks idle. The
+        // first version attempted every tick, and every refusal logged
+        // a warning — N waiting jobs behind an hours-long volume batch
+        // produced tens of thousands of lines. One log line when the
+        // wait BEGINS, none per tick. (Same-actor check-then-call is
+        // race-free: both reads and the guard inside startAnalyzing run
+        // on the MainActor with no suspension in between; a lost race
+        // just returns false and we keep waiting.)
         var announcedWait = false
         while true {
             if Task.isCancelled || state == .cancelling {
@@ -212,13 +231,15 @@ final class AnalyzeJob: MediaFileOperationJob {
                 await finish(cancelled: true)
                 return
             }
-            let ran = await orchestrator.startAnalyzing(
-                volumePrefix: record.fullPath,
-                model: model,
-                stages: stages,
-                ignoringScope: true
-            )
-            if ran { break }
+            if !orchestrator.currentStatus.isActive && !orchestrator.queueDispatchInFlight {
+                let ran = await orchestrator.startAnalyzing(
+                    volumePrefix: record.fullPath,
+                    model: model,
+                    stages: stages,
+                    ignoringScope: true
+                )
+                if ran { break }
+            }
             if !announcedWait {
                 announcedWait = true
                 subtitleText = "Waiting for the analyzer to free up…"

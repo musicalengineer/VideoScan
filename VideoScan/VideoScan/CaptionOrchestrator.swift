@@ -265,6 +265,14 @@ final class CaptionOrchestrator: ObservableObject {
     var liveSkipMissing = 0
     var liveSkipProtected = 0
 
+    /// Test seam / regression sensor (QA F5 2026-07-14): counts every
+    /// ENTRY into `startAnalyzing`, successful or refused. AnalyzeJob's
+    /// wait loop must poll a plain bool while the orchestrator is busy
+    /// instead of calling startAnalyzing per tick (each refusal logged
+    /// a warning — N waiting jobs behind an hours-long batch produced
+    /// tens of thousands of lines). Plain var, never published.
+    var startAnalyzingAttempts = 0
+
     // MARK: - In-flight counts
     //
     // The progress sheet needs to show captioned/skipped/failed counts
