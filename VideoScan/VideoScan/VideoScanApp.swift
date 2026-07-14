@@ -413,7 +413,7 @@ struct VideoScanApp: App {
 
                         if !TestEnvironment.isTestHost,
                            !catalogSync.isReadOnly,
-                           UserDefaults.standard.bool(forKey: "DossierAutoResume") {
+                           UserDefaults.standard.bool(forKey: CaptionOrchestrator.autoResumePrefsKey) {
                             Task {
                                 try? await Task.sleep(for: .seconds(3))
                                 guard !Task.isCancelled else { return }
@@ -438,6 +438,20 @@ struct VideoScanApp: App {
                                 }
                             }
                         }
+                    }
+                    // A drive just mounted: nudge the analyze queue so
+                    // volumes PARKED as offline (QA F2 — e.g. LaCie
+                    // queued at bedtime, mounted after the 3 s auto-
+                    // resume delay) get a fresh advance now that their
+                    // prefix is reachable. invalidateCache first so the
+                    // advance's reachability read sees the new mount
+                    // table regardless of observer ordering.
+                    // scheduleQueueAdvance self-guards (busy / paused /
+                    // empty queue), so this is a cheap no-op otherwise.
+                    .onReceive(NSWorkspace.shared.notificationCenter.publisher(
+                        for: NSWorkspace.didMountNotification)) { _ in
+                        VolumeReachability.invalidateCache()
+                        captionOrchestrator.scheduleQueueAdvance(model: catalogModel)
                     }
             }
         }

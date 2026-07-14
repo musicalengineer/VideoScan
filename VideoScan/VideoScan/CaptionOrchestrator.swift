@@ -159,7 +159,7 @@ final class CaptionOrchestrator: ObservableObject {
             // PAUSED instead of being silently dropped — nothing starts
             // until the user explicitly resumes (or enqueues) work.
             self.queuePaused = !restoredQueue.isEmpty
-                && !defaults.bool(forKey: "DossierAutoResume")
+                && !defaults.bool(forKey: Self.autoResumePrefsKey)
         }
     }
 
@@ -188,6 +188,13 @@ final class CaptionOrchestrator: ObservableObject {
     /// UserDefaults key for the pending FIFO analyze queue (feature
     /// 2026-07: express intent on several volumes, walk away).
     static let queuedVolumesPrefsKey = "DossierQueuedVolumes"
+
+    /// UserDefaults key for the "Resume on Launch" toggle. ONE constant
+    /// (QA F10 2026-07-14) shared by init's paused-restore read, the
+    /// VideoScanApp launch wiring, and the dashboard's @AppStorage —
+    /// the literal was previously repeated at all three sites. NOTE:
+    /// the string is persisted user state — never rename the value.
+    static let autoResumePrefsKey = "DossierAutoResume"
 
     /// Where scope + queue persistence goes. `.standard` in the app;
     /// tests inject a throwaway suite. Set once in init.
@@ -252,7 +259,30 @@ final class CaptionOrchestrator: ObservableObject {
     /// when its batch settles. Without it, two rapid enqueues while
     /// idle could each dequeue a volume and race startAnalyzing's busy
     /// guard — the loser's volume would be silently dropped.
-    var queueDispatchInFlight = false
+    ///
+    /// Carries the PREFIX (QA F6 2026-07-14), not just a Bool: during
+    /// the dequeue→batch-start window the volume is in NEITHER
+    /// queuedVolumePrefixes NOR currentVolumePrefix, so enqueueAnalyze
+    /// would happily re-queue it (double run, row lies "Queued" while
+    /// analyzing). enqueueAnalyze and the row state treat the in-flight
+    /// prefix as running. @Published so the row repaints with it.
+    @Published var queueDispatchInFlightPrefix: String?
+
+    /// Bool view of the dispatch latch — the guard scheduleQueueAdvance
+    /// and the wait-loop pollers read.
+    var queueDispatchInFlight: Bool { queueDispatchInFlightPrefix != nil }
+
+    /// Queued volumes currently PARKED because their volume isn't
+    /// mounted (QA F2 2026-07-14). Parked volumes STAY in
+    /// queuedVolumePrefixes (persisted, dequeueable, visible) but the
+    /// queue advance skips past them — dispatching an unmounted prefix
+    /// would run the batch's missing-on-disk branch over every record
+    /// under it (mass soft-purge) and an offline drive at the head
+    /// would otherwise wedge the whole line. Cleared per-prefix when
+    /// the volume dispatches or is dequeued. Membership doubles as the
+    /// log-once latch so a parked volume doesn't re-log on every
+    /// settle's re-advance.
+    @Published var parkedVolumePrefixes: Set<String> = []
 
     // MARK: - Per-reason skip/fail counters (batch observability)
     //

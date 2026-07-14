@@ -231,6 +231,258 @@ struct CaptionOrchestratorQueueTests {
     }
 }
 
+// MARK: - Queue dispatch hardening (QA review 2026-07-14)
+//
+// Pins the fixes for the QA findings on the analyze-queue branch:
+//   F1 — a queued volume that loses the busy-guard race to a foreign
+//        caller is RE-PARKED at the head of the line, never dropped.
+//   F2 — an UNMOUNTED queued prefix is never dispatched (dispatching
+//        one soft-purged every record under it), is kept in line as
+//        parked, and never wedges reachable volumes behind it.
+//   F4 — "Remove from Line" also clears DossierActiveVolumes so a
+//        resurrected interrupted volume stays dead when the user says
+//        so; a RUNNING volume's crash-recovery entry is untouched.
+//   F6 — a volume in the dequeue→batch-start dispatch window reads as
+//        RUNNING: enqueueAnalyze won't re-queue it (double run) and
+//        the row-state helper won't report it "Queued".
+
+/// Wait until nothing is dispatching or running. Unlike
+/// awaitQueueDrain, tolerates PARKED volumes still sitting in
+/// queuedVolumePrefixes (that's their fixed behavior).
+@MainActor
+private func awaitQueueSettle(_ orch: CaptionOrchestrator,
+                              timeoutSeconds: Double = 15) async -> Bool {
+    let deadline = Date().addingTimeInterval(timeoutSeconds)
+    while Date() < deadline {
+        if !orch.queueDispatchInFlight, !orch.currentStatus.isActive {
+            return true
+        }
+        try? await Task.sleep(for: .milliseconds(20))
+    }
+    return false
+}
+
+@MainActor
+@Suite("Analyze queue dispatch hardening")
+struct CaptionOrchestratorQueueDispatchTests {
+
+    @Test("F1: volume that loses the dispatch race is re-parked at the head, not dropped")
+    func dispatchRaceReparksInsteadOfDropping() async throws {
+        let model = VideoScanModel()
+        let (root, prefixes, recs) = try makeThreeVolumes(tag: "race")
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        model.records = [recs[0]]
+        let volume = prefixes[0]
+
+        let stub = StubDossierRunner(modelID: "stub-vlm-race")
+        let orch = CaptionOrchestrator(runnerFactory: { stub })
+
+        // Enqueue while idle: the advance dequeues the volume and hands
+        // it to a dispatch Task that has NOT had a MainActor turn yet.
+        orch.enqueueAnalyze(volumePrefix: volume, model: model)
+        #expect(orch.queueDispatchInFlight,
+                "dispatch latch must be set synchronously with the dequeue")
+
+        // A foreign caller (AnalyzeJob wait-loop, ReformatJob follow-up)
+        // wins the busy guard before the dispatch Task runs.
+        orch.currentStatus = .running(progress: 0.1, currentFile: "foreign", etaSec: nil)
+
+        // Let the dispatch Task run and get refused.
+        let deadline = Date().addingTimeInterval(5)
+        while orch.queueDispatchInFlight && Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(!orch.queueDispatchInFlight, "latch must clear after the refusal")
+        #expect(orch.queuedVolumePrefixes == [volume],
+                "the losing volume must be re-parked at the queue head, not silently dropped")
+
+        // The foreign batch settles → settle path re-advances the line.
+        orch.currentStatus = .finished(captioned: 0, skipped: 0, failed: 0)
+        orch.scheduleQueueAdvance(model: model)
+        #expect(await awaitQueueDrain(orch), "queue never drained after the foreign settle")
+        let processed = await stub.pathsCalled()
+        #expect(processed == [recs[0].fullPath],
+                "the re-parked volume must run exactly once after the foreign batch settles")
+    }
+
+    @Test("F4: Remove from Line clears crash-resume ownership so the volume stays dead across relaunch")
+    func dequeueForgetsInterruptedVolume() throws {
+        let suiteName = "vs-test-queue-forget-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(["/Volumes/Interrupted/"],
+                     forKey: CaptionOrchestrator.activeVolumesPrefsKey)
+        defaults.set(true, forKey: "DossierAutoResume")
+
+        let model = VideoScanModel()
+        let orch = CaptionOrchestrator(defaults: defaults)
+        // Hold busy so resume only merges the line without dispatching.
+        orch.currentStatus = .running(progress: 0.1, currentFile: "x", etaSec: nil)
+        orch.resumePersistedWork(model: model)
+        #expect(orch.queuedVolumePrefixes == ["/Volumes/Interrupted/"])
+
+        orch.dequeueAnalyze(volumePrefix: "/Volumes/Interrupted/")
+        orch.currentStatus = .idle
+        #expect(orch.queuedVolumePrefixes.isEmpty)
+        #expect(!orch.activeVolumePrefixes.contains("/Volumes/Interrupted/"),
+                "explicit user dequeue must also clear the crash-resume entry")
+        #expect((defaults.stringArray(forKey: CaptionOrchestrator.activeVolumesPrefsKey) ?? []).isEmpty,
+                "persisted actives must be cleared too")
+
+        // Relaunch: nothing resurrects.
+        let relaunched = CaptionOrchestrator(defaults: defaults)
+        #expect(relaunched.queuedVolumePrefixes.isEmpty,
+                "a dequeued volume must not re-prepend on the next launch")
+        #expect(relaunched.activeVolumePrefixes.isEmpty)
+    }
+
+    @Test("F2 P0 sensor: an unmounted queued prefix is parked — never dispatched, records never soft-purged")
+    func unmountedPrefixParkedNotPurged() async throws {
+        let model = VideoScanModel()
+        // A /Volumes prefix that is definitely NOT in the kernel mount
+        // table — VolumeReachability answers honestly (no disk I/O).
+        let offline = "/Volumes/VSTestOffline-\(UUID().uuidString)/"
+        let rec = queueRecord(fullPath: offline + "family_1994.mov")
+        model.records = [rec]
+
+        let stub = StubDossierRunner(modelID: "stub-vlm-offline")
+        let orch = CaptionOrchestrator(runnerFactory: { stub })
+
+        // The bedtime scenario: queue the drive, then it isn't mounted
+        // when the advance fires.
+        orch.enqueueAnalyze(volumePrefix: offline, model: model)
+        #expect(await awaitQueueSettle(orch))
+        try? await Task.sleep(for: .milliseconds(50))
+
+        #expect(await stub.pathsCalled() == [],
+                "an unmounted prefix must never reach the batch loop")
+        #expect(rec.purgedAt == nil,
+                "records under an offline volume must NOT be soft-purged")
+        #expect(rec.junkReasons.isEmpty)
+        #expect(orch.queuedVolumePrefixes == [offline],
+                "the volume must stay in line (parked), not be dropped")
+        #expect(orch.parkedVolumePrefixes.contains(offline),
+                "parked state must be visible to the UI")
+        #expect(!orch.queueDispatchInFlight)
+    }
+
+    @Test("F2: an unreachable volume at the HEAD doesn't wedge the line — the next reachable one runs")
+    func unreachableHeadDoesNotWedgeQueue() async throws {
+        let model = VideoScanModel()
+        let (root, prefixes, recs) = try makeThreeVolumes(tag: "wedge")
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let offline = "/Volumes/VSTestOffline-\(UUID().uuidString)/"
+        let offlineRec = queueRecord(fullPath: offline + "clip.mov")
+        model.records = [offlineRec, recs[0]]
+
+        let stub = StubDossierRunner(modelID: "stub-vlm-wedge")
+        let orch = CaptionOrchestrator(runnerFactory: { stub })
+
+        // Hold busy so both enqueues stay queued in order:
+        // offline FIRST (head), reachable behind it.
+        orch.currentStatus = .running(progress: 0.1, currentFile: "x", etaSec: nil)
+        orch.enqueueAnalyze(volumePrefix: offline, model: model)
+        orch.enqueueAnalyze(volumePrefix: prefixes[0], model: model)
+        #expect(orch.queuedVolumePrefixes == [offline, prefixes[0]])
+
+        // Settle → advance must skip past the offline head.
+        orch.currentStatus = .finished(captioned: 0, skipped: 0, failed: 0)
+        orch.scheduleQueueAdvance(model: model)
+        #expect(await awaitQueueSettle(orch))
+
+        #expect(await stub.pathsCalled() == [recs[0].fullPath],
+                "the reachable volume behind the offline head must run")
+        #expect(orch.queuedVolumePrefixes == [offline],
+                "the offline head stays parked in line")
+        #expect(orch.parkedVolumePrefixes.contains(offline))
+        #expect(offlineRec.purgedAt == nil)
+    }
+
+    @Test("F2: launch resume of an interrupted-but-unmounted volume parks instead of purging")
+    func resumeUnmountedInterruptedVolumeParks() async throws {
+        let suiteName = "vs-test-queue-offline-resume-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let offline = "/Volumes/VSTestOffline-\(UUID().uuidString)/"
+        defaults.set([offline], forKey: CaptionOrchestrator.activeVolumesPrefsKey)
+        defaults.set(true, forKey: CaptionOrchestrator.autoResumePrefsKey)
+
+        let model = VideoScanModel()
+        let rec = queueRecord(fullPath: offline + "clip.mov")
+        model.records = [rec]
+
+        let stub = StubDossierRunner(modelID: "stub-vlm-offline-resume")
+        let orch = CaptionOrchestrator(runnerFactory: { stub }, defaults: defaults)
+        orch.resumePersistedWork(model: model)
+        #expect(await awaitQueueSettle(orch))
+        try? await Task.sleep(for: .milliseconds(50))
+
+        #expect(await stub.pathsCalled() == [])
+        #expect(rec.purgedAt == nil,
+                "auto-resume before the drive mounts must not purge its records")
+        #expect(orch.queuedVolumePrefixes == [offline])
+        #expect(orch.parkedVolumePrefixes.contains(offline))
+    }
+
+    @Test("F6: re-enqueue during the dispatch window is a no-op and the volume reads as running")
+    func enqueueDuringDispatchWindowIsNoOp() async throws {
+        let model = VideoScanModel()
+        let (root, prefixes, recs) = try makeThreeVolumes(tag: "window")
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        model.records = [recs[0]]
+        let volume = prefixes[0]
+
+        let stub = StubDossierRunner(modelID: "stub-vlm-window")
+        let orch = CaptionOrchestrator(runnerFactory: { stub })
+
+        // First enqueue while idle: dequeued + handed to a dispatch
+        // Task synchronously — we are now INSIDE the window (the Task
+        // hasn't had a MainActor turn).
+        orch.enqueueAnalyze(volumePrefix: volume, model: model)
+        #expect(orch.queueDispatchInFlight)
+        #expect(orch.queuedVolumePrefixes.isEmpty)
+
+        // Double-click / Analyze All racing in during the window.
+        orch.enqueueAnalyze(volumePrefix: volume, model: model)
+        #expect(orch.queuedVolumePrefixes.isEmpty,
+                "a volume in the dispatch window must not be re-queued (double run)")
+        #expect(orch.queuePosition(of: volume) == nil,
+                "row must not read 'Queued' for a volume that's about to analyze")
+        #expect(orch.isVolumeAnalyzing(volume),
+                "row-state helper must report the dispatch window as analyzing")
+
+        #expect(await awaitQueueDrain(orch))
+        #expect(await stub.countCalled() == 1,
+                "the volume must run exactly once")
+    }
+
+    @Test("F10: the auto-resume prefs key constant pins the persisted string")
+    func autoResumeKeyPinned() {
+        // The literal is persisted user state — renaming the VALUE
+        // would silently turn off Resume on Launch for existing users.
+        #expect(CaptionOrchestrator.autoResumePrefsKey == "DossierAutoResume")
+    }
+
+    @Test("F4 guard: a RUNNING volume's crash-recovery entry survives a stray dequeue")
+    func dequeueDoesNotForgetRunningVolume() throws {
+        let suiteName = "vs-test-queue-running-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let orch = CaptionOrchestrator(defaults: defaults)
+        // Simulate a live batch on X — exactly what rememberActiveVolume
+        // records at batch start.
+        orch.currentStatus = .running(progress: 0.5, currentFile: "x", etaSec: nil)
+        orch.currentVolumePrefix = "/Volumes/X/"
+        orch.rememberActiveVolume("/Volumes/X/")
+
+        orch.dequeueAnalyze(volumePrefix: "/Volumes/X/")
+        #expect(orch.activeVolumePrefixes.contains("/Volumes/X/"),
+                "an ACTIVE batch must keep its crash-recovery entry — only a user dequeue of a non-running volume forgets")
+        orch.currentStatus = .idle
+    }
+}
+
 // MARK: - Scope gate at the batch boundary (regression sensors)
 
 @MainActor

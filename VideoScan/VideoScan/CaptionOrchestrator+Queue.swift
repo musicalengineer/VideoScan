@@ -35,7 +35,11 @@ extension CaptionOrchestrator {
     /// queued or currently analyzing this volume → no-op.
     func enqueueAnalyze(volumePrefix: String, model: VideoScanModel) {
         guard !isShuttingDown, !volumePrefix.isEmpty else { return }
-        if currentStatus.isActive && currentVolumePrefix == volumePrefix { return }
+        // isVolumeAnalyzing covers BOTH a running batch on this prefix
+        // AND the dequeue→batch-start dispatch window (QA F6): during
+        // that window the volume is in neither the queue nor
+        // currentVolumePrefix, and re-queuing it here ran it twice.
+        if isVolumeAnalyzing(volumePrefix) { return }
         guard !queuedVolumePrefixes.contains(volumePrefix) else { return }
         queuedVolumePrefixes.append(volumePrefix)
         persistQueue()
@@ -49,13 +53,41 @@ extension CaptionOrchestrator {
 
     /// Remove a pending volume from the queue (the row's cancel
     /// affordance). Does not touch a running batch — that's Stop.
+    ///
+    /// Also clears the volume's crash-resume entry (QA F4 2026-07-14):
+    /// resumePersistedWork merges DossierActiveVolumes into the queue
+    /// but the actives entry survived, so an interrupted volume the
+    /// user removed from the line re-prepended itself on EVERY launch.
+    /// An explicit user dequeue forgets it for good. Guarded so a
+    /// RUNNING (or mid-dispatch) batch keeps its entry — crash-mid-
+    /// batch recovery must still resurrect; only user intent forgets.
     func dequeueAnalyze(volumePrefix: String) {
         let before = queuedVolumePrefixes.count
         queuedVolumePrefixes.removeAll { $0 == volumePrefix }
-        guard queuedVolumePrefixes.count != before else { return }
-        persistQueue()
-        captionOrchLog.info("Analyze queue: dequeued \(volumePrefix, privacy: .public)")
+        let removedFromQueue = queuedVolumePrefixes.count != before
+        parkedVolumePrefixes.remove(volumePrefix)
+
+        var forgotActive = false
+        if activeVolumePrefixes.contains(volumePrefix),
+           !isVolumeAnalyzing(volumePrefix) {
+            forgetActiveVolume(volumePrefix)
+            forgotActive = true
+        }
+
+        guard removedFromQueue || forgotActive else { return }
+        if removedFromQueue { persistQueue() }
+        captionOrchLog.info("Analyze queue: dequeued \(volumePrefix, privacy: .public)\(forgotActive ? " (interrupted-volume resume entry cleared)" : "")")
         appLog.write("Analyze queue: \(VolumeReachability.displayLabel(forPath: volumePrefix)) removed from queue")
+    }
+
+    /// True when `volumePrefix` is the one the orchestrator is working
+    /// on RIGHT NOW — either a running batch or a queued dispatch in
+    /// its hand-off window (QA F6). The dashboard row and the enqueue
+    /// guard share this ONE definition so the UI can never say
+    /// "Queued" for a volume that's actually analyzing.
+    func isVolumeAnalyzing(_ volumePrefix: String) -> Bool {
+        if queueDispatchInFlightPrefix == volumePrefix { return true }
+        return currentStatus.isActive && currentVolumePrefix == volumePrefix
     }
 
     /// "Analyze All" — enqueue every prefix the dashboard computed as
@@ -117,22 +149,82 @@ extension CaptionOrchestrator {
         guard !isShuttingDown, !queuePaused else { return }
         guard !currentStatus.isActive, !queueDispatchInFlight else { return }
         guard !queuedVolumePrefixes.isEmpty else { return }
-        let next = queuedVolumePrefixes.removeFirst()
+
+        // Reachability gate (QA F2 2026-07-14 — the mass-purge P0):
+        // dispatching an UNMOUNTED prefix would run the batch loop's
+        // missing-on-disk branch over every record under it — thousands
+        // of soft-purges and a lying "Analyze Complete" (queue LaCie at
+        // bedtime, drive mounts slower than the 3 s auto-resume delay).
+        // VolumeReachability.isReachable is the app's standard
+        // non-blocking check: kernel mount table + SWR cache, never
+        // disk I/O on the MainActor. Unreachable volumes are PARKED —
+        // kept in the queue (and persisted) but skipped, so an offline
+        // drive at the HEAD can't wedge the volumes behind it. A later
+        // advance (any settle, a mount event, Resume the Line, a new
+        // enqueue) re-checks and picks them up once mounted.
+        // Un-park anything whose drive came back (or left the queue)
+        // so the dashboard banner tracks the truth even while the
+        // returned volume waits behind others in line.
+        if !parkedVolumePrefixes.isEmpty {
+            parkedVolumePrefixes = parkedVolumePrefixes.filter { prefix in
+                queuedVolumePrefixes.contains(prefix)
+                    && !VolumeReachability.isReachable(path: prefix)
+            }
+        }
+        guard let nextIndex = queuedVolumePrefixes.firstIndex(where: {
+            VolumeReachability.isReachable(path: $0)
+        }) else {
+            parkUnreachable(queuedVolumePrefixes)
+            return
+        }
+        parkUnreachable(Array(queuedVolumePrefixes[..<nextIndex]))
+
+        let next = queuedVolumePrefixes.remove(at: nextIndex)
+        parkedVolumePrefixes.remove(next)
         persistQueue()
-        queueDispatchInFlight = true
+        queueDispatchInFlightPrefix = next
         captionOrchLog.info("Analyze queue: starting \(next, privacy: .public) (\(self.queuedVolumePrefixes.count) still queued)")
         Task { [weak self, weak model] in
             guard let self else { return }
             guard let model else {
-                self.queueDispatchInFlight = false
+                self.queueDispatchInFlightPrefix = nil
                 return
             }
-            await self.startAnalyzing(volumePrefix: next, model: model)
-            self.queueDispatchInFlight = false
+            let ran = await self.startAnalyzing(volumePrefix: next, model: model)
+            if !ran {
+                // Dispatch race lost (QA F1): another MainActor caller
+                // (an AnalyzeJob wait-loop, ReformatJob's follow-up)
+                // won startAnalyzing's busy guard between our dequeue
+                // and this call. The volume must NOT vanish — re-park
+                // it at the HEAD of the line so it runs next when the
+                // winner's batch settles (every settle path calls
+                // scheduleQueueAdvance via startAnalyzing's defer).
+                if !self.queuedVolumePrefixes.contains(next) {
+                    self.queuedVolumePrefixes.insert(next, at: 0)
+                    self.persistQueue()
+                }
+                captionOrchLog.warning("Analyze queue: \(next, privacy: .public) lost the dispatch race — re-parked at the head of the line")
+                appLog.write("Analyze queue: \(VolumeReachability.displayLabel(forPath: next)) went back to the front of the line (analyzer was busy)")
+            }
+            self.queueDispatchInFlightPrefix = nil
             // Chain to the next queued volume. startAnalyzing's own
             // settle hook is a no-op while queueDispatchInFlight was
             // still latched, so this is the ONE advance for this hop.
+            // On the re-park path this also covers the window where
+            // the winner settled BEFORE we cleared the latch (its
+            // settle advance no-opped against our latch).
             self.scheduleQueueAdvance(model: model)
+        }
+    }
+
+    /// Mark queued-but-offline prefixes as parked (QA F2). Logs once
+    /// per prefix — parked-set membership is the log latch, so the
+    /// re-check on every settle doesn't spam the log.
+    private func parkUnreachable(_ prefixes: [String]) {
+        for prefix in prefixes where !parkedVolumePrefixes.contains(prefix) {
+            parkedVolumePrefixes.insert(prefix)
+            captionOrchLog.notice("Analyze queue: \(prefix, privacy: .public) parked — volume offline; kept in line, will retry on a later advance")
+            appLog.write("Analyze queue: \(VolumeReachability.displayLabel(forPath: prefix)) is waiting for its drive to reconnect — kept in line, nothing touched")
         }
     }
 

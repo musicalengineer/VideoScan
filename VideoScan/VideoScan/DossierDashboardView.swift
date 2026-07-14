@@ -33,7 +33,7 @@ struct DossierDashboardView: View {
 
     @EnvironmentObject var captionOrchestrator: CaptionOrchestrator
     @EnvironmentObject var model: VideoScanModel
-    @AppStorage("DossierAutoResume") private var autoResume: Bool = false
+    @AppStorage(CaptionOrchestrator.autoResumePrefsKey) private var autoResume: Bool = false
 
     /// Per-volume coverage — keyed by `searchPath`. Refreshed by the
     /// 1s tick. Each value mirrors what CatalogCoverage exposes for the
@@ -132,6 +132,19 @@ struct DossierDashboardView: View {
                         }
                         .controlSize(.small)
                     }
+                    if !captionOrchestrator.parkedVolumePrefixes.isEmpty {
+                        // Queued volumes whose drive is offline (QA F2):
+                        // they hold their place in line but can't run —
+                        // and their row may not render at all (the row
+                        // list is reachable volumes only), so this
+                        // banner is their visible state.
+                        Label("\(captionOrchestrator.parkedVolumePrefixes.count) volume(s) in line waiting for their drive to reconnect",
+                              systemImage: "externaldrive.badge.exclamationmark")
+                            .font(.system(size: 11))
+                            .foregroundColor(.orange)
+                            .help("These volumes stay in the analyze line but won't start until their drive is mounted again. Nothing is changed or removed while a drive is offline.")
+                            .accessibilityIdentifier("dossier.parkedBanner")
+                    }
                     Spacer()
                     Button {
                         analyzeAll()
@@ -148,8 +161,10 @@ struct DossierDashboardView: View {
                     DossierVolumeRow(
                         target: vol,
                         coverage: volumeCoverage[vol.searchPath] ?? .empty,
-                        isAnalyzing: captionOrchestrator.currentVolumePrefix == vol.searchPath
-                            && captionOrchestrator.currentStatus.isActive,
+                        // isVolumeAnalyzing (not a raw currentVolumePrefix
+                        // check) so the dequeue→batch-start dispatch
+                        // window reads "analyzing", never "Queued" (QA F6).
+                        isAnalyzing: captionOrchestrator.isVolumeAnalyzing(vol.searchPath),
                         isPaused: captionOrchestrator.currentVolumePrefix == vol.searchPath
                             && captionOrchestrator.paused,
                         isSelected: selectedVolumePath == vol.searchPath,
