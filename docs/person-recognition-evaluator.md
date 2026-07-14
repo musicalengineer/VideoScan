@@ -3,7 +3,7 @@
 **Status:** Initial implementation
 **Last updated:** 2026-07-10
 **Author:** Rick + Codex
-**TL;DR:** A standalone evaluator labels videos independently of the recognition code, invokes a configured engine, and reports face-presence, identity-presence, segment, and performance metrics. VideoScan's headless engine adapter is the next integration seam.
+**TL;DR:** A standalone evaluator labels videos independently of the recognition code, invokes VideoScan's headless production-engine adapter, and reports face-presence, identity-presence, segment, performance, and nightly readiness metrics.
 
 ## Purpose
 
@@ -237,7 +237,42 @@ Python tests:
 python3 -m unittest tests/test_person_eval.py
 ```
 
-## Nightly integration seam
+## Nightly metrics
+
+The normal 02:00 local nightly always publishes benchmark readiness alongside
+the test row. Until a private quality manifest exists, the dashboard shows a
+deliberate red **0% readiness** while identity F1, precision, and recall remain
+**N/A**. This is a setup alarm, not a claim that recognition accuracy is 0%.
+
+The readiness ladder is:
+
+- 0: no canonical quality manifest;
+- 25: manifest configured, awaiting a live run;
+- 50: live development/ineligible report;
+- 75: versioned quality holdout exists but its run failed or is ineligible;
+- 100: current report is publication-eligible.
+
+Dashboard bands are red below 25, yellow from 25–49.9, orange from 50–79.9,
+and green at 80 or above. Measured quality uses identity F1 as its headline and
+is never populated from development, fixture, smoke, or one-sided suites.
+
+To activate the nightly benchmark, place the ignored private manifest at:
+
+```text
+output/person-eval-private/nightly/manifest.json
+```
+
+Alternatively set `VIDEOSCAN_PERSON_EVAL_MANIFEST`. The latest private JSON
+and Markdown reports stay under the ignored `output/` tree. Public rows contain
+only scores, counts, whitelisted engine/version labels, status, and safe reason codes;
+media and reference paths are never published.
+
+Quality publication has a second, deliberate firewall. Until development vs.
+holdout source-group isolation is enforced and reviewed, the nightly stops at
+75 with `quality-publication-provenance-gate-closed`, even if the evaluator
+report is otherwise eligible. After that review, set
+`VIDEOSCAN_PERSON_EVAL_ALLOW_QUALITY=1` in the nightly launch environment.
+The dashboard only accepts clean `main` rows from the primary local nightly.
 
 The JSON report is deliberately additive and stable enough for a later nightly
 row. Suggested fields are:
@@ -254,9 +289,9 @@ row. Suggested fields are:
 }
 ```
 
-Nightly publication is intentionally deferred until the real VideoScan adapter
-and a useful private holdout exist. Empty or fixture-only suites must never
-publish a production-looking accuracy score.
+Quality publication remains deferred until a useful private holdout exists.
+Empty or fixture-only suites must never publish a production-looking accuracy
+score, even though their readiness state is visible every morning.
 
 The evaluator enforces that boundary. A report is `publishEligible` only when
 the manifest explicitly declares a versioned quality-tier holdout, all cases

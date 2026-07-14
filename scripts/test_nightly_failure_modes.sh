@@ -370,6 +370,35 @@ else
 fi
 
 # ───────────────────────────────────────────────────────────────────
+# Test 9: every nightly row can carry the additive person-readiness fields.
+# This pins the sensor that keeps the red 0 visible even on build/test failure
+# rows, without changing their original status or reason.
+# ───────────────────────────────────────────────────────────────────
+echo
+echo "== Test 9: person metrics merge into failure row =="
+PERSON_LIB="$SANDBOX/person_lib.sh"
+awk '/^with_person_metrics\(\) \{/,/^}$/' "$SCRIPT_DIR/nightly_local_tests.sh" > "$PERSON_LIB"
+if [ ! -s "$PERSON_LIB" ]; then
+    fail "with_person_metrics could not be extracted from nightly_local_tests.sh"
+else
+    merged=$(
+        PERSON_METRICS_JSON='{"person_eval_readiness_pct":0,"person_eval_readiness_band":"red","person_eval_quality_score":null}'
+        source "$PERSON_LIB"
+        with_person_metrics '{"status":"failed","reason":"build-rc:65","total":0}'
+    )
+    got=$(printf '%s' "$merged" | python3 -c '
+import json,sys
+r=json.load(sys.stdin)
+print(f"{r.get('"'"'status'"'"')}|{r.get('"'"'reason'"'"')}|{r.get('"'"'person_eval_readiness_pct'"'"')}|{r.get('"'"'person_eval_quality_score'"'"')}")
+')
+    if [ "$got" = "failed|build-rc:65|0|None" ]; then
+        pass "failure row preserves status and gains red readiness 0 / quality null"
+    else
+        fail "person metric merge broke row contract: got '$got'"
+    fi
+fi
+
+# ───────────────────────────────────────────────────────────────────
 # Summary
 # ───────────────────────────────────────────────────────────────────
 echo

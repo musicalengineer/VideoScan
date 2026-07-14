@@ -48,6 +48,12 @@ jobs:
           python3 scripts/lint_environment_objects.py --selftest
           python3 scripts/lint_environment_objects.py
 
+      - name: Person metrics contract tests
+        run: |
+          python3 -m unittest \
+            tests/test_person_eval_metrics.py \
+            tests/test_person_metrics_integration.py
+
       # Build ONCE — app + test targets. Shared DerivedData for all later steps.
       - name: Build (app + tests)
         run: |

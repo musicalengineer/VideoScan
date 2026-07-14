@@ -29,7 +29,7 @@ if ! git fetch origin metrics 2>/dev/null; then
     exit 1
 fi
 
-# ---------- 2. Extract history.jsonl into docs/ ----------
+# ---------- 2. Extract metric streams into docs/ ----------
 # git show pulls a single file out of the remote ref without checking it
 # out — leaves your working tree on whatever branch you're on.
 if ! git show "origin/metrics:metrics/history.jsonl" > docs/history.jsonl 2>/dev/null; then
@@ -40,6 +40,20 @@ fi
 
 ROWS=$(wc -l < docs/history.jsonl | tr -d ' ')
 echo "Loaded $ROWS data point(s) into docs/history.jsonl"
+
+# Optional streams: update atomically so a transient missing remote file does
+# not truncate a useful local cache to zero bytes.
+extract_optional() {
+    local name="$1"
+    local tmp="docs/.${name}.tmp.$$"
+    if git show "origin/metrics:metrics/${name}" > "$tmp" 2>/dev/null; then
+        mv "$tmp" "docs/${name}"
+    else
+        rm -f "$tmp"
+    fi
+}
+extract_optional testdriver.jsonl
+extract_optional static_analysis.jsonl
 
 # ---------- 3. Serve docs/ on localhost ----------
 URL="http://localhost:$PORT/"

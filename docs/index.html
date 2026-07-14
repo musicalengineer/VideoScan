@@ -22,6 +22,8 @@
     --good-dim: #3fb95022;
     --warn: #d29922;
     --warn-dim: #d2992222;
+    --orange: #db6d28;
+    --orange-dim: #db6d2822;
     --bad: #f85149;
     --bad-dim: #f8514922;
     --purple: #bc8cff;
@@ -244,6 +246,21 @@
 
 <div id="status">Loading metrics&hellip;</div>
 
+<!-- ============ PERSON RECOGNITION QUALITY SECTION ============ -->
+<h3 class="section-heading">Person Recognition &mdash; benchmark readiness and measured quality</h3>
+
+<div class="cards" id="person-cards"></div>
+
+<div class="charts">
+  <div class="chart-box">
+    <h2>Person Recognition &mdash; Readiness and Identity F1</h2>
+    <canvas id="chart-person-scores"></canvas>
+    <div id="chart-person-note" class="chart-note hidden">
+      Quality history begins after the nightly job publishes its first person-recognition row.
+    </div>
+  </div>
+</div>
+
 <!-- ============ TESTDRIVER (LOCAL RUNS) SECTION ============ -->
 <!-- Real test runs (XCTest + Swift Testing) on Rick's Mac hardware via
      TestDriver. This is the only place real coverage and pass/fail counts
@@ -329,6 +346,7 @@ let METRICS_SHA = null;
 // Staleness threshold for the TestDriver banner. 36h gives some slack
 // for weekends + DST jitter — nightly runs at 02:00 local daily.
 const STALENESS_THRESHOLD_HOURS = 36;
+const PERSON_METRIC_STALE_HOURS = 36;
 
 const $status = document.getElementById("status");
 const $staleBanner = document.getElementById("staleness-banner");
@@ -411,6 +429,17 @@ function card(label, value, older, newer, lowerIsBetter, indicatorColor) {
     <div class="delta ${deltaClass(older, newer, lowerIsBetter)}">${fmtDelta(older, newer)}</div>
   `;
   return el;
+}
+
+function personBandColor(band) {
+  if (band === "green") return "var(--good)";
+  if (band === "orange") return "var(--orange)";
+  if (band === "yellow") return "var(--warn)";
+  return "var(--bad)";
+}
+
+function metricPercent(value) {
+  return typeof value === "number" ? `${(value * 100).toFixed(1)}%` : "N/A";
 }
 
 const chartDefaults = {
@@ -600,6 +629,97 @@ async function loadData() {
   const tdRows = tdText ? parseJsonl(tdText) : [];
   tdRows.sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
   const tdLast = tdRows.length ? tdRows[tdRows.length - 1] : {};
+
+  // ---- Person recognition readiness + quality ----
+  // Person fields are additive to the robust nightly-local row. Ad-hoc
+  // TestDriver rows may not carry them, so select the latest metric-bearing
+  // row instead of blindly using tdLast. Old histories intentionally render
+  // as readiness 0 / quality N/A until tonight's first row arrives.
+  const personRows = tdRows.filter(r =>
+    r.person_eval_readiness_pct != null &&
+    r.source === "nightly-local" &&
+    r.branch === "main" &&
+    r.dirty !== true
+  );
+  const personRaw = personRows.length ? personRows[personRows.length - 1] : {
+    person_eval_status: "not-configured",
+    person_eval_reason: "quality-holdout-not-configured",
+    person_eval_readiness_pct: 0,
+    person_eval_readiness_band: "red",
+    person_eval_publish_eligible: false,
+    person_eval_quality_score: null,
+  };
+  const personIsStale = personRows.length > 0 && hoursSince(personRaw.ts) > PERSON_METRIC_STALE_HOURS;
+  const person = personIsStale ? {
+    ...personRaw,
+    person_eval_status: "stale",
+    person_eval_reason: "last-clean-main-person-metric-older-than-36h",
+    person_eval_readiness_pct: Math.min(Number(personRaw.person_eval_readiness_pct) || 0, 75),
+    person_eval_readiness_band: (Number(personRaw.person_eval_readiness_pct) || 0) < 25 ? "red" : "orange",
+    person_eval_publish_eligible: false,
+    person_eval_quality_score: null,
+    person_eval_quality_band: null,
+  } : personRaw;
+  const personPrev = personRows.length > 1 ? personRows[personRows.length - 2] : {};
+  const eligible = person.person_eval_publish_eligible === true;
+  const personCards = document.getElementById("person-cards");
+  const readiness = Number(person.person_eval_readiness_pct) || 0;
+  const quality = eligible && typeof person.person_eval_quality_score === "number"
+    ? person.person_eval_quality_score : null;
+  personCards.appendChild(card("Benchmark Readiness", `${readiness.toFixed(0)}%`,
+    personPrev.person_eval_readiness_pct, readiness, false,
+    personBandColor(person.person_eval_readiness_band)));
+  personCards.appendChild(card("Identity F1 Quality",
+    quality == null ? "N/A" : `${quality.toFixed(1)}/100`,
+    eligible ? personPrev.person_eval_quality_score : null, quality, false,
+    quality == null ? "var(--muted)" : personBandColor(person.person_eval_quality_band)));
+  personCards.appendChild(card("Identity Precision",
+    eligible ? metricPercent(person.person_eval_identity_precision) : "N/A",
+    null, null, false, eligible ? "var(--accent)" : "var(--muted)"));
+  personCards.appendChild(card("Identity Recall",
+    eligible ? metricPercent(person.person_eval_identity_recall) : "N/A",
+    null, null, false, eligible ? "var(--accent)" : "var(--muted)"));
+  personCards.appendChild(card("Face Detection Recall",
+    eligible ? metricPercent(person.person_eval_face_recall) : "N/A",
+    null, null, false, eligible ? "var(--purple)" : "var(--muted)"));
+  personCards.appendChild(card("False Positives / Negatives",
+    eligible ? `${person.person_eval_false_positives ?? "—"} / ${person.person_eval_false_negatives ?? "—"}` : "N/A",
+    null, null, true, eligible ? "var(--bad)" : "var(--muted)"));
+  personCards.appendChild(card("Quality Cases",
+    eligible ? person.person_eval_case_count : "N/A",
+    null, null, false, eligible ? "var(--good)" : "var(--muted)"));
+  const setupDetail = eligible
+    ? `${person.person_eval_engine || "engine?"} · ${person.person_eval_dataset_version || "dataset?"}`
+    : `${person.person_eval_status || "not-configured"}: ${person.person_eval_reason || "quality not measured"}`;
+  const provenance = person.ts
+    ? ` · ${person.host || "host?"} · ${person.commit || "commit?"}` : "";
+  const personStatusCard = card("Status", "", null, null, false,
+    eligible ? "var(--good)" : personBandColor(person.person_eval_readiness_band));
+  const personStatusValue = personStatusCard.querySelector(".value");
+  personStatusValue.textContent = setupDetail + provenance;
+  personStatusValue.style.fontSize = "14px";
+  personCards.appendChild(personStatusCard);
+
+  if (personRows.length) {
+    const personLabels = dateLabels(personRows);
+    new Chart(document.getElementById("chart-person-scores"), {
+      type: "line",
+      data: { labels: personLabels, datasets: [
+        { label: "readiness %", data: personRows.map(r => r.person_eval_readiness_pct), ...lineStyle("#d29922") },
+        { label: "identity F1", data: personRows.map(r => r.person_eval_publish_eligible === true ? r.person_eval_quality_score : null), ...lineStyle("#3fb950") },
+      ]},
+      options: {
+        ...chartDefaults,
+        plugins: {
+          ...chartDefaults.plugins,
+          legend: { display: true, labels: { color: "#8b949e" } },
+        },
+      },
+    });
+  } else {
+    document.getElementById("chart-person-scores").classList.add("hidden");
+    document.getElementById("chart-person-note").classList.remove("hidden");
+  }
 
   // Apples-to-apples delta: only compare against the most recent prior
   // row that shares the SAME `source`. The file mixes `nightly-local`

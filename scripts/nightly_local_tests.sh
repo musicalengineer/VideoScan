@@ -63,17 +63,62 @@
 
 set -u
 
-NIGHTLY_SCRIPT_VERSION="2026-07-09-r1"
+NIGHTLY_SCRIPT_VERSION="2026-07-14-person-eval-r1"
 REPO="$HOME/dev/VideoScan"
 LOGDIR="$HOME/Library/Logs/VideoScan"
 LOGFILE="$LOGDIR/nightly_test_$(date +%Y%m%d_%H%M%S).log"
 PENDING_QUEUE="$LOGDIR/nightly-pending.jsonl"
 METRICS_WT="/tmp/nightly-metrics-wt"
+PERSON_EVAL_MANIFEST="${VIDEOSCAN_PERSON_EVAL_MANIFEST:-$REPO/output/person-eval-private/nightly/manifest.json}"
+PERSON_EVAL_REPORT="${VIDEOSCAN_PERSON_EVAL_REPORT:-$REPO/output/person-eval-private/nightly/latest-report.json}"
+PERSON_METRICS_JSON='{"person_eval_status":"not-configured","person_eval_reason":"quality-holdout-not-configured","person_eval_readiness_pct":0,"person_eval_readiness_band":"red","person_eval_publish_eligible":false,"person_eval_quality_score":null}'
 
 mkdir -p "$LOGDIR"
 exec > "$LOGFILE" 2>&1
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
+
+# Refresh the privacy-safe person-recognition fields. With no app argument it
+# reports setup readiness only (used even on build-failure rows). After the app
+# builds, pass its executable to run the configured private holdout. Evaluator
+# failures never fail the main nightly suite; they become a visible orange/red
+# person_eval_status in the same durable row.
+refresh_person_metrics() {
+    local app="${1:-}"
+    local output
+    local quality_flag=()
+    if [ "${VIDEOSCAN_PERSON_EVAL_ALLOW_QUALITY:-0}" = "1" ]; then
+        quality_flag=(--allow-quality)
+    fi
+    if [ -n "$app" ]; then
+        output=$(python3 tools/person-eval/nightly_metrics.py \
+            --manifest "$PERSON_EVAL_MANIFEST" --report "$PERSON_EVAL_REPORT" \
+            --app "$app" \
+            --timeout-seconds "${VIDEOSCAN_PERSON_EVAL_TIMEOUT_SECONDS:-1200}" \
+            "${quality_flag[@]}" 2>>"$LOGFILE") || output=""
+    else
+        output=$(python3 tools/person-eval/nightly_metrics.py \
+            --manifest "$PERSON_EVAL_MANIFEST" --report "$PERSON_EVAL_REPORT" \
+            2>>"$LOGFILE") || output=""
+    fi
+    if [ -n "$output" ]; then
+        PERSON_METRICS_JSON="$output"
+    else
+        PERSON_METRICS_JSON='{"person_eval_status":"collector-failed","person_eval_reason":"person-metrics-collector-failed","person_eval_readiness_pct":0,"person_eval_readiness_band":"red","person_eval_publish_eligible":false,"person_eval_quality_score":null,"person_eval_quality_band":null}'
+    fi
+    log "Person recognition metrics: $PERSON_METRICS_JSON"
+}
+
+# Merge additive person fields into any normal/failure nightly JSON row. Python
+# owns JSON escaping so private dataset names cannot corrupt the public JSONL.
+with_person_metrics() {
+    BASE_ROW="$1" PERSON_ROW="$PERSON_METRICS_JSON" python3 -c '
+import json, os
+base = json.loads(os.environ["BASE_ROW"])
+base.update(json.loads(os.environ["PERSON_ROW"]))
+print(json.dumps(base, separators=(",", ":")))
+'
+}
 
 log "=== Nightly local test run starting (script v$NIGHTLY_SCRIPT_VERSION) ==="
 log "Host: $(scutil --get ComputerName 2>/dev/null || hostname -s)"
@@ -291,6 +336,10 @@ COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 COMMIT_DATE=$(git log -1 --format=%cd --date=short 2>/dev/null || echo "unknown")
 log "Commit: $COMMIT ($COMMIT_DATE)"
 
+# Establish the pre-build readiness state. This guarantees even a build
+# failure publishes the desired red 0 when no quality benchmark is configured.
+refresh_person_metrics
+
 # ── Build ───────────────────────────────────────────────────────────
 # DerivedData lives under ~/Library/Caches, NOT /tmp. macOS garbage-collects
 # /tmp and can leave a half-populated explicit-modules cache, which surfaces
@@ -325,7 +374,7 @@ fi
 
 if [ "$BUILD_RC" -ne 0 ]; then
     log "FATAL: build failed after clean retry (rc=$BUILD_RC)"
-    publish_row "$(make_status_row failed "build-rc:$BUILD_RC" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")"
+    publish_row "$(with_person_metrics "$(make_status_row failed "build-rc:$BUILD_RC" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")")"
     exit 1
 fi
 BUILD_END=$(date +%s)
@@ -433,7 +482,7 @@ fi
 
 if [ "$TOTAL" -eq 0 ]; then
     log "SKIP: no tests ran (likely build issue or test discovery fail)"
-    publish_row "$(make_status_row failed "zero-tests-ran:test-rc=$TEST_RC" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")"
+    publish_row "$(with_person_metrics "$(make_status_row failed "zero-tests-ran:test-rc=$TEST_RC" "$DIRTY" "$COMMIT" "$COMMIT_DATE" "$BRANCH")")"
     exit 1
 fi
 
@@ -482,6 +531,12 @@ if [ -d /tmp/nightly-results.xcresult ]; then
 fi
 log "Logic-only coverage: ${COV_LOGIC}%"
 
+# Run the optional private benchmark only after the core test result is known.
+# It has a separate bounded budget and process-group timeout, so it cannot
+# orphan a VideoScan scanner. Missing config returns immediately.
+PERSON_EVAL_APP="$NIGHTLY_DD/Build/Products/Debug/VideoScan.app/Contents/MacOS/VideoScan"
+refresh_person_metrics "$PERSON_EVAL_APP"
+
 # ── Build JSON row (matches TestDriver MetricsPublisher format) ─────
 TS=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
 COV_FIELD=""
@@ -496,6 +551,7 @@ ROW=$(printf '{"ts":"%s","source":"nightly-local","host":"%s","branch":"%s","com
     "$PASSED" "$FAILED" "$SKIPPED" "$TOTAL" \
     "$ELAPSED" "$STATUS" "$REASON" "$NIGHTLY_SCRIPT_VERSION" \
     "$FAILED_NAMES_JSON" "$COV_FIELD")
+ROW=$(with_person_metrics "$ROW")
 
 publish_row "$ROW"
 PUBLISH_RC=$?

@@ -54,6 +54,40 @@ for r in rows:
     r["_date"] = datestr(r.get("ts"))
 rows.sort(key=lambda r: str(r.get("ts","")))
 
+# Person metrics ride additively on nightly-local rows. Manual TestDriver rows
+# may omit them, so retain the newest metric-bearing row. No row yet is the
+# deliberate red readiness zero—not a fabricated 0% recognition result.
+person_rows = [r for r in rows
+               if r.get("person_eval_readiness_pct") is not None
+               and r.get("source") == "nightly-local"
+               and r.get("branch") == "main"
+               and r.get("dirty") is not True]
+person = person_rows[-1] if person_rows else {
+    "person_eval_readiness_pct": 0,
+    "person_eval_readiness_band": "red",
+    "person_eval_publish_eligible": False,
+    "person_eval_quality_score": None,
+    "person_eval_status": "not-configured",
+    "person_eval_reason": "quality-holdout-not-configured",
+}
+if person_rows:
+    try:
+        metric_time = datetime.datetime.fromisoformat(str(person.get("ts", "")).replace("Z", "+00:00"))
+        metric_age_h = (datetime.datetime.now(datetime.timezone.utc) - metric_time).total_seconds() / 3600
+    except (TypeError, ValueError):
+        metric_age_h = float("inf")
+    if metric_age_h > 36:
+        person = dict(person)
+        prior_readiness = float(person.get("person_eval_readiness_pct") or 0)
+        person.update({
+            "person_eval_status": "stale",
+            "person_eval_reason": "last-clean-main-person-metric-older-than-36h",
+            "person_eval_readiness_pct": min(prior_readiness, 75),
+            "person_eval_readiness_band": "red" if prior_readiness < 25 else "orange",
+            "person_eval_publish_eligible": False,
+            "person_eval_quality_score": None,
+        })
+
 today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 
 # Latest row per host (any status) — drives the table.
@@ -102,8 +136,32 @@ for h in order:
 for h in latest:
     if h not in seen and h not in order: emit(h)
 
+readiness = float(person.get("person_eval_readiness_pct") or 0)
+band = person.get("person_eval_readiness_band") or "red"
+band_icon = {"red": "🔴", "yellow": "🟡", "orange": "🟠", "green": "🟢"}.get(band, "🔴")
+eligible = person.get("person_eval_publish_eligible") is True
+quality = person.get("person_eval_quality_score") if eligible else None
+quality_text = f"{quality:.1f}/100" if isinstance(quality, (int, float)) else "N/A"
+print("─" * 46)
+print(f"Person recognition: {band_icon} readiness {readiness:.0f}% | quality {quality_text}")
+if eligible:
+    p = person.get("person_eval_identity_precision")
+    r = person.get("person_eval_identity_recall")
+    ps = f"{100*p:.1f}%" if isinstance(p, (int, float)) else "N/A"
+    rs = f"{100*r:.1f}%" if isinstance(r, (int, float)) else "N/A"
+    print(f"   precision {ps} | recall {rs} | FP {person.get('person_eval_false_positives', '—')} | FN {person.get('person_eval_false_negatives', '—')}")
+else:
+    print(f"   {person.get('person_eval_status', 'not-configured')}: {person.get('person_eval_reason', 'quality not measured')}")
+
 # ── Flags: things worth a look ───────────────────────────────────────
 flags = []
+
+if readiness < 80:
+    flags.append(f"Person-recognition benchmark readiness is {readiness:.0f}% ({person.get('person_eval_status','not-configured')}).")
+elif not eligible:
+    flags.append("Person-recognition benchmark is prepared but has no publishable quality result.")
+elif isinstance(quality, (int, float)) and quality < 80:
+    flags.append(f"Person-recognition identity F1 is {quality:.1f}/100 (target: 80+).")
 
 green_today = any(r["_date"] == today and r.get("status")=="ok" and int(r.get("total") or 0)>0 for r in rows)
 if not green_today:
