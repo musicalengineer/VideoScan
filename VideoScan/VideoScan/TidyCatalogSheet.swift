@@ -70,6 +70,15 @@ struct TidyCatalogSheet: View {
                     Text("Nothing is deleted — you can undo right after, or put files back one by one with “Show set-aside files.”")
                         .font(.caption)
                         .foregroundColor(.secondary)
+
+                    // One-way-ratchet disclosure (QA MINOR 7, 2026-07-15):
+                    // set-aside audio is invisible to future Correlates by
+                    // design — say so up front, in family language, and
+                    // name the rescue path (GH #111).
+                    Text("One thing to know: audio that's set aside won't pair up on its own if its video turns up in a later scan. A “Find Missing Audio” helper (coming later) will be the way to reunite them.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             } else {
                 HStack(spacing: 10) {

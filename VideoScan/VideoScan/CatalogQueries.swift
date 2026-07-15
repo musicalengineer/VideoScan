@@ -665,6 +665,21 @@ nonisolated func pfApplySetAsideFilter(
     return records.filter { !$0.isSetAside }
 }
 
+/// The record base the toolbar's search-hit badge counts over. MUST be
+/// the same purge → set-aside pre-filter, in the same order, that
+/// `computeFiltered()` applies before running the search — otherwise the
+/// badge counts rows the table hides (QA fix, 2026-07-15: the badge was
+/// counting set-aside records that a default search could never show).
+nonisolated func pfSearchBadgeBase(
+    _ records: [VideoRecord],
+    showRemoved: Bool,
+    showSetAside: Bool
+) -> [VideoRecord] {
+    pfApplySetAsideFilter(
+        pfApplyPurgeFilter(records, showRemoved: showRemoved),
+        showSetAside: showSetAside)
+}
+
 /// Volume-membership predicate for the catalog's Volume filter. A record
 /// belongs to a selected volume only when its CURRENT location (`fullPath`)
 /// is under one of the selected scan-target prefixes.

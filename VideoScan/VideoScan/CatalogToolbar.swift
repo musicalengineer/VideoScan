@@ -113,8 +113,14 @@ struct CatalogToolbar<Dashboard: View>: View {
             searchHitCount = 0
             return
         }
-        searchHitCount = model.searchIndex.count(records: model.records,
-                                                 query: debouncedSearchText)
+        // Count over the SAME pre-filtered base the table searches
+        // (purge → set-aside, honoring both toggles) so the badge never
+        // claims hits the table hides (QA fix, 2026-07-15).
+        searchHitCount = model.searchIndex.count(
+            records: pfSearchBadgeBase(model.records,
+                                       showRemoved: showRemoved,
+                                       showSetAside: showSetAside),
+            query: debouncedSearchText)
     }
 
     /// "+ Filter" menu next to the search field. Each pick appends a
@@ -392,6 +398,21 @@ struct CatalogToolbar<Dashboard: View>: View {
                         recomputeSearchHitCount()
                     }
                     .onChange(of: model.records.count) { _, _ in
+                        recomputeSearchHitCount()
+                    }
+                    // The badge base honors the visibility toggles and the
+                    // set-aside/purge batch state — recompute when any of
+                    // them changes so the count always matches the table.
+                    .onChange(of: showRemoved) { _, _ in
+                        recomputeSearchHitCount()
+                    }
+                    .onChange(of: showSetAside) { _, _ in
+                        recomputeSearchHitCount()
+                    }
+                    .onChange(of: model.lastTidyBatch) { _, _ in
+                        recomputeSearchHitCount()
+                    }
+                    .onChange(of: model.lastPurgedBatch) { _, _ in
                         recomputeSearchHitCount()
                     }
                 if !searchText.isEmpty {

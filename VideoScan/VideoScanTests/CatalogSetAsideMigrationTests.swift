@@ -100,6 +100,25 @@ struct TidyCatalogTests {
         #expect(model.records.allSatisfy { $0.setAsideReason == nil })
     }
 
+    @Test("plan category counts are stored tallies from the builder, and match the rows exactly")
+    func planCountsAreStoredAndCorrect() async {
+        // QA MINOR 6 (2026-07-15): stillCount/musicCount/unlinkedAudioCount
+        // were lazy O(rows) filter passes evaluated 3× per sheet body eval.
+        // They are now tallied once in buildTidyPlan; this oracle pins the
+        // stored values against a recount of the rows so the tallies can
+        // never drift from the plan they describe.
+        let model = mixedModel()
+        let plan = await model.computeTidyCatalogPlan()
+        #expect(plan.stillCount
+                == plan.rows.filter { $0.reason == .stillImage }.count)
+        #expect(plan.musicCount
+                == plan.rows.filter { $0.reason == .musicFormat }.count)
+        #expect(plan.unlinkedAudioCount
+                == plan.rows.filter { $0.reason == .unlinkedAudio }.count)
+        #expect(plan.stillCount + plan.musicCount + plan.unlinkedAudioCount
+                == plan.rows.count, "the three categories partition the rows")
+    }
+
     @Test("sensor: apply mutates ONLY setAsideReason — byte oracle + count invariant")
     func applyMutatesOnlyTheField() async {
         let model = mixedModel()
@@ -172,6 +191,33 @@ struct TidyCatalogTests {
         #expect(music.setAsideReason == nil)
         // The other planned rows stay set aside.
         #expect(model.records.first { $0.filename == "IMG_0042.cr3" }!.setAsideReason != nil)
+    }
+
+    @Test("Put Back publishes: restored ids leave lastTidyBatch so the table recomputes and Undo stays honest")
+    func restorePublishesViaBatchState() async {
+        // QA MAJOR 4 (2026-07-15): restoreSetAsideRecords mutated only the
+        // plain-class field — no published state changed, so the table's
+        // recompute triggers (.onChange(of: model.lastTidyBatch)) never
+        // fired and the Undo banner kept counting already-restored rows.
+        // RED pre-fix: lastTidyBatch is untouched by a restore.
+        let model = mixedModel()
+        let plan = await model.computeTidyCatalogPlan()
+        model.applyTidyCatalog(plan)
+        let batchBefore = model.lastTidyBatch
+        #expect(batchBefore?.ids.count == 3)
+
+        let music = model.records.first { $0.filename == "song.mp3" }!
+        #expect(model.restoreSetAsideRecords(ids: [music.id]) == 1)
+        #expect(model.lastTidyBatch != batchBefore,
+                "restore must publish via the observed batch state (RED pre-fix)")
+        #expect(model.lastTidyBatch?.ids.contains(music.id) == false,
+                "restored ids must leave the Undo batch — banner count stays honest")
+        #expect(model.lastTidyBatch?.ids.count == 2)
+
+        // Restoring everything left drops the batch entirely (banner gone,
+        // same shape as restoreRecord's lastPurgedBatch handling).
+        _ = model.restoreSetAsideRecords(ids: Set(plan.rows.map(\.id)))
+        #expect(model.lastTidyBatch == nil)
     }
 
     @Test("CSV export carries every planned row with friendly categories")
@@ -248,6 +294,42 @@ struct SetAsideVisibilityTests {
             showSetAside: true)
         let browseHits = model.searchIndex.filter(records: browsePool, query: "donna")
         #expect(Set(browseHits.map(\.filename)) == ["donna_birthday.mov", "donna_song.mp3"])
+    }
+
+    @Test("search-hit badge base: set-aside hits aren't counted by default, are counted with the toggle")
+    func badgeBaseRespectsSetAsideToggle() {
+        // QA MAJOR 3 (2026-07-15): the badge counted model.records raw
+        // while the table filtered set-aside before searching — so the
+        // badge claimed hits the table could never show. The badge now
+        // counts over pfSearchBadgeBase, the exact purge → set-aside
+        // pre-filter computeFiltered applies before its search step.
+        let model = VideoScanModel()
+        let video = rec("donna_birthday.mov")
+        let music = rec("donna_song.mp3", stream: .audioOnly, setAside: "music-format")
+        let purged = rec("donna_gone.mov", purged: true)
+        model.records = [video, music, purged]
+        model.searchIndex.rebuild(records: model.records)
+
+        // Default toggles: only the visible video counts.
+        let defaultBase = pfSearchBadgeBase(model.records,
+                                            showRemoved: false, showSetAside: false)
+        #expect(model.searchIndex.count(records: defaultBase, query: "donna") == 1,
+                "badge must not count set-aside or purged hits the table hides")
+        // Parity sensor: badge base == the table's pre-search base.
+        let tableBase = pfApplySetAsideFilter(
+            pfApplyPurgeFilter(model.records, showRemoved: false),
+            showSetAside: false)
+        #expect(defaultBase.map(\.id) == tableBase.map(\.id),
+                "badge base and table base must be the same pipeline")
+
+        // "Show set-aside files" on: the set-aside hit is counted too.
+        let browseBase = pfSearchBadgeBase(model.records,
+                                           showRemoved: false, showSetAside: true)
+        #expect(model.searchIndex.count(records: browseBase, query: "donna") == 2)
+        // "Show removed" on as well: all three count.
+        let allBase = pfSearchBadgeBase(model.records,
+                                        showRemoved: true, showSetAside: true)
+        #expect(model.searchIndex.count(records: allBase, query: "donna") == 3)
     }
 
     @Test("set-aside audio is never offered to the correlator")

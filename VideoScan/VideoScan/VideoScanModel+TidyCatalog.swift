@@ -48,9 +48,13 @@ extension VideoScanModel {
         /// Active records examined (excludes purged + already-set-aside).
         var examined = 0
 
-        var stillCount: Int { rows.lazy.filter { $0.reason == .stillImage }.count }
-        var musicCount: Int { rows.lazy.filter { $0.reason == .musicFormat }.count }
-        var unlinkedAudioCount: Int { rows.lazy.filter { $0.reason == .unlinkedAudio }.count }
+        /// Per-category tallies — STORED, tallied once in buildTidyPlan
+        /// (QA fix, 2026-07-15: these were lazy filter passes over up to
+        /// ~90k rows, and TidyCatalogSheet's body evaluates all three per
+        /// constraint pass — the no-O(records)-work-in-view-bodies rule).
+        var stillCount = 0
+        var musicCount = 0
+        var unlinkedAudioCount = 0
     }
 
     /// Compute the dry-run plan. Snapshot on the main actor (cheap value
@@ -121,10 +125,12 @@ extension VideoScanModel {
                 plan.rows.append(.init(id: c.snap.id, filename: c.snap.filename,
                                        fullPath: c.fullPath, sizeBytes: c.sizeBytes,
                                        reason: .stillImage))
+                plan.stillCount += 1
             case .music:
                 plan.rows.append(.init(id: c.snap.id, filename: c.snap.filename,
                                        fullPath: c.fullPath, sizeBytes: c.sizeBytes,
                                        reason: .musicFormat))
+                plan.musicCount += 1
             case .ambiguousAudio:
                 if evidence.isVideoLinked(c.snap) {
                     plan.keptLinkedAudio += 1
@@ -132,6 +138,7 @@ extension VideoScanModel {
                     plan.rows.append(.init(id: c.snap.id, filename: c.snap.filename,
                                            fullPath: c.fullPath, sizeBytes: c.sizeBytes,
                                            reason: .unlinkedAudio))
+                    plan.unlinkedAudioCount += 1
                 }
             }
         }
@@ -220,6 +227,15 @@ extension VideoScanModel {
     /// Restore individual/bulk set-aside records (the "Show set-aside
     /// files" browse flow — right-click → Put Back in Catalog). Returns
     /// the count restored.
+    ///
+    /// PUBLISH discipline (QA fix, 2026-07-15 — restoreRecord template):
+    /// `setAsideReason` lives on a plain class, so mutating it alone
+    /// publishes nothing and the table's recompute triggers never fire.
+    /// The observable state here is `lastTidyBatch` (@Published, watched
+    /// by `.onChange(of: model.lastTidyBatch)`): restored ids are PRUNED
+    /// from it — that both fires the recompute and keeps the Undo
+    /// banner's count honest (Undo must not re-hide rows the user just
+    /// put back, and an emptied batch drops the banner entirely).
     @discardableResult
     func restoreSetAsideRecords(ids: Set<UUID>) -> Int {
         var restored = 0
@@ -231,6 +247,16 @@ extension VideoScanModel {
         }
         guard restored > 0 else { return 0 }
         saveCatalogDebounced()
+        if let batch = lastTidyBatch {
+            let remaining = batch.ids.filter { !ids.contains($0) }
+            lastTidyBatch = remaining.isEmpty ? nil : LastTidyBatch(ids: remaining)
+        } else {
+            // No Undo batch to prune (older-session set-asides). Publish
+            // through the same observed state anyway — assigning nil is a
+            // real @Published emission even when the value doesn't change,
+            // so the table still refreshes the restored rows.
+            lastTidyBatch = nil
+        }
         appLog.write("Put back in catalog: \(restored) set-aside record(s) restored")
         return restored
     }
