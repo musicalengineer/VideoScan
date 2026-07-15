@@ -253,6 +253,24 @@ struct CatalogScopeGateTests {
         #expect(model.records.count == recordCountBefore)  // gate never mutates the catalog
     }
 
+    @Test("extensionless audio-only essence with a recovery name passes the gate (Avid recovery)")
+    func extensionlessAudioOnlyAdmitted() async {
+        // QA MAJOR 5: a data-recovery name like file0001 has no structural
+        // evidence and never will — extensionless must be admitted BEFORE
+        // the ambiguous-audio evidence test, regardless of probed stream
+        // type. RED pre-fix: classified ambiguous, evidence fails, excluded.
+        let model = VideoScanModel()
+        let essence = gateRec(filename: "file0001",
+                              streamTypeRaw: StreamType.audioOnly.rawValue,
+                              directory: "/Volumes/Recovered/chunk3")
+        essence.ext = ""
+        let outcome = await model.applyCatalogScopeGate(
+            targetRecords: [essence], volName: "T")
+        #expect(outcome.admitted.count == 1,
+                "extensionless recovered audio essence must never be evidence-gated")
+        #expect(outcome.unlinkedAudioExcluded == 0)
+    }
+
     @Test("stills/music reaching the gate are excluded (belt and braces)")
     func strayStillOrMusicExcluded() async {
         let model = VideoScanModel()
@@ -264,6 +282,35 @@ struct CatalogScopeGateTests {
             targetRecords: [mp3, cr3], volName: "T")
         #expect(outcome.admitted.isEmpty)
         #expect(outcome.stillOrMusicExcluded == 2)
+    }
+
+    @Test("post-scan still/music exclusions land in the persisted DiscoveryAudit")
+    func stillOrMusicExclusionsReachAudit() async throws {
+        // QA MINOR 9 (2026-07-15): stillOrMusicExcluded reached the console
+        // summary but not the audit sidecar — the discovery-honesty ledger
+        // must account for every enumerated file. Additive field only.
+        let model = VideoScanModel()
+        let audit = DiscoveryAuditCollector(scanRoot: "/Volumes/Scan",
+                                            volumeName: "T")
+        let mp3 = gateRec(filename: "cover_art.mp3",
+                          streamTypeRaw: StreamType.videoAndAudio.rawValue)
+        let cr3 = gateRec(filename: "IMG_0042.cr3",
+                          streamTypeRaw: StreamType.videoOnly.rawValue)
+        let wav = gateRec(filename: "stray.wav",
+                          streamTypeRaw: StreamType.audioOnly.rawValue)
+        _ = await model.applyCatalogScopeGate(
+            targetRecords: [mp3, cr3, wav], volName: "T", audit: audit)
+
+        let finished = audit.finish(cataloged: 0)
+        #expect(finished.scopeStillOrMusicExcluded == 2)
+        #expect(finished.scopeUnlinkedAudioExcluded == 1)
+
+        // And it reaches the sidecar bytes (the field is Codable-encoded).
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.sortedKeys]
+        let json = String(decoding: try enc.encode(finished), as: UTF8.self)
+        #expect(json.contains("\"scopeStillOrMusicExcluded\":2"),
+                "the audit sidecar JSON must carry the post-scan still/music tally")
     }
 
     @Test("scale: gate over a 100k-record catalog stays within budget")

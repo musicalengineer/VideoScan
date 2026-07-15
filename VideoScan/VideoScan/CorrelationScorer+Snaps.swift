@@ -57,6 +57,16 @@ extension CorrelationScorer {
 
     // MARK: - Shared scoring rubric
 
+    /// The STRUCTURAL scoring signals — path-level or persistent metadata,
+    /// as opposed to duration/timestamp coincidence. This is the GH #101
+    /// pairing bar: findBestPair (user-facing "Find A/V Pair") and the
+    /// catalog-scope evidence test (CatalogScopeEvidence) both require at
+    /// least one of these reasons before a pair proposal counts. ONE
+    /// shared constant next to scoreParts so the bar can never drift
+    /// between call sites (QA fix, 2026-07-15 — it was duplicated).
+    /// Values must match the reason strings scoreParts appends below.
+    static let structuralSignals: Set<String> = ["filename", "directory", "timecode", "tape"]
+
     /// The ONE place the correlation rubric lives (filename 4 /
     /// duration 3 / timestamp 3 / timecode 2 / directory 1 / tape 1,
     /// floor 3). Both the record path (`scoreCorrelatePair`) and the

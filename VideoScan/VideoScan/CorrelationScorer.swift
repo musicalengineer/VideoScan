@@ -175,12 +175,13 @@ enum CorrelationScorer {
         // with an unrelated Avid orphan MXF on exactly that basis.
         //
         // For findBestPair, require at least one STRUCTURAL signal
-        // (path-level or persistent metadata): filename, directory,
-        // timecode, or tape. Bulk correlation (scoreCorrelatePair
-        // direct callers) keeps the original score >= 3 threshold —
-        // it has the broader correlation context and can tolerate
-        // duration-only pairs in well-bounded pools.
-        let structuralSignals: Set<String> = ["filename", "directory", "timecode", "tape"]
+        // (path-level or persistent metadata) — the shared
+        // `structuralSignals` constant next to scoreParts (one bar for
+        // every call site; QA fix 2026-07-15 de-duplicated it). Bulk
+        // correlation (scoreCorrelatePair direct callers) keeps the
+        // original score >= 3 threshold — it has the broader correlation
+        // context and can tolerate duration-only pairs in well-bounded
+        // pools.
         var best: Candidate?
         for other in opposites {
             let video = isVideo ? record : other

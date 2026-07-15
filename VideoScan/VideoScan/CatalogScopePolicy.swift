@@ -30,13 +30,16 @@ import Foundation
 //   * Video                      → always included (any container whose
 //     probe found a video stream, plus every extension on the video
 //     allowlist).
-//   * Extensionless              → always included. Recovered Avid
-//     video-only essence is often extensionless; excluding what we
-//     cannot classify would hide exactly the files this app rescues.
+//   * Extensionless              → ALWAYS included, and checked BEFORE
+//     any stream-type rule (2026-07-15). Recovered Avid essence is often
+//     extensionless with data-recovery names (file0001) — structural
+//     evidence always fails for those, so even one that PROBES audio-only
+//     must bypass the evidence gate; excluding what we cannot classify
+//     would hide exactly the files this app rescues.
 //   * Ambiguous audio            → included ONLY when video-linked:
 //     production-audio containers (wav/aif/aiff/aifc/caf) and anything
-//     that probed audio-only (notably audio-only MXF — Avid orphan
-//     essence wears the same extension as its video partner).
+//     WITH an extension that probed audio-only (notably audio-only MXF —
+//     Avid orphan essence wears the same extension as its video partner).
 //
 // Video-linked evidence = the EXISTING correlator's pairing bar, not a
 // new heuristic. See CatalogScopeEvidence below for the exact tiers.
@@ -57,7 +60,10 @@ enum CatalogScopePolicy {
     enum Classification: Equatable {
         /// Video content — always in the catalog.
         case video
-        /// No extension — always in (Avid recovery must stay eligible).
+        /// No extension — always in (Avid recovery must stay eligible),
+        /// even when the probe reported audio-only (recovery names carry
+        /// no structural evidence, so the evidence gate would always
+        /// exclude them — see classify()).
         case extensionless
         /// Still image / camera raw — never in.
         case still
@@ -109,15 +115,23 @@ enum CatalogScopePolicy {
     /// extension classes beat stream type (cover-art mp3s and camera
     /// raws probe as video streams), and the audio-only stream type
     /// catches audio-only MXF, which wears a video extension.
+    ///
+    /// EXTENSIONLESS IS CHECKED FIRST (QA fix 2026-07-15, Manager decision
+    /// per Rick's standing "extensionless stays eligible — Avid recovery"
+    /// rule): recovered extensionless essence carries data-recovery names
+    /// (file0001) whose structural evidence ALWAYS fails, so routing an
+    /// extensionless file that probed audio-only through the ambiguous-
+    /// audio evidence test excluded exactly the files this app rescues.
+    /// Extensionless → always included, regardless of probed stream type.
     static func classify(ext: String, streamTypeRaw: String) -> Classification {
         let e = ext.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if e.isEmpty { return .extensionless }
         if stillImageExtensions.contains(e) { return .still }
         if musicExtensions.contains(e) { return .music }
         if ambiguousAudioExtensions.contains(e)
             || streamTypeRaw == StreamType.audioOnly.rawValue {
             return .ambiguousAudio
         }
-        if e.isEmpty { return .extensionless }
         return .video
     }
 
@@ -217,8 +231,10 @@ enum CatalogScopePolicy {
 
 struct CatalogScopeEvidence {
 
-    /// Structural reasons — see CorrelationScorer.findBestPair (GH #101).
-    static let structuralSignals: Set<String> = ["filename", "directory", "timecode", "tape"]
+    /// Structural reasons — the SHARED GH #101 bar, hoisted next to
+    /// CorrelationScorer.scoreParts (QA fix 2026-07-15: this was a
+    /// duplicate literal that could drift from findBestPair's copy).
+    static var structuralSignals: Set<String> { CorrelationScorer.structuralSignals }
 
     private let videos: [CorrelationScorer.Snap]
     private let videoKeys: [String]              // filenameCorrelationKey per video

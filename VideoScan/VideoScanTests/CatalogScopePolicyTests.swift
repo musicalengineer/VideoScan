@@ -115,10 +115,22 @@ struct CatalogScopeClassificationTests {
         #expect(CatalogScopePolicy.classify(
             ext: "", streamTypeRaw: StreamType.ffprobeFailed.rawValue) == .extensionless)
         #expect(!CatalogScopePolicy.extensionAlwaysExcluded(""))
-        // Even an extensionless file that probed audio-only is ambiguous
-        // (evidence-tested), never blanket-excluded pre-probe.
+    }
+
+    @Test("extensionless beats probed stream type — recovered audio essence is never evidence-gated")
+    func extensionlessAudioOnlyStaysIncluded() {
+        // QA MAJOR 5 (2026-07-15, Manager decision per Rick's standing
+        // "extensionless stays eligible (Avid recovery)" rule): recovered
+        // extensionless audio essence carries data-recovery names
+        // (file0001) whose structural evidence ALWAYS fails — routing it
+        // through the ambiguous-audio evidence test excluded exactly the
+        // files this app rescues. Extensionless → always included,
+        // regardless of what ffprobe saw. RED pre-fix: .ambiguousAudio.
         #expect(CatalogScopePolicy.classify(
-            ext: "", streamTypeRaw: StreamType.audioOnly.rawValue) == .ambiguousAudio)
+            ext: "", streamTypeRaw: StreamType.audioOnly.rawValue) == .extensionless)
+        // Whitespace-only extension is the same class after trimming.
+        #expect(CatalogScopePolicy.classify(
+            ext: " ", streamTypeRaw: StreamType.audioOnly.rawValue) == .extensionless)
     }
 
     @Test("ambiguous audio class: wav/aif/aiff/aifc/caf and audio-only streams",
@@ -228,6 +240,19 @@ struct CatalogScopeEvidenceTests {
     func emptyPoolNeverLinks() {
         let evidence = CatalogScopeEvidence(videoSnaps: [])
         #expect(!evidence.isVideoLinked(snap(filename: "a.wav", duration: 10)))
+    }
+
+    @Test("sensor: the GH-#101 structural-signal bar is ONE shared constant with pinned contents")
+    func structuralSignalBarIsSharedAndPinned() {
+        // QA MINOR 8 (2026-07-15): the set was duplicated in findBestPair
+        // and CatalogScopeEvidence — a drift in either copy would silently
+        // change what counts as "evidence of belonging to video" or what
+        // Find A/V Pair may propose. Pin the contents AND the sharing.
+        #expect(CorrelationScorer.structuralSignals
+                == ["filename", "directory", "timecode", "tape"])
+        #expect(CatalogScopeEvidence.structuralSignals
+                == CorrelationScorer.structuralSignals,
+                "the evidence test must consume the SAME constant, not a copy")
     }
 }
 
