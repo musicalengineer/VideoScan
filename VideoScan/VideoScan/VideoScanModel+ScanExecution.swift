@@ -236,13 +236,23 @@ extension VideoScanModel {
             updateGlobalScanState()
             return
         }
+        // Catalog scope gate (video-only catalog, 2026-07-15): ambiguous
+        // audio is admitted only with video-linked evidence; stray stills/
+        // music are dropped. Runs BEFORE preservation + merge so excluded
+        // files never enter the catalog — and re-drop identically on every
+        // rescan (nothing creeps back). Pair-protected records pass
+        // untouched (hard invariant; see VideoScanModel+CatalogScope).
+        let scopeOutcome = await applyCatalogScopeGate(
+            targetRecords: targetRecords, volName: volName, audit: audit)
+        let scopedRecords = scopeOutcome.admitted
+
         // Restore dossier + user-edit fields snapshotted in startTarget.
         // Without this, every rescan would silently destroy hours of
         // Qwen + Whisper work and any manual people tags. Must run BEFORE
         // commitScanResults so the merged-in records carry the fields.
-        let restored = applyPreservedFieldsAfterRescan(of: target, onto: targetRecords)
+        let restored = applyPreservedFieldsAfterRescan(of: target, onto: scopedRecords)
         if restored > 0 {
-            appLog.write("Rescan preservation: restored dossier+user fields onto \(restored) of \(targetRecords.count) freshly-scanned records on \(volName)")
+            appLog.write("Rescan preservation: restored dossier+user fields onto \(restored) of \(scopedRecords.count) freshly-scanned records on \(volName)")
         }
         // Discovery honesty (2026-07-02): a scan whose enumerator could not
         // read one or more directories has NOT seen the whole tree — even if
@@ -268,7 +278,7 @@ extension VideoScanModel {
         await commitScanResults(
             root: target.searchPath,
             volName: volName,
-            targetRecords: targetRecords,
+            targetRecords: scopedRecords,
             scanWasComplete: scanWasComplete
         )
         saveCatalogDebounced()
@@ -283,9 +293,9 @@ extension VideoScanModel {
             keptCheckpoint = true
             log("  💾 Scan checkpoint kept for \(volName) — the scan aborted before completing, so it stays resumable.")
         }
-        logTargetScanSummary(volName: volName, records: targetRecords)
-        finishDiscoveryAudit(audit, volName: volName, cataloged: targetRecords.count)
-        appLog.write("Completed catalog scan of volume \(volName): \(completedCount) file(s) scanned, \(targetRecords.count) catalogued")
+        logTargetScanSummary(volName: volName, records: scopedRecords)
+        finishDiscoveryAudit(audit, volName: volName, cataloged: scopedRecords.count)
+        appLog.write("Completed catalog scan of volume \(volName): \(completedCount) file(s) scanned, \(scopedRecords.count) catalogued")
         // Post-merge status (QA on 3628e07): a PARTIAL merge must not claim
         // .complete — that both misstates what happened and hides the
         // resume affordance until relaunch, because detectResumableTargets
@@ -338,6 +348,9 @@ extension VideoScanModel {
         lines.append("  ── Discovery audit — \(volName) ──")
         lines.append("  Enumerated \(audit.filesEnumerated) file(s) · admitted \(audit.filesAdmitted) · cataloged \(audit.filesCataloged)")
         lines.append("  Skipped: \(audit.skippedNonMediaExtension) non-media ext · \(audit.skippedExtensionlessOff) extensionless (option off) · \(audit.skippedAudioExtensionOff) audio (option off) · \(audit.skippedSmallFile) small · \(audit.skippedSystemTreeDirs) system dir(s) · \(audit.skippedBundleDirs) bundle dir(s)")
+        if audit.skippedCatalogScope > 0 || audit.scopeUnlinkedAudioExcluded > 0 || audit.scopeLinkedAudioKept > 0 {
+            lines.append("  Catalog scope: \(audit.skippedCatalogScope) photo/music file(s) skipped before probing · \(audit.scopeLinkedAudioKept) audio kept (belongs to a video) · \(audit.scopeUnlinkedAudioExcluded) audio left out (no matching video)")
+        }
         if audit.sniffRejected > 0 || audit.probeRejected > 0 {
             lines.append("  Not cataloged: \(audit.sniffRejected) no media signature (sniff) · \(audit.probeRejected) unidentified by ffprobe")
         }

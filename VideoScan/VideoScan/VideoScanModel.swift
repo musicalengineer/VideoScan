@@ -511,6 +511,23 @@ final class VideoScanModel: ObservableObject {
     /// checkmarks update live.
     @Published var scanOptions: ScanOptions = .restored()
 
+    /// Catalog scope: video and linked audio only (DEFAULT ON — Rick's
+    /// 2026-07-15 directive). Drives the walker's pre-ffprobe extension
+    /// skip and the post-scan linked-audio evidence gate. Test hosts get
+    /// the pristine default and never read/write the real plist
+    /// (settings-pollution class).
+    @Published var catalogScopeSettings: CatalogScopeSettings =
+        TestEnvironment.isTestHost
+            ? CatalogScopeSettings()
+            : CatalogScopeSettings.restored(from: .standard)
+
+    /// Explicit save — @Published kills didSet, so every UI mutation of
+    /// `catalogScopeSettings` must call this (AnalysisScope pattern).
+    func saveCatalogScopeSettings() {
+        guard !TestEnvironment.isTestHost else { return }
+        catalogScopeSettings.save(to: .standard)
+    }
+
     /// Snapshot the current skip-directory set from scanOptions.
     /// Must be called on the main actor (returns a Sendable Set<String>
     /// that nonisolated walkers can then capture safely).

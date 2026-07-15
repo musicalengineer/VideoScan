@@ -83,6 +83,7 @@ extension VideoScanModel {
             probeExtensionless: scanOptions.probeExtensionless,
             scanAudioFiles: scanOptions.scanAudioFiles,
             scanUnknownExtensions: scanOptions.scanUnknownExtensions,
+            videoOnlyCatalogScope: catalogScopeSettings.videoAndLinkedAudioOnly,
             audit: audit
         ) { [weak self] currentDir in
             Task { @MainActor in
@@ -424,6 +425,7 @@ extension VideoScanModel {
         probeExtensionless: Bool = false,
         scanAudioFiles: Bool = false,
         scanUnknownExtensions: Bool = false,
+        videoOnlyCatalogScope: Bool = false,
         audit: DiscoveryAuditCollector? = nil,
         onDirectoryEntered: (@Sendable (_ currentDir: URL) -> Void)? = nil
     ) -> AsyncStream<URL> {
@@ -437,6 +439,7 @@ extension VideoScanModel {
             audioExtensions: audioExtensions,
             scanAudioFiles: scanAudioFiles,
             scanUnknownExtensions: scanUnknownExtensions,
+            videoOnlyCatalogScope: videoOnlyCatalogScope,
             audit: audit,
             onDirectoryEntered: onDirectoryEntered
         )

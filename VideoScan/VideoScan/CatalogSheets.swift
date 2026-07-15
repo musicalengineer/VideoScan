@@ -219,8 +219,27 @@ struct ScanOptionsMenu: View {
         )
     }
 
+    /// Catalog-scope binding — explicit save() on every change
+    /// (@Published kills didSet; same pattern as `toggle` above).
+    private var catalogScopeBinding: Binding<Bool> {
+        Binding(
+            get: { model.catalogScopeSettings.videoAndLinkedAudioOnly },
+            set: { newVal in
+                model.catalogScopeSettings.videoAndLinkedAudioOnly = newVal
+                model.saveCatalogScopeSettings()
+            }
+        )
+    }
+
     var body: some View {
         Menu {
+            // Catalog scope (2026-07-15): ON by default. Turning it OFF is
+            // the legacy escape hatch — catalog everything the scan finds.
+            Toggle("Videos and Their Audio Only", isOn: catalogScopeBinding)
+                .help("Keep the catalog to family videos, plus audio that belongs to a video (like the sound half of an Avid pair). Photos and music files are skipped without slowing the scan down. Turn off to catalog everything the scan finds, like older versions did.")
+
+            Divider()
+
             Toggle("Skip System Files", isOn: toggle(\.skipSystemFiles))
             Toggle("Skip Media Bundles", isOn: toggle(\.skipMediaBundles))
             Toggle("Skip Small Files", isOn: toggle(\.skipSmallFiles))

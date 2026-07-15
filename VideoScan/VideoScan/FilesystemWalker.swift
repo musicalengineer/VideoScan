@@ -32,6 +32,12 @@ enum FilesystemWalker {
         case audioScanningOff
         /// No extension while "Scan Files With No Extension" is off.
         case extensionlessScanningOff
+        /// Still-image or music extension while the video-only catalog
+        /// scope is on (CatalogScopePolicy, 2026-07-15). Checked FIRST —
+        /// it beats every additive "Scan X" toggle, which is the compute
+        /// win: no sniff, no hash, no ffprobe for 25k AIF neighbors'
+        /// stills or an 81k-file music archive.
+        case catalogScopeExcluded
     }
 
     /// Classify a regular file by extension. Normal scans admit only known
@@ -53,8 +59,20 @@ enum FilesystemWalker {
                              probeExtensionless: Bool = false,
                              scanAudioFiles: Bool = false,
                              scanUnknownExtensions: Bool = false,
+                             videoOnlyCatalogScope: Bool = false,
                              knownNonMediaExtensions: Set<String> = SkipCategories.knownNonMediaExtensions
     ) -> FileAdmission {
+        // Video-only catalog scope (2026-07-15): stills and music formats
+        // are out BEFORE any allowlist/toggle can admit them — camera
+        // raws (.cr3) rode in via "Scan Unrecognized File Types" (their
+        // ISO-BMFF header passes the sniff) and music rode in via "Scan
+        // For Audio Files". Also beats the video allowlist deliberately:
+        // Rick classified .ogg as music, and it sits on both lists.
+        // Ambiguous audio (wav/aif/…) is NOT skipped here — it must be
+        // probed so the post-scan evidence gate can judge it.
+        if videoOnlyCatalogScope, CatalogScopePolicy.extensionAlwaysExcluded(ext) {
+            return .reject(.catalogScopeExcluded)
+        }
         if videoExtensions.contains(ext) { return .admit }
         if audioExtensions.contains(ext) {
             return scanAudioFiles ? .admit : .reject(.audioScanningOff)
@@ -75,12 +93,14 @@ enum FilesystemWalker {
                                 audioExtensions: Set<String> = [],
                                 probeExtensionless: Bool = false,
                                 scanAudioFiles: Bool = false,
-                                scanUnknownExtensions: Bool = false) -> Bool {
+                                scanUnknownExtensions: Bool = false,
+                                videoOnlyCatalogScope: Bool = false) -> Bool {
         classifyFile(extension: ext, videoExtensions: videoExtensions,
                      audioExtensions: audioExtensions,
                      probeExtensionless: probeExtensionless,
                      scanAudioFiles: scanAudioFiles,
-                     scanUnknownExtensions: scanUnknownExtensions) == .admit
+                     scanUnknownExtensions: scanUnknownExtensions,
+                     videoOnlyCatalogScope: videoOnlyCatalogScope) == .admit
     }
 
     // MARK: - Shared walk core
@@ -96,6 +116,7 @@ enum FilesystemWalker {
         let probeExtensionless: Bool
         let scanAudioFiles: Bool
         let scanUnknownExtensions: Bool
+        let videoOnlyCatalogScope: Bool
     }
 
     /// Synchronous iterative depth-first walk. Both public walkers run this
@@ -277,7 +298,8 @@ enum FilesystemWalker {
                             audioExtensions: policy.audioExtensions,
                             probeExtensionless: policy.probeExtensionless,
                             scanAudioFiles: policy.scanAudioFiles,
-                            scanUnknownExtensions: policy.scanUnknownExtensions) {
+                            scanUnknownExtensions: policy.scanUnknownExtensions,
+                            videoOnlyCatalogScope: policy.videoOnlyCatalogScope) {
         case .admit:
             if ext == "ts" && !isMpegTS(url) {
                 audit?.skippedNonMediaExtension()   // TypeScript, not MPEG-TS
@@ -295,6 +317,8 @@ enum FilesystemWalker {
             audit?.skippedAudioExtensionOff()
         case .reject(.extensionlessScanningOff):
             audit?.skippedExtensionlessOff()
+        case .reject(.catalogScopeExcluded):
+            audit?.skippedCatalogScope()
         }
     }
 
@@ -313,6 +337,7 @@ enum FilesystemWalker {
         audioExtensions: Set<String> = [],
         scanAudioFiles: Bool = false,
         scanUnknownExtensions: Bool = false,
+        videoOnlyCatalogScope: Bool = false,
         audit: DiscoveryAuditCollector? = nil,
         onProgress: (@Sendable (_ currentDir: URL, _ filesFoundSoFar: Int, _ lastFile: URL?) -> Void)? = nil
     ) async -> [URL] {
@@ -324,7 +349,8 @@ enum FilesystemWalker {
             minFileBytes: skipSmallFiles ? 1_048_576 : 0,
             probeExtensionless: probeExtensionless,
             scanAudioFiles: scanAudioFiles,
-            scanUnknownExtensions: scanUnknownExtensions
+            scanUnknownExtensions: scanUnknownExtensions,
+            videoOnlyCatalogScope: videoOnlyCatalogScope
         )
         let result = await Task.detached(priority: .userInitiated) {
             var videoFiles: [URL] = []
@@ -359,6 +385,7 @@ enum FilesystemWalker {
         audioExtensions: Set<String> = [],
         scanAudioFiles: Bool = false,
         scanUnknownExtensions: Bool = false,
+        videoOnlyCatalogScope: Bool = false,
         audit: DiscoveryAuditCollector? = nil,
         onDirectoryEntered: (@Sendable (_ currentDir: URL) -> Void)? = nil
     ) -> AsyncStream<URL> {
@@ -370,7 +397,8 @@ enum FilesystemWalker {
             minFileBytes: skipSmallFiles ? 1_048_576 : 0,
             probeExtensionless: probeExtensionless,
             scanAudioFiles: scanAudioFiles,
-            scanUnknownExtensions: scanUnknownExtensions
+            scanUnknownExtensions: scanUnknownExtensions,
+            videoOnlyCatalogScope: videoOnlyCatalogScope
         )
         return AsyncStream(URL.self, bufferingPolicy: .unbounded) { continuation in
             let walker = Task.detached(priority: .userInitiated) {

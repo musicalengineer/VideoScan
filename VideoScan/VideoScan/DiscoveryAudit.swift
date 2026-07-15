@@ -58,6 +58,18 @@ struct DiscoveryAudit: Codable, Equatable, Sendable {
     var skippedExtensionlessOff: Int = 0
     /// Under the small-file floor (1 MB) with "Skip Small Files" on.
     var skippedSmallFile: Int = 0
+    /// Still-image / music extension skipped pre-probe by the video-only
+    /// catalog scope (CatalogScopePolicy, 2026-07-15). Zero when the
+    /// scope toggle is off.
+    var skippedCatalogScope: Int = 0
+
+    // ── Catalog-scope audio gate (post-scan, finalize) ──
+    /// Probed ambiguous-audio files NOT cataloged: the evidence test found
+    /// no video they belong to (video-only catalog scope).
+    var scopeUnlinkedAudioExcluded: Int = 0
+    /// Probed ambiguous-audio files KEPT: video-linked per the correlator's
+    /// pairing bar (or protected as part of an existing recovered pair).
+    var scopeLinkedAudioKept: Int = 0
 
     // ── Directories skipped, by rule (counts only) ──
     /// Skip-listed directory names (system trees, dev caches, Finder meta).
@@ -166,6 +178,7 @@ final class DiscoveryAuditCollector: @unchecked Sendable {
     func skippedAudioExtensionOff() { with { $0.skippedAudioExtensionOff += 1 } }
     func skippedExtensionlessOff() { with { $0.skippedExtensionlessOff += 1 } }
     func skippedSmallFile() { with { $0.skippedSmallFile += 1 } }
+    func skippedCatalogScope() { with { $0.skippedCatalogScope += 1 } }
     func skippedSystemTreeDir() { with { $0.skippedSystemTreeDirs += 1 } }
     func skippedBundleDir() { with { $0.skippedBundleDirs += 1 } }
     func directoryEnumerationFailed(path: String, error: Error) {
@@ -186,6 +199,16 @@ final class DiscoveryAuditCollector: @unchecked Sendable {
     /// (checkpoint honesty, QA 2026-07-02).
     func markResumedFromIncompleteWalk() {
         with { $0.resumedFromIncompleteWalk = true }
+    }
+
+    // ── Catalog-scope gate hook (finalize, once per scan) ──
+    /// Record the post-scan ambiguous-audio verdicts (video-only catalog
+    /// scope). Called once with the batch totals — not per file.
+    func catalogScopeAudioJudged(linkedKept: Int, unlinkedExcluded: Int) {
+        with {
+            $0.scopeLinkedAudioKept += linkedKept
+            $0.scopeUnlinkedAudioExcluded += unlinkedExcluded
+        }
     }
 
     // ── Probe-engine hooks ──
