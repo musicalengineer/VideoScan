@@ -31,13 +31,18 @@ extension VideoScanModel {
     /// stripped from every export path so a catalog moved to another Mac
     /// looks like the user's curated view, not their personal trash bin.
     /// Restoring is a per-machine action — exports never carry purge state.
+    ///
+    /// Set-aside policy (QA blocker fix, 2026-07-15): set-aside records
+    /// travel WITH their `setAsideReason` — they are part of the catalog
+    /// ("hidden, never deleted"), so an export/re-import must round-trip
+    /// them. See `pfExportableRecords`.
     func exportCatalog(to url: URL) throws {
-        let activeRecords = pfActiveRecords(records)
-        let excluded = records.count - activeRecords.count
+        let exportable = pfExportableRecords(records)
+        let purgedExcluded = records.count - exportable.count
         let snapshot = CatalogSnapshot(
             version: CatalogSnapshot.currentVersion,
             savedAt: Date(),
-            records: activeRecords,
+            records: exportable,
             savedFromHost: CatalogHost.currentName
         )
         let encoder = JSONEncoder()
@@ -48,10 +53,13 @@ extension VideoScanModel {
         // byte-identical to the former CatalogSnapshot encoding.
         let data = try encoder.encode(CatalogSnapshotDTO(snapshot))
         try data.write(to: url, options: .atomic)
-        if excluded > 0 {
-            log("Exported \(activeRecords.count) records (\(excluded) removed records excluded)")
+        if purgedExcluded > 0 {
+            // The excluded set is exactly the purged records now — the log
+            // label must say so (it used to lump set-aside records under
+            // "removed", which both mislabeled them and hid the data loss).
+            log("Exported \(exportable.count) records (\(purgedExcluded) removed-from-catalog record(s) excluded — local trash never travels)")
         } else {
-            log("Exported \(activeRecords.count) records")
+            log("Exported \(exportable.count) records")
         }
     }
 

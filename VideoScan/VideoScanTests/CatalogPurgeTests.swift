@@ -905,11 +905,13 @@ struct CatalogPurgeGapTests {
     // MARK: - 18. Bundle export strips purged records
     //
     // B3 spec: BundleExporter.writeBundle filters its records argument
-    // through pfActiveRecords before encoding. Per existing-test pattern
-    // (#13 above) we avoid pulling in POIStorage.allPOIFolders by driving
-    // the filter pipeline directly — same approach the bundle exporter
-    // uses internally, so this asserts the documented contract without
-    // needing a real Application Support tree.
+    // through pfExportableRecords before encoding (pfActiveRecords until
+    // the 2026-07-15 QA blocker fix — set-aside records must TRAVEL, only
+    // purged stays local). Per existing-test pattern (#13 above) we avoid
+    // pulling in POIStorage.allPOIFolders by driving the filter pipeline
+    // directly — same approach the bundle exporter uses internally, so
+    // this asserts the documented contract without needing a real
+    // Application Support tree.
     @Test func bundleExport_stripsPurgedRecords() async throws {
         let active1 = makeRecord(name: "active_on_v1.mov",
                                  path: "/Volumes/V1/active_on_v1.mov")
@@ -924,9 +926,9 @@ struct CatalogPurgeGapTests {
         let mixed = [active1, purgedA, active2, purgedB]
 
         // The bundle exporter's first line is `let records =
-        // pfActiveRecords(inputRecords)`. Apply the same filter here and
-        // assert the resulting array is what the encoder would see.
-        let toEncode = pfActiveRecords(mixed)
+        // pfExportableRecords(inputRecords)`. Apply the same filter here
+        // and assert the resulting array is what the encoder would see.
+        let toEncode = pfExportableRecords(mixed)
         #expect(toEncode.count == 2,
                 "Filter pipeline must drop both purged records before encoding")
         let activeIDs = Set(toEncode.map { $0.id })

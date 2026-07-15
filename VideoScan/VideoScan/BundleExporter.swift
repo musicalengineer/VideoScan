@@ -75,6 +75,12 @@ enum BundleExporter {
     /// view, not their personal trash bin. The caller can compute the
     /// excluded count from `records.count - summary.manifest.counts.records`
     /// and log it for discoverability.
+    ///
+    /// Set-aside policy (QA blocker fix, 2026-07-15): set-aside records
+    /// TRAVEL, with their `setAsideReason` — they are part of the catalog
+    /// ("hidden, never deleted"), and a bundle is a backup/transfer of the
+    /// catalog. Dropping them here silently destroyed Tidy state on
+    /// restore. See `pfExportableRecords`.
     @MainActor
     static func writeBundle(records inputRecords: [VideoRecord],
                             scanTargets: [CatalogScanTarget],
@@ -94,11 +100,12 @@ enum BundleExporter {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
 
-        // Global-inert filter applied before serialization — purged records
-        // never cross the bundle boundary. Single filter site keeps the
-        // record-count math in the manifest consistent with what's actually
-        // encoded in catalog.json.
-        let records = pfActiveRecords(inputRecords)
+        // Export filter applied before serialization — purged records never
+        // cross the bundle boundary; set-aside records DO (with their
+        // reason), so a restore round-trips the user's Tidy state. Single
+        // filter site keeps the record-count math in the manifest
+        // consistent with what's actually encoded in catalog.json.
+        let records = pfExportableRecords(inputRecords)
 
         // 1. Catalog — same shape as the standalone catalog export so a
         //    catalog.json pulled out of a bundle could be imported via the

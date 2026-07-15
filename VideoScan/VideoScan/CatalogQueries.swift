@@ -595,13 +595,37 @@ nonisolated func pfTriageBandCounts(
 
 /// Return records that are neither soft-removed NOR set aside by the
 /// video-only catalog scope — the default catalog view, and the record
-/// set every downstream feature operates on (search, dup detection,
-/// correlate candidates, analysis eligibility, CSV/bundle export,
-/// triage). Set-aside exclusion added 2026-07-15: hidden cruft must not
-/// show up "in a list or in a search" (Rick), and must never be offered
-/// as a correlate/dup/analysis candidate.
+/// set every downstream FEATURE surface operates on (search, dup
+/// detection, correlate candidates, analysis eligibility, triage).
+/// Set-aside exclusion added 2026-07-15: hidden cruft must not show up
+/// "in a list or in a search" (Rick), and must never be offered as a
+/// correlate/dup/analysis candidate.
+///
+/// NOT for exports/backups — those carry the catalog itself and must
+/// keep set-aside records; use `pfExportableRecords` there.
 nonisolated func pfActiveRecords(_ records: [VideoRecord]) -> [VideoRecord] {
     records.filter { !$0.isPurged && !$0.isSetAside }
+}
+
+/// Return the records that EXPORTS and BACKUPS carry: everything except
+/// purged. Deliberately a SEPARATE predicate from `pfActiveRecords`
+/// (QA blocker fix, 2026-07-15):
+///
+///   * Set-aside records stay IN the catalog — "hidden, never deleted"
+///     is the whole contract — so a bundle/catalog export must carry
+///     them WITH their `setAsideReason`, or a backup restore / re-import
+///     silently loses the user's Tidy state (and the records themselves
+///     on a fresh machine).
+///   * Purged records remain LOCAL-ONLY (the standing "local trash never
+///     travels" policy) — exports still exclude them.
+///
+/// Shape rationale: exports are the ONLY surfaces whose job is carrying
+/// the catalog rather than presenting a view of it, so this is the
+/// smallest-blast-radius split — two call sites change (BundleExporter,
+/// exportCatalog) and every view/feature surface keeps the set-aside-
+/// hidden default via `pfActiveRecords`.
+nonisolated func pfExportableRecords(_ records: [VideoRecord]) -> [VideoRecord] {
+    records.filter { !$0.isPurged }
 }
 
 /// Return records whose `purgedAt` is non-nil — the "Show removed" view.
