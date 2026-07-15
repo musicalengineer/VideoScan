@@ -1,7 +1,7 @@
 # VideoScan Project
 
 ## Manager role
-When operating in this repo, you are the Manager. Read .claude/MANAGER.md for your protocol. Manager directs the activity of the sub-agents so the director (Rick) of this project can maintain the high-level view and direct agents to perform in their respective areas. Most especially, the QA and testing sub agents need to make sure we have no regressions and they can also look on GH for stats and CI and code metrics. 
+When operating in this repo, you are the Manager. Read .Codex/MANAGER.md for your protocol. Manager directs the activity of the sub-agents so the director (Rick) of this project can maintain the high-level view and direct agents to perform in their respective areas. Most especially, the QA and testing sub agents need to make sure we have no regressions and they can also look on GH for stats and CI and code metrics. 
 
 ## Overview
 Personal video cataloging and person-finding suite for organizing family home videos across multiple storage volumes. Three components work together to catalog, search by face, and compile clips.
@@ -97,7 +97,7 @@ Rationale: escaped bugs are boundary bugs (environment, cost, capability) — th
 <!-- Document non-obvious choices here -->
 -
 
-## Notes for Claude
+## Notes for Codex
 <!-- Instructions for AI assistance -->
 - This is a personal project — prioritize reliability with large video libraries
 - macOS-native capabilities preferred (Vision, AVFoundation) over cross-platform alternatives
@@ -105,7 +105,7 @@ Rationale: escaped bugs are boundary bugs (environment, cost, capability) — th
 
 ## Build mode policy
 
-- **Debug** for rapid dev iteration — Rick's solo edit/build/run loops AND paired RD sessions with Claude. Incremental compiles are 5–15s instead of ~3 min. Default when in doubt.
+- **Debug** for rapid dev iteration — Rick's solo edit/build/run loops AND paired RD sessions with Codex. Incremental compiles are 5–15s instead of ~3 min. Default when in doubt.
 - **Release** for: (1) automated tests where production parity matters (TestDriver Smoke/Diagnostic, CI, perf baselines), (2) manual demo / family-facing runs, (3) bugs that only reproduce under the optimizer.
 - Build-settings notes: Debug's `ONLY_ACTIVE_ARCH` should be `YES` (M1/M4 → arm64 only). Release keeps `SWIFT_COMPILATION_MODE = wholemodule` — that's the right call for production but is why Release rebuilds are slow on a one-line change.
 - Adopted 2026-05-23 after a slow-Xcode investigation. Supersedes the prior "always Release" practice.
@@ -113,11 +113,11 @@ Rationale: escaped bugs are boundary bugs (environment, cost, capability) — th
 
 # VideoScan — Agent Team Configuration
 
-This section augments the existing project CLAUDE.md. Append it (or merge as appropriate).
+This section augments the existing project AGENTS.md. Append it (or merge as appropriate).
 
 ## Operating model
 
-Rick is the Director (CTO). The main Claude Code session is the Manager. Six specialized subagents handle specific concerns:
+Rick is the Director (CTO). The main Codex session is the Manager. Six specialized subagents handle specific concerns:
 
 - `feature-dev` — Swift/SwiftUI implementation
 - `bug-fix` — diagnostic and remediation work
@@ -126,7 +126,7 @@ Rick is the Director (CTO). The main Claude Code session is the Manager. Six spe
 - `performance` — profiling and optimization
 - `metrics` — codebase measurements
 
-Subagent definitions are in `.claude/agents/`. The Manager protocol is in `.claude/agents/MANAGER.md`.
+Subagent definitions are in `.Codex/agents/`. The Manager protocol is in `.Codex/agents/MANAGER.md`.
 
 ## Autonomy
 
@@ -142,7 +142,7 @@ Manager uses **adaptive** reporting: verbose for novel work, summary for routine
 
 ## When to invoke each agent
 
-Direct invocation by Rick uses the `/` form (slash commands defined in `.claude/commands/`). Manager invocation uses the Task tool with the agent name.
+Direct invocation by Rick uses the `/` form (slash commands defined in `.Codex/commands/`). Manager invocation uses the Task tool with the agent name.
 
 Common patterns:
 - New feature → feature-dev → testing → qa → performance
