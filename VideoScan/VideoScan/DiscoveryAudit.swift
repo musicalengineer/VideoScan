@@ -70,6 +70,14 @@ struct DiscoveryAudit: Codable, Equatable, Sendable {
     /// Probed ambiguous-audio files KEPT: video-linked per the correlator's
     /// pairing bar (or protected as part of an existing recovered pair).
     var scopeLinkedAudioKept: Int = 0
+    /// Stills/music excluded at the POST-scan gate (belt-and-braces — e.g.
+    /// scope toggled on between walk and finalize). Distinct from
+    /// `skippedCatalogScope`, the pre-probe walker skip. Persisted so the
+    /// discovery-honesty ledger accounts for every enumerated file
+    /// (QA MINOR 9, 2026-07-15 — this reached the console summary but not
+    /// the audit sidecar). Additive field only: the sidecar JSON is
+    /// write-only, no decode migration needed.
+    var scopeStillOrMusicExcluded: Int = 0
 
     // ── Directories skipped, by rule (counts only) ──
     /// Skip-listed directory names (system trees, dev caches, Finder meta).
@@ -202,12 +210,14 @@ final class DiscoveryAuditCollector: @unchecked Sendable {
     }
 
     // ── Catalog-scope gate hook (finalize, once per scan) ──
-    /// Record the post-scan ambiguous-audio verdicts (video-only catalog
-    /// scope). Called once with the batch totals — not per file.
-    func catalogScopeAudioJudged(linkedKept: Int, unlinkedExcluded: Int) {
+    /// Record the post-scan gate verdicts (video-only catalog scope).
+    /// Called once with the batch totals — not per file.
+    func catalogScopeAudioJudged(linkedKept: Int, unlinkedExcluded: Int,
+                                 stillOrMusicExcluded: Int = 0) {
         with {
             $0.scopeLinkedAudioKept += linkedKept
             $0.scopeUnlinkedAudioExcluded += unlinkedExcluded
+            $0.scopeStillOrMusicExcluded += stillOrMusicExcluded
         }
     }
 

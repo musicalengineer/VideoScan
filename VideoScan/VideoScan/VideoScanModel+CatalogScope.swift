@@ -47,6 +47,12 @@ extension VideoScanModel {
         /// Belt-and-braces: stills/music that somehow reached the probe
         /// stage (e.g. scope toggled on between walk and finalize).
         var stillOrMusicExcluded = 0
+        /// Records the gate WOULD have excluded but admitted because their
+        /// content fingerprint matches an existing catalog record — the
+        /// moved/renamed-file shape. They must upsert so commitScanResults'
+        /// move adoption can relocate the ORIGINAL record instead of
+        /// pruning it (QA blocker fix, 2026-07-15).
+        var identityMatchedKept = 0
     }
 
     /// Apply the video-only catalog scope to a finished scan's records,
@@ -72,6 +78,38 @@ extension VideoScanModel {
                 .map(\.fullPath)
         )
 
+        // Move/rename identity exemption (QA blocker fix, 2026-07-15): the
+        // gate runs BEFORE commitScanResults, but move adoption inside the
+        // merge fingerprints THIS scan's added files against gone records.
+        // A cataloged audio file moved to a new directory fails the
+        // evidence test there — stripping it here would leave adoption
+        // nothing to match, and the ORIGINAL record (pair fields, notes,
+        // dossier) would be pruned as genuinely gone. So: any fresh record
+        // the gate would EXCLUDE whose content fingerprint (partialMD5 +
+        // sizeBytes — the exact key adoption trusts) matches an existing
+        // non-purged catalog record is admitted anyway. It upserts, the
+        // merge relocates the original instance, and a later Tidy pass can
+        // still set it aside if it truly has no video. Purged records stay
+        // out of the pool — they are never adoption candidates (adopting
+        // one would swallow the fresh file into a hidden row). The pool is
+        // built LAZILY: a scan that excludes nothing never pays the
+        // O(records) pass.
+        var knownFingerprints: Set<ScanMergeFingerprint>? = nil
+        func matchesExistingRecord(_ rec: VideoRecord) -> Bool {
+            let fp = ScanMergeFingerprint(of: rec)
+            guard fp.isViable else { return false }
+            if knownFingerprints == nil {
+                var pool = Set<ScanMergeFingerprint>()
+                pool.reserveCapacity(records.count)
+                for r in records where !r.isPurged {
+                    let f = ScanMergeFingerprint(of: r)
+                    if f.isViable { pool.insert(f) }
+                }
+                knownFingerprints = pool
+            }
+            return knownFingerprints?.contains(fp) ?? false
+        }
+
         var ambiguous: [VideoRecord] = []
         for rec in targetRecords {
             if CatalogScopePolicy.isPairProtected(rec) || protectedPaths.contains(rec.fullPath) {
@@ -83,10 +121,20 @@ extension VideoScanModel {
             case .video, .extensionless:
                 outcome.admitted.append(rec)
             case .still, .music:
-                outcome.stillOrMusicExcluded += 1
-                appLog.write("NOT CATALOGED — outside catalog scope (still image / music format): \(rec.fullPath)")
+                if matchesExistingRecord(rec) {
+                    outcome.admitted.append(rec)
+                    outcome.identityMatchedKept += 1
+                } else {
+                    outcome.stillOrMusicExcluded += 1
+                    appLog.write("NOT CATALOGED — outside catalog scope (still image / music format): \(rec.fullPath)")
+                }
             case .ambiguousAudio:
-                ambiguous.append(rec)
+                if matchesExistingRecord(rec) {
+                    outcome.admitted.append(rec)
+                    outcome.identityMatchedKept += 1
+                } else {
+                    ambiguous.append(rec)
+                }
             }
         }
 
@@ -117,13 +165,14 @@ extension VideoScanModel {
         }
 
         audit?.catalogScopeAudioJudged(linkedKept: outcome.linkedAudioKept,
-                                       unlinkedExcluded: outcome.unlinkedAudioExcluded)
+                                       unlinkedExcluded: outcome.unlinkedAudioExcluded,
+                                       stillOrMusicExcluded: outcome.stillOrMusicExcluded)
 
         let excluded = outcome.unlinkedAudioExcluded + outcome.stillOrMusicExcluded
-        if excluded > 0 || outcome.linkedAudioKept > 0 {
+        if excluded > 0 || outcome.linkedAudioKept > 0 || outcome.identityMatchedKept > 0 {
             // ONE summary line per scan (fa24921 console etiquette).
             log("  Catalog scope (\(volName)): kept \(outcome.linkedAudioKept) audio file(s) that belong to a video, left out \(outcome.unlinkedAudioExcluded) audio file(s) with no matching video\(outcome.stillOrMusicExcluded > 0 ? " and \(outcome.stillOrMusicExcluded) photo/music file(s)" : "").")
-            catalogScopeLog.info("Scope gate \(volName, privacy: .public): admitted=\(outcome.admitted.count) linkedAudioKept=\(outcome.linkedAudioKept) unlinkedAudioExcluded=\(outcome.unlinkedAudioExcluded) stillOrMusic=\(outcome.stillOrMusicExcluded) pairProtected=\(outcome.pairProtectedKept)")
+            catalogScopeLog.info("Scope gate \(volName, privacy: .public): admitted=\(outcome.admitted.count) linkedAudioKept=\(outcome.linkedAudioKept) unlinkedAudioExcluded=\(outcome.unlinkedAudioExcluded) stillOrMusic=\(outcome.stillOrMusicExcluded) pairProtected=\(outcome.pairProtectedKept) identityMatched=\(outcome.identityMatchedKept)")
         }
         return outcome
     }
