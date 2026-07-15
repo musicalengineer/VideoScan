@@ -593,9 +593,15 @@ nonisolated func pfTriageBandCounts(
 // Pure functions so the same logic drives the table filter, batch ops, and
 // the unit tests in CatalogPurgeTests.
 
-/// Return records whose `purgedAt` is nil — the default catalog view.
+/// Return records that are neither soft-removed NOR set aside by the
+/// video-only catalog scope — the default catalog view, and the record
+/// set every downstream feature operates on (search, dup detection,
+/// correlate candidates, analysis eligibility, CSV/bundle export,
+/// triage). Set-aside exclusion added 2026-07-15: hidden cruft must not
+/// show up "in a list or in a search" (Rick), and must never be offered
+/// as a correlate/dup/analysis candidate.
 nonisolated func pfActiveRecords(_ records: [VideoRecord]) -> [VideoRecord] {
-    records.filter { !$0.isPurged }
+    records.filter { !$0.isPurged && !$0.isSetAside }
 }
 
 /// Return records whose `purgedAt` is non-nil — the "Show removed" view.
@@ -603,20 +609,36 @@ nonisolated func pfPurgedRecords(_ records: [VideoRecord]) -> [VideoRecord] {
     records.filter { $0.isPurged }
 }
 
+/// Return the set-aside records — the "Show set-aside files" view.
+nonisolated func pfSetAsideRecords(_ records: [VideoRecord]) -> [VideoRecord] {
+    records.filter { $0.isSetAside }
+}
+
 /// Apply the soft-delete filter. When `showRemoved` is false (the default
 /// user state) purged rows are hidden; when true, all records pass through
 /// and the caller is responsible for any extra purged-row styling.
 ///
-/// This is independent of the online/offline reachability filter so the
-/// two compose: e.g. user can see (online + active), (offline + active),
-/// (online + purged when showRemoved is on), or (offline + purged when
-/// showRemoved is on).
+/// Filters on `isPurged` ONLY (not set-aside) so it composes with
+/// `pfApplySetAsideFilter` below: the two toggles are independent, and
+/// "Show removed" must not implicitly reveal or hide set-aside rows.
 nonisolated func pfApplyPurgeFilter(
     _ records: [VideoRecord],
     showRemoved: Bool
 ) -> [VideoRecord] {
     if showRemoved { return records }
-    return pfActiveRecords(records)
+    return records.filter { !$0.isPurged }
+}
+
+/// Apply the catalog-scope set-aside filter (video-only catalog,
+/// 2026-07-15). Composes with `pfApplyPurgeFilter` exactly like the
+/// online/View filters — each narrows independently, so the user can view
+/// any combination of (active | +removed) × (in-scope | +set-aside).
+nonisolated func pfApplySetAsideFilter(
+    _ records: [VideoRecord],
+    showSetAside: Bool
+) -> [VideoRecord] {
+    if showSetAside { return records }
+    return records.filter { !$0.isSetAside }
 }
 
 /// Volume-membership predicate for the catalog's Volume filter. A record

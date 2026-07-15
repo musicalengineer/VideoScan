@@ -95,7 +95,7 @@ extension VideoScanModel {
             // after this merge — current catalog (minus soft-removed) plus
             // this scan's own batch (an Avid pair often arrives together).
             var videoSnaps: [CorrelationScorer.Snap] = []
-            for r in records where !r.isPurged && r.streamType == .videoOnly {
+            for r in records where !r.isPurged && !r.isSetAside && r.streamType == .videoOnly {
                 videoSnaps.append(CorrelationScorer.snap(r))
             }
             for r in targetRecords where r.streamType == .videoOnly {

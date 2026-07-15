@@ -262,6 +262,11 @@ struct CatalogView: View {
     /// Persisted across launches like other catalog UI prefs.
     /// Default OFF — purged rows hidden until the user opts in.
     @AppStorage("catalogShowRemoved") private var showRemoved: Bool = false
+    /// Whether set-aside rows (video-only catalog scope: photos / music /
+    /// audio with no matching video) are included in the table. Default
+    /// OFF — set-aside rows hidden until the user opts in. Independent of
+    /// `showRemoved` (distinct states, distinct toggles).
+    @AppStorage("catalogShowSetAside") private var showSetAside: Bool = false
     /// Strict-catalog policy: scan targets that have never been scanned and
     /// aren't currently doing anything are hidden from the Scan Volumes
     /// table by default. The user opts in with a small toggle near the table.
@@ -399,6 +404,7 @@ struct CatalogView: View {
                 showPairsOnly: $showPairsOnly,
                 viewFilters: $catalogViewFilters,
                 showRemoved: $showRemoved,
+                showSetAside: $showSetAside,
                 dashboardContent: {
                     if model.isScanning || model.isCombining {
                         CompactDashboard(
@@ -430,6 +436,7 @@ struct CatalogView: View {
                 showPairsOnly: showPairsOnly,
                 viewFilters: catalogViewFilters,
                 showRemoved: showRemoved,
+                showSetAside: showSetAside,
                 filterByIDs: filterByIDs,
                 focusMatchScore: focusMatchScore,
                 focusLabel: focusLabel,

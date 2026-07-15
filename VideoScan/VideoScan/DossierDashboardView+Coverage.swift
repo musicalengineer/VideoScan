@@ -99,6 +99,9 @@ struct CatalogCoverage: Equatable {
             // purgedAt: tombstones from prior removals.
             if r.mediaDisposition == .confirmedJunk { junk += 1; continue }
             if r.purgedAt != nil { continue }
+            // Set-aside (video-only catalog scope) — hidden cruft, out of
+            // coverage entirely (mirrors pfCatalogWideMetadataCandidates).
+            if r.setAsideReason != nil { continue }
             t += 1
             // `eligible` mirrors the FULL orchestrator candidate
             // filter (pfCatalogWideMetadataCandidates + the Analysis

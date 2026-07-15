@@ -225,6 +225,24 @@ public class VideoRecord: Identifiable, Decodable {
     /// Swift's `Date?` ≈ C++ `std::optional<Date>` — nil/empty means "no value".
     public var purgedAt: Date?
 
+    /// Catalog-scope set-aside marker (video-only catalog, 2026-07-15).
+    /// nil = record is in scope (the normal state); non-nil = the record
+    /// was set aside as outside the video-only catalog scope, carrying a
+    /// machine reason key ("still-image" / "music-format" /
+    /// "unlinked-audio" — CatalogScopePolicy.SetAsideReason). Set-aside
+    /// rows are hidden from the default table, search, dup detection,
+    /// correlate candidates, analysis coverage, and CSV export — but the
+    /// record and its file are NEVER deleted, and restore is just
+    /// `setAsideReason = nil` (same reversibility contract as purgedAt,
+    /// kept as a SEPARATE field so "removed" and "set aside" stay
+    /// distinct states with distinct toggles).
+    ///
+    /// Codable note: encoded only when non-nil and decoded via
+    /// decodeIfPresent, so pre-feature catalog.json files round-trip
+    /// byte-identical and legacy records come back in scope.
+    /// (`String?` ≈ C++ `std::optional<std::string>`.)
+    public var setAsideReason: String?
+
     /// True when the file is DRM-protected (e.g. iTunes FairPlay-encrypted
     /// m4v / m4p purchases from long-defunct user accounts). Detected via
     /// AVAsset.hasProtectedContent during ffprobe or during the orchestrator's
@@ -413,6 +431,9 @@ public class VideoRecord: Identifiable, Decodable {
         // trip cleanly as active records rather than throwing. Regression
         // covered by CatalogPurgeTests.testDecodingLegacyCatalogJsonYieldsNilPurgedAt.
         purgedAt                    = try c.decodeIfPresent(Date.self, forKey: .purgedAt)
+        // decodeIfPresent so pre-feature catalogs (no setAsideReason key)
+        // round-trip cleanly as in-scope records (same shape as purgedAt).
+        setAsideReason              = try c.decodeIfPresent(String.self, forKey: .setAsideReason)
         // decodeIfPresent so legacy catalogs (no key) come back as false —
         // i.e. unknown DRM status. The orchestrator probes on first
         // encounter and persists the result, so this becomes a one-time

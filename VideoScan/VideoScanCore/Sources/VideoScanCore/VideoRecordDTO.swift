@@ -117,6 +117,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let combinedFromPairID: UUID?
     public let scanContext: ScanContext
     public let purgedAt: Date?
+    public let setAsideReason: String?
     public let needsReformat: Bool
     public let derivedFrom: UUID?
     public let cleanupRecipeID: String?
@@ -213,6 +214,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
         combinedFromPairID          = r.combinedFromPairID
         scanContext                 = r.scanContext
         purgedAt                    = r.purgedAt
+        setAsideReason              = r.setAsideReason
         needsReformat               = r.needsReformat
         derivedFrom                 = r.derivedFrom
         cleanupRecipeID             = r.cleanupRecipeID
@@ -350,6 +352,10 @@ public struct VideoRecordDTO: Sendable, Encodable {
         // for the (vast majority) of records that are never purged, and means
         // un-purging a record makes its JSON byte-identical to before purge.
         try c.encodeIfPresent(purgedAt, forKey: .purgedAt)
+        // Only write setAsideReason when present — same rationale as
+        // purgedAt: pre-feature records round-trip byte-identical, and
+        // restoring a set-aside record makes its JSON identical to before.
+        try c.encodeIfPresent(setAsideReason, forKey: .setAsideReason)
         // Only write drmProtected when true — same rationale as purgedAt: most
         // records are unprotected and writing `false` everywhere would inflate
         // catalog.json without changing any decoder behavior.

@@ -80,6 +80,12 @@ struct RescanPreservedFields: Sendable {
     let junkScore: Int
     let notes: String
 
+    /// Catalog-scope set-aside state (2026-07-15). Preserved so a rescan's
+    /// fresh instance can NEVER silently resurrect a set-aside record into
+    /// the default view (rescan-never-resurrects sensor) — only Tidy undo
+    /// or an explicit "Put Back in Catalog" flips this field.
+    let setAsideReason: String?
+
     /// True if this snapshot carries anything worth restoring.
     /// Records that have only scan-derived data don't need to be in
     /// the snapshot map at all — caller can use this to filter and
@@ -100,6 +106,7 @@ struct RescanPreservedFields: Sendable {
             || starRating != 0
             || junkScore != 0
             || !notes.isEmpty
+            || setAsideReason != nil
     }
 
     @MainActor
@@ -126,6 +133,7 @@ struct RescanPreservedFields: Sendable {
         self.starRating = rec.starRating
         self.junkScore = rec.junkScore
         self.notes = rec.notes
+        self.setAsideReason = rec.setAsideReason
     }
 
     /// Apply the snapshotted fields onto a freshly-scanned record.
@@ -156,6 +164,7 @@ struct RescanPreservedFields: Sendable {
         rec.starRating = self.starRating
         rec.junkScore = self.junkScore
         rec.notes = self.notes
+        rec.setAsideReason = self.setAsideReason
     }
 }
 

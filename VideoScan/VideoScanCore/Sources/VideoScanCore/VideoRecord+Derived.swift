@@ -31,6 +31,13 @@ extension VideoRecord {
     /// return after a null check.
     public var isPurged: Bool { purgedAt != nil }
 
+    /// True when the record was set aside by the video-only catalog scope
+    /// (stills / music / audio with no video link — 2026-07-15). Hidden
+    /// from default views like purged rows, but a DISTINCT reversible
+    /// state: "Show set-aside files" reveals these, "Show removed"
+    /// reveals purged. Restore is `setAsideReason = nil`.
+    public var isSetAside: Bool { setAsideReason != nil }
+
     /// True when EITHER the stored needsReformat flag is set OR the
     /// codec strings match a known-problematic legacy codec. The
     /// catalog UI's red `!` badge reads this so already-cataloged

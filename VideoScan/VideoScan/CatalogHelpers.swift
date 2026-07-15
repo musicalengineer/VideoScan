@@ -32,6 +32,11 @@ struct CatalogContent: View {
     /// orange, with a restricted context menu). When false (default), purged
     /// rows are hidden — they remain in catalog.json for recoverability.
     let showRemoved: Bool
+    /// When true, set-aside rows (video-only catalog scope: photos / music /
+    /// audio with no matching video) are included in the table so Rick can
+    /// browse and put them back. When false (default), they are hidden —
+    /// records and files are untouched. Independent of `showRemoved`.
+    var showSetAside: Bool = false
     /// When non-empty, show only these specific records (overrides all other filters).
     /// Used by Archive tab's "Show in Catalog" / "Show Pair in Catalog".
     var filterByIDs: Set<UUID> = []
@@ -216,6 +221,11 @@ struct CatalogContent: View {
         // sees a smaller input. Toggling Show Removed is a pure inclusion (it
         // adds purged rows back; it doesn't change online/View semantics).
         var out = pfApplyPurgeFilter(records, showRemoved: showRemoved)
+        // Catalog-scope set-aside filter (2026-07-15) — composes with the
+        // purge filter above; applied BEFORE search so set-aside rows can
+        // never match a default search (Rick: cruft is "only bothersome if
+        // it shows up in a list or in a search").
+        out = pfApplySetAsideFilter(out, showSetAside: showSetAside)
         if !filterTargetPaths.isEmpty {
             let prefixes = Array(filterTargetPaths)
             // Match records by CURRENT physical location only. A relocated file
@@ -297,6 +307,8 @@ struct CatalogContent: View {
                     // above the table so it never reflows the grid below —
                     // the VStack just gets one more row when armed.
                     purgeUndoBanner
+                    // Same affordance for the most recent Tidy Catalog apply.
+                    tidyUndoBanner
                     // Empty-state overlay: when a search is active and
                     // yields zero rows, surface that explicitly instead
                     // of leaving the user staring at a blank table area.
@@ -624,6 +636,55 @@ struct CatalogContent: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
                     .stroke(Color.orange.opacity(0.35), lineWidth: 1)
+            )
+            .padding(.horizontal, 12)
+            .padding(.top, 6)
+            .transition(.opacity.combined(with: .move(edge: .top)))
+        }
+    }
+
+    // Inline undo affordance for the most recent "Tidy Catalog" apply —
+    // purple to match the set-aside palette, otherwise the same layout and
+    // dismissal rules as the purge banner (no auto-dismiss timer).
+    @ViewBuilder
+    private var tidyUndoBanner: some View {
+        if let batch = model.lastTidyBatch {
+            HStack(spacing: 10) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.purple)
+                let n = batch.ids.count
+                Text("Set aside \(n) file\(n == 1 ? "" : "s") — nothing was deleted.")
+                    .font(.system(size: 12))
+                    .foregroundColor(.primary)
+                Button("Undo") {
+                    _ = model.undoLastTidyCatalog()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+
+                Spacer()
+
+                Button {
+                    model.dismissTidyUndoBanner()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(Color.secondary, Color.secondary.opacity(0.2))
+                }
+                .buttonStyle(.plain)
+                .help("Dismiss — set-aside files stay hidden until you flip “Show set-aside files” and right-click → Put Back in Catalog")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.purple.opacity(0.12))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.purple.opacity(0.35), lineWidth: 1)
             )
             .padding(.horizontal, 12)
             .padding(.top, 6)

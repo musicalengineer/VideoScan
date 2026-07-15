@@ -47,6 +47,9 @@ nonisolated func pfCatalogWideMetadataCandidates(
         guard stage == .cataloged || stage == .workbench else { return false }
         // Never re-process a purged record.
         guard rec.purgedAt == nil else { return false }
+        // Set-aside records (video-only catalog scope, 2026-07-15) are out
+        // of every analysis pipeline — hidden cruft, not work items.
+        guard rec.setAsideReason == nil else { return false }
         // Junk is a "do not analyze" state — the user has already
         // decided to cull these. Analyzing them wastes Whisper time
         // (potentially hours on bad audio) and inflates the dial's

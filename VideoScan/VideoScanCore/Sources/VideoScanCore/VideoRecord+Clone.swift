@@ -123,6 +123,7 @@ extension VideoRecord {
         c.combinedFromPairID = combinedFromPairID
         c.sourceHost = sourceHost
         c.purgedAt = purgedAt
+        c.setAsideReason = setAsideReason
         c.drmProtected = drmProtected
         c.needsReformat = needsReformat
         c.derivedFrom = derivedFrom

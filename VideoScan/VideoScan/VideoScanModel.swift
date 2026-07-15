@@ -907,6 +907,12 @@ final class VideoScanModel: ObservableObject {
     /// place of the default "Removed N items." message.
     @Published var lastPurgeUndoError: String?
 
+    // MARK: - Tidy Catalog undo state (logic in VideoScanModel+TidyCatalog.swift)
+
+    /// The Tidy undo banner observes this. nil = no banner shown. Same
+    /// session-scope one-target-at-a-time semantics as lastPurgedBatch.
+    @Published var lastTidyBatch: LastTidyBatch?
+
     // MARK: - Logging (delegates to DashboardState)
 
     func log(_ msg: String) { dashboard.log(msg) }

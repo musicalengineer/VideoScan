@@ -38,7 +38,7 @@ struct OnlineCopyFinder {
     private let byDupGroup: [UUID: [VideoRecord]]
 
     init(records: [VideoRecord]) {
-        let active = records.filter { !$0.isPurged }
+        let active = records.filter { !$0.isPurged && !$0.isSetAside }
         self.active = active
         byHashSize = Dictionary(grouping: active.filter { !$0.partialMD5.isEmpty }) {
             Self.hashSizeKey($0)
@@ -67,7 +67,7 @@ struct OnlineCopyFinder {
     /// matches first (strongest evidence), then UMID, then dup-group;
     /// deduped by id, stable within each tier by path.
     func sameContentCopies(of rec: VideoRecord) -> [VideoRecord] {
-        guard !rec.isPurged else { return [] }
+        guard !rec.isPurged, !rec.isSetAside else { return [] }
         var seen: Set<UUID> = [rec.id]
         var out: [VideoRecord] = []
 

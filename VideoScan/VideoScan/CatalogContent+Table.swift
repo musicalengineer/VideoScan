@@ -37,6 +37,28 @@ extension CatalogContent {
         }
     }
 
+    /// Right-click menu for set-aside rows (video-only catalog scope,
+    /// 2026-07-15). Same minimal shape as the purged menu: Put Back +
+    /// Reveal. Set-aside records are inert until restored — they must not
+    /// be offered Combine/Correlate/Tag actions.
+    @ViewBuilder
+    private func setAsideRowContextMenu(rec: VideoRecord, selectedRecs: [VideoRecord]) -> some View {
+        let setAsideSelection = selectedRecs.filter { $0.isSetAside }
+        Button {
+            _ = model.restoreSetAsideRecords(ids: Set(setAsideSelection.map(\.id)))
+        } label: {
+            Label(setAsideSelection.count > 1
+                  ? "Put \(setAsideSelection.count) Back in Catalog"
+                  : "Put Back in Catalog",
+                  systemImage: "arrow.uturn.backward.circle")
+        }
+        if VolumeReachability.isReachable(path: rec.fullPath) {
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.selectFile(rec.fullPath, inFileViewerRootedAtPath: "")
+            }
+        }
+    }
+
     /// Filename-cell tooltip: directory + state suffix, plus the pro-video
     /// bundle tag when the file lives inside a project bundle ("Look Inside
     /// Video Project Bundles", 2026-07-02). Kept as a helper so the bundle
@@ -45,6 +67,11 @@ extension CatalogContent {
         var tip: String
         if purged {
             tip = "\(rec.directory) (removed from catalog)"
+        } else if rec.isSetAside {
+            let label = rec.setAsideReason
+                .flatMap { CatalogScopePolicy.SetAsideReason(rawValue: $0)?.friendlyLabel }
+                ?? "outside catalog scope"
+            tip = "\(rec.directory) (set aside — \(label.lowercased()))"
         } else if let reason = rec.unanalyzableReason {
             tip = "\(rec.directory)\n\n⚠️ \(reason)"
         } else if offline {
@@ -68,6 +95,7 @@ extension CatalogContent {
                 let offline = !VolumeReachability.isReachable(path: rec.fullPath)
                 let purged = rec.isPurged
                 let workspaceActive = rec.workspaceActive
+                let setAside = rec.isSetAside
                 HStack(spacing: 4) {
                     if purged {
                         // Trash-slash icon makes the "removed" state obvious
@@ -76,6 +104,13 @@ extension CatalogContent {
                         Image(systemName: "trash.slash")
                             .font(.system(size: 10))
                             .foregroundColor(.orange)
+                    } else if setAside {
+                        // Archive-box = "set aside by catalog scope" (photo /
+                        // music / audio with no matching video). Purple to
+                        // stay distinct from purge-orange.
+                        Image(systemName: "archivebox")
+                            .font(.system(size: 10))
+                            .foregroundColor(.purple)
                     } else if rec.isLikelyUnanalyzable {
                         // Red "!" — file's video / audio codec was
                         // deprecated by AVFoundation (svq3, qdm2,
@@ -104,13 +139,14 @@ extension CatalogContent {
                         // both offline-secondary and pair-blue/green when set.
                         // Workspace tint (.mint / turquoise) sits between
                         // purged-orange (highest priority) and the rest.
-                        .italic(offline || purged)
+                        .italic(offline || purged || setAside)
                         .foregroundColor(purged ? .orange
-                            : (workspaceActive ? .mint
-                                : (offline ? .secondary
-                                    : (showPairsOnly && rec.pairedWith != nil
-                                       ? (rec.streamType == .videoOnly ? .blue : .green)
-                                       : rec.filenameColor))))
+                            : (setAside ? .purple
+                                : (workspaceActive ? .mint
+                                    : (offline ? .secondary
+                                        : (showPairsOnly && rec.pairedWith != nil
+                                           ? (rec.streamType == .videoOnly ? .blue : .green)
+                                           : rec.filenameColor)))))
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 2)
@@ -228,11 +264,13 @@ extension CatalogContent {
             // Restore / Remove menu items use the same record set their
             // actions operate on (label counts == operated-on counts).
             // Swift's `.filter` ≈ C++ std::copy_if into a new vector.
-            let activeRecs = selectedRecs.filter { !$0.isPurged }
+            let activeRecs = selectedRecs.filter { !$0.isPurged && !$0.isSetAside }
             let purgedRecs = selectedRecs.filter { $0.isPurged }
+            let setAsideRecs = selectedRecs.filter { $0.isSetAside && !$0.isPurged }
             if let id = ids.first,
                let rec = records.first(where: { $0.id == id }) {
                 // Pure-purged selection: minimal menu (Restore + Reveal).
+                // Pure set-aside selection: minimal menu (Put Back + Reveal).
                 // Mixed selection: show the full active menu PLUS a Restore
                 // item for the purged subset; row-targeted active actions
                 // (Combine, Rename, Tag, etc.) are gated on
@@ -240,13 +278,17 @@ extension CatalogContent {
                 // purged row doesn't silently apply destructive ops to it.
                 // Spec: "active-only row actions must be gated on
                 // purgedRecs.isEmpty".
-                if !activeRecs.isEmpty || rec.isPurged {
+                if !activeRecs.isEmpty || rec.isPurged || rec.isSetAside {
                     if rec.isPurged && activeRecs.isEmpty {
                         purgedRowContextMenu(rec: rec, selectedRecs: selectedRecs)
+                    } else if rec.isSetAside && activeRecs.isEmpty {
+                        setAsideRowContextMenu(rec: rec, selectedRecs: selectedRecs)
                     } else {
                         // Active or mixed selection — show the full menu,
-                        // gating active-row actions on purgedRecs.isEmpty.
-                        let pureActive = purgedRecs.isEmpty
+                        // gating active-row actions on the selection being
+                        // free of BOTH purged and set-aside rows (inert
+                        // states must never receive destructive ops).
+                        let pureActive = purgedRecs.isEmpty && setAsideRecs.isEmpty
                         Button(VolumeReachability.isReachable(path: rec.fullPath)
                                ? "Reveal in Finder"
                                : "Reveal in Finder (offline)") {
@@ -694,6 +736,21 @@ extension CatalogContent {
                             }
                             .help("Clear the removed marker on the selected rows.")
                         }
+
+                        // Put Back in Catalog — visible when the selection
+                        // contains at least one set-aside row (mixed
+                        // selection; pure set-aside gets the minimal menu).
+                        if !setAsideRecs.isEmpty {
+                            Button {
+                                _ = model.restoreSetAsideRecords(ids: Set(setAsideRecs.map(\.id)))
+                            } label: {
+                                Label(setAsideRecs.count > 1
+                                      ? "Put \(setAsideRecs.count) Back in Catalog"
+                                      : "Put Back in Catalog",
+                                      systemImage: "arrow.uturn.backward.circle")
+                            }
+                            .help("Clear the set-aside marker on the selected rows so they show up in lists and searches again.")
+                        }
                     }
                 }
             }
@@ -710,6 +767,8 @@ extension CatalogContent {
         .onChange(of: filterByIDs) { tableData = computeFiltered() }
         .onChange(of: viewFilters) { tableData = computeFiltered() }
         .onChange(of: showRemoved) { tableData = computeFiltered() }
+        .onChange(of: showSetAside) { tableData = computeFiltered() }
+        .onChange(of: model.lastTidyBatch) { tableData = computeFiltered() }
         // Re-compute when purge state flips on any record (purge, undo, restore).
         // We key off lastPurgedBatch so mutations from the model are observed.
         .onChange(of: model.lastPurgedBatch) { tableData = computeFiltered() }

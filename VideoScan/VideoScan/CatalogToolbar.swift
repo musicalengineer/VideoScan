@@ -47,7 +47,15 @@ struct CatalogToolbar<Dashboard: View>: View {
     /// When on, purged rows render alongside active rows (italic + orange).
     /// Persisted in @AppStorage("catalogShowRemoved") by the parent.
     @Binding var showRemoved: Bool
+    /// When on, set-aside rows (catalog scope: photos / music / audio with
+    /// no matching video) render alongside active rows (italic + purple).
+    /// Persisted in @AppStorage("catalogShowSetAside") by the parent.
+    @Binding var showSetAside: Bool
     @ViewBuilder let dashboardContent: () -> Dashboard
+
+    /// Tidy Catalog dry-run sheet (catalog scope, 2026-07-15). Owned here
+    /// like the junk sheets — the parent doesn't need to know about it.
+    @State private var showTidySheet = false
 
     // MARK: Delete-Confirmed-Junk sheet state
     //
@@ -513,6 +521,31 @@ struct CatalogToolbar<Dashboard: View>: View {
                   ? "Removed (purged) records are visible — italic + orange. Click to hide."
                   : "Click to show removed records alongside active ones.")
 
+            // Show set-aside toggle — reveals the files Tidy Catalog set
+            // aside (photos / music / audio with no matching video) so
+            // Rick can browse and put any of them back.
+            Toggle(isOn: $showSetAside) {
+                Label("Show set-aside", systemImage: "archivebox")
+                    .labelStyle(.titleAndIcon)
+                    .foregroundColor(showSetAside ? .purple : .secondary)
+            }
+            .toggleStyle(.button)
+            .controlSize(.small)
+            .help(showSetAside
+                  ? "Set-aside files are visible — italic + purple. Right-click one to put it back. Click to hide."
+                  : "Click to show the files Tidy Catalog set aside (photos, music, audio with no matching video).")
+
+            // Tidy Catalog — dry-run first, apply on confirm (nag-button
+            // pattern: the button performs the fix, starting with a report).
+            Button {
+                showTidySheet = true
+            } label: {
+                Label("Tidy Catalog…", systemImage: "sparkles")
+            }
+            .controlSize(.small)
+            .disabled(!hasRecords || isScanning)
+            .help("Find photos, music, and unmatched audio in the catalog and set them aside (hidden, never deleted). Shows a summary first — nothing happens until you confirm.")
+
             Spacer()
 
             Button {
@@ -561,6 +594,10 @@ struct CatalogToolbar<Dashboard: View>: View {
                     bytesSucceeded: junkResultBytesSucceeded
                 )
             }
+        }
+        // Tidy Catalog — dry-run summary first, applies on confirm.
+        .sheet(isPresented: $showTidySheet) {
+            TidyCatalogSheet(model: model)
         }
     }
 
