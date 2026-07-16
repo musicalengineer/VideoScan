@@ -50,6 +50,10 @@
         </div>
 
         <div class="typing" id="typing" hidden><span></span><span></span><span></span><em id="typingLabel">An agent is thinking</em></div>
+        <div class="roundtable-status" id="roundtableStatus" hidden>
+          <div><strong id="roundtableHeadline">Roundtable</strong><small id="roundtableDetail"></small></div>
+          <span id="roundtableCountdown"></span>
+        </div>
         <form class="composer" id="composer">
           <textarea id="message" rows="2" maxlength="32768" placeholder="What should we put on the table?" aria-label="Message"></textarea>
           <div class="composer-footer">
@@ -58,12 +62,16 @@
                 <option value="codex">Codex</option>
                 <option value="claude">Claude</option>
                 <option value="both">Codex + Claude (independent)</option>
+                <option value="roundtable">Roundtable (alternating discussion)</option>
                 <option value="notes">Room notes only</option>
               </select>
             </label>
+            <label class="turn-budget" id="turnBudget" hidden>Agent turns
+              <input id="roundtableTurns" type="number" min="2" max="10" value="4" inputmode="numeric">
+            </label>
             <div class="composer-actions">
               <button type="button" class="stop-button" id="stop" hidden>Stop</button>
-              <span class="hint">Use your keyboard’s Dictation mic · ⌘ ↵ sends</span>
+              <span class="hint" id="composerHint">Use your keyboard’s Dictation mic · ⌘ ↵ sends</span>
               <button type="submit" class="send-button" id="send">Send message <span>↗</span></button>
             </div>
           </div>

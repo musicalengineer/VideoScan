@@ -2,6 +2,7 @@ const state = {
   topics: [], messages: [], activeTopicId: null,
   agents: { codex: { connection: "connecting", busy: false }, claude: { connection: "connecting", busy: false } },
   drafts: {},
+  roundtable: { status: "inactive" },
 };
 const $ = selector => document.querySelector(selector);
 const elements = {
@@ -10,6 +11,9 @@ const elements = {
   typing: $("#typing"), typingLabel: $("#typingLabel"), status: $("#roomStatus"), pulse: $("#statusPulse"),
   codex: $("#codexParticipant"), claude: $("#claudeParticipant"), toast: $("#toast"),
   speak: $("#speakReplies"),
+  roundtableStatus: $("#roundtableStatus"), roundtableHeadline: $("#roundtableHeadline"),
+  roundtableDetail: $("#roundtableDetail"), roundtableCountdown: $("#roundtableCountdown"),
+  turnBudget: $("#turnBudget"), roundtableTurns: $("#roundtableTurns"), hint: $("#composerHint"),
 };
 const speechAvailable = "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
 let speakReplies = speechAvailable && readPreference("engineering-room-speak") === "true";
@@ -23,6 +27,7 @@ async function boot() {
   state.messages = data.messages;
   state.activeTopicId = state.topics.find(topic => topic.status === "active")?.id ?? state.topics[0]?.id ?? null;
   setAgents(data.agents ?? { codex: data.agent });
+  state.roundtable = data.roundtable ?? { status: "inactive" };
   render();
   const events = new EventSource("/api/events");
   events.addEventListener("room", event => receive(JSON.parse(event.data)));
@@ -32,7 +37,7 @@ async function boot() {
 function receive(event) {
   const { type, data } = event;
   if (type === "snapshot") {
-    state.topics = data.topics; state.messages = data.messages; setAgents(data.agents ?? { codex: data.agent }); render(); return;
+    state.topics = data.topics; state.messages = data.messages; state.roundtable = data.roundtable ?? { status: "inactive" }; setAgents(data.agents ?? { codex: data.agent }); render(); return;
   }
   if (type === "topic.created") { upsert(state.topics, data); if (!state.activeTopicId) state.activeTopicId = data.id; render(); }
   if (type === "topic.updated") { upsert(state.topics, data); render(); }
@@ -60,9 +65,10 @@ function receive(event) {
     setAgents({ [provider]: { ...state.agents[provider], connection: data.state } });
   }
   if (type === "room.error") { if (data.provider) setBusy(data.provider, false); showError(data.message); }
+  if (type === "roundtable.updated") { state.roundtable = data; renderRoundtable(); updateRoomStatus(); }
 }
 
-function render() { renderTopics(); renderMessages(); }
+function render() { renderTopics(); renderMessages(); renderRoundtable(); }
 
 function renderTopics() {
   elements.topics.replaceChildren();
@@ -119,10 +125,11 @@ function updateRoomStatus() {
   const busy = Object.entries(state.agents).filter(([, status]) => status.busy).map(([provider]) => displayName(provider));
   const online = Object.values(state.agents).filter(status => ["connected", "available"].includes(status.connection)).length;
   const unverified = Object.values(state.agents).filter(status => status.connection === "available").length;
+  const roundtableActive = ["thinking", "intervention"].includes(state.roundtable.status);
   elements.typing.hidden = busy.length === 0;
-  elements.stop.hidden = busy.length === 0;
+  elements.stop.hidden = busy.length === 0 && !roundtableActive;
   elements.typingLabel.textContent = busy.length ? `${busy.join(" and ")} ${busy.length === 1 ? "is" : "are"} thinking` : "";
-  elements.status.textContent = busy.length ? `${busy.join(" and ")} in conversation` : unverified ? "Room ready · Claude login checks on first message" : online === 2 ? "Room is ready" : `${online}/2 agents available`;
+  elements.status.textContent = roundtableActive ? `Roundtable ${state.roundtable.completedTurns + 1}/${state.roundtable.totalTurns}` : busy.length ? `${busy.join(" and ")} in conversation` : unverified ? "Room ready · Claude login checks on first message" : online === 2 ? "Room is ready" : `${online}/2 agents available`;
   elements.pulse.classList.toggle("connected", online === 2 && unverified === 0);
   elements.send.disabled = targetBusy();
 }
@@ -133,13 +140,40 @@ function targetBusy() {
   return Boolean(state.agents[target]?.busy);
 }
 
+function renderRoundtable() {
+  const roundtable = state.roundtable;
+  const visible = roundtable && roundtable.status !== "inactive";
+  elements.roundtableStatus.hidden = !visible;
+  if (!visible) return;
+  const turn = Math.min((roundtable.completedTurns ?? 0) + 1, roundtable.totalTurns ?? 0);
+  const provider = roundtable.currentProvider ? displayName(roundtable.currentProvider) : roundtable.nextProvider ? displayName(roundtable.nextProvider) : "";
+  elements.roundtableHeadline.textContent = roundtable.status === "thinking"
+    ? `Roundtable · turn ${turn}/${roundtable.totalTurns} · ${provider} thinking`
+    : roundtable.status === "intervention"
+      ? `Roundtable · ${roundtable.completedTurns}/${roundtable.totalTurns} complete · ${provider} next`
+      : `Roundtable · ${roundtable.status}`;
+  elements.roundtableDetail.textContent = roundtable.reason ?? "Codex and Claude alternate; each sees the latest attributed peer response.";
+  elements.roundtableStatus.classList.toggle("error", roundtable.status === "error");
+  updateCountdown();
+}
+
+function updateCountdown() {
+  const waitingUntil = state.roundtable?.waitingUntil;
+  if (!waitingUntil || state.roundtable.status !== "intervention") { elements.roundtableCountdown.textContent = ""; return; }
+  const seconds = Math.max(0, Math.ceil((new Date(waitingUntil).getTime() - Date.now()) / 1000));
+  elements.roundtableCountdown.textContent = `${seconds}s to interject`;
+}
+setInterval(updateCountdown, 250);
+
 elements.composer.addEventListener("submit", async event => {
   event.preventDefault();
   const text = elements.message.value.trim();
   if (!text) return;
   elements.send.disabled = true;
   try {
-    await api("/api/messages", { method: "POST", body: { topicId: state.activeTopicId, target: elements.target.value, text } });
+    const body = { topicId: state.activeTopicId, target: elements.target.value, text };
+    if (elements.target.value === "roundtable") body.turns = Number(elements.roundtableTurns.value);
+    await api("/api/messages", { method: "POST", body });
     elements.message.value = "";
   } catch (error) { showError(error.message); }
   finally { elements.send.disabled = targetBusy(); }
@@ -148,7 +182,12 @@ elements.composer.addEventListener("submit", async event => {
 elements.message.addEventListener("keydown", event => {
   if (event.key === "Enter" && event.metaKey) { event.preventDefault(); elements.composer.requestSubmit(); }
 });
-elements.target.addEventListener("change", updateRoomStatus);
+elements.target.addEventListener("change", () => {
+  const roundtable = elements.target.value === "roundtable";
+  elements.turnBudget.hidden = !roundtable;
+  elements.hint.textContent = roundtable ? "Rick starts it · agents alternate · Stop or any new message cancels continuation" : "Use your keyboard’s Dictation mic · ⌘ ↵ sends";
+  updateRoomStatus();
+});
 elements.stop.addEventListener("click", () => api("/api/turns/current/interrupt", { method: "POST", body: {} }).catch(error => showError(error.message)));
 elements.speak.addEventListener("click", () => {
   if (!speechAvailable) return;

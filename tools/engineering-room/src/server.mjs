@@ -10,6 +10,7 @@ import { CodexAppServerClient } from "./codex-client.mjs";
 import { ClaudeCliClient } from "./claude-client.mjs";
 import { RoomAgent } from "./room-agent.mjs";
 import { loadOrCreateAccessToken } from "./access-token.mjs";
+import { RoundtableController, normalizeTurns } from "./roundtable-controller.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const toolRoot = resolve(here, "..");
@@ -36,6 +37,11 @@ const clients = new Set();
 let sequence = 0;
 
 for (const agent of Object.values(agents)) agent.on("event", event => publish(event.type, event.data));
+const roundtable = new RoundtableController({
+  agents, database, publish,
+  transcript: attributedTranscript,
+  presence: () => clients.size > 0,
+});
 
 const server = createServer(async (request, response) => {
   try {
@@ -84,25 +90,39 @@ const server = createServer(async (request, response) => {
       const body = await readJson(request);
       const messageText = validateText(body.text, 1, 32768, "Message");
       const target = body.target ?? "codex";
-      if (!["codex", "claude", "both", "notes"].includes(target)) throw httpError(400, "That participant is not available.");
+      if (!["codex", "claude", "both", "notes", "roundtable"].includes(target)) throw httpError(400, "That participant is not available.");
+      const roundtableTurns = target === "roundtable" ? normalizeTurns(body.turns ?? 4) : null;
       const topics = database.snapshot().topics;
       const topicId = body.topicId ?? topics[0]?.id ?? null;
       if (topicId && !topics.some(topic => topic.id === topicId)) throw httpError(400, "Unknown topic.");
-      const recipients = target === "both" ? ["codex", "claude"] : target === "notes" ? [] : [target];
+      const wasRoundtableActive = roundtable.active;
+      if (wasRoundtableActive) await roundtable.interject();
+      if (target === "roundtable") {
+        if (wasRoundtableActive) await waitForAgentsIdle(Object.values(agents));
+        roundtable.preflight(roundtableTurns);
+      }
+      const recipients = target === "both" ? ["codex", "claude"] : ["notes", "roundtable"].includes(target) ? [] : [target];
       const busy = recipients.filter(provider => agents[provider].status.busy);
-      if (busy.length) throw httpError(409, `${busy.map(titleCase).join(" and ")} ${busy.length === 1 ? "is" : "are"} still answering. Use Stop or wait.`);
+      if (busy.length && !wasRoundtableActive) throw httpError(409, `${busy.map(titleCase).join(" and ")} ${busy.length === 1 ? "is" : "are"} still answering. Use Stop or wait.`);
       const message = database.createMessage({ topicId, author: "rick", body: messageText });
       publish("message.created", message);
       const topicTitle = topics.find(topic => topic.id === topicId)?.title ?? "General discussion";
+      if (target === "roundtable") {
+        await roundtable.start({ message, topicTitle, turns: roundtableTurns });
+        return json(response, 202, message);
+      }
       const transcript = attributedTranscript(topicId, message.id);
-      for (const provider of recipients) agents[provider].ask(message, topicTitle, transcript).catch(error => {
+      const route = () => recipients.forEach(provider => agents[provider].ask(message, topicTitle, transcript).catch(error => {
         if (error.code !== "BUSY") publish("room.error", { provider, message: publicError(error) });
-      });
+      }));
+      if (busy.length) waitForAgentsIdle(busy.map(provider => agents[provider])).then(route).catch(error => publish("room.error", { message: publicError(error) }));
+      else route();
       return json(response, 202, message);
     }
     if (request.method === "POST" && url.pathname === "/api/turns/current/interrupt") {
-      const results = await Promise.all(Object.values(agents).map(agent => agent.interrupt().catch(() => false)));
-      const interrupted = results.some(Boolean);
+      const stoppedRoundtable = await roundtable.stop("Stopped by Rick.");
+      const results = stoppedRoundtable ? [] : await Promise.all(Object.values(agents).map(agent => agent.interrupt().catch(() => false)));
+      const interrupted = stoppedRoundtable || results.some(Boolean);
       return json(response, interrupted ? 202 : 409, { interrupted });
     }
     if (request.method === "GET") return await staticFile(url.pathname, response);
@@ -226,17 +246,33 @@ function roomSnapshot() {
     agents: Object.fromEntries(Object.entries(agents).map(([provider, agent]) => [provider, agent.status])),
     agent: agents.codex.status,
     participants: { rick: "present", codex: agents.codex.status.connection, claude: agents.claude.status.connection },
+    roundtable: roundtable.snapshot,
   };
 }
 
 function attributedTranscript(topicId, excludingMessageId) {
   const labels = { rick: "Rick", codex: "Codex", claude: "Claude", system: "Room" };
-  return database.snapshot().messages
+  const chunks = database.snapshot().messages
     .filter(message => message.topicId === topicId && message.id !== excludingMessageId)
     .slice(-24)
-    .map(message => `${labels[message.author] ?? message.author}: ${message.body}`)
-    .join("\n\n")
-    .slice(-24000);
+    .map(message => `${labels[message.author] ?? message.author}: ${message.body}`);
+  const retained = [];
+  let length = 0;
+  for (let index = chunks.length - 1; index >= 0; index -= 1) {
+    const separator = retained.length ? 2 : 0;
+    if (length + separator + chunks[index].length > 24000) break;
+    retained.unshift(chunks[index]);
+    length += separator + chunks[index].length;
+  }
+  return retained.join("\n\n");
+}
+
+async function waitForAgentsIdle(selectedAgents, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  while (selectedAgents.some(agent => agent.status.busy)) {
+    if (Date.now() >= deadline) throw new Error("The interrupted agent did not become idle in time.");
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
 }
 
 function titleCase(value) { return value.charAt(0).toUpperCase() + value.slice(1); }

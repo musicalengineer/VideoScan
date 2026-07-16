@@ -39,6 +39,12 @@ Turn on **Read replies aloud** in each browser that should speak. To talk, click
 - Routes messages to **Codex**, **Claude**, **Codex + Claude**, or room notes.
   **Codex + Claude** starts two independent responses to Rick's same message;
   neither agent's output triggers the other.
+- Runs an explicit **Roundtable** only when Rick selects it and sends the
+  initiating message. Codex and Claude alternate, each receiving the latest
+  attributed peer response. The default budget is four agent turns (UI: 2–10;
+  hard server cap: 12). With a browser present, the room leaves an eight-second
+  intervention window between turns; unattended it continues quickly but never
+  beyond the fixed budget. Stop or any new Rick message cancels continuation.
 - Streams both agents' responses and provides a Stop button.
 - Stores private room state outside Git.
 - Runs Codex with a read-only sandbox and denies every approval request.
@@ -53,8 +59,9 @@ Turn on **Read replies aloud** in each browser that should speak. To talk, click
 - Discussion and inspection only; it cannot approve writes, privilege escalation, or other mutations. Read-only commands remain available to Codex.
 - One active turn per agent. Asking both is bounded to one independent turn
   from each agent.
-- No autonomous agent-to-agent loops.
-- Automated roundtables, exports, browser-controlled microphone capture, and
+- No unbounded or bot-triggered agent-to-agent loops. Roundtables are a
+  broker-owned, explicit, fixed-budget state machine and never resume after a restart.
+- Exports, browser-controlled microphone capture, and
   GitHub integration remain deferred. Spoken replies and OS Dictation work now.
 
 ## Configuration

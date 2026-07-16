@@ -57,6 +57,23 @@ test("local server requires its token and persists a safe round trip", async t =
   });
   assert.equal(afterBoth.messages.find(message => message.author === "claude").body, "An independent Claude reply.");
 
+  const roundtable = await fetch(`${base}/api/messages`, { method: "POST", headers, body: JSON.stringify({ topicId: room.topics[0].id, target: "roundtable", turns: 2, text: "Challenge each other's design." }) });
+  assert.equal(roundtable.status, 202);
+  const afterRoundtable = await waitFor(async () => {
+    const value = await (await fetch(`${base}/api/bootstrap`, { headers: { Cookie: cookie } })).json();
+    return value.roundtable.status === "completed" ? value : null;
+  });
+  assert.equal(afterRoundtable.roundtable.completedTurns, 2);
+  const initiation = afterRoundtable.messages.find(message => message.author === "rick" && message.body === "Challenge each other's design.");
+  const roundtableReplies = afterRoundtable.messages.filter(message => message.replyTo === initiation.id && ["codex", "claude"].includes(message.author));
+  assert.deepEqual(roundtableReplies.map(message => message.author), ["codex", "claude"]);
+
+  const beforeInvalid = afterRoundtable.messages.length;
+  const invalidBudget = await fetch(`${base}/api/messages`, { method: "POST", headers, body: JSON.stringify({ topicId: room.topics[0].id, target: "roundtable", turns: 13, text: "Too many turns." }) });
+  assert.equal(invalidBudget.status, 400);
+  const afterInvalid = await (await fetch(`${base}/api/bootstrap`, { headers: { Cookie: cookie } })).json();
+  assert.equal(afterInvalid.messages.length, beforeInvalid);
+
   const hostile = await fetch(`${base}/api/topics`, { method: "POST", headers: { Cookie: cookie, "Content-Type": "application/json", Origin: "https://evil.example" }, body: JSON.stringify({ title: "Injected" }) });
   assert.equal(hostile.status, 403);
 });
