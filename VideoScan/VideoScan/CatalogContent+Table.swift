@@ -476,6 +476,29 @@ extension CatalogContent {
                             }
                         }
 
+                        // Trim Master — cut static/junk off the head and
+                        // tail of an archival capture with a stream copy
+                        // (no re-encode, no quality loss). Single-file
+                        // operation in v1: disabled for multi-select.
+                        // Needs a video stream, an online volume, and no
+                        // trim already running against this record.
+                        let trimRunning = fileOpsCenter.jobs.contains { job in
+                            guard job.state.isActive, let t = job as? TrimJob else { return false }
+                            return t.record.id == rec.id
+                        }
+                        let trimBlocked = !VolumeReachability.isReachable(path: rec.fullPath)
+                            || trimRunning
+                            || activeRecs.count > 1
+                            || !(rec.streamType == .videoAndAudio || rec.streamType == .videoOnly)
+                        Button("Trim Master…") {
+                            trimRequest = TrimRequest(record: rec)
+                        }
+                        .disabled(trimBlocked)
+                        .help(activeRecs.count > 1
+                              ? "Trim Master works on one file at a time."
+                              : "Cut static or junk off the start and end — a perfect copy with no quality loss. The original is never changed.")
+                        .accessibilityIdentifier("catalog.row.trimMaster")
+
                         // Rick 2026-06-14: grey out (don't hide) when
                         // the file lacks the relevant stream. More
                         // discoverable than absent — the user learns

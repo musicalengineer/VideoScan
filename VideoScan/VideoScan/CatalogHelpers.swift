@@ -106,6 +106,8 @@ struct CatalogContent: View {
     @State var transcodeRequest: TranscodeRequest?
     /// Non-nil presents the "Clean Up Video" recipe confirmation sheet.
     @State var cleanupRequest: CleanupRequest?
+    /// Non-nil presents the "Trim Master…" in/out point sheet.
+    @State var trimRequest: TrimRequest?
 
     /// "Find Online Version" came up empty — non-nil drives an alert
     /// explaining where copies exist (all offline) or that this is the
@@ -434,6 +436,10 @@ struct CatalogContent: View {
         // as the transcode sheet above (never chained isPresented).
         .sheet(item: $cleanupRequest) { request in
             CleanupSheet(request: request)
+        }
+        // "Trim Master…" in/out point picker. Same .sheet(item:) shape.
+        .sheet(item: $trimRequest) { request in
+            TrimSheet(request: request)
         }
         .alert(
             "Find Online Version",
