@@ -70,6 +70,11 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// `<stem>_cleaned.mov` (ProRes LT, audio copied) BESIDE the
     /// original, which is never modified. Rick 2026-07-07.
     case cleanup
+    /// "Trim Master…" — cuts static/garbage off the head and tail of an
+    /// archival capture with a pure ffmpeg STREAM COPY (no re-encode,
+    /// zero quality loss) and writes `<stem>_trimmed.<same ext>` BESIDE
+    /// the original, which is never modified. Rick 2026-07-16.
+    case trim
 
     /// Badge text — rendered in small caps by the row view.
     /// `.extract` says "Faces" (not "Extract") since the verb split:
@@ -85,6 +90,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .analyze: return "Analyze"
         case .transcode: return "Transcode"
         case .cleanup: return "Clean Up"
+        case .trim: return "Trim"
         }
     }
 }
@@ -478,6 +484,25 @@ final class MediaFileOperationsCenter: ObservableObject {
         add(job)
         job.start()
         fileOpsLog.info("cleanup started: \(record.filename, privacy: .public) recipe=\(recipe.id, privacy: .public) v\(recipe.version) → \(job.outputURL.lastPathComponent, privacy: .public)")
+        return job
+    }
+
+    /// Kick off "Trim Master…" on a single record — a stream-copy trim
+    /// (never a re-encode) that publishes `<stem>_trimmed.<same ext>`
+    /// beside the original and catalogs it with provenance. The original
+    /// file and its catalog record are never modified beyond a journey
+    /// note. `plannedOutput` carries the destination the trim sheet
+    /// displayed; nil computes it fresh. Rick 2026-07-16.
+    @discardableResult
+    func startTrim(record: VideoRecord,
+                   range: TrimRange,
+                   model: VideoScanModel,
+                   plannedOutput: URL? = nil) -> TrimJob {
+        let job = TrimJob(record: record, range: range, model: model,
+                          plannedOutput: plannedOutput)
+        add(job)
+        job.start()
+        fileOpsLog.info("trim started: \(record.filename, privacy: .public) [\(TrimTimecode.format(range.inSeconds), privacy: .public) → \(TrimTimecode.format(range.outSeconds), privacy: .public)] → \(job.outputURL.lastPathComponent, privacy: .public)")
         return job
     }
 

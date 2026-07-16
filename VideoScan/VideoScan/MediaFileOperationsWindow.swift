@@ -373,6 +373,15 @@ struct MediaFileOperationRow: View {
                     // banked. Show in Catalog jumps straight there.
                     finishedChip(summary)
                     showInCatalogButtonByID(analyze.record.id)
+                } else if let trim = job as? TrimJob {
+                    // Trim finishes like Transcode: Reveal the trimmed
+                    // master + jump to its catalog row (which proves the
+                    // derivedFrom provenance wiring took effect).
+                    // publishedURL is where it ACTUALLY landed (a
+                    // publish-time collision can bump the planned name).
+                    finishedChip(summary)
+                    revealButton(trim.publishedURL ?? trim.outputURL)
+                    showInCatalogButton(trim.publishedURL ?? trim.outputURL)
                 } else {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(.green)
@@ -547,6 +556,9 @@ extension MediaFileOperationKind {
         // Clean Up shares transcode's derivative-producing nature but
         // gets its own hue so the two verbs read apart at a glance.
         case .cleanup: return .teal
+        // Trim is the third derivative-producing verb — indigo keeps it
+        // distinct from transcode's mint and cleanup's teal.
+        case .trim: return .indigo
         }
     }
 }
