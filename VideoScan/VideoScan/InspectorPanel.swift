@@ -13,6 +13,12 @@ struct InspectorPanel: View {
     let previewImage: NSImage?
     let previewOfflineVolumeName: String?
     var onSelectRecord: ((UUID) -> Void)?
+    /// Trim provenance (Trim Master, 2026-07-16), resolved by the CALLER
+    /// (O(1) id-index lookup + memoized reverse scan — no O(records)
+    /// work in this view body). `trimSource` = the record this one was
+    /// trimmed from; `trimDerivatives` = trimmed versions of this one.
+    var trimSource: VideoRecord?
+    var trimDerivatives: [VideoRecord] = []
 
     var body: some View {
         if let rec = record {
@@ -222,6 +228,23 @@ struct InspectorPanel: View {
                                         .foregroundColor(conf.textColor)
                                     Spacer()
                                 }
+                            }
+                        }
+                    }
+
+                    // Trim provenance — same minimal-indicator convention
+                    // as the Correlation section's "Paired With" row.
+                    if rec.trimInSeconds != nil || !trimDerivatives.isEmpty {
+                        inspectorSection("Trim", systemImage: "scissors") {
+                            if let inSec = rec.trimInSeconds, let outSec = rec.trimOutSeconds {
+                                if let source = trimSource {
+                                    trimLinkRow(label: "Trimmed from", target: source)
+                                }
+                                inspectorRow("Kept",
+                                             "\(TrimTimecode.format(inSec)) – \(TrimTimecode.format(outSec))")
+                            }
+                            ForEach(trimDerivatives, id: \.id) { derived in
+                                trimLinkRow(label: "Trimmed version", target: derived)
                             }
                         }
                     }
@@ -625,6 +648,39 @@ struct InspectorPanel: View {
     }
 
     // MARK: - Row Helpers
+
+    /// Clickable record link for the Trim section — same visual language
+    /// as the Correlation section's "Paired With" row.
+    private func trimLinkRow(label: String, target: VideoRecord) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .frame(width: 80, alignment: .trailing)
+            Button {
+                onSelectRecord?(target.id)
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "scissors")
+                        .font(.system(size: 9))
+                    Text(target.filename)
+                        .font(.system(size: 11, weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .foregroundColor(.accentColor)
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering in
+                if hovering {
+                    NSCursor.pointingHand.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            Spacer()
+        }
+    }
 
     @ViewBuilder
     private func inspectorRow(_ label: String, _ value: String) -> some View {

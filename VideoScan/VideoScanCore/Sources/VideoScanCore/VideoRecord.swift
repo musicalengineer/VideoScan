@@ -303,6 +303,20 @@ public class VideoRecord: Identifiable, Decodable {
     /// `cleanupRecipeID` is nil.
     public var cleanupRecipeVersion: Int?
 
+    /// Trim provenance (Trim Master, 2026-07-16): the source-file second
+    /// the stream-copy trim kept FROM. Presence marks this record as a
+    /// trim derivative (derivationKind "trim") — exactly how
+    /// `cleanupRecipeID` marks cleanup outputs. Pairs with `derivedFrom`
+    /// (the SOURCE record's id) so the catalog can answer "trimmed from
+    /// what, keeping which range". Additive optional — legacy catalogs
+    /// decode as nil and the DTO only encodes the key when present, so
+    /// old catalog.json files round-trip byte-identical.
+    public var trimInSeconds: Double?
+
+    /// The source-file second the trim kept UNTIL. nil whenever
+    /// `trimInSeconds` is nil.
+    public var trimOutSeconds: Double?
+
     /// True when this record represents a file currently being actively
     /// worked on with external tools (transcode in another app, Topaz,
     /// FCP edit in progress). Independent of `lifecycleStage` — a file
@@ -445,6 +459,9 @@ public class VideoRecord: Identifiable, Decodable {
         // as derivedFrom: legacy catalogs (no keys) decode as nil.
         cleanupRecipeID             = try c.decodeIfPresent(String.self, forKey: .cleanupRecipeID)
         cleanupRecipeVersion        = try c.decodeIfPresent(Int.self, forKey: .cleanupRecipeVersion)
+        // Trim provenance — same additive-optional migration pattern.
+        trimInSeconds               = try c.decodeIfPresent(Double.self, forKey: .trimInSeconds)
+        trimOutSeconds              = try c.decodeIfPresent(Double.self, forKey: .trimOutSeconds)
         // Workspace-active flag. decodeIfPresent so legacy catalogs (no key)
         // come back as false — i.e. "not in workspace." Import-to-workspace
         // (Pass B) is the only writer that sets this true.

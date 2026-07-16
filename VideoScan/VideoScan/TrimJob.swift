@@ -514,9 +514,12 @@ final class TrimJob: MediaFileOperationJob {
 
     // MARK: Catalog + provenance
 
-    /// Probe the trimmed file and register it in the catalog with
-    /// provenance: `derivedFrom` = source record id. File Journey notes
-    /// on BOTH records, a search-index update so the new file is
+    /// Probe the trimmed file and register it in the catalog with full
+    /// provenance: `derivedFrom` = source record id plus the trim range
+    /// (trimInSeconds/trimOutSeconds — presence marks the record as a
+    /// trim derivative, exactly how cleanupRecipeID marks cleanup
+    /// outputs; both are additive-optional schema fields). File Journey
+    /// notes on BOTH records, a search-index update so the new file is
     /// findable immediately, and a catalog-mutated notification so the
     /// debounced save persists it.
     /// The ORIGINAL record's disposition is untouched — Rick decides
@@ -526,6 +529,8 @@ final class TrimJob: MediaFileOperationJob {
         let newRec = await model.probeFile(url: publishedURL)
 
         newRec.derivedFrom = record.id
+        newRec.trimInSeconds = range.inSeconds
+        newRec.trimOutSeconds = range.outSeconds
 
         let stamp = ISO8601DateFormatter().string(from: Date())
         let rangeText = "\(TrimTimecode.format(range.inSeconds))–\(TrimTimecode.format(range.outSeconds))"

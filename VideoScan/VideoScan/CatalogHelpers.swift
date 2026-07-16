@@ -121,11 +121,17 @@ struct CatalogContent: View {
     /// time memo needs. See CatalogPerfMemo.swift.
     @State private var duplicateGroupMemo = RenderMemo<DuplicateGroupMemoKey, [VideoRecord]>()
     @State private var mediaOnVolumeMemo = RenderMemo<MediaOnVolumeMemoKey, Int64>()
+    @State private var trimDerivativesMemo = RenderMemo<TrimDerivativesMemoKey, [VideoRecord]>()
 
     private struct DuplicateGroupMemoKey: Equatable {
         let selectedID: UUID
         let version: RecordsVersion
         let analyzing: Bool
+    }
+
+    private struct TrimDerivativesMemoKey: Equatable {
+        let selectedID: UUID
+        let version: RecordsVersion
     }
 
     private struct MediaOnVolumeMemoKey: Equatable {
@@ -160,6 +166,27 @@ struct CatalogContent: View {
         return duplicateGroupMemo.value(for: key) {
             records.filter { $0.duplicateGroupID == groupID && $0.id != rec.id }
         }
+    }
+
+    /// Trimmed versions of the selected record (Trim Master provenance).
+    /// Memoized on (selected id, records version) — same discipline as
+    /// duplicateGroupMembers: the O(n) reverse scan runs once per
+    /// selection/catalog change, never per body re-eval.
+    private var trimDerivatives: [VideoRecord] {
+        guard let rec = selectedRecord else { return [] }
+        let key = TrimDerivativesMemoKey(selectedID: rec.id, version: recordsVersion)
+        return trimDerivativesMemo.value(for: key) {
+            records.filter { $0.derivedFrom == rec.id && $0.trimInSeconds != nil }
+        }
+    }
+
+    /// The record the selected trim derivative was cut from — O(1) via
+    /// the model's id index, so no memo needed.
+    private var trimSource: VideoRecord? {
+        guard let rec = selectedRecord,
+              rec.trimInSeconds != nil,
+              let sourceID = rec.derivedFrom else { return nil }
+        return model.record(forID: sourceID)
     }
 
     private func volumeRoot(for path: String) -> String {
@@ -355,7 +382,9 @@ struct CatalogContent: View {
                     onSelectRecord: { id in
                         selectedIDs = [id]
                         onSelect(id)
-                    }
+                    },
+                    trimSource: trimSource,
+                    trimDerivatives: trimDerivatives
                 )
                 .frame(minWidth: 260, idealWidth: 300, maxWidth: 400)
             }

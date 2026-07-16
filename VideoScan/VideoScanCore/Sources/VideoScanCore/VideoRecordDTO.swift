@@ -122,6 +122,8 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let derivedFrom: UUID?
     public let cleanupRecipeID: String?
     public let cleanupRecipeVersion: Int?
+    public let trimInSeconds: Double?
+    public let trimOutSeconds: Double?
     public let workspaceActive: Bool
     public let drmProtected: Bool
     public let originalFullPath: String?
@@ -219,6 +221,8 @@ public struct VideoRecordDTO: Sendable, Encodable {
         derivedFrom                 = r.derivedFrom
         cleanupRecipeID             = r.cleanupRecipeID
         cleanupRecipeVersion        = r.cleanupRecipeVersion
+        trimInSeconds               = r.trimInSeconds
+        trimOutSeconds              = r.trimOutSeconds
         workspaceActive             = r.workspaceActive
         drmProtected                = r.drmProtected
         originalFullPath            = r.originalFullPath
@@ -368,6 +372,11 @@ public struct VideoRecordDTO: Sendable, Encodable {
         // byte-identity golden for legacy catalogs.
         try c.encodeIfPresent(cleanupRecipeID, forKey: .cleanupRecipeID)
         try c.encodeIfPresent(cleanupRecipeVersion, forKey: .cleanupRecipeVersion)
+        // Trim provenance: only written for trim outputs — adds zero
+        // bytes to every pre-existing record, preserving the
+        // byte-identity golden for legacy catalogs.
+        try c.encodeIfPresent(trimInSeconds, forKey: .trimInSeconds)
+        try c.encodeIfPresent(trimOutSeconds, forKey: .trimOutSeconds)
         // Only write workspaceActive when true — keeps catalog.json deltas
         // minimal for the majority of records that are never imported into
         // the workspace. Legacy decode treats absence as false (same shape
