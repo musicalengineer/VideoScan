@@ -7,6 +7,7 @@ import { randomBytes } from "node:crypto";
 import { hostname as machineHostname, networkInterfaces } from "node:os";
 import { RoomDatabase } from "./database.mjs";
 import { CodexAppServerClient } from "./codex-client.mjs";
+import { ClaudeCliClient } from "./claude-client.mjs";
 import { RoomAgent } from "./room-agent.mjs";
 import { loadOrCreateAccessToken } from "./access-token.mjs";
 
@@ -23,13 +24,18 @@ const sessionToken = process.env.ENGINEERING_ROOM_TOKEN || (lanMode
   ? loadOrCreateAccessToken(process.env.ENGINEERING_ROOM_TOKEN_FILE || join(toolRoot, "var", "access-token"))
   : randomBytes(24).toString("base64url"));
 const codexBin = findCodex();
+const claudeBin = findClaude();
 const database = new RoomDatabase(process.env.ENGINEERING_ROOM_DB || join(toolRoot, "var", "engineering-room.sqlite3"));
 const codex = new CodexAppServerClient({ codexBin, cwd: repoRoot });
-const agent = new RoomAgent({ client: codex, database });
+const claude = new ClaudeCliClient({ claudeBin, cwd: repoRoot });
+const agents = {
+  codex: new RoomAgent({ client: codex, database, provider: "codex", displayName: "Codex" }),
+  claude: new RoomAgent({ client: claude, database, provider: "claude", displayName: "Claude" }),
+};
 const clients = new Set();
 let sequence = 0;
 
-agent.on("event", event => publish(event.type, event.data));
+for (const agent of Object.values(agents)) agent.on("event", event => publish(event.type, event.data));
 
 const server = createServer(async (request, response) => {
   try {
@@ -44,9 +50,9 @@ const server = createServer(async (request, response) => {
     }
 
     if (!authorized(request)) return text(response, 401, "Open the startup URL printed by Engineering Room.");
-    if (request.method === "GET" && url.pathname === "/healthz") return json(response, 200, { status: "ok", codex: agent.status.connection });
+    if (request.method === "GET" && url.pathname === "/healthz") return json(response, 200, { status: "ok", codex: agents.codex.status.connection, claude: agents.claude.status.connection });
     if (request.method === "GET" && url.pathname === "/api/bootstrap") {
-      return json(response, 200, { ...database.snapshot(), agent: agent.status, participants: { rick: "present", codex: agent.status.connection, claude: "not-invited" } });
+      return json(response, 200, roomSnapshot());
     }
     if (request.method === "GET" && url.pathname === "/api/events") return openEvents(request, response);
     if (request.method === "POST" && url.pathname === "/api/topics") {
@@ -78,21 +84,25 @@ const server = createServer(async (request, response) => {
       const body = await readJson(request);
       const messageText = validateText(body.text, 1, 32768, "Message");
       const target = body.target ?? "codex";
-      if (!["codex", "notes"].includes(target)) throw httpError(400, "That participant is not available yet.");
+      if (!["codex", "claude", "both", "notes"].includes(target)) throw httpError(400, "That participant is not available.");
       const topics = database.snapshot().topics;
       const topicId = body.topicId ?? topics[0]?.id ?? null;
       if (topicId && !topics.some(topic => topic.id === topicId)) throw httpError(400, "Unknown topic.");
-      if (target === "codex" && agent.status.busy) throw httpError(409, "Codex is still answering. Use Stop or wait for the current turn.");
+      const recipients = target === "both" ? ["codex", "claude"] : target === "notes" ? [] : [target];
+      const busy = recipients.filter(provider => agents[provider].status.busy);
+      if (busy.length) throw httpError(409, `${busy.map(titleCase).join(" and ")} ${busy.length === 1 ? "is" : "are"} still answering. Use Stop or wait.`);
       const message = database.createMessage({ topicId, author: "rick", body: messageText });
       publish("message.created", message);
       const topicTitle = topics.find(topic => topic.id === topicId)?.title ?? "General discussion";
-      if (target === "codex") agent.ask(message, topicTitle).catch(error => {
-        if (error.code !== "BUSY") publish("room.error", { message: publicError(error) });
+      const transcript = attributedTranscript(topicId, message.id);
+      for (const provider of recipients) agents[provider].ask(message, topicTitle, transcript).catch(error => {
+        if (error.code !== "BUSY") publish("room.error", { provider, message: publicError(error) });
       });
       return json(response, 202, message);
     }
     if (request.method === "POST" && url.pathname === "/api/turns/current/interrupt") {
-      const interrupted = await agent.interrupt();
+      const results = await Promise.all(Object.values(agents).map(agent => agent.interrupt().catch(() => false)));
+      const interrupted = results.some(Boolean);
       return json(response, interrupted ? 202 : 409, { interrupted });
     }
     if (request.method === "GET") return await staticFile(url.pathname, response);
@@ -108,12 +118,17 @@ server.listen(port, host, async () => {
     : [`http://127.0.0.1:${port}/?token=${encodeURIComponent(sessionToken)}`];
   console.log(`\nEngineering Room is ready${lanMode ? " for the household LAN" : ""}:\n${roomUrls.join("\n")}\n`);
   try {
-    await agent.initialize();
-    publish("codex.connection", { state: "connected" });
-  } catch (error) {
-    publish("codex.connection", { state: "disconnected", error: publicError(error) });
-    console.error(`Codex is unavailable: ${publicError(error)}`);
-  }
+    const initialized = await Promise.allSettled(Object.entries(agents).map(async ([provider, agent]) => {
+      await agent.initialize();
+      publish("agent.connection", { provider, state: agent.status.connection });
+    }));
+    initialized.forEach((result, index) => {
+      if (result.status === "fulfilled") return;
+      const provider = Object.keys(agents)[index];
+      publish("agent.connection", { provider, state: "disconnected", error: publicError(result.reason) });
+      console.error(`${titleCase(provider)} is unavailable: ${publicError(result.reason)}`);
+    });
+  } catch (error) { console.error(`Room initialization failed: ${publicError(error)}`); }
 });
 
 function publish(type, data) {
@@ -127,7 +142,7 @@ function openEvents(request, response) {
     "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform",
     Connection: "keep-alive", "X-Accel-Buffering": "no",
   });
-  response.write(`event: room\ndata: ${JSON.stringify({ version: 1, sequence, type: "snapshot", data: { ...database.snapshot(), agent: agent.status } })}\n\n`);
+  response.write(`event: room\ndata: ${JSON.stringify({ version: 1, sequence, type: "snapshot", data: roomSnapshot() })}\n\n`);
   clients.add(response);
   const keepalive = setInterval(() => response.write(": keepalive\n\n"), 15000);
   request.on("close", () => { clearInterval(keepalive); clients.delete(response); });
@@ -197,6 +212,35 @@ function findCodex() {
   throw new Error("Codex was not found. Set CODEX_BIN to its absolute path.");
 }
 
+function findClaude() {
+  const candidates = [process.env.CLAUDE_BIN, "/opt/homebrew/bin/claude", "/usr/local/bin/claude", join(process.env.HOME ?? "", ".local/bin/claude")].filter(Boolean);
+  const found = candidates.find(path => path.includes("/") && existsSync(path));
+  if (found) return found;
+  if (process.env.CLAUDE_BIN && !process.env.CLAUDE_BIN.includes("/")) return process.env.CLAUDE_BIN;
+  return null;
+}
+
+function roomSnapshot() {
+  return {
+    ...database.snapshot(),
+    agents: Object.fromEntries(Object.entries(agents).map(([provider, agent]) => [provider, agent.status])),
+    agent: agents.codex.status,
+    participants: { rick: "present", codex: agents.codex.status.connection, claude: agents.claude.status.connection },
+  };
+}
+
+function attributedTranscript(topicId, excludingMessageId) {
+  const labels = { rick: "Rick", codex: "Codex", claude: "Claude", system: "Room" };
+  return database.snapshot().messages
+    .filter(message => message.topicId === topicId && message.id !== excludingMessageId)
+    .slice(-24)
+    .map(message => `${labels[message.author] ?? message.author}: ${message.body}`)
+    .join("\n\n")
+    .slice(-24000);
+}
+
+function titleCase(value) { return value.charAt(0).toUpperCase() + value.slice(1); }
+
 function discoverLanAddresses() {
   const addresses = [];
   for (const entries of Object.values(networkInterfaces())) {
@@ -232,6 +276,7 @@ function text(response, status, body) { response.writeHead(status, { "Content-Ty
 
 function shutdown() {
   codex.close();
+  claude.close();
   for (const client of clients) client.end();
   clients.clear();
   server.close(() => { database.close(); process.exit(0); });
