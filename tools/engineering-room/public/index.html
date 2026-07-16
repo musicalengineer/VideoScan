@@ -17,7 +17,7 @@
       <div class="participants" aria-label="Room participants">
         <span class="participant present"><b>R</b>Rick</span>
         <span class="participant" id="codexParticipant"><b>C</b>Codex</span>
-        <span class="participant future" title="Claude joins after v1 is proven"><b>A</b>Claude · soon</span>
+        <span class="participant" id="claudeParticipant"><b>A</b>Claude</span>
         <button class="audio-toggle" id="speakReplies" type="button" aria-pressed="false">Read replies aloud: off</button>
       </div>
     </header>
@@ -31,7 +31,7 @@
         <nav id="topics" aria-label="Discussion topics"></nav>
         <div class="room-note">
           <span class="pulse" id="statusPulse"></span>
-          <div><strong id="roomStatus">Connecting to Codex</strong><small>Discussion only · repository read-only</small></div>
+          <div><strong id="roomStatus">Connecting to the room</strong><small>Discussion only · no writes or external actions</small></div>
         </div>
       </aside>
 
@@ -49,15 +49,16 @@
           </div>
         </div>
 
-        <div class="typing" id="typing" hidden><span></span><span></span><span></span><em>Codex is thinking</em></div>
+        <div class="typing" id="typing" hidden><span></span><span></span><span></span><em id="typingLabel">An agent is thinking</em></div>
         <form class="composer" id="composer">
           <textarea id="message" rows="2" maxlength="32768" placeholder="What should we put on the table?" aria-label="Message"></textarea>
           <div class="composer-footer">
             <label>Send to
               <select id="target">
                 <option value="codex">Codex</option>
+                <option value="claude">Claude</option>
+                <option value="both">Codex + Claude (independent)</option>
                 <option value="notes">Room notes only</option>
-                <option value="claude" disabled>Claude — joins in v2</option>
               </select>
             </label>
             <div class="composer-actions">

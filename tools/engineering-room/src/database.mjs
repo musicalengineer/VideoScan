@@ -51,6 +51,13 @@ export class RoomDatabase {
       CREATE INDEX IF NOT EXISTS messages_topic_idx ON messages(topic_id, created_at);
     `);
 
+    // `speaker` is additive so existing v1 databases keep their constrained
+    // author column intact while v2 can attribute Claude distinctly.
+    const columns = this.db.prepare("PRAGMA table_info(messages)").all();
+    if (!columns.some(column => column.name === "speaker")) {
+      this.db.exec("ALTER TABLE messages ADD COLUMN speaker TEXT");
+    }
+
     const count = this.db.prepare("SELECT COUNT(*) AS count FROM topics").get().count;
     if (count === 0) {
       this.createTopic("Topics of the day");
@@ -92,9 +99,10 @@ export class RoomDatabase {
   }
 
   createMessage({ topicId = null, author, body, kind = "message", replyTo = null }) {
+    const storedAuthor = author === "claude" ? "system" : author;
     const message = { id: randomUUID(), topicId, author, body, kind, replyTo, createdAt: new Date().toISOString() };
-    this.db.prepare("INSERT INTO messages(id,topic_id,author,kind,body,created_at,reply_to) VALUES(?,?,?,?,?,?,?)")
-      .run(message.id, topicId, author, kind, body, message.createdAt, replyTo);
+    this.db.prepare("INSERT INTO messages(id,topic_id,author,speaker,kind,body,created_at,reply_to) VALUES(?,?,?,?,?,?,?,?)")
+      .run(message.id, topicId, storedAuthor, author, kind, body, message.createdAt, replyTo);
     return message;
   }
 
@@ -110,16 +118,16 @@ export class RoomDatabase {
     `).run(provider, externalThreadId, now, now);
   }
 
-  createTurn(requestMessageId) {
-    const turn = { id: randomUUID(), provider: "codex", requestMessageId, status: "starting", startedAt: new Date().toISOString() };
+  createTurn(requestMessageId, provider = "codex") {
+    const turn = { id: randomUUID(), provider, requestMessageId, status: "starting", startedAt: new Date().toISOString() };
     this.db.prepare("INSERT INTO turns(id,provider,request_message_id,status,started_at) VALUES(?,?,?,?,?)")
       .run(turn.id, turn.provider, requestMessageId, turn.status, turn.startedAt);
     return turn;
   }
 
-  reconcileIncompleteTurns() {
+  reconcileIncompleteTurns(provider = "codex") {
     const completedAt = new Date().toISOString();
-    const result = this.db.prepare("UPDATE turns SET status='failed', completed_at=? WHERE status IN ('starting','inProgress')").run(completedAt);
+    const result = this.db.prepare("UPDATE turns SET status='failed', completed_at=? WHERE provider=? AND status IN ('starting','inProgress')").run(completedAt, provider);
     return Number(result.changes);
   }
 
@@ -135,5 +143,5 @@ function mapTopic(row) {
 }
 
 function mapMessage(row) {
-  return { id: row.id, topicId: row.topic_id, author: row.author, kind: row.kind, body: row.body, createdAt: row.created_at, replyTo: row.reply_to };
+  return { id: row.id, topicId: row.topic_id, author: row.speaker ?? row.author, kind: row.kind, body: row.body, createdAt: row.created_at, replyTo: row.reply_to };
 }

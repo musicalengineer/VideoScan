@@ -16,7 +16,7 @@ test("local server requires its token and persists a safe round trip", async t =
   const token = "automated-room-token";
   const child = spawn(process.execPath, [join(root, "src/server.mjs")], {
     cwd: root,
-    env: { ...process.env, CODEX_BIN: join(here, "fake-codex.mjs"), ENGINEERING_ROOM_PORT: String(port), ENGINEERING_ROOM_TOKEN: token, ENGINEERING_ROOM_DB: join(mkdtempSync(join(tmpdir(), "engineering-room-server-")), "room.sqlite3") },
+    env: { ...process.env, CODEX_BIN: join(here, "fake-codex.mjs"), CLAUDE_BIN: join(here, "fake-claude.mjs"), ENGINEERING_ROOM_PORT: String(port), ENGINEERING_ROOM_TOKEN: token, ENGINEERING_ROOM_DB: join(mkdtempSync(join(tmpdir(), "engineering-room-server-")), "room.sqlite3") },
     stdio: ["ignore", "pipe", "pipe"],
   });
   t.after(() => child.kill("SIGTERM"));
@@ -49,6 +49,14 @@ test("local server requires its token and persists a safe round trip", async t =
   assert.equal(after.messages.find(message => message.author === "rick").body, payload);
   assert.equal(after.messages.find(message => message.author === "codex").body, "A measured reply.");
 
+  const both = await fetch(`${base}/api/messages`, { method: "POST", headers, body: JSON.stringify({ topicId: room.topics[0].id, target: "both", text: "Independent views, please." }) });
+  assert.equal(both.status, 202);
+  const afterBoth = await waitFor(async () => {
+    const value = await (await fetch(`${base}/api/bootstrap`, { headers: { Cookie: cookie } })).json();
+    return value.messages.some(message => message.author === "claude") && value.messages.filter(message => message.author === "codex").length >= 2 ? value : null;
+  });
+  assert.equal(afterBoth.messages.find(message => message.author === "claude").body, "An independent Claude reply.");
+
   const hostile = await fetch(`${base}/api/topics`, { method: "POST", headers: { Cookie: cookie, "Content-Type": "application/json", Origin: "https://evil.example" }, body: JSON.stringify({ title: "Injected" }) });
   assert.equal(hostile.status, 403);
 });
@@ -61,6 +69,7 @@ test("LAN mode accepts an allowed household host and rejects hostile hosts", asy
     env: {
       ...process.env,
       CODEX_BIN: join(here, "fake-codex.mjs"),
+      CLAUDE_BIN: join(here, "fake-claude.mjs"),
       ENGINEERING_ROOM_LAN: "1",
       ENGINEERING_ROOM_PORT: String(port),
       ENGINEERING_ROOM_TOKEN: token,

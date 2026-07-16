@@ -10,6 +10,7 @@ test("topics and attributed messages survive a database restart", () => {
   let db = new RoomDatabase(path);
   const topic = db.createTopic("Recognition metrics");
   const message = db.createMessage({ topicId: topic.id, author: "rick", body: "Keep quality honest." });
+  const claude = db.createMessage({ topicId: topic.id, author: "claude", body: "Measure the boundary cases." });
   db.setSession("codex", "thread-42");
   db.close();
 
@@ -17,6 +18,7 @@ test("topics and attributed messages survive a database restart", () => {
   const snapshot = db.snapshot();
   assert.equal(snapshot.topics.find(item => item.id === topic.id).title, "Recognition metrics");
   assert.equal(snapshot.messages.find(item => item.id === message.id).body, "Keep quality honest.");
+  assert.equal(snapshot.messages.find(item => item.id === claude.id).author, "claude");
   assert.equal(db.getSession("codex").externalThreadId, "thread-42");
   db.close();
 });

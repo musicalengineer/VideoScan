@@ -1,9 +1,14 @@
-const state = { topics: [], messages: [], activeTopicId: null, busy: false, draft: null };
+const state = {
+  topics: [], messages: [], activeTopicId: null,
+  agents: { codex: { connection: "connecting", busy: false }, claude: { connection: "connecting", busy: false } },
+  drafts: {},
+};
 const $ = selector => document.querySelector(selector);
 const elements = {
   topics: $("#topics"), timeline: $("#timeline"), currentTopic: $("#currentTopic"), welcome: $("#welcome"),
   composer: $("#composer"), message: $("#message"), target: $("#target"), send: $("#send"), stop: $("#stop"),
-  typing: $("#typing"), status: $("#roomStatus"), pulse: $("#statusPulse"), codex: $("#codexParticipant"), toast: $("#toast"),
+  typing: $("#typing"), typingLabel: $("#typingLabel"), status: $("#roomStatus"), pulse: $("#statusPulse"),
+  codex: $("#codexParticipant"), claude: $("#claudeParticipant"), toast: $("#toast"),
   speak: $("#speakReplies"),
 };
 const speechAvailable = "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
@@ -17,17 +22,17 @@ async function boot() {
   state.topics = data.topics;
   state.messages = data.messages;
   state.activeTopicId = state.topics.find(topic => topic.status === "active")?.id ?? state.topics[0]?.id ?? null;
-  setAgent(data.agent);
+  setAgents(data.agents ?? { codex: data.agent });
   render();
   const events = new EventSource("/api/events");
   events.addEventListener("room", event => receive(JSON.parse(event.data)));
-  events.onerror = () => setAgent({ connection: "disconnected", busy: state.busy });
+  events.onerror = () => setAgents({ codex: { ...state.agents.codex, connection: "disconnected" }, claude: { ...state.agents.claude, connection: "disconnected" } });
 }
 
 function receive(event) {
   const { type, data } = event;
   if (type === "snapshot") {
-    state.topics = data.topics; state.messages = data.messages; setAgent(data.agent); render(); return;
+    state.topics = data.topics; state.messages = data.messages; setAgents(data.agents ?? { codex: data.agent }); render(); return;
   }
   if (type === "topic.created") { upsert(state.topics, data); if (!state.activeTopicId) state.activeTopicId = data.id; render(); }
   if (type === "topic.updated") { upsert(state.topics, data); render(); }
@@ -35,13 +40,26 @@ function receive(event) {
     const isNew = !state.messages.some(message => message.id === data.id);
     upsert(state.messages, data);
     renderMessages();
-    if (isNew && data.author === "codex" && speakReplies) speak(data.body);
+    if (isNew && ["codex", "claude"].includes(data.author) && speakReplies) speak(`${displayName(data.author)} says. ${data.body}`);
   }
-  if (type === "turn.started") { state.draft = { topicId: data.topicId, text: "" }; setBusy(true); }
-  if (type === "agent.message.delta") { if (state.draft) state.draft.text += data.text; renderMessages(); }
-  if (type === "turn.completed" || type === "turn.interrupted") { state.draft = null; setBusy(false); renderMessages(); }
-  if (type === "codex.connection") setAgent({ connection: data.state, busy: state.busy });
-  if (type === "room.error") { setBusy(false); showError(data.message); }
+  if (type === "turn.started") {
+    state.drafts[data.provider ?? "codex"] = { topicId: data.topicId, text: "" };
+    setBusy(data.provider ?? "codex", true);
+  }
+  if (type === "agent.message.delta") {
+    const draft = state.drafts[data.provider ?? "codex"];
+    if (draft) draft.text += data.text;
+    renderMessages();
+  }
+  if (type === "turn.completed" || type === "turn.interrupted") {
+    delete state.drafts[data.provider ?? "codex"];
+    setBusy(data.provider ?? "codex", false); renderMessages();
+  }
+  if (type === "agent.connection" || type === "codex.connection") {
+    const provider = data.provider ?? "codex";
+    setAgents({ [provider]: { ...state.agents[provider], connection: data.state } });
+  }
+  if (type === "room.error") { if (data.provider) setBusy(data.provider, false); showError(data.message); }
 }
 
 function render() { renderTopics(); renderMessages(); }
@@ -67,38 +85,52 @@ function renderTopics() {
 function renderMessages() {
   const rows = state.messages.filter(message => message.topicId === null || message.topicId === state.activeTopicId);
   elements.timeline.replaceChildren();
-  const visibleDraft = state.draft?.topicId === state.activeTopicId ? state.draft.text : "";
-  if (rows.length === 0 && !visibleDraft) elements.timeline.append(elements.welcome);
+  const visibleDrafts = Object.entries(state.drafts).filter(([, draft]) => draft.topicId === state.activeTopicId && draft.text);
+  if (rows.length === 0 && visibleDrafts.length === 0) elements.timeline.append(elements.welcome);
   for (const message of rows) elements.timeline.append(messageNode(message));
-  if (visibleDraft) elements.timeline.append(messageNode({ id: "draft", author: "codex", body: visibleDraft, createdAt: new Date().toISOString() }));
+  for (const [provider, draft] of visibleDrafts) elements.timeline.append(messageNode({ id: `draft-${provider}`, author: provider, body: draft.text, createdAt: new Date().toISOString() }));
   requestAnimationFrame(() => { elements.timeline.scrollTop = elements.timeline.scrollHeight; });
 }
 
 function messageNode(message) {
   const row = document.createElement("article"); row.className = `message-row ${message.author}`; row.dataset.id = message.id;
-  const avatar = document.createElement("div"); avatar.className = "avatar"; avatar.textContent = message.author === "rick" ? "R" : message.author === "codex" ? "C" : "·";
+  const avatar = document.createElement("div"); avatar.className = "avatar"; avatar.textContent = ({ rick: "R", codex: "C", claude: "A", system: "·" })[message.author] ?? "·";
   const card = document.createElement("div"); card.className = "message-card";
   const meta = document.createElement("div"); meta.className = "message-meta";
-  const author = document.createElement("strong"); author.textContent = ({ rick: "Rick", codex: "Codex", system: "Room" })[message.author] ?? message.author;
+  const author = document.createElement("strong"); author.textContent = displayName(message.author);
   const time = document.createElement("time"); time.dateTime = message.createdAt; time.textContent = new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit" }).format(new Date(message.createdAt));
   const body = document.createElement("div"); body.className = "message-body"; body.textContent = message.body;
   meta.append(author, time); card.append(meta, body); row.append(avatar, card); return row;
 }
 
-function setAgent(agent = {}) {
-  state.busy = Boolean(agent.busy);
-  const connected = agent.connection === "connected";
-  elements.status.textContent = connected ? (state.busy ? "Codex is in conversation" : "Room is ready") : "Codex is offline";
-  elements.pulse.classList.toggle("connected", connected);
-  elements.codex.classList.toggle("present", connected);
-  setBusy(state.busy);
+function setAgents(patch = {}) {
+  for (const [provider, status] of Object.entries(patch)) state.agents[provider] = { ...state.agents[provider], ...status };
+  elements.codex.classList.toggle("present", state.agents.codex.connection === "connected");
+  elements.claude.classList.toggle("present", ["connected", "available"].includes(state.agents.claude.connection));
+  updateRoomStatus();
 }
 
-function setBusy(busy) {
-  state.busy = busy; elements.typing.hidden = !busy; elements.stop.hidden = !busy;
-  elements.send.disabled = busy && elements.target.value === "codex";
-  if (busy) elements.status.textContent = "Codex is in conversation";
-  else if (elements.codex.classList.contains("present")) elements.status.textContent = "Room is ready";
+function setBusy(provider, busy) {
+  state.agents[provider] = { ...state.agents[provider], busy };
+  updateRoomStatus();
+}
+
+function updateRoomStatus() {
+  const busy = Object.entries(state.agents).filter(([, status]) => status.busy).map(([provider]) => displayName(provider));
+  const online = Object.values(state.agents).filter(status => ["connected", "available"].includes(status.connection)).length;
+  const unverified = Object.values(state.agents).filter(status => status.connection === "available").length;
+  elements.typing.hidden = busy.length === 0;
+  elements.stop.hidden = busy.length === 0;
+  elements.typingLabel.textContent = busy.length ? `${busy.join(" and ")} ${busy.length === 1 ? "is" : "are"} thinking` : "";
+  elements.status.textContent = busy.length ? `${busy.join(" and ")} in conversation` : unverified ? "Room ready · Claude login checks on first message" : online === 2 ? "Room is ready" : `${online}/2 agents available`;
+  elements.pulse.classList.toggle("connected", online === 2 && unverified === 0);
+  elements.send.disabled = targetBusy();
+}
+
+function targetBusy() {
+  const target = elements.target.value;
+  if (target === "both") return state.agents.codex.busy || state.agents.claude.busy;
+  return Boolean(state.agents[target]?.busy);
 }
 
 elements.composer.addEventListener("submit", async event => {
@@ -110,13 +142,13 @@ elements.composer.addEventListener("submit", async event => {
     await api("/api/messages", { method: "POST", body: { topicId: state.activeTopicId, target: elements.target.value, text } });
     elements.message.value = "";
   } catch (error) { showError(error.message); }
-  finally { elements.send.disabled = state.busy && elements.target.value === "codex"; }
+  finally { elements.send.disabled = targetBusy(); }
 });
 
 elements.message.addEventListener("keydown", event => {
   if (event.key === "Enter" && event.metaKey) { event.preventDefault(); elements.composer.requestSubmit(); }
 });
-elements.target.addEventListener("change", () => { elements.send.disabled = state.busy && elements.target.value === "codex"; });
+elements.target.addEventListener("change", updateRoomStatus);
 elements.stop.addEventListener("click", () => api("/api/turns/current/interrupt", { method: "POST", body: {} }).catch(error => showError(error.message)));
 elements.speak.addEventListener("click", () => {
   if (!speechAvailable) return;
@@ -147,6 +179,7 @@ async function api(url, options = {}) {
 }
 
 function upsert(list, value) { const index = list.findIndex(item => item.id === value.id); if (index === -1) list.push(value); else list[index] = value; }
+function displayName(author) { return ({ rick: "Rick", codex: "Codex", claude: "Claude", system: "Room" })[author] ?? author; }
 function updateSpeechButton() {
   elements.speak.disabled = !speechAvailable;
   elements.speak.setAttribute("aria-pressed", String(speakReplies));
