@@ -412,6 +412,40 @@ struct TrimLogicTests {
         #expect(MediaFileOperationKind.trim.badgeText == "Trim")
     }
 
+    // MARK: - Off-main publish/cleanup discipline (MINOR 6)
+
+    /// The publish/cleanup helpers carry internal `assert(!Thread.isMainThread)`
+    /// sensors, so this test (and every Debug end-to-end trim test that
+    /// exercises the real job) traps if someone reverts the `@concurrent`
+    /// hop and puts FileManager work back on the main actor. Called from
+    /// a @MainActor context deliberately — that is exactly how runTrim
+    /// calls them.
+    @Test @MainActor
+    func publishAndCleanupHelpersRunOffMain() async throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("trim_offmain_\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // Cleanup hop: deletes, off main (asserted inside the helper).
+        let victim = dir.appendingPathComponent("stale.vs-partial.mkv")
+        try Data("stale".utf8).write(to: victim)
+        await TrimJob.removeFileOffMain(atPath: victim.path)
+        #expect(!FileManager.default.fileExists(atPath: victim.path))
+
+        // Publish hop: promotes, off main, still non-clobbering.
+        let partial = dir.appendingPathComponent("tape_trimmed.vs-partial.mkv")
+        try Data("payload".utf8).write(to: partial)
+        let preferred = dir.appendingPathComponent("tape_trimmed.mkv")
+        let published = try await TrimJob.promoteOffMain(
+            partialPath: partial.path,
+            preferredOutput: preferred,
+            sourcePath: dir.appendingPathComponent("tape.mkv").path)
+        #expect(published == preferred)
+        #expect(FileManager.default.fileExists(atPath: preferred.path))
+        #expect(!FileManager.default.fileExists(atPath: partial.path))
+    }
+
     // MARK: - Center-level same-record dedupe (MAJOR 2 layer 1)
 
     /// Two concurrent trims of one record share the `.vs-partial` path

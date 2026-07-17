@@ -253,7 +253,7 @@ final class TrimJob: MediaFileOperationJob {
 
         // Clean up a stale partial from a prior cancelled run. The FINAL
         // name is never pre-deleted — publish is non-clobbering.
-        try? FileManager.default.removeItem(atPath: partialPath)
+        await Self.removeFileOffMain(atPath: partialPath)
 
         // ---- ffmpeg stream-copy trim (input seek — see TrimEngine.swift).
         #if DEBUG
@@ -307,20 +307,20 @@ final class TrimJob: MediaFileOperationJob {
         // Watchdog stall wins over a generic cancel (the watchdog cancels
         // the Task) — surface the specific cause, not "Cancelled".
         if let stallReason {
-            try? FileManager.default.removeItem(atPath: partialPath)
+            await Self.removeFileOffMain(atPath: partialPath)
             trimLog.error("trim FAILED (stall): \(self.record.filename, privacy: .public) — \(stallReason, privacy: .public)")
             finish(failed: stallReason)
             return
         }
         if Task.isCancelled || state == .cancelling {
             // The ONE deletion this feature performs: our own partial.
-            try? FileManager.default.removeItem(atPath: partialPath)
+            await Self.removeFileOffMain(atPath: partialPath)
             trimLog.info("trim cancelled: \(self.record.filename, privacy: .public) after \(elapsed, format: .fixed(precision: 1), privacy: .public)s — partial removed, nothing at the final name")
             finishCancelled()
             return
         }
         guard result.exitCode == 0 else {
-            try? FileManager.default.removeItem(atPath: partialPath)
+            await Self.removeFileOffMain(atPath: partialPath)
             let tail = result.stderr.split(separator: "\n").suffix(3).joined(separator: " · ")
             finish(failed: "ffmpeg failed (exit \(result.exitCode))\(tail.isEmpty ? "" : ": \(tail)")")
             return
@@ -332,7 +332,7 @@ final class TrimJob: MediaFileOperationJob {
         let attrs = try? FileManager.default.attributesOfItem(atPath: partialPath)
         let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
         if size < 10_000 {
-            try? FileManager.default.removeItem(atPath: partialPath)
+            await Self.removeFileOffMain(atPath: partialPath)
             finish(failed: "ffmpeg output too small (\(size) bytes) — likely a muxer failure")
             return
         }
@@ -344,14 +344,14 @@ final class TrimJob: MediaFileOperationJob {
                                             source: inputPath,
                                             output: partialPath)
         if Task.isCancelled || state == .cancelling {
-            try? FileManager.default.removeItem(atPath: partialPath)
+            await Self.removeFileOffMain(atPath: partialPath)
             finishCancelled()
             return
         }
         let verifyDetail: String
         switch verification {
         case .failed(let reason):
-            try? FileManager.default.removeItem(atPath: partialPath)
+            await Self.removeFileOffMain(atPath: partialPath)
             trimLog.error("trim VERIFY FAILED: \(self.record.filename, privacy: .public) — \(reason, privacy: .public)")
             appLog.write("trim verify FAILED: \(record.filename) — \(reason); partial removed, nothing published")
             finish(failed: "Verification failed — \(reason). No file was published; the original is untouched.")
@@ -365,11 +365,11 @@ final class TrimJob: MediaFileOperationJob {
         // the verified partial to a freshly-uniquified final name.
         let published: URL
         do {
-            published = try Self.promoteNonClobbering(partialPath: partialPath,
+            published = try await Self.promoteOffMain(partialPath: partialPath,
                                                       preferredOutput: outputURL,
                                                       sourcePath: inputPath)
         } catch {
-            try? FileManager.default.removeItem(atPath: partialPath)
+            await Self.removeFileOffMain(atPath: partialPath)
             finish(failed: "Could not finalize output file: \(error.localizedDescription)")
             return
         }
@@ -479,6 +479,49 @@ final class TrimJob: MediaFileOperationJob {
         return StreamProbe(videoCodecName: videoCodec,
                            streamCount: streams.count,
                            durationSeconds: duration)
+    }
+
+    // MARK: Off-main file-system hops (QA MINOR 6)
+
+    // FileManager calls made straight from @MainActor runTrim execute ON
+    // the main thread — `nonisolated` runs on the CALLER's actor in this
+    // repo's Approachable Concurrency configuration (the documented
+    // trap). These `@concurrent` statics force the global executor;
+    // runTrim awaits each one, so the state machine's ORDERING is
+    // unchanged — every state transition still happens on MainActor,
+    // after the file work completes. The thread assertions turn every
+    // Debug end-to-end trim test into a regression sensor for this.
+
+    /// Delete our own partial (the ONE deletion this feature performs)
+    /// off the main actor. Internal so the thread-discipline test can
+    /// drive it directly.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    static func removeFileOffMain(atPath path: String) async {
+        #if compiler(>=6.2)
+        assert(!Thread.isMainThread,
+               "trim cleanup must not run file deletion on the main thread (QA MINOR 6)")
+        #endif
+        try? FileManager.default.removeItem(atPath: path)
+    }
+
+    /// The non-clobbering promote, hopped off the main actor (the rename
+    /// is instant same-volume, but the uniquify loop stats the directory
+    /// — none of it belongs on main). Internal for the same test reason.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    static func promoteOffMain(partialPath: String,
+                               preferredOutput: URL,
+                               sourcePath: String) async throws -> URL {
+        #if compiler(>=6.2)
+        assert(!Thread.isMainThread,
+               "trim publish must not run rename/stat work on the main thread (QA MINOR 6)")
+        #endif
+        return try promoteNonClobbering(partialPath: partialPath,
+                                        preferredOutput: preferredOutput,
+                                        sourcePath: sourcePath)
     }
 
     // MARK: Publish
