@@ -1,0 +1,1453 @@
+{
+  "byTag": {
+    "family-similarity": {
+      "accuracy": 0.0,
+      "cases": 13,
+      "f1": 0.0,
+      "false_positive_rate": 1.0,
+      "fn": 0,
+      "fp": 13,
+      "precision": 0.0,
+      "recall": null,
+      "tn": 0,
+      "tp": 0
+    },
+    "hard-negative": {
+      "accuracy": 0.0,
+      "cases": 13,
+      "f1": 0.0,
+      "false_positive_rate": 1.0,
+      "fn": 0,
+      "fp": 13,
+      "precision": 0.0,
+      "recall": null,
+      "tn": 0,
+      "tp": 0
+    },
+    "negative": {
+      "accuracy": 0.0,
+      "cases": 13,
+      "f1": 0.0,
+      "false_positive_rate": 1.0,
+      "fn": 0,
+      "fp": 13,
+      "precision": 0.0,
+      "recall": null,
+      "tn": 0,
+      "tp": 0
+    },
+    "positive": {
+      "accuracy": 0.9285714285714286,
+      "cases": 14,
+      "f1": 0.962962962962963,
+      "false_positive_rate": null,
+      "fn": 1,
+      "fp": 0,
+      "precision": 1.0,
+      "recall": 0.9285714285714286,
+      "tn": 0,
+      "tp": 13
+    }
+  },
+  "caseCount": 27,
+  "cases": [
+    {
+      "bestDistance": 0.109577775,
+      "elapsedSeconds": 5.2172499895095825,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 464,
+      "hits": 81,
+      "id": "donna-1",
+      "identityClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 222.28125,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 136.92392392392395,
+      "segmentEvaluable": false,
+      "segmentPrecision": null,
+      "segmentRecall": null,
+      "tags": [
+        "positive"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-1.mov"
+    },
+    {
+      "bestDistance": 0.122461855,
+      "elapsedSeconds": 2.105916976928711,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 30,
+      "hits": 11,
+      "id": "donna-2",
+      "identityClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 223.546875,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 13.480611111111111,
+      "segmentEvaluable": false,
+      "segmentPrecision": null,
+      "segmentRecall": null,
+      "tags": [
+        "positive"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-2.mov"
+    },
+    {
+      "bestDistance": 0.11313784,
+      "elapsedSeconds": 2.9088339805603027,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 131,
+      "hits": 59,
+      "id": "donna-3",
+      "identityClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 225.5,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 44.83086666666667,
+      "segmentEvaluable": false,
+      "segmentPrecision": null,
+      "segmentRecall": null,
+      "tags": [
+        "positive"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-3.mov"
+    },
+    {
+      "bestDistance": 0.111695886,
+      "elapsedSeconds": 2.0377520322799683,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 39,
+      "hits": 23,
+      "id": "donna-4",
+      "identityClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 253.484375,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 20.597916666666666,
+      "segmentEvaluable": false,
+      "segmentPrecision": null,
+      "segmentRecall": null,
+      "tags": [
+        "positive"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-4.mov"
+    },
+    {
+      "bestDistance": 0.113720834,
+      "elapsedSeconds": 2.829898953437805,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 161,
+      "hits": 14,
+      "id": "donna-5",
+      "identityClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 224.21875,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 27.970466666666653,
+      "segmentEvaluable": false,
+      "segmentPrecision": null,
+      "segmentRecall": null,
+      "tags": [
+        "positive"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-5.mov"
+    },
+    {
+      "bestDistance": 0.82294464,
+      "elapsedSeconds": 1.397542953491211,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 2,
+      "hits": 0,
+      "id": "donna-6",
+      "identityClass": {
+        "accuracy": 0.0,
+        "f1": 0.0,
+        "false_positive_rate": null,
+        "fn": 1,
+        "fp": 0,
+        "precision": null,
+        "recall": 0.0,
+        "tn": 0,
+        "tp": 0
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 221.515625,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": false
+      },
+      "predictedPresenceSeconds": 0.0,
+      "segmentEvaluable": false,
+      "segmentPrecision": null,
+      "segmentRecall": null,
+      "tags": [
+        "positive"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-6.MOV"
+    },
+    {
+      "bestDistance": 0.15778846,
+      "elapsedSeconds": 1.577085018157959,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 25,
+      "hits": 12,
+      "id": "donna-7",
+      "identityClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 222.203125,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 14.860866666666663,
+      "segmentEvaluable": false,
+      "segmentPrecision": null,
+      "segmentRecall": null,
+      "tags": [
+        "positive"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-7.mov"
+    },
+    {
+      "bestDistance": 0.065880656,
+      "elapsedSeconds": 18.41891598701477,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 2488,
+      "hits": 680,
+      "id": "donna-8",
+      "identityClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 299.890625,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 516.3745833333331,
+      "segmentEvaluable": false,
+      "segmentPrecision": null,
+      "segmentRecall": null,
+      "tags": [
+        "positive"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-8.mov"
+    },
+    {
+      "bestDistance": 0.10955733,
+      "elapsedSeconds": 2.1778860092163086,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 65,
+      "hits": 41,
+      "id": "donna-9",
+      "identityClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 255.234375,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 28.939583333333328,
+      "segmentEvaluable": false,
+      "segmentPrecision": null,
+      "segmentRecall": null,
+      "tags": [
+        "positive"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-9.mov"
+    },
+    {
+      "bestDistance": 0.17477566,
+      "elapsedSeconds": 2.803947925567627,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 51,
+      "hits": 10,
+      "id": "donna-10",
+      "identityClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 255.34375,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 23.434083333333334,
+      "segmentEvaluable": false,
+      "segmentPrecision": null,
+      "segmentRecall": null,
+      "tags": [
+        "positive"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-10.mov"
+    },
+    {
+      "bestDistance": 0.05877751,
+      "elapsedSeconds": 4.155189037322998,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 272,
+      "hits": 82,
+      "id": "donna-11",
+      "identityClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 225.0625,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 106.95902402402402,
+      "segmentEvaluable": false,
+      "segmentPrecision": null,
+      "segmentRecall": null,
+      "tags": [
+        "positive"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-11.mov"
+    },
+    {
+      "bestDistance": 0.31300545,
+      "elapsedSeconds": 2.9706130027770996,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 202,
+      "hits": 23,
+      "id": "donna-12",
+      "identityClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 250.515625,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 38.02,
+      "segmentEvaluable": false,
+      "segmentPrecision": null,
+      "segmentRecall": null,
+      "tags": [
+        "positive"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-12.mov"
+    },
+    {
+      "bestDistance": 0.11573583,
+      "elapsedSeconds": 1.8168410062789917,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 41,
+      "hits": 21,
+      "id": "donna-13",
+      "identityClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 227.234375,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 15.713166666666666,
+      "segmentEvaluable": false,
+      "segmentPrecision": null,
+      "segmentRecall": null,
+      "tags": [
+        "positive"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-13.mov"
+    },
+    {
+      "bestDistance": 0.15567029,
+      "elapsedSeconds": 2.0619609355926514,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 45,
+      "hits": 16,
+      "id": "donna-14",
+      "identityClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 224.296875,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 23.269999999999996,
+      "segmentEvaluable": false,
+      "segmentPrecision": null,
+      "segmentRecall": null,
+      "tags": [
+        "positive"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-14.mov"
+    },
+    {
+      "bestDistance": 0.12343913,
+      "elapsedSeconds": 2.657739996910095,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": false
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 163,
+      "hits": 26,
+      "id": "notdonna-1",
+      "identityClass": {
+        "accuracy": 0.0,
+        "f1": 0.0,
+        "false_positive_rate": 1.0,
+        "fn": 0,
+        "fp": 1,
+        "precision": 0.0,
+        "recall": null,
+        "tn": 0,
+        "tp": 0
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 225.640625,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 39.39116666666666,
+      "segmentEvaluable": true,
+      "segmentPrecision": 0.0,
+      "segmentRecall": null,
+      "tags": [
+        "family-similarity",
+        "hard-negative",
+        "negative"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-1.mov"
+    },
+    {
+      "bestDistance": 0.12008262,
+      "elapsedSeconds": 10.5224130153656,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": false
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 1379,
+      "hits": 321,
+      "id": "notdonna-2",
+      "identityClass": {
+        "accuracy": 0.0,
+        "f1": 0.0,
+        "false_positive_rate": 1.0,
+        "fn": 0,
+        "fp": 1,
+        "precision": 0.0,
+        "recall": null,
+        "tn": 0,
+        "tp": 0
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 222.53125,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 336.57766666666686,
+      "segmentEvaluable": true,
+      "segmentPrecision": 0.0,
+      "segmentRecall": null,
+      "tags": [
+        "family-similarity",
+        "hard-negative",
+        "negative"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-2.mov"
+    },
+    {
+      "bestDistance": 0.12643176,
+      "elapsedSeconds": 3.9726619720458984,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": false
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 332,
+      "hits": 66,
+      "id": "notdonna-3",
+      "identityClass": {
+        "accuracy": 0.0,
+        "f1": 0.0,
+        "false_positive_rate": 1.0,
+        "fn": 0,
+        "fp": 1,
+        "precision": 0.0,
+        "recall": null,
+        "tn": 0,
+        "tp": 0
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 228.21875,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 93.25793499999996,
+      "segmentEvaluable": true,
+      "segmentPrecision": 0.0,
+      "segmentRecall": null,
+      "tags": [
+        "family-similarity",
+        "hard-negative",
+        "negative"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-3.mov"
+    },
+    {
+      "bestDistance": 0.05559224,
+      "elapsedSeconds": 2.6714619398117065,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": false
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 117,
+      "hits": 9,
+      "id": "notdonna-4",
+      "identityClass": {
+        "accuracy": 0.0,
+        "f1": 0.0,
+        "false_positive_rate": 1.0,
+        "fn": 0,
+        "fp": 1,
+        "precision": 0.0,
+        "recall": null,
+        "tn": 0,
+        "tp": 0
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 225.0625,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 23.234633333333335,
+      "segmentEvaluable": true,
+      "segmentPrecision": 0.0,
+      "segmentRecall": null,
+      "tags": [
+        "family-similarity",
+        "hard-negative",
+        "negative"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-4.mov"
+    },
+    {
+      "bestDistance": 0.12957597,
+      "elapsedSeconds": 2.5469770431518555,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": false
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 107,
+      "hits": 18,
+      "id": "notdonna-5",
+      "identityClass": {
+        "accuracy": 0.0,
+        "f1": 0.0,
+        "false_positive_rate": 1.0,
+        "fn": 0,
+        "fp": 1,
+        "precision": 0.0,
+        "recall": null,
+        "tn": 0,
+        "tp": 0
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 225.015625,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 28.024,
+      "segmentEvaluable": true,
+      "segmentPrecision": 0.0,
+      "segmentRecall": null,
+      "tags": [
+        "family-similarity",
+        "hard-negative",
+        "negative"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-5.mov"
+    },
+    {
+      "bestDistance": 0.0934422,
+      "elapsedSeconds": 2.22611403465271,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": false
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 69,
+      "hits": 22,
+      "id": "notdonna-7",
+      "identityClass": {
+        "accuracy": 0.0,
+        "f1": 0.0,
+        "false_positive_rate": 1.0,
+        "fn": 0,
+        "fp": 1,
+        "precision": 0.0,
+        "recall": null,
+        "tn": 0,
+        "tp": 0
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 225.390625,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 29.828333333333333,
+      "segmentEvaluable": true,
+      "segmentPrecision": 0.0,
+      "segmentRecall": null,
+      "tags": [
+        "family-similarity",
+        "hard-negative",
+        "negative"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-7.mov"
+    },
+    {
+      "bestDistance": 0.181844,
+      "elapsedSeconds": 2.2485299110412598,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": false
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 59,
+      "hits": 4,
+      "id": "notdonna-8",
+      "identityClass": {
+        "accuracy": 0.0,
+        "f1": 0.0,
+        "false_positive_rate": 1.0,
+        "fn": 0,
+        "fp": 1,
+        "precision": 0.0,
+        "recall": null,
+        "tn": 0,
+        "tp": 0
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 224.28125,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 10.0365,
+      "segmentEvaluable": true,
+      "segmentPrecision": 0.0,
+      "segmentRecall": null,
+      "tags": [
+        "family-similarity",
+        "hard-negative",
+        "negative"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-8.mov"
+    },
+    {
+      "bestDistance": 0.11856592,
+      "elapsedSeconds": 2.129694938659668,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": false
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 64,
+      "hits": 9,
+      "id": "notdonna-9",
+      "identityClass": {
+        "accuracy": 0.0,
+        "f1": 0.0,
+        "false_positive_rate": 1.0,
+        "fn": 0,
+        "fp": 1,
+        "precision": 0.0,
+        "recall": null,
+        "tn": 0,
+        "tp": 0
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 225.84375,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 11.458333333333334,
+      "segmentEvaluable": true,
+      "segmentPrecision": 0.0,
+      "segmentRecall": null,
+      "tags": [
+        "family-similarity",
+        "hard-negative",
+        "negative"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-9.mov"
+    },
+    {
+      "bestDistance": 0.48198396,
+      "elapsedSeconds": 2.269386887550354,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": false
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 60,
+      "hits": 2,
+      "id": "notdonna-10",
+      "identityClass": {
+        "accuracy": 0.0,
+        "f1": 0.0,
+        "false_positive_rate": 1.0,
+        "fn": 0,
+        "fp": 1,
+        "precision": 0.0,
+        "recall": null,
+        "tn": 0,
+        "tp": 0
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 223.828125,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 7.999999999999998,
+      "segmentEvaluable": true,
+      "segmentPrecision": 0.0,
+      "segmentRecall": null,
+      "tags": [
+        "family-similarity",
+        "hard-negative",
+        "negative"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-10.mov"
+    },
+    {
+      "bestDistance": 0.06920797,
+      "elapsedSeconds": 2.8848029375076294,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": false
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 151,
+      "hits": 63,
+      "id": "notdonna-11",
+      "identityClass": {
+        "accuracy": 0.0,
+        "f1": 0.0,
+        "false_positive_rate": 1.0,
+        "fn": 0,
+        "fp": 1,
+        "precision": 0.0,
+        "recall": null,
+        "tn": 0,
+        "tp": 0
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 222.5625,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 52.643600000000006,
+      "segmentEvaluable": true,
+      "segmentPrecision": 0.0,
+      "segmentRecall": null,
+      "tags": [
+        "family-similarity",
+        "hard-negative",
+        "negative"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-11.mov"
+    },
+    {
+      "bestDistance": 0.10362756,
+      "elapsedSeconds": 2.3068989515304565,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": false
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 93,
+      "hits": 13,
+      "id": "notdonna-12",
+      "identityClass": {
+        "accuracy": 0.0,
+        "f1": 0.0,
+        "false_positive_rate": 1.0,
+        "fn": 0,
+        "fp": 1,
+        "precision": 0.0,
+        "recall": null,
+        "tn": 0,
+        "tp": 0
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 222.046875,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 19.415081748415083,
+      "segmentEvaluable": true,
+      "segmentPrecision": 0.0,
+      "segmentRecall": null,
+      "tags": [
+        "family-similarity",
+        "hard-negative",
+        "negative"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-12.mov"
+    },
+    {
+      "bestDistance": 0.39007705,
+      "elapsedSeconds": 1.9784590005874634,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": false
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 19,
+      "hits": 5,
+      "id": "notdonna-13",
+      "identityClass": {
+        "accuracy": 0.0,
+        "f1": 0.0,
+        "false_positive_rate": 1.0,
+        "fn": 0,
+        "fp": 1,
+        "precision": 0.0,
+        "recall": null,
+        "tn": 0,
+        "tp": 0
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 222.0625,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 6.569233333333333,
+      "segmentEvaluable": true,
+      "segmentPrecision": 0.0,
+      "segmentRecall": null,
+      "tags": [
+        "family-similarity",
+        "hard-negative",
+        "negative"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-13.mov"
+    },
+    {
+      "bestDistance": 0.118484855,
+      "elapsedSeconds": 11.028302907943726,
+      "error": null,
+      "expected": {
+        "anyFace": true,
+        "targetPerson": false
+      },
+      "expectedPresenceSeconds": 0.0,
+      "faceClass": {
+        "accuracy": 1.0,
+        "f1": 1.0,
+        "false_positive_rate": null,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tn": 0,
+        "tp": 1
+      },
+      "facesDetected": 1452,
+      "hits": 319,
+      "id": "notdonna-6",
+      "identityClass": {
+        "accuracy": 0.0,
+        "f1": 0.0,
+        "false_positive_rate": 1.0,
+        "fn": 0,
+        "fp": 1,
+        "precision": 0.0,
+        "recall": null,
+        "tn": 0,
+        "tp": 0
+      },
+      "overlapSeconds": 0.0,
+      "peakRSSMB": 222.15625,
+      "predicted": {
+        "anyFace": true,
+        "targetPerson": true
+      },
+      "predictedPresenceSeconds": 352.0756000000001,
+      "segmentEvaluable": true,
+      "segmentPrecision": 0.0,
+      "segmentRecall": null,
+      "tags": [
+        "family-similarity",
+        "hard-negative",
+        "negative"
+      ],
+      "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-6.mp4"
+    }
+  ],
+  "datasetVersion": "donna-testvideos-assess-v0",
+  "engine": "ArcFace",
+  "facePresence": {
+    "accuracy": 1.0,
+    "f1": 1.0,
+    "false_positive_rate": null,
+    "fn": 0,
+    "fp": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "tn": 0,
+    "tp": 27
+  },
+  "generatedAt": "2026-07-16T23:27:56.499046+00:00",
+  "holdout": false,
+  "identityPresence": {
+    "accuracy": 0.48148148148148145,
+    "f1": 0.65,
+    "false_positive_rate": 1.0,
+    "fn": 1,
+    "fp": 13,
+    "precision": 0.5,
+    "recall": 0.9285714285714286,
+    "tn": 0,
+    "tp": 13
+  },
+  "ineligibilityReasons": [
+    "suite is not marked as quality-tier",
+    "suite is not marked as a holdout"
+  ],
+  "performance": {
+    "elapsedSeconds": 101.92307734489441,
+    "peakRSSMB": 299.890625
+  },
+  "person": "Donna",
+  "publicationTier": "development",
+  "publishEligible": false,
+  "resultSource": "live-engine",
+  "schemaVersion": 1,
+  "score": 65.0,
+  "segment": {
+    "evaluableCases": 13,
+    "expectedSeconds": 0.0,
+    "overlapSeconds": 0.0,
+    "precision": 0.0,
+    "predictedSeconds": 1010.512083415082,
+    "recall": null
+  },
+  "suite": "DonnaTestVideos assessment 2026-07-16 (development, NOT holdout)"
+}

@@ -1,0 +1,191 @@
+{
+ "Donna-1": {
+  "frames": 10,
+  "frames_with_face": 7,
+  "faces": 7,
+  "median_face_h": 55.0,
+  "max_face_h": 70.1
+ },
+ "Donna-10": {
+  "frames": 10,
+  "frames_with_face": 4,
+  "faces": 4,
+  "median_face_h": 271.6,
+  "max_face_h": 378.1
+ },
+ "Donna-11": {
+  "frames": 10,
+  "frames_with_face": 7,
+  "faces": 7,
+  "median_face_h": 230.2,
+  "max_face_h": 391.8
+ },
+ "Donna-12": {
+  "frames": 10,
+  "frames_with_face": 10,
+  "faces": 15,
+  "median_face_h": 219.9,
+  "max_face_h": 523.5
+ },
+ "Donna-13": {
+  "frames": 10,
+  "frames_with_face": 9,
+  "faces": 9,
+  "median_face_h": 106.1,
+  "max_face_h": 244.3
+ },
+ "Donna-14": {
+  "frames": 10,
+  "frames_with_face": 10,
+  "faces": 14,
+  "median_face_h": 47.5,
+  "max_face_h": 57.5
+ },
+ "Donna-2": {
+  "frames": 10,
+  "frames_with_face": 10,
+  "faces": 10,
+  "median_face_h": 269.0,
+  "max_face_h": 318.6
+ },
+ "Donna-3": {
+  "frames": 10,
+  "frames_with_face": 10,
+  "faces": 11,
+  "median_face_h": 172.4,
+  "max_face_h": 303.7
+ },
+ "Donna-4": {
+  "frames": 10,
+  "frames_with_face": 5,
+  "faces": 5,
+  "median_face_h": 262.8,
+  "max_face_h": 278.9
+ },
+ "Donna-5": {
+  "frames": 10,
+  "frames_with_face": 4,
+  "faces": 4,
+  "median_face_h": 139.9,
+  "max_face_h": 148.9
+ },
+ "Donna-6": {
+  "frames": 2,
+  "frames_with_face": 2,
+  "faces": 2,
+  "median_face_h": 172.5,
+  "max_face_h": 308.2
+ },
+ "Donna-7": {
+  "frames": 10,
+  "frames_with_face": 5,
+  "faces": 5,
+  "median_face_h": 200.1,
+  "max_face_h": 210.0
+ },
+ "Donna-8": {
+  "frames": 10,
+  "frames_with_face": 9,
+  "faces": 14,
+  "median_face_h": 133.7,
+  "max_face_h": 386.0
+ },
+ "Donna-9": {
+  "frames": 10,
+  "frames_with_face": 7,
+  "faces": 7,
+  "median_face_h": 282.3,
+  "max_face_h": 316.7
+ },
+ "NotDonna-1": {
+  "frames": 10,
+  "frames_with_face": 8,
+  "faces": 14,
+  "median_face_h": 185.6,
+  "max_face_h": 193.5
+ },
+ "NotDonna-10": {
+  "frames": 10,
+  "frames_with_face": 8,
+  "faces": 8,
+  "median_face_h": 95.8,
+  "max_face_h": 178.1
+ },
+ "NotDonna-11": {
+  "frames": 10,
+  "frames_with_face": 9,
+  "faces": 9,
+  "median_face_h": 123.7,
+  "max_face_h": 135.2
+ },
+ "NotDonna-12": {
+  "frames": 10,
+  "frames_with_face": 10,
+  "faces": 13,
+  "median_face_h": 66.7,
+  "max_face_h": 76.9
+ },
+ "NotDonna-13": {
+  "frames": 10,
+  "frames_with_face": 7,
+  "faces": 7,
+  "median_face_h": 186.9,
+  "max_face_h": 398.1
+ },
+ "NotDonna-2": {
+  "frames": 10,
+  "frames_with_face": 10,
+  "faces": 11,
+  "median_face_h": 98.5,
+  "max_face_h": 165.9
+ },
+ "NotDonna-3": {
+  "frames": 10,
+  "frames_with_face": 10,
+  "faces": 11,
+  "median_face_h": 111.7,
+  "max_face_h": 167.8
+ },
+ "NotDonna-4": {
+  "frames": 10,
+  "frames_with_face": 9,
+  "faces": 9,
+  "median_face_h": 181.2,
+  "max_face_h": 189.1
+ },
+ "NotDonna-5": {
+  "frames": 10,
+  "frames_with_face": 6,
+  "faces": 9,
+  "median_face_h": 133.0,
+  "max_face_h": 287.2
+ },
+ "NotDonna-6": {
+  "frames": 10,
+  "frames_with_face": 9,
+  "faces": 11,
+  "median_face_h": 99.5,
+  "max_face_h": 168.5
+ },
+ "NotDonna-7": {
+  "frames": 10,
+  "frames_with_face": 7,
+  "faces": 7,
+  "median_face_h": 85.6,
+  "max_face_h": 110.0
+ },
+ "NotDonna-8": {
+  "frames": 10,
+  "frames_with_face": 7,
+  "faces": 7,
+  "median_face_h": 118.1,
+  "max_face_h": 254.6
+ },
+ "NotDonna-9": {
+  "frames": 10,
+  "frames_with_face": 10,
+  "faces": 20,
+  "median_face_h": 197.9,
+  "max_face_h": 280.7
+ }
+}

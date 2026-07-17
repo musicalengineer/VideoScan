@@ -1,0 +1,354 @@
+{
+ "schemaVersion": 1,
+ "suite": "DonnaTestVideos assessment 2026-07-16 (development, NOT holdout)",
+ "publication": {
+  "tier": "development",
+  "datasetVersion": "donna-testvideos-assess-v0",
+  "holdout": false
+ },
+ "engine": {
+  "name": "ArcFace",
+  "person": "Donna",
+  "referencePath": "/Users/rickb/Library/Application Support/VideoScan/POI/donna",
+  "timeoutSeconds": 1200,
+  "command": [
+   "{app}",
+   "--person-eval",
+   "--engine",
+   "arcface",
+   "--person",
+   "{person}",
+   "--references",
+   "{references}",
+   "--video",
+   "{video}",
+   "--frame-step",
+   "10"
+  ]
+ },
+ "cases": [
+  {
+   "id": "donna-1",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-1.mov",
+   "tags": [
+    "positive"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": true
+   }
+  },
+  {
+   "id": "donna-2",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-2.mov",
+   "tags": [
+    "positive"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": true
+   }
+  },
+  {
+   "id": "donna-3",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-3.mov",
+   "tags": [
+    "positive"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": true
+   }
+  },
+  {
+   "id": "donna-4",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-4.mov",
+   "tags": [
+    "positive"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": true
+   }
+  },
+  {
+   "id": "donna-5",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-5.mov",
+   "tags": [
+    "positive"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": true
+   }
+  },
+  {
+   "id": "donna-6",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-6.MOV",
+   "tags": [
+    "positive"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": true
+   }
+  },
+  {
+   "id": "donna-7",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-7.mov",
+   "tags": [
+    "positive"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": true
+   }
+  },
+  {
+   "id": "donna-8",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-8.mov",
+   "tags": [
+    "positive"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": true
+   }
+  },
+  {
+   "id": "donna-9",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-9.mov",
+   "tags": [
+    "positive"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": true
+   }
+  },
+  {
+   "id": "donna-10",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-10.mov",
+   "tags": [
+    "positive"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": true
+   }
+  },
+  {
+   "id": "donna-11",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-11.mov",
+   "tags": [
+    "positive"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": true
+   }
+  },
+  {
+   "id": "donna-12",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-12.mov",
+   "tags": [
+    "positive"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": true
+   }
+  },
+  {
+   "id": "donna-13",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-13.mov",
+   "tags": [
+    "positive"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": true
+   }
+  },
+  {
+   "id": "donna-14",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/Donna/Donna-14.mov",
+   "tags": [
+    "positive"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": true
+   }
+  },
+  {
+   "id": "notdonna-1",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-1.mov",
+   "tags": [
+    "negative",
+    "hard-negative",
+    "family-similarity"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": false
+   }
+  },
+  {
+   "id": "notdonna-2",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-2.mov",
+   "tags": [
+    "negative",
+    "hard-negative",
+    "family-similarity"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": false
+   }
+  },
+  {
+   "id": "notdonna-3",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-3.mov",
+   "tags": [
+    "negative",
+    "hard-negative",
+    "family-similarity"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": false
+   }
+  },
+  {
+   "id": "notdonna-4",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-4.mov",
+   "tags": [
+    "negative",
+    "hard-negative",
+    "family-similarity"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": false
+   }
+  },
+  {
+   "id": "notdonna-5",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-5.mov",
+   "tags": [
+    "negative",
+    "hard-negative",
+    "family-similarity"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": false
+   }
+  },
+  {
+   "id": "notdonna-7",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-7.mov",
+   "tags": [
+    "negative",
+    "hard-negative",
+    "family-similarity"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": false
+   }
+  },
+  {
+   "id": "notdonna-8",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-8.mov",
+   "tags": [
+    "negative",
+    "hard-negative",
+    "family-similarity"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": false
+   }
+  },
+  {
+   "id": "notdonna-9",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-9.mov",
+   "tags": [
+    "negative",
+    "hard-negative",
+    "family-similarity"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": false
+   }
+  },
+  {
+   "id": "notdonna-10",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-10.mov",
+   "tags": [
+    "negative",
+    "hard-negative",
+    "family-similarity"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": false
+   }
+  },
+  {
+   "id": "notdonna-11",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-11.mov",
+   "tags": [
+    "negative",
+    "hard-negative",
+    "family-similarity"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": false
+   }
+  },
+  {
+   "id": "notdonna-12",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-12.mov",
+   "tags": [
+    "negative",
+    "hard-negative",
+    "family-similarity"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": false
+   }
+  },
+  {
+   "id": "notdonna-13",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-13.mov",
+   "tags": [
+    "negative",
+    "hard-negative",
+    "family-similarity"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": false
+   }
+  },
+  {
+   "id": "notdonna-6",
+   "video": "/Users/rickb/dev/VideoScan/tests/fixtures/videos/DonnaTestVideos/NotDonna/NotDonna-6.mp4",
+   "tags": [
+    "negative",
+    "hard-negative",
+    "family-similarity"
+   ],
+   "expected": {
+    "anyFace": true,
+    "targetPerson": false
+   }
+  }
+ ]
+}
