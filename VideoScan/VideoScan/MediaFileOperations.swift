@@ -492,14 +492,20 @@ final class MediaFileOperationsCenter: ObservableObject {
     /// beside the original and catalogs it with provenance. The original
     /// file and its catalog record are never modified beyond a journey
     /// note. `plannedOutput` carries the destination the trim sheet
-    /// displayed; nil computes it fresh. Rick 2026-07-16.
+    /// displayed; nil computes it fresh. `probedIntra` carries the
+    /// sheet's packet-flag keyframe probe verdict (nil = probe not run /
+    /// undecidable) so the job's summary wording and verification
+    /// tolerance honor what the probe learned about the ACTUAL file,
+    /// not just the codec name (QA MAJOR 1, 2026-07-17). Rick 2026-07-16.
     @discardableResult
     func startTrim(record: VideoRecord,
                    range: TrimRange,
                    model: VideoScanModel,
-                   plannedOutput: URL? = nil) -> TrimJob {
+                   plannedOutput: URL? = nil,
+                   probedIntra: Bool? = nil) -> TrimJob {
         let job = TrimJob(record: record, range: range, model: model,
-                          plannedOutput: plannedOutput)
+                          plannedOutput: plannedOutput,
+                          probedIntra: probedIntra)
         add(job)
         // Same-record dedupe guard (QA MAJOR 2, 2026-07-17). The context
         // menu greys out "Trim Master…" while a trim runs, but the Center

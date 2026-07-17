@@ -338,6 +338,60 @@ struct TrimLogicTests {
         #expect(detail.contains("2 streams"))
     }
 
+    // MARK: - Probe-verdict plumbing (MAJOR 1)
+
+    /// The sheet's packet-flag probe verdict must reach the job and
+    /// drive BOTH the summary wording and the verification tolerance —
+    /// not get thrown away at the sheet boundary. Cases:
+    ///   (a) intra-BY-NAME but probed false (default-GOP FFV1 from a
+    ///       third-party capture tool) → downgraded: keyframe-aligned
+    ///       wording, widened tolerance (no false-fail discarding a
+    ///       completed multi-hour copy).
+    ///   (b) probed true → the frame-accurate claim stands.
+    ///   (c) probe unavailable (nil) → by-name fallback, unchanged.
+    ///   (d) the probe can never UPGRADE a long-GOP codec to intra.
+    @Test @MainActor
+    func probeVerdictDrivesAccuracyWordingAndTolerance() {
+        let model = VideoScanModel()
+        let intraRec = makeTrimSourceRecord(path: "/x/master.mkv",
+                                            durationSeconds: 100, videoCodec: "ffv1")
+        let range = TrimRange(inSeconds: 1, outSeconds: 5)
+
+        // (a) probed false → downgrade wording AND widen tolerance.
+        let downgraded = TrimJob(record: intraRec, range: range, model: model,
+                                 probedIntra: false)
+        #expect(downgraded.codecClass == .intraOnly, "by-name class stays honest")
+        #expect(downgraded.effectiveCodecClass == .longGOP)
+        #expect(downgraded.accuracySummaryWord == "keyframe-aligned",
+                "a keyframe-snapped file must never be summarized as frame-accurate")
+        #expect(TrimPlan.verificationTolerance(for: downgraded.effectiveCodecClass) == 20.0,
+                "the honest snap must not false-fail verification and discard the copy")
+
+        // (b) probed true → frame-accurate claim stands.
+        let confirmed = TrimJob(record: intraRec, range: range, model: model,
+                                probedIntra: true)
+        #expect(confirmed.effectiveCodecClass == .intraOnly)
+        #expect(confirmed.accuracySummaryWord == "frame-accurate")
+        #expect(TrimPlan.verificationTolerance(for: confirmed.effectiveCodecClass) == 0.75)
+
+        // (c) nil → codec-name behavior, both directions.
+        let nilIntra = TrimJob(record: intraRec, range: range, model: model)
+        #expect(nilIntra.effectiveCodecClass == .intraOnly)
+        #expect(nilIntra.accuracySummaryWord == "frame-accurate")
+        let gopRec = makeTrimSourceRecord(path: "/x/holiday.mp4",
+                                          durationSeconds: 100, videoCodec: "h264")
+        let nilGOP = TrimJob(record: gopRec, range: range, model: model)
+        #expect(nilGOP.effectiveCodecClass == .longGOP)
+        #expect(nilGOP.accuracySummaryWord == "keyframe-aligned")
+
+        // (d) probe true never upgrades a long-GOP name — 60 all-K
+        // packets don't prove a long-GOP file is intra.
+        let notUpgraded = TrimJob(record: gopRec, range: range, model: model,
+                                  probedIntra: true)
+        #expect(notUpgraded.effectiveCodecClass == .longGOP)
+        #expect(notUpgraded.accuracySummaryWord == "keyframe-aligned")
+    }
+
     // MARK: - MFO kind wiring
 
     @Test func trimKindHasBadge() {

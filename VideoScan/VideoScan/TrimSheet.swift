@@ -526,10 +526,16 @@ struct TrimSheet: View {
 
     private func startTrim() {
         guard rangeError == nil else { return }
+        // The probe verdict travels WITH the job (QA MAJOR 1): the banner
+        // and the finished row must tell the same honest story, and a
+        // probed-false intra-named file needs the wider verification
+        // tolerance so the honest keyframe snap can't false-fail a
+        // completed multi-hour copy.
         fileOpsCenter.startTrim(record: request.record,
                                 range: TrimRange(inSeconds: inSeconds, outSeconds: outSeconds),
                                 model: model,
-                                plannedOutput: request.destinationURL)
+                                plannedOutput: request.destinationURL,
+                                probedIntra: probeAllKeyframes)
         dismiss()
         // Same handoff TranscodeSheet/CleanupSheet use: open the
         // operations window (progress + Cancel live there) after the

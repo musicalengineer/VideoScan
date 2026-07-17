@@ -217,6 +217,65 @@ struct TrimMediaMatrixTests {
                 "mxf long-GOP cut outside the honest snap window: \(outPackets)")
     }
 
+    // MARK: - ffv1 large-GOP + probed-false verdict (MAJOR 1, end-to-end)
+
+    /// The wasteful-discard scenario QA flagged: an intra-NAMED file
+    /// whose packets are not actually all seek points (here: FFV1 with a
+    /// 1.2 s GOP — any third-party capture tool's default-ish output).
+    /// The cut snaps back ~1.1 s, which is OVER the 0.75 s intra
+    /// tolerance — before the probe verdict was plumbed through, this
+    /// completed copy was verify-FAILED and deleted. With probedIntra =
+    /// false the tolerance widens, the trim publishes, and the summary
+    /// wording is honestly "keyframe-aligned".
+    @Test("ffv1 large-GOP probed false: honest snap publishes instead of false-failing",
+          .timeLimit(.minutes(2)))
+    func ffv1LargeGOPProbedFalsePublishes() async throws {
+        try #require(CleanupTestMedia.toolsAvailable)
+        let dir = try CleanupTestMedia.makeScratchDir("trim_gop_ffv1")
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // -g 30 at 25 fps = 1.2 s between seek points.
+        let src = try CleanupTestMedia.generate(
+            into: dir, name: "test_trim_thirdparty.mkv",
+            duration: 8.0, size: "320x240", rate: "25",
+            videoCodec: "ffv1", extraVideoArgs: ["-g", "30"],
+            audioCodec: "pcm_s16le")
+        let before = try CleanupTestMedia.fingerprint(src)
+
+        // The probe verdict the sheet would compute for this file.
+        let csv = try TrimTestProbe.keyframeFlagCSV(src)
+        let probed = TrimKeyframeProbe.allSampledPacketsAreKeyframes(csv: csv)
+        #expect(probed == false, "fixture must probe as NOT all-keyframes")
+
+        let model = VideoScanModel()
+        let record = makeTrimSourceRecord(path: src, durationSeconds: 8.0, videoCodec: "ffv1")
+        model.records = [record]
+        // in = 2.3 lands mid-GOP: the copy snaps back to the seek point
+        // at 1.2 s (~1.1 s overshoot > 0.75 s intra tolerance).
+        let job = TrimJob(record: record,
+                          range: TrimRange(inSeconds: 2.3, outSeconds: 5.3),
+                          model: model,
+                          probedIntra: probed)
+
+        #expect(job.accuracySummaryWord == "keyframe-aligned",
+                "the finished row must not claim frame accuracy for a keyframe-snapped file")
+
+        job.start()
+        await job.task?.value
+
+        guard case .finished(let summary) = job.state else {
+            Issue.record("probed-false trim must publish (widened tolerance), got \(job.state)")
+            return
+        }
+        #expect(summary.contains("Verified"))
+        #expect(try CleanupTestMedia.fingerprint(src) == before)
+        let published = try #require(job.publishedURL)
+        // Everything asked for is present (the snap errs toward keeping).
+        let outPackets = try TrimTestProbe.videoPacketCount(published.path)
+        #expect(outPackets >= 75,
+                "snap must never drop requested frames: \(outPackets) < 75")
+    }
+
     // MARK: - Negative: invalid ranges write NOTHING
 
     @Test("in ≥ out is rejected before anything touches disk")

@@ -67,9 +67,33 @@ final class TrimJob: MediaFileOperationJob {
     /// forced a bump.
     private(set) var publishedURL: URL?
 
-    /// Codec accuracy class captured at init (drives the verification
-    /// tolerance and the honest summary wording).
+    /// Codec accuracy class BY NAME, captured at init.
     let codecClass: TrimCodecClass
+
+    /// Packet-flag keyframe probe verdict, when a caller ran the probe
+    /// (the trim sheet does): true = all sampled packets are seek points,
+    /// false = at least one isn't (the default-GOP FFV1 case), nil =
+    /// probe unavailable/undecidable. QA MAJOR 1 (2026-07-17): the sheet
+    /// used to run the probe for its banner and throw the verdict away —
+    /// the job then worded the DONE summary and sized the verification
+    /// tolerance from the codec NAME alone.
+    let probedIntra: Bool?
+
+    /// The accuracy class the job actually operates under: the probe can
+    /// DOWNGRADE a by-name intra claim (default-GOP FFV1 snaps like
+    /// long-GOP, and its verification tolerance must widen with it),
+    /// never upgrade one — 60 all-K packets don't prove a long-GOP file
+    /// is intra. Drives BOTH the summary wording and the verification
+    /// tolerance.
+    var effectiveCodecClass: TrimCodecClass {
+        if codecClass == .intraOnly, probedIntra == false { return .longGOP }
+        return codecClass
+    }
+
+    /// The honest accuracy word in the DONE log / appLog summary.
+    var accuracySummaryWord: String {
+        effectiveCodecClass.claimsFrameAccuracy ? "frame-accurate" : "keyframe-aligned"
+    }
 
     /// Weak — the model owns jobs via MediaFileOperationsCenter.
     private weak var model: VideoScanModel?
@@ -116,11 +140,13 @@ final class TrimJob: MediaFileOperationJob {
     init(record: VideoRecord,
          range: TrimRange,
          model: VideoScanModel,
-         plannedOutput: URL? = nil) {
+         plannedOutput: URL? = nil,
+         probedIntra: Bool? = nil) {
         self.record = record
         self.range = range
         self.model = model
         self.codecClass = TrimCodecClassifier.classify(videoCodec: record.videoCodec)
+        self.probedIntra = probedIntra
         self.outputURL = plannedOutput
             ?? Self.trimmedOutputURL(forSourcePath: record.fullPath)
     }
@@ -338,9 +364,7 @@ final class TrimJob: MediaFileOperationJob {
         await catalogTrimOutput(publishedURL: published)
 
         guard case .verified(let verifyDetail) = verification else { return }
-        let accuracy = codecClass.claimsFrameAccuracy
-            ? "frame-accurate"
-            : "keyframe-aligned"
+        let accuracy = accuracySummaryWord
         trimLog.info("trim DONE: \(self.record.filename, privacy: .public) → \(published.lastPathComponent, privacy: .public) (\(Self.humanBytes(size), privacy: .public)) copy \(elapsed, format: .fixed(precision: 1), privacy: .public)s — \(accuracy, privacy: .public)")
         appLog.write("trim done: \(published.lastPathComponent) (\(Self.humanBytes(size))) — \(accuracy) stream copy, verified (\(verifyDetail)). Original untouched.")
         finish(success: "Trimmed → \(published.lastPathComponent) (\(Self.humanBytes(size))). Verified: \(verifyDetail). Original untouched.")
@@ -367,7 +391,7 @@ final class TrimJob: MediaFileOperationJob {
         return Self.evaluateVerification(source: srcProbe,
                                          output: outProbe,
                                          expectedDuration: range.duration,
-                                         codecClass: codecClass)
+                                         codecClass: effectiveCodecClass)
     }
 
     /// PURE verdict logic — unit-tested without subprocesses.
