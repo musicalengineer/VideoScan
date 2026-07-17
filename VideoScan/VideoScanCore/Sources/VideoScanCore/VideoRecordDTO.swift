@@ -122,6 +122,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let derivedFrom: UUID?
     public let cleanupRecipeID: String?
     public let cleanupRecipeVersion: Int?
+    public let derivationKind: String?
     public let trimInSeconds: Double?
     public let trimOutSeconds: Double?
     public let workspaceActive: Bool
@@ -221,6 +222,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
         derivedFrom                 = r.derivedFrom
         cleanupRecipeID             = r.cleanupRecipeID
         cleanupRecipeVersion        = r.cleanupRecipeVersion
+        derivationKind              = r.derivationKind
         trimInSeconds               = r.trimInSeconds
         trimOutSeconds              = r.trimOutSeconds
         workspaceActive             = r.workspaceActive
@@ -372,9 +374,13 @@ public struct VideoRecordDTO: Sendable, Encodable {
         // byte-identity golden for legacy catalogs.
         try c.encodeIfPresent(cleanupRecipeID, forKey: .cleanupRecipeID)
         try c.encodeIfPresent(cleanupRecipeVersion, forKey: .cleanupRecipeVersion)
-        // Trim provenance: only written for trim outputs — adds zero
+        // Derivation provenance: `derivationKind` names the MFO verb
+        // that produced this record ("trim", "balanceAudio"); the trim
+        // seconds are trim-specific payload, present only when the kind
+        // is "trim". All three written only when present — adds zero
         // bytes to every pre-existing record, preserving the
         // byte-identity golden for legacy catalogs.
+        try c.encodeIfPresent(derivationKind, forKey: .derivationKind)
         try c.encodeIfPresent(trimInSeconds, forKey: .trimInSeconds)
         try c.encodeIfPresent(trimOutSeconds, forKey: .trimOutSeconds)
         // Only write workspaceActive when true — keeps catalog.json deltas

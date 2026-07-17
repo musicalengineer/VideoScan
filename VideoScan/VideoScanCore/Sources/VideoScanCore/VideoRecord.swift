@@ -303,14 +303,26 @@ public class VideoRecord: Identifiable, Decodable {
     /// `cleanupRecipeID` is nil.
     public var cleanupRecipeVersion: Int?
 
-    /// Trim provenance (Trim Master, 2026-07-16): the source-file second
-    /// the stream-copy trim kept FROM. Presence marks this record as a
-    /// trim derivative (derivationKind "trim") — exactly how
-    /// `cleanupRecipeID` marks cleanup outputs. Pairs with `derivedFrom`
-    /// (the SOURCE record's id) so the catalog can answer "trimmed from
-    /// what, keeping which range". Additive optional — legacy catalogs
-    /// decode as nil and the DTO only encodes the key when present, so
-    /// old catalog.json files round-trip byte-identical.
+    /// Which MFO verb produced this record's file, for records created
+    /// by derivation from another catalog record — "trim" (Trim Master,
+    /// 2026-07-16) or "balanceAudio" (Balance Audio, GH #116). The
+    /// universal derivation marker: pairs with `derivedFrom` (the SOURCE
+    /// record's id) so provenance answers both "from what" and "by what
+    /// operation". Verb-specific payload rides in its own fields (see
+    /// `trimInSeconds`/`trimOutSeconds` for "trim"). nil for originals
+    /// and for older derivation verbs that predate the field (their kind
+    /// is implied by their own provenance fields, e.g.
+    /// `cleanupRecipeID`). Additive optional — legacy catalogs decode as
+    /// nil, and the DTO only encodes the key when present, so old
+    /// catalog.json files round-trip byte-identical.
+    public var derivationKind: String?
+
+    /// Trim-specific payload (Trim Master, 2026-07-16): the source-file
+    /// second the stream-copy trim kept FROM. Present only when
+    /// `derivationKind == "trim"`; nil/absent for every other record —
+    /// including all legacy records, same additive-optional migration as
+    /// `derivationKind`. Pairs with `derivedFrom` so the catalog can
+    /// answer "trimmed from what, keeping which range".
     public var trimInSeconds: Double?
 
     /// The source-file second the trim kept UNTIL. nil whenever
@@ -459,7 +471,9 @@ public class VideoRecord: Identifiable, Decodable {
         // as derivedFrom: legacy catalogs (no keys) decode as nil.
         cleanupRecipeID             = try c.decodeIfPresent(String.self, forKey: .cleanupRecipeID)
         cleanupRecipeVersion        = try c.decodeIfPresent(Int.self, forKey: .cleanupRecipeVersion)
-        // Trim provenance — same additive-optional migration pattern.
+        // Derivation provenance (kind + trim payload) — same
+        // additive-optional migration pattern.
+        derivationKind              = try c.decodeIfPresent(String.self, forKey: .derivationKind)
         trimInSeconds               = try c.decodeIfPresent(Double.self, forKey: .trimInSeconds)
         trimOutSeconds              = try c.decodeIfPresent(Double.self, forKey: .trimOutSeconds)
         // Workspace-active flag. decodeIfPresent so legacy catalogs (no key)

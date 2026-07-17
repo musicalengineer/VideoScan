@@ -1,0 +1,625 @@
+import Combine
+import Foundation
+import os
+
+// MARK: - BalanceAudioJob
+//
+// "Balance Audio" — GH #116, Rick 2026-07. Fixes one-sided audio on old
+// tape ingests (classically left-channel-only) that Rick previously
+// repaired by hand in FCP. The job consumes an AudioBalanceAnalysis
+// (produced by the analyze-first sheet) and:
+//
+//   - leftOnly / rightOnly → duplicates the live channel to both sides
+//     (`pan=stereo|c0=cX|c1=cX`);
+//   - mono (single-channel stream) → spreads it to dual-mono stereo;
+//   - dualMono / trueStereo / silent / multichannel → REFUSES with a
+//     clear reason. dualMono is already balanced and trueStereo is real
+//     stereo — "fixing" either would destroy good audio, so the refusal
+//     is the safety-critical branch (pinned by negative tests).
+//
+// VIDEO IS NEVER RE-ENCODED: `-map 0 -c copy` stream-copies every
+// stream, then `-c:a …` overrides ONLY the audio (which must pass
+// through the pan filter). PCM sources re-encode to the same PCM codec
+// (lossless); lossy sources stay in their codec family at ≥ the source
+// bitrate. The container is preserved (same extension ⇒ same muxer).
+//
+// Safety discipline (CleanupJob's, adapted):
+//   - SOURCE NEVER MODIFIED — the pipeline only reads it (hash-oracle
+//     sensor in BalanceAudioJobTests).
+//   - Output `<stem>_balanced.<ext>` BESIDE the source. ffmpeg writes to
+//     the `.vs-partial` sibling (ReformatJob.partialURL keeps the real
+//     extension last, so the muxer is still inferred; the scan walker
+//     skips `.vs-partial.` names). Promotion is a NON-CLOBBERING rename
+//     re-uniquified at publish time (CleanupJob's M3 TOCTOU guard).
+//     Cancel/crash leaves nothing at the final path.
+//   - Free-space pre-check before rendering.
+//   - Stall watchdog on ffmpeg's progress stream.
+//   - POST-FIX VERIFICATION before promotion: the analyzer re-runs on
+//     the partial and must classify it dualMono, with the video codec
+//     unchanged, stream count preserved, and duration within tolerance.
+//     A verification failure deletes the partial and fails loudly.
+//
+// Unlike CleanupJob there is NO scratch/RAM-disk phase: this is a remux
+// with an audio-only re-encode — output ≈ source size, written once,
+// directly to the same volume as the final name (rename is metadata-
+// only).
+//
+// Memory: ffmpeg streams; this process holds only progress lines
+// (bounded by ProcessRunner's 256 KB stderr cap) plus the verification
+// analysis (~KBs). Worst-case in-process footprint < 1 MB.
+
+private let balanceLog = Logger(subsystem: "Rick-Breen.VideoScan",
+                                category: "balanceAudio")
+
+// MARK: - Pure fix rules
+
+/// PURE decision tables for the balance fix — no I/O, fully
+/// unit-testable (the TrimEngine/CleanupEngine split).
+enum BalanceAudioFix {
+
+    /// The provenance tag written to `VideoRecord.derivationKind`.
+    static let derivationKind = "balanceAudio"
+
+    /// Verification tolerance on the output's duration vs the source's.
+    static let durationToleranceSeconds: Double = 1.0
+
+    /// nil = actionable. Non-nil = the plain-language reason the job
+    /// refuses (surfaced verbatim in the sheet and the job row).
+    static func refusalReason(for c: AudioChannelClass) -> String? {
+        switch c {
+        case .leftOnly, .rightOnly, .mono:
+            return nil
+        case .dualMono:
+            return "Already balanced — both channels carry the same sound."
+        case .trueStereo:
+            return "True stereo — nothing to fix."
+        case .silent:
+            return "No audio program — there is no sound to balance."
+        case .multichannel:
+            return "Surround (more than 2 channels) sound isn't supported by Balance Audio yet."
+        }
+    }
+
+    /// The ffmpeg pan filter for an actionable class; nil otherwise.
+    /// Duplicating the live channel (rather than a −3 dB split) keeps
+    /// per-speaker loudness identical to what the one live channel had.
+    static func panFilter(for c: AudioChannelClass) -> String? {
+        switch c {
+        case .leftOnly: return "pan=stereo|c0=c0|c1=c0"
+        case .rightOnly: return "pan=stereo|c0=c1|c1=c1"
+        case .mono: return "pan=stereo|c0=c0|c1=c0"
+        case .trueStereo, .dualMono, .silent, .multichannel: return nil
+        }
+    }
+
+    /// Audio encoder arguments: PCM in → SAME PCM codec out (lossless);
+    /// lossy in → same codec family at ≥ the source bitrate (floor
+    /// 192 kb/s so an unknown/low source bitrate never downgrades);
+    /// unknown/unencodable codec → AAC 256 kb/s (documented fallback).
+    static func audioEncodeArgs(sourceCodec: String,
+                                bitRateBitsPerSec: Int?) -> [String] {
+        let codec = sourceCodec.trimmingCharacters(in: .whitespaces).lowercased()
+        if codec.hasPrefix("pcm_") {
+            return ["-c:a", codec]                       // lossless, no bitrate
+        }
+        let lossyBitrate = max(bitRateBitsPerSec ?? 0, 192_000)
+        switch codec {
+        case "aac":  return ["-c:a", "aac", "-b:a", "\(lossyBitrate)"]
+        case "mp3":  return ["-c:a", "libmp3lame", "-b:a", "\(min(lossyBitrate, 320_000))"]
+        case "mp2":  return ["-c:a", "mp2", "-b:a", "\(min(lossyBitrate, 384_000))"]
+        case "ac3":  return ["-c:a", "ac3", "-b:a", "\(min(lossyBitrate, 640_000))"]
+        case "eac3": return ["-c:a", "eac3", "-b:a", "\(lossyBitrate)"]
+        case "alac": return ["-c:a", "alac"]             // lossless
+        default:
+            // Legacy/unencodable codec family (qdm2, mace, cook, …):
+            // modernize to AAC at a generous bitrate. The original is
+            // untouched beside the output, so nothing is lost.
+            return ["-c:a", "aac", "-b:a", "\(max(lossyBitrate, 256_000))"]
+        }
+    }
+
+    /// Full ffmpeg argument vector. `-map 0 -c copy` carries EVERY
+    /// stream (video/subs/data) verbatim; the audio override + pan
+    /// filter re-encode only the audio. Pure — tested as strings.
+    static func ffmpegArgs(input: String,
+                           output: String,
+                           panFilter: String,
+                           audioArgs: [String]) -> [String] {
+        var args: [String] = [
+            "-hide_banner", "-nostdin", "-y",
+            "-i", input,
+            "-map", "0",
+            "-c", "copy",
+            "-af", panFilter
+        ]
+        args += audioArgs
+        args += [
+            "-map_metadata", "0",
+            "-progress", "pipe:2",
+            output
+        ]
+        return args
+    }
+
+    /// `<stem>_balanced.<ext>` beside the source — SAME extension, so
+    /// the container is preserved. Finder-style counters on collision
+    /// (`<stem>_balanced 2.<ext>`, …). `fileExists` injected so the
+    /// uniquify loop is pure-testable and the publish path can fold
+    /// "partial exists" into "taken" (CleanupJob's convention).
+    static func balancedOutputURL(
+        forSourcePath path: String,
+        fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
+    ) -> URL {
+        let src = URL(fileURLWithPath: path)
+        let dir = src.deletingLastPathComponent()
+        let stem = src.deletingPathExtension().lastPathComponent
+        let ext = src.pathExtension.isEmpty ? "mov" : src.pathExtension
+        var candidate = dir.appendingPathComponent("\(stem)_balanced.\(ext)")
+        var n = 2
+        while fileExists(candidate.path) {
+            candidate = dir.appendingPathComponent("\(stem)_balanced \(n).\(ext)")
+            n += 1
+        }
+        return candidate
+    }
+
+    /// Free-space requirement: output ≈ source size (streams copied)
+    /// plus worst-case audio growth (lossy → 48 kHz stereo PCM is
+    /// ~192 KB/s) plus a 64 MB muxer/headroom cushion. Pure.
+    static func requiredFreeBytes(sourceBytes: Int64,
+                                  durationSeconds: Double) -> Int64 {
+        let audioGrowth = Int64(max(0, durationSeconds) * 200_000)
+        return sourceBytes + audioGrowth + (64 << 20)
+    }
+}
+
+// MARK: - Job
+
+@MainActor
+final class BalanceAudioJob: MediaFileOperationJob {
+
+    let id = UUID()
+    let kind: MediaFileOperationKind = .balanceAudio
+    let startedAt = Date()
+
+    /// Source record. READ ONLY on disk.
+    let record: VideoRecord
+
+    /// The analyze-first verdict the sheet displayed — classification,
+    /// per-channel levels, and the stream shape verification compares
+    /// against.
+    let analysis: AudioBalanceAnalysis
+
+    /// PLANNED `<stem>_balanced.<ext>` beside the source (shared with
+    /// the sheet so it never promises a name the job doesn't plan to
+    /// use). Publish re-uniquifies — see `publishedURL`.
+    let outputURL: URL
+
+    /// Where the balanced copy actually landed; nil until promotion.
+    private(set) var publishedURL: URL?
+
+    /// Test seam: overrides ToolLocator's ffmpeg (failure injection —
+    /// point it at /usr/bin/false to exercise the render-failed path).
+    private let ffmpegPathOverride: String?
+
+    private weak var model: VideoScanModel?
+
+    let canPause = false
+
+    @Published private(set) var state: MediaFileOperationState = .running {
+        didSet {
+            if !state.isActive, finishedAt == nil { finishedAt = Date() }
+        }
+    }
+    @Published private(set) var finishedAt: Date?
+    @Published private(set) var subtitleText: String
+    @Published private(set) var fractionValue: Double = 0
+    @Published private(set) var isIndeterminateValue: Bool = true
+
+    /// The run Task — internal so tests can `await job.task?.value`.
+    private(set) var task: Task<Void, Never>?
+
+    /// Set by the stall watchdog; wins over the generic cancel branch.
+    private var stallReason: String?
+
+    var title: String { record.filename }
+    var subtitle: String { subtitleText }
+    var fraction: Double { fractionValue }
+    var isIndeterminate: Bool { isIndeterminateValue }
+
+    // MARK: Init / start
+
+    init(record: VideoRecord,
+         analysis: AudioBalanceAnalysis,
+         model: VideoScanModel,
+         plannedOutput: URL? = nil,
+         ffmpegPathOverride: String? = nil) {
+        self.record = record
+        self.analysis = analysis
+        self.model = model
+        self.ffmpegPathOverride = ffmpegPathOverride
+        self.subtitleText = "Preparing to balance audio…"
+        self.outputURL = plannedOutput
+            ?? BalanceAudioFix.balancedOutputURL(forSourcePath: record.fullPath)
+    }
+
+    /// Idempotent — a second call is a no-op.
+    func start() {
+        guard task == nil else { return }
+        task = Task { [weak self] in
+            guard let self else { return }
+            await self.runBalance()
+        }
+    }
+
+    func cancel() {
+        guard state.isActive else { return }
+        state = .cancelling
+        subtitleText = "Cancelling…"
+        task?.cancel()
+    }
+
+    // MARK: Run
+
+    private func runBalance() async {
+        let inputPath = record.fullPath
+        let classification = analysis.classification
+        balanceLog.info("balance START: \(self.record.filename, privacy: .public) class=\(classification.rawValue, privacy: .public) → \(self.outputURL.lastPathComponent, privacy: .public)")
+        appLog.write("balance audio: \(record.filename) — \(classification.rawValue) → \(outputURL.lastPathComponent)")
+
+        // ---- Refusals (the safety-critical branch): dualMono /
+        // trueStereo / silent / multichannel are never "fixed".
+        if let reason = BalanceAudioFix.refusalReason(for: classification) {
+            balanceLog.notice("balance REFUSED: \(self.record.filename, privacy: .public) — \(reason, privacy: .public)")
+            finish(failed: reason)
+            return
+        }
+        guard let pan = BalanceAudioFix.panFilter(for: classification) else {
+            finish(failed: "No balance fix applies to \(classification.rawValue)")
+            return
+        }
+        guard FileManager.default.fileExists(atPath: inputPath) else {
+            finish(failed: "Source file missing on disk")
+            return
+        }
+        // v1 scope: exactly one audio stream (`-map 0 -c copy -c:a`
+        // would re-encode every audio stream through one pan filter).
+        guard analysis.shape.audioStreams == 1 else {
+            finish(failed: "This file has \(analysis.shape.audioStreams) audio tracks — Balance Audio currently handles files with a single audio track")
+            return
+        }
+        let ffmpeg = ffmpegPathOverride ?? ToolLocator.ffmpegPath
+        guard FileManager.default.isExecutableFile(atPath: ffmpeg) else {
+            finish(failed: "ffmpeg not found (set VS_FFMPEG_PATH or install via Homebrew)")
+            return
+        }
+
+        // ---- Free-space pre-check on the destination volume.
+        let required = BalanceAudioFix.requiredFreeBytes(
+            sourceBytes: record.sizeBytes,
+            durationSeconds: analysis.shape.durationSeconds)
+        let destDir = outputURL.deletingLastPathComponent()
+        if let free = Self.freeBytes(forDirectory: destDir), free < required {
+            finish(failed: "Not enough free space next to the original — need about \(Self.humanBytes(required)), only \(Self.humanBytes(free)) available")
+            return
+        }
+
+        // ---- Publish-time re-uniquify (M3 pattern): the planned name
+        // is only a plan. A name whose partial exists is treated as
+        // taken (another job mid-publish on it).
+        let fm = FileManager.default
+        let taken: (String) -> Bool = { path in
+            fm.fileExists(atPath: path)
+                || fm.fileExists(atPath: ReformatJob.partialURL(for: URL(fileURLWithPath: path)).path)
+        }
+        var candidate = outputURL
+        if taken(candidate.path) {
+            candidate = BalanceAudioFix.balancedOutputURL(
+                forSourcePath: inputPath, fileExists: taken)
+        }
+        let partialURL = ReformatJob.partialURL(for: candidate)
+
+        // Any exit before promotion must leave no partial behind.
+        var promoted = false
+        defer {
+            if !promoted { try? fm.removeItem(at: partialURL) }
+        }
+
+        let durationSeconds = analysis.shape.durationSeconds > 0
+            ? analysis.shape.durationSeconds
+            : max(0, record.durationSeconds)
+        subtitleText = "Balancing audio — video is copied unchanged…"
+        isIndeterminateValue = (durationSeconds == 0)
+
+        // ---- Stall watchdog fed by ffmpeg's -progress stream.
+        let monitor = StallMonitor(label: "balance \(record.filename)") { [weak self] silentFor in
+            Task { @MainActor [weak self] in
+                self?.handleStall(silentFor: silentFor)
+            }
+        }
+        let progressSink: @Sendable (Double) -> Void = { [weak self] fraction in
+            monitor.tick()
+            // Negative fraction = watchdog-only heartbeat (progress line
+            // without a parseable time, or unknown duration).
+            guard fraction >= 0, let self else { return }
+            Task { @MainActor in
+                self.applyProgressFraction(fraction)
+            }
+        }
+
+        let args = BalanceAudioFix.ffmpegArgs(
+            input: inputPath,
+            output: partialURL.path,
+            panFilter: pan,
+            audioArgs: BalanceAudioFix.audioEncodeArgs(
+                sourceCodec: analysis.shape.audioCodec,
+                bitRateBitsPerSec: analysis.shape.audioBitRate))
+        balanceLog.info("balance render: ffmpeg \(args.joined(separator: " "), privacy: .public)")
+
+        monitor.start()
+        let renderError = await Self.renderOffMain(ffmpeg: ffmpeg,
+                                                   arguments: args,
+                                                   durationSeconds: durationSeconds,
+                                                   progress: progressSink)
+        if let stallReason {
+            monitor.stop()
+            finish(failed: stallReason)
+            return
+        }
+        if Task.isCancelled || state == .cancelling {
+            monitor.stop()
+            finishCancelled()
+            return
+        }
+        if let renderError {
+            monitor.stop()
+            finish(failed: renderError)
+            return
+        }
+
+        // ---- POST-FIX VERIFICATION on the partial, before promotion.
+        subtitleText = "Verifying the balanced copy…"
+        monitor.tick()
+        do {
+            try await Self.verifyOffMain(partialPath: partialURL.path,
+                                         source: analysis.shape,
+                                         sourceDuration: durationSeconds)
+        } catch {
+            monitor.stop()
+            if error is CancellationError || Task.isCancelled || state == .cancelling {
+                finishCancelled()
+            } else {
+                let msg = (error as? BalanceVerificationError)?.message
+                    ?? error.localizedDescription
+                balanceLog.error("balance VERIFY FAILED: \(self.record.filename, privacy: .public) — \(msg, privacy: .public)")
+                finish(failed: "Verification failed — the balanced copy was discarded. \(msg)")
+            }
+            return
+        }
+        monitor.stop()
+        if Task.isCancelled || state == .cancelling {
+            finishCancelled()
+            return
+        }
+
+        // ---- NON-CLOBBERING promote (rename only; retry the uniquify
+        // on a raced-in collision, bounded).
+        var attempts = 0
+        while true {
+            do {
+                try fm.moveItem(at: partialURL, to: candidate)
+                promoted = true
+                break
+            } catch {
+                attempts += 1
+                guard attempts < 100, fm.fileExists(atPath: candidate.path) else {
+                    finish(failed: "Could not place the balanced copy next to the original: \(error.localizedDescription)")
+                    return
+                }
+                candidate = BalanceAudioFix.balancedOutputURL(
+                    forSourcePath: inputPath, fileExists: taken)
+            }
+        }
+        publishedURL = candidate
+        if candidate != outputURL {
+            balanceLog.notice("balance publish: planned name \(self.outputURL.lastPathComponent, privacy: .public) was taken — published as \(candidate.lastPathComponent, privacy: .public)")
+        }
+
+        let attrs = try? fm.attributesOfItem(atPath: candidate.path)
+        let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+
+        // ---- Catalog + provenance + persistence.
+        await catalogBalanceOutput(publishedURL: candidate)
+
+        balanceLog.info("balance DONE: \(self.record.filename, privacy: .public) → \(candidate.lastPathComponent, privacy: .public) (\(Self.humanBytes(size), privacy: .public))")
+        appLog.write("balance audio done: \(candidate.lastPathComponent) (\(Self.humanBytes(size))) — original untouched")
+        finish(success: "Balanced → \(candidate.lastPathComponent) (\(Self.humanBytes(size))). Original untouched.")
+    }
+
+    /// m2 guard (CleanupJob precedent): progress beats arrive via
+    /// unstructured Tasks and can land after a terminal state — a
+    /// straggler must never drag a finished bar backwards.
+    func applyProgressFraction(_ fraction: Double) {
+        guard state.isActive else { return }
+        fractionValue = fraction
+        isIndeterminateValue = false
+    }
+
+    // MARK: Off-main hops
+    //
+    // Same `@concurrent` idiom as CleanupJob.renderOffMain: this repo's
+    // Approachable Concurrency runs `nonisolated async` on the CALLER's
+    // actor — calling ffmpeg supervision from this @MainActor job
+    // without `@concurrent` would run it on main (the documented trap).
+
+    /// Run the ffmpeg remux. Returns nil on success, or a
+    /// user-presentable failure message.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    private static func renderOffMain(
+        ffmpeg: String,
+        arguments: [String],
+        durationSeconds: Double,
+        progress: @escaping @Sendable (Double) -> Void
+    ) async -> String? {
+        let result = await ProcessRunner.runProcess(
+            executable: ffmpeg,
+            arguments: arguments,
+            stderrLine: { line in
+                guard let sec = ReformatJob.parseProgressSeconds(line: line),
+                      durationSeconds > 0 else {
+                    // Still a sign of life for the watchdog.
+                    progress(-1)
+                    return
+                }
+                progress(min(1.0, sec / durationSeconds))
+            }
+        )
+        if Task.isCancelled { return nil }   // caller handles cancel
+        guard result.exitCode == 0 else {
+            let tail = result.stderr.split(separator: "\n").suffix(4).joined(separator: " · ")
+            return "ffmpeg exited with status \(result.exitCode)\(tail.isEmpty ? "" : " — \(tail)")"
+        }
+        return nil
+    }
+
+    /// Re-analyze the rendered partial and enforce the post-fix
+    /// contract: balanced classification, video codec unchanged, stream
+    /// count preserved, duration within tolerance.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    private static func verifyOffMain(
+        partialPath: String,
+        source: AudioBalanceStreamShape,
+        sourceDuration: Double
+    ) async throws {
+        let check = try await AudioBalanceProbe.analyze(path: partialPath)
+        guard check.classification == .dualMono else {
+            throw BalanceVerificationError(
+                message: "output classified as \(check.classification.rawValue), expected dualMono")
+        }
+        guard check.shape.videoCodec == source.videoCodec else {
+            throw BalanceVerificationError(
+                message: "video codec changed (\(source.videoCodec ?? "none") → \(check.shape.videoCodec ?? "none"))")
+        }
+        guard check.shape.totalStreams == source.totalStreams else {
+            throw BalanceVerificationError(
+                message: "stream count changed (\(source.totalStreams) → \(check.shape.totalStreams))")
+        }
+        if sourceDuration > 0, check.shape.durationSeconds > 0 {
+            let delta = abs(check.shape.durationSeconds - sourceDuration)
+            guard delta <= BalanceAudioFix.durationToleranceSeconds else {
+                throw BalanceVerificationError(
+                    message: String(format: "duration drifted %.2fs", delta))
+            }
+        }
+    }
+
+    // MARK: Stall handling
+
+    private func handleStall(silentFor: Double) {
+        guard state.isActive, stallReason == nil else { return }
+        let attribution = StallMonitor.attribution(forPaths: [record.fullPath, outputURL.path])
+        let reason = "Stalled — no progress for \(Int(silentFor))s while balancing audio. \(attribution)"
+        stallReason = reason
+        subtitleText = "Stalled — stopping…"
+        balanceLog.error("balance WATCHDOG: killing \(self.record.filename, privacy: .public) — \(reason, privacy: .public)")
+        appLog.write("balance watchdog: \(record.filename) stalled \(Int(silentFor))s — \(attribution); killing job")
+        task?.cancel()
+    }
+
+    // MARK: Catalog + provenance
+
+    /// Probe the balanced file and register it with full provenance:
+    /// `derivedFrom` = source id, `derivationKind` = "balanceAudio",
+    /// File Journey notes on both records, search-index update, and the
+    /// catalog-mutated notification (debounced save) — the same M1/M2
+    /// pattern CleanupJob documents.
+    private func catalogBalanceOutput(publishedURL: URL) async {
+        guard let model else { return }
+        let newRec = await model.probeFile(url: publishedURL)
+
+        newRec.derivedFrom = record.id
+        newRec.derivationKind = BalanceAudioFix.derivationKind
+
+        let fixNote: String
+        switch analysis.classification {
+        case .leftOnly: fixNote = "left channel copied to both sides"
+        case .rightOnly: fixNote = "right channel copied to both sides"
+        case .mono: fixNote = "mono sound spread to both speakers"
+        default: fixNote = analysis.classification.rawValue
+        }
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let sourceNote = "Balance Audio \(stamp): Created balanced copy \(publishedURL.lastPathComponent) (\(fixNote); video copied unchanged)"
+        let derivedNote = "Balance Audio \(stamp): Balanced from \(record.filename) (\(fixNote); video copied unchanged)"
+
+        record.notes = record.notes.isEmpty
+            ? sourceNote
+            : "\(record.notes)\n\(sourceNote)"
+        newRec.notes = newRec.notes.isEmpty
+            ? derivedNote
+            : "\(newRec.notes)\n\(derivedNote)"
+
+        if let existing = model.records.firstIndex(where: { $0.fullPath == publishedURL.path }) {
+            model.records[existing] = newRec
+        } else {
+            model.records.append(newRec)
+        }
+        model.searchIndex.update(newRec)
+        model.searchIndex.update(record)
+        NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
+
+        balanceLog.info("balance: catalogued \(publishedURL.lastPathComponent, privacy: .public) (derivedFrom=\(self.record.id.uuidString, privacy: .public), kind=\(BalanceAudioFix.derivationKind, privacy: .public))")
+    }
+
+    // MARK: Finish helpers
+
+    private func finish(success: String) {
+        state = .finished(summary: success)
+        subtitleText = success
+        fractionValue = 1.0
+        isIndeterminateValue = false
+    }
+
+    private func finish(failed: String) {
+        state = .failed(message: failed)
+        subtitleText = failed
+        isIndeterminateValue = false
+        balanceLog.warning("balance failed: \(failed, privacy: .public)")
+    }
+
+    private func finishCancelled() {
+        state = .cancelled
+        subtitleText = "Cancelled"
+        isIndeterminateValue = false
+    }
+
+    // MARK: Small utilities
+
+    /// Free bytes on the volume containing `dir` (CombineSheet's
+    /// resource-values approach).
+    nonisolated static func freeBytes(forDirectory dir: URL) -> Int64? {
+        if let values = try? dir.resourceValues(
+            forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
+           let free = values.volumeAvailableCapacityForImportantUsage {
+            return free
+        }
+        let fallback = try? dir.resourceValues(forKeys: [.volumeAvailableCapacityKey])
+        return fallback?.volumeAvailableCapacity.map { Int64($0) }
+    }
+
+    private static func humanBytes(_ bytes: Int64) -> String {
+        let f = ByteCountFormatter()
+        f.allowedUnits = [.useMB, .useGB]
+        f.countStyle = .file
+        return f.string(fromByteCount: bytes)
+    }
+}
+
+/// Typed verification failure so the job can surface the exact contract
+/// breach.
+private struct BalanceVerificationError: Error {
+    let message: String
+}

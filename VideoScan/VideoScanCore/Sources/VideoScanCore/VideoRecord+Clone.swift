@@ -129,6 +129,7 @@ extension VideoRecord {
         c.derivedFrom = derivedFrom
         c.cleanupRecipeID = cleanupRecipeID
         c.cleanupRecipeVersion = cleanupRecipeVersion
+        c.derivationKind = derivationKind
         c.trimInSeconds = trimInSeconds
         c.trimOutSeconds = trimOutSeconds
         c.workspaceActive = workspaceActive

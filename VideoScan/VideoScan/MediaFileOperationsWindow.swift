@@ -559,6 +559,10 @@ extension MediaFileOperationKind {
         // Trim is the third derivative-producing verb — indigo keeps it
         // distinct from transcode's mint and cleanup's teal.
         case .trim: return .indigo
+        // Balance Audio — pink keeps it distinct from the other
+        // derivative-producing verbs (mint/teal/indigo; indigo went to
+        // Trim when the branches merged). GH #116.
+        case .balanceAudio: return .pink
         }
     }
 }

@@ -63,6 +63,7 @@ extension VideoRecord {
         case derivedFrom
         case cleanupRecipeID
         case cleanupRecipeVersion
+        case derivationKind
         case trimInSeconds
         case trimOutSeconds
         case workspaceActive

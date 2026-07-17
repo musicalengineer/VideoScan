@@ -75,6 +75,11 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// zero quality loss) and writes `<stem>_trimmed.<same ext>` BESIDE
     /// the original, which is never modified. Rick 2026-07-16.
     case trim
+    /// "Balance Audio" — fixes one-sided (left/right-only) or mono
+    /// audio by duplicating the live channel to both sides; video
+    /// stream-copied, `<stem>_balanced.<ext>` beside the original,
+    /// which is never modified. GH #116, Rick 2026-07.
+    case balanceAudio
 
     /// Badge text — rendered in small caps by the row view.
     /// `.extract` says "Faces" (not "Extract") since the verb split:
@@ -91,6 +96,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .transcode: return "Transcode"
         case .cleanup: return "Clean Up"
         case .trim: return "Trim"
+        case .balanceAudio: return "Balance"
         }
     }
 }
@@ -525,6 +531,33 @@ final class MediaFileOperationsCenter: ObservableObject {
         }
         job.start()
         fileOpsLog.info("trim started: \(record.filename, privacy: .public) [\(TrimTimecode.format(range.inSeconds), privacy: .public) → \(TrimTimecode.format(range.outSeconds), privacy: .public)] → \(job.outputURL.lastPathComponent, privacy: .public)")
+        return job
+    }
+
+    /// Kick off "Balance Audio" on a single record. The sheet already
+    /// ran the analyzer (analyze-then-confirm); the job re-verifies the
+    /// output after the fix. Returns nil — REFUSING the dispatch — when
+    /// a balance job is already active for this same record (the
+    /// MFO-layer duplicate guard: two concurrent jobs against one input
+    /// would race on the same planned output name). GH #116.
+    @discardableResult
+    func startBalanceAudio(record: VideoRecord,
+                           analysis: AudioBalanceAnalysis,
+                           model: VideoScanModel,
+                           plannedOutput: URL? = nil) -> BalanceAudioJob? {
+        let duplicate = jobs.contains { job in
+            guard job.state.isActive, let b = job as? BalanceAudioJob else { return false }
+            return b.record.id == record.id
+        }
+        guard !duplicate else {
+            fileOpsLog.notice("balanceAudio REFUSED duplicate dispatch: \(record.filename, privacy: .public) already has an active balance job")
+            return nil
+        }
+        let job = BalanceAudioJob(record: record, analysis: analysis,
+                                  model: model, plannedOutput: plannedOutput)
+        add(job)
+        job.start()
+        fileOpsLog.info("balanceAudio started: \(record.filename, privacy: .public) class=\(analysis.classification.rawValue, privacy: .public) → \(job.outputURL.lastPathComponent, privacy: .public)")
         return job
     }
 
