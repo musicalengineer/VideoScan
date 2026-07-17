@@ -108,6 +108,9 @@ struct CatalogContent: View {
     @State var cleanupRequest: CleanupRequest?
     /// Non-nil presents the "Trim Master…" in/out point sheet.
     @State var trimRequest: TrimRequest?
+    /// Non-nil presents the "Balance Audio" analyze-then-confirm sheet
+    /// (GH #116).
+    @State var balanceRequest: BalanceAudioRequest?
 
     /// "Find Online Version" came up empty — non-nil drives an alert
     /// explaining where copies exist (all offline) or that this is the
@@ -469,6 +472,11 @@ struct CatalogContent: View {
         // "Trim Master…" in/out point picker. Same .sheet(item:) shape.
         .sheet(item: $trimRequest) { request in
             TrimSheet(request: request)
+        }
+        // "Balance Audio" analyze-then-confirm (GH #116). Same
+        // .sheet(item:) shape — never chained isPresented.
+        .sheet(item: $balanceRequest) { request in
+            BalanceAudioSheet(request: request)
         }
         .alert(
             "Find Online Version",

@@ -167,7 +167,8 @@ enum CorrelationScorer {
             vKey = ""  // computed per-candidate below
         }
 
-        // Issue #101: the user-facing Repair Audio path must NOT
+        // Issue #101: the user-facing Find Matching Audio path
+        // (formerly "Repair Audio") must NOT
         // surface pairs whose entire score comes from duration +
         // timestamp coincidence. In a 16k-record catalog, plenty of
         // unrelated A and V files have similar duration and creation

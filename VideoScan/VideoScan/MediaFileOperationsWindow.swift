@@ -382,6 +382,14 @@ struct MediaFileOperationRow: View {
                     finishedChip(summary)
                     revealButton(trim.publishedURL ?? trim.outputURL)
                     showInCatalogButton(trim.publishedURL ?? trim.outputURL)
+                } else if let balance = job as? BalanceAudioJob,
+                          let published = balance.publishedURL {
+                    // Balance Audio (GH #116): same finished treatment
+                    // as Reformat/Transcode — Reveal the balanced copy
+                    // and jump to its provenance-stamped catalog row.
+                    finishedChip(summary)
+                    revealButton(published)
+                    showInCatalogButton(published)
                 } else {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(.green)

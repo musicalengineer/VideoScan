@@ -368,12 +368,17 @@ extension CatalogContent {
                         .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
                         .accessibilityIdentifier("catalog.row.extractFrames")
 
-                        // Repair Audio — Rick 2026-06-14. Video-only
-                        // files only. Auto-finds the highest-confidence
-                        // audio-only match (same scorer Find A/V Pair
-                        // uses) and pre-fills the Combine sheet.
+                        // Find Matching Audio — Rick 2026-06-14 (renamed
+                        // from "Repair Audio" with GH #116, which freed
+                        // the repair/fix verb space for Balance Audio).
+                        // Video-only files only. Auto-finds the
+                        // highest-confidence audio-only match (same
+                        // scorer Find A/V Pair uses) and pre-fills the
+                        // Combine sheet. Internal names + accessibility
+                        // ids deliberately unchanged — visible strings
+                        // only.
                         if rec.streamType == .videoOnly {
-                            Button("Repair Audio…") {
+                            Button("Find Matching Audio…") {
                                 repairAudio(for: rec)
                                 openWindow(id: "combine")
                             }
@@ -381,12 +386,14 @@ extension CatalogContent {
                             .accessibilityIdentifier("catalog.row.repairAudio")
                         }
 
-                        // Repair Video — symmetric verb for audio-only
-                        // files (Rick 2026-06-15). Same CorrelationScorer
+                        // Find Matching Video — symmetric verb for
+                        // audio-only files (Rick 2026-06-15; renamed from
+                        // "Repair Video" alongside the audio verb so the
+                        // pair reads consistently). Same CorrelationScorer
                         // works both directions: given an audio-only
                         // record, it returns the best video-only match.
                         if rec.streamType == .audioOnly {
-                            Button("Repair Video…") {
+                            Button("Find Matching Video…") {
                                 repairVideo(for: rec)
                                 openWindow(id: "combine")
                             }
@@ -410,6 +417,30 @@ extension CatalogContent {
                             VolumeReachability.isReachable(path: $0.fullPath)
                         })
                         .accessibilityIdentifier("catalog.row.analyze")
+
+                        // Balance Audio — GH #116, Rick 2026-07. Fixes
+                        // one-sided (classically left-only) audio from
+                        // old tape ingests. Opens an analyze-then-confirm
+                        // sheet; the fix runs as a BalanceAudioJob in the
+                        // operations window. Needs an audio stream, an
+                        // online volume, and no balance already running
+                        // against this same record (the Center refuses
+                        // duplicates too — this disable is the courtesy
+                        // layer).
+                        let balanceRunning = fileOpsCenter.jobs.contains { job in
+                            guard job.state.isActive, let b = job as? BalanceAudioJob else { return false }
+                            return b.record.id == rec.id
+                        }
+                        Button("Balance Audio…") {
+                            balanceRequest = BalanceAudioRequest(record: rec)
+                        }
+                        .disabled(!VolumeReachability.isReachable(path: rec.fullPath)
+                                  || balanceRunning
+                                  || rec.streamType != .videoAndAudio)
+                        .help(rec.streamType == .videoAndAudio
+                              ? "Check whether the sound sits on only one channel (common on old tape ingests) and fix it automatically. The original is never changed."
+                              : "This file has no audio track alongside its video to balance.")
+                        .accessibilityIdentifier("catalog.row.balanceAudio")
 
                         // Transcode — opens a configuration sheet for format
                         // and destination instead of assuming the source disk.
@@ -959,12 +990,13 @@ extension CatalogContent {
         alert.runModal()
     }
 
-    /// "Repair Audio…" handler for video-only records. Uses the same
-    /// CorrelationScorer that Find A/V Pair does to identify the
-    /// best audio-only match across all volumes, then opens the
-    /// existing Combine sheet pre-filled with the pair. If no
-    /// candidate clears the score≥3 floor, shows an alert telling the
-    /// user how to proceed manually. Rick 2026-06-14.
+    /// "Find Matching Audio…" handler for video-only records (menu
+    /// renamed from "Repair Audio" with GH #116; function name kept for
+    /// history). Uses the same CorrelationScorer that Find A/V Pair
+    /// does to identify the best audio-only match across all volumes,
+    /// then opens the existing Combine sheet pre-filled with the pair.
+    /// If no candidate clears the score≥3 floor, shows an alert telling
+    /// the user how to proceed manually. Rick 2026-06-14.
     private func repairAudio(for rec: VideoRecord) {
         let durationTolerance: Double = 1.0
         let timestampTolerance: TimeInterval = 5.0
@@ -994,8 +1026,9 @@ extension CatalogContent {
         onCombinePair?(cand.video, cand.audio)
     }
 
-    /// "Repair Video…" handler for audio-only records — mirror of
-    /// repairAudio. The CorrelationScorer is direction-agnostic; the
+    /// "Find Matching Video…" handler for audio-only records — mirror
+    /// of repairAudio (menu renamed from "Repair Video" with GH #116).
+    /// The CorrelationScorer is direction-agnostic; the
     /// returned pair is always (video, audio) regardless of which side
     /// was the input record, so the Combine-sheet call site stays
     /// identical. Rick 2026-06-15.

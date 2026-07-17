@@ -38,7 +38,7 @@ struct ScanOptions: Equatable {
     /// Polarity exception (additive "Scan X"): when ON, the scan ALSO admits
     /// standalone audio files (wav/aif/mp3/…). OFF by default — archives hold
     /// thousands of scratch/temp audio files, so this is an opt-in pass. Needed
-    /// to catalog audio for Repair Audio / A-V correlation. See audioExtensions.
+    /// to catalog audio for Find Matching Audio / A-V correlation. See audioExtensions.
     var scanAudioFiles: Bool = false
 
     /// Polarity exception (additive "Scan X"): when ON, the scan ALSO admits
