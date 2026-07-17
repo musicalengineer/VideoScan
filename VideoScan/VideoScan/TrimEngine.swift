@@ -211,6 +211,11 @@ enum TrimPlanError: Error, Equatable {
 
 enum TrimPlan {
 
+    /// The provenance tag written to `VideoRecord.derivationKind` on
+    /// trim derivatives (the universal which-MFO-verb marker; Balance
+    /// Audio writes "balanceAudio" via `BalanceAudioFix.derivationKind`).
+    static let derivationKind = "trim"
+
     /// Validate a requested range against the source duration.
     /// `sourceDuration <= 0` means "duration unknown" (a probe failure) —
     /// the out-bound check is skipped, in<out is still enforced.

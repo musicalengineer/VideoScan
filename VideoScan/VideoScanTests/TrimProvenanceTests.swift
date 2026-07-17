@@ -126,6 +126,10 @@ struct TrimProvenanceTests {
         #expect(model.records.count == 2)
         let derived = try #require(model.records.first { $0.id != source.id })
         #expect(derived.derivedFrom == source.id)
+        // Unified provenance scheme (balance-audio merge, 2026-07-17):
+        // derivationKind names the MFO verb; the trim seconds are the
+        // trim-specific payload.
+        #expect(derived.derivationKind == "trim")
         #expect(derived.trimInSeconds == 1.0)
         #expect(derived.trimOutSeconds == 4.0)
         #expect(derived.notes.contains("Trimmed from test_trim_prov.mkv"))
@@ -138,6 +142,7 @@ struct TrimProvenanceTests {
         #expect(source.mediaDisposition == .important, "source disposition must not change")
         #expect(source.starRating == 3)
         #expect(source.trimInSeconds == nil, "range lives on the DERIVED record only")
+        #expect(source.derivationKind == nil, "kind lives on the DERIVED record only")
         #expect(source.purgedAt == nil)
         #expect(source.lifecycleStage == .cataloged)
     }
