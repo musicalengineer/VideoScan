@@ -153,6 +153,15 @@ enum TrimTimecode {
         }
     }
 
+    /// Commit an edited timecode field: the parsed value, or `lastGood`
+    /// when the text is unparseable. Used by the trim sheet on field
+    /// submit AND at Trim-click time — typing an out-point and clicking
+    /// Trim without pressing Return must use the TYPED value, not the
+    /// last committed one (QA MINOR 4, 2026-07-17).
+    static func commitValue(text: String, lastGood: Double) -> Double {
+        parse(text) ?? lastGood
+    }
+
     /// Format seconds as "HH:MM:SS" (whole seconds) or "HH:MM:SS.mmm"
     /// (fractional), millisecond precision. Negative input clamps to 0.
     /// Round-trip contract: `parse(format(x)) == x` within 0.5 ms.
@@ -166,9 +175,9 @@ enum TrimTimecode {
         let m = (totalSeconds % 3600) / 60
         let s = totalSeconds % 60
         if ms == 0 {
-            return String(format: "%02d:%02d:%02d", h, m, s)
+            return String(format: "%02lld:%02lld:%02lld", h, m, s)
         }
-        return String(format: "%02d:%02d:%02d.%03d", h, m, s, ms)
+        return String(format: "%02lld:%02lld:%02lld.%03lld", h, m, s, ms)
     }
 }
 

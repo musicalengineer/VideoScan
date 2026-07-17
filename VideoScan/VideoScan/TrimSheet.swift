@@ -381,12 +381,11 @@ struct TrimSheet: View {
 
     private func commitText(isInPoint: Bool) {
         let text = isInPoint ? inText : outText
-        guard let parsed = TrimTimecode.parse(text) else {
-            // Unparseable → restore the last good value.
-            if isInPoint { inText = TrimTimecode.format(inSeconds) } else { outText = TrimTimecode.format(outSeconds) }
-            return
-        }
-        setPoint(parsed, isInPoint: isInPoint)
+        let lastGood = isInPoint ? inSeconds : outSeconds
+        let committed = TrimTimecode.commitValue(text: text, lastGood: lastGood)
+        // setPoint also normalizes the field text — an unparseable entry
+        // visibly snaps back to the last good value.
+        setPoint(committed, isInPoint: isInPoint)
     }
 
     private func setPoint(_ seconds: Double, isInPoint: Bool) {
@@ -525,6 +524,11 @@ struct TrimSheet: View {
     // MARK: Start
 
     private func startTrim() {
+        // Commit any pending (un-submitted) field text FIRST: typing an
+        // out-point and clicking Trim without pressing Return must trim
+        // at the typed value, not the last committed one (QA MINOR 4).
+        commitText(isInPoint: true)
+        commitText(isInPoint: false)
         guard rangeError == nil else { return }
         // The probe verdict travels WITH the job (QA MAJOR 1): the banner
         // and the finished row must tell the same honest story, and a

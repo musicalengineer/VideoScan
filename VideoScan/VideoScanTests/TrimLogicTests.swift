@@ -48,6 +48,20 @@ struct TrimLogicTests {
         #expect(TrimTimecode.parse("01::03") == nil, "empty component rejected")
     }
 
+    // MARK: - Field-commit helper (MINOR 4)
+
+    /// The sheet commits field text through this on submit AND at
+    /// Trim-click time — so typed-but-unsubmitted text is honored, and
+    /// garbage falls back to the last good value instead of crashing or
+    /// silently zeroing.
+    @Test func commitValueParsesOrFallsBack() {
+        #expect(TrimTimecode.commitValue(text: "01:00", lastGood: 5) == 60)
+        #expect(TrimTimecode.commitValue(text: "00:02:03.500", lastGood: 5) == 123.5)
+        #expect(TrimTimecode.commitValue(text: "garbage", lastGood: 5) == 5)
+        #expect(TrimTimecode.commitValue(text: "", lastGood: 5) == 5)
+        #expect(TrimTimecode.commitValue(text: "-3", lastGood: 5) == 5)
+    }
+
     // MARK: - Timecode formatting + round trip
 
     @Test func formatsTimecodes() {
