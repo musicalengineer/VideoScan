@@ -98,11 +98,15 @@ final class TrimJob: MediaFileOperationJob {
     /// Weak — the model owns jobs via MediaFileOperationsCenter.
     private weak var model: VideoScanModel?
 
+    #if DEBUG
     /// TEST SEAM ONLY: extra ffmpeg INPUT options inserted before `-ss`.
     /// The cancel-mid-trim tests pass `["-readrate", "0.1"]` to slow the
-    /// copy to 10% realtime so a cancel deterministically lands mid-run.
-    /// Never set in production paths.
+    /// copy to 10% realtime so a cancel deterministically lands mid-run;
+    /// the exit-code sensor injects an unknown input format. `#if DEBUG`
+    /// makes "never in production" a compiler guarantee, not a comment
+    /// (QA MINOR 5, 2026-07-17 — the test target builds Debug).
     var debugExtraInputArgs: [String] = []
+    #endif
 
     /// No pause — same reasoning as Reformat/Transcode (no clean
     /// suspend/resume contract through ffmpeg's subprocess state).
@@ -236,9 +240,15 @@ final class TrimJob: MediaFileOperationJob {
         let destDir = outputURL.deletingLastPathComponent()
         if let values = try? destDir.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
            let available = values.volumeAvailableCapacityForImportantUsage,
-           available > 0, estimate > available {
-            finish(failed: "Not enough free space on \(VolumeReachability.displayLabel(forPath: destDir.path)) — the trimmed file needs about \(Self.humanBytes(estimate)), only \(Self.humanBytes(available)) is free")
-            return
+           available > 0 {
+            if estimate > available {
+                finish(failed: "Not enough free space on \(VolumeReachability.displayLabel(forPath: destDir.path)) — the trimmed file needs about \(Formatting.humanSize(estimate)), only \(Formatting.humanSize(available)) is free")
+                return
+            }
+        } else {
+            // Leave a trail: a skipped precheck is a diagnosis clue when
+            // the write later dies mid-copy on a full volume.
+            trimLog.notice("trim: free-space precheck skipped — volume capacity unavailable for \(destDir.path, privacy: .public)")
         }
 
         // Clean up a stale partial from a prior cancelled run. The FINAL
@@ -246,6 +256,7 @@ final class TrimJob: MediaFileOperationJob {
         try? FileManager.default.removeItem(atPath: partialPath)
 
         // ---- ffmpeg stream-copy trim (input seek — see TrimEngine.swift).
+        #if DEBUG
         var args = TrimPlan.ffmpegArgs(input: inputPath,
                                        partialOutput: partialPath,
                                        range: range)
@@ -254,6 +265,11 @@ final class TrimJob: MediaFileOperationJob {
             // right after "-hide_banner -nostdin -y".
             args.insert(contentsOf: debugExtraInputArgs, at: 3)
         }
+        #else
+        let args = TrimPlan.ffmpegArgs(input: inputPath,
+                                       partialOutput: partialPath,
+                                       range: range)
+        #endif
 
         subtitleText = "Trimming — copying the good part, no re-encode…"
         isIndeterminateValue = (range.duration <= 0)
@@ -332,6 +348,7 @@ final class TrimJob: MediaFileOperationJob {
             finishCancelled()
             return
         }
+        let verifyDetail: String
         switch verification {
         case .failed(let reason):
             try? FileManager.default.removeItem(atPath: partialPath)
@@ -341,6 +358,7 @@ final class TrimJob: MediaFileOperationJob {
             return
         case .verified(let detail):
             trimLog.info("trim verify PASS: \(self.outputURL.lastPathComponent, privacy: .public) — \(detail, privacy: .public)")
+            verifyDetail = detail
         }
 
         // ---- Non-clobbering promote (CleanupJob's M3 pattern): rename
@@ -363,11 +381,10 @@ final class TrimJob: MediaFileOperationJob {
         // ---- Catalog + provenance.
         await catalogTrimOutput(publishedURL: published)
 
-        guard case .verified(let verifyDetail) = verification else { return }
         let accuracy = accuracySummaryWord
-        trimLog.info("trim DONE: \(self.record.filename, privacy: .public) → \(published.lastPathComponent, privacy: .public) (\(Self.humanBytes(size), privacy: .public)) copy \(elapsed, format: .fixed(precision: 1), privacy: .public)s — \(accuracy, privacy: .public)")
-        appLog.write("trim done: \(published.lastPathComponent) (\(Self.humanBytes(size))) — \(accuracy) stream copy, verified (\(verifyDetail)). Original untouched.")
-        finish(success: "Trimmed → \(published.lastPathComponent) (\(Self.humanBytes(size))). Verified: \(verifyDetail). Original untouched.")
+        trimLog.info("trim DONE: \(self.record.filename, privacy: .public) → \(published.lastPathComponent, privacy: .public) (\(Formatting.humanSize(size), privacy: .public)) copy \(elapsed, format: .fixed(precision: 1), privacy: .public)s — \(accuracy, privacy: .public)")
+        appLog.write("trim done: \(published.lastPathComponent) (\(Formatting.humanSize(size))) — \(accuracy) stream copy, verified (\(verifyDetail)). Original untouched.")
+        finish(success: "Trimmed → \(published.lastPathComponent) (\(Formatting.humanSize(size))). Verified: \(verifyDetail). Original untouched.")
     }
 
     // MARK: Verification
@@ -627,10 +644,4 @@ final class TrimJob: MediaFileOperationJob {
         isIndeterminateValue = false
     }
 
-    private static func humanBytes(_ bytes: Int64) -> String {
-        let f = ByteCountFormatter()
-        f.allowedUnits = [.useMB, .useGB]
-        f.countStyle = .file
-        return f.string(fromByteCount: bytes)
-    }
 }
