@@ -157,6 +157,106 @@ struct TrimSensorTests {
                 "expected Finder-style bump, got \(published.lastPathComponent)")
     }
 
+    // MARK: - (e) ffmpeg nonzero-exit path (QA MAJOR 3)
+
+    /// End-to-end oracle on the exitCode != 0 branch: the debug input-args
+    /// seam injects an invalid input option so ffmpeg dies at input-open.
+    /// The failure must leave the world EXACTLY as it was — no partial,
+    /// nothing at the final name, source bytes untouched, no phantom
+    /// catalog record — and the job must fail with an attributed reason.
+    @Test("ffmpeg nonzero exit: partial removed, no final, source untouched, no phantom record",
+          .timeLimit(.minutes(2)))
+    func ffmpegFailureLeavesNothing() async throws {
+        try #require(CleanupTestMedia.toolsAvailable)
+        let dir = try CleanupTestMedia.makeScratchDir("trim_sensor_exit")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let src = try CleanupTestMedia.generate(
+            into: dir, name: "test_trim_exit.mkv",
+            duration: 6.0, size: "320x240", rate: "25",
+            videoCodec: "ffv1", extraVideoArgs: ["-g", "1"],
+            audioCodec: "pcm_s16le")
+        let before = try CleanupTestMedia.fingerprint(src)
+
+        let model = VideoScanModel()
+        let record = makeTrimSourceRecord(path: src, durationSeconds: 6.0, videoCodec: "ffv1")
+        model.records = [record]
+        let job = TrimJob(record: record,
+                          range: TrimRange(inSeconds: 1.0, outSeconds: 4.0),
+                          model: model)
+        // Force exit != 0: an unknown input format makes ffmpeg fail at
+        // input-open, after the argument vector is fully assembled.
+        job.debugExtraInputArgs = ["-f", "definitely_not_a_format"]
+        let finalName = job.outputURL.lastPathComponent
+        job.start()
+        await job.task?.value
+
+        guard case .failed(let message) = job.state else {
+            Issue.record("nonzero ffmpeg exit must fail the job, got \(job.state)")
+            return
+        }
+        #expect(message.contains("ffmpeg failed (exit"),
+                "the failure must attribute the ffmpeg exit code: \(message)")
+        let entries = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+        #expect(!entries.contains { $0.contains(".vs-partial") },
+                "partial debris after ffmpeg failure: \(entries)")
+        #expect(!entries.contains(finalName),
+                "NOTHING may land at the final name on an ffmpeg failure")
+        #expect(try CleanupTestMedia.fingerprint(src) == before,
+                "source changed during a failed trim")
+        #expect(model.records.count == 1, "no phantom catalog record for a failed trim")
+        #expect(job.publishedURL == nil)
+    }
+
+    // MARK: - (f) Verify-failure path (QA MAJOR 3)
+
+    /// End-to-end oracle on the verification-failure branch, forced
+    /// deterministically via a stale catalog duration: the record claims
+    /// 100 s but the real file holds 4 s, so a 0→50 s trim validates,
+    /// copies everything ffmpeg can find (~4 s), exits 0 — and the
+    /// duration check must then catch the 46 s shortfall, delete the
+    /// partial, publish nothing, and fail with the honest reason.
+    @Test("verification failure: partial removed, no final, source untouched, no phantom record",
+          .timeLimit(.minutes(2)))
+    func verifyFailureLeavesNothing() async throws {
+        try #require(CleanupTestMedia.toolsAvailable)
+        let dir = try CleanupTestMedia.makeScratchDir("trim_sensor_verifyfail")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let src = try CleanupTestMedia.generate(
+            into: dir, name: "test_trim_verifyfail.mkv",
+            duration: 4.0, size: "320x240", rate: "25",
+            videoCodec: "ffv1", extraVideoArgs: ["-g", "1"],
+            audioCodec: "pcm_s16le")
+        let before = try CleanupTestMedia.fingerprint(src)
+
+        let model = VideoScanModel()
+        // Stale catalog: claims 100 s for a 4 s file.
+        let record = makeTrimSourceRecord(path: src, durationSeconds: 100.0, videoCodec: "ffv1")
+        model.records = [record]
+        let job = TrimJob(record: record,
+                          range: TrimRange(inSeconds: 0.0, outSeconds: 50.0),
+                          model: model)
+        let finalName = job.outputURL.lastPathComponent
+        job.start()
+        await job.task?.value
+
+        guard case .failed(let message) = job.state else {
+            Issue.record("a 46 s duration shortfall must fail verification, got \(job.state)")
+            return
+        }
+        #expect(message.contains("Verification failed"),
+                "the row must carry the verification verdict: \(message)")
+        #expect(message.contains("original is untouched"))
+        let entries = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+        #expect(!entries.contains { $0.contains(".vs-partial") },
+                "partial debris after verify failure: \(entries)")
+        #expect(!entries.contains(finalName),
+                "an unverified file must NEVER land at the final name")
+        #expect(try CleanupTestMedia.fingerprint(src) == before,
+                "source changed during a verify-failed trim")
+        #expect(model.records.count == 1, "no phantom catalog record for a verify-failed trim")
+        #expect(job.publishedURL == nil)
+    }
+
     // MARK: - (d) The keyframe honesty probe (pins the -g finding)
 
     @Test("default-GOP ffv1 is NOT all-keyframes; -g 1 ffv1 is — the probe tells them apart",
