@@ -134,6 +134,20 @@ final class TrimJob: MediaFileOperationJob {
         }
     }
 
+    /// Refusal path for MediaFileOperationsCenter's same-record dedupe
+    /// guard (QA MAJOR 2, 2026-07-17): two concurrent trims of one record
+    /// share the `.vs-partial` path — the second job's stale-partial
+    /// cleanup would unlink the first job's in-flight output. The Center
+    /// parks the refused job as a visible FAILED row (same loud-reason
+    /// discipline as the preflight guards) without ever starting it.
+    /// The no-op task makes a later `start()` inert and lets callers
+    /// `await job.task?.value` uniformly.
+    func refuseToStart(reason: String) {
+        guard task == nil, state.isActive else { return }
+        finish(failed: reason)
+        task = Task {}
+    }
+
     /// Cancel the in-flight ffmpeg. Task.cancel propagates into
     /// ProcessRunner, which terminates the child (SIGTERM → SIGKILL).
     func cancel() {
@@ -370,7 +384,14 @@ final class TrimJob: MediaFileOperationJob {
             return .failed(reason: "stream count changed (\(source.streamCount) → \(output.streamCount)) — all source streams must be carried")
         }
         let tolerance = TrimPlan.verificationTolerance(for: codecClass)
-        if expectedDuration > 0, output.durationSeconds > 0 {
+        if expectedDuration > 0 {
+            // A file we JUST wrote whose duration can't be read (≤ 0 —
+            // exactly what an in-flight/truncated MKV reports) is
+            // suspicious, not a free pass. Fail-honest is the feature's
+            // contract (QA MAJOR 2, 2026-07-17).
+            guard output.durationSeconds > 0 else {
+                return .failed(reason: "the trimmed file reports no readable duration — a freshly written file with an unreadable duration is treated as truncated")
+            }
             let delta = abs(output.durationSeconds - expectedDuration)
             guard delta <= tolerance else {
                 return .failed(reason: "duration off by \(String(format: "%.1f", delta))s (got \(TrimTimecode.format(output.durationSeconds)), asked \(TrimTimecode.format(expectedDuration)), tolerance \(String(format: "%.1f", tolerance))s)")

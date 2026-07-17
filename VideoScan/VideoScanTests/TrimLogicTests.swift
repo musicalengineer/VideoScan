@@ -296,6 +296,36 @@ struct TrimLogicTests {
         #expect(reason.contains("duration"))
     }
 
+    /// MAJOR 2 (QA 2026-07-17): an unreadable (≤ 0) duration on a file we
+    /// JUST wrote is suspicious — an in-flight/truncated MKV reports
+    /// exactly that, and skipping the duration check let a truncated file
+    /// pass verification on codec+stream-count alone. Fail-honest is the
+    /// feature's contract.
+    @Test func verificationFailsOnUnreadableOutputDuration() {
+        let src = TrimJob.StreamProbe(videoCodecName: "ffv1", streamCount: 2, durationSeconds: 10)
+        let out = TrimJob.StreamProbe(videoCodecName: "ffv1", streamCount: 2, durationSeconds: 0)
+        let verdict = TrimJob.evaluateVerification(source: src, output: out,
+                                                   expectedDuration: 3, codecClass: .intraOnly)
+        guard case .failed(let reason) = verdict else {
+            Issue.record("zero output duration must FAIL verification — a truncated in-flight file reports exactly this")
+            return
+        }
+        #expect(reason.contains("duration"))
+        // Negative duration (garbage probe) is equally suspicious.
+        let negOut = TrimJob.StreamProbe(videoCodecName: "ffv1", streamCount: 2, durationSeconds: -1)
+        if case .verified = TrimJob.evaluateVerification(source: src, output: negOut,
+                                                         expectedDuration: 3, codecClass: .intraOnly) {
+            Issue.record("negative output duration must fail verification")
+        }
+        // When the EXPECTED duration is unknown (≤ 0), the check stays
+        // skipped — there is nothing to compare against.
+        let unknownExpected = TrimJob.evaluateVerification(source: src, output: out,
+                                                           expectedDuration: 0, codecClass: .intraOnly)
+        if case .failed = unknownExpected {
+            Issue.record("unknown EXPECTED duration must not fail the duration check")
+        }
+    }
+
     @Test func verificationSuccessCarriesHonestDetail() {
         let src = TrimJob.StreamProbe(videoCodecName: "ffv1", streamCount: 2, durationSeconds: 10)
         let out = TrimJob.StreamProbe(videoCodecName: "ffv1", streamCount: 2, durationSeconds: 3.01)
@@ -312,5 +342,62 @@ struct TrimLogicTests {
 
     @Test func trimKindHasBadge() {
         #expect(MediaFileOperationKind.trim.badgeText == "Trim")
+    }
+
+    // MARK: - Center-level same-record dedupe (MAJOR 2 layer 1)
+
+    /// Two concurrent trims of one record share the `.vs-partial` path
+    /// (trimmedOutputURL uniquifies against FINAL names only) — the
+    /// second job's stale-partial cleanup would unlink the first job's
+    /// in-flight output. The context menu already greys the verb out;
+    /// this pins the guard in the Center itself, where EVERY caller
+    /// (sheet, tests, future programmatic paths) must pass.
+    ///
+    /// Determinism note: TrimJob's initial state is `.running` and its
+    /// run Task cannot execute between two synchronous @MainActor calls,
+    /// so the first job is reliably "active" when the second dispatch
+    /// arrives — no fixtures or sleeps needed.
+    @Test @MainActor
+    func startTrimRefusesSameRecordDoubleDispatch() async throws {
+        let center = MediaFileOperationsCenter()
+        let model = VideoScanModel()
+        let record = makeTrimSourceRecord(path: "/nonexistent/guard_tape.mkv",
+                                          durationSeconds: 100, videoCodec: "ffv1")
+        let range = TrimRange(inSeconds: 1, outSeconds: 5)
+
+        let first = center.startTrim(record: record, range: range, model: model)
+        let second = center.startTrim(record: record, range: range, model: model)
+
+        #expect(first !== second)
+        // The refusal is a visible parked row with a loud reason — the
+        // second job must NEVER have run (no cleanup, no ffmpeg).
+        guard case .failed(let reason) = second.state else {
+            Issue.record("double-dispatch must park the second trim as failed, got \(second.state)")
+            return
+        }
+        #expect(reason.contains("already running"))
+        #expect(center.jobs.count == 2, "the refused row stays visible in the operations window")
+
+        // A DIFFERENT record is not refused by the guard (it fails later
+        // on its own missing source, not on "already running").
+        let other = makeTrimSourceRecord(path: "/nonexistent/other_tape.mkv",
+                                         durationSeconds: 100, videoCodec: "ffv1")
+        let third = center.startTrim(record: other, range: range, model: model)
+        await first.task?.value
+        await second.task?.value
+        await third.task?.value
+        if case .failed(let thirdReason) = third.state {
+            #expect(!thirdReason.contains("already running"),
+                    "distinct records must not trip the same-record guard")
+        }
+
+        // Once the first record's trims are ALL terminal, a re-trim of
+        // the same record is allowed again.
+        let retry = center.startTrim(record: record, range: range, model: model)
+        await retry.task?.value
+        if case .failed(let retryReason) = retry.state {
+            #expect(!retryReason.contains("already running"),
+                    "a finished trim must not block a new trim of the same record")
+        }
     }
 }

@@ -501,6 +501,22 @@ final class MediaFileOperationsCenter: ObservableObject {
         let job = TrimJob(record: record, range: range, model: model,
                           plannedOutput: plannedOutput)
         add(job)
+        // Same-record dedupe guard (QA MAJOR 2, 2026-07-17). The context
+        // menu greys out "Trim Master…" while a trim runs, but the Center
+        // is the last line of defense for every caller: two trims of one
+        // record share the `.vs-partial` path, so the second job's
+        // stale-partial cleanup would unlink the first job's in-flight
+        // output. Refuse loudly — the parked row carries the reason.
+        let duplicate = jobs.contains { other in
+            guard other.id != job.id, other.state.isActive,
+                  let t = other as? TrimJob else { return false }
+            return t.record.id == record.id
+        }
+        if duplicate {
+            fileOpsLog.warning("trim REFUSED (already running for this record): \(record.filename, privacy: .public)")
+            job.refuseToStart(reason: "A trim of \(record.filename) is already running — wait for it to finish (or cancel it) before starting another. Nothing was started.")
+            return job
+        }
         job.start()
         fileOpsLog.info("trim started: \(record.filename, privacy: .public) [\(TrimTimecode.format(range.inSeconds), privacy: .public) → \(TrimTimecode.format(range.outSeconds), privacy: .public)] → \(job.outputURL.lastPathComponent, privacy: .public)")
         return job
