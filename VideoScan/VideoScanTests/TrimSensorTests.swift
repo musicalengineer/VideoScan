@@ -159,6 +159,11 @@ struct TrimSensorTests {
 
     // MARK: - (e) ffmpeg nonzero-exit path (QA MAJOR 3)
 
+    #if DEBUG
+    // The debugExtraInputArgs seam is `#if DEBUG` in TrimJob.swift (QA
+    // MINOR 5) — mirror that gate here or the test target won't compile
+    // in Release. This whole test depends on the seam to force the
+    // failure, so it compiles out (not just skips) in Release runs.
     /// End-to-end oracle on the exitCode != 0 branch: the debug input-args
     /// seam injects an invalid input option so ffmpeg dies at input-open.
     /// The failure must leave the world EXACTLY as it was — no partial,
@@ -206,6 +211,7 @@ struct TrimSensorTests {
         #expect(model.records.count == 1, "no phantom catalog record for a failed trim")
         #expect(job.publishedURL == nil)
     }
+    #endif  // DEBUG (debugExtraInputArgs seam)
 
     // MARK: - (f) Verify-failure path (QA MAJOR 3)
 

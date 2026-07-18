@@ -377,6 +377,12 @@ struct TrimMediaMatrixTests {
 
     // MARK: - Negative: cancel mid-copy
 
+    #if DEBUG
+    // The debugExtraInputArgs seam is `#if DEBUG` in TrimJob.swift (QA
+    // MINOR 5) — mirror that gate here or the test target won't compile
+    // in Release. Without the -readrate throttle the 6 s copy finishes
+    // before the 1.5 s cancel lands, so the test is meaningless without
+    // the seam; it compiles out in Release rather than flaking.
     @Test("cancel mid-trim: ffmpeg killed, partial removed, NOTHING at the final path, source untouched",
           .timeLimit(.minutes(2)))
     func cancelMidTrimLeavesNothing() async throws {
@@ -425,4 +431,5 @@ struct TrimMediaMatrixTests {
                 "source changed during a cancelled trim")
         #expect(model.records.count == 1, "no catalog record for a cancelled trim")
     }
+    #endif  // DEBUG (debugExtraInputArgs seam)
 }
