@@ -106,6 +106,61 @@ enum BalanceAudioTestMedia {
         return out
     }
 
+    // MARK: Multi-audio-stream fixtures (the 12-bit DV shape)
+
+    /// Container choices for two-audio-stream fixtures.
+    enum TwoPairContainer: String {
+        /// REAL .dv container. ffmpeg's dv muxer only accepts a second
+        /// audio pair in the 50 Mbps (DVCPRO50 / yuv422p) profile at
+        /// 48 kHz — consumer 12-bit DV is 25 Mbps / 32 kHz, but the
+        /// STREAM SHAPE (dvvideo + two pcm_s16le stereo pairs) is
+        /// identical, which is all the probe/job care about.
+        case dv
+        /// mov with h264 video + two pcm_s16le stereo streams — the
+        /// same two-audio-stream shape in the QuickTime family.
+        case movPcm
+
+        var ext: String { self == .dv ? "dv" : "mov" }
+        var videoArgs: [String] {
+            self == .dv
+                ? ["-c:v", "dvvideo", "-pix_fmt", "yuv422p"]
+                : ["-c:v", "libx264", "-preset", "ultrafast"]
+        }
+    }
+
+    /// Fixture with TWO stereo audio streams — the shape DV camcorders
+    /// produce in 12-bit audio mode (two independent stereo pairs that
+    /// ffprobe reports as two audio streams). `pair1`/`pair2` are
+    /// aevalsrc per-channel expression sets ("L|R"), e.g.
+    /// `"0|\(tone)"` for right-only program, `"0|0"` for a silent pair.
+    @discardableResult
+    static func generateTwoAudioPairs(into dir: URL,
+                                      label: String,
+                                      pair1: String,
+                                      pair2: String,
+                                      container: TwoPairContainer,
+                                      duration: Double = 2.0) throws -> String {
+        let name = "test_balance_2pair_\(label).\(container.ext)"
+        let out = dir.appendingPathComponent(name).path
+        var args: [String] = [
+            "-f", "lavfi",
+            "-i", "testsrc=duration=\(duration):size=720x480:rate=30000/1001",
+            "-f", "lavfi",
+            "-i", "aevalsrc=\(pair1):s=48000:d=\(duration)",
+            "-f", "lavfi",
+            "-i", "aevalsrc=\(pair2):s=48000:d=\(duration)",
+            "-map", "0:v", "-map", "1:a", "-map", "2:a"
+        ]
+        args += container.videoArgs
+        args += ["-c:a", "pcm_s16le"]
+        try runFFmpeg(args, output: out)
+        return out
+    }
+
+    /// The standard program tone, exposed for two-pair expressions.
+    static let programTone = "0.5*sin(440*2*PI*t)"
+    static let programTone2 = "0.5*sin(987*2*PI*t)"
+
     /// Audio-only fixture (no video) for probe-level tests.
     @discardableResult
     static func generateAudioOnly(into dir: URL,

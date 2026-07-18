@@ -15,13 +15,25 @@ import os
 //   - dualMono / trueStereo / silent / multichannel → REFUSES with a
 //     clear reason. dualMono is already balanced and trueStereo is real
 //     stereo — "fixing" either would destroy good audio, so the refusal
-//     is the safety-critical branch (pinned by negative tests).
+//     is the safety-critical branch (pinned by negative tests). A file
+//     where MORE than one audio stream carries program is refused the
+//     same way — at ANALYZE time, through the one shared gate
+//     (BalanceAudioFix.refusalReason(for: analysis)), so the sheet
+//     never promises what the job would refuse.
 //
-// VIDEO IS NEVER RE-ENCODED: `-map 0 -c copy` stream-copies every
-// stream, then `-c:a …` overrides ONLY the audio (which must pass
-// through the pan filter). PCM sources re-encode to the same PCM codec
-// (lossless); lossy sources stay in their codec family at ≥ the source
-// bitrate. The container is preserved (same extension ⇒ same muxer).
+// MULTI-AUDIO (12-bit DV, fix/balance-audio-dv-multitrack): DV
+// camcorders in 12-bit audio mode record two stereo pairs (two audio
+// streams). When exactly ONE carries program, the job maps video + THE
+// program stream by absolute index, applies the pan fix to it, and
+// DROPS the silent extra pair(s) — logged and noted in provenance.
+//
+// VIDEO IS NEVER RE-ENCODED: `-c copy` stream-copies every mapped
+// stream (`-map 0` for single-audio sources — v1-identical; video +
+// program track for multi-audio), then `-c:a …` overrides ONLY the
+// audio (which must pass through the pan filter). PCM sources re-encode
+// to the same PCM codec (lossless); lossy sources stay in their codec
+// family at ≥ the source bitrate. The container is preserved (same
+// extension ⇒ same muxer).
 //
 // Safety discipline (CleanupJob's, adapted):
 //   - SOURCE NEVER MODIFIED — the pipeline only reads it (hash-oracle
@@ -62,6 +74,26 @@ enum BalanceAudioFix {
 
     /// Verification tolerance on the output's duration vs the source's.
     static let durationToleranceSeconds: Double = 1.0
+
+    /// Stream-level refusal, decided at ANALYZE time: more than one
+    /// audio stream carrying program is out of scope — Balance Audio
+    /// fixes a single program track. (The 12-bit DV case with ONE
+    /// program pair + a silent pair is NOT refused; the silent pair is
+    /// dropped instead.) nil when at most one stream carries program.
+    static func streamRefusalReason(programStreamCount: Int) -> String? {
+        guard programStreamCount > 1 else { return nil }
+        let quantifier = programStreamCount == 2 ? "both" : "all"
+        return "\(programStreamCount) audio tracks \(quantifier) carry sound — Balance Audio handles a single program track."
+    }
+
+    /// THE one gate — the sheet's Balance button and the job's refusal
+    /// branch BOTH call this, so what the sheet promises the job never
+    /// refuses (the sensor in BalanceAudioMultiTrackTests pins this
+    /// agreement). Stream-level refusal first, then the per-class table.
+    static func refusalReason(for analysis: AudioBalanceAnalysis) -> String? {
+        streamRefusalReason(programStreamCount: analysis.programStreamCount)
+            ?? refusalReason(for: analysis.classification)
+    }
 
     /// nil = actionable. Non-nil = the plain-language reason the job
     /// refuses (surfaced verbatim in the sheet and the job row).
@@ -118,17 +150,42 @@ enum BalanceAudioFix {
         }
     }
 
-    /// Full ffmpeg argument vector. `-map 0 -c copy` carries EVERY
-    /// stream (video/subs/data) verbatim; the audio override + pan
+    /// Output mapping. Single-audio-stream files keep the historical
+    /// `-map 0` (every stream carried — byte-identical behavior to v1).
+    /// Multi-audio files (the 12-bit DV shape) map the video stream(s)
+    /// plus THE program audio stream by ABSOLUTE container index —
+    /// `0:\(index)`, never an assumed `0:a:0` — so the silent extra
+    /// pair(s) are dropped. `0:v?` is the optional-map form: it matches
+    /// zero video streams without erroring (audio-only files). Pure.
+    static func mapArgs(audioStreams: Int, programStreamIndex: Int) -> [String] {
+        audioStreams <= 1
+            ? ["-map", "0"]
+            : ["-map", "0:v?", "-map", "0:\(programStreamIndex)"]
+    }
+
+    /// Streams expected in the verified output: everything (single-
+    /// audio `-map 0`), or video + the one program track (multi-audio
+    /// drops the silent extras). Pure — verification compares against
+    /// this, not against the source's raw total.
+    static func expectedOutputStreams(source: AudioBalanceStreamShape) -> Int {
+        source.audioStreams <= 1 ? source.totalStreams : source.videoStreams + 1
+    }
+
+    /// Full ffmpeg argument vector. `mapArgs` selects the carried
+    /// streams (see `mapArgs(audioStreams:programStreamIndex:)`);
+    /// `-c copy` stream-copies them verbatim; the audio override + pan
     /// filter re-encode only the audio. Pure — tested as strings.
     static func ffmpegArgs(input: String,
                            output: String,
+                           mapArgs: [String],
                            panFilter: String,
                            audioArgs: [String]) -> [String] {
         var args: [String] = [
             "-hide_banner", "-nostdin", "-y",
-            "-i", input,
-            "-map", "0",
+            "-i", input
+        ]
+        args += mapArgs
+        args += [
             "-c", "copy",
             "-af", panFilter
         ]
@@ -268,8 +325,11 @@ final class BalanceAudioJob: MediaFileOperationJob {
         appLog.write("balance audio: \(record.filename) — \(classification.rawValue) → \(outputURL.lastPathComponent)")
 
         // ---- Refusals (the safety-critical branch): dualMono /
-        // trueStereo / silent / multichannel are never "fixed".
-        if let reason = BalanceAudioFix.refusalReason(for: classification) {
+        // trueStereo / silent / multichannel are never "fixed", and
+        // neither is a file where MORE than one audio stream carries
+        // program. This is the SAME gate the sheet consulted before
+        // offering the button — sheet and job can never disagree.
+        if let reason = BalanceAudioFix.refusalReason(for: analysis) {
             balanceLog.notice("balance REFUSED: \(self.record.filename, privacy: .public) — \(reason, privacy: .public)")
             finish(failed: reason)
             return
@@ -282,11 +342,12 @@ final class BalanceAudioJob: MediaFileOperationJob {
             finish(failed: "Source file missing on disk")
             return
         }
-        // v1 scope: exactly one audio stream (`-map 0 -c copy -c:a`
-        // would re-encode every audio stream through one pan filter).
-        guard analysis.shape.audioStreams == 1 else {
-            finish(failed: "This file has \(analysis.shape.audioStreams) audio tracks — Balance Audio currently handles files with a single audio track")
-            return
+        // Multi-audio (12-bit DV): only the program stream is carried;
+        // the unused silent pair(s) are dropped, and we say so.
+        if !analysis.droppedStreamIndices.isEmpty {
+            let list = analysis.droppedStreamIndices.map(String.init).joined(separator: ", ")
+            balanceLog.notice("balance: dropped silent track(s) \(list, privacy: .public) — output carries video + program track \(self.analysis.programStreamIndex, privacy: .public) only")
+            appLog.write("balance audio: \(record.filename) — dropping silent audio track(s) \(list) (no sound on them)")
         }
         let ffmpeg = ffmpegPathOverride ?? ToolLocator.ffmpegPath
         guard FileManager.default.isExecutableFile(atPath: ffmpeg) else {
@@ -350,6 +411,9 @@ final class BalanceAudioJob: MediaFileOperationJob {
         let args = BalanceAudioFix.ffmpegArgs(
             input: inputPath,
             output: partialURL.path,
+            mapArgs: BalanceAudioFix.mapArgs(
+                audioStreams: analysis.shape.audioStreams,
+                programStreamIndex: analysis.programStreamIndex),
             panFilter: pan,
             audioArgs: BalanceAudioFix.audioEncodeArgs(
                 sourceCodec: analysis.shape.audioCodec,
@@ -486,7 +550,9 @@ final class BalanceAudioJob: MediaFileOperationJob {
 
     /// Re-analyze the rendered partial and enforce the post-fix
     /// contract: balanced classification, video codec unchanged, stream
-    /// count preserved, duration within tolerance.
+    /// count as planned (everything for single-audio sources; video +
+    /// the one program track when silent extras were dropped), duration
+    /// within tolerance.
     #if compiler(>=6.2)
     @concurrent
     #endif
@@ -504,9 +570,22 @@ final class BalanceAudioJob: MediaFileOperationJob {
             throw BalanceVerificationError(
                 message: "video codec changed (\(source.videoCodec ?? "none") → \(check.shape.videoCodec ?? "none"))")
         }
-        guard check.shape.totalStreams == source.totalStreams else {
+        // Stream count: the mapped expectation, OR the source's own
+        // count — DV-family muxers keep FIXED audio slots inside the
+        // frame data, so a "dropped" silent pair re-appears as a silent
+        // slot (observed on .dv outputs 2026-07-18). Anything else
+        // (streams lost or gained) fails.
+        let expectedStreams = BalanceAudioFix.expectedOutputStreams(source: source)
+        guard check.shape.totalStreams == expectedStreams
+                || check.shape.totalStreams == source.totalStreams else {
             throw BalanceVerificationError(
-                message: "stream count changed (\(source.totalStreams) → \(check.shape.totalStreams))")
+                message: "stream count is \(check.shape.totalStreams), expected \(expectedStreams) (source had \(source.totalStreams))")
+        }
+        // Exactly ONE stream may carry program — the balanced one. A
+        // second live stream in the output means the mapping went wrong.
+        guard check.programStreamCount == 1 else {
+            throw BalanceVerificationError(
+                message: "output carries \(check.programStreamCount) program stream(s), expected exactly 1")
         }
         if sourceDuration > 0, check.shape.durationSeconds > 0 {
             let delta = abs(check.shape.durationSeconds - sourceDuration)
@@ -544,12 +623,16 @@ final class BalanceAudioJob: MediaFileOperationJob {
         newRec.derivedFrom = record.id
         newRec.derivationKind = BalanceAudioFix.derivationKind
 
-        let fixNote: String
+        var fixNote: String
         switch analysis.classification {
         case .leftOnly: fixNote = "left channel copied to both sides"
         case .rightOnly: fixNote = "right channel copied to both sides"
         case .mono: fixNote = "mono sound spread to both speakers"
         default: fixNote = analysis.classification.rawValue
+        }
+        if !analysis.droppedStreamIndices.isEmpty {
+            let list = analysis.droppedStreamIndices.map(String.init).joined(separator: ", ")
+            fixNote += "; unused silent track(s) \(list) left out"
         }
         let stamp = ISO8601DateFormatter().string(from: Date())
         let sourceNote = "Balance Audio \(stamp): Created balanced copy \(publishedURL.lastPathComponent) (\(fixNote); video copied unchanged)"

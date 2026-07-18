@@ -114,9 +114,12 @@ struct BalanceAudioSheet: View {
     }
 
     /// The analysis, but only when a fix applies (drives the button).
+    /// Consults the SAME gate the job does — analysis-level, so the
+    /// multi-track (12-bit DV, both pairs live) refusal disables the
+    /// button here exactly like trueStereo/dualMono.
     private var actionable: AudioBalanceAnalysis? {
         if case .analyzed(let analysis) = phase,
-           BalanceAudioFix.refusalReason(for: analysis.classification) == nil {
+           BalanceAudioFix.refusalReason(for: analysis) == nil {
             return analysis
         }
         return nil
@@ -128,7 +131,11 @@ struct BalanceAudioSheet: View {
     private func analysisView(_ analysis: AudioBalanceAnalysis) -> some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
-                Text(analysis.classification.familyDescription)
+                // Stream-level refusal (several tracks carry sound)
+                // outranks the per-channel classification as headline.
+                Text(BalanceAudioFix.streamRefusalReason(
+                        programStreamCount: analysis.programStreamCount)
+                     ?? analysis.classification.familyDescription)
                     .font(.body.weight(.medium))
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("balanceSheet.classification")
@@ -155,6 +162,20 @@ struct BalanceAudioSheet: View {
                     } icon: {
                         Image(systemName: "film")
                             .foregroundColor(.accentColor)
+                    }
+                    if !analysis.droppedStreamIndices.isEmpty {
+                        // "won't be used", not "removed": DV keeps fixed
+                        // audio slots, so the silent pair may remain as
+                        // an empty slot in the copy.
+                        Label {
+                            Text(analysis.droppedStreamIndices.count == 1
+                                 ? "The tape's extra silent track won't be used in the balanced copy."
+                                 : "The tape's extra silent tracks won't be used in the balanced copy.")
+                                .font(.body)
+                        } icon: {
+                            Image(systemName: "speaker.slash.fill")
+                                .foregroundColor(.secondary)
+                        }
                     }
                     Label {
                         Text("Your original file is never changed.")

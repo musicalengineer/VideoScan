@@ -219,25 +219,24 @@ struct BalanceAudioJobTests {
         #expect(message.contains("No audio program"))
     }
 
-    @Test("multiple audio tracks are refused in v1")
-    func multiAudioTrackRefused() async throws {
+    @Test("multiple PROGRAM-carrying tracks are refused (12-bit DV with one program pair is fixable — see BalanceAudioMultiTrackTests)")
+    func multiProgramTrackRefused() async throws {
         try #require(BalanceAudioTestMedia.toolsAvailable)
         let dir = try BalanceAudioTestMedia.makeScratchDir("refuse_multitrack")
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let (record, real, model) = try await makeFixture(.leftOnly, wrapper: .mp4H264Aac, in: dir)
-        // Same real measurements, but a shape claiming 2 audio streams.
-        var shape = real.shape
-        shape.audioStreams = 2
-        let doctored = AudioBalanceAnalysis(classification: real.classification,
-                                            measurements: real.measurements,
-                                            shape: shape)
+        // Same real measurements, but an analysis claiming TWO streams
+        // carry program — the analyze-time refusal the sheet also shows.
+        var doctored = real
+        doctored.shape.audioStreams = 2
+        doctored.programStreamCount = 2
         let job = BalanceAudioJob(record: record, analysis: doctored, model: model)
         job.start()
         await job.task?.value
 
         guard case .failed(let message) = job.state else {
-            Issue.record("multi-track job must refuse, got \(job.state)")
+            Issue.record("multi-program job must refuse, got \(job.state)")
             return
         }
         #expect(message.contains("audio tracks"))
