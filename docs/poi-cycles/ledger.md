@@ -22,6 +22,13 @@ on the same clips.** Face-only ceiling vs same-age adult negatives is
 expected well below 0.90 — the 0.90 goal is a fusion-system goal; the loop
 grades each component honestly along the way.
 
+**Publication (mandatory per-cycle completion step, codex 2026-07-19):** update
+`docs/poi-cycles/metrics.jsonl` with the cycle row + honest evidence tier
+(`grade` | `development`), `python3 scripts/publish_poi_cycle_metrics.py
+--check`, then publish to the metrics branch. Cycles must stay unique,
+ordered, contiguous from C1. Dashboard graphs BA/precision/recall/F1 on
+GitHub Pages.
+
 | Cycle | Candidate | Branch @ commit | Verdict | Balanced acc (A/B) | Graded | Notes |
 |---|---|---|---|---|---|---|
 | C1 | Score-based presence aggregation (minHits=3, minHitRate=0.08, maxMedianDistance=0.50) | `poi/c01-aggregation` @ 0ea582f | **FAIL** | legacy 0.577 → score 0.500 (−0.077) | 2026-07-17 22:28 UTC, codex `poi-c01-grade-2026-07-17` | Score mode reduced every headline metric; added 1 FN (`Donna-14.mov`) and 1 FP. Do not merge. |
