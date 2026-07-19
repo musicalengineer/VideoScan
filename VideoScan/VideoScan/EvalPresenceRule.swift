@@ -1,20 +1,25 @@
 // EvalPresenceRule.swift
-// POI improvement cycle 03 — minimum-hit confirmation floor (EVAL-ONLY).
+// POI improvement cycle 03 — minimum-hit confirmation floor.
 //
-// Video-level presence rule for the Person Evaluation CLI. The ONE change
-// this cycle: an opt-in `minimumHits` mode where a person is CONFIRMED
-// present in a video iff the raw matched face-observation count (`totalHits`;
-// multiple observations can land in one frame) reaches an explicit
-// floor. No hit-rate gate, no median-distance gate — cycle 1's compound
-// gates are deliberately absent so any grade delta is attributable to the
-// count floor alone.
+// Video-level presence rule: a person is CONFIRMED present in a video iff
+// the raw matched face-observation count (`totalHits`; multiple observations
+// can land in one frame) reaches an explicit floor. No hit-rate gate, no
+// median-distance gate — cycle 1's compound gates are deliberately absent so
+// any grade delta is attributable to the count floor alone.
 //
 //     legacyAnyHit (default): presence = "confirmed" ⇔ hits > 0
 //     minimumHits(N):         presence = "confirmed" ⇔ hits ≥ N
 //     otherwise:              presence = "none"
 //
-// This type is used ONLY by PersonEvaluationCLI. Production scan behavior
-// (PersonFinderModel and friends) is untouched and remains legacy.
+// TWO consumers share this single rule (share, don't duplicate):
+//   1. PersonEvaluationCLI — the eval harness, where the rule graded PASS
+//      at floor 7 (balanced accuracy 0.615 vs 0.500 legacy, zero Donna
+//      misses in both grading rounds).
+//   2. PersonFinderModel's production scan path — promoted 2026-07-19 as
+//      the user-facing "Match Confidence Floor" setting (default 7,
+//      1 = legacy any-hit opt-out). See
+//      PersonFinderModel.matchFloorDecision for the production wrapper,
+//      which adds a short-clip any-hit safeguard the eval CLI doesn't need.
 //
 // Pure O(1) math over an already-computed counter — no I/O, no actors, no
 // global state, no per-observation allocation. Worst-case memory: the

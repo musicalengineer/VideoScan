@@ -9,8 +9,12 @@
 //     resumeJob, togglePauseJob
 //   • Bulk lifecycle: startAll, stopAll, pauseAll, resumeAll
 //   • Core scan pipeline (nonisolated statics): resolveOutputDir,
-//     filterByPresence, scanAllVideos, processOneVideo, discoverVideos,
-//     runScan
+//     filterResults (né filterByPresence — now also applies the
+//     match-confidence floor), scanAllVideos, processOneVideo,
+//     discoverVideos, runScan
+//   • Match-confidence floor (POI cycle-03 promotion, 2026-07-19):
+//     presenceRule, matchFloorDecision, PFMatchFilterOutcome (file scope),
+//     belowFloorSummaryLine, floorProvenanceLine
 //   • Two private helpers that travel with the methods above:
 //     referenceCacheIdentifiers, pfScanLog
 //
@@ -35,6 +39,22 @@ private let pfScanLog = Logger(
     subsystem: "Rick-Breen.VideoScan",
     category: "scan"
 )
+
+/// Outcome of the combined match-confidence-floor + min-presence filter
+/// (PersonFinderModel.filterResults). Counts exist so the UI can say
+/// honestly what was refused — no silent disappearance. File-scope (not
+/// nested in PersonFinderModel) so it doesn't infer the class's @MainActor
+/// isolation — it's a plain Sendable value used off-main by the scan path.
+struct PFMatchFilterOutcome: Sendable {
+    var valid: [pfVideoResult] = []
+    /// Non-empty-segment videos refused by the confidence floor.
+    var belowFloorCount: Int = 0
+    /// Videos confirmed only via the short-clip any-hit safeguard.
+    var shortClipFallbackCount: Int = 0
+    /// Non-empty-segment videos refused by the min-presence-seconds gate
+    /// (the pre-existing filter, unchanged).
+    var belowPresenceCount: Int = 0
+}
 
 extension PersonFinderModel {
 
@@ -74,6 +94,129 @@ extension PersonFinderModel {
             }
         }
         return (confirmed, suspected)
+    }
+
+    // MARK: Match confidence floor (POI cycle-03 promotion, 2026-07-19)
+    //
+    // The graded minimum-hits rule, promoted from the eval CLI into the
+    // production scan path. A video counts as FOUND only when its total
+    // matched face observations (pfVideoResult.totalHits) reach the
+    // user-set "Match Confidence Floor" (default 7 — the graded config;
+    // 1 = legacy any-hit opt-out). The decision REUSES EvalPresenceRule —
+    // same code the grade validated, not a reimplementation.
+    //
+    // Short-clip safeguard (false-negative guard the grade disclosed):
+    // a very short video may sample fewer frames than the floor, making
+    // the floor unreachable even when the person is in every frame. The
+    // pipeline doesn't thread an exact sampled-frame count into
+    // pfVideoResult, but every engine populates duration + fps, and the
+    // sampling cadence is settings.frameStep — so estimated sampled
+    // frames = duration × fps / frameStep (the same arithmetic the scan
+    // loop's own frameInterval uses). When that estimate is below the
+    // floor, the video falls back to any-hit and the fallback is logged.
+    // Unknown duration/fps (estimate 0) also falls back — fails OPEN
+    // toward legacy behavior, never toward a silent miss.
+    //
+    // All pure O(1)/O(n) value math — no I/O, no actors. Worst-case
+    // memory: one copied array of kept results (≤ input size).
+
+    /// Map the user's floor to the shared rule: 1 (or below, defensively)
+    /// = the legacy any-hit arm; otherwise the graded minimum-hits mode.
+    nonisolated static func presenceRule(floor: Int) -> EvalPresenceRule {
+        floor <= 1 ? .legacy : .minimumHits(floor: floor)
+    }
+
+    /// Video-level "is the person in this video?" decision.
+    /// Returns `confirmed` plus whether the short-clip any-hit fallback is
+    /// what confirmed it (true only when the fallback CHANGED the outcome —
+    /// i.e. hits were nonzero but below the floor on a too-short video).
+    nonisolated static func matchFloorDecision(
+        totalHits: Int,
+        durationSeconds: Double,
+        fps: Double,
+        floor: Int,
+        frameStep: Int
+    ) -> (confirmed: Bool, usedShortClipFallback: Bool) {
+        let effectiveFloor = max(1, floor)
+        let rule = presenceRule(floor: effectiveFloor)
+        let confirmedByFloor =
+            rule.presence(hits: totalHits) == EvalPresenceRule.confirmedSpelling
+        // Fallback is only relevant when the floor refused a real match.
+        guard effectiveFloor > 1, !confirmedByFloor, totalHits > 0 else {
+            return (confirmedByFloor, false)
+        }
+        let step = max(1, frameStep)
+        let estimatedSampled = (durationSeconds > 0 && fps > 0)
+            ? Int((durationSeconds * fps / Double(step)).rounded(.down))
+            : 0
+        if estimatedSampled < effectiveFloor {
+            return (true, true)   // any-hit fallback for short/unknown clips
+        }
+        return (false, false)
+    }
+
+    /// Partition scan results by the match-confidence floor and the
+    /// configured min-presence threshold. Supersedes the old private
+    /// `filterByPresence` (whose presence semantics are preserved exactly,
+    /// including the keep-empty-segment-results-when-minPresence≤0 quirk —
+    /// downstream ClipResult builders still guard on `!segments.isEmpty`).
+    /// Internal (not private) so unit tests can pin the gate directly —
+    /// the seam PersonFinderPresenceArithmeticTests asked for.
+    nonisolated static func filterResults(
+        _ ordered: [pfVideoResult?],
+        settings: PersonFinderSettings
+    ) -> PFMatchFilterOutcome {
+        var outcome = PFMatchFilterOutcome()
+        let minSecs = settings.minPresenceSecs
+        let floor = max(1, settings.matchConfidenceFloor)
+        for r in ordered.compactMap({ $0 }) {
+            let hasSegments = !r.segments.isEmpty
+            // Floor gate — only for videos that would otherwise show as
+            // found (segments exist). Empty-segment results were never
+            // "found" and keep their legacy handling below.
+            if hasSegments {
+                let decision = matchFloorDecision(
+                    totalHits: r.totalHits,
+                    durationSeconds: r.durationSeconds,
+                    fps: r.fps,
+                    floor: floor,
+                    frameStep: settings.frameStep
+                )
+                if !decision.confirmed {
+                    outcome.belowFloorCount += 1
+                    continue
+                }
+                if decision.usedShortClipFallback {
+                    outcome.shortClipFallbackCount += 1
+                }
+            }
+            // Presence gate — byte-for-byte the old filterByPresence logic.
+            if minSecs > 0 && r.totalPresenceSecs < minSecs {
+                if hasSegments { outcome.belowPresenceCount += 1 }
+                continue
+            }
+            outcome.valid.append(r)
+        }
+        return outcome
+    }
+
+    /// The honest console line for floor-refused videos — pure + static so
+    /// the exact wording is pinned by tests (MFO summary-line convention).
+    nonisolated static func belowFloorSummaryLine(count: Int, floor: Int) -> String {
+        let videos = count == 1 ? "video" : "videos"
+        return "\(count) \(videos) had brief possible matches below the confidence floor (\(floor)) — not counted as found. Set the floor to 1 in search settings to count any single match."
+    }
+
+    /// One provenance line per job recording the floor in effect — written
+    /// to videoscan.log next to the "Starting search…" headline. Pure +
+    /// static so the format is pinned by tests (MFO logging convention).
+    nonisolated static func floorProvenanceLine(personName: String, floor: Int) -> String {
+        let f = max(1, floor)
+        let rule = presenceRule(floor: f)
+        let detail = f > 1
+            ? "rule=\(rule.mode.rawValue), short clips fall back to any match"
+            : "rule=\(rule.mode.rawValue), any single match counts"
+        return "Match confidence floor for \(personName): \(f) (\(detail))"
     }
 
     private nonisolated static func referenceCacheIdentifiers(referencePath: String, filenames: [String]) -> [String] {
@@ -232,7 +375,8 @@ extension PersonFinderModel {
             osLog.info("Cache restore: \(hits)/\(videoFiles.count) cached, \(cachedResults.count) with hits for \(personName, privacy: .public)")
 
             let outputDir = Self.resolveOutputDir(jobSettings)
-            let (validResults, _) = Self.filterByPresence(cachedResults, settings: jobSettings)
+            let filterOutcome = Self.filterResults(cachedResults, settings: jobSettings)
+            let validResults = filterOutcome.valid
 
             let clipResults: [ClipResult] = validResults.compactMap { r -> ClipResult? in
                 guard !r.segments.isEmpty else { return nil }
@@ -263,6 +407,14 @@ extension PersonFinderModel {
                 job.status = .done
                 job.stopElapsedTimer()
                 job.appendLog("Restored from cache: \(clipResults.count) video(s) with hits, \(totalSegments) segment(s)")
+                // Honest accounting: cached matches the current floor refuses
+                // are reported, never silently dropped.
+                if filterOutcome.belowFloorCount > 0 {
+                    job.appendLog(Self.belowFloorSummaryLine(
+                        count: filterOutcome.belowFloorCount,
+                        floor: max(1, jobSettings.matchConfidenceFloor)
+                    ))
+                }
                 let (confirmed, suspected) = Self.splitByConfidence(
                     validResults, threshold: threshold
                 )
@@ -335,6 +487,12 @@ extension PersonFinderModel {
         // PersistentLog.
         let volumeName = URL(fileURLWithPath: job.searchPath).lastPathComponent
         appLog.write("Starting search for \(personName) on \(volumeName) using \(jobSettings.recognitionEngine.rawValue)")
+        // Provenance: one line per job recording the match-confidence floor
+        // in effect (POI cycle-03 promotion). Same pure-line-builder pattern
+        // as MediaFileOperations.startSummaryLine.
+        appLog.write(Self.floorProvenanceLine(
+            personName: personName, floor: jobSettings.matchConfidenceFloor
+        ))
 
         // Pick reference faces: job-specific or global
         let faces = job.assignedProfile != nil ? job.assignedFaces : self.referenceFaces
@@ -410,6 +568,8 @@ extension PersonFinderModel {
         job.appendLog("Engine: \(jobSettings.recognitionEngine.title)")
         job.appendLog("  Threshold: \(String(format: "%.2f", jobSettings.threshold)), Confidence: \(String(format: "%.2f", jobSettings.minFaceConfidence))")
         job.appendLog("  FrameStep: \(jobSettings.frameStep), Concurrency: \(jobSettings.concurrency)")
+        let effectiveFloor = max(1, jobSettings.matchConfidenceFloor)
+        job.appendLog("  Match confidence floor: \(effectiveFloor)\(effectiveFloor > 1 ? " (short clips fall back to any match)" : " (any single match counts)")")
         if jobSettings.recognitionEngine == .arcface {
             // ArcFace ignores the generic Threshold above and uses its own cosine
             // threshold. Log the engine-specific knobs so each run is self-documenting
@@ -592,21 +752,9 @@ extension PersonFinderModel {
             .path
     }
 
-    /// Partition scan results by the configured min-presence threshold.
-    /// Returns (kept, skippedCount). `skipped` counts non-empty results that
-    /// fell below the threshold — empty-segment entries are already excluded.
-    private nonisolated static func filterByPresence(
-        _ ordered: [pfVideoResult?],
-        settings: PersonFinderSettings
-    ) -> (valid: [pfVideoResult], skipped: Int) {
-        let nonNil = ordered.compactMap { $0 }
-        let minSecs = settings.minPresenceSecs
-        let valid = nonNil.filter { minSecs <= 0 || $0.totalPresenceSecs >= minSecs }
-        let skipped = nonNil.filter {
-            minSecs > 0 && $0.totalPresenceSecs < minSecs && !$0.segments.isEmpty
-        }.count
-        return (valid, skipped)
-    }
+    // filterByPresence was superseded 2026-07-19 by filterResults (above),
+    // which layers the match-confidence floor on top of the identical
+    // min-presence semantics.
 
     /// Drive the parallel scan of every discovered video. Returns the
     /// index-preserving `[pfVideoResult?]` array the caller will filter.
@@ -688,6 +836,7 @@ extension PersonFinderModel {
         // ClipResult and appended to job.results live (see below).
         let liveOutputDir = resolveOutputDir(settings)
         let minPresence = settings.minPresenceSecs
+        let matchFloor = max(1, settings.matchConfidenceFloor)
 
         await withTaskGroup(of: (Int, pfVideoResult?).self) { group in
             var submitted = 0
@@ -717,13 +866,28 @@ extension PersonFinderModel {
             for await (idx, result) in group {
                 if Task.isCancelled { break }
                 orderedResults[idx] = result
+                // Match-confidence floor decision (POI cycle-03 promotion):
+                // computed once here so the live row, the hit counter, and
+                // the per-video console line all agree — and agree with the
+                // post-loop filterResults pass in runScan.
+                let floorDecision: (confirmed: Bool, usedShortClipFallback: Bool)? =
+                    result.flatMap { r in
+                        guard !r.segments.isEmpty else { return nil }
+                        return matchFloorDecision(
+                            totalHits: r.totalHits,
+                            durationSeconds: r.durationSeconds,
+                            fps: r.fps,
+                            floor: matchFloor,
+                            frameStep: settings.frameStep
+                        )
+                    }
                 // Build the per-video row up-front (outside MainActor.run) so
                 // the hop into MainActor stays a quick assignment. Same
-                // shape and presence gate as the post-loop batch publish in
-                // runScan, so a row appearing live is the same row that
-                // ends up in the final ordered list.
+                // shape and floor + presence gates as the post-loop batch
+                // publish in runScan, so a row appearing live is the same
+                // row that ends up in the final ordered list.
                 let liveRow: ClipResult? = {
-                    guard let r = result, !r.segments.isEmpty else { return nil }
+                    guard let r = result, floorDecision?.confirmed == true else { return nil }
                     guard minPresence <= 0 || r.totalPresenceSecs >= minPresence else { return nil }
                     return ClipResult(
                         videoFilename: r.filename,
@@ -739,9 +903,18 @@ extension PersonFinderModel {
                 await MainActor.run {
                     job.videosScanned += 1
                     job.progress = Double(job.videosScanned) / Double(job.videosTotal)
-                    if let r = result, !r.segments.isEmpty {
+                    if floorDecision?.confirmed == true {
                         job.videosWithHits += 1
                         dash?.lastMatchFlashAt = Date()
+                    }
+                    // Honest per-video accounting for the floor — refused or
+                    // rescued videos say so in the console, never vanish.
+                    if let r = result, let d = floorDecision {
+                        if !d.confirmed {
+                            job.appendLog("  ↳ \(r.filename) — \(r.totalHits) brief match(es) below the confidence floor (\(matchFloor)); not counted as found")
+                        } else if d.usedShortClipFallback {
+                            job.appendLog("  ↳ \(r.filename) — very short clip: kept with \(r.totalHits) match(es) via the any-match fallback (too few sampled frames to reach the floor of \(matchFloor))")
+                        }
                     }
                     // Live-append: completion-order during the scan; the
                     // post-loop batch publish at runScan replaces this with
@@ -1002,8 +1175,9 @@ extension PersonFinderModel {
         // Main app log: the headline the user wants to skim — who, where, on what.
         osLog.notice("Search for \(personLabel, privacy: .public) on \(path, privacy: .public) — engine=\(settings.recognitionEngine.rawValue, privacy: .public)")
         // Per-job face_detect log: full cache-key details, for cache-miss diagnosis.
+        let scanFloor = max(1, settings.matchConfidenceFloor)
         await job.appendLog("Search for \(personLabel) on \(path)")
-        await job.appendLog("  engine=\(settings.recognitionEngine.rawValue) threshold=\(scanThreshold) refs=\(refFilenames.count) refHash=\(scanRefHash)")
+        await job.appendLog("  engine=\(settings.recognitionEngine.rawValue) threshold=\(scanThreshold) floor=\(scanFloor) refs=\(refFilenames.count) refHash=\(scanRefHash)")
         PersonFinderCache.shared.resetStats()
 
         guard let videoFiles = await discoverVideos(job: job, settings: settings) else { return }
@@ -1027,10 +1201,20 @@ extension PersonFinderModel {
             return
         }
 
-        // Presence filter
-        let (validResults, skipped) = filterByPresence(orderedResults, settings: settings)
-        if skipped > 0 {
-            await job.appendLog("\nPresence filter: \(validResults.count) kept, \(skipped) below \(Int(settings.minPresenceSecs))s\n")
+        // Match-confidence floor + presence filter — with honest accounting
+        // for everything the gates refused (no silent disappearance).
+        let filterOutcome = filterResults(orderedResults, settings: settings)
+        let validResults = filterOutcome.valid
+        if filterOutcome.belowFloorCount > 0 {
+            await job.appendLog("\n" + Self.belowFloorSummaryLine(
+                count: filterOutcome.belowFloorCount, floor: scanFloor
+            ))
+        }
+        if filterOutcome.shortClipFallbackCount > 0 {
+            await job.appendLog("Short-clip safeguard: \(filterOutcome.shortClipFallbackCount) very short video(s) kept with any match (too few sampled frames to reach the floor)")
+        }
+        if filterOutcome.belowPresenceCount > 0 {
+            await job.appendLog("\nPresence filter: \(validResults.count) kept, \(filterOutcome.belowPresenceCount) below \(Int(settings.minPresenceSecs))s\n")
         }
 
         let outputDir = resolveOutputDir(settings)
@@ -1253,6 +1437,11 @@ extension PersonFinderModel {
         let onAnnotate: @MainActor (ScanJob) -> Void = { [weak self] finishedJob in
             self?.annotateIdentityPlausibility(for: finishedJob)
         }
+        // The floor in effect NOW governs which cached rows come back — a
+        // row a fresh run would refuse must not resurrect via restart.
+        // Captured on MainActor before the detached hop.
+        let matchFloor = max(1, settings.matchConfidenceFloor)
+        let frameStep = settings.frameStep
         Task.detached(priority: .utility) {
             await withTaskGroup(of: Void.self) { group in
                 var slotIndex = 0
@@ -1260,7 +1449,7 @@ extension PersonFinderModel {
                 while slotIndex < min(maxConcurrentRehydrations, pendingRehydrations.count) {
                     let pair = pendingRehydrations[slotIndex]
                     group.addTask {
-                        await Self.rehydrateResultsFromCache(job: pair.0, descriptor: pair.1, onAnnotate: onAnnotate)
+                        await Self.rehydrateResultsFromCache(job: pair.0, descriptor: pair.1, matchFloor: matchFloor, frameStep: frameStep, onAnnotate: onAnnotate)
                     }
                     slotIndex += 1
                 }
@@ -1270,7 +1459,7 @@ extension PersonFinderModel {
                     if slotIndex < pendingRehydrations.count {
                         let pair = pendingRehydrations[slotIndex]
                         group.addTask {
-                            await Self.rehydrateResultsFromCache(job: pair.0, descriptor: pair.1, onAnnotate: onAnnotate)
+                            await Self.rehydrateResultsFromCache(job: pair.0, descriptor: pair.1, matchFloor: matchFloor, frameStep: frameStep, onAnnotate: onAnnotate)
                         }
                         slotIndex += 1
                     }
@@ -1329,6 +1518,8 @@ extension PersonFinderModel {
     private nonisolated static func rehydrateResultsFromCache(
         job: ScanJob,
         descriptor: PersistedJobDescriptor,
+        matchFloor: Int,
+        frameStep: Int,
         onAnnotate: (@MainActor (ScanJob) -> Void)? = nil
     ) async {
         let fm = FileManager.default
@@ -1345,6 +1536,7 @@ extension PersonFinderModel {
         guard !videoFiles.isEmpty else { return }
 
         var cachedRows: [ClipResult] = []
+        var hiddenBelowFloor = 0
         for path in videoFiles {
             guard let key = PersonFinderCache.makeKey(
                 videoPath: path, personName: descriptor.personName,
@@ -1352,6 +1544,19 @@ extension PersonFinderModel {
                 refFilenames: refIdentifiers
             ), let result = PersonFinderCache.shared.lookup(key: key),
                   !result.segments.isEmpty else { continue }
+            // Same floor decision as a live scan — restored rows and fresh
+            // rows must agree for the same cached evidence.
+            let decision = matchFloorDecision(
+                totalHits: result.totalHits,
+                durationSeconds: result.durationSeconds,
+                fps: result.fps,
+                floor: matchFloor,
+                frameStep: frameStep
+            )
+            guard decision.confirmed else {
+                hiddenBelowFloor += 1
+                continue
+            }
             cachedRows.append(ClipResult(
                 videoFilename: result.filename,
                 videoPath: result.filePath,
@@ -1363,9 +1568,12 @@ extension PersonFinderModel {
                 outputDir: ""
             ))
         }
-        guard !cachedRows.isEmpty else { return }
+        guard !cachedRows.isEmpty || hiddenBelowFloor > 0 else { return }
         await MainActor.run {
             job.results = cachedRows
+            if hiddenBelowFloor > 0 {
+                job.appendLog(belowFloorSummaryLine(count: hiddenBelowFloor, floor: matchFloor))
+            }
             onAnnotate?(job)
         }
     }

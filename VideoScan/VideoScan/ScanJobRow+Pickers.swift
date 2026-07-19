@@ -167,6 +167,19 @@ extension ScanJobRow {
                         .textFieldStyle(.roundedBorder).frame(width: 64)
                     Text("sec")
                 }
+                // Match Confidence Floor — the graded POI cycle-03 rule
+                // (minimum matched moments across a whole video before we say
+                // the person is in it). Default 7; 1 restores the old
+                // any-single-match behavior. Persists via settingsBinding's
+                // explicit save() (the @Observable-kills-didSet pattern).
+                LabeledControl("Match Confidence Floor") {
+                    TextField("", value: model.settingsBinding.matchConfidenceFloor, format: .number)
+                        .textFieldStyle(.roundedBorder).frame(width: 54)
+                    Stepper("", value: model.settingsBinding.matchConfidenceFloor, in: 1...99)
+                        .labelsHidden()
+                    Text("matches")
+                }
+                .help("How many matching moments a video needs before it counts as a find. Filters out one-frame look-alikes. Set to 1 to count any single match (the old behavior). Very short clips always count with any match.")
             }
 
             Divider()

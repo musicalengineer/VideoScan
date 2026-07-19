@@ -174,6 +174,17 @@ struct PersonFinderSettings: Equatable {
     var largestFaceOnly: Bool = false   // use only the largest detected face per reference photo
     var previewRate: Int = 5            // show preview every N sampled frames (1 = every frame)
 
+    /// "Match Confidence Floor" — how many matched face observations a whole
+    /// video needs (pfVideoResult.totalHits) before the person counts as
+    /// FOUND in it. 1 = a single match is enough (the pre-2026-07 any-hit
+    /// behavior, kept as the opt-out). Default 7 = the graded POI cycle-03
+    /// operating point (balanced accuracy 0.615 vs 0.500 legacy, zero Donna
+    /// misses in both grading rounds) — it exists to stop one drive-by
+    /// look-alike frame from flagging a whole video. The decision logic is
+    /// shared with the eval CLI via EvalPresenceRule; see
+    /// PersonFinderModel.matchFloorDecision for the short-clip safeguard.
+    var matchConfidenceFloor: Int = 7
+
     // Reference photo management
     var rejectedReferenceFiles: [String] = []  // filenames removed by user, excluded on reload
 
@@ -243,16 +254,19 @@ struct PersonFinderSettings: Equatable {
     }
 
     /// Restore settings from UserDefaults. Missing keys use struct defaults.
-    static func restored() -> PersonFinderSettings {
+    /// The suite is injectable (defaulting to .standard) so persistence tests
+    /// can run against a throwaway `UserDefaults(suiteName:)` and never touch
+    /// the real prefs plist — same pattern as AnalysisScope.restored(from:).
+    static func restored(from defaults: UserDefaults = Self.defaults) -> PersonFinderSettings {
         var s = PersonFinderSettings()
-        restoreStrings(&s)
-        restoreNumericValues(&s)
-        restoreBoolValues(&s)
+        restoreStrings(&s, from: defaults)
+        restoreNumericValues(&s, from: defaults)
+        restoreBoolValues(&s, from: defaults)
         validatePaths(&s)
         return s
     }
 
-    private static func restoreStrings(_ s: inout PersonFinderSettings) {
+    private static func restoreStrings(_ s: inout PersonFinderSettings, from defaults: UserDefaults) {
         let d = defaults; let p = prefix
         if let v = d.string(forKey: "\(p)personName") { s.personName = v }
         if let v = d.string(forKey: "\(p)referencePath") { s.referencePath = v }
@@ -265,7 +279,7 @@ struct PersonFinderSettings: Equatable {
         if let rejected = d.stringArray(forKey: "\(p)rejectedReferenceFiles") { s.rejectedReferenceFiles = rejected }
     }
 
-    private static func restoreNumericValues(_ s: inout PersonFinderSettings) {
+    private static func restoreNumericValues(_ s: inout PersonFinderSettings, from defaults: UserDefaults) {
         let d = defaults; let p = prefix
         if d.object(forKey: "\(p)threshold") != nil { s.threshold = d.float(forKey: "\(p)threshold") }
         if d.object(forKey: "\(p)minFaceConfidence") != nil { s.minFaceConfidence = d.float(forKey: "\(p)minFaceConfidence") }
@@ -277,9 +291,12 @@ struct PersonFinderSettings: Equatable {
         if d.object(forKey: "\(p)previewRate") != nil { s.previewRate = max(1, d.integer(forKey: "\(p)previewRate")) }
         if d.object(forKey: "\(p)arcfaceThreshold") != nil { s.arcfaceThreshold = d.float(forKey: "\(p)arcfaceThreshold") }
         if d.object(forKey: "\(p)arcfaceInferenceConcurrency") != nil { s.arcfaceInferenceConcurrency = max(1, d.integer(forKey: "\(p)arcfaceInferenceConcurrency")) }
+        // Clamp poisoned values (0, negatives, non-numeric → 0) back to the
+        // legal minimum: 1 = any-hit. A bad plist must never disable matching.
+        if d.object(forKey: "\(p)matchConfidenceFloor") != nil { s.matchConfidenceFloor = max(1, d.integer(forKey: "\(p)matchConfidenceFloor")) }
     }
 
-    private static func restoreBoolValues(_ s: inout PersonFinderSettings) {
+    private static func restoreBoolValues(_ s: inout PersonFinderSettings, from defaults: UserDefaults) {
         let d = defaults; let p = prefix
         if d.object(forKey: "\(p)requirePrimary") != nil { s.requirePrimary = d.bool(forKey: "\(p)requirePrimary") }
         if d.object(forKey: "\(p)skipBundles") != nil { s.skipBundles = d.bool(forKey: "\(p)skipBundles") }
@@ -328,9 +345,10 @@ struct PersonFinderSettings: Equatable {
         largestFaceOnly = profile.largestFaceOnly
     }
 
-    /// Save all settings to UserDefaults.
-    func save() {
-        let d = Self.defaults
+    /// Save all settings to UserDefaults. Injectable suite for the same
+    /// test-isolation reason as `restored(from:)`.
+    func save(to defaults: UserDefaults = Self.defaults) {
+        let d = defaults
         let p = Self.prefix
         d.set(personName, forKey: "\(p)personName")
         d.set(referencePath, forKey: "\(p)referencePath")
@@ -354,6 +372,7 @@ struct PersonFinderSettings: Equatable {
         d.set(arcfaceThreshold, forKey: "\(p)arcfaceThreshold")
         d.set(arcfaceInferenceConcurrency, forKey: "\(p)arcfaceInferenceConcurrency")
         d.set(rejectedReferenceFiles, forKey: "\(p)rejectedReferenceFiles")
+        d.set(matchConfidenceFloor, forKey: "\(p)matchConfidenceFloor")
     }
 }
 

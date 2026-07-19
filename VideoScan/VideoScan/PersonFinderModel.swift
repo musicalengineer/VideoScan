@@ -428,7 +428,8 @@ final class PersonFinderModel: ObservableObject {
     // referenceCacheIdentifiers / addJob / loadFacesForJob / removeJob /
     // restoreFromCache / startJob / startJobAfterLoad / stopJob /
     // pauseJob / resumeJob / togglePauseJob / startAll / stopAll /
-    // pauseAll / resumeAll / resolveOutputDir / filterByPresence /
+    // pauseAll / resumeAll / resolveOutputDir / filterResults (né
+    // filterByPresence; now also applies the match-confidence floor) /
     // scanAllVideos / processOneVideo / discoverVideos / runScan
     // moved to PersonFinderModel+JobLifecycle.swift (step 6 of 6 — final).
 
