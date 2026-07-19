@@ -27,7 +27,24 @@ Grade provenance: report + raw argv under
 b1eaa05a…92b058, refs content sha256 42db0731…07dd3d, exe sha256
 6e384152…2dfca.
 
-**C3 (declared 2026-07-18 21:15 ET, Rick-ratified lever): rule-out cascade** —
+**C3 REDIRECTED (2026-07-18 21:45 ET): minimum-hit confirmation floor** —
+`confirmed` iff totalHits >= 7, eval-only flag, config {"minHits":7,
+"mode":"minimumHits"}. Codex development evidence (four preserved captures,
+NOT a grade): all four reclassify to BA 0.615 (16/26) with FN=0; thin margin
+(weakest positive 8 hits vs strongest rejected negative 6) and duration/
+frame-step bias disclosed. Attributable because C1's failure came from the
+compound rate/distance gates, which this removes. Branch poi/c03-minimum-hits
+from 4bb3e42. Codex authorized as non-architectural under Rick's standing
+bounded-cycle authorization.
+
+**Rule-out cascade: HELD, decision queued for Rick** (was the 21:15 C3
+declaration) — needs (a) new age/gender model approval; license survey found
+NO cleanly-licensed candidate (best: InsightFace genderage, weights
+"non-commercial research only" — same zoo/license as production ArcFace,
+consistency question flagged); and (b) family-member negatives in the corpus
+for measurability. Alternative no-model lever if declined: quality-weighted
+track pooling (research #1). Original note follows for the record:
+**(superseded 21:15 declaration): rule-out cascade** —
 one matcher-level change: per-face age/gender attributes rule out
 males/children before Donna matching; eval-only flag; reference input = full
 legacy 30 (deterministic by construction; C2's audited calibration is
