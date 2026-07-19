@@ -355,6 +355,12 @@ final class BalanceAudioJob: MediaFileOperationJob {
     /// Set by the stall watchdog; wins over the generic cancel branch.
     private var stallReason: String?
 
+    /// True when the safety gate refused the fix (dualMono/trueStereo/
+    /// silent/multi-program are never "fixed") — flips the file-log
+    /// OUTCOME line from "balance audio FAILED:" to "balance audio
+    /// refused:" (see MediaFileOperationJob.wasRefused).
+    private(set) var wasRefused = false
+
     var title: String { record.filename }
     var subtitle: String { subtitleText }
     var fraction: Double { fractionValue }
@@ -399,8 +405,9 @@ final class BalanceAudioJob: MediaFileOperationJob {
     private func runBalance() async {
         let inputPath = record.fullPath
         let classification = analysis.classification
+        // (videoscan.log START line is written by the Center's
+        // startBalanceAudio — one choke point for every MFO verb.)
         balanceLog.info("balance START: \(self.record.filename, privacy: .public) class=\(classification.rawValue, privacy: .public) → \(self.outputURL.lastPathComponent, privacy: .public)")
-        appLog.write("balance audio: \(record.filename) — \(classification.rawValue) → \(outputURL.lastPathComponent)")
 
         // ---- Refusals (the safety-critical branch): dualMono /
         // trueStereo / silent / multichannel are never "fixed", and
@@ -409,6 +416,7 @@ final class BalanceAudioJob: MediaFileOperationJob {
         // offering the button — sheet and job can never disagree.
         if let reason = BalanceAudioFix.refusalReason(for: analysis) {
             balanceLog.notice("balance REFUSED: \(self.record.filename, privacy: .public) — \(reason, privacy: .public)")
+            wasRefused = true
             finish(failed: reason)
             return
         }
@@ -586,7 +594,8 @@ final class BalanceAudioJob: MediaFileOperationJob {
         await catalogBalanceOutput(publishedURL: candidate)
 
         balanceLog.info("balance DONE: \(self.record.filename, privacy: .public) → \(candidate.lastPathComponent, privacy: .public) (\(Self.humanBytes(size), privacy: .public))")
-        appLog.write("balance audio done: \(candidate.lastPathComponent) (\(Self.humanBytes(size))) — original untouched")
+        // (The Center's "balance audio done:" OUTCOME line carries this
+        // same summary — no separate appLog write here.)
         finish(success: "Balanced → \(candidate.lastPathComponent) (\(Self.humanBytes(size))). Original untouched.")
     }
 

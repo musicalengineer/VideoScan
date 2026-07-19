@@ -155,8 +155,9 @@ final class CleanupJob: MediaFileOperationJob {
     private func runCleanup() async {
         let inputPath = record.fullPath
         let volumeLabel = VolumeReachability.displayLabel(forPath: inputPath)
+        // (videoscan.log START line is written by the Center's
+        // startCleanup — one choke point for every MFO verb.)
         cleanupLog.info("cleanup START: \(self.record.filename, privacy: .public) recipe=\(self.recipe.id, privacy: .public) v\(self.recipe.version, privacy: .public) on \(volumeLabel, privacy: .public) → \(self.outputURL.lastPathComponent, privacy: .public)")
-        appLog.write("cleanup: \(record.filename) — \(recipe.displayName) (\(recipe.id) v\(recipe.version)) → \(outputURL.lastPathComponent)")
 
         // Loud early guard (QA note): the menu already gates on a video
         // stream, but programmatic callers must not slip an audio-only /
@@ -307,7 +308,8 @@ final class CleanupJob: MediaFileOperationJob {
         await catalogCleanupOutput(publishedURL: published)
 
         cleanupLog.info("cleanup DONE: \(self.record.filename, privacy: .public) → \(published.lastPathComponent, privacy: .public) (\(Self.humanBytes(size), privacy: .public)) render \(renderElapsed, format: .fixed(precision: 1), privacy: .public)s")
-        appLog.write("cleanup done: \(published.lastPathComponent) (\(Self.humanBytes(size))) — original untouched")
+        // (The Center's "cleanup done:" OUTCOME line carries this same
+        // summary — no separate appLog write here.)
         finish(success: "Cleaned → \(published.lastPathComponent) (\(Self.humanBytes(size))). Original untouched.")
     }
 

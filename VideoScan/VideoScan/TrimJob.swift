@@ -131,6 +131,11 @@ final class TrimJob: MediaFileOperationJob {
     /// (the watchdog cancels the Task, which also trips Task.isCancelled).
     private var stallReason: String?
 
+    /// True when the Center's dedupe guard refused this job before it
+    /// ever ran — flips the file-log OUTCOME line from "trim FAILED:"
+    /// to "trim refused:" (see MediaFileOperationJob.wasRefused).
+    private(set) var wasRefused = false
+
     var title: String { record.filename }
     var subtitle: String { subtitleText }
     var fraction: Double { fractionValue }
@@ -174,6 +179,7 @@ final class TrimJob: MediaFileOperationJob {
     /// `await job.task?.value` uniformly.
     func refuseToStart(reason: String) {
         guard task == nil, state.isActive else { return }
+        wasRefused = true
         finish(failed: reason)
         task = Task {}
     }
@@ -193,8 +199,9 @@ final class TrimJob: MediaFileOperationJob {
         let inputPath = record.fullPath
         let partialPath = ReformatJob.partialURL(for: outputURL).path
         let volumeLabel = VolumeReachability.displayLabel(forPath: inputPath)
+        // (videoscan.log START line is written by the Center's
+        // startTrim — one choke point for every MFO verb.)
         trimLog.info("trim START: \(self.record.filename, privacy: .public) [\(TrimTimecode.format(self.range.inSeconds), privacy: .public) → \(TrimTimecode.format(self.range.outSeconds), privacy: .public)] on \(volumeLabel, privacy: .public) → \(self.outputURL.lastPathComponent, privacy: .public) (codec class \(self.codecClass.rawValue, privacy: .public))")
-        appLog.write("trim: \(record.filename) [\(TrimTimecode.format(range.inSeconds)) → \(TrimTimecode.format(range.outSeconds))] → \(outputURL.lastPathComponent)")
 
         // ---- Preflight guards (each fails loudly with a specific reason).
 
@@ -353,7 +360,8 @@ final class TrimJob: MediaFileOperationJob {
         case .failed(let reason):
             await Self.removeFileOffMain(atPath: partialPath)
             trimLog.error("trim VERIFY FAILED: \(self.record.filename, privacy: .public) — \(reason, privacy: .public)")
-            appLog.write("trim verify FAILED: \(record.filename) — \(reason); partial removed, nothing published")
+            // (The Center's "trim FAILED:" OUTCOME line carries this
+            // same reason — no separate appLog write here.)
             finish(failed: "Verification failed — \(reason). No file was published; the original is untouched.")
             return
         case .verified(let detail):
@@ -383,7 +391,8 @@ final class TrimJob: MediaFileOperationJob {
 
         let accuracy = accuracySummaryWord
         trimLog.info("trim DONE: \(self.record.filename, privacy: .public) → \(published.lastPathComponent, privacy: .public) (\(Formatting.humanSize(size), privacy: .public)) copy \(elapsed, format: .fixed(precision: 1), privacy: .public)s — \(accuracy, privacy: .public)")
-        appLog.write("trim done: \(published.lastPathComponent) (\(Formatting.humanSize(size))) — \(accuracy) stream copy, verified (\(verifyDetail)). Original untouched.")
+        // (The Center's "trim done:" OUTCOME line carries this same
+        // summary — no separate appLog write here.)
         finish(success: "Trimmed → \(published.lastPathComponent) (\(Formatting.humanSize(size))). Verified: \(verifyDetail). Original untouched.")
     }
 

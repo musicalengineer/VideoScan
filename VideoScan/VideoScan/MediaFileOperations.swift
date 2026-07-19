@@ -99,6 +99,26 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .balanceAudio: return "Balance"
         }
     }
+
+    /// Lowercase verb used in the videoscan.log START/OUTCOME summary
+    /// lines ("trim done: …", "balance audio FAILED: …"). Distinct from
+    /// `badgeText` (UI capitalization) and deliberately matching the
+    /// wording the pre-existing ad-hoc log lines already used, so
+    /// greps over old logs keep working.
+    var logVerb: String {
+        switch self {
+        case .combine: return "combine"
+        case .compare: return "compare"
+        case .extract: return "extract faces"
+        case .ripFrames: return "extract frames"
+        case .reformat: return "reformat"
+        case .analyze: return "analyze"
+        case .transcode: return "transcode"
+        case .cleanup: return "cleanup"
+        case .trim: return "trim"
+        case .balanceAudio: return "balance audio"
+        }
+    }
 }
 
 // MARK: - State
@@ -215,6 +235,14 @@ where ObjectWillChangePublisher == ObservableObjectPublisher, ID == UUID {
     var isPaused: Bool { get }
     func pause()
     func resume()
+
+    /// True when the job was REFUSED before doing any work (duplicate
+    /// dispatch, safety gate). The terminal state is still `.failed` —
+    /// the flag only changes the file-log OUTCOME wording from
+    /// "<verb> FAILED:" to "<verb> refused:", so postmortem greps can
+    /// tell "the operation broke" from "the guard said no". Defaulted
+    /// false below; conformers with refusal paths set it.
+    var wasRefused: Bool { get }
 }
 
 /// Pause is opt-in; most operations can't pause mid-ffmpeg.
@@ -223,6 +251,7 @@ extension MediaFileOperationJob {
     var isPaused: Bool { false }
     func pause() {}
     func resume() {}
+    var wasRefused: Bool { false }
 }
 
 // MARK: - Per-volume gate policy (pure)
@@ -311,6 +340,34 @@ final class MediaFileOperationsCenter: ObservableObject {
     /// (header counts) stays fresh. Keyed by job id for cleanup.
     private var jobForwarders: [UUID: AnyCancellable] = [:]
 
+    // MARK: File-log summaries (START / OUTCOME)
+    //
+    // Every MFO job writes exactly ONE start line and ONE terminal line
+    // to `appLog` (~/Library/Logs/VideoScan/videoscan.log) so failures
+    // are greppable after the fact — motivating case 2026-07-17: a
+    // Balance Audio ffmpeg failure (exit 183) lived only in the MFO
+    // window and OSLog; videoscan.log went silent. The START lines are
+    // written by the `start…` methods below (they know the per-verb
+    // plan clause); the OUTCOME line is written HERE, at the Center's
+    // single choke point, by watching each job's change publisher for
+    // the terminal transition — no per-job copy-pasted call sites, and
+    // derived-state jobs (compare/extract/ripFrames) are covered
+    // without touching their internals.
+    //
+    // Memory: three collections keyed by job UUID, pruned when jobs
+    // leave the list — bounded by `finishedCap` + active jobs (≈ 50–60
+    // entries, bytes each). Worst case is trivially small.
+
+    /// Unthrottled terminal-transition watchers (the 4 Hz forwarder
+    /// above can't be reused — its throttling could sample state
+    /// mid-transition, and OUTCOME logging must be exactly-once).
+    private var terminalWatchers: [UUID: AnyCancellable] = [:]
+    /// Jobs whose OUTCOME line has been written — the exactly-once guard.
+    private var terminalLogged: Set<UUID> = []
+    /// Coalesces the change-event flood (progress beats arrive 4–10 Hz
+    /// per job) down to one pending state check at a time.
+    private var terminalCheckScheduled: Set<UUID> = []
+
     var runningCount: Int {
         jobs.filter { $0.state.isActive }.count
     }
@@ -341,6 +398,14 @@ final class MediaFileOperationsCenter: ObservableObject {
             .sink { [weak self] _ in
                 self?.objectWillChange.send()
             }
+        terminalWatchers[job.id] = job.objectWillChange
+            .sink { [weak self, weak job] _ in
+                guard let self, let job else { return }
+                self.scheduleTerminalCheck(job)
+            }
+        // A job can arrive already terminal (a refused/parked row) — it
+        // will never publish another change, so check once right away.
+        scheduleTerminalCheck(job)
         trimFinished()
     }
 
@@ -349,7 +414,7 @@ final class MediaFileOperationsCenter: ObservableObject {
         let removed = jobs.filter { !$0.state.isActive }
         guard !removed.isEmpty else { return }
         jobs.removeAll { !$0.state.isActive }
-        for job in removed { jobForwarders[job.id] = nil }
+        for job in removed { releaseLogBookkeeping(for: job) }
         fileOpsLog.info("cleared \(removed.count) finished operation(s)")
     }
 
@@ -376,10 +441,96 @@ final class MediaFileOperationsCenter: ObservableObject {
                 finishedKept += 1
                 keep.append(job)
             } else {
-                jobForwarders[job.id] = nil
+                releaseLogBookkeeping(for: job)
             }
         }
         if keep.count != jobs.count { jobs = keep }
+    }
+
+    // MARK: File-log summary plumbing
+
+    /// Drop a departing job's subscriptions and log bookkeeping — but
+    /// first make sure its OUTCOME line was written (a job can be
+    /// removed in the same main-actor turn as its terminal transition,
+    /// before the scheduled async check ran).
+    private func releaseLogBookkeeping(for job: any MediaFileOperationJob) {
+        logTerminalIfNeeded(job)
+        jobForwarders[job.id] = nil
+        terminalWatchers[job.id] = nil
+        // Prune the exactly-once marker ONLY when no deferred check is
+        // still in flight — a pending check re-reading a pruned id
+        // would double-write the OUTCOME line. (The unpruned entry in
+        // that rare overlap is 16 bytes, reclaimed at app exit.)
+        if !terminalCheckScheduled.contains(job.id) {
+            terminalLogged.remove(job.id)
+        }
+    }
+
+    /// Coalesced deferred state check. `objectWillChange` fires BEFORE
+    /// the mutation lands (it's a *will*-change signal — ≈ observing a
+    /// setter's entry, not its exit), so the read is hopped to the next
+    /// main-actor turn, by which point the new state has settled.
+    private func scheduleTerminalCheck(_ job: any MediaFileOperationJob) {
+        let id = job.id
+        guard !terminalLogged.contains(id),
+              terminalCheckScheduled.insert(id).inserted else { return }
+        Task { @MainActor [weak self, weak job] in
+            guard let self else { return }
+            self.terminalCheckScheduled.remove(id)
+            guard let job else { return }
+            self.logTerminalIfNeeded(job)
+        }
+    }
+
+    /// Write the one-and-only OUTCOME line if `job` has reached a
+    /// terminal state. Safe to call repeatedly — `terminalLogged` makes
+    /// it idempotent.
+    private func logTerminalIfNeeded(_ job: any MediaFileOperationJob) {
+        guard !job.state.isActive, !terminalLogged.contains(job.id) else { return }
+        terminalLogged.insert(job.id)
+        terminalWatchers[job.id] = nil
+        if let line = Self.terminalSummaryLine(verb: job.kind.logVerb,
+                                              title: job.title,
+                                              state: job.state,
+                                              wasRefused: job.wasRefused) {
+            appLog.write(line)
+        }
+    }
+
+    /// START line — "<verb>: <title> — <one-clause plan>". Pure; the
+    /// `start…` methods below supply the per-verb plan clause.
+    /// (`nonisolated` ≈ a free function that only happens to live in
+    /// the class's namespace — no shared state, callable off-main.)
+    nonisolated static func startSummaryLine(verb: String, title: String,
+                                             plan: String) -> String {
+        "\(verb): \(title) — \(plan)"
+    }
+
+    /// OUTCOME line for a terminal state; nil while the job is active.
+    /// Pure and static so tests can pin the exact format per state.
+    /// The failed/refused message is the SAME user-facing reason string
+    /// the MFO window row shows — no separate wording to drift.
+    nonisolated static func terminalSummaryLine(verb: String, title: String,
+                                                state: MediaFileOperationState,
+                                                wasRefused: Bool) -> String? {
+        switch state {
+        case .running, .cancelling:
+            return nil
+        case .finished(let summary):
+            return "\(verb) done: \(title) — \(summary)"
+        case .failed(let message):
+            return wasRefused
+                ? "\(verb) refused: \(title) — \(message)"
+                : "\(verb) FAILED: \(title) — \(message)"
+        case .cancelled:
+            return "\(verb) cancelled: \(title)"
+        }
+    }
+
+    /// Instance convenience for the `start…` methods.
+    private func logStart(_ job: any MediaFileOperationJob, plan: String) {
+        appLog.write(Self.startSummaryLine(verb: job.kind.logVerb,
+                                           title: job.title, plan: plan))
     }
 
     // MARK: Starting operations
@@ -393,6 +544,7 @@ final class MediaFileOperationsCenter: ObservableObject {
         add(job)
         job.start()
         fileOpsLog.info("compare started: \(recordA.filename, privacy: .public) vs \(recordB.filename, privacy: .public) (gates: \(gates.count))")
+        logStart(job, plan: "duplicate check")
         return job
     }
 
@@ -411,6 +563,7 @@ final class MediaFileOperationsCenter: ObservableObject {
         add(job)
         job.start()
         fileOpsLog.info("extract started: \(record.filename, privacy: .public) → \(destinationParent.path, privacy: .public) (gates: \(gates.count))")
+        logStart(job, plan: "best portrait frames → \(destinationParent.lastPathComponent)/")
         return job
     }
 
@@ -430,6 +583,7 @@ final class MediaFileOperationsCenter: ObservableObject {
         add(job)
         job.start()
         fileOpsLog.info("ripFrames started: \(record.filename, privacy: .public) → \(destinationParent.path, privacy: .public) (\(options.sampling.logDescription, privacy: .public), gates: \(gates.count))")
+        logStart(job, plan: "\(options.sampling.logDescription) → \(destinationParent.lastPathComponent)/")
         return job
     }
 
@@ -446,6 +600,7 @@ final class MediaFileOperationsCenter: ObservableObject {
         add(job)
         job.start()
         fileOpsLog.info("reformat started: \(record.filename, privacy: .public) → \(job.outputURL.lastPathComponent, privacy: .public)")
+        logStart(job, plan: "legacy codec → H.264/AAC \(job.outputURL.lastPathComponent)")
         return job
     }
 
@@ -469,6 +624,7 @@ final class MediaFileOperationsCenter: ObservableObject {
         add(job)
         job.start()
         fileOpsLog.info("transcode started: \(record.filename, privacy: .public) preset=\(preset.rawValue, privacy: .public) → \(job.outputURL.lastPathComponent, privacy: .public)")
+        logStart(job, plan: "\(preset.rawValue) → \(job.outputURL.lastPathComponent)")
         return job
     }
 
@@ -490,6 +646,7 @@ final class MediaFileOperationsCenter: ObservableObject {
         add(job)
         job.start()
         fileOpsLog.info("cleanup started: \(record.filename, privacy: .public) recipe=\(recipe.id, privacy: .public) v\(recipe.version) → \(job.outputURL.lastPathComponent, privacy: .public)")
+        logStart(job, plan: "\(recipe.displayName) → \(job.outputURL.lastPathComponent)")
         return job
     }
 
@@ -526,11 +683,14 @@ final class MediaFileOperationsCenter: ObservableObject {
         }
         if duplicate {
             fileOpsLog.warning("trim REFUSED (already running for this record): \(record.filename, privacy: .public)")
+            // No START line for a refused job — nothing started; the
+            // terminal watcher writes the one "trim refused:" line.
             job.refuseToStart(reason: "A trim of \(record.filename) is already running — wait for it to finish (or cancel it) before starting another. Nothing was started.")
             return job
         }
         job.start()
         fileOpsLog.info("trim started: \(record.filename, privacy: .public) [\(TrimTimecode.format(range.inSeconds), privacy: .public) → \(TrimTimecode.format(range.outSeconds), privacy: .public)] → \(job.outputURL.lastPathComponent, privacy: .public)")
+        logStart(job, plan: "[\(TrimTimecode.format(range.inSeconds)) → \(TrimTimecode.format(range.outSeconds))] stream copy → \(job.outputURL.lastPathComponent)")
         return job
     }
 
@@ -551,6 +711,9 @@ final class MediaFileOperationsCenter: ObservableObject {
         }
         guard !duplicate else {
             fileOpsLog.notice("balanceAudio REFUSED duplicate dispatch: \(record.filename, privacy: .public) already has an active balance job")
+            // No job row exists for this refusal (dispatch returned nil),
+            // so the terminal watcher can't write it — log it here.
+            appLog.write("balance audio refused: \(record.filename) — a balance job for this file is already running; nothing was started")
             return nil
         }
         let job = BalanceAudioJob(record: record, analysis: analysis,
@@ -558,6 +721,7 @@ final class MediaFileOperationsCenter: ObservableObject {
         add(job)
         job.start()
         fileOpsLog.info("balanceAudio started: \(record.filename, privacy: .public) class=\(analysis.classification.rawValue, privacy: .public) → \(job.outputURL.lastPathComponent, privacy: .public)")
+        logStart(job, plan: "\(analysis.classification.rawValue) → \(job.outputURL.lastPathComponent)")
         return job
     }
 
@@ -576,6 +740,7 @@ final class MediaFileOperationsCenter: ObservableObject {
         add(job)
         job.start()
         fileOpsLog.info("analyze started: \(record.filename, privacy: .public) stages=\(stages.map(\.rawValue).joined(separator: ","), privacy: .public)")
+        logStart(job, plan: "stages \(stages.map(\.rawValue).sorted().joined(separator: "+"))")
         return job
     }
 
