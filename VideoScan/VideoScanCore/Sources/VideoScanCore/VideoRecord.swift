@@ -329,6 +329,30 @@ public class VideoRecord: Identifiable, Decodable {
     /// `trimInSeconds` is nil.
     public var trimOutSeconds: Double?
 
+    /// Rick's hand-entered date for the footage (Estimated Date, GH
+    /// #117): REDUCED-PRECISION ISO — "1992", "1992-06", or
+    /// "1992-06-14". The partial date IS the precision signal (year-only
+    /// vs month vs day); there is no separate precision enum. Sorts
+    /// lexically, reads cleanly in catalog.json. Old tapes often have no
+    /// usable machine date, so this outranks every inferred/container
+    /// date in "best date" resolution (VideoRecordUserDate.swift).
+    /// nil = never dated by hand. Only ever written with
+    /// `UserDateEntry.canonicalize` output. Additive optional — legacy
+    /// catalogs decode as nil, the DTO encodes the key only when
+    /// present, old catalog.json files round-trip byte-identical.
+    /// Derivatives (trim / balanceAudio outputs) inherit it from their
+    /// source record — same footage, same date.
+    public var userDate: String?
+
+    /// Confidence in `userDate`: "estimated" (Rick's best guess, the
+    /// entry UI's default) or "known" — where "known" applies AT THE
+    /// PRECISION ENTERED ("1992" + known means the YEAR is certain).
+    /// Meaningless (nil) when `userDate` is nil. The known / estimated /
+    /// unconfirmed status shown in the UI is DERIVED from these two
+    /// fields (`userDateStatus`), never stored. Same additive-optional
+    /// migration as `userDate`.
+    public var userDateConfidence: String?
+
     /// True when this record represents a file currently being actively
     /// worked on with external tools (transcode in another app, Topaz,
     /// FCP edit in progress). Independent of `lifecycleStage` — a file
@@ -476,6 +500,10 @@ public class VideoRecord: Identifiable, Decodable {
         derivationKind              = try c.decodeIfPresent(String.self, forKey: .derivationKind)
         trimInSeconds               = try c.decodeIfPresent(Double.self, forKey: .trimInSeconds)
         trimOutSeconds              = try c.decodeIfPresent(Double.self, forKey: .trimOutSeconds)
+        // Estimated date (GH #117) — same additive-optional migration
+        // pattern: legacy catalogs (no keys) decode as nil = unconfirmed.
+        userDate                    = try c.decodeIfPresent(String.self, forKey: .userDate)
+        userDateConfidence          = try c.decodeIfPresent(String.self, forKey: .userDateConfidence)
         // Workspace-active flag. decodeIfPresent so legacy catalogs (no key)
         // come back as false — i.e. "not in workspace." Import-to-workspace
         // (Pass B) is the only writer that sets this true.

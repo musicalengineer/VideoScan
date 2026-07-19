@@ -647,6 +647,10 @@ final class TrimJob: MediaFileOperationJob {
         newRec.derivedFrom = record.id
         newRec.trimInSeconds = range.inSeconds
         newRec.trimOutSeconds = range.outSeconds
+        // Estimated date (GH #117): a trimmed master is the same footage,
+        // so Rick's hand-entered date carries over with its confidence.
+        newRec.userDate = record.userDate
+        newRec.userDateConfidence = record.userDateConfidence
 
         let stamp = ISO8601DateFormatter().string(from: Date())
         let rangeText = "\(TrimTimecode.format(range.inSeconds))–\(TrimTimecode.format(range.outSeconds))"

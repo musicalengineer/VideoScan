@@ -132,6 +132,8 @@ extension VideoRecord {
         c.derivationKind = derivationKind
         c.trimInSeconds = trimInSeconds
         c.trimOutSeconds = trimOutSeconds
+        c.userDate = userDate
+        c.userDateConfidence = userDateConfidence
         c.workspaceActive = workspaceActive
         c.scanContext = scanContext
         return c

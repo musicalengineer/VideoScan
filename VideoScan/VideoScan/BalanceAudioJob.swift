@@ -722,6 +722,10 @@ final class BalanceAudioJob: MediaFileOperationJob {
 
         newRec.derivedFrom = record.id
         newRec.derivationKind = BalanceAudioFix.derivationKind
+        // Estimated date (GH #117): a balanced copy is the same footage,
+        // so Rick's hand-entered date carries over with its confidence.
+        newRec.userDate = record.userDate
+        newRec.userDateConfidence = record.userDateConfidence
 
         var fixNote: String
         switch analysis.classification {

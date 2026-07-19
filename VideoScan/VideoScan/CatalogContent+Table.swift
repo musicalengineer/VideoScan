@@ -217,11 +217,19 @@ extension CatalogContent {
             }
             .width(min: 60, ideal: 75)
 
-            TableColumn("Created", value: \.dateCreatedSortKey) { rec in
-                Text(rec.dateCreated.isEmpty ? "—" : rec.dateCreated)
-                    .foregroundColor(rec.dateCreated.isEmpty ? .secondary : .primary)
+            // Resolved best date (GH #117): Rick's hand-entered date —
+            // either confidence — OUTRANKS the dossier's inferred date,
+            // which outranks the filesystem creation date. Estimated
+            // entries carry an " (est.)" suffix; the tooltip names the
+            // source. Both accessors are O(1) per record (pure integer
+            // math on the user-date path — VideoRecordUserDate.swift),
+            // so the column stays safe at catalog scale.
+            TableColumn("Date", value: \.resolvedDateSortKey) { rec in
+                let display = rec.resolvedDateDisplay
+                Text(display.isEmpty ? "—" : display)
+                    .foregroundColor(display.isEmpty ? .secondary : .primary)
                     .font(.system(size: 11))
-                    .help("File creation date from filesystem metadata")
+                    .help(rec.resolvedDateHelp)
             }
             .width(min: 80, ideal: 100)
 

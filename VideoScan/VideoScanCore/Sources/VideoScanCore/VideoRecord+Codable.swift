@@ -66,6 +66,8 @@ extension VideoRecord {
         case derivationKind
         case trimInSeconds
         case trimOutSeconds
+        case userDate
+        case userDateConfidence
         case workspaceActive
     }
 }

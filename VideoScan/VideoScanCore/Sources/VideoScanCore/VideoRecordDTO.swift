@@ -125,6 +125,8 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let derivationKind: String?
     public let trimInSeconds: Double?
     public let trimOutSeconds: Double?
+    public let userDate: String?
+    public let userDateConfidence: String?
     public let workspaceActive: Bool
     public let drmProtected: Bool
     public let originalFullPath: String?
@@ -225,6 +227,8 @@ public struct VideoRecordDTO: Sendable, Encodable {
         derivationKind              = r.derivationKind
         trimInSeconds               = r.trimInSeconds
         trimOutSeconds              = r.trimOutSeconds
+        userDate                    = r.userDate
+        userDateConfidence          = r.userDateConfidence
         workspaceActive             = r.workspaceActive
         drmProtected                = r.drmProtected
         originalFullPath            = r.originalFullPath
@@ -383,6 +387,11 @@ public struct VideoRecordDTO: Sendable, Encodable {
         try c.encodeIfPresent(derivationKind, forKey: .derivationKind)
         try c.encodeIfPresent(trimInSeconds, forKey: .trimInSeconds)
         try c.encodeIfPresent(trimOutSeconds, forKey: .trimOutSeconds)
+        // Estimated date (GH #117): written only when Rick has dated the
+        // record — adds zero bytes to every pre-existing record,
+        // preserving the byte-identity golden for legacy catalogs.
+        try c.encodeIfPresent(userDate, forKey: .userDate)
+        try c.encodeIfPresent(userDateConfidence, forKey: .userDateConfidence)
         // Only write workspaceActive when true — keeps catalog.json deltas
         // minimal for the majority of records that are never imported into
         // the workspace. Legacy decode treats absence as false (same shape

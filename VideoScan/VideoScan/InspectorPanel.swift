@@ -157,6 +157,15 @@ struct InspectorPanel: View {
                         InspectorFamilyTagsView(record: rec)
                     }
 
+                    // "When and who" area: the date entry sits right under
+                    // Family Tags (GH #117 — the future tag-person picker
+                    // and this share one neighborhood). `.id(rec.id)`
+                    // reseeds the draft text when the selection changes.
+                    inspectorSection("When Was This?", systemImage: "calendar.badge.clock") {
+                        InspectorDateView(record: rec)
+                            .id(rec.id)
+                    }
+
                     // Dossier — captions, transcript, OCR text, OCR dates,
                     // inferred date. Only shown when the record has been
                     // processed by the dossier pipeline so empty rows don't
@@ -440,6 +449,10 @@ struct InspectorPanel: View {
 
         // Timestamps
         section("Timestamps")
+        if let userDate = rec.userDate {
+            add("Your Date", rec.userDateStatus == .known
+                ? "\(userDate) (known)" : "\(userDate) (best guess)")
+        }
         add("Created", rec.dateCreated)
         add("Modified", rec.dateModified)
         add("Timecode", rec.timecode)
