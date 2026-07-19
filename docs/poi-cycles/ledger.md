@@ -6,11 +6,41 @@ confirmed-only presence (schemaVersion 2), corpus enumerated fresh per run
 with a corpus fingerprint. Codex grades; FAIL means the candidate does not
 merge and the loop continues.
 
+**REVISED LADDER (Rick-ratified 2026-07-19, after C1–C3 evidence review):**
+post-processing levers on unchanged ArcFace distances are RETIRED (C2 proved
+confusers score cosine 0.85–0.94 — the separation signal is not in a blurry
+SD face crop; "the 4-year-old test" shows the signal lives in whole-person
+features the crop discards). New ladder: **C4 = learned Donna classifier
+head** on ArcFace embeddings, trained on Rick's labeled clips (first
+learning-based cycle; hard negatives become training signal); **C5 =
+deinterlace + quality-weighted pooling** (embedding quality); **C6 =
+whole-person witness** (MobileCLIP person-region embeddings — needs Rick
+model sign-off); fusion ladder (rule-out cascade, only-adult-female prior)
+in parallel. **Corpus split rule from C4 on: current 26 clips = TRAINING
+POOL; Rick's new clips = SEALED HOLDOUT (grader-only). Never train and grade
+on the same clips.** Face-only ceiling vs same-age adult negatives is
+expected well below 0.90 — the 0.90 goal is a fusion-system goal; the loop
+grades each component honestly along the way.
+
 | Cycle | Candidate | Branch @ commit | Verdict | Balanced acc (A/B) | Graded | Notes |
 |---|---|---|---|---|---|---|
 | C1 | Score-based presence aggregation (minHits=3, minHitRate=0.08, maxMedianDistance=0.50) | `poi/c01-aggregation` @ 0ea582f | **FAIL** | legacy 0.577 → score 0.500 (−0.077) | 2026-07-17 22:28 UTC, codex `poi-c01-grade-2026-07-17` | Score mode reduced every headline metric; added 1 FN (`Donna-14.mov`) and 1 FP. Do not merge. |
 
 | C2 | Calibrated reference set (audited clustering minClusterLink=0.35 + threshold 0.48; config sha256 bd515334…f6ce4b) | `poi/c02-refs-threshold` @ 3e5a4bb | **FAIL** | legacy 0.500/0.500 vs candidate 0.538/0.577 (2 paired AB/BA rounds) — never strictly > 15/26 | 2026-07-18 21:05 ET, codex | Recall 1.0 both arms. Candidate better than legacy in-round but ties the historical bar at best. Instability: references-used varied 17–25 on identical config+images; NotDonna-5 flipped FP→TN between rounds; 25/26 clips changed raw fields across rounds. Do not merge/promote. |
+
+| C3 | Minimum-hit confirmation floor (confirmed iff totalHits >= 7; config sha256 e981faa3…dbe7ea) | `poi/c03-minimum-hits` @ fbb8e6a | **PASS** | legacy 0.500/0.500 vs candidate **0.6154/0.6154** (2 fresh paired rounds, both strictly > 15/26 bar) | 2026-07-19 13:51 ET, codex | FIRST PASS. FN=0 both rounds; same 3 FPs corrected in both repeats (NotDonna-8/10/13); zero prediction flips across repeats in either arm (raw observations varied, none crossed a boundary); 104/104 processes clean; completion audit PASS. Frozen/unmerged — Rick decides integration. Report sha256 ccb48a15…3073bd. |
+
+## C3 detail (2026-07-19)
+
+Eval-only change; production default untouched. Known limitations carried
+from the declaration: thin one-hit margin (weakest positive 8 vs strongest
+rejected negative 6) and absolute-count duration/frame-step bias — short
+genuine-Donna clips are the FN exposure; the current corpus contains none
+(sealed-holdout growth should include some). Note: legacy measured 0.500 in
+both formal rounds (13/13 FP) vs its historical 0.577 — same-day corpus
+drift within legacy itself; the acceptance comparator was the exact
+historical bar 15/26, disclosed. LAST cycle graded on the current 26 clips
+(they become the C4+ training pool per the revised ladder).
 
 ## C2 detail (2026-07-18)
 
