@@ -30,6 +30,21 @@ grades each component honestly along the way.
 
 | C3 | Minimum-hit confirmation floor (confirmed iff totalHits >= 7; config sha256 e981faa3…dbe7ea) | `poi/c03-minimum-hits` @ fbb8e6a | **PASS** | legacy 0.500/0.500 vs candidate **0.6154/0.6154** (2 fresh paired rounds, both strictly > 15/26 bar) | 2026-07-19 13:51 ET, codex | FIRST PASS. FN=0 both rounds; same 3 FPs corrected in both repeats (NotDonna-8/10/13); zero prediction flips across repeats in either arm (raw observations varied, none crossed a boundary); 104/104 processes clean; completion audit PASS. Frozen/unmerged — Rick decides integration. Report sha256 ccb48a15…3073bd. |
 
+## C4 status (2026-07-19, implementation complete — NOT YET GRADED)
+
+`poi/c04-donna-classifier` @ 74ec6a3: donna-lr classifier head (sklearn LR on
+8,079 production-ArcFace face rows from the 26 training clips; model sha256
+7ff1ad9a…ea6858, ~12 KB weights-only). **LOCO cross-validated development
+evidence (NOT a grade): balanced accuracy 0.769** (TP 11 / FN 2 / FP 4 / TN 9)
+vs 0.500 legacy on identical runs; corrects 9/13 legacy FPs INCLUDING
+NotDonna-4 (C2's no-threshold-can-separate clip). Disclosed: first candidate
+with Donna FNs (Donna-7, Donna-14 — Rick's integration call); knife-edge
+p*≈0.9849 (optimal gap ~0.005 ≈ ArcFace run drift — holdout boundary flips
+expected); config-name unification (presenceModel vs aggregation) pending.
+Official grade: sealed holdout (Rick building) + M4 quiet window or M5/M1
+routing per machine policy. Suite 2853/0 green in worktree — the unit-runner
+wedge has CLEARED; UI-runner testmanagerd flake persists.
+
 ## C3 detail (2026-07-19)
 
 Eval-only change; production default untouched. Known limitations carried
