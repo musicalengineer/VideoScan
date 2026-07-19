@@ -17,7 +17,9 @@ enum PersonEvaluationCLI {
         func value() -> Float? { best }
     }
 
-    private struct Options {
+    /// Internal (not private) so the unit tests can pin the parse/validation
+    /// truth table without spawning a process.
+    struct Options {
         var engine = RecognitionEngine.vision
         var person = ""
         var references = ""
@@ -27,16 +29,42 @@ enum PersonEvaluationCLI {
         var minFaceConfidence: Float?
         var largestFaceOnly = false
         var facePresenceOnly = false
+        // POI cycle 03 — minimum-hit confirmation floor (eval-only A/B
+        // surface). nil = flag not given. Parse validation guarantees the
+        // pair is coherent: `minHits` is set iff `aggregationMode` is
+        // `.minimumHits` (no inert flags, no silent defaults).
+        var aggregationMode: EvalPresenceRule.Mode?
+        var minHits: Int?
+
+        /// The single rule this run both EXECUTES and EMITS — one source, so
+        /// the reported configuration is always the effective one (cycle 2's
+        /// provenance lesson). Default (no flags) is the legacy any-hit arm.
+        var presenceRule: EvalPresenceRule {
+            if aggregationMode == .minimumHits, let floor = minHits {
+                return .minimumHits(floor: floor)
+            }
+            return .legacy
+        }
     }
 
-    private struct SegmentOutput: Codable {
+    struct SegmentOutput: Codable {
         let start: Double
         let end: Double
         let bestDistance: Float
         let averageDistance: Float
     }
 
-    private struct Output: Codable {
+    /// Machine-readable result for one video. schemaVersion 2 (POI cycle 03)
+    /// is a purely ADDITIVE change over 1: `hits`, `segments`,
+    /// `facesDetected`, `bestDistance` keep their raw pipeline semantics.
+    /// New fields:
+    ///   - `aggregation` — the exact EvalPresenceRule used (the evaluator's
+    ///     config-hash surface; byte-stable under this encoder's sortedKeys).
+    ///   - `presence`    — video-level decision: "confirmed" or "none". The
+    ///     grader counts ONLY the exact spelling "confirmed" as a positive.
+    ///     Default/legacy runs: confirmed ⇔ hits > 0 (any-hit, unchanged
+    ///     semantics). minimum-hits runs: confirmed ⇔ hits ≥ minHits.
+    struct Output: Codable {
         let schemaVersion: Int
         let person: String
         let engine: String
@@ -48,22 +76,30 @@ enum PersonEvaluationCLI {
         let elapsedSeconds: Double
         let peakRSSMB: Double
         let error: String?
+        let aggregation: EvalPresenceRule
+        let presence: String
     }
 
     @MainActor
     static func run(arguments: [String]) async -> Int32 {
+        // Attribute error outputs to the rule that was actually requested
+        // whenever parsing got far enough to know it; before that, the only
+        // truthful answer is the default (legacy).
+        var attributedRule = EvalPresenceRule.legacy
         do {
             let options = try parse(arguments)
+            attributedRule = options.presenceRule
             let started = CFAbsoluteTimeGetCurrent()
             let output = try await evaluate(options, started: started)
             try emit(output)
             return output.error == nil ? 0 : 1
         } catch {
             let output = Output(
-                schemaVersion: 1, person: "", engine: "", video: "",
+                schemaVersion: 2, person: "", engine: "", video: "",
                 facesDetected: 0, hits: 0, bestDistance: nil, segments: [],
                 elapsedSeconds: 0, peakRSSMB: peakRSSMB(),
-                error: error.localizedDescription
+                error: error.localizedDescription,
+                aggregation: attributedRule, presence: EvalPresenceRule.noneSpelling
             )
             try? emit(output)
             return 2
@@ -173,8 +209,13 @@ enum PersonEvaluationCLI {
         } }
         guard let result else { throw CLIError("recognition engine returned no result") }
 
+        // POI cycle 03: the video-level presence decision. Raw hit counting
+        // upstream is untouched; only the confirmed/none classification of
+        // the already-computed total differs between modes.
+        let rule = options.presenceRule
+
         return Output(
-            schemaVersion: 1, person: options.facePresenceOnly ? "" : options.person,
+            schemaVersion: 2, person: options.facePresenceOnly ? "" : options.person,
             engine: options.facePresenceOnly ? "FacePresence/Vision" : options.engine.displayName,
             video: options.video, facesDetected: result.facesDetected, hits: result.totalHits,
             bestDistance: await distanceAccumulator.value() ?? result.segments.map(\.bestDistance).min(),
@@ -183,11 +224,13 @@ enum PersonEvaluationCLI {
                               bestDistance: $0.bestDistance, averageDistance: $0.avgDistance)
             },
             elapsedSeconds: CFAbsoluteTimeGetCurrent() - started,
-            peakRSSMB: peakRSSMB(), error: nil
+            peakRSSMB: peakRSSMB(), error: nil,
+            aggregation: rule,
+            presence: rule.presence(hits: result.totalHits)
         )
     }
 
-    private static func parse(_ arguments: [String]) throws -> Options {
+    static func parse(_ arguments: [String]) throws -> Options {
         var options = Options()
         var index = 0
         func value(after flag: String) throws -> String {
@@ -219,6 +262,27 @@ enum PersonEvaluationCLI {
                 options.minFaceConfidence = number
             case "--largest-face-only": options.largestFaceOnly = true
             case "--face-presence-only": options.facePresenceOnly = true
+            // POI cycle 03 — aggregation A/B surface. Strict by design:
+            // duplicates, unknown modes, non-positive/non-integer floors,
+            // and inert flag combinations are all hard errors, so the run
+            // either executes exactly the requested rule or refuses.
+            case "--aggregation":
+                guard options.aggregationMode == nil else { throw CLIError("duplicate --aggregation") }
+                let raw = try value(after: argument).lowercased()
+                switch raw {
+                case "minimum-hits", "minimumhits": options.aggregationMode = .minimumHits
+                case "legacy", "legacy-any-hit", "legacyanyhit": options.aggregationMode = .legacyAnyHit
+                default: throw CLIError("unknown aggregation mode: \(raw)")
+                }
+            case "--min-hits":
+                guard options.minHits == nil else { throw CLIError("duplicate --min-hits") }
+                let raw = try value(after: argument)
+                // Int() rejects floats, NaN, hex, empty, and overflow — every
+                // malformed spelling fails here rather than defaulting.
+                guard let number = Int(raw), number > 0 else {
+                    throw CLIError("invalid --min-hits: \(raw) (must be a positive integer)")
+                }
+                options.minHits = number
             default: throw CLIError("unknown argument: \(argument)")
             }
             index += 1
@@ -226,6 +290,22 @@ enum PersonEvaluationCLI {
         guard options.facePresenceOnly || !options.person.isEmpty else { throw CLIError("--person is required") }
         guard options.facePresenceOnly || !options.references.isEmpty else { throw CLIError("--references is required") }
         guard !options.video.isEmpty else { throw CLIError("--video is required") }
+        // POI cycle 03 flag coherence (order-independent, checked post-parse):
+        // the emitted config must always be the effective config, so a flag
+        // that could not influence this run is an error, not a no-op.
+        switch options.aggregationMode {
+        case .minimumHits:
+            guard options.minHits != nil else {
+                throw CLIError("--aggregation minimum-hits requires --min-hits (no silent default)")
+            }
+            guard !options.facePresenceOnly else {
+                throw CLIError("--aggregation minimum-hits conflicts with --face-presence-only (a presence-only run has no reference hits to count)")
+            }
+        case .legacyAnyHit, nil:
+            guard options.minHits == nil else {
+                throw CLIError("--min-hits requires --aggregation minimum-hits")
+            }
+        }
         return options
     }
 
