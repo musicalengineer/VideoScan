@@ -24,7 +24,10 @@ struct BalanceAudioRequest: Identifiable {
     let id = UUID()
     let record: VideoRecord
     /// Planned `<stem>_balanced.<ext>` beside the original, uniquified
-    /// against files existing right now.
+    /// against files existing right now. Computed BEFORE the analysis —
+    /// once the probe reports the container, the sheet recomputes with
+    /// `containerFormat` (raw DV publishes as .mov) and that refined
+    /// plan is what's displayed and handed to the job.
     let destinationURL: URL
 
     @MainActor
@@ -53,6 +56,15 @@ struct BalanceAudioSheet: View {
         case failed(String)
     }
     @State private var phase: Phase = .analyzing
+
+    /// The container-aware destination, recomputed once the analysis
+    /// knows `containerFormat` (raw DV → `<stem>_balanced.mov`). Falls
+    /// back to the request's pre-analysis plan until then.
+    @State private var plannedDestination: URL?
+
+    private var destinationURL: URL {
+        plannedDestination ?? request.destinationURL
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -163,10 +175,26 @@ struct BalanceAudioSheet: View {
                         Image(systemName: "film")
                             .foregroundColor(.accentColor)
                     }
+                    if BalanceAudioFix.isRawDVContainer(analysis.shape.containerFormat) {
+                        // Honest about the wrapper change: the raw DV
+                        // file can't hold the balanced sound, so the
+                        // copy is QuickTime — the video inside is the
+                        // same untouched DV.
+                        Label {
+                            Text("This raw DV file can't hold the balanced sound, so the copy is packaged as QuickTime (.mov). The DV picture inside is untouched.")
+                                .font(.body)
+                                .fixedSize(horizontal: false, vertical: true)
+                        } icon: {
+                            Image(systemName: "shippingbox")
+                                .foregroundColor(.accentColor)
+                        }
+                        .accessibilityIdentifier("balanceSheet.dvContainerNote")
+                    }
                     if !analysis.droppedStreamIndices.isEmpty {
-                        // "won't be used", not "removed": DV keeps fixed
-                        // audio slots, so the silent pair may remain as
-                        // an empty slot in the copy.
+                        // "won't be used", not "removed": accurate for
+                        // every container (QuickTime genuinely drops
+                        // the pair; other muxers with fixed audio slots
+                        // may keep an empty one).
                         Label {
                             Text(analysis.droppedStreamIndices.count == 1
                                  ? "The tape's extra silent track won't be used in the balanced copy."
@@ -188,7 +216,7 @@ struct BalanceAudioSheet: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("The balanced copy will be saved next to it as:")
                                 .font(.body)
-                            Text(request.destinationURL.lastPathComponent)
+                            Text(destinationURL.lastPathComponent)
                                 .font(.body.monospaced())
                                 .lineLimit(1)
                                 .truncationMode(.middle)
@@ -256,6 +284,12 @@ struct BalanceAudioSheet: View {
         let path = request.record.fullPath
         do {
             let analysis = try await AudioBalanceProbe.analyze(path: path)
+            // Refine the planned name now that the container is known
+            // (raw DV → .mov); the same URL is displayed AND handed to
+            // the job, so the sheet never shows a name the job won't use.
+            plannedDestination = BalanceAudioFix.balancedOutputURL(
+                forSourcePath: path,
+                containerFormat: analysis.shape.containerFormat)
             phase = .analyzed(analysis)
         } catch AudioBalanceProbeError.noAudioStream {
             phase = .failed("This file has no audio stream to balance.")
@@ -272,7 +306,7 @@ struct BalanceAudioSheet: View {
         fileOpsCenter.startBalanceAudio(record: request.record,
                                         analysis: analysis,
                                         model: model,
-                                        plannedOutput: request.destinationURL)
+                                        plannedOutput: destinationURL)
         dismiss()
         // Same handoff CleanupSheet uses: open the operations window
         // (progress + Cancel live there) after the dismissal starts.

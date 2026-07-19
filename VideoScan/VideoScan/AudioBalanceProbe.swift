@@ -87,6 +87,18 @@ struct AudioBalanceStreamShape: Sendable, Equatable {
     var durationSeconds: Double
     /// Every audio stream, in ffprobe order (audio-ordinal order).
     var audioStreamInfos: [AudioBalanceStreamInfo]
+    /// ffprobe's `format_name` — the DEMUXER's name(s), comma-separated
+    /// for shared demuxers ("mov,mp4,m4a,3gp,3g2,mj2"). Raw DV probes
+    /// as exactly "dv" — the balance job keys its output-container rule
+    /// on this (BalanceAudioFix.isRawDVContainer). "" when unknown
+    /// (legacy canned JSON in tests).
+    var containerFormat: String = ""
+    /// `r_frame_rate` of the first video stream ("30000/1001",
+    /// "25/1", …). Raw DV needs it as an input-side `-r` override:
+    /// the demuxer reports a bogus avg_frame_rate (60000/1) that makes
+    /// the mov muxer fail at trailer-write. nil when there is no video
+    /// stream or ffprobe didn't report one.
+    var videoRFrameRate: String? = nil
 }
 
 // MARK: - Analysis result
@@ -157,12 +169,14 @@ enum AudioBalanceProbe {
         ]
     }
 
-    /// ffprobe JSON request for the stream shape.
+    /// ffprobe JSON request for the stream shape. `r_frame_rate` +
+    /// `format_name` feed the raw-DV output-container rule
+    /// (fix/balance-dv-output-container).
     static func shapeArgs(input: String) -> [String] {
         [
             "-v", "error",
-            "-show_entries", "stream=index,codec_type,codec_name,channels,bit_rate",
-            "-show_entries", "format=duration",
+            "-show_entries", "stream=index,codec_type,codec_name,channels,bit_rate,r_frame_rate",
+            "-show_entries", "format=format_name,duration",
             "-of", "json",
             input
         ]
@@ -176,8 +190,12 @@ enum AudioBalanceProbe {
         let codec_name: String?
         let channels: Int?
         let bit_rate: String?
+        let r_frame_rate: String?
     }
-    private struct ProbedFormat: Decodable { let duration: String? }
+    private struct ProbedFormat: Decodable {
+        let format_name: String?
+        let duration: String?
+    }
     private struct ProbeReport: Decodable {
         let streams: [ProbedStream]?
         let format: ProbedFormat?
@@ -217,7 +235,9 @@ enum AudioBalanceProbe {
             audioChannels: firstAudio.channels,
             audioBitRate: firstAudio.bitRate,
             durationSeconds: Double(report.format?.duration ?? "") ?? 0,
-            audioStreamInfos: audioInfos)
+            audioStreamInfos: audioInfos,
+            containerFormat: report.format?.format_name ?? "",
+            videoRFrameRate: video?.r_frame_rate)
     }
 
     // MARK: Full analysis (I/O)

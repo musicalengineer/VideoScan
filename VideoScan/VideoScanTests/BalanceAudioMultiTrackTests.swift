@@ -94,13 +94,16 @@ struct BalanceAudioMultiTrackTests {
             return
         }
         let published = try #require(job.publishedURL)
-        #expect(published.pathExtension == "dv", "container must be preserved")
+        // Raw DV sources publish as QuickTime — the dv muxer can't take
+        // the balanced audio back (fix/balance-dv-output-container; the
+        // container rule itself is pinned in BalanceAudioDVOutputTests).
+        #expect(published.pathExtension == "mov",
+                "raw DV source must publish as QuickTime")
 
         // Output: ONE balanced dual-mono program track, dvvideo stream-
-        // copied. NOTE the DV container carries audio in fixed slots
-        // inside the frame data — the dropped pair re-appears as a
-        // silent slot, so the demuxer may still report 2 audio streams;
-        // the content contract is "exactly one PROGRAM stream".
+        // copied. In QuickTime the dropped silent pair stays dropped
+        // (no fixed DV audio slots); the content contract is "exactly
+        // one PROGRAM stream".
         let check = try await AudioBalanceProbe.analyze(path: published.path)
         #expect(check.classification == .dualMono)
         #expect(check.programStreamCount == 1,

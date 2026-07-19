@@ -115,6 +115,15 @@ enum BalanceAudioTestMedia {
         /// 48 kHz — consumer 12-bit DV is 25 Mbps / 32 kHz, but the
         /// STREAM SHAPE (dvvideo + two pcm_s16le stereo pairs) is
         /// identical, which is all the probe/job care about.
+        /// NOTE (fix/balance-dv-output-container, verified 2026-07-18):
+        /// the muxer rejects 32 kHz PCM outright — even a SINGLE
+        /// consumer-profile pair can't be synthesized ("Invalid sample
+        /// rate 32000 … must be 48000"), which is the very bug that
+        /// forces balanced raw-DV output into QuickTime. DVCPRO50 is
+        /// therefore the only possible raw-.dv stand-in; the demuxed
+        /// raw-DV quirks the fix depends on (format_name "dv", bogus
+        /// avg_frame_rate 60000/1 with true r_frame_rate 30000/1001)
+        /// are present on these fixtures too.
         case dv
         /// mov with h264 video + two pcm_s16le stereo streams — the
         /// same two-audio-stream shape in the QuickTime family.

@@ -75,6 +75,44 @@ enum BalanceAudioFix {
     /// Verification tolerance on the output's duration vs the source's.
     static let durationToleranceSeconds: Double = 1.0
 
+    // MARK: Raw-DV container rule (fix/balance-dv-output-container)
+    //
+    // Diagnosed on Clip 28.dv (consumer 12-bit DV, 32 kHz): a raw `.dv`
+    // OUTPUT container is a dead end — ffmpeg's dv muxer rejects 32 kHz
+    // PCM ("must be 48000") and forcing `-ar 48000` crashes it outright
+    // (fifo.c assertion, a genuine muxer bug). The fix: raw-DV sources
+    // publish as QuickTime (.mov — the native iMovie wrapper these
+    // clips came from) with the DV video stream-copied. That mux needs
+    // one more thing: raw DV metadata reports a bogus avg_frame_rate
+    // (60000/1; r_frame_rate is the true 30000/1001) and the mov muxer
+    // fails at trailer-write ("fps 60000 is too large") unless the
+    // PROBED r_frame_rate is fed back as an input-side `-r` override.
+
+    /// True when ffprobe's `format_name` says the file is a raw DV
+    /// stream. Raw DV probes as exactly "dv"; comma-splitting guards
+    /// against shared-demuxer lists ("mov,mp4,m4a,3gp,3g2,mj2" — DV
+    /// video INSIDE QuickTime is NOT raw DV and keeps its container).
+    static func isRawDVContainer(_ containerFormat: String) -> Bool {
+        containerFormat
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            .contains("dv")
+    }
+
+    /// Input-side ffmpeg args for a raw-DV source: `-r <r_frame_rate>`
+    /// with the PROBED rate — never hardcoded (NTSC DV is 30000/1001,
+    /// PAL DV is 25/1). Empty for every other container, and empty when
+    /// the probed rate is missing/degenerate ("0/0") — better to let
+    /// ffmpeg guess than to force nonsense. Pure.
+    static func rawDVInputArgs(shape: AudioBalanceStreamShape) -> [String] {
+        guard isRawDVContainer(shape.containerFormat),
+              let rate = shape.videoRFrameRate,
+              let numerator = rate.split(separator: "/").first.flatMap({ Int($0) }),
+              numerator > 0
+        else { return [] }
+        return ["-r", rate]
+    }
+
     /// Stream-level refusal, decided at ANALYZE time: more than one
     /// audio stream carrying program is out of scope — Balance Audio
     /// fixes a single program track. (The 12-bit DV case with ONE
@@ -171,19 +209,46 @@ enum BalanceAudioFix {
         source.audioStreams <= 1 ? source.totalStreams : source.videoStreams + 1
     }
 
-    /// Full ffmpeg argument vector. `mapArgs` selects the carried
-    /// streams (see `mapArgs(audioStreams:programStreamIndex:)`);
-    /// `-c copy` stream-copies them verbatim; the audio override + pan
-    /// filter re-encode only the audio. Pure — tested as strings.
+    /// Output stream-shape verification. nil = acceptable; non-nil = the
+    /// contract breach message. The HARD contract: exactly ONE audio
+    /// stream (the balanced program track) and the video stream count
+    /// unchanged. Non-A/V tracks are tolerated up to the source's own
+    /// non-A/V count PLUS ONE: the mov muxer materializes DV timecode
+    /// metadata as a `tmcd` data track (probes as codec "unknown") —
+    /// desirable provenance, observed on Clip 28.dv → .mov 2026-07-18.
+    /// Pure — supersedes the raw total-stream equality check, which the
+    /// timecode track would have tripped.
+    static func outputStreamMismatch(observed: AudioBalanceStreamShape,
+                                     source: AudioBalanceStreamShape) -> String? {
+        guard observed.audioStreams == 1 else {
+            return "output carries \(observed.audioStreams) audio stream(s), expected exactly 1"
+        }
+        guard observed.videoStreams == source.videoStreams else {
+            return "video stream count changed (\(source.videoStreams) → \(observed.videoStreams))"
+        }
+        let observedExtras = observed.totalStreams - observed.videoStreams - observed.audioStreams
+        let sourceExtras = source.totalStreams - source.videoStreams - source.audioStreams
+        guard observedExtras <= sourceExtras + 1 else {
+            return "output gained \(observedExtras - sourceExtras) non-A/V track(s), expected at most 1 (timecode)"
+        }
+        return nil
+    }
+
+    /// Full ffmpeg argument vector. `inputArgs` land BEFORE `-i` (they
+    /// are demuxer options — the raw-DV `-r` override); `mapArgs`
+    /// selects the carried streams (see
+    /// `mapArgs(audioStreams:programStreamIndex:)`); `-c copy`
+    /// stream-copies them verbatim; the audio override + pan filter
+    /// re-encode only the audio. Pure — tested as strings.
     static func ffmpegArgs(input: String,
                            output: String,
                            mapArgs: [String],
                            panFilter: String,
-                           audioArgs: [String]) -> [String] {
-        var args: [String] = [
-            "-hide_banner", "-nostdin", "-y",
-            "-i", input
-        ]
+                           audioArgs: [String],
+                           inputArgs: [String] = []) -> [String] {
+        var args: [String] = ["-hide_banner", "-nostdin", "-y"]
+        args += inputArgs
+        args += ["-i", input]
         args += mapArgs
         args += [
             "-c", "copy",
@@ -199,18 +264,29 @@ enum BalanceAudioFix {
     }
 
     /// `<stem>_balanced.<ext>` beside the source — SAME extension, so
-    /// the container is preserved. Finder-style counters on collision
+    /// the container is preserved, EXCEPT raw DV sources
+    /// (`containerFormat` probes as "dv"), which publish as `.mov`: the
+    /// dv muxer can't take the balanced audio back (see the raw-DV
+    /// container rule above). Finder-style counters on collision
     /// (`<stem>_balanced 2.<ext>`, …). `fileExists` injected so the
     /// uniquify loop is pure-testable and the publish path can fold
     /// "partial exists" into "taken" (CleanupJob's convention).
+    /// `containerFormat` defaults to "" (unknown → same-extension) so
+    /// pre-analysis callers keep the historical behavior.
     static func balancedOutputURL(
         forSourcePath path: String,
+        containerFormat: String = "",
         fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
     ) -> URL {
         let src = URL(fileURLWithPath: path)
         let dir = src.deletingLastPathComponent()
         let stem = src.deletingPathExtension().lastPathComponent
-        let ext = src.pathExtension.isEmpty ? "mov" : src.pathExtension
+        let ext: String
+        if isRawDVContainer(containerFormat) {
+            ext = "mov"
+        } else {
+            ext = src.pathExtension.isEmpty ? "mov" : src.pathExtension
+        }
         var candidate = dir.appendingPathComponent("\(stem)_balanced.\(ext)")
         var n = 2
         while fileExists(candidate.path) {
@@ -297,7 +373,9 @@ final class BalanceAudioJob: MediaFileOperationJob {
         self.ffmpegPathOverride = ffmpegPathOverride
         self.subtitleText = "Preparing to balance audio…"
         self.outputURL = plannedOutput
-            ?? BalanceAudioFix.balancedOutputURL(forSourcePath: record.fullPath)
+            ?? BalanceAudioFix.balancedOutputURL(
+                forSourcePath: record.fullPath,
+                containerFormat: analysis.shape.containerFormat)
     }
 
     /// Idempotent — a second call is a no-op.
@@ -349,6 +427,13 @@ final class BalanceAudioJob: MediaFileOperationJob {
             balanceLog.notice("balance: dropped silent track(s) \(list, privacy: .public) — output carries video + program track \(self.analysis.programStreamIndex, privacy: .public) only")
             appLog.write("balance audio: \(record.filename) — dropping silent audio track(s) \(list) (no sound on them)")
         }
+        // Raw DV source → QuickTime output (the container decision — see
+        // BalanceAudioFix's raw-DV container rule).
+        let isRawDV = BalanceAudioFix.isRawDVContainer(analysis.shape.containerFormat)
+        if isRawDV {
+            balanceLog.notice("balance: raw DV source — writing QuickTime (.mov) container, DV video stream-copied (input rate override \(BalanceAudioFix.rawDVInputArgs(shape: self.analysis.shape).joined(separator: " "), privacy: .public))")
+            appLog.write("balance: raw DV source — writing QuickTime (.mov) container, DV video stream-copied")
+        }
         let ffmpeg = ffmpegPathOverride ?? ToolLocator.ffmpegPath
         guard FileManager.default.isExecutableFile(atPath: ffmpeg) else {
             finish(failed: "ffmpeg not found (set VS_FFMPEG_PATH or install via Homebrew)")
@@ -376,7 +461,9 @@ final class BalanceAudioJob: MediaFileOperationJob {
         var candidate = outputURL
         if taken(candidate.path) {
             candidate = BalanceAudioFix.balancedOutputURL(
-                forSourcePath: inputPath, fileExists: taken)
+                forSourcePath: inputPath,
+                containerFormat: analysis.shape.containerFormat,
+                fileExists: taken)
         }
         let partialURL = ReformatJob.partialURL(for: candidate)
 
@@ -417,7 +504,8 @@ final class BalanceAudioJob: MediaFileOperationJob {
             panFilter: pan,
             audioArgs: BalanceAudioFix.audioEncodeArgs(
                 sourceCodec: analysis.shape.audioCodec,
-                bitRateBitsPerSec: analysis.shape.audioBitRate))
+                bitRateBitsPerSec: analysis.shape.audioBitRate),
+            inputArgs: BalanceAudioFix.rawDVInputArgs(shape: analysis.shape))
         balanceLog.info("balance render: ffmpeg \(args.joined(separator: " "), privacy: .public)")
 
         monitor.start()
@@ -481,7 +569,9 @@ final class BalanceAudioJob: MediaFileOperationJob {
                     return
                 }
                 candidate = BalanceAudioFix.balancedOutputURL(
-                    forSourcePath: inputPath, fileExists: taken)
+                    forSourcePath: inputPath,
+                    containerFormat: analysis.shape.containerFormat,
+                    fileExists: taken)
             }
         }
         publishedURL = candidate
@@ -570,16 +660,17 @@ final class BalanceAudioJob: MediaFileOperationJob {
             throw BalanceVerificationError(
                 message: "video codec changed (\(source.videoCodec ?? "none") → \(check.shape.videoCodec ?? "none"))")
         }
-        // Stream count: the mapped expectation, OR the source's own
-        // count — DV-family muxers keep FIXED audio slots inside the
-        // frame data, so a "dropped" silent pair re-appears as a silent
-        // slot (observed on .dv outputs 2026-07-18). Anything else
-        // (streams lost or gained) fails.
-        let expectedStreams = BalanceAudioFix.expectedOutputStreams(source: source)
-        guard check.shape.totalStreams == expectedStreams
-                || check.shape.totalStreams == source.totalStreams else {
-            throw BalanceVerificationError(
-                message: "stream count is \(check.shape.totalStreams), expected \(expectedStreams) (source had \(source.totalStreams))")
+        // Stream shape: exactly one audio stream, video stream count
+        // unchanged, and at most ONE gained non-A/V track (the mov muxer
+        // materializes DV timecode metadata as a tmcd data track —
+        // desirable provenance). The pure rule replaces the old raw
+        // total-stream equality, which the timecode track would trip;
+        // it also retires the .dv-output fixed-audio-slot tolerance —
+        // raw DV sources publish as QuickTime now, so no muxer path
+        // re-materializes a dropped silent pair.
+        if let mismatch = BalanceAudioFix.outputStreamMismatch(
+            observed: check.shape, source: source) {
+            throw BalanceVerificationError(message: mismatch)
         }
         // Exactly ONE stream may carry program — the balanced one. A
         // second live stream in the output means the mapping went wrong.
@@ -633,6 +724,9 @@ final class BalanceAudioJob: MediaFileOperationJob {
         if !analysis.droppedStreamIndices.isEmpty {
             let list = analysis.droppedStreamIndices.map(String.init).joined(separator: ", ")
             fixNote += "; unused silent track(s) \(list) left out"
+        }
+        if BalanceAudioFix.isRawDVContainer(analysis.shape.containerFormat) {
+            fixNote += "; packaged as QuickTime (.mov) — raw DV can't carry the balanced audio, DV video bits untouched"
         }
         let stamp = ISO8601DateFormatter().string(from: Date())
         let sourceNote = "Balance Audio \(stamp): Created balanced copy \(publishedURL.lastPathComponent) (\(fixNote); video copied unchanged)"
