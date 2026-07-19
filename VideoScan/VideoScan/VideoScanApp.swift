@@ -316,6 +316,57 @@ enum BuildInfo {
         return "unknown"
     }()
 
+    /// Short commit hash, resolved the same way (and with the same caveat)
+    /// as `gitBranch`: read from the repo at LAUNCH time, so it reflects
+    /// the checkout's HEAD, not necessarily the commit the binary was
+    /// compiled from — `buildDate` is the tiebreaker for "am I running
+    /// what I just built". Handles both a real `.git` directory and the
+    /// worktree case where `.git` is a pointer file ("gitdir: …").
+    static let gitHash: String = {
+        var url = URL(fileURLWithPath: #filePath)
+        for _ in 0..<8 {
+            url.deleteLastPathComponent()
+            if url.path == "/" { break }
+            var gitDir = url.appendingPathComponent(".git")
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: gitDir.path, isDirectory: &isDir) else { continue }
+            if !isDir.boolValue,
+               let pointer = try? String(contentsOf: gitDir, encoding: .utf8),
+               pointer.hasPrefix("gitdir: ") {
+                let target = pointer.dropFirst("gitdir: ".count)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                gitDir = URL(fileURLWithPath: target)
+            }
+            guard let head = try? String(contentsOf: gitDir.appendingPathComponent("HEAD"),
+                                         encoding: .utf8) else { break }
+            let trimmed = head.trimmingCharacters(in: .whitespacesAndNewlines)
+            let prefix = "ref: "
+            guard trimmed.hasPrefix(prefix) else { return String(trimmed.prefix(8)) }
+            let ref = String(trimmed.dropFirst(prefix.count))
+            // Worktree gitdirs resolve refs against the shared commondir.
+            var refRoot = gitDir
+            if let common = try? String(contentsOf: gitDir.appendingPathComponent("commondir"),
+                                        encoding: .utf8) {
+                let rel = common.trimmingCharacters(in: .whitespacesAndNewlines)
+                refRoot = URL(fileURLWithPath: rel, relativeTo: gitDir).standardizedFileURL
+            }
+            if let sha = try? String(contentsOf: refRoot.appendingPathComponent(ref),
+                                     encoding: .utf8) {
+                return String(sha.trimmingCharacters(in: .whitespacesAndNewlines).prefix(8))
+            }
+            // Ref not loose — search packed-refs.
+            if let packed = try? String(contentsOf: refRoot.appendingPathComponent("packed-refs"),
+                                        encoding: .utf8) {
+                for line in packed.split(separator: "\n")
+                where line.hasSuffix(" \(ref)") {
+                    return String(line.prefix(8))
+                }
+            }
+            break
+        }
+        return "unknown"
+    }()
+
     static let buildMode: String = {
         #if DEBUG
         return "debug"
@@ -324,7 +375,7 @@ enum BuildInfo {
         #endif
     }()
 
-    static let summary: String = "v\(version) (\(buildMode)) · \(gitBranch) · \(buildDate)"
+    static let summary: String = "v\(version) (\(buildMode)) · \(gitBranch) @ \(gitHash) · \(buildDate)"
 }
 
 struct VideoScanApp: App {
