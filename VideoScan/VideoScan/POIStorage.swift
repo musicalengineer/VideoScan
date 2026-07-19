@@ -41,7 +41,19 @@ enum POIStorage {
     // MARK: - Paths
 
     /// Root directory for all POI data. Created on first access.
+    /// Test hosts (unit AND UI — TestEnvironment.isTestHost covers both)
+    /// are diverted to a per-process temp dir so no test can ever touch
+    /// the user's real POI store (settings-pollution class; same pattern
+    /// as MetadataCache / ScanJobsStorage / PersistentLog.logDir).
     static var storeDir: URL {
+        if TestEnvironment.isTestHost {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent(
+                    "VideoScanTestPOI-\(ProcessInfo.processInfo.processIdentifier)",
+                    isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir
+        }
         let base = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
         ).first ?? URL(fileURLWithPath: NSHomeDirectory())

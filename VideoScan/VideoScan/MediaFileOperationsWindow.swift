@@ -259,11 +259,15 @@ struct MediaFileOperationRow: View {
                         .font(.system(size: 13, design: .monospaced))
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        // Gauntlet flow 4 matches the balanced file's row
+                        // by this title text. Test-only.
+                        .accessibilityIdentifier("mfo.row.title")
                     Text(job.subtitle)
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
+                        .accessibilityIdentifier("mfo.row.subtitle")
                 }
 
                 Spacer()
@@ -450,6 +454,9 @@ struct MediaFileOperationRow: View {
             .background(Capsule().fill(Color.green.opacity(0.15)))
             .lineLimit(1)
             .fixedSize()
+            // Gauntlet flow 4 waits on this chip to prove the job reached
+            // done in the MFO window. Test-only.
+            .accessibilityIdentifier("mfo.row.finishedChip")
     }
 
     /// "Reveal in Finder" for extract rows — selects the output folder.

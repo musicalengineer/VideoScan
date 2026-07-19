@@ -406,6 +406,11 @@ final class PersonFinderModel: ObservableObject {
         // flow can call `restoreSessionFromDisk()` explicitly.
         if !Self.isRunningTests {
             restoreSessionFromDisk()
+        } else {
+            // Gauntlet UI tests inject a saved POI profile here (transient
+            // launch-arg seam — see GauntletSeams.swift). No-op without the
+            // seam args; unit-test hosts are unaffected.
+            installGauntletPOIIfRequested()
         }
     }
 

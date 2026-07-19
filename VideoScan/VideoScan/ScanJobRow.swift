@@ -208,6 +208,8 @@ struct ScanJobRow: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.regular)
+                    // Gauntlet flow 1 hook (person search) — test-only.
+                    .accessibilityIdentifier("pf.job.startButton")
 
                     Button(action: onRemove) {
                         Image(systemName: "trash")

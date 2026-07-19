@@ -57,12 +57,16 @@ struct InspectorDateView: View {
                     .font(.system(size: 11, design: .monospaced))
                     .frame(maxWidth: 150)
                     .onSubmit(saveEntry)
+                    // Gauntlet flow 3 hooks (set-a-date) — test-only, UI unchanged.
+                    .accessibilityIdentifier("inspector.date.field")
                 Button("Save") { saveEntry() }
                     .controlSize(.small)
+                    .accessibilityIdentifier("inspector.date.save")
                 if record.userDate != nil {
                     Button("Clear") { clearEntry() }
                         .controlSize(.small)
                         .help("Forget this date — the file goes back to needing one")
+                        .accessibilityIdentifier("inspector.date.clear")
                 }
             }
 
@@ -82,11 +86,13 @@ struct InspectorDateView: View {
                 guard record.userDate != nil else { return }
                 saveEntry()
             }
+            .accessibilityIdentifier("inspector.date.confidencePicker")
 
             if entryRejected {
                 Text("Hmm, couldn't read that — try 1992, 6/1992, or 6/14/1992.")
                     .font(.system(size: 10))
                     .foregroundColor(.orange)
+                    .accessibilityIdentifier("inspector.date.rejected")
             }
 
             statusLine
@@ -120,6 +126,10 @@ struct InspectorDateView: View {
                 .font(.system(size: 10))
         }
         .foregroundColor(color)
+        // Gauntlet flow 3 asserts the saved wording here ("Saved: 1992 —
+        // best guess" / "— you're sure").
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("inspector.date.status")
     }
 
     // MARK: Mutations

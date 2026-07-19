@@ -84,3 +84,4 @@ docs/history.jsonl
 # "Delete person" UI. Contains real archived POI data the user may
 # want to recover. Never commit.
 /.trash/
+.dd-gauntlet/

@@ -358,6 +358,8 @@ extension CatalogView {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .disabled(model.scanTargets.isEmpty || model.scanTargets.allSatisfy { $0.status.isActive })
+                // Gauntlet flows 2/3/4 kick off the fixture scan here. Test-only.
+                .accessibilityIdentifier("catalog.scanAll")
 
                 Button(action: {
                     if model.hasPausedTargets { model.resumeAllTargets() } else { model.pauseAllTargets() }

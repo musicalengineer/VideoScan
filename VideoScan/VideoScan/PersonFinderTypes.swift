@@ -258,6 +258,14 @@ struct PersonFinderSettings: Equatable {
     /// can run against a throwaway `UserDefaults(suiteName:)` and never touch
     /// the real prefs plist — same pattern as AnalysisScope.restored(from:).
     static func restored(from defaults: UserDefaults = Self.defaults) -> PersonFinderSettings {
+        // Test hosts asked for the REAL suite get pristine defaults instead
+        // — a UI-test app process must neither inherit Rick's saved search
+        // settings nor depend on them (settings-pollution class; same
+        // `defaults === .standard` guard as CaptionOrchestrator). Tests
+        // that inject their own throwaway suite are unaffected.
+        if TestEnvironment.isTestHost && defaults === UserDefaults.standard {
+            return PersonFinderSettings()
+        }
         var s = PersonFinderSettings()
         restoreStrings(&s, from: defaults)
         restoreNumericValues(&s, from: defaults)
@@ -348,6 +356,11 @@ struct PersonFinderSettings: Equatable {
     /// Save all settings to UserDefaults. Injectable suite for the same
     /// test-isolation reason as `restored(from:)`.
     func save(to defaults: UserDefaults = Self.defaults) {
+        // Mirror of the restored(from:) gate: never WRITE the real prefs
+        // plist from a test host (settings-pollution class).
+        if TestEnvironment.isTestHost && defaults === UserDefaults.standard {
+            return
+        }
         let d = defaults
         let p = Self.prefix
         d.set(personName, forKey: "\(p)personName")
@@ -729,6 +742,8 @@ struct CompilationSettings: Equatable {
     private static let prefix = "comp_"
 
     static func restored() -> CompilationSettings {
+        // Same test-host prefs gate as PersonFinderSettings above.
+        if TestEnvironment.isTestHost { return CompilationSettings() }
         var s = CompilationSettings()
         let d = defaults; let p = prefix
         if let v = d.string(forKey: "\(p)mode"), let m = CompilationMode(rawValue: v) { s.mode = m }
@@ -738,6 +753,8 @@ struct CompilationSettings: Equatable {
     }
 
     func save() {
+        // Same test-host prefs gate as PersonFinderSettings above.
+        if TestEnvironment.isTestHost { return }
         let d = Self.defaults; let p = Self.prefix
         d.set(mode.rawValue, forKey: "\(p)mode")
         d.set(pad, forKey: "\(p)pad")

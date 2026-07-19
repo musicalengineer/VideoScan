@@ -165,6 +165,9 @@ extension PersonFinderView {
                                        cardWidth: personCardWidth,
                                        nameFontSize: personNameFontSize)
                                 .opacity(isBeingScanned ? 0.7 : 1.0)
+                                // Gauntlet flow 1 right-clicks the card to
+                                // reach "Search for <name>…". Test-only.
+                                .accessibilityIdentifier("pf.person.\(profile.name)")
                                 .onTapGesture {
                                     if isBeingScanned {
                                         scanLockMessage = "Cannot edit \(profile.name) while scanning for \(profile.name)."

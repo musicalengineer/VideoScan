@@ -799,6 +799,9 @@ struct AboutView: View {
                             Text(BuildInfo.summary)
                                 .font(.system(.caption, design: .monospaced))
                                 .foregroundStyle(.secondary)
+                                // Gauntlet flow 5 asserts the version + git
+                                // hash summary line rendered. Test-only.
+                                .accessibilityIdentifier("about.buildSummary")
                             HStack(spacing: 4) {
                                 Image(systemName: "cpu.fill")
                                     .font(.system(size: 10))

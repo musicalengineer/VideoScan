@@ -37,6 +37,9 @@
          <TestPlanReference
             reference = "container:VideoScan-UI.xctestplan">
          </TestPlanReference>
+         <TestPlanReference
+            reference = "container:VideoScan-Gauntlet.xctestplan">
+         </TestPlanReference>
       </TestPlans>
       <Testables>
          <TestableReference

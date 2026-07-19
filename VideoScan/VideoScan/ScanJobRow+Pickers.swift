@@ -89,6 +89,10 @@ extension ScanJobRow {
         }
         .menuStyle(.borderedButton)
         .fixedSize()
+        // Gauntlet flow 1 hook — the fixture folder arrives via the
+        // "Recent" section (GauntletSeams.recentSearchPath), so the test
+        // opens this menu and clicks the folder name. Test-only.
+        .accessibilityIdentifier("pf.job.volumeMenu")
     }
 
     var inlineEnginePicker: some View {

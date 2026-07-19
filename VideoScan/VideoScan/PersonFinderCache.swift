@@ -35,6 +35,18 @@ final class PersonFinderCache {
     }
 
     private static var dbPath: String {
+        // Test hosts (unit AND UI) get a per-process scratch DB — a UI-test
+        // scan must never write cache rows into the user's real
+        // personfinder_cache.sqlite (settings-pollution class; same gate as
+        // MetadataCache / ScanJobsStorage / POIStorage).
+        if TestEnvironment.isTestHost {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent(
+                    "VideoScanTestPFCache-\(ProcessInfo.processInfo.processIdentifier)",
+                    isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir.appendingPathComponent("personfinder_cache.sqlite").path
+        }
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
         ).first ?? FileManager.default.temporaryDirectory

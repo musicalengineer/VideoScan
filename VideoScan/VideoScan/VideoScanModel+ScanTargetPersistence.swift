@@ -23,7 +23,12 @@ extension VideoScanModel {
         // plus a ~1.3–2.3 s per-test reachability stall over 20+ stale
         // targets. Restore LOGIC stays covered by PhaseConsistencyTests via
         // ScanTargetPersistence.restore with per-test unique keys.
-        if Self.isRunningTests { return }
+        if Self.isRunningTests {
+            // Gauntlet UI tests inject a fixture folder here instead
+            // (transient launch-arg seam — see GauntletSeams.swift).
+            installGauntletScanTargetIfRequested()
+            return
+        }
         let restored = ScanTargetPersistence.restore(
             existing: scanTargets,
             savedTargetsKey: Self.savedTargetsKey,

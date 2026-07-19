@@ -61,11 +61,22 @@ extension PersonFinderView {
     }
 
     /// Recently used search paths, persisted across sessions.
+    /// Test hosts never read the user's real recents (the list would leak
+    /// Rick's volume names into assertions and vary per machine); instead
+    /// the Gauntlet's fixture folder — if injected — is the whole list,
+    /// which is how UI tests pick a scan folder without an NSOpenPanel.
     static let recentPathsKey = "PersonFinder.recentSearchPaths"
     static var recentPaths: [String] {
-        UserDefaults.standard.stringArray(forKey: recentPathsKey) ?? []
+        if TestEnvironment.isTestHost {
+            if let seam = GauntletSeams.recentSearchPath { return [seam] }
+            return []
+        }
+        return UserDefaults.standard.stringArray(forKey: recentPathsKey) ?? []
     }
     static func recordRecentPath(_ path: String) {
+        // Never WRITE the real prefs plist from a test host
+        // (settings-pollution class).
+        if TestEnvironment.isTestHost { return }
         var paths = recentPaths.filter { $0 != path }
         paths.insert(path, at: 0)
         if paths.count > 10 { paths = Array(paths.prefix(10)) }

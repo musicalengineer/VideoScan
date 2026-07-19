@@ -1,0 +1,43 @@
+{
+  "configurations": [
+    {
+      "id": "8A4E6F02-1B7C-4D2E-9A31-5C0D8E7F6A21",
+      "name": "Gauntlet",
+      "options": {}
+    }
+  ],
+  "defaultOptions": {
+    "codeCoverage": false,
+    "environmentVariableEntries": [
+      {
+        "key": "VS_GAUNTLET",
+        "value": "1"
+      }
+    ],
+    "targetForVariableExpansion": {
+      "containerPath": "container:VideoScan.xcodeproj",
+      "identifier": "0DC193272F676647006295E7",
+      "name": "VideoScan"
+    },
+    "testExecutionOrdering": "alphabetical",
+    "testTimeoutsEnabled": true
+  },
+  "testTargets": [
+    {
+      "parallelizable": false,
+      "selectedTests": [
+        "Gauntlet01PersonSearchUITests",
+        "Gauntlet02CatalogSearchUITests",
+        "Gauntlet03SetDateUITests",
+        "Gauntlet04BalanceAudioUITests",
+        "Gauntlet05NavigationUITests"
+      ],
+      "target": {
+        "containerPath": "container:VideoScan.xcodeproj",
+        "identifier": "0DC1933E2F676648006295E7",
+        "name": "VideoScanUITests"
+      }
+    }
+  ],
+  "version": 1
+}

@@ -580,6 +580,8 @@ struct CatalogToolbar<Dashboard: View>: View {
             }
             .buttonStyle(.bordered)
             .help(showInspector ? "Hide Inspector" : "Show Inspector")
+            // Gauntlet flow 5 toggles the inspector here. Test-only.
+            .accessibilityIdentifier("catalog.inspectorToggle")
 
             dashboardContent()
         }

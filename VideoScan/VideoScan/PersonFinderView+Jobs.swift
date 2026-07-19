@@ -51,6 +51,9 @@ extension PersonFinderView {
         .buttonStyle(.bordered)
         .controlSize(.small)
         .disabled(model.jobs.isEmpty)
+        // Gauntlet flow 1 opens the job console here to assert the
+        // refused-below-floor line. Test-only.
+        .accessibilityIdentifier("pf.console.open")
 
         let anyIdle   = model.jobs.contains { $0.status.isIdle }
         let anyActive = model.jobs.contains { $0.status.isActive }
