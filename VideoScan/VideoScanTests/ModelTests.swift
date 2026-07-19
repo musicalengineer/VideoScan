@@ -383,11 +383,30 @@ struct POIStorageTests {
         #expect(url.deletingLastPathComponent().lastPathComponent == "rick")
     }
 
-    @Test func storeDirIsUnderApplicationSupport() {
+    /// Pre-Gauntlet this asserted the PRODUCTION location
+    /// (…/Application Support/VideoScan/POI). Since the settings-pollution
+    /// fix on feature/gauntlet-v1, POIStorage.storeDir redirects to a
+    /// per-process temp dir whenever TestEnvironment.isTestHost — which is
+    /// ALWAYS true in this suite. So the contract this test can honestly
+    /// pin from inside a test host is the ISOLATION contract; asserting
+    /// the real Application Support path here would require resolving the
+    /// user's real dirs — the exact pollution class the redirect kills.
+    /// (The production branch has no injection seam today; if one is
+    /// added, extend this with a production-shape assertion through it.)
+    @Test func storeDirIsIsolatedPerProcessUnderTestHost() {
         let dir = POIStorage.storeDir
-        #expect(dir.path.contains("Application Support"))
-        #expect(dir.path.contains("VideoScan"))
-        #expect(dir.lastPathComponent == "POI")
+        // Redirected: under the temp dir, keyed to THIS process, and
+        // nowhere near the real store.
+        #expect(dir.lastPathComponent.hasPrefix("VideoScanTestPOI-"))
+        #expect(dir.lastPathComponent
+            .contains("\(ProcessInfo.processInfo.processIdentifier)"))
+        #expect(dir.path.hasPrefix(FileManager.default.temporaryDirectory.path))
+        #expect(!dir.path.contains("Application Support"))
+        // Created on access (same side-effect the production path has).
+        var isDir: ObjCBool = false
+        #expect(FileManager.default.fileExists(atPath: dir.path,
+                                               isDirectory: &isDir))
+        #expect(isDir.boolValue)
     }
 
     @Test func migrationIdempotentWhenNothingToDo() {
