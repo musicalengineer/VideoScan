@@ -45,8 +45,12 @@ final class Gauntlet03SetDateUITests: GauntletTestCase {
         let status = app.staticTexts["inspector.date.status"].firstMatch
         XCTAssertTrue(status.waitForExistence(timeout: 15),
                       "Saved-date status line never appeared after Save.")
-        XCTAssertTrue(status.label.contains("1992") && status.label.contains("best guess"),
-                      "Expected 'Saved: 1992 — best guess', got: \(status.label)")
+        // macOS 26 exposes a styled SwiftUI Text's string via `value`, not
+        // `label`, when it carries only an .accessibilityIdentifier — `label`
+        // is empty. Read label, falling back to value (same fix as Gauntlet05).
+        let savedStatus = status.label.isEmpty ? (status.value as? String ?? "") : status.label
+        XCTAssertTrue(savedStatus.contains("1992") && savedStatus.contains("best guess"),
+                      "Expected 'Saved: 1992 — best guess', got: \(savedStatus)")
         XCTAssertTrue(app.staticTexts["1992 (est.)"].waitForExistence(timeout: 15),
                       "Date column never showed '1992 (est.)' after a best-guess year.")
 
@@ -63,14 +67,16 @@ final class Gauntlet03SetDateUITests: GauntletTestCase {
 
         let sureDeadline = Date().addingTimeInterval(15)
         var sure = false
+        var lastStatus = ""
         while Date() < sureDeadline {
+            lastStatus = status.label.isEmpty ? (status.value as? String ?? "") : status.label
             if status.exists,
-               status.label.contains("1992-06-14"),
-               status.label.contains("sure") { sure = true; break }
+               lastStatus.contains("1992-06-14"),
+               lastStatus.contains("sure") { sure = true; break }
             Thread.sleep(forTimeInterval: 0.5)
         }
         XCTAssertTrue(sure,
-                      "Status never became 'Saved: 1992-06-14 — you're sure'; last: \(status.exists ? status.label : "<gone>")")
+                      "Status never became 'Saved: 1992-06-14 — you're sure'; last: \(status.exists ? lastStatus : "<gone>")")
         XCTAssertTrue(app.staticTexts["1992-06-14"].waitForExistence(timeout: 15),
                       "Date column never updated to the canonical certain date.")
         XCTAssertFalse(app.staticTexts["1992-06-14 (est.)"].exists,
@@ -82,8 +88,9 @@ final class Gauntlet03SetDateUITests: GauntletTestCase {
         let rejection = app.staticTexts["inspector.date.rejected"]
         XCTAssertTrue(rejection.waitForExistence(timeout: 15),
                       "The friendly rejection line never appeared for garbage input.")
-        XCTAssertTrue(rejection.label.contains("couldn't read that"),
-                      "Rejection wording changed: \(rejection.label)")
+        let rejectionText = rejection.label.isEmpty ? (rejection.value as? String ?? "") : rejection.label
+        XCTAssertTrue(rejectionText.contains("couldn't read that"),
+                      "Rejection wording changed: \(rejectionText)")
         XCTAssertTrue(app.staticTexts["1992-06-14"].exists,
                       "A rejected entry must not clobber the previously saved date.")
     }
