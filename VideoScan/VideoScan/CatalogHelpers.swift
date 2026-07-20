@@ -356,7 +356,14 @@ struct CatalogContent: View {
             // predicates, so search-then-volume yields exactly the same
             // rows as volume-then-search.
             out = model.searchIndex.filter(records: out, query: searchText)
-            searchHitCount = out.count
+            // Badge honors the reachable-only baseline (2026-07-20, Rick): in the
+            // default connected-only view the hit count matches the media you can
+            // actually see, instead of #123's cross-catalog count that included
+            // matches on disconnected drives. The "Show disconnected media" opt-out
+            // restores the full #123 count. Reversible — revert to `out.count`.
+            searchHitCount = showDisconnectedMedia
+                ? out.count
+                : out.filter { VolumeReachability.isReachable(path: $0.fullPath) }.count
         } else {
             searchHitCount = 0
         }

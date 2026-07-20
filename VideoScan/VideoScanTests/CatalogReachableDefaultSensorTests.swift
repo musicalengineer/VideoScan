@@ -28,6 +28,7 @@
 import Testing
 import Foundation
 import SwiftUI
+import AppKit
 import os.lock
 @testable import VideoScan
 
@@ -230,5 +231,198 @@ struct ReachableOnlyConcurrencyTests {
         VolumeReachability.awaitPendingProbesForTesting()
         // Reaching here without a crash is the assertion; pin "/" too.
         #expect(VolumeReachability.currentMountedRoots().contains("/"))
+    }
+}
+
+// MARK: - 4. Search-hit badge honors the reachable-only baseline
+//
+// The 2026-07-20 change (CatalogHelpers.computeFiltered, ~line 358): the
+// toolbar's search-hit badge (`searchHitCount`) now counts only REACHABLE
+// matches in the default connected-only view, and ALL matches when the
+// "Show disconnected media" opt-out is on (the prior #123 semantics):
+//
+//     searchHitCount = showDisconnectedMedia
+//         ? out.count
+//         : out.filter { VolumeReachability.isReachable(path: $0.fullPath) }.count
+//
+// This suite pins that split by exercising the REAL wiring end-to-end. The
+// search path of computeFiltered reads `model.searchIndex`, so the method
+// can't be called on a bare, unseeded @EnvironmentObject view (that traps).
+// Instead we mount the real CatalogContent offscreen with a live model in
+// the environment; its `.onAppear { tableData = computeFiltered() }` fires
+// the production badge write, which we read back through a binding-backed
+// box. Same mount-and-pump technique as DashboardSubscriptionHotPathTests.
+//
+// C++ analogy: `searchHitCount: .constant(...)` vs a box-backed Binding is
+// like passing a value vs a reference to an out-parameter — we need the
+// reference so the view's write is observable after the call, the way you'd
+// pass `int& out` to read back a callee's result.
+//
+// @MainActor: NSHostingView / NSWindow and the model are main-thread only.
+@MainActor
+@Suite("Reachable-Only: search-hit badge")
+struct ReachableOnlyBadgeTests {
+
+    init() { VolumeReachability.invalidateCache() }
+
+    /// Reference cell the view's `searchHitCount` binding writes into.
+    /// Seeded to -1 (an impossible badge value) so "onAppear never fired /
+    /// nothing was written" fails loudly instead of masquerading as a real
+    /// count. Not a class in the mounted view — just a captured box.
+    @MainActor final class BadgeBox { var value = -1 }
+
+    /// videoBearing, non-purged, non-set-aside record — survives every
+    /// upstream filter so only the reachable-only badge split is under test.
+    private func record(at path: String) -> VideoRecord {
+        let r = VideoRecord()
+        r.fullPath = path
+        r.filename = (path as NSString).lastPathComponent
+        r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        return r
+    }
+
+    /// Mount the real CatalogContent offscreen with a live model, let its
+    /// onAppear run the production computeFiltered(), and return the badge
+    /// it published. Retains the window through the read.
+    private func measuredBadge(records: [VideoRecord],
+                               searchText: String,
+                               showDisconnectedMedia: Bool) -> Int {
+        let model = VideoScanModel()
+        model.records = records
+        // The search fast path resolves candidate fullPaths from the inverted
+        // index, so the haystacks must exist for BOTH the reachable and the
+        // ghost records — rebuild over exactly this set.
+        model.searchIndex.rebuild(records: records)
+
+        let box = BadgeBox()
+        let view = CatalogContent(
+            records: records,
+            selectedIDs: .constant([]),
+            sortOrder: .constant([]),
+            searchText: searchText,
+            searchHitCount: Binding(get: { box.value }, set: { box.value = $0 }),
+            filterTargetPaths: [],
+            showPairsOnly: false,
+            viewFilters: [],
+            showDisconnectedMedia: showDisconnectedMedia,
+            showRemoved: false,
+            previewImage: nil,
+            previewFilename: "",
+            previewOfflineVolumeName: nil,
+            showInspector: .constant(false),
+            onSort: { _ in },
+            onSelect: { _ in },
+            onClearPreview: {}
+        )
+        .environmentObject(model)
+        .environmentObject(CaptionOrchestrator())
+        .environmentObject(MediaFileOperationsCenter())
+
+        let hosting = NSHostingView(rootView: view)
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = hosting
+        window.orderOut(nil)               // retained but offscreen
+        hosting.layoutSubtreeIfNeeded()
+
+        // Pump the main runloop until onAppear fires computeFiltered and
+        // writes the badge (box leaves its -1 sentinel), with a hard cap so a
+        // wiring failure can't hang the suite. The reachability answers here
+        // are synchronous: non-/Volumes temp files default reachable-true and
+        // a fresh /Volumes key defaults reachable-false with no probe wait, so
+        // the badge is deterministic on the first write.
+        let deadline = Date().addingTimeInterval(2.0)
+        while Date() < deadline && box.value < 0 {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        _ = window   // keep alive through the read
+        return box.value
+    }
+
+    /// Build a corpus with a known reachable/unreachable match split plus a
+    /// non-matching decoy on each side (so the badge is a real search count,
+    /// not a raw record count). Returns the records and a cleanup closure for
+    /// the real temp files backing the reachable rows.
+    private func makeCorpus(reachableMatches: Int,
+                            unreachableMatches: Int) -> (records: [VideoRecord], cleanup: () -> Void) {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("badge_\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        var records: [VideoRecord] = []
+        // Reachable matches: REAL temp files (reachable-true default AND a
+        // truthful background probe — can never flip out mid-test).
+        for i in 0..<reachableMatches {
+            let url = dir.appendingPathComponent("donna_reach_\(i).mov")
+            FileManager.default.createFile(atPath: url.path, contents: Data([0x00]))
+            records.append(record(at: url.path))
+        }
+        // Reachable NON-match decoy — proves the badge counts search hits, not
+        // every reachable row.
+        let decoy = dir.appendingPathComponent("vacation_reach.mov")
+        FileManager.default.createFile(atPath: decoy.path, contents: Data([0x00]))
+        records.append(record(at: decoy.path))
+
+        // Unreachable matches: fresh /Volumes keys — honestly reachable-false
+        // on first query, no probe wait, no disk touch.
+        let ghostRoot = "/Volumes/DefinitelyNotMounted_\(UUID().uuidString)"
+        for i in 0..<unreachableMatches {
+            records.append(record(at: "\(ghostRoot)/donna_ghost_\(i).mov"))
+        }
+        // Unreachable NON-match decoy.
+        records.append(record(at: "\(ghostRoot)/vacation_ghost.mov"))
+
+        return (records.shuffled(), { try? FileManager.default.removeItem(at: dir) })
+    }
+
+    /// DEFAULT (showDisconnectedMedia == false): the badge counts ONLY the
+    /// reachable matches, not the matches sitting on an unmounted volume.
+    @Test func defaultBadgeCountsOnlyReachableMatches() {
+        let (records, cleanup) = makeCorpus(reachableMatches: 2, unreachableMatches: 3)
+        defer { cleanup() }
+
+        let badge = measuredBadge(records: records,
+                                  searchText: "donna",
+                                  showDisconnectedMedia: false)
+        #expect(badge == 2,
+                "Default connected-only badge must count only the 2 reachable 'donna' matches (5 total exist, 3 on an unmounted volume) — got \(badge)")
+    }
+
+    /// OPT-OUT (showDisconnectedMedia == true): the badge restores the #123
+    /// cross-catalog semantics — ALL matches, reachable + unreachable.
+    @Test func optOutBadgeCountsAllMatches() {
+        let (records, cleanup) = makeCorpus(reachableMatches: 2, unreachableMatches: 3)
+        defer { cleanup() }
+
+        let badge = measuredBadge(records: records,
+                                  searchText: "donna",
+                                  showDisconnectedMedia: true)
+        #expect(badge == 5,
+                "Show-disconnected-media badge must count ALL 5 'donna' matches (2 reachable + 3 unreachable) — got \(badge)")
+    }
+
+    /// Both views over the SAME corpus in one test: the opt-out count must be
+    /// strictly larger than the default count precisely because unreachable
+    /// matches exist. Pins the DIRECTION of the split, not just two magic
+    /// numbers — a regression that ignored `showDisconnectedMedia` (counting
+    /// the same value both ways) trips this even if the constants drift.
+    @Test func optOutStrictlyExceedsDefaultWhenUnreachableMatchesExist() {
+        let (records, cleanup) = makeCorpus(reachableMatches: 2, unreachableMatches: 3)
+        defer { cleanup() }
+
+        let defaultBadge = measuredBadge(records: records,
+                                         searchText: "donna",
+                                         showDisconnectedMedia: false)
+        let optOutBadge = measuredBadge(records: records,
+                                        searchText: "donna",
+                                        showDisconnectedMedia: true)
+        #expect(defaultBadge == 2)
+        #expect(optOutBadge == 5)
+        #expect(optOutBadge > defaultBadge,
+                "opt-out must reveal MORE hits than the connected-only default when matches live on an unmounted volume (default \(defaultBadge), opt-out \(optOutBadge))")
     }
 }
