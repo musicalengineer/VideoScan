@@ -781,11 +781,21 @@ final class VideoScanModel: ObservableObject {
         let catalogMTime: Date? = catalogJSONPath.flatMap {
             try? FileManager.default.attributesOfItem(atPath: $0)[.modificationDate] as? Date
         }
+        // GH #123 (2026-07-19): two poisoning defenses live in the index
+        // itself — defaultPersistenceURL() diverts test hosts to a temp
+        // dir (so this load/rebuild/save block can never touch the real
+        // plist under a test run), and expectedRecordCount rejects a
+        // persisted index grossly inconsistent with the catalog (the
+        // 0-record poison a guardless test run used to write here cost
+        // 5.4 s of inline haystack builds per settled keystroke).
+        // Rejection falls through to the rebuild branch — recovery is
+        // automatic on the next launch.
         let idxStart = Date()
-        let loaded = searchIndex.loadFromDisk(catalogModifiedAt: catalogMTime)
+        let loaded = searchIndex.loadFromDisk(catalogModifiedAt: catalogMTime,
+                                              expectedRecordCount: records.count)
         if loaded {
             let ms = Int((Date().timeIntervalSince(idxStart)) * 1000)
-            log("Search index loaded from disk in \(ms) ms (\(records.count) records)")
+            log("Search index loaded from disk in \(ms) ms (\(searchIndex.recordCount()) indexed / \(records.count) records)")
         } else {
             searchIndex.rebuild(records: records)
             let rebuildMs = Int((Date().timeIntervalSince(idxStart)) * 1000)

@@ -218,8 +218,21 @@ nonisolated func pfParseDecadeValue(_ value: String) -> ClosedRange<Int>? {
     return nil
 }
 
+/// Shared Gregorian calendar for year extraction. `Calendar` is a value
+/// type (Sendable), so a global `let` is concurrency-safe — like a C++
+/// `const` global of an immutable value class. Constructing one per
+/// record was ~half the 9.5 µs/record cost of `pfYearsFromRecord`
+/// (GH #123 finding 2: 952 ms per "1990s" pass at 100k records).
+nonisolated let pfGregorianCalendar = Calendar(identifier: .gregorian)
+
 /// Extract any 4-digit years (1900–2099) found in a catalog record's
 /// path or filename. Used by universal search for year-token matching.
+///
+/// PERF NOTE (GH #123 PR D): this is the CANONICAL year extractor but it
+/// is O(path length) + two Calendar component reads per call — do not
+/// call it per record per query. CatalogSearchIndex caches its result
+/// (via buildYearSet) at index build/update time; query paths should hit
+/// that cache.
 nonisolated func pfYearsFromRecord(_ rec: VideoRecord) -> Set<Int> {
     var years = Set<Int>()
     let haystack = rec.fullPath + " " + rec.directory + " " + rec.filename
@@ -244,7 +257,7 @@ nonisolated func pfYearsFromRecord(_ rec: VideoRecord) -> Set<Int> {
         index = haystack.index(after: index)
     }
     // Also use dateModifiedRaw / dateCreatedRaw years if available.
-    let cal = Calendar(identifier: .gregorian)
+    let cal = pfGregorianCalendar
     if let d = rec.dateModifiedRaw {
         years.insert(cal.component(.year, from: d))
     }
@@ -476,7 +489,7 @@ nonisolated func pfCatalogTokenMatches(_ token: SearchToken, _ rec: VideoRecord)
         // Highest-confidence year signal we have; honor it for decade
         // queries even when filename/path carry no year hint.
         if let inf = rec.inferredRecordDate {
-            let y = Calendar(identifier: .gregorian).component(.year, from: inf)
+            let y = pfGregorianCalendar.component(.year, from: inf)
             if range.contains(y) { return true }
         }
         return false

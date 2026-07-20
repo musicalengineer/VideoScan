@@ -18,9 +18,13 @@ import Foundation
 //
 //   haystack.contains(token)   // one call per record per token
 //
-// Year-range and field-prefix tokens (people:donna, year:1989..1995)
-// still defer to the canonical `pfCatalogTokenMatches` because those
-// need structural access (specific fields, not a flat haystack).
+// Year-range tokens use a per-record precomputed Set<Int> of years
+// (GH #123 PR D — pfYearsFromRecord was ~9.5 µs/record/query at 100k:
+// char scan + a Calendar init + two component extractions PER RECORD,
+// ≈ 950 ms per settled keystroke for "1990s"). Field-prefix tokens
+// (people:donna) still defer to the canonical `pfCatalogTokenMatches`
+// because those need structural access (specific fields, not a flat
+// haystack).
 //
 // Memory: ~5KB per record × 16k records ≈ 80 MB. Trivial for M4-class
 // machines. The win is wall-clock: the 15k-record catalog goes from
@@ -33,7 +37,8 @@ import Foundation
 //
 // Correctness contract: filter(records:query:) MUST return the same
 // records as pfRecordsMatchingQuery(records:, query:) using the
-// catalog-narrow matcher. Pinned by CatalogSearchIndexTests.
+// catalog-narrow matcher. Pinned by CatalogSearchIndexTests (and the
+// year-set agreement sensor in CatalogSearchBudgetSensorTests).
 
 @MainActor
 final class CatalogSearchIndex {
@@ -42,6 +47,18 @@ final class CatalogSearchIndex {
     /// The fullPath key matches catalog's primary key so updates are
     /// O(1) and survive record rebuild as long as the path is stable.
     private var haystacks: [String: String] = [:]
+
+    /// fullPath → every year signal on the record (path/filename-embedded
+    /// years, file dates, dossier-inferred date). Precomputed at
+    /// build/update time so a yearRange token ("1990s", "year:1991") is a
+    /// set-membership test per record instead of a per-query
+    /// `pfYearsFromRecord` walk (GH #123 finding 2: ~950 ms/pass at 100k
+    /// → ~tens of ms).
+    ///
+    /// MUST agree with the canonical `pfCatalogTokenMatches(.yearRange)`
+    /// logic — see `buildYearSet`. Memory: ~100k records × a Set of 1–5
+    /// small Ints ≈ 10–15 MB. Trivial next to the haystacks.
+    private var yearSets: [String: Set<Int>] = [:]
 
     /// Inverted word index: word → set of fullPaths whose haystack
     /// contains that word. Built alongside `haystacks`, used by
@@ -85,6 +102,7 @@ final class CatalogSearchIndex {
     /// Discard the entire cache. Called on catalog reset / full reload.
     func clear() {
         haystacks.removeAll(keepingCapacity: false)
+        yearSets.removeAll(keepingCapacity: false)
         wordIndex.removeAll(keepingCapacity: false)
         fastPathEligibility.removeAll(keepingCapacity: false)
     }
@@ -93,16 +111,20 @@ final class CatalogSearchIndex {
     /// existing index. O(n) over the input.
     func rebuild(records: [VideoRecord]) {
         var hs: [String: String] = [:]
+        var ys: [String: Set<Int>] = [:]
         var wi: [String: Set<String>] = [:]
         hs.reserveCapacity(records.count)
+        ys.reserveCapacity(records.count)
         for rec in records {
             let h = Self.buildHaystack(rec)
             hs[rec.fullPath] = h
+            ys[rec.fullPath] = Self.buildYearSet(rec)
             for word in Self.extractWords(from: h) {
                 wi[word, default: []].insert(rec.fullPath)
             }
         }
         self.haystacks = hs
+        self.yearSets = ys
         self.wordIndex = wi
         // Word set replaced wholesale → any cached eligibility verdict is stale.
         fastPathEligibility.removeAll(keepingCapacity: false)
@@ -118,6 +140,9 @@ final class CatalogSearchIndex {
         let newHaystack = Self.buildHaystack(rec)
         let newWords = Self.extractWords(from: newHaystack)
         haystacks[rec.fullPath] = newHaystack
+        // Year signals can change on the same writeback (dossier
+        // triangulation sets inferredRecordDate) — keep the set current.
+        yearSets[rec.fullPath] = Self.buildYearSet(rec)
         // Words that left: remove this fullPath from their bucket.
         for word in oldWords.subtracting(newWords) {
             wordIndex[word]?.remove(rec.fullPath)
@@ -150,6 +175,7 @@ final class CatalogSearchIndex {
             }
         }
         haystacks.removeValue(forKey: fullPath)
+        yearSets.removeValue(forKey: fullPath)
         // Removing the last reference to a word drops it from the key set,
         // which could make a previously-ineligible needle eligible. Drop the
         // memo so the next query recomputes against the current word set.
@@ -165,6 +191,10 @@ final class CatalogSearchIndex {
     /// True if `word` is in the inverted index. Used by tests; not
     /// load-bearing for production.
     func indexedWordCount() -> Int { wordIndex.count }
+
+    /// Number of records with a cached haystack. Used by tests and
+    /// logging; not load-bearing for production.
+    func recordCount() -> Int { haystacks.count }
 
     /// Filter `records` against `query`. Empty query returns all records
     /// (preserving order). Otherwise tokenizes via the canonical
@@ -286,23 +316,54 @@ final class CatalogSearchIndex {
 
     // MARK: - Persistence (Rick 2026-06-16)
     //
-    // Save the haystack cache to disk so the index doesn't rebuild from
-    // scratch on every catalog load. Only `haystacks` is persisted —
-    // the inverted `wordIndex` is RECOMPUTED on load. Reasoning:
-    // serializing wordIndex would multiply on-disk size by
+    // Save the haystack + year caches to disk so the index doesn't
+    // rebuild from scratch on every catalog load. The inverted
+    // `wordIndex` is RECOMPUTED on load. Reasoning: serializing
+    // wordIndex would multiply on-disk size by
     // (avg-words-per-record × avg-records-per-word) — for a 15K-record
     // catalog that's a 5-10× blow-up of redundant fullPath strings.
     // Rebuilding wordIndex from haystacks at load time is ~30% of the
     // full rebuild cost, so the launch wins are still ~70%.
+    //
+    // GH #123 poisoning fix (2026-07-19): unit-test runs used to
+    // overwrite the user's real index file with a 0-record one
+    // (VideoScanModel.init had no test-host guard), and loadFromDisk
+    // happily accepted the empty file — every search then rebuilt
+    // haystacks inline per record per query: 5.4 s per settled
+    // keystroke at 103k records. Two independent defenses now:
+    //   1. defaultPersistenceURL() diverts test hosts to a per-process
+    //      temp dir (same seam as POIStorage.storeDir /
+    //      PersistentLog.logDir) — a test run CANNOT touch the real
+    //      plist through any default-path caller.
+    //   2. loadFromDisk rejects a persisted index whose record count is
+    //      grossly inconsistent with the live catalog — the existing
+    //      poison (or any future corruption) is inert: reject → rebuild.
 
     /// Persisted format version. Bump when the on-disk layout changes
     /// so old files force a rebuild instead of silently deserializing
-    /// wrong shapes.
-    nonisolated static let persistedVersion: Int = 1
+    /// wrong shapes. v2 (2026-07-19): per-record year sets persisted
+    /// alongside haystacks (GH #123 PR D). v1 files are rejected → one
+    /// rebuild, then saved back as v2.
+    nonisolated static let persistedVersion: Int = 2
 
     /// Default location next to the catalog:
     /// `~/Library/Application Support/VideoScan/catalog.search-index.v1.plist`
+    ///
+    /// Test hosts (unit AND UI — TestEnvironment.isTestHost covers both)
+    /// are diverted to a per-process temp dir so no test run can ever
+    /// read or overwrite the user's real search index
+    /// (settings-pollution class; same pattern as POIStorage.storeDir /
+    /// PersistentLog.logDir). This is THE seam that stopped the GH #123
+    /// index poisoning — keep every persistence caller on this default.
     nonisolated static func defaultPersistenceURL() -> URL {
+        if TestEnvironment.isTestHost {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent(
+                    "VideoScanTestSearchIndex-\(ProcessInfo.processInfo.processIdentifier)",
+                    isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir.appendingPathComponent("catalog.search-index.v1.plist")
+        }
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask
         ).first ?? URL(fileURLWithPath: NSHomeDirectory())
@@ -312,15 +373,20 @@ final class CatalogSearchIndex {
         return dir.appendingPathComponent("catalog.search-index.v1.plist")
     }
 
-    /// Persist the haystack cache atomically. Caller usually invokes
-    /// this after `rebuild` and on app quit. Failures are non-fatal —
-    /// the next launch just rebuilds from records as before.
+    /// Persist the haystack + year caches atomically. Caller usually
+    /// invokes this after `rebuild` and on app quit. Failures are
+    /// non-fatal — the next launch just rebuilds from records as before.
     func saveToDisk(at url: URL = defaultPersistenceURL()) throws {
+        // Plists can't hold Set<Int> — flatten to [Int] per record.
+        var yearArrays: [String: [Int]] = [:]
+        yearArrays.reserveCapacity(yearSets.count)
+        for (path, ys) in yearSets { yearArrays[path] = Array(ys) }
         let payload: [String: Any] = [
             "version": Self.persistedVersion,
             "savedAt": Date().timeIntervalSince1970,
             "recordCount": haystacks.count,
             "haystacks": haystacks,
+            "years": yearArrays,
         ]
         let data = try PropertyListSerialization.data(
             fromPropertyList: payload, format: .binary, options: 0
@@ -330,16 +396,27 @@ final class CatalogSearchIndex {
 
     /// Try to populate this index from a persisted file. Returns true
     /// on success (caller can skip `rebuild`), false on missing file /
-    /// version mismatch / staleness vs catalog / parse failure.
+    /// version mismatch / staleness vs catalog / record-count sanity
+    /// failure / parse failure.
     ///
     /// Staleness check: if `catalogModifiedAt` is provided AND the
     /// persisted index was saved BEFORE that time, the index is
     /// rejected — the catalog has changed since save and the haystacks
     /// would be out of date. Pass `nil` to skip staleness (testing).
+    ///
+    /// Sanity check (GH #123): if `expectedRecordCount` is provided and
+    /// > 0, a persisted index whose record count is grossly inconsistent
+    /// with the live catalog is rejected — in particular the
+    /// 0-records-for-a-non-empty-catalog poison, but also any count
+    /// outside [50%, 200%] of the catalog. A rejected index costs one
+    /// rebuild; an accepted poison costs seconds of inline haystack
+    /// construction on EVERY query. Pass `nil` to skip (tests that
+    /// exercise other paths).
     @discardableResult
     func loadFromDisk(
         at url: URL = defaultPersistenceURL(),
-        catalogModifiedAt: Date? = nil
+        catalogModifiedAt: Date? = nil,
+        expectedRecordCount: Int? = nil
     ) -> Bool {
         guard let data = try? Data(contentsOf: url) else { return false }
         guard let payload = try? PropertyListSerialization.propertyList(
@@ -353,8 +430,23 @@ final class CatalogSearchIndex {
             if savedDate < catalogModifiedAt { return false }
         }
         guard let hs = payload["haystacks"] as? [String: String] else { return false }
+        guard let yearArrays = payload["years"] as? [String: [Int]] else { return false }
+        // Record-count sanity (GH #123): measured against the ACTUAL
+        // haystack dictionary, not the self-reported "recordCount"
+        // field — never trust a possibly-corrupt file's claim about
+        // itself.
+        if let expected = expectedRecordCount, expected > 0 {
+            let n = hs.count
+            if n == 0 { return false }                    // the observed poison
+            if n < (expected + 1) / 2 { return false }    // grossly under
+            if n > expected * 2 { return false }          // grossly over / stale
+        }
 
         self.haystacks = hs
+        var ys: [String: Set<Int>] = [:]
+        ys.reserveCapacity(yearArrays.count)
+        for (path, arr) in yearArrays { ys[path] = Set(arr) }
+        self.yearSets = ys
         // Rebuild the inverted word index from haystacks. This is the
         // ~30% of rebuild cost we DIDN'T avoid by persisting; loading
         // is still much faster than the full record-walk + haystack
@@ -405,13 +497,14 @@ final class CatalogSearchIndex {
     }
 
     /// Check a single record against pre-tokenized query.
-    /// Fast path: substring tokens use the cached haystack. Year-range
-    /// and field-prefix tokens fall through to the canonical matcher.
+    /// Fast paths: substring tokens use the cached haystack; yearRange
+    /// tokens use the cached year set. Field-prefix tokens fall through
+    /// to the canonical matcher (they need specific field access).
     ///
-    /// Defensive fallback: if the record has no cached haystack (added
-    /// after rebuild, or some other staleness), we build it inline and
-    /// use it for this match — correctness is preserved at the cost of
-    /// one extra O(record-fields) build for that record.
+    /// Defensive fallback: if the record has no cached haystack / year
+    /// set (added after rebuild, or some other staleness), we build it
+    /// inline and use it for this match — correctness is preserved at
+    /// the cost of one extra O(record-fields) build for that record.
     func matches(_ rec: VideoRecord, tokens: [SearchToken]) -> Bool {
         var lazyHaystack: String?
         func haystack() -> String {
@@ -430,10 +523,18 @@ final class CatalogSearchIndex {
                 if !Self.literalContains(haystack: haystack(), needle: needle) {
                     return false
                 }
-            case .yearRange, .field:
-                // Year ranges need inferredRecordDate / path-year
-                // extraction; field-prefix tokens need specific field
-                // access. Both delegate to the canonical matcher.
+            case .yearRange(let range):
+                // GH #123 PR D: set-membership on the precomputed year
+                // set instead of re-deriving years per record per query.
+                // Agreement with the canonical pfCatalogTokenMatches is
+                // pinned by CatalogSearchBudgetSensorTests.
+                let years = yearSets[rec.fullPath] ?? Self.buildYearSet(rec)
+                if !years.contains(where: { range.contains($0) }) {
+                    return false
+                }
+            case .field:
+                // Field-prefix tokens need specific field access —
+                // delegate to the canonical matcher.
                 if !pfCatalogTokenMatches(token, rec) {
                     return false
                 }
@@ -484,6 +585,20 @@ final class CatalogSearchIndex {
         // byte-literal search in `matches` stays correct for accents.
         return parts.joined(separator: " ").lowercased()
             .precomposedStringWithCanonicalMapping
+    }
+
+    /// Every year signal the canonical yearRange matcher consults, as
+    /// one Set: path/filename-embedded years + file dates (both via
+    /// `pfYearsFromRecord`) + the dossier-inferred record date. MUST
+    /// stay in lock-step with `pfCatalogTokenMatches`'s `.yearRange`
+    /// branch — `pfYearsFromRecord` remains the canonical reference;
+    /// this is a build-time cache of it (GH #123 PR D).
+    nonisolated static func buildYearSet(_ rec: VideoRecord) -> Set<Int> {
+        var years = pfYearsFromRecord(rec)
+        if let inf = rec.inferredRecordDate {
+            years.insert(pfGregorianCalendar.component(.year, from: inf))
+        }
+        return years
     }
 
     /// Decompose a path-like string into space-separated word tokens by
