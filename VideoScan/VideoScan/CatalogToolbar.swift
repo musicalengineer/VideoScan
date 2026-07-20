@@ -25,6 +25,18 @@ struct CatalogToolbar<Dashboard: View>: View {
     @Binding var showRelocateSheet: Bool
     @Binding var showDashboard: Bool
     @Binding var searchText: String
+    /// Parent's debounced mirror of `searchText` (GH #123 PR B: the
+    /// toolbar's own private 250 ms debouncer is gone — ContentView owns
+    /// the ONE debouncer and passes the settled value down). Read only
+    /// for the "Searching…" vs badge display decision.
+    let debouncedSearchText: String
+    /// Search-hit badge count, computed by CatalogContent as a
+    /// by-product of the table filter pass and handed down by the parent
+    /// (GH #123 PR B — this used to be a SECOND full catalog scan per
+    /// settled keystroke, doubling every search's main-thread cost).
+    /// Semantics unchanged: hits over pfSearchBadgeBase (purge +
+    /// set-aside pre-filter), pinned by CatalogSearchBudgetSensorTests.
+    let searchHitCount: Int
     @Binding var showInspector: Bool
     let cacheCount: Int
     let dashboard: DashboardState
@@ -79,15 +91,6 @@ struct CatalogToolbar<Dashboard: View>: View {
     /// Search-syntax help popover toggled by the `?` button next to
     /// the catalog search field. Local UI state — no need to persist.
     @State private var showSearchHelp = false
-    /// Debounced mirror of `searchText`. Updated 250ms after the last
-    /// keystroke so the toolbar hit-count badge doesn't recompute on
-    /// every character typed. Rick 2026-06-09: this + the CatalogSearch-
-    /// Index were the two-part fix for sluggish search typing.
-    @State private var debouncedSearchText: String = ""
-    /// Cancellable task that fires 250ms after the last keystroke and
-    /// propagates `searchText` → `debouncedSearchText`. Reset each
-    /// keystroke so only the trailing edge ever lands.
-    @State private var searchDebounceTask: Task<Void, Never>? = nil
 
     /// Active (non-purged) records currently marked .confirmedJunk. This is
     /// the same query the model exposes via `confirmedJunkRecords`; we read
@@ -99,32 +102,14 @@ struct CatalogToolbar<Dashboard: View>: View {
         }
     }
 
-    /// Memoized badge count for the catalog search bar. A @State cache,
-    /// NOT a computed property: this toolbar sits in a nested hosting
-    /// view whose constraint passes re-evaluate `body` constantly, and
-    /// post-dossier haystacks are multi-KB transcripts. Computing the
-    /// scan in `body` (twice — text + color) was 87% of main-thread
-    /// time in the 2026-06-10 beachball. Recomputed only when the
-    /// debounced query or the record set changes.
-    @State private var searchHitCount: Int = 0
-
-    private func recomputeSearchHitCount() {
-        guard !debouncedSearchText.isEmpty else {
-            searchHitCount = 0
-            return
-        }
-        // Count over the SAME pre-filtered base the table searches
-        // (purge → set-aside → kind facet, honoring all three) so the
-        // badge never claims hits the table hides (QA fix 2026-07-15;
-        // facet added with GH #124 — a ".m4a" search under the default
-        // Videos facet must not claim 80k invisible hits).
-        searchHitCount = model.searchIndex.count(
-            records: pfSearchBadgeBase(model.records,
-                                       showRemoved: showRemoved,
-                                       showSetAside: showSetAside,
-                                       kindFacet: model.kindFacetSetting.facet),
-            query: debouncedSearchText)
-    }
+    // The memoized badge count + its recompute chain lived here from
+    // 2026-06-10 to 2026-07-19. GH #123 PR B removed them: the count
+    // was a SECOND full catalog scan on every settled keystroke —
+    // identical work to the table filter running 250 ms-debounced in
+    // parallel. CatalogContent.computeFiltered() now derives the badge
+    // count from its own single pass — over the same purge → set-aside
+    // → kind-facet base (#124) the old pfSearchBadgeBase scan used —
+    // and publishes it up through ContentView (`searchHitCount` above).
 
     /// Facet chip binding — explicit save() on every change (@Published
     /// kills didSet; same pattern as the catalog-scope binding in
@@ -404,47 +389,18 @@ struct CatalogToolbar<Dashboard: View>: View {
                     .textFieldStyle(.plain)
                     .frame(width: 320)
                     .accessibilityIdentifier("catalog.searchField")
-                    .onChange(of: searchText) { _, newValue in
-                        // Cancel any pending debounce so only the trailing
-                        // edge of typing lands on debouncedSearchText.
-                        searchDebounceTask?.cancel()
-                        if newValue.isEmpty {
-                            // Empty-clear is instant — no point waiting.
-                            debouncedSearchText = ""
-                            return
-                        }
-                        searchDebounceTask = Task { @MainActor in
-                            try? await Task.sleep(nanoseconds: 250_000_000)
-                            if !Task.isCancelled {
-                                debouncedSearchText = newValue
-                            }
-                        }
-                    }
-                    .onChange(of: debouncedSearchText) { _, _ in
-                        recomputeSearchHitCount()
-                    }
-                    .onChange(of: model.records.count) { _, _ in
-                        recomputeSearchHitCount()
-                    }
-                    // The badge base honors the visibility toggles and the
-                    // set-aside/purge batch state — recompute when any of
-                    // them changes so the count always matches the table.
-                    .onChange(of: showRemoved) { _, _ in
-                        recomputeSearchHitCount()
-                    }
-                    .onChange(of: showSetAside) { _, _ in
-                        recomputeSearchHitCount()
-                    }
-                    .onChange(of: model.lastTidyBatch) { _, _ in
-                        recomputeSearchHitCount()
-                    }
-                    .onChange(of: model.lastPurgedBatch) { _, _ in
-                        recomputeSearchHitCount()
-                    }
+                    // No debouncer and no recompute chain here anymore
+                    // (GH #123 PR B): ContentView owns the single 250 ms
+                    // debouncer, and CatalogContent's filter pass — which
+                    // already re-runs on every one of these triggers
+                    // (debounced text, records.count, showRemoved,
+                    // showSetAside, tidy/purge batches) — publishes the
+                    // badge count as a by-product of the SAME scan.
                 if !searchText.isEmpty {
                     Button(action: {
+                        // Parent's onChange(searchText) instant-clears its
+                        // debounced mirror on empty, so one write is enough.
                         searchText = ""
-                        debouncedSearchText = ""
                     }) {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(.secondary)
@@ -477,8 +433,9 @@ struct CatalogToolbar<Dashboard: View>: View {
                 // settled (debouncedSearchText caught up). Counts against
                 // the full record set so the badge reflects pre-filter
                 // results (i.e. before View-menu filters like Online/Has
-                // Family further narrow). Reads the memoized
-                // searchHitCount — never scan records inside body.
+                // Family further narrow). Reads the count the table's
+                // filter pass published (GH #123 PR B) — never scan
+                // records inside body.
                 Text("\(searchHitCount) of \(model.records.count)")
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(searchHitCount == 0 ? .red : .secondary)

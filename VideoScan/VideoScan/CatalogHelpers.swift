@@ -25,6 +25,15 @@ struct CatalogContent: View {
     @Binding var selectedIDs: Set<UUID>
     @Binding var sortOrder: [KeyPathComparator<VideoRecord>]
     let searchText: String
+    /// Search-hit badge count, published UP to the parent as a
+    /// by-product of `computeFiltered()`'s single scan (GH #123 PR B —
+    /// the toolbar used to run its own duplicate full scan for this on
+    /// every settled keystroke, doubling every search's main-thread
+    /// cost). ContentView hands the value to CatalogToolbar. Semantics:
+    /// hits over pfSearchBadgeBase; 0 when the search is empty. A
+    /// `@Binding` here ≈ a C++ reference member — writes land in
+    /// ContentView's @State storage, not in a local copy.
+    @Binding var searchHitCount: Int
     let filterTargetPaths: Set<String>
     let showPairsOnly: Bool
     let viewFilters: Set<CatalogViewFilter>
@@ -288,6 +297,11 @@ struct CatalogContent: View {
         }
     }
 
+    /// Compute the table's row set — and, as a by-product of the SAME
+    /// scan, publish the toolbar's search-hit badge count through the
+    /// `searchHitCount` binding (GH #123 PR B). Callers only ever run
+    /// this from event handlers (onAppear/onChange), never from `body`,
+    /// so the binding write is a legal state mutation.
     func computeFiltered() -> [VideoRecord] {
         // Explicit-IDs ask always wins, including over Show-Removed. The
         // filterByIDs path is driven by user navigation ("Show in Catalog",
@@ -295,6 +309,10 @@ struct CatalogContent: View {
         // so surface them whether or not the row happens to be purged or
         // the Show-Removed toggle is on.
         if !filterByIDs.isEmpty {
+            // Focus mode is mutually exclusive with a live search
+            // (ContentView clears one when the other activates); zero the
+            // badge so a stale count can't outlive its query.
+            searchHitCount = 0
             return records.filter { filterByIDs.contains($0.id) }
         }
         // Default: hide soft-deleted (purged) records. Composes with all the
@@ -315,6 +333,27 @@ struct CatalogContent: View {
         // partner by reference, so correlated pairs stay whole even under
         // the default facet.
         out = pfApplyKindFacet(out, facet: kindFacet)
+        if !searchText.isEmpty {
+            // Search routes through the model's CatalogSearchIndex so the
+            // per-keystroke cost is haystack.contains() per record — no
+            // re-lowercasing or re-concatenation of every audio transcript
+            // and OCR field. Correctness is identical to the canonical
+            // pfRecordFilenameOrPersonMatch (pinned by index unit tests).
+            // Rick 2026-06-09: this is the fast path that made search
+            // feel instant on 15k-record catalogs.
+            //
+            // GH #123 PR B: ONE scan per settled query. The search runs
+            // over the badge base (purge → set-aside → kind facet, the
+            // #124-era pfSearchBadgeBase, BEFORE the volume filter) so
+            // its hit count IS the toolbar badge; the volume filter then
+            // narrows the survivors. Filters are independent per-record
+            // predicates, so search-then-volume yields exactly the same
+            // rows as volume-then-search.
+            out = model.searchIndex.filter(records: out, query: searchText)
+            searchHitCount = out.count
+        } else {
+            searchHitCount = 0
+        }
         if !filterTargetPaths.isEmpty {
             let prefixes = Array(filterTargetPaths)
             // Match records by CURRENT physical location only. A relocated file
@@ -324,16 +363,6 @@ struct CatalogContent: View {
             // had moved to LaCie — confusing, and inconsistent with the Volume
             // column.)
             out = out.filter { pfRecordOnSelectedVolume($0, prefixes: prefixes) }
-        }
-        if !searchText.isEmpty {
-            // Search routes through the model's CatalogSearchIndex so the
-            // per-keystroke cost is haystack.contains() per record — no
-            // re-lowercasing or re-concatenation of every audio transcript
-            // and OCR field. Correctness is identical to the canonical
-            // pfRecordFilenameOrPersonMatch (pinned by index unit tests).
-            // Rick 2026-06-09: this is the fast path that made search
-            // feel instant on 15k-record catalogs.
-            out = model.searchIndex.filter(records: out, query: searchText)
         }
         if showPairsOnly {
             // Only show records that have a correlated partner

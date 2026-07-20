@@ -208,16 +208,24 @@ struct CatalogView: View {
     /// Debounced mirror of `searchText` driving the CatalogContent
     /// table filter. Updated 250 ms after the last keystroke so
     /// computeFiltered (~10 ms × 15K records) only runs on the trailing
-    /// edge of typing. Rick 2026-06-16. Parallels CatalogToolbar's own
-    /// private debouncer (which feeds the hit-count badge) — type
-    /// checker couldn't absorb a Binding through the toolbar's already-
-    /// huge initializer, so we run two independent debouncers on the
-    /// same source. They produce identical output in practice.
+    /// edge of typing. Rick 2026-06-16. GH #123 PR B (2026-07-19): this
+    /// is now the ONLY search debouncer — CatalogToolbar's private twin
+    /// is gone. The toolbar reads this value (for its "Searching…"
+    /// indicator) and the hit count below, both passed down as plain
+    /// values.
     @State private var debouncedSearchText: String = ""
     /// Cancellable task that fires 250 ms after the last keystroke and
     /// propagates `searchText` → `debouncedSearchText`. Reset on every
     /// keystroke so only the trailing edge lands.
     @State private var searchDebounceTask: Task<Void, Never>? = nil
+    /// Search-hit badge count for the toolbar. WRITTEN by CatalogContent
+    /// as a by-product of the table filter pass (GH #123 PR B: the badge
+    /// used to run its own duplicate full scan per settled keystroke —
+    /// 2× the main-thread cost of every search). READ by CatalogToolbar.
+    /// Semantics unchanged: hits over pfSearchBadgeBase (purge +
+    /// set-aside pre-filter, BEFORE volume/View-chip narrowing);
+    /// 0 when the search is empty.
+    @State private var searchHitCount: Int = 0
     @State private var showDeleteDuplicatesConfirm = false
     /// Analysis-ledger (2026-07-05): Correlate All is incremental; the
     /// from-scratch redo is destructive to manual pairs, so it confirms.
@@ -363,6 +371,8 @@ struct CatalogView: View {
                 showRelocateSheet: $showRelocateSheet,
                 showDashboard: $showDashboard,
                 searchText: $searchText,
+                debouncedSearchText: debouncedSearchText,
+                searchHitCount: searchHitCount,
                 showInspector: $showInspector,
                 cacheCount: model.cacheCount,
                 dashboard: model.dashboard,
@@ -432,6 +442,7 @@ struct CatalogView: View {
                 selectedIDs: $selectedIDs,
                 sortOrder: $sortOrder,
                 searchText: debouncedSearchText,
+                searchHitCount: $searchHitCount,
                 filterTargetPaths: filterTargetPaths,
                 showPairsOnly: showPairsOnly,
                 viewFilters: catalogViewFilters,
