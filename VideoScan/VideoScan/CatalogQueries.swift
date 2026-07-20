@@ -28,6 +28,8 @@ enum SearchField: String, Equatable {
     case filename     // filename only (not path/dir)
     case notes        // user-written notes (only via field prefix; never via plain substring on catalog bar)
     case streamType   // structural filter on rec.streamType (audio/video/both/failed/none)
+    case mediaKind    // GH #124: facet-family spelling (type:video / type:audio / type:video-only)
+    case codec        // GH #124 layer 4: videoCodec OR audioCodec substring (codec:mp3, codec:prores)
 
     static func parse(_ raw: String) -> SearchField? {
         switch raw.lowercased() {
@@ -38,6 +40,8 @@ enum SearchField: String, Equatable {
         case "filename", "name", "file":    return .filename
         case "notes", "note":               return .notes
         case "stream", "streamtype":        return .streamType
+        case "type", "kind":                return .mediaKind
+        case "codec", "codecs":             return .codec
         default:                            return nil
         }
     }
@@ -277,7 +281,21 @@ nonisolated func pfFieldTokenMatches(_ field: SearchField, _ value: String, _ re
         return rec.notes.lowercased().contains(n)
     case .streamType:
         return pfStreamTypeAliasMatches(value: n, recordType: rec.streamType)
+    case .mediaKind:
+        return pfMediaKindAliasMatches(value: n, recordType: rec.streamType)
+    case .codec:
+        return pfCodecFieldMatches(value: n, rec: rec)
     }
+}
+
+/// `codec:` field match — EITHER codec field, so `codec:mp3` finds
+/// audio-only music rows and `codec:prores` finds masters with one
+/// grammar. Extracted (like pfStreamTypeAliasMatches before it) to keep
+/// pfFieldTokenMatches' cyclomatic complexity in budget. `value` must
+/// already be lowercased by the caller.
+nonisolated func pfCodecFieldMatches(value: String, rec: VideoRecord) -> Bool {
+    rec.videoCodec.lowercased().contains(value)
+        || rec.audioCodec.lowercased().contains(value)
 }
 
 /// Structural filter for `stream:<alias>` tokens. `value` is matched
@@ -296,6 +314,37 @@ nonisolated func pfStreamTypeAliasMatches(value: String, recordType: StreamType)
     case "failed", "ffprobefailed":        return recordType == .ffprobeFailed
     case "empty", "none", "nostreams":     return recordType == .noStreams
     default:                               return false
+    }
+}
+
+/// Structural filter for `type:` / `kind:` tokens — the FACET-family
+/// grammar (GH #124, shared spelling with the #117 v2 facet work).
+/// Differs from the legacy `stream:` grammar in ONE deliberate way:
+/// `type:video` means "video-bearing" (videoAndAudio OR videoOnly) to
+/// match the facet chip's Videos bucket, whereas `stream:video` has
+/// always meant strictly videoOnly and keeps meaning that (back-compat).
+/// `type:video-only` is the strict spelling here. NOTE: a search token
+/// is an ASSERTION of confirmed streams, so `type:video` does NOT match
+/// ffprobeFailed/noStreams even though the videoBearing VIEW facet keeps
+/// those rows visible — the view is a safety net, the query is a claim.
+/// Unknown values return false (typo → empty results, not everything),
+/// same contract as `pfStreamTypeAliasMatches`.
+nonisolated func pfMediaKindAliasMatches(value: String, recordType: StreamType) -> Bool {
+    switch value {
+    case "video", "videobearing", "video-bearing":
+        return recordType == .videoAndAudio || recordType == .videoOnly
+    case "video-only", "videoonly":
+        return recordType == .videoOnly
+    case "audio", "audio-only", "audioonly":
+        return recordType == .audioOnly
+    case "both", "av", "video+audio", "videoandaudio":
+        return recordType == .videoAndAudio
+    case "failed", "ffprobefailed":
+        return recordType == .ffprobeFailed
+    case "none", "empty", "nostreams":
+        return recordType == .noStreams
+    default:
+        return false
     }
 }
 
@@ -666,18 +715,25 @@ nonisolated func pfApplySetAsideFilter(
 }
 
 /// The record base the toolbar's search-hit badge counts over. MUST be
-/// the same purge → set-aside pre-filter, in the same order, that
-/// `computeFiltered()` applies before running the search — otherwise the
-/// badge counts rows the table hides (QA fix, 2026-07-15: the badge was
-/// counting set-aside records that a default search could never show).
+/// the same purge → set-aside → kind-facet pre-filter, in the same
+/// order, that `computeFiltered()` applies before running the search —
+/// otherwise the badge counts rows the table hides (QA fix, 2026-07-15:
+/// the badge was counting set-aside records that a default search could
+/// never show; GH #124 extends the same contract to the facet — with
+/// the default Videos facet a ".m4a" search must not claim 80k hits the
+/// table shows zero of. The chip is the visible tell for why, and
+/// flipping it to All Kinds restores the wide count.)
 nonisolated func pfSearchBadgeBase(
     _ records: [VideoRecord],
     showRemoved: Bool,
-    showSetAside: Bool
+    showSetAside: Bool,
+    kindFacet: CatalogKindFacet
 ) -> [VideoRecord] {
-    pfApplySetAsideFilter(
-        pfApplyPurgeFilter(records, showRemoved: showRemoved),
-        showSetAside: showSetAside)
+    pfApplyKindFacet(
+        pfApplySetAsideFilter(
+            pfApplyPurgeFilter(records, showRemoved: showRemoved),
+            showSetAside: showSetAside),
+        facet: kindFacet)
 }
 
 /// Volume-membership predicate for the catalog's Volume filter. A record

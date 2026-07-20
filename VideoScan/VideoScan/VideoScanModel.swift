@@ -528,17 +528,34 @@ final class VideoScanModel: ObservableObject {
         catalogScopeSettings.save(to: .standard)
     }
 
+    /// Catalog media-kind facet (GH #124 layer 1): the persisted "which
+    /// stream shapes does the catalog table show" preference. DEFAULT
+    /// `.videoBearing` — the table opens on video-bearing records so 80k
+    /// music rows never bury the videos again. Audio-only stays one click
+    /// away via the toolbar facet chip and is NEVER hidden from
+    /// correlate/combine (those source candidates from `records`
+    /// directly). Same explicit-save + test-host-pristine discipline as
+    /// `catalogScopeSettings` above.
+    @Published var kindFacetSetting: CatalogKindFacetSetting =
+        TestEnvironment.isTestHost
+            ? CatalogKindFacetSetting()
+            : CatalogKindFacetSetting.restored(from: .standard)
+
+    /// Explicit save for the media-kind facet — @Published kills didSet,
+    /// so every UI mutation of `kindFacetSetting` must call this.
+    func saveKindFacetSetting() {
+        guard !TestEnvironment.isTestHost else { return }
+        kindFacetSetting.save(to: .standard)
+    }
+
     /// Snapshot the current skip-directory set from scanOptions.
     /// Must be called on the main actor (returns a Sendable Set<String>
-    /// that nonisolated walkers can then capture safely).
+    /// that nonisolated walkers can then capture safely). The derivation
+    /// itself is `ScanOptions.skipDirs()` — pure, unit-tested without a
+    /// model (GH #124 layer 3 refactor; behavior unchanged for the
+    /// pre-existing categories, music-library trees added).
     func skipDirsSnapshot() -> Set<String> {
-        var s = SkipCategories.finderMetaDirs  // always skipped
-        if scanOptions.skipSystemFiles {
-            s.formUnion(SkipCategories.systemDirs)
-            s.formUnion(SkipCategories.windowsTrashDirs)
-            s.formUnion(SkipCategories.devCacheDirs)
-        }
-        return s
+        scanOptions.skipDirs()
     }
 
     /// Snapshot the current skip-bundle-extensions set from scanOptions.
@@ -547,13 +564,10 @@ final class VideoScanModel: ObservableObject {
     /// "Look Inside Video Project Bundles" then carves the PRO-VIDEO subset
     /// (.fcpbundle, .imovielibrary, .rcproject, …) back OUT of whatever the
     /// skips added — photo/music libraries (.photoslibrary, .lrdata, …) are
-    /// never unlocked by it.
+    /// never unlocked by it. Derivation lives in
+    /// `ScanOptions.skipBundleExtensions()` (pure, unit-tested).
     func skipBundleExtensionsSnapshot() -> Set<String> {
-        var s = Set<String>()
-        if scanOptions.skipSystemFiles { s.formUnion(SkipCategories.appBundleExtensions) }
-        if scanOptions.skipMediaBundles { s.formUnion(SkipCategories.mediaLibraryExtensions) }
-        if scanOptions.scanVideoProjectBundles { s.subtract(SkipCategories.proVideoBundleExtensions) }
-        return s
+        scanOptions.skipBundleExtensions()
     }
 
     /// Discovery audit of the most recently FINALIZED scan (one entry per

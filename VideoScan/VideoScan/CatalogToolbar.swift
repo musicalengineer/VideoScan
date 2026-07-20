@@ -114,13 +114,29 @@ struct CatalogToolbar<Dashboard: View>: View {
             return
         }
         // Count over the SAME pre-filtered base the table searches
-        // (purge → set-aside, honoring both toggles) so the badge never
-        // claims hits the table hides (QA fix, 2026-07-15).
+        // (purge → set-aside → kind facet, honoring all three) so the
+        // badge never claims hits the table hides (QA fix 2026-07-15;
+        // facet added with GH #124 — a ".m4a" search under the default
+        // Videos facet must not claim 80k invisible hits).
         searchHitCount = model.searchIndex.count(
             records: pfSearchBadgeBase(model.records,
                                        showRemoved: showRemoved,
-                                       showSetAside: showSetAside),
+                                       showSetAside: showSetAside,
+                                       kindFacet: model.kindFacetSetting.facet),
             query: debouncedSearchText)
+    }
+
+    /// Facet chip binding — explicit save() on every change (@Published
+    /// kills didSet; same pattern as the catalog-scope binding in
+    /// ScanOptionsMenu).
+    private var kindFacetBinding: Binding<CatalogKindFacet> {
+        Binding(
+            get: { model.kindFacetSetting.facet },
+            set: { newVal in
+                model.kindFacetSetting.facet = newVal
+                model.saveKindFacetSetting()
+            }
+        )
     }
 
     /// "+ Filter" menu next to the search field. Each pick appends a
@@ -141,6 +157,15 @@ struct CatalogToolbar<Dashboard: View>: View {
                 Button("Notes")       { insertSearchPrefix("notes:") }
             }
             Section("Structural") {
+                // GH #124: the facet-family grammar. type:video is the
+                // video-BEARING bucket (V+A or video-only), matching the
+                // toolbar facet chip's Videos spelling.
+                Menu("Media kind") {
+                    Button("Video (any)")    { insertSearchToken("type:video") }
+                    Button("Video only")     { insertSearchToken("type:video-only") }
+                    Button("Audio only")     { insertSearchToken("type:audio") }
+                    Button("Video + audio")  { insertSearchToken("type:both") }
+                }
                 Menu("Stream type") {
                     Button("Audio only")     { insertSearchToken("stream:audio") }
                     Button("Video only")     { insertSearchToken("stream:video") }
@@ -148,6 +173,7 @@ struct CatalogToolbar<Dashboard: View>: View {
                     Button("ffprobe failed") { insertSearchToken("stream:failed") }
                     Button("No streams")     { insertSearchToken("stream:empty") }
                 }
+                Button("Codec…")  { insertSearchPrefix("codec:") }
                 Button("Year…")   { insertSearchPrefix("year:") }
                 Button("Decade…") { insertSearchPrefix("decade:") }
             }
@@ -488,6 +514,40 @@ struct CatalogToolbar<Dashboard: View>: View {
             // fleet progress without keeping the dashboard window open.
             DossierToolbarChip(model: model)
 
+            // Media-kind facet chip (GH #124 layer 1). Default = Videos so
+            // the table opens on video-bearing records; Audio Only / All
+            // Kinds are one click away. Teal when off-default so a
+            // non-video view is visible at a glance. Persisted preference
+            // (explicit save via kindFacetBinding). Correlate/Combine are
+            // untouched — they read model.records, not the view filter.
+            Menu {
+                Picker("Media kind", selection: kindFacetBinding) {
+                    ForEach(CatalogKindFacet.allCases) { facet in
+                        Label(facet.label, systemImage: facet.icon)
+                            .tag(facet)
+                            .help(facet.help)
+                    }
+                }
+                .pickerStyle(.inline)
+                .labelsHidden()
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: model.kindFacetSetting.facet.icon)
+                    Text(model.kindFacetSetting.facet.label)
+                }
+                .foregroundColor(model.kindFacetSetting.facet == .videoBearing
+                                 ? .primary : .teal)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .accessibilityIdentifier("catalog.kindFacet.menu")
+            .help(model.kindFacetSetting.facet.help)
+            .onChange(of: model.kindFacetSetting) { _, _ in
+                // The badge counts over the facet base — keep it honest
+                // when the chip flips.
+                recomputeSearchHitCount()
+            }
+
             Menu {
                 ForEach(CatalogViewFilter.allCases, id: \.self) { filter in
                     Toggle(isOn: Binding(
@@ -704,6 +764,12 @@ private struct CatalogSearchHelpPopover: View {
                                         meaning: "decade")
                 CatalogSearchExampleRow(query: "stream:audio",
                                         meaning: "audio-only files (or video / both / failed)")
+                CatalogSearchExampleRow(query: "type:video",
+                                        meaning: "video-bearing files — video+audio or video-only")
+                CatalogSearchExampleRow(query: "type:audio",
+                                        meaning: "audio-only files (type:video-only for strict video-only)")
+                CatalogSearchExampleRow(query: "codec:mp3",
+                                        meaning: "video OR audio codec contains mp3 (codec:prores, codec:pcm…)")
             }
 
             Divider()

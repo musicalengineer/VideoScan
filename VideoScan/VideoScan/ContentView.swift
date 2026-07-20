@@ -437,6 +437,9 @@ struct CatalogView: View {
                 viewFilters: catalogViewFilters,
                 showRemoved: showRemoved,
                 showSetAside: showSetAside,
+                // Media-kind facet (GH #124) — persisted on the model,
+                // flipped by the toolbar facet chip.
+                kindFacet: model.kindFacetSetting.facet,
                 filterByIDs: filterByIDs,
                 focusMatchScore: focusMatchScore,
                 focusLabel: focusLabel,

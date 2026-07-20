@@ -26,6 +26,15 @@ struct ScanOptions: Equatable {
     /// Duplicates find copies later. Flip ON for a faster SMB scan when
     /// you don't care about dup detection this pass.
     var skipChecksums: Bool = false
+    /// Skip iTunes / Music.app library trees (iTunes/, iTunes Media/,
+    /// Music Library.musiclibrary, Automatically Add to…, .itlp, …).
+    /// ON by default — GH #124 layer 3: backup trees carried whole music
+    /// libraries into the catalog (~80k of Rick's ~103k records were
+    /// audio-only, overwhelmingly iTunes), so rescans must not repollute
+    /// after the music-triage purge. Treated like system trees: family
+    /// videos don't live inside a music library. Turn OFF deliberately
+    /// to include them in a scan.
+    var skipMusicLibraryTrees: Bool = true
 
     /// Polarity exception (an additive "Scan X", not a "Skip X"): when ON, the
     /// scan ALSO examines files with NO extension and lets ffprobe decide if
@@ -60,20 +69,58 @@ struct ScanOptions: Equatable {
     /// (ScanContext.bundleContainer). OFF by default.
     var scanVideoProjectBundles: Bool = false
 
+    // MARK: Skip-set derivation (pure — unit-testable without a model)
+
+    /// The directory-name skip set this policy implies. Pure function of
+    /// the options so the walker rules are testable without constructing
+    /// a VideoScanModel; `VideoScanModel.skipDirsSnapshot()` delegates
+    /// here. (Extracted with GH #124 layer 3 — behavior for the
+    /// pre-existing categories is unchanged.)
+    func skipDirs() -> Set<String> {
+        var s = SkipCategories.finderMetaDirs  // always skipped
+        if skipSystemFiles {
+            s.formUnion(SkipCategories.systemDirs)
+            s.formUnion(SkipCategories.windowsTrashDirs)
+            s.formUnion(SkipCategories.devCacheDirs)
+        }
+        if skipMusicLibraryTrees {
+            s.formUnion(SkipCategories.musicLibraryDirs)
+        }
+        return s
+    }
+
+    /// The bundle-extension skip set this policy implies. Same delegation
+    /// story as `skipDirs()`. "Look Inside Video Project Bundles" carves
+    /// the PRO-VIDEO subset back out of whatever the skips added — it
+    /// never unlocks photo/music libraries, and it runs LAST so the
+    /// carve-out wins regardless of which skip contributed the extension.
+    func skipBundleExtensions() -> Set<String> {
+        var s = Set<String>()
+        if skipSystemFiles { s.formUnion(SkipCategories.appBundleExtensions) }
+        if skipMediaBundles { s.formUnion(SkipCategories.mediaLibraryExtensions) }
+        if skipMusicLibraryTrees { s.formUnion(SkipCategories.musicLibraryBundleExtensions) }
+        if scanVideoProjectBundles { s.subtract(SkipCategories.proVideoBundleExtensions) }
+        return s
+    }
+
     // MARK: Persistence
     // UserDefaults.standard is documented thread-safe (CFPreferences-backed
-    // with internal locking). nonisolated(unsafe) tells strict concurrency
-    // we know what we're doing.
-    nonisolated(unsafe) private static let defaults = UserDefaults.standard
+    // with internal locking). The `defaults` parameter is injectable so
+    // isolation tests never touch the real preferences plist
+    // (settings-pollution class); production callers use the .standard
+    // default, matching the historical behavior.
     private static let prefix = "scanopts_"
 
-    static func restored() -> ScanOptions {
+    static func restored(from defaults: UserDefaults = .standard) -> ScanOptions {
         let d = defaults; let p = prefix
         var s = ScanOptions()
         if d.object(forKey: "\(p)skipSystemFiles") != nil { s.skipSystemFiles  = d.bool(forKey: "\(p)skipSystemFiles") }
         if d.object(forKey: "\(p)skipMediaBundles") != nil { s.skipMediaBundles = d.bool(forKey: "\(p)skipMediaBundles") }
         if d.object(forKey: "\(p)skipSmallFiles") != nil { s.skipSmallFiles   = d.bool(forKey: "\(p)skipSmallFiles") }
         if d.object(forKey: "\(p)skipChecksums") != nil { s.skipChecksums    = d.bool(forKey: "\(p)skipChecksums") }
+        // Absent key keeps the ON default — same "never set ≠ stored false"
+        // nil-check discipline as CatalogScopeSettings.restored.
+        if d.object(forKey: "\(p)skipMusicLibraryTrees") != nil { s.skipMusicLibraryTrees = d.bool(forKey: "\(p)skipMusicLibraryTrees") }
         if d.object(forKey: "\(p)probeExtensionless") != nil { s.probeExtensionless = d.bool(forKey: "\(p)probeExtensionless") }
         if d.object(forKey: "\(p)scanAudioFiles") != nil { s.scanAudioFiles = d.bool(forKey: "\(p)scanAudioFiles") }
         if d.object(forKey: "\(p)scanUnknownExtensions") != nil { s.scanUnknownExtensions = d.bool(forKey: "\(p)scanUnknownExtensions") }
@@ -81,12 +128,13 @@ struct ScanOptions: Equatable {
         return s
     }
 
-    func save() {
-        let d = Self.defaults; let p = Self.prefix
+    func save(to defaults: UserDefaults = .standard) {
+        let d = defaults; let p = Self.prefix
         d.set(skipSystemFiles, forKey: "\(p)skipSystemFiles")
         d.set(skipMediaBundles, forKey: "\(p)skipMediaBundles")
         d.set(skipSmallFiles, forKey: "\(p)skipSmallFiles")
         d.set(skipChecksums, forKey: "\(p)skipChecksums")
+        d.set(skipMusicLibraryTrees, forKey: "\(p)skipMusicLibraryTrees")
         d.set(probeExtensionless, forKey: "\(p)probeExtensionless")
         d.set(scanAudioFiles, forKey: "\(p)scanAudioFiles")
         d.set(scanUnknownExtensions, forKey: "\(p)scanUnknownExtensions")
@@ -104,11 +152,14 @@ struct ScanOptions: Equatable {
 
     /// Scan everything, hash everything. Use when you suspect a rare find
     /// lives somewhere weird. Slower — walks system trees and hashes all.
+    /// Music-library trees included too (GH #124): "everything" means
+    /// everything; the walker admission rules still gate what's cataloged.
     static let thorough = ScanOptions(
         skipSystemFiles: false,
         skipMediaBundles: false,
         skipSmallFiles: false,
-        skipChecksums: false
+        skipChecksums: false,
+        skipMusicLibraryTrees: false
     )
 }
 
@@ -151,6 +202,39 @@ enum SkipCategories {
     static let mediaLibraryExtensions: Set<String> = [
         "photoslibrary", "imovielibrary", "fcpbundle", "musiclibrary",
         "tvlibrary", "aplibrary", "finalcutprojectlibrary", "lrdata"
+    ]
+    /// iTunes / Music.app library DIRECTORY names, matched against a
+    /// directory's lowercased last path component like every other skip
+    /// set (GH #124 layer 3). The real on-disk shapes these cover:
+    ///   * classic:  ~/Music/iTunes/{iTunes Media|iTunes Music}/…
+    ///               plus Album Artwork/ and iPod Photo Cache/ siblings
+    ///   * watch folders: "Automatically Add to iTunes.localized/",
+    ///               "Automatically Add to Music.localized/" (both appear
+    ///               with and without the .localized suffix depending on
+    ///               macOS era, so both spellings are listed)
+    ///   * Windows backups: My Music\iTunes\… (the "itunes" component
+    ///               matches regardless of the parent's name)
+    /// A bare "music" folder name is deliberately NOT in this set —
+    /// family archives legitimately hold folders like "Wedding/Music"
+    /// with home recordings; the library-specific names above are the
+    /// precise tell. MusicTriage derives its path markers from this set
+    /// so scan-time prevention and catalog-time triage can never drift.
+    static let musicLibraryDirs: Set<String> = [
+        "itunes", "itunes media", "itunes music",
+        "album artwork", "ipod photo cache",
+        "automatically add to itunes", "automatically add to itunes.localized",
+        "automatically add to music", "automatically add to music.localized"
+    ]
+    /// iTunes / Music.app library BUNDLE extensions (GH #124 layer 3):
+    /// the Music.app library itself ("Music Library.musiclibrary"),
+    /// iTunes LP bundles (.itlp), and iTunes Extras (.ite).
+    /// `musiclibrary` also lives in mediaLibraryExtensions (governed by
+    /// the default-OFF "Skip Media Bundles"); listing it here means the
+    /// default-ON music skip covers it without the user flipping that
+    /// broader toggle. NEVER unlocked by "Look Inside Video Project
+    /// Bundles" — these aren't pro-video bundles.
+    static let musicLibraryBundleExtensions: Set<String> = [
+        "musiclibrary", "itlp", "ite"
     ]
     /// Pro-video PROJECT bundles — the subset of media libraries that
     /// "Look Inside Video Project Bundles" carves back OUT of the skip set.

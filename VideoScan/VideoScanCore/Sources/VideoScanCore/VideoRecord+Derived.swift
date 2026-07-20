@@ -82,6 +82,18 @@ extension VideoRecord {
         StreamType(rawValue: streamTypeRaw) ?? .ffprobeFailed
     }
 
+    /// The codec string the catalog's Codec column shows (GH #124 layer 4).
+    /// Audio-only records have always CAPTURED their codec (ScanEngine maps
+    /// ffprobe's codec_name for the first audio stream regardless of stream
+    /// shape; the MXF header fallback writes "PCM n-bit") — the column just
+    /// never displayed it, so 80k music/audio rows read "—". Video codec
+    /// wins when both exist (it's the headline codec for A/V files); the
+    /// audio codec fills in only when there is no video stream. Derived,
+    /// not stored — no schema growth, legacy catalogs round-trip untouched.
+    public var displayCodec: String {
+        videoCodec.isEmpty ? audioCodec : videoCodec
+    }
+
     // MARK: - Sort keys
     //
     // SwiftUI Table's `value:` parameter on TableColumn requires a KeyPath

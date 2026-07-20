@@ -37,6 +37,13 @@ struct CatalogContent: View {
     /// browse and put them back. When false (default), they are hidden —
     /// records and files are untouched. Independent of `showRemoved`.
     var showSetAside: Bool = false
+    /// Media-kind facet (GH #124): which stream shapes the table shows.
+    /// Default `.videoBearing` — audio-only rows hidden until the user
+    /// flips the toolbar facet chip. Applied in computeFiltered AFTER the
+    /// purge/set-aside filters and BEFORE search, so the search working
+    /// set shrinks with the view (the issue's ~4x win). Never affects
+    /// correlate/combine — those source candidates from `model.records`.
+    var kindFacet: CatalogKindFacet = .videoBearing
     /// When non-empty, show only these specific records (overrides all other filters).
     /// Used by Archive tab's "Show in Catalog" / "Show Pair in Catalog".
     var filterByIDs: Set<UUID> = []
@@ -125,11 +132,53 @@ struct CatalogContent: View {
     @State private var duplicateGroupMemo = RenderMemo<DuplicateGroupMemoKey, [VideoRecord]>()
     @State private var mediaOnVolumeMemo = RenderMemo<MediaOnVolumeMemoKey, Int64>()
     @State private var trimDerivativesMemo = RenderMemo<TrimDerivativesMemoKey, [VideoRecord]>()
+    /// Music-triage candidate memo (GH #124 layer 2). The O(n) detection
+    /// pass runs once per catalog change / purge / tidy event — NEVER per
+    /// body re-eval (the no-O(records)-in-body rule). Keyed on the purge
+    /// and tidy batches too because purging doesn't change records.count
+    /// or the aggregates revision, yet must shrink the chip.
+    @State private var musicTriageMemo = RenderMemo<MusicTriageMemoKey, [UUID]>()
+    /// Non-nil presents the music-triage review sheet with a snapshot of
+    /// the candidate IDs taken at click time (.sheet(item:) discipline —
+    /// never chained isPresented).
+    @State private var musicTriagePayload: MusicTriagePayload?
+    /// The candidate count the user last dismissed the banner at.
+    /// @SceneStorage so the dismissal survives tab switches (CatalogView
+    /// is torn down per switch) but NOT app relaunch — nag semantics:
+    /// the suggestion returns next session, or sooner if the count moves.
+    @SceneStorage("musicTriageDismissedCount") private var musicTriageDismissedCount: Int = 0
 
     private struct DuplicateGroupMemoKey: Equatable {
         let selectedID: UUID
         let version: RecordsVersion
         let analyzing: Bool
+    }
+
+    private struct MusicTriageMemoKey: Equatable {
+        let version: RecordsVersion
+        let purge: VideoScanModel.LastPurgedBatch?
+        let tidy: VideoScanModel.LastTidyBatch?
+    }
+
+    /// Identifiable payload for the review sheet — the candidate IDs
+    /// frozen at banner-click time.
+    struct MusicTriagePayload: Identifiable {
+        let id = UUID()
+        let candidateIDs: [UUID]
+    }
+
+    /// Memoized music-library candidate IDs. See MusicTriage.candidateIDs
+    /// for the precision rules (MXF halves / paired / same-stem NEVER
+    /// suggested — pinned by MusicTriageTests).
+    private var musicTriageCandidateIDs: [UUID] {
+        let key = MusicTriageMemoKey(
+            version: recordsVersion,
+            purge: model.lastPurgedBatch,
+            tidy: model.lastTidyBatch
+        )
+        return musicTriageMemo.value(for: key) {
+            MusicTriage.candidateIDs(in: records)
+        }
     }
 
     private struct TrimDerivativesMemoKey: Equatable {
@@ -258,6 +307,14 @@ struct CatalogContent: View {
         // never match a default search (Rick: cruft is "only bothersome if
         // it shows up in a list or in a search").
         out = pfApplySetAsideFilter(out, showSetAside: showSetAside)
+        // Media-kind facet (GH #124) — the default Videos facet drops the
+        // ~80k audio-only rows here, BEFORE search/pairs/View filters, so
+        // every downstream pass (and the table itself) works the small
+        // set. `.everything` is an identity short-circuit. Note the
+        // Show-Pairs-Only flatten below re-appends each video's audio
+        // partner by reference, so correlated pairs stay whole even under
+        // the default facet.
+        out = pfApplyKindFacet(out, facet: kindFacet)
         if !filterTargetPaths.isEmpty {
             let prefixes = Array(filterTargetPaths)
             // Match records by CURRENT physical location only. A relocated file
@@ -341,6 +398,10 @@ struct CatalogContent: View {
                     purgeUndoBanner
                     // Same affordance for the most recent Tidy Catalog apply.
                     tidyUndoBanner
+                    // Music-triage suggestion (GH #124 layer 2, nag-button
+                    // pattern). Reads the memoized candidate list — no
+                    // O(records) work per body eval.
+                    musicTriageBanner
                     // Empty-state overlay: when a search is active and
                     // yields zero rows, surface that explicitly instead
                     // of leaving the user staring at a blank table area.
@@ -477,6 +538,11 @@ struct CatalogContent: View {
         // .sheet(item:) shape — never chained isPresented.
         .sheet(item: $balanceRequest) { request in
             BalanceAudioSheet(request: request)
+        }
+        // Music-triage review list (GH #124). Same .sheet(item:) shape.
+        .sheet(item: $musicTriagePayload) { payload in
+            MusicTriageSheet(candidateIDs: payload.candidateIDs)
+                .environmentObject(model)
         }
         .alert(
             "Find Online Version",
@@ -732,6 +798,27 @@ struct CatalogContent: View {
             .padding(.horizontal, 12)
             .padding(.top, 6)
             .transition(.opacity.combined(with: .move(edge: .top)))
+        }
+    }
+
+    // MARK: - Music Triage Banner (GH #124 layer 2)
+    //
+    // Suggestion chip in the banner stack. Hidden while a focus filter is
+    // active (the user is mid-navigation), when there are no candidates,
+    // or when the user dismissed it at exactly this count. Clicking
+    // "Review & Remove…" freezes the candidate IDs into the sheet payload
+    // so the reviewed list can't shift under the user.
+    @ViewBuilder
+    private var musicTriageBanner: some View {
+        if filterByIDs.isEmpty {
+            let ids = musicTriageCandidateIDs
+            if !ids.isEmpty && ids.count != musicTriageDismissedCount {
+                MusicTriageBanner(
+                    count: ids.count,
+                    onReview: { musicTriagePayload = MusicTriagePayload(candidateIDs: ids) },
+                    onDismiss: { musicTriageDismissedCount = ids.count }
+                )
+            }
         }
     }
 

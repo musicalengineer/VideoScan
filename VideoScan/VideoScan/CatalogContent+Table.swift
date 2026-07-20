@@ -193,10 +193,15 @@ extension CatalogContent {
             }
             .width(min: 80, ideal: 95)
 
-            TableColumn("Codec", value: \.videoCodec) { rec in
-                Text(rec.videoCodec.isEmpty ? "—" : rec.videoCodec)
-                    .foregroundColor(rec.videoCodec.isEmpty ? .secondary : .primary)
-                    .help("Video codec (e.g. h264, prores, mpeg2video)")
+            // GH #124 layer 4: audio-only rows always CAPTURED their codec
+            // (ScanEngine maps codec_name for the first audio stream); the
+            // column just never showed it, so 80k music rows read "—".
+            // displayCodec = videoCodec, falling back to audioCodec when
+            // there's no video stream. Sort key follows the displayed value.
+            TableColumn("Codec", value: \.displayCodec) { rec in
+                Text(rec.displayCodec.isEmpty ? "—" : rec.displayCodec)
+                    .foregroundColor(rec.displayCodec.isEmpty ? .secondary : .primary)
+                    .help("Video codec (e.g. h264, prores); for audio-only files, the audio codec (e.g. mp3, aac, pcm_s16le)")
             }
             .width(min: 60, ideal: 80)
 
@@ -828,6 +833,8 @@ extension CatalogContent {
         .onChange(of: showPairsOnly) { tableData = computeFiltered() }
         .onChange(of: filterByIDs) { tableData = computeFiltered() }
         .onChange(of: viewFilters) { tableData = computeFiltered() }
+        // Media-kind facet chip flip (GH #124).
+        .onChange(of: kindFacet) { tableData = computeFiltered() }
         .onChange(of: showRemoved) { tableData = computeFiltered() }
         .onChange(of: showSetAside) { tableData = computeFiltered() }
         .onChange(of: model.lastTidyBatch) { tableData = computeFiltered() }

@@ -244,6 +244,11 @@ struct ScanOptionsMenu: View {
             Toggle("Skip Media Bundles", isOn: toggle(\.skipMediaBundles))
             Toggle("Skip Small Files", isOn: toggle(\.skipSmallFiles))
             Toggle("Skip Checksums", isOn: toggle(\.skipChecksums))
+            // GH #124 layer 3: music-library trees skip like system trees
+            // by default so a rescan can't re-pollute the catalog after
+            // the music-triage purge. Turn OFF to deliberately include.
+            Toggle("Skip iTunes & Music Libraries", isOn: toggle(\.skipMusicLibraryTrees))
+                .help("Skip iTunes and Music.app library folders (iTunes Media, Music Library.musiclibrary, Automatically Add to…, album artwork). On by default — music libraries swept in from backup drives were burying the catalog in audio files. Turn off to deliberately scan them.")
 
             Divider()
 
