@@ -833,6 +833,8 @@ extension CatalogContent {
         .onChange(of: showPairsOnly) { tableData = computeFiltered() }
         .onChange(of: filterByIDs) { tableData = computeFiltered() }
         .onChange(of: viewFilters) { tableData = computeFiltered() }
+        // Reachable-only baseline opt-out (2026-07-20).
+        .onChange(of: showDisconnectedMedia) { tableData = computeFiltered() }
         // Media-kind facet chip flip (GH #124).
         .onChange(of: kindFacet) { tableData = computeFiltered() }
         .onChange(of: showRemoved) { tableData = computeFiltered() }

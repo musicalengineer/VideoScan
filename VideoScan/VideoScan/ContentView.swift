@@ -141,7 +141,9 @@ struct ContentView: View {
 // MARK: - Catalog View Filter
 
 enum CatalogViewFilter: String, CaseIterable, Hashable {
-    case onlineOnly       = "Online Media Only"
+    // .onlineOnly retired 2026-07-20: reachable-only is now the DEFAULT
+    // catalog baseline (opt-out via "Show disconnected media"), not an
+    // opt-in additive filter. See CatalogContent.showDisconnectedMedia.
     case videoAndAudioOnly = "Video+Audio Only"
     case unpairedOnly     = "Unpaired Only"
     case ratedOnly        = "Rated Only"
@@ -151,7 +153,6 @@ enum CatalogViewFilter: String, CaseIterable, Hashable {
 
     var icon: String {
         switch self {
-        case .onlineOnly:        return "externaldrive.fill.badge.checkmark"
         case .videoAndAudioOnly: return "film"
         case .unpairedOnly:      return "exclamationmark.triangle"
         case .ratedOnly:         return "star.fill"
@@ -266,6 +267,13 @@ struct CatalogView: View {
     // Volume pane height is now managed by NSSplitView (VerticalSplitView)
     @State private var showPairsOnly = false
     @State private var catalogViewFilters: Set<CatalogViewFilter> = []
+    /// Baseline reachability opt-out (2026-07-20). Reachable-only is the
+    /// DEFAULT — the catalog table shows only media on currently-mounted
+    /// volumes. Flipping this ON lifts that baseline and shows disconnected
+    /// media too. Persisted across launches; default OFF. NOT one of the
+    /// additive `catalogViewFilters`, so "Clear All Filters" leaves it alone.
+    /// `@AppStorage` ≈ a persisted-in-NSUserDefaults bool.
+    @AppStorage("catalog.showDisconnectedMedia") private var showDisconnectedMedia = false
     /// Whether purged ("removed from catalog") rows are included in the table.
     /// Persisted across launches like other catalog UI prefs.
     /// Default OFF — purged rows hidden until the user opts in.
@@ -413,6 +421,7 @@ struct CatalogView: View {
                 avidBinFiles: model.avidBinResults.count,
                 showPairsOnly: $showPairsOnly,
                 viewFilters: $catalogViewFilters,
+                showDisconnectedMedia: $showDisconnectedMedia,
                 showRemoved: $showRemoved,
                 showSetAside: $showSetAside,
                 dashboardContent: {
@@ -446,6 +455,7 @@ struct CatalogView: View {
                 filterTargetPaths: filterTargetPaths,
                 showPairsOnly: showPairsOnly,
                 viewFilters: catalogViewFilters,
+                showDisconnectedMedia: showDisconnectedMedia,
                 showRemoved: showRemoved,
                 showSetAside: showSetAside,
                 // Media-kind facet (GH #124) — persisted on the model,

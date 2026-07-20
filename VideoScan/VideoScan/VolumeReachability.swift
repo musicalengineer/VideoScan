@@ -191,12 +191,29 @@ enum VolumeReachability {
         valuesEqual: { $0 == $1 },
         onChange: { _ in postReachabilityDidChange() },
         probe: { statTarget in
+            // /Volumes keys are answered from the kernel mount table — the
+            // SAME source of truth as the miss-default (2026-07-20 fix). The
+            // probe reads a FRESH `currentMountedRoots()`; `defaultReachability`
+            // reads the cached `mountedRoots` snapshot (refreshed on first use
+            // + mount/unmount invalidation), so the two can momentarily diverge
+            // if a mount changes with no notification — benign under
+            // stale-while-revalidate. `fileExists` returns TRUE
+            // for a leftover mountpoint stub directory or a symlink (proven
+            // live: `/Volumes/M4drive -> /` exists via fileExists but is NOT
+            // in the mount table), which would resurrect a disconnected drive
+            // as "connected" and defeat the reachable-only filter. getmntinfo
+            // reads in-kernel state, never spins up a sleeping HDD.
+            if statTarget.hasPrefix("/Volumes/") {
+                return currentMountedRoots().contains(statTarget)
+            }
+            // Non-/Volumes (internal) keys: existence IS the right question —
+            // there's no separable "volume" to ask the mount table about.
             var isDir: ObjCBool = false
             if FileManager.default.fileExists(atPath: statTarget, isDirectory: &isDir) {
                 return true
             }
             // checkResourceIsReachable handles a few cases fileExists doesn't,
-            // particularly bookmarked URLs and quick-existence checks on /Volumes.
+            // particularly bookmarked URLs and quick-existence checks.
             return (try? URL(fileURLWithPath: statTarget).checkResourceIsReachable()) ?? false
         }
     )
@@ -231,24 +248,37 @@ enum VolumeReachability {
     nonisolated(unsafe) private static var mountedRoots: Set<String> = currentMountedRoots()
     private static let mountedRootsLock = OSAllocatedUnfairLock()
 
+    /// Serializes the raw `getmntinfo` call. `getmntinfo(3)` returns a pointer
+    /// into a single libc-owned static buffer that it may `realloc` in place;
+    /// it is NOT reentrant/thread-safe. The reachability probe queue is
+    /// concurrent, so `/Volumes` probes can call `currentMountedRoots()` from
+    /// several threads at once — without this lock they would race on that
+    /// shared buffer (torn reads at best, use-after-free under a concurrent
+    /// realloc at worst). The lock is held only across the microsecond
+    /// in-kernel read + copy-out into a Swift `Set`, so it never blocks on I/O.
+    private static let getmntinfoLock = OSAllocatedUnfairLock()
+
     /// Read the kernel mount table. Internal so tests can sanity-check it
     /// ("/" must always be present) without faking mounts.
     static func currentMountedRoots() -> Set<String> {
-        var mntPtr: UnsafeMutablePointer<statfs>?
-        let count = getmntinfo(&mntPtr, MNT_NOWAIT)
-        guard count > 0, let mntPtr else { return [] }
-        var roots = Set<String>()
-        for i in 0..<Int(count) {
-            var fs = mntPtr[i]
-            let mountPoint = withUnsafePointer(to: &fs.f_mntonname) {
-                $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) {
-                    String(cString: $0)
+        getmntinfoLock.withLockUnchecked {
+            var mntPtr: UnsafeMutablePointer<statfs>?
+            let count = getmntinfo(&mntPtr, MNT_NOWAIT)
+            guard count > 0, let mntPtr else { return [] }
+            var roots = Set<String>()
+            for i in 0..<Int(count) {
+                var fs = mntPtr[i]
+                let mountPoint = withUnsafePointer(to: &fs.f_mntonname) {
+                    $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) {
+                        String(cString: $0)
+                    }
                 }
+                roots.insert(mountPoint)
             }
-            roots.insert(mountPoint)
+            // getmntinfo's buffer is reused static storage owned by libc — never
+            // freed; the copy-out above completes before we drop the lock.
+            return roots
         }
-        // getmntinfo's buffer is reused static storage owned by libc — never freed.
-        return roots
     }
 
     /// The honest no-cache-entry answer. Pure — unit-tested directly.

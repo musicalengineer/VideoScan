@@ -37,6 +37,12 @@ struct CatalogContent: View {
     let filterTargetPaths: Set<String>
     let showPairsOnly: Bool
     let viewFilters: Set<CatalogViewFilter>
+    /// Reachable-only is the DEFAULT catalog baseline (2026-07-20): the table
+    /// shows only media on currently-mounted volumes unless this opt-out is
+    /// true. Persisted by the parent in @AppStorage("catalog.showDisconnectedMedia").
+    /// NOT one of the additive `viewFilters` — it's a baseline preference, so
+    /// "Clear All Filters" leaves it alone.
+    let showDisconnectedMedia: Bool
     /// When true, purged rows are included in the table (rendered italic +
     /// orange, with a restricted context menu). When false (default), purged
     /// rows are hidden — they remain in catalog.json for recoverability.
@@ -383,10 +389,17 @@ struct CatalogContent: View {
             }
             out = result
         }
-        // View menu filters (additive — each active filter narrows further)
-        if viewFilters.contains(.onlineOnly) {
+        // Reachable-only baseline (2026-07-20): by default the catalog shows
+        // ONLY media on currently-mounted volumes. The "Show disconnected
+        // media" toggle lifts this baseline. Uses the SAME
+        // VolumeReachability.isReachable the Volumes view uses so the two
+        // stay consistent. Applied here (after the additive filters would
+        // start) but gated on its OWN flag, not `viewFilters` — Clear All
+        // Filters must not disturb it.
+        if !showDisconnectedMedia {
             out = out.filter { VolumeReachability.isReachable(path: $0.fullPath) }
         }
+        // View menu filters (additive — each active filter narrows further)
         if viewFilters.contains(.videoAndAudioOnly) {
             out = out.filter { $0.streamType == .videoAndAudio }
         }

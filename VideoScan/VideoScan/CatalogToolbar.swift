@@ -56,6 +56,11 @@ struct CatalogToolbar<Dashboard: View>: View {
     let avidBinFiles: Int
     @Binding var showPairsOnly: Bool
     @Binding var viewFilters: Set<CatalogViewFilter>
+    /// Baseline reachability opt-out (2026-07-20). Reachable-only is the
+    /// DEFAULT; when this is ON the catalog also shows media on disconnected
+    /// volumes. Persisted in @AppStorage("catalog.showDisconnectedMedia") by
+    /// the parent. NOT part of `viewFilters` — "Clear All Filters" leaves it.
+    @Binding var showDisconnectedMedia: Bool
     /// When on, purged rows render alongside active rows (italic + orange).
     /// Persisted in @AppStorage("catalogShowRemoved") by the parent.
     @Binding var showRemoved: Bool
@@ -505,15 +510,33 @@ struct CatalogToolbar<Dashboard: View>: View {
             // flips — one scan keeps the count honest.
 
             Menu {
-                ForEach(CatalogViewFilter.allCases, id: \.self) { filter in
-                    Toggle(isOn: Binding(
-                        get: { viewFilters.contains(filter) },
-                        set: { on in
-                            if on { viewFilters.insert(filter) }
-                            else  { viewFilters.remove(filter) }
+                // Baseline reachability opt-out (2026-07-20). Reachable-only
+                // is the DEFAULT; this toggle lifts that baseline. Kept in its
+                // own section ABOVE the additive filters — and deliberately
+                // NOT reset by "Clear All Filters" (it's a preference, not a
+                // filter). Same VolumeReachability the Volumes view uses.
+                Section {
+                    Toggle(isOn: $showDisconnectedMedia) {
+                        Label("Show disconnected media",
+                              systemImage: showDisconnectedMedia
+                              ? "externaldrive.badge.xmark"
+                              : "externaldrive.fill.badge.checkmark")
+                    }
+                    .help(showDisconnectedMedia
+                          ? "Showing media on disconnected volumes too. Turn off to show only reachable media (the default)."
+                          : "Only media on connected volumes is shown (the default). Turn on to also list files on disconnected drives.")
+                }
+                Section("View filters") {
+                    ForEach(CatalogViewFilter.allCases, id: \.self) { filter in
+                        Toggle(isOn: Binding(
+                            get: { viewFilters.contains(filter) },
+                            set: { on in
+                                if on { viewFilters.insert(filter) }
+                                else  { viewFilters.remove(filter) }
+                            }
+                        )) {
+                            Label(filter.rawValue, systemImage: filter.icon)
                         }
-                    )) {
-                        Label(filter.rawValue, systemImage: filter.icon)
                     }
                 }
                 if !viewFilters.isEmpty {
