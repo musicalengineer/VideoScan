@@ -6,6 +6,7 @@
 
 import SwiftUI
 import AVKit
+import os.log
 
 // MARK: - Table + Preview + Inspector
 
@@ -1052,21 +1053,160 @@ func duplicateDisplayLabel(for record: VideoRecord) -> String {
 
 // MARK: - Shared media open helpers
 
+private let mediaOpenLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "mediaOpen")
+
+/// Which player VideoScan should hand a file to.
+enum MediaPlayerChoice: Equatable {
+    /// QuickTime Player — chosen ONLY when the cataloged codecs guarantee
+    /// both picture AND sound play (Rick's preferred player when it works).
+    case quickTime
+    /// VLC — the "opens anything" fallback for codecs QuickTime can't
+    /// decode, or would open silently (ac3/dts/opus/…), or files we have
+    /// no metadata for. Used when /Applications/VLC.app exists.
+    case vlc
+    /// The system default handler — last resort when VLC isn't installed.
+    case systemDefault
+}
+
 enum MediaOpener {
-    /// Open one or more catalog records in QuickTime Player.
-    /// Silently skips records on offline volumes (the table's row context
-    /// menu shows a clearer "Reveal" option for those).
+
+    // MARK: Player decision (pure, unit-testable)
+    //
+    // Decided entirely from already-cataloged ffprobe metadata — zero
+    // runtime probing. Conservative by design: QuickTime is returned ONLY
+    // on a positive three-way match (container + video codec + audio
+    // codec all known-good). ANY uncertainty — an empty/unknown field, an
+    // off-list audio codec that QT would open silently — routes to VLC.
+
+    /// Containers QuickTime opens natively.
+    private static let qtContainers: Set<String> = ["mov", "mp4", "m4v", "qt"]
+
+    /// Video codecs QuickTime can decode. (ffprobe names + fourccs.)
+    private static let qtVideoCodecs: Set<String> = [
+        "h264", "avc1", "hevc", "hvc1", "hev1",
+        "prores", "apcn", "apch", "apcs", "apco", "ap4h", "mjpeg"
+    ]
+
+    /// Audio codecs QuickTime plays WITH SOUND. The empty string means
+    /// "no audio track" — video-only files are fine in QT. Anything NOT
+    /// on this list (ac3, eac3, dts, opus, vorbis, flac, truehd, …) makes
+    /// QT open-but-silent, so it is deliberately excluded → routes to VLC.
+    private static let qtAudioCodecs: Set<String> = [
+        "aac", "mp4a", "alac", "mp3", "lpcm",
+        "pcm_s16le", "pcm_s24le", "sowt", "twos", ""
+    ]
+
+    /// Pure decision function. Inputs are normalized (trimmed, lowercased)
+    /// before matching. See the allow-lists above for the exact policy.
+    static func preferredPlayer(container: String,
+                                videoCodec: String,
+                                audioCodec: String,
+                                hasVLC: Bool) -> MediaPlayerChoice {
+        func norm(_ s: String) -> String {
+            s.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        }
+        let c = norm(container)
+        let v = norm(videoCodec)
+        let a = norm(audioCodec)
+
+        // Positive-match only. Missing container or videoCodec fails the
+        // Set.contains check on its own, so uncataloged files fall through
+        // to VLC/systemDefault without a special case.
+        let qtOK = qtContainers.contains(c)
+            && qtVideoCodecs.contains(v)
+            && qtAudioCodecs.contains(a)
+
+        if qtOK { return .quickTime }
+        return hasVLC ? .vlc : .systemDefault
+    }
+
+    /// Convenience overload reading the fields off a catalog record.
+    static func preferredPlayer(for record: VideoRecord,
+                                hasVLC: Bool) -> MediaPlayerChoice {
+        preferredPlayer(container: record.container,
+                        videoCodec: record.videoCodec,
+                        audioCodec: record.audioCodec,
+                        hasVLC: hasVLC)
+    }
+
+    // MARK: VLC availability
+    //
+    // `static let` is computed lazily exactly once on first access and is
+    // thread-safe — the Swift analog of a function-local `static` in C++
+    // (Meyers singleton). We only probe the filesystem once per launch.
+    private static let vlcAppPath = "/Applications/VLC.app"
+    private static let vlcInstalled: Bool =
+        FileManager.default.fileExists(atPath: vlcAppPath)
+
+    /// Whether /Applications/VLC.app is present (cached for the process).
+    static var hasVLC: Bool { vlcInstalled }
+
+    // MARK: Smart launch
+
+    /// The unified double-click entry point: pick the right player per
+    /// record from cataloged metadata, then launch — batching by player
+    /// so a multi-selection opens in as few app launches as possible.
+    /// Records on unreachable volumes are skipped (and logged), never
+    /// blocked on.
+    static func open(_ records: [VideoRecord]) {
+        let reachable = records.filter { rec in
+            if VolumeReachability.isReachable(path: rec.fullPath) { return true }
+            mediaOpenLog.info("Skipping unreachable file: \(rec.fullPath, privacy: .public)")
+            return false
+        }
+        guard !reachable.isEmpty else { return }
+
+        var qtURLs: [URL] = []
+        var vlcURLs: [URL] = []
+        var defaultURLs: [URL] = []
+        for rec in reachable {
+            let url = URL(fileURLWithPath: rec.fullPath)
+            switch preferredPlayer(for: rec, hasVLC: hasVLC) {
+            case .quickTime:     qtURLs.append(url)
+            case .vlc:           vlcURLs.append(url)
+            case .systemDefault: defaultURLs.append(url)
+            }
+        }
+
+        if !qtURLs.isEmpty { launchQuickTime(qtURLs) }
+        if !vlcURLs.isEmpty { launchVLC(vlcURLs) }
+        for url in defaultURLs {
+            mediaOpenLog.info("Opening in system default handler: \(url.path, privacy: .public)")
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// Open one or more catalog records in QuickTime Player, unconditionally.
+    /// Kept for the explicit "Open in QuickTime Player" menu item — the
+    /// smart path is `open(_:)`. Silently skips records on offline volumes.
     static func openInQuickTime(_ records: [VideoRecord]) {
         let urls = records
             .filter { VolumeReachability.isReachable(path: $0.fullPath) }
             .map { URL(fileURLWithPath: $0.fullPath) }
-        guard !urls.isEmpty,
-              let qtURL = NSWorkspace.shared.urlForApplication(
-                withBundleIdentifier: "com.apple.QuickTimePlayerX"
-              )
-        else { return }
+        launchQuickTime(urls)
+    }
+
+    private static func launchQuickTime(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        guard let qtURL = NSWorkspace.shared.urlForApplication(
+            withBundleIdentifier: "com.apple.QuickTimePlayerX"
+        ) else {
+            mediaOpenLog.error("QuickTime Player not found; \(urls.count) file(s) not opened")
+            return
+        }
+        mediaOpenLog.info("Opening \(urls.count) file(s) in QuickTime")
         NSWorkspace.shared.open(urls,
                                 withApplicationAt: qtURL,
+                                configuration: NSWorkspace.OpenConfiguration())
+    }
+
+    /// Launch the VLC application BUNDLE (LaunchServices resolves the
+    /// correct arm64 binary — never hardcode Contents/MacOS/VLC).
+    private static func launchVLC(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        mediaOpenLog.info("Opening \(urls.count) file(s) in VLC")
+        NSWorkspace.shared.open(urls,
+                                withApplicationAt: URL(fileURLWithPath: vlcAppPath),
                                 configuration: NSWorkspace.OpenConfiguration())
     }
 }

@@ -63,7 +63,10 @@ extension PersonFinderView {
             } primaryAction: { ids in
                 guard let id = ids.first,
                       let rec = resultTableData.first(where: { $0.id == id }) else { return }
-                playInQuickTime(rec)
+                // Double-click → smart open (QuickTime when the cataloged
+                // codecs guarantee picture+sound, else VLC), unified with
+                // the Catalog/Archive windows.
+                smartOpen(rec)
             }
             .frame(minHeight: 120)
             .popover(isPresented: $inspectorShown, arrowEdge: .trailing) {
@@ -243,14 +246,13 @@ extension PersonFinderView {
                 .controlSize(.regular)
                 .tint(.blue)
 
-                Button {
-                    playInQuickTime(rec)
-                } label: {
-                    Label("Play", systemImage: "play.fill")
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
-                .tint(.blue)
+                // The dedicated Play button was removed 2026-07-20: playback
+                // is now triggered by double-clicking the result row, routed
+                // through MediaOpener.open (smart QuickTime/VLC selection),
+                // matching the Catalog and Archive windows.
+                // TODO: make this detail/preview area itself playable inline
+                // (embedded player) — deliberately OUT OF SCOPE for the
+                // smart-player-open feature; tracked separately.
 
                 Button {
                     openInspector(for: rec)
@@ -268,8 +270,30 @@ extension PersonFinderView {
         .background(Color(NSColor.controlBackgroundColor))
     }
 
-    /// Launches QuickTime Player for the given result. Used by the Play
-    /// button, the context menu, and the table-row double-click action.
+    /// Smart-opens a People-window result, bridging its model to the
+    /// catalog's player decision.
+    ///
+    /// A `ClipResult` only carries a `videoPath` — no container/codec
+    /// fields — so we look up the matching catalog `VideoRecord` (by
+    /// `fullPath`) to recover the ffprobe metadata the player decision
+    /// needs. When the file isn't in the catalog, we hand `MediaOpener` a
+    /// lightweight record with only the path set: its empty codecs make
+    /// `preferredPlayer` route to VLC, the safe "opens anything" default.
+    private func smartOpen(_ rec: ClipResult) {
+        if let match = catalogModel.records.first(where: { $0.fullPath == rec.videoPath }) {
+            pfViewLog.info("Smart open (catalog metadata): \(rec.videoPath, privacy: .public)")
+            MediaOpener.open([match])
+        } else {
+            // Not in catalog → no codec metadata → VLC/systemDefault.
+            let stub = VideoRecord()
+            stub.fullPath = rec.videoPath
+            pfViewLog.info("Smart open (no catalog metadata, VLC fallback): \(rec.videoPath, privacy: .public)")
+            MediaOpener.open([stub])
+        }
+    }
+
+    /// Launches QuickTime Player for the given result. Used by the
+    /// explicit "Open in QuickTime Player" context-menu item.
     private func playInQuickTime(_ rec: ClipResult) {
         guard let qtURL = NSWorkspace.shared.urlForApplication(
             withBundleIdentifier: "com.apple.QuickTimePlayerX"

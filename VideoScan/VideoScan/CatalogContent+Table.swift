@@ -822,9 +822,10 @@ extension CatalogContent {
                 }
             }
         } primaryAction: { ids in
-            // Double-click / Return on row(s) → open in QuickTime.
+            // Double-click / Return on row(s) → smart open (QuickTime when
+            // the cataloged codecs guarantee picture+sound, else VLC).
             let recs = ids.compactMap { id in records.first { $0.id == id } }
-            MediaOpener.openInQuickTime(recs)
+            MediaOpener.open(recs)
         }
         .onAppear { tableData = computeFiltered() }
         .onChange(of: records.count) { tableData = computeFiltered() }
