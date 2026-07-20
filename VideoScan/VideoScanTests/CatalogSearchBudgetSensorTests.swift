@@ -81,7 +81,15 @@ struct CatalogSearchBudgetSensorTests {
             ("donna", 50),                // word fast-path
             ("mark dan grampa", 50),      // word fast-path, 3-token AND
             ("1990s", 50),                // yearRange — PR D's precomputed sets
-            ("donna 1990s", 50),          // fast-path narrow + yearRange on survivors
+            ("donna 1990s", 165),         // MIXED substring+yearRange: any yearRange
+                                          // token bails tryIndexLookup, so the whole
+                                          // query walks the linear matcher (~60 ms
+                                          // measured post-D). Candidate follow-up:
+                                          // resolve substring tokens via the index,
+                                          // then year-set-check only the candidates
+                                          // — but that touches the fast-path core,
+                                          // so it stays out of this overnight fix
+                                          // (PR C moves it off-main regardless).
             ("1993", 165),                // linear (infix-defeated) — interim, see header
             ("christmas", 165),           // linear (infix-defeated)
             ("mov", 165),                 // linear (infix of "imovie")

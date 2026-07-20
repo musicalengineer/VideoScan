@@ -499,11 +499,10 @@ struct CatalogToolbar<Dashboard: View>: View {
             .fixedSize()
             .accessibilityIdentifier("catalog.kindFacet.menu")
             .help(model.kindFacetSetting.facet.help)
-            .onChange(of: model.kindFacetSetting) { _, _ in
-                // The badge counts over the facet base — keep it honest
-                // when the chip flips.
-                recomputeSearchHitCount()
-            }
+            // No badge recompute here anymore (GH #123 PR B): the badge
+            // derives from CatalogContent's filter pass, which already
+            // re-runs via its own .onChange(of: kindFacet) when the chip
+            // flips — one scan keeps the count honest.
 
             Menu {
                 ForEach(CatalogViewFilter.allCases, id: \.self) { filter in
