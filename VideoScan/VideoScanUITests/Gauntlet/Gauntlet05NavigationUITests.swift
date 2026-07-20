@@ -69,11 +69,20 @@ final class Gauntlet05NavigationUITests: GauntletTestCase {
         let summary = app.staticTexts["about.buildSummary"]
         XCTAssertTrue(summary.waitForExistence(timeout: 15),
                       "About window rendered without the BuildInfo summary line.")
-        XCTAssertTrue(summary.label.contains("2.6"),
-                      "About summary lost the v2.6 marketing version: \(summary.label)")
+        // A styled SwiftUI Text carrying only an .accessibilityIdentifier
+        // exposes its string via the element's `value`, not `label`, on
+        // macOS 26 — `label` comes back empty. (Flow 5's first real run,
+        // 2026-07-20, caught this: the app renders "v2.6 …" correctly, but
+        // this assertion read the wrong attribute.) Read label, falling back
+        // to value — same pattern as Gauntlet01's `textViews...value as? String`.
+        let summaryText = summary.label.isEmpty
+            ? (summary.value as? String ?? "")
+            : summary.label
+        XCTAssertTrue(summaryText.contains("2.6"),
+                      "About summary lost the v2.6 marketing version: \(summaryText)")
         // The genuine-git-hash release feature (67e765a): the summary
         // must carry SOME hash/branch info beyond the bare version.
-        XCTAssertGreaterThan(summary.label.count, "2.6".count + 4,
-                             "About summary is suspiciously bare — git hash/branch info missing: \(summary.label)")
+        XCTAssertGreaterThan(summaryText.count, "2.6".count + 4,
+                             "About summary is suspiciously bare — git hash/branch info missing: \(summaryText)")
     }
 }
