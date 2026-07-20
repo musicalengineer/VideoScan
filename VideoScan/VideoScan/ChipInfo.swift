@@ -23,11 +23,11 @@ enum ChipInfo {
     private static func brandString() -> String {
         var size = 0
         sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0)
-        guard size > 0 else { return "Apple Silicon" }
+        guard size > 0 else { return "Apple" }
         var buf = [CChar](repeating: 0, count: size)
         sysctlbyname("machdep.cpu.brand_string", &buf, &size, nil, 0)
         let s = String(cString: buf).trimmingCharacters(in: .whitespacesAndNewlines)
-        return s.isEmpty ? "Apple Silicon" : s
+        return s.isEmpty ? "Apple" : s
     }
 
     private static func detailSuffix(chipName: String) -> String {
