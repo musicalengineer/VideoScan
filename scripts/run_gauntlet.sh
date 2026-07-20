@@ -59,7 +59,7 @@ xcodebuild test \
     -configuration Debug \
     -destination 'platform=macOS' \
     -derivedDataPath "$DERIVED_DATA" \
-    "${EXTRA_ARGS[@]}" \
+    ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"} \
     TEST_RUNNER_VS_GAUNTLET=1 \
     > "$LOG_FILE" 2>&1 &
 XB_PID=$!
