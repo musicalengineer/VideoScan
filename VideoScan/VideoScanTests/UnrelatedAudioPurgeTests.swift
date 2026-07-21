@@ -24,7 +24,8 @@ import Testing
 private func rec(streamType: StreamType,
                  fullPath: String,
                  umid: String = "",
-                 ext: String = "") -> VideoRecord {
+                 ext: String = "",
+                 pairGroupID: UUID? = nil) -> VideoRecord {
     let r = VideoRecord()
     r.streamTypeRaw = streamType.rawValue
     r.fullPath = fullPath
@@ -32,6 +33,7 @@ private func rec(streamType: StreamType,
     r.filename = (fullPath as NSString).lastPathComponent
     r.directory = (fullPath as NSString).deletingLastPathComponent
     r.ext = ext.isEmpty ? (fullPath as NSString).pathExtension : ext
+    r.pairGroupID = pairGroupID
     return r
 }
 
@@ -44,12 +46,71 @@ struct UnrelatedAudioPurgeCriterionTests {
         UnrelatedAudioPurge.videoSets(in: records)
     }
 
-    @Test("audio in a music-only dir, no video anywhere → candidate")
-    func lonelyMusicIsCandidate() {
+    @Test("audio in a music-only dir WITH some video anchor elsewhere → candidate")
+    func lonelyMusicWithAnchorIsCandidate() {
+        // A real video anchor exists (different dir) so the catalog is not
+        // anchor-empty; the unrelated sample is a genuine candidate.
+        let video = rec(streamType: .videoAndAudio, fullPath: "/Vol/Family/clip.mov")
         let audio = rec(streamType: .audioOnly,
                         fullPath: "/Vol/Logic/Library.bundle/Samples/loop_01.wav")
-        let sets = videoSets([audio])   // no video-bearing records at all
+        let sets = videoSets([video, audio])
         #expect(UnrelatedAudioPurge.isCandidate(audio, videoSets: sets))
+        #expect(UnrelatedAudioPurge.count(in: [video, audio]) == 1)
+    }
+
+    @Test("zero-anchor catalog (only audio) → aggregates refuse: no candidates")
+    func zeroAnchorCatalogRefuses() {
+        // A catalog scanned before its video volumes were online: only
+        // audio. The pure per-record predicate would call each unrelated,
+        // but the aggregate entry points MUST nominate nothing (fail-safe),
+        // and the summary reports hasVideoAnchors == false.
+        let all = [
+            rec(streamType: .audioOnly, fullPath: "/Vol/Logic/Samples/a.wav"),
+            rec(streamType: .audioOnly, fullPath: "/Vol/AppleLoops/b.caf"),
+            rec(streamType: .noStreams, fullPath: "/Vol/Misc/notes.txt"),
+        ]
+        #expect(UnrelatedAudioPurge.count(in: all) == 0)
+        #expect(UnrelatedAudioPurge.candidates(in: all).isEmpty)
+        #expect(UnrelatedAudioPurge.candidateIDs(in: all).isEmpty)
+        #expect(!UnrelatedAudioPurge.hasVideoAnchors(in: all))
+        let summary = UnrelatedAudioPurge.summary(in: all)
+        #expect(!summary.hasVideoAnchors)
+        let summaryCount = summary.count   // local Int — avoid empty_count misfire
+        #expect(summaryCount == 0)
+    }
+
+    @Test("paired audio (curated pair) in a different dir/stem, empty UMID → KEEP")
+    func pairedAudioIsKept() {
+        // The audio half of a hand-correlated pair: matched by tape.clipID,
+        // so it can live in a DIFFERENT dir with a DIFFERENT stem and empty
+        // UMID — invisible to the relationship check. The pairGroupID guard
+        // must keep it even though a video anchor exists elsewhere.
+        let video = rec(streamType: .videoOnly, fullPath: "/Vol/A/reel.mxf")
+        let pairedAudio = rec(streamType: .audioOnly,
+                              fullPath: "/Vol/Zzz/audio_essence/take7.mxf",
+                              pairGroupID: UUID())
+        let sets = videoSets([video, pairedAudio])
+        #expect(!UnrelatedAudioPurge.isCandidate(pairedAudio, videoSets: sets))
+        #expect(UnrelatedAudioPurge.candidates(in: [video, pairedAudio]).isEmpty)
+    }
+
+    @Test("audio co-located with a recovered-essence (.ffprobeFailed) record → KEEP")
+    func audioColocatedWithEssenceIsKept() {
+        // Recovered Avid essence: ffprobe failed on the RGBA video half, so
+        // it's .ffprobeFailed — but it must still anchor its co-located
+        // audio half (same directory).
+        let essence = rec(streamType: .ffprobeFailed, fullPath: "/Vol/Avid/OMFI/v_essence.mxf")
+        let audio   = rec(streamType: .audioOnly,     fullPath: "/Vol/Avid/OMFI/a_essence.mxf")
+        let sets = videoSets([essence, audio])
+        #expect(!UnrelatedAudioPurge.isCandidate(audio, videoSets: sets))
+    }
+
+    @Test("audio with same stem as a recovered-essence record (different dir) → KEEP")
+    func audioStemMatchesEssenceIsKept() {
+        let essence = rec(streamType: .ffprobeFailed, fullPath: "/Vol/Avid/v/clip42.mxf")
+        let audio   = rec(streamType: .audioOnly,     fullPath: "/Vol/Avid/a/clip42.mxf")
+        let sets = videoSets([essence, audio])
+        #expect(!UnrelatedAudioPurge.isCandidate(audio, videoSets: sets))
     }
 
     @Test("audio co-located with a video in the same dir → KEEP (same directory)")
@@ -128,6 +189,9 @@ struct UnrelatedAudioPurgeCriterionTests {
     @Test("summary() reports the top directories among candidates")
     func summaryTopTrees() {
         var all: [VideoRecord] = []
+        // A video anchor (different dir/stem) so the catalog is not anchor-
+        // empty; the sample audio below stays unrelated → candidates.
+        all.append(rec(streamType: .videoAndAudio, fullPath: "/Vol/Family/clip.mov"))
         // 5 junk in /Vol/Logic/Samples, 3 in /Vol/AppleLoops, 1 elsewhere.
         for i in 0..<5 { all.append(rec(streamType: .audioOnly, fullPath: "/Vol/Logic/Samples/s\(i).wav")) }
         for i in 0..<3 { all.append(rec(streamType: .audioOnly, fullPath: "/Vol/AppleLoops/l\(i).caf")) }
@@ -138,6 +202,35 @@ struct UnrelatedAudioPurgeCriterionTests {
         #expect(summary.topTrees.first?.path == "/Vol/Logic/Samples")
         #expect(summary.topTrees.first?.count == 5)
         #expect(summary.topTrees.count == 3)
+    }
+}
+
+@Suite(.serialized) @MainActor
+struct UnrelatedAudioPurgeRefusalTests {
+
+    /// The model's empty-anchor guard: purging a catalog with NO video /
+    /// essence anchor removes nothing (refuses) and leaves records intact.
+    /// Uses an injected temp store per the harness convention, though the
+    /// refusal returns before any snapshot/save is attempted.
+    @Test func purgeRefusesWhenNoVideoAnchors() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vs-unrelated-refuse-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let model = VideoScanModel()
+        model.catalogStore = CatalogStore(directory: tmp)
+        model.scanTargets.removeAll()
+        model.records = [
+            rec(streamType: .audioOnly, fullPath: "/Vol/Logic/Samples/a.wav"),
+            rec(streamType: .audioOnly, fullPath: "/Vol/AppleLoops/b.caf"),
+        ]
+        let before = model.records.count
+
+        let removed = model.purgeUnrelatedAudioRecords()
+
+        #expect(removed == 0, "no video anchors → purge must refuse and remove nothing")
+        #expect(model.records.count == before, "records untouched on refusal")
     }
 }
 

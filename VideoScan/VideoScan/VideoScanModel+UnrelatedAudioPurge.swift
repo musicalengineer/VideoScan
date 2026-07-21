@@ -64,6 +64,18 @@ extension VideoScanModel {
     /// rebuild, and one batched save.
     @discardableResult
     func purgeUnrelatedAudioRecords() -> Int {
+        // Empty-anchor guard: a catalog with NO video-bearing / recovered-
+        // essence record has no way to relate audio to video, so EVERY
+        // audio-only row would look "unrelated" and we'd wipe all of it
+        // (e.g. a catalog scanned before its video volumes were online).
+        // Refuse — remove nothing — and tell the user to re-scan first.
+        guard UnrelatedAudioPurge.hasVideoAnchors(in: records) else {
+            log("Purge Non-Video Audio Junk: REFUSED — this catalog has no video records to relate audio to. Nothing removed. Re-scan your video volumes first.")
+            appLog.write("Purge Non-Video Audio Junk (REFUSED): no video anchors in catalog; removed nothing")
+            unrelatedAudioPurgeLog.error("Refused: no video anchors — would wipe all audio")
+            return 0
+        }
+
         let doomed = UnrelatedAudioPurge.candidateIDs(in: records)
         guard !doomed.isEmpty else {
             log("Purge Non-Video Audio Junk: nothing to remove — no unrelated audio records in the catalog.")

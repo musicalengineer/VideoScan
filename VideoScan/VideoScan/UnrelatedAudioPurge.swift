@@ -86,23 +86,31 @@ enum UnrelatedAudioPurge {
         var isEmpty: Bool { dirs.isEmpty && stems.isEmpty && umids.isEmpty }
     }
 
-    /// True iff `record` carries a video stream (the "video-bearing" gate).
-    static func isVideoBearing(_ record: VideoRecord) -> Bool {
+    /// True iff `record` can ANCHOR a relationship for nearby audio: it
+    /// carries a video stream OR it is recovered Avid essence. ffprobe
+    /// fails on the separated Avid video half (RGBA/legacy KLV), so that
+    /// half lands as `.ffprobeFailed` — but it is still a REAL video whose
+    /// co-located / same-stem audio half must be kept. Used ONLY to build
+    /// the relationship sets, never on the candidate side (see the note on
+    /// isCandidate: ffprobeFailed stays a non-candidate).
+    static func isEssenceBearing(_ record: VideoRecord) -> Bool {
         switch record.streamType {
-        case .videoAndAudio, .videoOnly:
+        case .videoAndAudio, .videoOnly, .ffprobeFailed:
             return true
-        case .audioOnly, .noStreams, .ffprobeFailed:
+        case .audioOnly, .noStreams:
             return false
         }
     }
 
-    /// Single pass over the catalog collecting the video-side dirs, stems,
-    /// and non-empty UMIDs. Called ONCE per count/purge — never per record.
+    /// Single pass over the catalog collecting the anchor-side dirs, stems,
+    /// and non-empty UMIDs — from every video-bearing AND recovered-essence
+    /// (`.ffprobeFailed`) record. Called ONCE per count/purge — never per
+    /// record.
     static func videoSets(in records: [VideoRecord]) -> VideoSets {
         var dirs = Set<String>()
         var stems = Set<String>()
         var umids = Set<String>()
-        for r in records where isVideoBearing(r) {
+        for r in records where isEssenceBearing(r) {
             dirs.insert(dir(ofFullPath: r.fullPath))
             stems.insert(stem(ofFullPath: r.fullPath))
             if !r.materialPackageUMID.isEmpty {
@@ -110,6 +118,15 @@ enum UnrelatedAudioPurge {
             }
         }
         return VideoSets(dirs: dirs, stems: stems, umids: umids)
+    }
+
+    /// True iff the catalog has ANY relationship anchor (video-bearing or
+    /// recovered essence). When false, EVERY audio-only record would look
+    /// "unrelated" and the purge must REFUSE (see purgeUnrelatedAudioRecords
+    /// and the sheet's empty-anchor branch) — otherwise a catalog scanned
+    /// before its video volumes were online would wipe all 81k audio rows.
+    static func hasVideoAnchors(in records: [VideoRecord]) -> Bool {
+        !videoSets(in: records).isEmpty
     }
 
     // MARK: - The relationship check (pure, O(1) given the sets)
@@ -127,10 +144,19 @@ enum UnrelatedAudioPurge {
     }
 
     /// PURE candidate predicate given the precomputed video sets. A record
-    /// is a purge candidate iff it is audio-only AND unrelated to any video.
-    /// Non-audio records (video-bearing, ffprobeFailed, noStreams) are
-    /// never candidates — they are always kept.
+    /// is a purge candidate iff it is audio-only, NOT part of a curated
+    /// pair, AND unrelated to any video/essence anchor. Non-audio records
+    /// (video-bearing, ffprobeFailed, noStreams) are never candidates —
+    /// they are always kept.
     static func isCandidate(_ record: VideoRecord, videoSets sets: VideoSets) -> Bool {
+        // Never touch a hand-correlated pair's audio half. Curated pairing
+        // uses a normalized tape.clipID key, so the audio can sit in a
+        // DIFFERENT dir with a DIFFERENT stem and an empty UMID — invisible
+        // to the relationship check below. Guard on pairGroupID (it decodes
+        // independently of pointer resolution, VideoRecord.swift) plus the
+        // in-memory pairedWith pointer. Removing a paired audio would drop
+        // the curation and re-scan would re-add it UNPAIRED.
+        guard record.pairGroupID == nil, record.pairedWith == nil else { return false }
         guard record.streamType == .audioOnly else { return false }
         return !isRelatedToVideo(record, videoSets: sets)
     }
@@ -138,25 +164,31 @@ enum UnrelatedAudioPurge {
     // MARK: - Whole-catalog entry points (each builds the sets once)
 
     /// Every purge candidate in `records`, order preserved. Builds the
-    /// video sets once, then O(1) per record.
+    /// video sets once, then O(1) per record. Fail-safe: with NO anchor in
+    /// the catalog, NOTHING is a candidate (a zero-video catalog must never
+    /// nominate all audio for removal).
     static func candidates(in records: [VideoRecord]) -> [VideoRecord] {
         let sets = videoSets(in: records)
+        guard !sets.isEmpty else { return [] }
         return records.filter { isCandidate($0, videoSets: sets) }
     }
 
     /// IDs of every purge candidate — the removal key set. `Set` so the
-    /// `records.removeAll` pass is O(1) per record.
+    /// `records.removeAll` pass is O(1) per record. Same anchor fail-safe.
     static func candidateIDs(in records: [VideoRecord]) -> Set<UUID> {
         let sets = videoSets(in: records)
+        guard !sets.isEmpty else { return [] }
         var ids = Set<UUID>()
         for r in records where isCandidate(r, videoSets: sets) { ids.insert(r.id) }
         return ids
     }
 
     /// Count of purge candidates. One O(N) pass after the one-time set
-    /// build — safe to call from the confirmation sheet's on-appear.
+    /// build — safe to call from the confirmation sheet's on-appear. Same
+    /// anchor fail-safe: 0 when the catalog has no video/essence anchor.
     static func count(in records: [VideoRecord]) -> Int {
         let sets = videoSets(in: records)
+        guard !sets.isEmpty else { return 0 }
         var n = 0
         for r in records where isCandidate(r, videoSets: sets) { n += 1 }
         return n
@@ -181,24 +213,45 @@ enum UnrelatedAudioPurge {
         let count: Int
         /// Top parent directories among candidates, highest count first.
         let topTrees: [TreeCount]
+        /// Number of relationship anchors in the catalog — video-bearing
+        /// plus recovered-essence (`.ffprobeFailed`) records. Lets the
+        /// sheet read "77k of 81k audio vs 16k video records" instead of a
+        /// bare candidate count.
+        let anchorCount: Int
+        /// False when the catalog has NO anchor at all. The sheet then
+        /// refuses to purge (every audio would look unrelated).
+        let hasVideoAnchors: Bool
     }
 
-    /// Build the sheet summary: total candidate count + the `topN` parent
-    /// directories holding the most candidates. Single set-build then one
-    /// O(N) pass that tallies per-directory counts on the fly.
+    /// Build the sheet summary in ONE combined pass: total candidate count,
+    /// the `topN` parent directories holding the most candidates, the anchor
+    /// (video/essence) count, and whether any anchor exists at all. Single
+    /// set-build then one O(N) pass tallying candidates + anchors on the fly.
     static func summary(in records: [VideoRecord], topN: Int = 6) -> Summary {
         let sets = videoSets(in: records)
+        // No anchor at all → refuse: report zero candidates so the sheet
+        // shows the empty-anchor warning, never a count + Purge button.
+        guard !sets.isEmpty else {
+            return Summary(count: 0, topTrees: [], anchorCount: 0, hasVideoAnchors: false)
+        }
         var total = 0
+        var anchors = 0
         var perDir: [String: Int] = [:]
-        for r in records where isCandidate(r, videoSets: sets) {
-            total += 1
-            perDir[dir(ofFullPath: r.fullPath), default: 0] += 1
+        for r in records {
+            if isEssenceBearing(r) { anchors += 1 }
+            if isCandidate(r, videoSets: sets) {
+                total += 1
+                perDir[dir(ofFullPath: r.fullPath), default: 0] += 1
+            }
         }
         // Sort by count desc, then path asc for a stable, readable list.
         let top = perDir
             .sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
             .prefix(topN)
             .map { TreeCount(path: $0.key, count: $0.value) }
-        return Summary(count: total, topTrees: Array(top))
+        return Summary(count: total,
+                       topTrees: Array(top),
+                       anchorCount: anchors,
+                       hasVideoAnchors: !sets.isEmpty)
     }
 }

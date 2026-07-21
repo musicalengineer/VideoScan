@@ -22,6 +22,17 @@ struct UnrelatedAudioPurgeSheet: View {
     /// computed.
     @State private var summary: UnrelatedAudioPurge.Summary? = nil
 
+    /// Purge is offerable only when there ARE anchors AND at least one
+    /// candidate. Mirrors the model's refusal so the button never invites a
+    /// click the model would reject.
+    private var purgeEnabled: Bool {
+        guard let summary else { return false }
+        // Local Int (not a collection `.count`) so SwiftLint empty_count
+        // doesn't misfire on the `> 0` comparison.
+        let n = summary.count
+        return summary.hasVideoAnchors && n > 0
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 10) {
@@ -36,18 +47,32 @@ struct UnrelatedAudioPurgeSheet: View {
                 // Local Int binding (not a collection `.count`) so the
                 // SwiftLint empty_count rule doesn't misfire on `== 0`.
                 let n = summary.count
-                if n < 1 {
+                if !summary.hasVideoAnchors {
+                    // Empty-anchor refusal: no video/essence to relate audio
+                    // to — purging now would wipe ALL audio. Distinct from a
+                    // benign zero-candidate result; no Purge button offered.
+                    Label {
+                        Text("This catalog has no video records — refusing to purge all audio. Re-scan your video volumes first.")
+                            .fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundColor(.orange)
+                    }
+                } else if n < 1 {
                     Text("No unrelated audio records were found in the catalog. Nothing to remove.")
                         .fixedSize(horizontal: false, vertical: true)
                 } else {
                     Text("Remove \(n) unrelated audio record\(n == 1 ? "" : "s") from the catalog? Files on disk are untouched.")
                         .fixedSize(horizontal: false, vertical: true)
-                    Text("These are audio-only files with no relationship to any video — Logic Pro sample libraries, Apple Loops, Omnisphere / Pro Tools samples, standalone music. Audio that might belong to a video (same folder, matching name, or shared Avid UMID) is KEPT.")
+                    Text("Catalog has \(summary.anchorCount) video / recovered-essence record\(summary.anchorCount == 1 ? "" : "s") to relate audio against.")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                    Text("These are audio-only files with no relationship to any video — Logic Pro sample libraries, Apple Loops, Omnisphere / Pro Tools samples, standalone music. Audio that might belong to a video (same folder, matching name, shared Avid UMID, or an existing correlated pair) is KEPT.")
                         .font(.callout)
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    treesBreakdown(summary.topTrees, total: summary.count)
+                    treesBreakdown(summary.topTrees, total: n)
 
                     Text("A recovery snapshot is saved first (its path is logged to the console). There is no in-app Undo — to restore, quit and copy that snapshot back over catalog.json (or simply re-scan the volume).")
                         .font(.callout)
@@ -68,8 +93,10 @@ struct UnrelatedAudioPurgeSheet: View {
                 }
                 // Deliberately NOT the default action: this irreversibly
                 // removes records, so a reflexive Enter must not trigger it.
-                // Escape (Cancel) is the only keyboard path.
-                .disabled((summary?.count ?? 0) == 0)
+                // Escape (Cancel) is the only keyboard path. Also disabled
+                // when there are no video anchors — the model refuses that
+                // case anyway, but the button must not invite the click.
+                .disabled(!purgeEnabled)
             }
         }
         .padding(20)
