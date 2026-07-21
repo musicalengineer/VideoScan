@@ -541,22 +541,17 @@ struct VideoScanApp: App {
             CommandGroup(after: .windowArrangement) {
                 WindowMenuItems()
             }
-            // Catalog maintenance actions. A one-time cleanup of the
-            // cover-art music strays that were mis-cataloged as video
-            // before the scanner fix (545258f). Opens a confirmation sheet
-            // (bound in ContentView) that shows the LIVE candidate count
-            // and removes only on explicit Purge — files on disk untouched.
+            // Catalog maintenance actions. The unified "Purge Non-Video
+            // Media…" dialog REPLACES the two former single-purpose commands
+            // (Purge Cover-Art Music Records / Purge Non-Video Audio Junk).
+            // It opens a dialog (bound in ContentView) where Rick picks which
+            // categories of non-video junk and which volumes to purge, with
+            // live counts, and removes only on explicit Purge — files on disk
+            // untouched. The same dialog is reachable by right-clicking a
+            // volume in the Volumes window (that volume pre-selected).
             CommandMenu("Catalog") {
-                Button("Purge Cover-Art Music Records…") {
-                    catalogModel.showCoverArtMusicPurgeSheet = true
-                }
-                // Second maintenance purge: audio-only records unrelated to
-                // any video (Logic Pro / Apple Loops / Omnisphere sample
-                // libraries). Confirmation sheet shows the LIVE candidate
-                // count plus a top-directory breakdown so the doomed set can
-                // be eyeballed before removal — files on disk untouched.
-                Button("Purge Non-Video Audio Junk…") {
-                    catalogModel.showUnrelatedAudioPurgeSheet = true
+                Button("Purge Non-Video Media…") {
+                    catalogModel.showNonVideoMediaPurgeSheet = true
                 }
             }
         }

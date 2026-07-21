@@ -955,6 +955,17 @@ final class VideoScanModel: ObservableObject {
     /// count + top-trees breakdown on appear — never a hard-coded number.
     @Published var showUnrelatedAudioPurgeSheet: Bool = false
 
+    // MARK: - Non-Video Media Purge (logic in VideoScanModel+NonVideoMediaPurge.swift)
+
+    /// Drives the unified "Purge Non-Video Media…" dialog opened from the
+    /// Catalog menu. Flipped true by the Catalog-menu command (VideoScanApp);
+    /// the sheet is bound in ContentView. Model-level (not a view @State)
+    /// precisely so the app-level menu can open it. The volume right-click
+    /// entry point (VolumesWindow) drives its OWN local sheet item so it can
+    /// pre-select that one volume. Replaces showCoverArtMusicPurgeSheet /
+    /// showUnrelatedAudioPurgeSheet as the live purge surface.
+    @Published var showNonVideoMediaPurgeSheet: Bool = false
+
     // MARK: - Logging (delegates to DashboardState)
 
     func log(_ msg: String) { dashboard.log(msg) }

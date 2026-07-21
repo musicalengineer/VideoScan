@@ -48,6 +48,13 @@ struct VolumesWindow: View {
     /// environmentObject reliably.
     @State private var driveHealthTarget: CatalogScanTarget?
 
+    /// "Purge Non-Video Media…" sheet backing for the volume right-click
+    /// entry point. Carries the derived volume key + name so the unified
+    /// dialog opens with THIS volume pre-selected (others off). Local @State
+    /// (not the model's menu bool) so the sheet attaches to the Volumes
+    /// window and can pass a pre-selection.
+    @State private var nonVideoPurgeTarget: NonVideoPurgeTarget?
+
     /// "Delete from list" confirmation alert backing. Distinct from
     /// Retire — this is for orphan / typo / dangling scan targets
     /// (e.g. `/Volumes/rickb` with 0 records) that should never have
@@ -101,6 +108,16 @@ struct VolumesWindow: View {
         let path: String
         let name: String
         let orphanCount: Int
+    }
+
+    /// Identifiable payload for the "Purge Non-Video Media…" sheet. `volumeKey`
+    /// is the SAME pure derivation the purge classification uses
+    /// (`VolumeReachability.volumeName(forPath:)`) so the pre-selection matches
+    /// a real volume bucket in the dialog.
+    private struct NonVideoPurgeTarget: Identifiable {
+        let id = UUID()
+        let volumeKey: String
+        let name: String
     }
 
     private var selectedTarget: CatalogScanTarget? {
@@ -160,6 +177,13 @@ struct VolumesWindow: View {
         // inline editor card, but bigger.
         .sheet(item: $driveHealthTarget) { target in
             DriveHealthSheet(target: target)
+                .environmentObject(model)
+        }
+        // Volume right-click entry point for the unified purge dialog. Same
+        // NonVideoMediaPurgeSheet the Catalog menu opens, but pre-selected to
+        // THIS volume so Rick can clean drives one at a time.
+        .sheet(item: $nonVideoPurgeTarget) { target in
+            NonVideoMediaPurgeSheet(preselectedVolumeKey: target.volumeKey)
                 .environmentObject(model)
         }
     }
@@ -311,6 +335,21 @@ struct VolumesWindow: View {
               ? "Check this drive's health (SMART data, age, sector health)."
               : "Drive is offline — connect it to probe its health.")
         .accessibilityIdentifier("volumeRow.showDriveHealth")
+
+        // Unified purge, this volume pre-selected. Opens the same dialog as
+        // Catalog ▸ "Purge Non-Video Media…" but scoped to this drive so the
+        // user can clean volumes separately. The dialog computes live counts
+        // on appear and disables Purge when nothing matches, so this stays
+        // enabled unconditionally (gating it would need an O(records) sweep
+        // inside the context-menu builder — forbidden by the view-body rule).
+        Button("Purge Non-Video Media…") {
+            nonVideoPurgeTarget = NonVideoPurgeTarget(
+                volumeKey: VolumeReachability.volumeName(forPath: target.searchPath),
+                name: volumeName(target)
+            )
+        }
+        .help("Remove cover-art music and unrelated audio-only records from this volume. Files on disk are untouched.")
+        .accessibilityIdentifier("volumeRow.purgeNonVideoMedia")
 
         Divider()
 

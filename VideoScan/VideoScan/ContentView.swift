@@ -691,19 +691,14 @@ struct CatalogView: View {
         .sheet(isPresented: $showDiscoverVolumes) {
             DiscoverVolumesSheet(model: model)
         }
-        // Catalog maintenance: remove cover-art music strays. Opened from
-        // the Catalog menu (VideoScanApp); the sheet computes the live
-        // candidate count on appear and removes only on explicit Purge.
-        .sheet(isPresented: $model.showCoverArtMusicPurgeSheet) {
-            CoverArtMusicPurgeSheet()
-                .environmentObject(model)
-        }
-        // Catalog maintenance: remove audio-only records unrelated to any
-        // video (Logic/Apple Loops/Omnisphere sample libraries). The sheet
-        // computes the live candidate count + top-directory breakdown on
-        // appear and removes only on explicit Purge.
-        .sheet(isPresented: $model.showUnrelatedAudioPurgeSheet) {
-            UnrelatedAudioPurgeSheet()
+        // Catalog maintenance: the unified "Purge Non-Video Media…" dialog
+        // (replaces the former cover-art + unrelated-audio sheets). Opened
+        // from the Catalog menu (VideoScanApp) with all volumes selected; it
+        // does one O(N) classification pass on appear and removes only on
+        // explicit Purge. The volume right-click entry point (VolumesWindow)
+        // drives its own copy of this dialog with a volume pre-selected.
+        .sheet(isPresented: $model.showNonVideoMediaPurgeSheet) {
+            NonVideoMediaPurgeSheet(preselectedVolumeKey: nil)
                 .environmentObject(model)
         }
         // .sheet for Compare retired 2026-06-07 — Compare is now its own
