@@ -36,7 +36,7 @@ struct CoverArtMusicPurgeSheet: View {
                 } else {
                     Text("Remove \(count) cover-art music record\(count == 1 ? "" : "s") from the catalog? Files on disk are untouched.")
                         .fixedSize(horizontal: false, vertical: true)
-                    Text("These are commercial music files (iTunes purchases) whose embedded cover art was mistaken for video. A recovery snapshot of the catalog is written before anything is removed.")
+                    Text("These are commercial music files (iTunes purchases) whose embedded cover art was mistaken for video. A recovery snapshot is saved first (its path is logged to the console). There is no in-app Undo — to restore, quit and copy that snapshot back over catalog.json.")
                         .font(.callout)
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -53,7 +53,9 @@ struct CoverArtMusicPurgeSheet: View {
                     model.purgeCoverArtMusicRecords()
                     dismiss()
                 }
-                .keyboardShortcut(.defaultAction)
+                // Deliberately NOT the default action: this irreversibly
+                // removes records, so a reflexive Enter must not trigger it.
+                // Escape (Cancel) is the only keyboard path.
                 .disabled((count ?? 0) == 0)
             }
         }
