@@ -698,6 +698,14 @@ struct CatalogView: View {
             CoverArtMusicPurgeSheet()
                 .environmentObject(model)
         }
+        // Catalog maintenance: remove audio-only records unrelated to any
+        // video (Logic/Apple Loops/Omnisphere sample libraries). The sheet
+        // computes the live candidate count + top-directory breakdown on
+        // appear and removes only on explicit Purge.
+        .sheet(isPresented: $model.showUnrelatedAudioPurgeSheet) {
+            UnrelatedAudioPurgeSheet()
+                .environmentObject(model)
+        }
         // .sheet for Compare retired 2026-06-07 — Compare is now its own
         // Window scene (defined in VideoScanApp.swift, id: "compare").
         // The Compare button uses openWindow(id: "compare") instead.

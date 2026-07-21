@@ -550,6 +550,14 @@ struct VideoScanApp: App {
                 Button("Purge Cover-Art Music Records…") {
                     catalogModel.showCoverArtMusicPurgeSheet = true
                 }
+                // Second maintenance purge: audio-only records unrelated to
+                // any video (Logic Pro / Apple Loops / Omnisphere sample
+                // libraries). Confirmation sheet shows the LIVE candidate
+                // count plus a top-directory breakdown so the doomed set can
+                // be eyeballed before removal — files on disk untouched.
+                Button("Purge Non-Video Audio Junk…") {
+                    catalogModel.showUnrelatedAudioPurgeSheet = true
+                }
             }
         }
 

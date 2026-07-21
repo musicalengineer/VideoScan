@@ -946,6 +946,15 @@ final class VideoScanModel: ObservableObject {
     /// candidate count on appear — never a hard-coded number.
     @Published var showCoverArtMusicPurgeSheet: Bool = false
 
+    // MARK: - Unrelated Audio Purge (logic in VideoScanModel+UnrelatedAudioPurge.swift)
+
+    /// Drives the "Purge Non-Video Audio Junk…" confirmation sheet. Flipped
+    /// true by the Catalog-menu command (VideoScanApp); the sheet is bound
+    /// in ContentView. Model-level (not a view @State) precisely so the
+    /// app-level menu can open it. The sheet recomputes the live candidate
+    /// count + top-trees breakdown on appear — never a hard-coded number.
+    @Published var showUnrelatedAudioPurgeSheet: Bool = false
+
     // MARK: - Logging (delegates to DashboardState)
 
     func log(_ msg: String) { dashboard.log(msg) }
