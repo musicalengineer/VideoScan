@@ -231,6 +231,14 @@ struct UnrelatedAudioPurgeRefusalTests {
 
         #expect(removed == 0, "no video anchors → purge must refuse and remove nothing")
         #expect(model.records.count == before, "records untouched on refusal")
+
+        // The refuse path returns BEFORE any snapshot is attempted: no
+        // pre-unrelated-audio-purge recovery copy may appear in the isolated
+        // store dir (and certainly none in App Support). Confirm the dir holds
+        // no such snapshot file.
+        let entries = (try? FileManager.default.contentsOfDirectory(atPath: tmp.path)) ?? []
+        #expect(!entries.contains { $0.hasPrefix("catalog.pre-unrelated-audio-purge.") },
+                "refusal must not write a pre-unrelated-audio-purge snapshot")
     }
 }
 
