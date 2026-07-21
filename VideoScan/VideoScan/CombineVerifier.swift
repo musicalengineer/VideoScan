@@ -31,7 +31,7 @@ enum CombineVerifier {
         guard let vStream else {
             return VerifyResult(ok: false, reason: "no video stream in output", summary: "")
         }
-        guard aStream != nil else {
+        guard let aStream else {
             return VerifyResult(ok: false, reason: "no audio stream in output", summary: "")
         }
 
@@ -45,6 +45,28 @@ enum CombineVerifier {
             return VerifyResult(
                 ok: false,
                 reason: String(format: "duration mismatch: expected %.1fs, got %.1fs", expectedDuration, outDuration),
+                summary: ""
+            )
+        }
+
+        let videoDuration = Double(vStream.duration ?? "") ?? outDuration
+        guard let audioDuration = Double(aStream.duration ?? ""), audioDuration > 0 else {
+            return VerifyResult(
+                ok: false,
+                reason: "audio duration unavailable; cannot verify full-program coverage",
+                summary: ""
+            )
+        }
+        let audioCoverageTolerance = max(videoDuration * 0.02, 2.0)
+        if videoDuration > 0 && audioDuration + audioCoverageTolerance < videoDuration {
+            return VerifyResult(
+                ok: false,
+                reason: String(
+                    format: "audio duration mismatch: %.3fs covers %.1f%% of %.3fs video",
+                    audioDuration,
+                    audioDuration / videoDuration * 100,
+                    videoDuration
+                ),
                 summary: ""
             )
         }
@@ -65,9 +87,10 @@ enum CombineVerifier {
         }
 
         let vCodec = vStream.codec_name ?? "?"
-        let aCodec = aStream?.codec_name ?? "?"
-        let summary = String(format: "V:%@ %dx%d + A:%@, %.1fs",
-                             vCodec, vStream.width ?? 0, vStream.height ?? 0, aCodec, outDuration)
+        let aCodec = aStream.codec_name ?? "?"
+        let summary = String(format: "V:%@ %dx%d %.1fs + A:%@ %.1fs",
+                             vCodec, vStream.width ?? 0, vStream.height ?? 0,
+                             videoDuration, aCodec, audioDuration)
         return VerifyResult(ok: true, reason: "", summary: summary, warning: warning)
     }
 

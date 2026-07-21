@@ -381,6 +381,48 @@ import Foundation
         #expect(verify.reason.contains("no video"))
     }
 
+    /// GH #125 escaped-bug sensor. The production output had 3,808 seconds of
+    /// video but only 125 seconds of audio. Finder truthfully showed an audio
+    /// track, while 96.7% of the movie had no audio packets. This test uses a
+    /// small generated analogue and deliberately calls the production
+    /// CombineVerifier rather than this suite's historical test-only helper.
+    @Test func productionVerifierRejectsAudioEndingLongBeforeVideo() async throws {
+        guard TestMediaGenerator.isAvailable else { return }
+
+        let video = try TestMediaGenerator.generate(
+            container: "mp4", streams: .videoOnly, duration: 6.0,
+            prefix: "test_gh125_long_video"
+        )
+        let audio = try TestMediaGenerator.generate(
+            container: "m4a", streams: .audioOnly, duration: 1.0,
+            prefix: "test_gh125_short_audio"
+        )
+        let output = NSTemporaryDirectory()
+            + "test_gh125_truncated_audio_\(UUID().uuidString.prefix(8)).mov"
+        defer { TestMediaGenerator.cleanup(video, audio, output) }
+
+        let mux = await CombineEngine.runFFMpeg(
+            videoPath: video,
+            audioPath: audio,
+            outputPath: output,
+            technique: .streamCopy,
+            log: { _ in }
+        )
+        #expect(mux.success, "Generated escaped-shape fixture must mux successfully")
+
+        let verify = await CombineVerifier.verifyCombineOutput(
+            url: URL(fileURLWithPath: output),
+            expectedDuration: 6.0,
+            ffprobePath: ToolLocator.ffprobePath,
+            ffmpegPath: CombineEngine.ffmpegPath
+        )
+
+        #expect(!verify.ok,
+                "Verifier must reject a nominally valid audio stream that ends long before video")
+        #expect(verify.reason.contains("audio duration"),
+                "Failure must identify audio duration coverage, got: \(verify.reason)")
+    }
+
     @Test func verifyDetectsTwoAudioFilesMuxedAsVideoAudio() async throws {
         guard TestMediaGenerator.isAvailable else { return }
 

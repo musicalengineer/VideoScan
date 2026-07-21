@@ -20,6 +20,7 @@ public struct FFProbeOutput: Codable {
 public struct FFStream: Codable {
     public let codec_type: String?
     public let codec_name: String?
+    public let duration: String?
     public let width: Int?
     public let height: Int?
     public let r_frame_rate: String?
