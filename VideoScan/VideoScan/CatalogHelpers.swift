@@ -1206,6 +1206,28 @@ enum MediaOpener {
         launchQuickTime(urls)
     }
 
+    /// Open one or more catalog records in VLC, unconditionally. Kept for
+    /// the explicit "Open in VLC" menu item (the manual-override sibling of
+    /// "Open in QuickTime Player") — the smart auto-decision path is
+    /// `open(_:)`. Skips records on offline volumes, same filter as `open`.
+    /// If /Applications/VLC.app isn't present, falls back to the system
+    /// default handler so the menu item never silently no-ops.
+    @MainActor
+    static func openInVLC(_ records: [VideoRecord]) {
+        let urls = records
+            .filter { VolumeReachability.isReachable(path: $0.fullPath) }
+            .map { URL(fileURLWithPath: $0.fullPath) }
+        guard !urls.isEmpty else { return }
+        if hasVLC {
+            launchVLC(urls)   // shared private launcher — no duplicated launch code
+        } else {
+            for url in urls {
+                mediaOpenLog.info("VLC absent; opening in system default handler: \(url.path, privacy: .public)")
+                NSWorkspace.shared.open(url)
+            }
+        }
+    }
+
     @MainActor
     private static func launchQuickTime(_ urls: [URL]) {
         guard !urls.isEmpty else { return }

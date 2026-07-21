@@ -327,6 +327,13 @@ extension CatalogContent {
                                 )
                             }
                         }
+                        // Explicit manual override sibling of the QuickTime
+                        // item above — forces VLC regardless of the smart
+                        // double-click auto-decision. Falls back to the
+                        // system default handler when VLC isn't installed.
+                        Button("Open in VLC") {
+                            MediaOpener.openInVLC([rec])
+                        }
 
                         Divider()
 

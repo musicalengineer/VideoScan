@@ -313,6 +313,18 @@ extension PersonFinderView {
         )
     }
 
+    /// Force-launches VLC for the given result. Used by the explicit
+    /// "Open in VLC" context-menu item — the manual-override sibling of
+    /// "Open in QuickTime Player". A path-only stub is enough: VLC opens
+    /// anything, and MediaOpener.openInVLC falls back to the system default
+    /// handler if VLC isn't installed.
+    private func playInVLC(_ rec: ClipResult) {
+        let stub = VideoRecord()
+        stub.fullPath = rec.videoPath
+        pfViewLog.info("Open in VLC: \(rec.videoPath, privacy: .public)")
+        MediaOpener.openInVLC([stub])
+    }
+
     // MARK: Result Context Menu
 
     @ViewBuilder
@@ -324,6 +336,9 @@ extension PersonFinderView {
             }
             Button("Open in QuickTime Player") {
                 playInQuickTime(rec)
+            }
+            Button("Open in VLC") {
+                playInVLC(rec)
             }
             if !rec.clipFiles.isEmpty {
                 Button("Reveal Clips in Finder") {
