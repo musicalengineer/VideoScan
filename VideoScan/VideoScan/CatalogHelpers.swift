@@ -1078,22 +1078,31 @@ enum MediaOpener {
     // codec all known-good). ANY uncertainty — an empty/unknown field, an
     // off-list audio codec that QT would open silently — routes to VLC.
 
-    /// Containers QuickTime opens natively.
+    /// File extensions whose container QuickTime opens natively. Matched
+    /// against `VideoRecord.ext` (the scanner stores the UPPERCASED
+    /// pathExtension there; our `norm()` lowercases before comparing).
+    /// We deliberately key off the extension, NOT `record.container`,
+    /// because the scanner fills `container` with ffprobe's
+    /// `format_long_name` ("QuickTime / MOV"), not a short token.
     private static let qtContainers: Set<String> = ["mov", "mp4", "m4v", "qt"]
 
-    /// Video codecs QuickTime can decode. (ffprobe names + fourccs.)
+    /// Video codecs QuickTime can decode. These are compared against
+    /// `VideoRecord.videoCodec`, which the scanner fills from ffprobe's
+    /// `codec_name` — so only codec_name spellings appear here (no fourccs
+    /// like avc1/hvc1/apcn, which codec_name never emits).
     private static let qtVideoCodecs: Set<String> = [
-        "h264", "avc1", "hevc", "hvc1", "hev1",
-        "prores", "apcn", "apch", "apcs", "apco", "ap4h", "mjpeg"
+        "h264", "hevc", "prores", "mjpeg"
     ]
 
-    /// Audio codecs QuickTime plays WITH SOUND. The empty string means
-    /// "no audio track" — video-only files are fine in QT. Anything NOT
-    /// on this list (ac3, eac3, dts, opus, vorbis, flac, truehd, …) makes
-    /// QT open-but-silent, so it is deliberately excluded → routes to VLC.
+    /// Audio codecs QuickTime plays WITH SOUND, as ffprobe `codec_name`
+    /// spells them. The empty string means "no audio track" — video-only
+    /// files are fine in QT. Anything NOT on this list (ac3, eac3, dts,
+    /// opus, vorbis, flac, truehd, …) makes QT open-but-silent, so it is
+    /// deliberately excluded → routes to VLC.
     private static let qtAudioCodecs: Set<String> = [
-        "aac", "mp4a", "alac", "mp3", "lpcm",
-        "pcm_s16le", "pcm_s24le", "sowt", "twos", ""
+        "aac", "alac", "mp3",
+        "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le",
+        "pcm_s8", "pcm_u8", ""
     ]
 
     /// Pure decision function. Inputs are normalized (trimmed, lowercased)
@@ -1121,9 +1130,14 @@ enum MediaOpener {
     }
 
     /// Convenience overload reading the fields off a catalog record.
+    ///
+    /// NOTE: we pass `record.ext` ("MOV") as the container token — NOT
+    /// `record.container`, which the scanner fills with ffprobe's
+    /// `format_long_name` ("QuickTime / MOV") and would never match the
+    /// short tokens in `qtContainers`. (Blocker fix 2026-07-20.)
     static func preferredPlayer(for record: VideoRecord,
                                 hasVLC: Bool) -> MediaPlayerChoice {
-        preferredPlayer(container: record.container,
+        preferredPlayer(container: record.ext,
                         videoCodec: record.videoCodec,
                         audioCodec: record.audioCodec,
                         hasVLC: hasVLC)
@@ -1148,6 +1162,11 @@ enum MediaOpener {
     /// so a multi-selection opens in as few app launches as possible.
     /// Records on unreachable volumes are skipped (and logged), never
     /// blocked on.
+    ///
+    /// `@MainActor` ≈ "this must run on the UI thread": NSWorkspace launch
+    /// APIs expect the main thread, and every caller is a SwiftUI
+    /// primaryAction/button closure already on the main actor.
+    @MainActor
     static func open(_ records: [VideoRecord]) {
         let reachable = records.filter { rec in
             if VolumeReachability.isReachable(path: rec.fullPath) { return true }
@@ -1179,6 +1198,7 @@ enum MediaOpener {
     /// Open one or more catalog records in QuickTime Player, unconditionally.
     /// Kept for the explicit "Open in QuickTime Player" menu item — the
     /// smart path is `open(_:)`. Silently skips records on offline volumes.
+    @MainActor
     static func openInQuickTime(_ records: [VideoRecord]) {
         let urls = records
             .filter { VolumeReachability.isReachable(path: $0.fullPath) }
@@ -1186,6 +1206,7 @@ enum MediaOpener {
         launchQuickTime(urls)
     }
 
+    @MainActor
     private static func launchQuickTime(_ urls: [URL]) {
         guard !urls.isEmpty else { return }
         guard let qtURL = NSWorkspace.shared.urlForApplication(
@@ -1202,6 +1223,7 @@ enum MediaOpener {
 
     /// Launch the VLC application BUNDLE (LaunchServices resolves the
     /// correct arm64 binary — never hardcode Contents/MacOS/VLC).
+    @MainActor
     private static func launchVLC(_ urls: [URL]) {
         guard !urls.isEmpty else { return }
         mediaOpenLog.info("Opening \(urls.count) file(s) in VLC")

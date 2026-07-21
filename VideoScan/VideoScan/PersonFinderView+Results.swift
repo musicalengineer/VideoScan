@@ -280,7 +280,11 @@ extension PersonFinderView {
     /// lightweight record with only the path set: its empty codecs make
     /// `preferredPlayer` route to VLC, the safe "opens anything" default.
     private func smartOpen(_ rec: ClipResult) {
-        if let match = catalogModel.records.first(where: { $0.fullPath == rec.videoPath }) {
+        // Match current OR pre-relocation path so a moved file keeps its
+        // QuickTime routing instead of degrading to VLC.
+        if let match = catalogModel.records.first(where: {
+            $0.fullPath == rec.videoPath || $0.originalFullPath == rec.videoPath
+        }) {
             pfViewLog.info("Smart open (catalog metadata): \(rec.videoPath, privacy: .public)")
             MediaOpener.open([match])
         } else {
