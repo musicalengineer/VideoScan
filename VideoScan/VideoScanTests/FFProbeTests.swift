@@ -175,6 +175,67 @@ struct FFProbeIntegrationTests {
         #expect(rec.videoCodec.isEmpty)
     }
 
+    // MARK: - Attached-pic cover art (real ffmpeg fixture)
+    //
+    // Media-matrix / escaped-bug boundary for fix/attached-pic-classify.
+    // Synthesizes a REAL iTunes-shaped file — an mp3 audio stream plus an
+    // embedded cover image flagged disposition.attached_pic — with ffmpeg, then
+    // runs it through the live runFFProbe → extractMetadata path. Before the
+    // fix this cataloged as .videoAndAudio; it must catalog as .audioOnly.
+    // Self-contained: fixture is generated in a temp dir and deleted after.
+
+    @Test func probeMP3WithAttachedCoverArtIsAudioOnly() async throws {
+        let fm = FileManager.default
+        let dir = fm.temporaryDirectory
+            .appendingPathComponent("test_attachedpic_\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: dir) }
+
+        let tonePath  = dir.appendingPathComponent("test_tone.mp3").path
+        let coverPath = dir.appendingPathComponent("test_cover.jpg").path
+        let outPath   = dir.appendingPathComponent("test_cover_art.mp3").path
+
+        // 1) short sine tone -> mp3
+        let mk1 = await ProcessRunner.runCapturingStderr(
+            executable: ToolLocator.ffmpegPath,
+            arguments: ["-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+                        "-c:a", "libmp3lame", tonePath])
+        // 2) a solid-color square still -> jpg (1200x1200, like real album art)
+        let mk2 = await ProcessRunner.runCapturingStderr(
+            executable: ToolLocator.ffmpegPath,
+            arguments: ["-y", "-f", "lavfi", "-i", "color=c=blue:s=1200x1200:d=1",
+                        "-frames:v", "1", coverPath])
+        // 3) mux audio + cover, flag the image stream as attached_pic
+        let mk3 = await ProcessRunner.runCapturingStderr(
+            executable: ToolLocator.ffmpegPath,
+            arguments: ["-y", "-i", tonePath, "-i", coverPath,
+                        "-map", "0:a", "-map", "1", "-c", "copy",
+                        "-disposition:v:0", "attached_pic", outPath])
+
+        guard fm.fileExists(atPath: outPath) else {
+            // ffmpeg unavailable / lame missing — don't fail the classifier test
+            // on a toolchain gap. Surface the stderr for diagnosis.
+            Issue.record("Could not synthesize attached_pic fixture: \(mk1.stderr)\n\(mk2.stderr)\n\(mk3.stderr)")
+            return
+        }
+
+        // Sanity: the muxed file really carries an attached_pic video stream.
+        let model = VideoScanModel()
+        let url = URL(fileURLWithPath: outPath)
+        let (maybeOutput, stderr) = await model.runFFProbe(url: url)
+        let output = try #require(maybeOutput, "ffprobe should parse cover-art mp3: \(stderr)")
+        let coverStream = output.streams?.first { $0.codec_type == "video" }
+        #expect(coverStream?.disposition?.attached_pic == 1,
+                "fixture must carry a real attached_pic video stream")
+
+        let rec = VideoRecord()
+        ScanEngine.extractMetadata(probe: output, into: rec)
+        #expect(rec.streamType == .audioOnly,
+                "audio file with embedded cover art must catalog as audioOnly, not video")
+        #expect(!rec.audioCodec.isEmpty)
+        #expect(rec.videoCodec.isEmpty)
+    }
+
     // MARK: - Real Avid MXF files (skipped if not present)
 
     @Test func probeAvidMXFVideoOnly() async throws {
@@ -386,6 +447,84 @@ struct ExtractMetadataTests {
         ScanEngine.extractMetadata(probe: probe, into: rec)
         #expect(rec.totalBitrate.isEmpty)
         #expect(rec.videoBitrate.isEmpty)
+    }
+
+    // MARK: - attached_pic cover art (fix/attached-pic-classify)
+    //
+    // ffprobe reports embedded album art (iTunes MP3/M4A) as a "video" stream
+    // with disposition.attached_pic == 1 (a single still mjpeg/png, often
+    // square like 1200x1200). These must NOT count as real video, or a pure
+    // audio file pollutes the video catalog. Proven live on a Nine Inch Nails
+    // purchased MP3: mp3 audio + two mjpeg 1200x1200 attached_pic streams.
+
+    @Test func audioWithAttachedCoverArtClassifiedAudioOnly() throws {
+        // The escaped-bug shape: mp3 audio + attached_pic mjpeg cover art.
+        let probe = try Self.probe("""
+        {"format": {"format_name": "mp3", "duration": "217.0"},
+         "streams": [
+           {"codec_type": "audio", "codec_name": "mp3", "channels": 2, "sample_rate": "44100"},
+           {"codec_type": "video", "codec_name": "mjpeg", "width": 1200, "height": 1200,
+            "disposition": {"attached_pic": 1}},
+           {"codec_type": "video", "codec_name": "mjpeg", "width": 1200, "height": 1200,
+            "disposition": {"attached_pic": 1}}
+         ]}
+        """)
+        let rec = VideoRecord()
+        ScanEngine.extractMetadata(probe: probe, into: rec)
+        #expect(rec.streamTypeRaw == StreamType.audioOnly.rawValue)
+        #expect(rec.audioCodec == "mp3")
+        // No cover-art stream should have leaked into the video fields.
+        #expect(rec.videoCodec.isEmpty)
+        #expect(rec.resolution.isEmpty)
+    }
+
+    @Test func realVideoWithAttachedPicZeroStaysVideoAndAudio() throws {
+        // Regular video whose disposition.attached_pic == 0 must still count.
+        let probe = try Self.probe("""
+        {"format": {"format_name": "mov,mp4,m4a", "duration": "12.5"},
+         "streams": [
+           {"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080,
+            "r_frame_rate": "30000/1001", "disposition": {"attached_pic": 0}},
+           {"codec_type": "audio", "codec_name": "aac", "channels": 2, "sample_rate": "48000"}
+         ]}
+        """)
+        let rec = VideoRecord()
+        ScanEngine.extractMetadata(probe: probe, into: rec)
+        #expect(rec.streamTypeRaw == StreamType.videoAndAudio.rawValue)
+        #expect(rec.videoCodec == "h264")
+        #expect(rec.resolution == "1920x1080")
+    }
+
+    @Test func coverArtOnlyNoAudioIsNotPlayableVideo() throws {
+        // A file whose ONLY "video" stream is attached_pic cover art and has no
+        // audio stream must NOT be classified as having playable video.
+        let probe = try Self.probe("""
+        {"format": {"format_name": "image2"},
+         "streams": [
+           {"codec_type": "video", "codec_name": "mjpeg", "width": 1200, "height": 1200,
+            "disposition": {"attached_pic": 1}}
+         ]}
+        """)
+        let rec = VideoRecord()
+        ScanEngine.extractMetadata(probe: probe, into: rec)
+        #expect(rec.streamTypeRaw != StreamType.videoOnly.rawValue)
+        #expect(rec.streamTypeRaw != StreamType.videoAndAudio.rawValue)
+        // No audio + only cover art → the classifier reports no playable streams.
+        #expect(rec.streamTypeRaw == StreamType.noStreams.rawValue)
+        #expect(rec.videoCodec.isEmpty)
+    }
+
+    @Test func streamWithoutDispositionStillDecodesAsVideo() throws {
+        // Defensiveness: a video stream with no "disposition" object at all must
+        // still decode and still count as video (attached_pic stays nil != 1).
+        let probe = try Self.probe("""
+        {"format": null,
+         "streams": [{"codec_type": "video", "codec_name": "prores", "width": 1280, "height": 720}]}
+        """)
+        let rec = VideoRecord()
+        ScanEngine.extractMetadata(probe: probe, into: rec)
+        #expect(rec.streamTypeRaw == StreamType.videoOnly.rawValue)
+        #expect(rec.videoCodec == "prores")
     }
 
     @Test func multipleVideoStreamsUseFirstOnly() throws {

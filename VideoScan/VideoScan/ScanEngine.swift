@@ -116,7 +116,12 @@ enum ScanEngine {
             let stags = s.tags ?? [:]
             if r.timecode.isEmpty { r.timecode = stags["timecode"] ?? "" }
 
-            if s.codec_type == "video" && !hasVideo {
+            // A stream counts as real video only if it is NOT embedded cover
+            // art. ffprobe reports iTunes album art (mjpeg/png still) as a
+            // "video" stream with disposition.attached_pic == 1; counting it
+            // would mis-classify a pure-audio file (e.g. purchased MP3/M4A) as
+            // video and pollute the video catalog. See fix/attached-pic-classify.
+            if s.codec_type == "video" && s.disposition?.attached_pic != 1 && !hasVideo {
                 hasVideo     = true
                 r.videoCodec = s.codec_name ?? ""
                 let w = s.width ?? 0; let h = s.height ?? 0
