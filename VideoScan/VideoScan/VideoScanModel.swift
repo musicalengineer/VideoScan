@@ -937,6 +937,15 @@ final class VideoScanModel: ObservableObject {
     /// session-scope one-target-at-a-time semantics as lastPurgedBatch.
     @Published var lastTidyBatch: LastTidyBatch?
 
+    // MARK: - Cover-Art Music Purge (logic in VideoScanModel+CoverArtMusicPurge.swift)
+
+    /// Drives the "Purge Cover-Art Music Records…" confirmation sheet.
+    /// Flipped true by the Catalog-menu command (VideoScanApp); the sheet
+    /// is bound in ContentView. Model-level (not a view @State) precisely
+    /// so the app-level menu can open it. The sheet recomputes the live
+    /// candidate count on appear — never a hard-coded number.
+    @Published var showCoverArtMusicPurgeSheet: Bool = false
+
     // MARK: - Logging (delegates to DashboardState)
 
     func log(_ msg: String) { dashboard.log(msg) }

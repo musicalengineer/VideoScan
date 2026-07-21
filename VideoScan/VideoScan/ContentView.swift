@@ -691,6 +691,13 @@ struct CatalogView: View {
         .sheet(isPresented: $showDiscoverVolumes) {
             DiscoverVolumesSheet(model: model)
         }
+        // Catalog maintenance: remove cover-art music strays. Opened from
+        // the Catalog menu (VideoScanApp); the sheet computes the live
+        // candidate count on appear and removes only on explicit Purge.
+        .sheet(isPresented: $model.showCoverArtMusicPurgeSheet) {
+            CoverArtMusicPurgeSheet()
+                .environmentObject(model)
+        }
         // .sheet for Compare retired 2026-06-07 — Compare is now its own
         // Window scene (defined in VideoScanApp.swift, id: "compare").
         // The Compare button uses openWindow(id: "compare") instead.
