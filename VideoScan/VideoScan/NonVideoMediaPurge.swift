@@ -231,8 +231,18 @@ enum NonVideoMediaPurge {
             let vk = volumeKey(forFullPath: r.fullPath)
             let dir = UnrelatedAudioPurge.dir(ofFullPath: r.fullPath)
             volumeKeySet.insert(vk)
-            var byVolume = matrix[cat] ?? [:]
-            var cell = byVolume[vk] ?? Cell()
+            // DETACH before mutating: `removeValue` hands us the SOLE reference
+            // to the inner dict / Cell, so `cell.ids.append` mutates in place
+            // (amortized O(1)) instead of triggering copy-on-write of the whole
+            // accumulated array every iteration. A plain `matrix[cat]` read
+            // keeps a second reference alive → COW → O(k²) for a cell that
+            // accumulates k candidates (77k unrelated-audio collapsing into one
+            // volume bucket = billions of copies, multi-second freeze on the
+            // main thread). Restoring unique ownership makes this a true O(N)
+            // pass. (C++ analogy: reserve/emplace into a uniquely-owned vector
+            // vs. deep-copying a shared one on every push_back.)
+            var byVolume = matrix.removeValue(forKey: cat) ?? [:]
+            var cell = byVolume.removeValue(forKey: vk) ?? Cell()
             cell.ids.append(r.id)
             cell.dirCounts[dir, default: 0] += 1
             byVolume[vk] = cell

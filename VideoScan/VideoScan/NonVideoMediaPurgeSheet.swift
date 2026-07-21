@@ -260,12 +260,15 @@ struct NonVideoMediaPurgeSheet: View {
         // The one O(N) pass — off the view body, captured into @State.
         let c = model.classifyNonVideoMedia()
         classification = c
-        // Default selections: all categories; volumes = the preselected one
-        // (right-click entry) if it holds candidates, else every volume with
-        // candidates (Catalog-menu entry).
+        // Default selections: all categories; volumes depend on the entry
+        // point. A NON-NIL preselection (volume right-click) must NEVER fall
+        // through to "all volumes" — that would silently arm the whole catalog
+        // from a "clean this one drive" gesture. A right-clicked volume with no
+        // candidates opens to an empty, Purge-disabled dialog (correct). Only
+        // the nil case (Catalog-menu entry) selects every volume with junk.
         selectedCategories = Set(NonVideoCategory.allCases)
-        if let key = preselectedVolumeKey, c.volumeKeys.contains(key) {
-            selectedVolumeKeys = [key]
+        if let key = preselectedVolumeKey {
+            selectedVolumeKeys = c.volumeKeys.contains(key) ? [key] : []
         } else {
             selectedVolumeKeys = Set(c.volumeKeys)
         }

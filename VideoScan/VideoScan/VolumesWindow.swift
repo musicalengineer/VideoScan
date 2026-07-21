@@ -117,7 +117,6 @@ struct VolumesWindow: View {
     private struct NonVideoPurgeTarget: Identifiable {
         let id = UUID()
         let volumeKey: String
-        let name: String
     }
 
     private var selectedTarget: CatalogScanTarget? {
@@ -344,8 +343,7 @@ struct VolumesWindow: View {
         // inside the context-menu builder — forbidden by the view-body rule).
         Button("Purge Non-Video Media…") {
             nonVideoPurgeTarget = NonVideoPurgeTarget(
-                volumeKey: VolumeReachability.volumeName(forPath: target.searchPath),
-                name: volumeName(target)
+                volumeKey: VolumeReachability.volumeName(forPath: target.searchPath)
             )
         }
         .help("Remove cover-art music and unrelated audio-only records from this volume. Files on disk are untouched.")
