@@ -495,6 +495,31 @@ struct ExtractMetadataTests {
         #expect(rec.resolution == "1920x1080")
     }
 
+    @Test func coverArtBeforeRealVideoDoesNotShadowRealStream() throws {
+        // Mis-order guard: ffprobe can list the attached_pic cover art FIRST,
+        // ahead of the genuine video stream. The classifier must skip the cover
+        // art and still latch onto the real h264 track — its codec and dims must
+        // land in the record, and the 1200x1200 cover dims must NOT leak.
+        // (C++ analogy: like asserting the loop picks the right element and its
+        // fields, not just that a bool flag flipped.)
+        let probe = try Self.probe("""
+        {"format": {"format_name": "mov,mp4,m4a", "duration": "12.5"},
+         "streams": [
+           {"codec_type": "video", "codec_name": "mjpeg", "width": 1200, "height": 1200,
+            "disposition": {"attached_pic": 1}},
+           {"codec_type": "video", "codec_name": "h264", "width": 1920, "height": 1080,
+            "r_frame_rate": "30000/1001", "disposition": {"attached_pic": 0}},
+           {"codec_type": "audio", "codec_name": "aac", "channels": 2, "sample_rate": "48000"}
+         ]}
+        """)
+        let rec = VideoRecord()
+        ScanEngine.extractMetadata(probe: probe, into: rec)
+        #expect(rec.streamTypeRaw == StreamType.videoAndAudio.rawValue)
+        #expect(rec.videoCodec == "h264")
+        #expect(rec.resolution == "1920x1080")
+        #expect(rec.audioCodec == "aac")
+    }
+
     @Test func coverArtOnlyNoAudioIsNotPlayableVideo() throws {
         // A file whose ONLY "video" stream is attached_pic cover art and has no
         // audio stream must NOT be classified as having playable video.
@@ -512,6 +537,11 @@ struct ExtractMetadataTests {
         // No audio + only cover art → the classifier reports no playable streams.
         #expect(rec.streamTypeRaw == StreamType.noStreams.rawValue)
         #expect(rec.videoCodec.isEmpty)
+        // Contract pin: the fix flips such a file's "Is Playable" — before the
+        // attached_pic guard a lone cover-art still read as playable video.
+        // Downstream UI/CSV surface this string, so pin it deliberately: a
+        // noStreams record reports "No streams", never "Yes".
+        #expect(rec.isPlayable == "No streams")
     }
 
     @Test func streamWithoutDispositionStillDecodesAsVideo() throws {
