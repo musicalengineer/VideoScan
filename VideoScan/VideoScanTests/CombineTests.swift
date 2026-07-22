@@ -381,6 +381,55 @@ import Foundation
         #expect(verify.reason.contains("no video"))
     }
 
+    @Test func comparisonVideoDurationPrefersStreamDuration() {
+        let duration = CombineVerifier.resolveComparisonVideoDuration(
+            streamDuration: "6.25",
+            formatDuration: "5.0",
+            expectedDuration: 4.0
+        )
+
+        #expect(duration == 6.25)
+    }
+
+    @Test func comparisonVideoDurationFallsBackToFormatDuration() {
+        let duration = CombineVerifier.resolveComparisonVideoDuration(
+            streamDuration: "nan",
+            formatDuration: "5.0",
+            expectedDuration: 4.0
+        )
+
+        #expect(duration == 5.0)
+    }
+
+    @Test func comparisonVideoDurationFallsBackToExpectedDuration() {
+        let duration = CombineVerifier.resolveComparisonVideoDuration(
+            streamDuration: "0",
+            formatDuration: "-1",
+            expectedDuration: 4.0
+        )
+
+        #expect(duration == 4.0)
+    }
+
+    @Test func comparisonVideoDurationIsUnverifiableWithoutPositiveFiniteCandidate() {
+        let duration = CombineVerifier.resolveComparisonVideoDuration(
+            streamDuration: "nan",
+            formatDuration: "inf",
+            expectedDuration: 0
+        )
+
+        #expect(duration == nil)
+    }
+
+    @Test func durationValidationRejectsNonPositiveAndNonFiniteAudioMetadata() {
+        #expect(CombineVerifier.positiveFiniteDuration("1.25") == 1.25)
+        #expect(CombineVerifier.positiveFiniteDuration(nil) == nil)
+        #expect(CombineVerifier.positiveFiniteDuration("0") == nil)
+        #expect(CombineVerifier.positiveFiniteDuration("-1") == nil)
+        #expect(CombineVerifier.positiveFiniteDuration("nan") == nil)
+        #expect(CombineVerifier.positiveFiniteDuration("inf") == nil)
+    }
+
     /// GH #125 escaped-bug sensor. The production output had 3,808 seconds of
     /// video but only 125 seconds of audio. Finder truthfully showed an audio
     /// track, while 96.7% of the movie had no audio packets. This test uses a

@@ -39,18 +39,32 @@ enum CombineVerifier {
             return VerifyResult(ok: false, reason: "video stream has no dimensions (\(vStream.width ?? 0)x\(vStream.height ?? 0))", summary: "")
         }
 
-        let outDuration = Double(probe.format?.duration ?? "0") ?? 0
-        let tolerance = max(expectedDuration * 0.1, 2.0)
-        if expectedDuration > 0 && outDuration > 0 && abs(outDuration - expectedDuration) > tolerance {
+        let outDuration = positiveFiniteDuration(probe.format?.duration)
+        let validExpectedDuration = expectedDuration.isFinite && expectedDuration > 0
+            ? expectedDuration
+            : nil
+        let tolerance = max((validExpectedDuration ?? 0) * 0.1, 2.0)
+        if let validExpectedDuration, let outDuration,
+           abs(outDuration - validExpectedDuration) > tolerance {
             return VerifyResult(
                 ok: false,
-                reason: String(format: "duration mismatch: expected %.1fs, got %.1fs", expectedDuration, outDuration),
+                reason: String(format: "duration mismatch: expected %.1fs, got %.1fs", validExpectedDuration, outDuration),
                 summary: ""
             )
         }
 
-        let videoDuration = Double(vStream.duration ?? "") ?? outDuration
-        guard let audioDuration = Double(aStream.duration ?? ""), audioDuration > 0 else {
+        guard let videoDuration = resolveComparisonVideoDuration(
+            streamDuration: vStream.duration,
+            formatDuration: probe.format?.duration,
+            expectedDuration: expectedDuration
+        ) else {
+            return VerifyResult(
+                ok: false,
+                reason: "video duration unavailable; cannot verify audio coverage",
+                summary: ""
+            )
+        }
+        guard let audioDuration = positiveFiniteDuration(aStream.duration) else {
             return VerifyResult(
                 ok: false,
                 reason: "audio duration unavailable; cannot verify full-program coverage",
@@ -92,6 +106,29 @@ enum CombineVerifier {
                              vCodec, vStream.width ?? 0, vStream.height ?? 0,
                              videoDuration, aCodec, audioDuration)
         return VerifyResult(ok: true, reason: "", summary: summary, warning: warning)
+    }
+
+    /// Select the best trustworthy duration for audio-coverage comparison.
+    /// Stream metadata is most precise, then container metadata, then the
+    /// caller's source duration. Invalid candidates are skipped, like walking
+    /// a C++ initializer list and taking the first value that passes validation.
+    static func resolveComparisonVideoDuration(
+        streamDuration: String?,
+        formatDuration: String?,
+        expectedDuration: Double
+    ) -> Double? {
+        if let duration = positiveFiniteDuration(streamDuration) { return duration }
+        if let duration = positiveFiniteDuration(formatDuration) { return duration }
+        guard expectedDuration.isFinite, expectedDuration > 0 else { return nil }
+        return expectedDuration
+    }
+
+    static func positiveFiniteDuration(_ value: String?) -> Double? {
+        guard let value,
+              let duration = Double(value),
+              duration.isFinite,
+              duration > 0 else { return nil }
+        return duration
     }
 
     // MARK: - Audio Level Detection
