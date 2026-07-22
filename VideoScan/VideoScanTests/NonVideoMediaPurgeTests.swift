@@ -282,9 +282,10 @@ struct NonVideoMediaPurgeRemovalTests {
         model.records = survivors + doomed
         model.searchIndex.rebuild(records: model.records)
 
-        let removed = model.purgeNonVideoMedia(
+        let outcome = model.purgeNonVideoMedia(
             categories: Set(NonVideoCategory.allCases),
             volumeKeys: ["Music"])
+        let removed = outcome.removed
 
         #expect(removed == doomed.count,
                 "expected \(doomed.count) removed on Music, got \(removed)")
@@ -313,7 +314,7 @@ struct NonVideoMediaPurgeRemovalTests {
         ]
         let before = model.records.count
         let removed = model.purgeNonVideoMedia(categories: [.unrelatedAudio],
-                                               volumeKeys: ["Music"])
+                                               volumeKeys: ["Music"]).removed
         #expect(removed == 0, "empty-anchor purge must remove nothing")
         #expect(model.records.count == before)
     }
@@ -334,7 +335,7 @@ struct NonVideoMediaPurgeRemovalTests {
 
         // Purge only VolA — VolB's unrelated audio must remain.
         let removed = model.purgeNonVideoMedia(categories: [.unrelatedAudio],
-                                               volumeKeys: ["VolA"])
+                                               volumeKeys: ["VolA"]).removed
         #expect(removed == 1)
         let paths = Set(model.records.map(\.fullPath))
         #expect(!paths.contains(a1.fullPath))
@@ -389,7 +390,7 @@ struct NonVideoMediaPurgeRemovalTests {
         model.records = [video, onMusic, emptyKey, oddKey]
 
         let removed = model.purgeNonVideoMedia(categories: [.unrelatedAudio],
-                                               volumeKeys: ["Music"])
+                                               volumeKeys: ["Music"]).removed
         #expect(removed == 1, "only the Music-volume candidate should be removed")
         let paths = Set(model.records.map(\.fullPath))
         #expect(!paths.contains(onMusic.fullPath))     // removed
@@ -401,5 +402,48 @@ struct NonVideoMediaPurgeRemovalTests {
         #expect(reloaded.contains(emptyKey.fullPath))
         #expect(reloaded.contains(oddKey.fullPath))
         #expect(!reloaded.contains(onMusic.fullPath))
+    }
+
+    // MARK: Outcome threading — count + recovery-snapshot path
+    //
+    // The completion dialog (NonVideoMediaPurgeSheet) needs BOTH the removed
+    // count and the recovery-snapshot path to tell Rick "it's done, N removed,
+    // saved here." This pins that purgeNonVideoMedia surfaces both through
+    // PurgeOutcome. With an INJECTED temp store (not CatalogStore.shared) the
+    // snapshot is genuinely written to the temp dir even under XCTest, so we can
+    // assert a real, existing path — and that removed == 0 paths report a nil
+    // snapshot (nothing destroyed ⇒ nothing to recover).
+    @Test func purgeOutcomeReportsCountAndSnapshotPath() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vs-nonvideo-outcome-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let model = VideoScanModel()
+        model.catalogStore = CatalogStore(directory: tmp)   // injected, not shared
+        model.scanTargets.removeAll()
+
+        let video = rec(streamType: .videoAndAudio, fullPath: "/Volumes/Fam/clip.mov")
+        let m1 = rec(streamType: .audioOnly, fullPath: "/Volumes/Music/samples/one.wav")
+        let m2 = rec(streamType: .audioOnly, fullPath: "/Volumes/Music/samples/two.wav")
+        model.records = [video, m1, m2]
+        model.searchIndex.rebuild(records: model.records)
+
+        // Non-empty purge → correct count AND a non-nil, on-disk snapshot path.
+        let outcome = model.purgeNonVideoMedia(categories: [.unrelatedAudio],
+                                               volumeKeys: ["Music"])
+        #expect(outcome.removed == 2, "expected 2 removed, got \(outcome.removed)")
+        let snapshot = try #require(outcome.snapshotPath,
+                                    "non-empty purge must report a recovery snapshot path")
+        #expect(FileManager.default.fileExists(atPath: snapshot),
+                "reported snapshot must actually exist on disk: \(snapshot)")
+
+        // Zero/refusal path → removed == 0 and NO snapshot (nothing destroyed).
+        let noop = model.purgeNonVideoMedia(categories: [.unrelatedAudio],
+                                            volumeKeys: ["Music"])   // already purged
+        #expect(noop.removed == 0)
+        #expect(noop.snapshotPath == nil,
+                "a no-op purge must not write a recovery snapshot")
+        #expect(noop == PurgeOutcome.none)
     }
 }

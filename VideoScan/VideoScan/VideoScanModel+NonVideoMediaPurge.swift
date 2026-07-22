@@ -26,6 +26,20 @@ import os
 let nonVideoMediaPurgeLog = Logger(subsystem: "Rick-Breen.VideoScan",
                                    category: "nonVideoMediaPurge")
 
+/// Result of a `purgeNonVideoMedia` call — how many catalog records were
+/// removed and where the pre-purge recovery snapshot was written. The sheet
+/// threads both out to its completion dialog so the user sees the count AND the
+/// recovery path. `snapshotPath == nil` means no snapshot was written (a safe
+/// no-op purge, or the shared-store test path). A struct-with-value-semantics
+/// return ≈ a C++ small POD returned by value.
+struct PurgeOutcome: Equatable {
+    let removed: Int
+    let snapshotPath: String?
+
+    /// Nothing removed, no snapshot — the safe no-op / refusal result.
+    static let none = PurgeOutcome(removed: 0, snapshotPath: nil)
+}
+
 extension VideoScanModel {
 
     /// Build the (category × volume) classification for the current catalog —
@@ -37,18 +51,20 @@ extension VideoScanModel {
     }
 
     /// Remove every non-video-media record in the selected `categories` on the
-    /// selected `volumeKeys`. Returns the number of records actually removed
-    /// (0 = safe no-op: no snapshot, no save).
+    /// selected `volumeKeys`. Returns a `PurgeOutcome` carrying the number of
+    /// records actually removed AND the recovery-snapshot path that was written
+    /// (`PurgeOutcome.none` = safe no-op: no snapshot, no save). The sheet uses
+    /// both fields to render its completion confirmation.
     ///
     /// Discipline mirrors purgeUnrelatedAudioRecords() EXACTLY:
     /// snapshot-before-destroy with a fail-safe degrade, a single array-level
     /// removeAll, index rebuild, one batched save, undo-state clear.
     @discardableResult
     func purgeNonVideoMedia(categories: Set<NonVideoCategory>,
-                            volumeKeys: Set<String>) -> Int {
+                            volumeKeys: Set<String>) -> PurgeOutcome {
         guard !categories.isEmpty, !volumeKeys.isEmpty else {
             log("Purge Non-Video Media: nothing selected — no categories or no volumes chosen. Nothing removed.")
-            return 0
+            return .none
         }
 
         // Fresh classification at purge time so the removed set is the TRUE
@@ -70,15 +86,18 @@ extension VideoScanModel {
                                                  volumeKeys: volumeKeys)
         guard !doomed.isEmpty else {
             log("Purge Non-Video Media: nothing to remove for the selected categories / volumes.")
-            return 0
+            return .none
         }
 
         // 1. Pre-purge recovery snapshot. Fail-safe: if we can't write it,
-        //    remove nothing. (Skipped under XCTest / the shared store —
-        //    snapshotCatalog returns nil there by design; injected-store tests
-        //    exercise the .prev + save path directly.)
+        //    remove nothing. Skipped ONLY for the shared store under XCTest —
+        //    snapshotCatalog returns nil there by design. An INJECTED temp
+        //    store (the removal-test harness) DOES take a real snapshot to its
+        //    own temp dir, so the outcome's snapshotPath is exercised in tests.
+        let usingSharedStoreUnderTest =
+            Self.isRunningTests && catalogStore === CatalogStore.shared
         var snapshotPath: String? = nil
-        if !Self.isRunningTests {
+        if !usingSharedStoreUnderTest {
             snapshotPath = snapshotCatalog(prefix: "pre-nonvideo-purge")
             if snapshotPath == nil {
                 log("""
@@ -88,7 +107,7 @@ extension VideoScanModel {
                   """)
                 appLog.write("Purge Non-Video Media (DEGRADED): could not write pre-purge snapshot; kept all \(doomed.count) record(s)")
                 nonVideoMediaPurgeLog.error("Degraded: snapshot failed; kept \(doomed.count) record(s)")
-                return 0
+                return .none
             }
         }
 
@@ -120,6 +139,6 @@ extension VideoScanModel {
         log("Purge Non-Video Media: removed \(removed) record(s) [\(cats)] across \(volumeKeys.count) volume(s) from the catalog. Files on disk were untouched.\(snapNote)")
         appLog.write("Purge Non-Video Media: removed \(removed) record(s) [\(cats)]\(snapNote)")
         nonVideoMediaPurgeLog.info("Purged \(removed) record(s) of \(doomed.count) matched [\(cats)]")
-        return removed
+        return PurgeOutcome(removed: removed, snapshotPath: snapshotPath)
     }
 }

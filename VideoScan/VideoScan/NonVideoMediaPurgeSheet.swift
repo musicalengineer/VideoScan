@@ -39,6 +39,12 @@ struct NonVideoMediaPurgeSheet: View {
     @State private var selectedCategories: Set<NonVideoCategory> = Set(NonVideoCategory.allCases)
     /// Currently-checked volume keys. Filled on appear from the classification.
     @State private var selectedVolumeKeys: Set<String> = []
+    /// Non-nil once Purge has run: the sheet swaps its selection UI for the
+    /// completion confirmation (count removed + recovery snapshot path). This is
+    /// an in-sheet STATE SWAP rather than a second modal — simpler here and
+    /// keeps the one-window flow. (SwiftUI @State ≈ a member that, when it
+    /// changes, re-invokes body — like a value that redraws on assignment.)
+    @State private var outcome: PurgeOutcome? = nil
 
     private var total: Int {
         classification?.totalCount(categories: selectedCategories,
@@ -54,6 +60,20 @@ struct NonVideoMediaPurgeSheet: View {
     }
 
     var body: some View {
+        Group {
+            if let outcome {
+                completionView(outcome)
+            } else {
+                selectionView
+            }
+        }
+        .padding(20)
+        .frame(width: 560)
+        .onAppear(perform: computeOnAppear)
+    }
+
+    /// The pre-purge selection UI (categories, volumes, summary, Purge button).
+    private var selectionView: some View {
         VStack(alignment: .leading, spacing: 16) {
             header
 
@@ -73,9 +93,11 @@ struct NonVideoMediaPurgeSheet: View {
                 Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Button("Purge", role: .destructive) {
-                    model.purgeNonVideoMedia(categories: selectedCategories,
-                                             volumeKeys: selectedVolumeKeys)
-                    dismiss()
+                    // Do NOT dismiss — swap to the completion state so the user
+                    // gets an explicit "it's done" with the count and the
+                    // recovery-snapshot path.
+                    outcome = model.purgeNonVideoMedia(categories: selectedCategories,
+                                                       volumeKeys: selectedVolumeKeys)
                 }
                 // Deliberately NOT the default action: this irreversibly
                 // removes records, so a reflexive Enter must not trigger it.
@@ -83,9 +105,70 @@ struct NonVideoMediaPurgeSheet: View {
                 .disabled(!purgeEnabled)
             }
         }
-        .padding(20)
-        .frame(width: 560)
-        .onAppear(perform: computeOnAppear)
+    }
+
+    /// Post-purge confirmation. Shows a clear "done" signal, the count removed,
+    /// and — because the operation is destructive — where the recovery snapshot
+    /// was written. A single OK button dismisses.
+    @ViewBuilder
+    private func completionView(_ outcome: PurgeOutcome) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 10) {
+                Image(systemName: outcome.removed > 0
+                      ? "checkmark.circle.fill" : "info.circle")
+                    .font(.system(size: 22))
+                    .foregroundColor(outcome.removed > 0 ? .green : .secondary)
+                Text("Purge complete.")
+                    .font(.title3).bold()
+            }
+
+            if outcome.removed > 0 {
+                Text("Removed \(outcome.removed) record\(outcome.removed == 1 ? "" : "s") from the catalog.")
+                    .font(.callout).bold()
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let path = outcome.snapshotPath {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Recovery snapshot saved to:")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        Text(path)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .help(path)
+                        Text("Files on disk were not touched.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.secondary.opacity(0.08))
+                    .cornerRadius(6)
+                } else {
+                    Text("Files on disk were not touched.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            } else {
+                // N == 0: nothing matched, or the unrelated-audio category was
+                // refused (no video anchors). Say so plainly.
+                Text("Nothing to remove.")
+                    .font(.callout).bold()
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("Nothing in the catalog matched the selected categories and volumes, so no records were removed and no snapshot was written.")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                Spacer()
+                Button("OK") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
     }
 
     // MARK: - Sections
