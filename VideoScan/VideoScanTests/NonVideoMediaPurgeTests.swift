@@ -283,6 +283,63 @@ struct NonVideoMediaPurgeRemovalTests {
         #expect(model.records.isEmpty)
     }
 
+    // MARK: Data integrity — purging one half of a pair SEVERS the survivor's
+    //       back-reference (no dangling strong ref, no resurrected ghost).
+    //
+    // The realistic A/V pair: a video-only .mxf (excluded ext → always survives)
+    // cross-linked to an audio-only .wav (offered → removable), sharing a
+    // pairGroupID AND pairedWith both ways. Because VideoRecord is a class and
+    // pairedWith is a STRONG ref, a naive removeAll leaves the survivor pointing
+    // at (and keeping alive) the purged record, which then reappears in the
+    // "Show pairs only" view and could be acted on by Combine. This pins that
+    // the surviving .mxf comes out with BOTH pairedWith == nil and
+    // pairGroupID == nil — in memory and on reload — so the "removing them severs
+    // that pairing" promise is real. (purgeIsLiteralAndRemovesPairedRecords uses
+    // a pairGroupID with no partner present, so it does NOT exercise this.)
+    @Test func purgeSeversSurvivingPartnerBackReference() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vs-nonvideo-sever-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let model = VideoScanModel()
+        model.catalogStore = CatalogStore(directory: tmp)
+        model.scanTargets.removeAll()
+
+        let group = UUID()
+        // Surviving video-only essence (excluded .mxf) and the doomed audio half.
+        let video = rec(fullPath: "/Volumes/Avid/OMFI/take.mxf",
+                        streamType: .videoOnly, pairGroupID: group)
+        let audio = rec(fullPath: "/Volumes/Avid/OMFI/take.wav",
+                        pairGroupID: group)
+        // Cross-link both ways with strong refs, as the correlator would.
+        video.pairedWith = audio
+        audio.pairedWith = video
+        model.records = [video, audio]
+        model.searchIndex.rebuild(records: model.records)
+
+        let outcome = model.purgeNonVideoMedia(extensions: ["wav"], volumeKeys: ["Avid"])
+        #expect(outcome.removed == 1, "only the audio half is offered/removable")
+
+        // The .wav is gone; the .mxf survives with its pairing FULLY severed.
+        let survivors = model.records
+        #expect(survivors.count == 1)
+        let survivor = try #require(survivors.first)
+        #expect(survivor.fullPath == video.fullPath)
+        #expect(survivor.pairedWith == nil, "surviving partner must drop its strong back-ref")
+        #expect(survivor.pairGroupID == nil, "surviving partner must drop its pair group")
+        #expect(!survivors.contains { $0.fullPath == audio.fullPath },
+                "purged audio must not linger in records")
+
+        // And the severed state PERSISTS — reload from the injected store.
+        let reloaded = CatalogStore(directory: tmp).load()
+        #expect(reloaded.count == 1)
+        let reloadedSurvivor = try #require(reloaded.first)
+        #expect(reloadedSurvivor.fullPath == video.fullPath)
+        #expect(reloadedSurvivor.pairedWith == nil)
+        #expect(reloadedSurvivor.pairGroupID == nil)
+    }
+
     @Test func purgeVideoExtensionIsANoOp() throws {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("vs-nonvideo-video-\(UUID().uuidString)")
@@ -318,6 +375,135 @@ struct NonVideoMediaPurgeRemovalTests {
         #expect(model.purgeNonVideoMedia(extensions: [], volumeKeys: ["Music"]).removed == 0)
         #expect(model.purgeNonVideoMedia(extensions: ["wav"], volumeKeys: []).removed == 0)
         #expect(model.records.count == 1)
+    }
+
+    // MARK: Defense-in-depth — excluded extensions refused AT THE EXECUTE PATH
+    //
+    // classify() never OFFERS video containers / Avid essence / extensionless
+    // records, so the UI can't select them. But a caller (a future code path, a
+    // test, a refactor) could still hand purgeNonVideoMedia an excluded
+    // extension directly. This pins that the REMOVAL ENFORCES the exclusion
+    // itself — not just the checklist that feeds it — so no path can sever
+    // recovered Avid essence (.mxf) or an extensionless video-only Avid/QT file.
+    // (purgeVideoExtensionIsANoOp covers the single ["mov"] case; this pins the
+    // whole excluded family — including the crown-jewel .mxf and "" buckets that
+    // that test does not — AND that a refused purge writes NOTHING to the store.)
+    @Test func purgeExcludedExtensionsAreRefusedByExecutePath() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vs-nonvideo-excluded-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let model = VideoScanModel()
+        model.catalogStore = CatalogStore(directory: tmp)   // isolated store
+        model.scanTargets.removeAll()
+
+        // Records that MUST NOT be removable through this dialog, even if named
+        // directly: a real video container, recovered Avid essence, and an
+        // extensionless video-only orphan. Plus one genuinely offered .wav we
+        // deliberately DON'T select, to prove the refusal is about the excluded
+        // selection, not an empty catalog.
+        let mov     = rec(fullPath: "/Volumes/Fam/clip.mov", streamType: .videoAndAudio)
+        let mxf     = rec(fullPath: "/Volumes/Avid/essence.mxf", streamType: .ffprobeFailed)
+        let orphan  = rec(fullPath: "/Volumes/Avid/videoonly_orphan")   // ext == ""
+        let wav     = rec(fullPath: "/Volumes/Fam/loop.wav")            // offered, NOT selected here
+        model.records = [mov, mxf, orphan, wav]
+        model.searchIndex.rebuild(records: model.records)
+        // Seed the injected store so the post-refusal reload proves the refused
+        // purge left an ALREADY-PERSISTED catalog intact — not merely that an
+        // empty store stayed empty. (A refused purge never calls saveCatalogNow,
+        // so without this seed the store would be empty and the reload
+        // meaningless.)
+        model.saveCatalogNow()
+        let before = Set(model.records.map(\.fullPath))
+
+        // Each excluded selection must be a hard no-op: zero removed, no
+        // snapshot, PurgeOutcome.none — for the exact volumes those records live
+        // on (so it's a "would-match-if-offered" selection, not a wrong-volume
+        // miss).
+        for ext in ["mov", "mxf", ""] {
+            let outcome = model.purgeNonVideoMedia(extensions: [ext],
+                                                   volumeKeys: ["Fam", "Avid"])
+            #expect(outcome == PurgeOutcome.none,
+                    "purge of excluded extension \"\(ext)\" must be a no-op")
+            #expect(outcome.removed == 0)
+            #expect(outcome.snapshotPath == nil)
+        }
+        // Even asking for ALL three excluded extensions at once removes nothing.
+        let combined = model.purgeNonVideoMedia(extensions: ["mov", "mxf", ""],
+                                                volumeKeys: ["Fam", "Avid"])
+        #expect(combined == PurgeOutcome.none)
+
+        // Catalog untouched in memory …
+        #expect(Set(model.records.map(\.fullPath)) == before)
+        #expect(model.records.count == 4)
+        // … and NOTHING was persisted (a refused purge writes no snapshot; the
+        // reload sees the full original set, never a partial write).
+        let reloaded = CatalogStore(directory: tmp).load()
+        #expect(reloaded.count == 4)
+    }
+
+    // MARK: End-to-end — exact ext×vol intersection removed; everything else,
+    //       including PAIRED records of UNSELECTED extensions, survives reload.
+    //
+    // The scoping unit test (Classification.candidateIDs) proves the matrix
+    // arithmetic; this proves the whole execute path honors it against an
+    // injected store with a realistic mix: two selected extensions across two of
+    // three volumes, unselected extensions (one of them PAIRED — the exact thing
+    // the "(N paired)" annotation warns about), a selected extension on an
+    // UNSELECTED volume (also paired), and never-offered essence/extensionless.
+    // Only the selected {cr3,mp3} × {VolA,VolB} intersection may disappear.
+    @Test func purgeMixedExtensionsAndVolumesRemovesExactIntersectionOnly() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("vs-nonvideo-mixed-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        let model = VideoScanModel()
+        model.catalogStore = CatalogStore(directory: tmp)
+        model.scanTargets.removeAll()
+
+        // DOOMED: selected ext ∈ {cr3,mp3} AND volume ∈ {VolA,VolB}.
+        let aCr3_1 = rec(fullPath: "/Volumes/VolA/dcim/a1.cr3")
+        let aCr3_2 = rec(fullPath: "/Volumes/VolA/dcim/a2.cr3")
+        let bMp3   = rec(fullPath: "/Volumes/VolB/music/s1.mp3")
+        let doomed = [aCr3_1, aCr3_2, bMp3]
+
+        // SURVIVORS:
+        let aWavPaired = rec(fullPath: "/Volumes/VolA/audio/take.wav",
+                             pairGroupID: UUID())          // unselected ext, PAIRED — must survive
+        let bJpg       = rec(fullPath: "/Volumes/VolB/pics/p.jpg")      // unselected ext
+        let cCr3       = rec(fullPath: "/Volumes/VolC/dcim/c.cr3")      // selected ext, UNSELECTED vol
+        let cMp3Paired = rec(fullPath: "/Volumes/VolC/music/m.mp3",
+                             pairGroupID: UUID())          // selected ext, unselected vol, PAIRED
+        let mov        = rec(fullPath: "/Volumes/VolA/clip.mov",
+                             streamType: .videoAndAudio)   // never offered
+        let orphan     = rec(fullPath: "/Volumes/VolB/videoonly_orphan") // extensionless, never offered
+        let survivors  = [aWavPaired, bJpg, cCr3, cMp3Paired, mov, orphan]
+
+        model.records = survivors + doomed
+        model.searchIndex.rebuild(records: model.records)
+
+        let outcome = model.purgeNonVideoMedia(extensions: ["cr3", "mp3"],
+                                               volumeKeys: ["VolA", "VolB"])
+        #expect(outcome.removed == doomed.count,
+                "expected \(doomed.count) removed, got \(outcome.removed)")
+
+        let paths = Set(model.records.map(\.fullPath))
+        for d in doomed { #expect(!paths.contains(d.fullPath), "doomed \(d.fullPath) survived") }
+        for s in survivors { #expect(paths.contains(s.fullPath), "survivor \(s.fullPath) was removed") }
+        // The two most load-bearing survivors: a PAIRED record of an UNSELECTED
+        // extension, and a PAIRED record of a SELECTED extension on an
+        // UNSELECTED volume. Neither may be swept in by the intersection.
+        #expect(paths.contains(aWavPaired.fullPath))
+        #expect(paths.contains(cMp3Paired.fullPath))
+
+        // Survives a real reload from the injected store — exactly the
+        // survivors, no doomed record resurrected, no survivor lost.
+        let reloaded = CatalogStore(directory: tmp).load()
+        #expect(reloaded.count == survivors.count)
+        let reloadedPaths = Set(reloaded.map(\.fullPath))
+        #expect(reloadedPaths == Set(survivors.map(\.fullPath)))
     }
 
     // MARK: Outcome threading — count + recovery-snapshot path

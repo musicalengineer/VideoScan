@@ -114,7 +114,38 @@ extension VideoScanModel {
             }
         }
 
-        // 2. The removal. One array-level mutation → the `records` didSet fires
+        // 2a. SEVER the surviving partner's back-reference BEFORE removal.
+        //    VideoRecord is a class and `pairedWith` is a STRONG ref, so the
+        //    common A/V pair — a video-only .mxf (always excluded → survives)
+        //    plus its audio half (offered → doomed) — would otherwise keep the
+        //    "removed" audio record ALIVE via the survivor's `pairedWith`, and
+        //    the survivor would still carry the shared `pairGroupID`. That
+        //    resurrects the doomed record in the "Show pairs only" view (which
+        //    appends `pairedWith` without re-filtering against live `records`)
+        //    and lets Combine act on a record no longer in the catalog. So the
+        //    "removing them severs that pairing" promise must be made TRUE
+        //    here: for every SURVIVOR whose partner is doomed, clear its pairing.
+        //    We only mutate survivors; a both-sides-doomed pair needs no special
+        //    case (both ids are in `doomed`, both skipped). This runs inside the
+        //    same mutation, before removeAll, so the single `records` didSet
+        //    fires once and the index rebuild sees a consistent state.
+        //    (C++ analogy: null out the dangling shared_ptr on the kept node so
+        //    the erased node's refcount actually drops.)
+        var doomedGroupIDs = Set<UUID>()
+        for r in records where doomed.contains(r.id) {
+            if let g = r.pairGroupID { doomedGroupIDs.insert(g) }
+        }
+        for r in records where !doomed.contains(r.id) {
+            let partnerPurged =
+                (r.pairedWith.map { doomed.contains($0.id) } ?? false) ||
+                (r.pairGroupID.map { doomedGroupIDs.contains($0) } ?? false)
+            if partnerPurged {
+                r.pairedWith = nil
+                r.pairGroupID = nil
+            }
+        }
+
+        // 2b. The removal. One array-level mutation → the `records` didSet fires
         //    once, re-deriving stream-type / dossier / volume counts.
         let countBefore = records.count
         records.removeAll { doomed.contains($0.id) }
