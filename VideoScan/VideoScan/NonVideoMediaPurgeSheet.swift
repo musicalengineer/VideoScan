@@ -2,23 +2,25 @@ import SwiftUI
 
 // MARK: - Purge Non-Video Media dialog (2026-07-21)
 //
-// The single dialog that REPLACES the two separate purge sheets (cover-art
-// music, unrelated audio). Two entry points, same view:
+// The single dialog that lets Rick clean non-video junk out of the catalog.
+// REDESIGN (Rick, 2026-07-21): the "What to purge" control is a PURE EXTENSION
+// CHECKLIST — one row per file EXTENSION present in the catalog (excluding
+// video containers / Avid essence), each with a human label, a live count for
+// the selected volumes, and a "(N paired)" annotation (orange) when any of
+// those records belong to an A/V pair. Nothing is checked by default: opening
+// the dialog purges nothing until the user explicitly checks extensions. Two
+// entry points, same view:
 //   • Catalog ▸ "Purge Non-Video Media…"  (all volumes selected)
 //   • right-click a volume in the Volumes window (that volume pre-selected,
 //     others off) — via `preselectedVolumeKey`.
 //
-// Rick picks WHAT categories of non-video junk to purge and WHICH volumes,
-// with live counts that update as he toggles, then purges — so he can clean
-// volumes separately and explore before committing.
-//
 // EFFICIENT RECOMPUTE. The O(N) classification pass runs ONCE, in `.onAppear`,
 // captured into @State (`classification`). Every number the body renders —
-// per-category counts, per-volume counts, the grand total, the top-locations
-// breakdown — is cheap cell arithmetic over that captured matrix
-// (NonVideoMediaPurge.Classification), NOT another walk of the ~100k records.
-// This keeps the no-O(records)-work-in-a-view-body rule: toggling a checkbox
-// re-sums a handful of Ints, it never re-classifies the catalog.
+// per-extension counts + paired counts, per-volume counts, the grand total,
+// the top-locations breakdown — is cheap cell arithmetic over that captured
+// matrix (NonVideoMediaPurge.Classification), NOT another walk of the ~100k
+// records. This keeps the no-O(records)-work-in-a-view-body rule: toggling a
+// checkbox re-sums a handful of Ints, it never re-classifies the catalog.
 
 struct NonVideoMediaPurgeSheet: View {
     @EnvironmentObject var model: VideoScanModel
@@ -35,8 +37,8 @@ struct NonVideoMediaPurgeSheet: View {
 
     /// The one-shot classification, filled on appear. nil = not yet computed.
     @State private var classification: NonVideoMediaPurge.Classification? = nil
-    /// Currently-checked categories. Both on by default.
-    @State private var selectedCategories: Set<NonVideoCategory> = Set(NonVideoCategory.allCases)
+    /// Currently-checked extensions. EMPTY by default — explicit opt-in.
+    @State private var selectedExtensions: Set<String> = []
     /// Currently-checked volume keys. Filled on appear from the classification.
     @State private var selectedVolumeKeys: Set<String> = []
     /// Non-nil once Purge has run: the sheet swaps its selection UI for the
@@ -47,7 +49,7 @@ struct NonVideoMediaPurgeSheet: View {
     @State private var outcome: PurgeOutcome? = nil
 
     private var total: Int {
-        classification?.totalCount(categories: selectedCategories,
+        classification?.totalCount(extensions: selectedExtensions,
                                    volumeKeys: selectedVolumeKeys) ?? 0
     }
 
@@ -56,7 +58,7 @@ struct NonVideoMediaPurgeSheet: View {
         // Local Int (not a collection `.count`) so SwiftLint empty_count
         // doesn't misfire on the `> 0` comparison.
         let n = total
-        return !selectedCategories.isEmpty && !selectedVolumeKeys.isEmpty && n > 0
+        return !selectedExtensions.isEmpty && !selectedVolumeKeys.isEmpty && n > 0
     }
 
     var body: some View {
@@ -72,13 +74,13 @@ struct NonVideoMediaPurgeSheet: View {
         .onAppear(perform: computeOnAppear)
     }
 
-    /// The pre-purge selection UI (categories, volumes, summary, Purge button).
+    /// The pre-purge selection UI (extensions, volumes, summary, Purge button).
     private var selectionView: some View {
         VStack(alignment: .leading, spacing: 16) {
             header
 
             if let classification {
-                categorySection(classification)
+                extensionSection(classification)
                 Divider()
                 volumeSection(classification)
                 Divider()
@@ -96,7 +98,7 @@ struct NonVideoMediaPurgeSheet: View {
                     // Do NOT dismiss — swap to the completion state so the user
                     // gets an explicit "it's done" with the count and the
                     // recovery-snapshot path.
-                    outcome = model.purgeNonVideoMedia(categories: selectedCategories,
+                    outcome = model.purgeNonVideoMedia(extensions: selectedExtensions,
                                                        volumeKeys: selectedVolumeKeys)
                 }
                 // Deliberately NOT the default action: this irreversibly
@@ -152,12 +154,12 @@ struct NonVideoMediaPurgeSheet: View {
                         .foregroundColor(.secondary)
                 }
             } else {
-                // N == 0: nothing matched, or the unrelated-audio category was
-                // refused (no video anchors). Say so plainly.
+                // N == 0: nothing in the catalog matched the selected extensions
+                // and volumes. Say so plainly.
                 Text("Nothing to remove.")
                     .font(.callout).bold()
                     .fixedSize(horizontal: false, vertical: true)
-                Text("Nothing in the catalog matched the selected categories and volumes, so no records were removed and no snapshot was written.")
+                Text("Nothing in the catalog matched the selected extensions and volumes, so no records were removed and no snapshot was written.")
                     .font(.callout)
                     .foregroundColor(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -183,33 +185,72 @@ struct NonVideoMediaPurgeSheet: View {
         }
     }
 
+    /// The extension checklist: one row per offered extension, biggest-count
+    /// first, each with a human label, a live count for the selected volumes,
+    /// and an orange "(N paired)" annotation when any of those records belong
+    /// to an A/V pair — the visible guard against unknowingly severing a pair.
     @ViewBuilder
-    private func categorySection(_ c: NonVideoMediaPurge.Classification) -> some View {
+    private func extensionSection(_ c: NonVideoMediaPurge.Classification) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("What to purge")
-                .font(.callout).bold()
-            ForEach(NonVideoCategory.allCases) { cat in
-                let n = c.categoryCount(cat, volumeKeys: selectedVolumeKeys)
-                Toggle(isOn: categoryBinding(cat)) {
-                    Text("\(cat.label) (\(n))")
-                }
-                .accessibilityIdentifier("nonVideoPurge.category.\(cat.rawValue)")
+            HStack {
+                Text("What to purge")
+                    .font(.callout).bold()
+                Spacer()
+                Button("All") { selectedExtensions = Set(c.extensions) }
+                    .buttonStyle(.link)
+                    .disabled(selectedExtensions.count == c.extensions.count)
+                Button("None") { selectedExtensions = [] }
+                    .buttonStyle(.link)
+                    .disabled(selectedExtensions.isEmpty)
             }
-            if selectedCategories.contains(.unrelatedAudio), !c.hasVideoAnchors {
-                Label {
-                    Text("Unrelated audio is unavailable — this catalog has no video records to relate audio to. Re-scan your video volumes first.")
-                        .fixedSize(horizontal: false, vertical: true)
-                } icon: {
-                    Image(systemName: "exclamationmark.triangle.fill")
+            if c.extensions.isEmpty {
+                Text("No purgeable non-video media in the catalog. (Video files and Avid essence are never listed here.)")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(c.extensions, id: \.self) { ext in
+                            extensionRow(c, ext)
+                        }
+                    }
+                    .padding(.trailing, 4)
+                }
+                .frame(maxHeight: 200)
+                Text("Choose the file types to remove from the catalog. Only non-video types are listed — video files and Avid essence are never offered here. \"(N paired)\" means N of those records belong to an audio/video pair; removing them severs that pairing in the catalog.")
+                    .font(.callout)
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func extensionRow(_ c: NonVideoMediaPurge.Classification, _ ext: String) -> some View {
+        let n = c.extensionCount(ext, volumeKeys: selectedVolumeKeys)
+        let paired = c.extensionPairedCount(ext, volumeKeys: selectedVolumeKeys)
+        Toggle(isOn: extensionBinding(ext)) {
+            HStack(spacing: 6) {
+                Text(".\(ext)")
+                    .font(.system(.callout, design: .monospaced))
+                Text(NonVideoMediaPurge.label(forExtension: ext))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer()
+                if paired > 0 {
+                    Text("(\(paired) paired)")
+                        .font(.callout)
                         .foregroundColor(.orange)
                 }
-                .font(.callout)
+                Text("\(n)")
+                    .font(.system(.callout, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .frame(minWidth: 44, alignment: .trailing)
             }
-            Text("Cover-art music: commercial purchases whose embedded art was mistaken for video. Unrelated audio: audio-only files with no link to any video (sample libraries, loops, standalone music). Audio that might belong to a video — same folder, matching name, shared Avid UMID, or an existing correlated pair — is KEPT.")
-                .font(.callout)
-                .foregroundColor(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
+        .accessibilityIdentifier("nonVideoPurge.ext.\(ext)")
     }
 
     @ViewBuilder
@@ -234,7 +275,7 @@ struct NonVideoMediaPurgeSheet: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(c.volumeKeys, id: \.self) { vk in
-                            let n = c.volumeCount(vk, categories: selectedCategories)
+                            let n = c.volumeCount(vk, extensions: selectedExtensions)
                             Toggle(isOn: volumeBinding(vk)) {
                                 HStack {
                                     Text(vk.isEmpty ? "(unknown volume)" : vk)
@@ -266,7 +307,7 @@ struct NonVideoMediaPurgeSheet: View {
                 .font(.callout).bold()
                 .fixedSize(horizontal: false, vertical: true)
             if n > 0 {
-                let breakdown = c.topLocations(categories: selectedCategories,
+                let breakdown = c.topLocations(extensions: selectedExtensions,
                                                volumeKeys: selectedVolumeKeys)
                 treesBreakdown(breakdown.trees, total: breakdown.total)
             }
@@ -316,15 +357,15 @@ struct NonVideoMediaPurgeSheet: View {
 
     // MARK: - Bindings & lifecycle
 
-    /// Set-membership Binding for a category checkbox. (SwiftUI `Binding` ≈ a
+    /// Set-membership Binding for an extension checkbox. (SwiftUI `Binding` ≈ a
     /// get/set pair the control reads and writes — here it toggles set
     /// membership rather than a stored Bool.)
-    private func categoryBinding(_ cat: NonVideoCategory) -> Binding<Bool> {
+    private func extensionBinding(_ ext: String) -> Binding<Bool> {
         Binding(
-            get: { selectedCategories.contains(cat) },
+            get: { selectedExtensions.contains(ext) },
             set: { on in
-                if on { selectedCategories.insert(cat) }
-                else { selectedCategories.remove(cat) }
+                if on { selectedExtensions.insert(ext) }
+                else { selectedExtensions.remove(ext) }
             }
         )
     }
@@ -343,13 +384,15 @@ struct NonVideoMediaPurgeSheet: View {
         // The one O(N) pass — off the view body, captured into @State.
         let c = model.classifyNonVideoMedia()
         classification = c
-        // Default selections: all categories; volumes depend on the entry
-        // point. A NON-NIL preselection (volume right-click) must NEVER fall
-        // through to "all volumes" — that would silently arm the whole catalog
-        // from a "clean this one drive" gesture. A right-clicked volume with no
-        // candidates opens to an empty, Purge-disabled dialog (correct). Only
-        // the nil case (Catalog-menu entry) selects every volume with junk.
-        selectedCategories = Set(NonVideoCategory.allCases)
+        // Default selections: NO extensions (explicit opt-in — opening the
+        // dialog purges nothing until the user checks a type). Volumes depend
+        // on the entry point. A NON-NIL preselection (volume right-click) must
+        // NEVER fall through to "all volumes" — that would silently arm the
+        // whole catalog from a "clean this one drive" gesture. A right-clicked
+        // volume with no candidates opens to an empty, Purge-disabled dialog
+        // (correct). Only the nil case (Catalog-menu entry) selects every
+        // volume with junk.
+        selectedExtensions = []
         if let key = preselectedVolumeKey {
             selectedVolumeKeys = c.volumeKeys.contains(key) ? [key] : []
         } else {

@@ -2,38 +2,36 @@ import Foundation
 import Testing
 @testable import VideoScan
 
-// MARK: - Non-Video Media Purge — unified classification tests (2026-07-21)
+// MARK: - Non-Video Media Purge — extension×volume classification tests (2026-07-21)
 //
-// Authored by feature-dev as the initial pin for the unified purge dialog's
-// composition layer (NonVideoMediaPurge + purgeNonVideoMedia). The testing
-// agent owns the suite from here. These reuse the SAME synthetic-record
-// harness the cover-art / unrelated-audio tests use — no real catalog, and
-// the one store-touching test injects a temp CatalogStore.
+// Authored by feature-dev as the initial pin for the REDESIGNED unified purge
+// dialog: a PURE EXTENSION CHECKLIST (NonVideoMediaPurge + purgeNonVideoMedia).
+// The testing agent owns the suite from here. These use a synthetic-record
+// harness — no real catalog, and the store-touching tests inject a temp
+// CatalogStore.
 //
 // Dimensions covered:
-//   • Logic — record → {coverArt, unrelatedAudio, none} classification.
-//   • Volume-scoping — a candidate on volume A is counted for A and excluded
-//     when A is deselected.
-//   • Matrix sums — category / volume / total counts are consistent unions.
-//   • Keep-guards — curated pairs + essence audio are never candidates under
-//     the unified path.
-//   • Empty-anchor — no video anchors ⇒ zero unrelated-audio candidates and
-//     the model purge refuses that category.
-//   • Scale — 100k records classify within a budget; toggling is O(cells).
-//   • Isolation — the removal runs through an injected temp CatalogStore.
+//   • Logic — record → offered/excluded by extension; label map.
+//   • Extension×volume scoping — a .cr3 on volume A is counted for A and
+//     excluded when A is deselected; purging {.m4a}×{Music} removes only
+//     Music-volume m4a and spares other volumes + other extensions.
+//   • Paired-count accuracy — an extension with some pairGroupID-set records
+//     reports the right "(N paired)".
+//   • Media matrix — video containers / Avid essence are NEVER offered and
+//     never removed (a .mov survives any extension selection).
+//   • Scale — 100k records, most candidates in ONE dominant extension×volume
+//     cell → classify within a tight budget; toggling is O(cells). Guards the
+//     copy-on-write O(N²) regression QA caught.
+//   • Isolation — removal runs through an injected temp CatalogStore.
 
 @MainActor
-private func rec(streamType: StreamType,
-                 fullPath: String,
-                 videoCodec: String = "",
-                 umid: String = "",
+private func rec(fullPath: String,
+                 streamType: StreamType = .audioOnly,
                  ext: String = "",
                  pairGroupID: UUID? = nil) -> VideoRecord {
     let r = VideoRecord()
     r.streamTypeRaw = streamType.rawValue
     r.fullPath = fullPath
-    r.videoCodec = videoCodec
-    r.materialPackageUMID = umid
     r.filename = (fullPath as NSString).lastPathComponent
     r.directory = (fullPath as NSString).deletingLastPathComponent
     r.ext = ext.isEmpty ? (fullPath as NSString).pathExtension : ext
@@ -44,194 +42,178 @@ private func rec(streamType: StreamType,
 @Suite(.serialized) @MainActor
 struct NonVideoMediaPurgeClassificationTests {
 
-    // MARK: Logic — 3-way category
+    // MARK: Logic — offered vs excluded, sort order, labels
 
-    @Test func coverArtRecordClassifiesAsCoverArt() {
-        // mp3 with a cover-art (mjpeg) video stream, video-tagged.
-        let r = rec(streamType: .videoAndAudio,
-                    fullPath: "/Volumes/Music/iTunes/song.mp3",
-                    videoCodec: "mjpeg", ext: "mp3")
-        let c = NonVideoMediaPurge.classify(records: [r,
-            rec(streamType: .videoAndAudio, fullPath: "/Volumes/Fam/clip.mov")])
-        #expect(c.categoryCount(.coverArt, volumeKeys: ["Music"]) == 1)
-        #expect(c.categoryCount(.unrelatedAudio, volumeKeys: ["Music"]) == 0)
+    @Test func offeredExtensionsExcludeVideoAndExtensionless() {
+        let records = [
+            rec(fullPath: "/Volumes/A/photo.cr3"),
+            rec(fullPath: "/Volumes/A/song.mp3"),
+            rec(fullPath: "/Volumes/A/clip.mov"),          // video container — excluded
+            rec(fullPath: "/Volumes/A/essence.mxf"),       // Avid essence — excluded
+            rec(fullPath: "/Volumes/A/orphan"),            // extensionless — excluded
+        ]
+        let c = NonVideoMediaPurge.classify(records: records)
+        #expect(Set(c.extensions) == ["cr3", "mp3"])
+        #expect(!c.extensions.contains("mov"))
+        #expect(!c.extensions.contains("mxf"))
+        #expect(!c.extensions.contains(""))
     }
 
-    @Test func unrelatedAudioClassifiesAsUnrelatedAudio() {
-        let video = rec(streamType: .videoAndAudio, fullPath: "/Volumes/Fam/clip.mov")
-        let music = rec(streamType: .audioOnly, fullPath: "/Volumes/Music/loop.wav")
-        let c = NonVideoMediaPurge.classify(records: [video, music])
-        #expect(c.categoryCount(.unrelatedAudio, volumeKeys: ["Music"]) == 1)
-        #expect(c.categoryCount(.coverArt, volumeKeys: ["Music"]) == 0)
+    @Test func extensionsSortByCountDescending() {
+        var records: [VideoRecord] = []
+        for i in 0..<5 { records.append(rec(fullPath: "/Volumes/A/j\(i).jpg")) }
+        for i in 0..<3 { records.append(rec(fullPath: "/Volumes/A/m\(i).mp3")) }
+        for i in 0..<1 { records.append(rec(fullPath: "/Volumes/A/w\(i).wav")) }
+        let c = NonVideoMediaPurge.classify(records: records)
+        #expect(c.extensions == ["jpg", "mp3", "wav"])
     }
 
-    @Test func plainVideoIsNotAnyCandidate() {
-        let video = rec(streamType: .videoAndAudio, fullPath: "/Volumes/Fam/clip.mov")
-        let c = NonVideoMediaPurge.classify(records: [video])
-        #expect(c.volumeKeys.isEmpty)
-        #expect(c.totalCount(categories: Set(NonVideoCategory.allCases),
-                             volumeKeys: ["Fam"]) == 0)
+    @Test func labelMapAndFallback() {
+        #expect(NonVideoMediaPurge.label(forExtension: "cr3") == "Canon RAW photo")
+        #expect(NonVideoMediaPurge.label(forExtension: "jpeg") == "JPEG photo")
+        #expect(NonVideoMediaPurge.label(forExtension: "m4a") == "AAC audio")
+        #expect(NonVideoMediaPurge.label(forExtension: "aac") == "audio")
+        #expect(NonVideoMediaPurge.label(forExtension: "flac") == "audio")
+        // Case-insensitive.
+        #expect(NonVideoMediaPurge.label(forExtension: "MP3") == "MP3 audio")
+        // Unmapped → "(.ext)" fallback.
+        #expect(NonVideoMediaPurge.label(forExtension: "xyz") == "(.xyz)")
     }
 
-    // MARK: Keep-guards — pairs + essence survive
+    // MARK: Extension×volume scoping
 
-    @Test func curatedPairAndEssenceAudioAreNeverCandidates() {
-        let video   = rec(streamType: .videoAndAudio, fullPath: "/Volumes/Fam/clip.mov")
-        let paired  = rec(streamType: .audioOnly,
-                          fullPath: "/Volumes/Pairs/audio/take7.mxf",
-                          pairGroupID: UUID())
-        let essence = rec(streamType: .ffprobeFailed, fullPath: "/Volumes/Avid/OMFI/v.mxf")
-        let coAudio = rec(streamType: .audioOnly, fullPath: "/Volumes/Avid/OMFI/a.mxf")
-        let c = NonVideoMediaPurge.classify(records: [video, paired, essence, coAudio])
-        // None of these must appear as candidates on any volume.
-        let all = Set(NonVideoCategory.allCases)
-        #expect(c.totalCount(categories: all, volumeKeys: Set(c.volumeKeys)) == 0)
-        #expect(c.volumeKeys.isEmpty)
+    @Test func extensionVolumeScopingCountsAndUnion() {
+        let a1 = rec(fullPath: "/Volumes/VolA/dcim/p1.cr3")
+        let a2 = rec(fullPath: "/Volumes/VolA/dcim/p2.cr3")
+        let b1 = rec(fullPath: "/Volumes/VolB/dcim/p3.cr3")
+        let bMp3 = rec(fullPath: "/Volumes/VolB/music/s.mp3")
+        let c = NonVideoMediaPurge.classify(records: [a1, a2, b1, bMp3])
+
+        // .cr3 counted per volume.
+        #expect(c.extensionCount("cr3", volumeKeys: ["VolA"]) == 2)
+        #expect(c.extensionCount("cr3", volumeKeys: ["VolB"]) == 1)
+        #expect(c.extensionCount("cr3", volumeKeys: ["VolA", "VolB"]) == 3)
+        // Deselect VolA → its .cr3 drop out.
+        #expect(c.extensionCount("cr3", volumeKeys: ["VolB"]) == 1)
+
+        // Per-volume count scoped to selected extensions.
+        #expect(c.volumeCount("VolB", extensions: ["cr3"]) == 1)
+        #expect(c.volumeCount("VolB", extensions: ["cr3", "mp3"]) == 2)
+        #expect(c.volumeCount("VolB", extensions: ["mp3"]) == 1)
+
+        // candidateIDs union scopes to selected cells only.
+        let idsA = c.candidateIDs(extensions: ["cr3"], volumeKeys: ["VolA"])
+        #expect(idsA == [a1.id, a2.id])
+        #expect(!idsA.contains(b1.id))
+        let idsAll = c.candidateIDs(extensions: ["cr3", "mp3"], volumeKeys: ["VolA", "VolB"])
+        #expect(idsAll.count == 4)
+
+        // Total across selection.
+        #expect(c.totalCount(extensions: ["cr3", "mp3"], volumeKeys: ["VolA", "VolB"]) == 4)
+        #expect(c.totalCount(extensions: ["mp3"], volumeKeys: ["VolA"]) == 0)
     }
 
-    // MARK: Empty-anchor fail-safe
+    // MARK: Paired-count accuracy
 
-    @Test func noVideoAnchorsYieldsZeroUnrelatedAudioCandidates() {
-        // Catalog with ONLY audio — every audio would look "unrelated", but
-        // the fail-safe must nominate none.
-        let a = rec(streamType: .audioOnly, fullPath: "/Volumes/Music/a.wav")
-        let b = rec(streamType: .audioOnly, fullPath: "/Volumes/Music/b.wav")
+    @Test func pairedCountReportsPairedRecordsOnly() {
+        let group = UUID()
+        let p1 = rec(fullPath: "/Volumes/Music/a1.wav", pairGroupID: group)
+        let p2 = rec(fullPath: "/Volumes/Music/a2.wav", pairGroupID: UUID())
+        let plain = rec(fullPath: "/Volumes/Music/a3.wav")
+        let c = NonVideoMediaPurge.classify(records: [p1, p2, plain])
+        #expect(c.extensionCount("wav", volumeKeys: ["Music"]) == 3)
+        #expect(c.extensionPairedCount("wav", volumeKeys: ["Music"]) == 2)
+
+        // Paired count is volume-scoped like the row count.
+        let onOther = rec(fullPath: "/Volumes/Other/b.wav", pairGroupID: UUID())
+        let c2 = NonVideoMediaPurge.classify(records: [p1, plain, onOther])
+        #expect(c2.extensionPairedCount("wav", volumeKeys: ["Music"]) == 1)
+        #expect(c2.extensionPairedCount("wav", volumeKeys: ["Music", "Other"]) == 2)
+        #expect(c2.extensionPairedCount("wav", volumeKeys: ["Other"]) == 1)
+    }
+
+    @Test func pairedViaPairedWithLinkIsCounted() {
+        let a = rec(fullPath: "/Volumes/Pairs/a.wav")
+        let b = rec(fullPath: "/Volumes/Pairs/b.wav")
+        a.pairedWith = b   // direct link, no group id
         let c = NonVideoMediaPurge.classify(records: [a, b])
-        #expect(!c.hasVideoAnchors)
-        #expect(c.categoryCount(.unrelatedAudio, volumeKeys: ["Music"]) == 0)
-        #expect(c.volumeKeys.isEmpty)
+        #expect(c.extensionPairedCount("wav", volumeKeys: ["Pairs"]) == 1)
     }
 
-    // MARK: Volume-scoping + matrix sums
+    // MARK: Media matrix — video/essence never offered, never removed
 
-    @Test func volumeScopingAndMatrixSums() {
-        let video = rec(streamType: .videoAndAudio, fullPath: "/Volumes/Fam/clip.mov")
-        let mA1 = rec(streamType: .audioOnly, fullPath: "/Volumes/VolA/loops/a1.wav")
-        let mA2 = rec(streamType: .audioOnly, fullPath: "/Volumes/VolA/loops/a2.wav")
-        let mB1 = rec(streamType: .audioOnly, fullPath: "/Volumes/VolB/samples/b1.wav")
-        let coverB = rec(streamType: .videoOnly,
-                         fullPath: "/Volumes/VolB/music/x.m4a",
-                         videoCodec: "png", ext: "m4a")
-        let c = NonVideoMediaPurge.classify(records: [video, mA1, mA2, mB1, coverB])
-
-        let all = Set(NonVideoCategory.allCases)
-        // VolA has 2 unrelated-audio; VolB has 1 unrelated + 1 cover-art.
-        #expect(c.volumeCount("VolA", categories: all) == 2)
-        #expect(c.volumeCount("VolB", categories: all) == 2)
-        // Category counts across BOTH volumes.
-        #expect(c.categoryCount(.unrelatedAudio, volumeKeys: ["VolA", "VolB"]) == 3)
-        #expect(c.categoryCount(.coverArt, volumeKeys: ["VolA", "VolB"]) == 1)
-        // Grand total across both = 4; sum of per-volume totals matches.
-        #expect(c.totalCount(categories: all, volumeKeys: ["VolA", "VolB"]) == 4)
-        // Deselect VolA → its 2 candidates drop out of the total.
-        #expect(c.totalCount(categories: all, volumeKeys: ["VolB"]) == 2)
-        // candidateIDs union scoping: only VolB rows when VolA deselected.
-        let idsB = c.candidateIDs(categories: all, volumeKeys: ["VolB"])
-        #expect(idsB.count == 2)
-        #expect(idsB.contains(mB1.id))
-        #expect(idsB.contains(coverB.id))
-        #expect(!idsB.contains(mA1.id))
-        // Deselect cover-art category → only unrelated-audio remains on VolB.
-        #expect(c.totalCount(categories: [.unrelatedAudio], volumeKeys: ["VolB"]) == 1)
-    }
-
-    // MARK: Regression sensor — cover-art record acts as a video anchor
-    //
-    // A cover-art music file is streamType .videoAndAudio, so it counts as a
-    // relationship ANCHOR for the unrelated-audio predicate (isEssenceBearing).
-    // Real music co-located in the SAME directory is therefore "related" and is
-    // KEPT on a single classification pass — the conservative, keep-erring
-    // direction. This pins that behavior: if the shared predicates are ever
-    // changed so cover-art no longer anchors, THIS test flips and forces a
-    // deliberate review (it is a design decision, not a silent refactor).
-    @Test func coverArtAnchorProtectsCoLocatedMusicOnSinglePass() {
-        // A real video anchor must exist so unrelated-audio classification is
-        // active at all; otherwise the empty-anchor fail-safe would spare the
-        // music for a different reason and the sensor would be meaningless.
-        let farVideo = rec(streamType: .videoAndAudio, fullPath: "/Volumes/Fam/clip.mov")
-        let cover    = rec(streamType: .videoAndAudio,
-                           fullPath: "/Volumes/Music/iTunes/art.mp3",
-                           videoCodec: "mjpeg", ext: "mp3")
-        let coLocated = rec(streamType: .audioOnly,
-                            fullPath: "/Volumes/Music/iTunes/track.mp3")
-        let c = NonVideoMediaPurge.classify(records: [farVideo, cover, coLocated])
-        // The cover-art record itself IS a candidate (category .coverArt).
-        #expect(c.categoryCount(.coverArt, volumeKeys: ["Music"]) == 1)
-        // The co-located real music is protected by the cover-art anchor: it is
-        // NOT an unrelated-audio candidate on this single pass.
-        #expect(c.categoryCount(.unrelatedAudio, volumeKeys: ["Music"]) == 0)
-        // Sanity: the same music in a dir with NO anchor WOULD be a candidate.
-        let elsewhere = rec(streamType: .audioOnly,
-                            fullPath: "/Volumes/Music/samples/track.mp3")
-        let c2 = NonVideoMediaPurge.classify(records: [farVideo, cover, elsewhere])
-        #expect(c2.categoryCount(.unrelatedAudio, volumeKeys: ["Music"]) == 1)
+    @Test func videoContainersNeverOfferedNorRemoved() {
+        let mov = rec(fullPath: "/Volumes/Fam/clip.mov", streamType: .videoAndAudio)
+        let mxf = rec(fullPath: "/Volumes/Avid/essence.mxf", streamType: .ffprobeFailed)
+        let wav = rec(fullPath: "/Volumes/Fam/loop.wav")
+        let c = NonVideoMediaPurge.classify(records: [mov, mxf, wav])
+        // Only .wav offered.
+        #expect(c.extensions == ["wav"])
+        // Even if a caller passes "mov"/"mxf", nothing maps to them.
+        #expect(c.candidateIDs(extensions: ["mov", "mxf"], volumeKeys: ["Fam", "Avid"]).isEmpty)
+        // Selecting ALL offered extensions never includes the video containers.
+        let all = Set(c.extensions)
+        let ids = c.candidateIDs(extensions: all, volumeKeys: Set(c.volumeKeys))
+        #expect(!ids.contains(mov.id))
+        #expect(!ids.contains(mxf.id))
+        #expect(ids.contains(wav.id))
     }
 
     @Test func topLocationsRecomputeWithSelection() {
-        let video = rec(streamType: .videoAndAudio, fullPath: "/Volumes/Fam/clip.mov")
-        let a1 = rec(streamType: .audioOnly, fullPath: "/Volumes/VolA/loops/a1.wav")
-        let a2 = rec(streamType: .audioOnly, fullPath: "/Volumes/VolA/loops/a2.wav")
-        let b1 = rec(streamType: .audioOnly, fullPath: "/Volumes/VolB/samples/b1.wav")
-        let c = NonVideoMediaPurge.classify(records: [video, a1, a2, b1])
-        let all = Set(NonVideoCategory.allCases)
-        let both = c.topLocations(categories: all, volumeKeys: ["VolA", "VolB"])
+        let a1 = rec(fullPath: "/Volumes/VolA/loops/a1.wav")
+        let a2 = rec(fullPath: "/Volumes/VolA/loops/a2.wav")
+        let b1 = rec(fullPath: "/Volumes/VolB/samples/b1.wav")
+        let c = NonVideoMediaPurge.classify(records: [a1, a2, b1])
+        let both = c.topLocations(extensions: ["wav"], volumeKeys: ["VolA", "VolB"])
         #expect(both.total == 3)
-        // /Volumes/VolA/loops (2) must sort ahead of /Volumes/VolB/samples (1).
         #expect(both.trees.first?.path == "/Volumes/VolA/loops")
         #expect(both.trees.first?.count == 2)
-        // Scope to VolB only → just the one directory, total 1.
-        let onlyB = c.topLocations(categories: all, volumeKeys: ["VolB"])
+        let onlyB = c.topLocations(extensions: ["wav"], volumeKeys: ["VolB"])
         #expect(onlyB.total == 1)
         #expect(onlyB.trees.count == 1)
         #expect(onlyB.trees.first?.path == "/Volumes/VolB/samples")
     }
 
-    // MARK: Scale — 100k records, SINGLE-DOMINANT-VOLUME distribution
+    // MARK: Scale — 100k records, SINGLE-DOMINANT extension×volume cell
     //
-    // The real worst case (and the O(N²) trap QA caught) is ~77k unrelated-
-    // audio records collapsing into ONE volume bucket — a samples drive, or an
-    // internal tree where every path maps to key "rickb". An even N-way split
+    // The real worst case (and the O(N²) trap QA caught) is tens of thousands
+    // of ONE extension collapsing into ONE volume bucket — a samples drive
+    // where every .wav maps to key "Dominant" and one directory. An even split
     // spreads the accumulation across cells and can pass at ~5s while the real
     // catalog is far slower, so we deliberately funnel almost all candidates
-    // into a single cell here: if the amortized-O(1) append ever regresses to
-    // COW-per-append, this cell alone is O(k²) with k≈90k and the strict budget
-    // blows out immediately.
+    // into a single cell: if the amortized-O(1) append regresses to
+    // COW-per-append, this one cell is O(k²) with k≈90k and the budget blows
+    // out immediately.
     @Test func classifyOneHundredKWithinBudget() {
         var records: [VideoRecord] = []
         records.reserveCapacity(100_000)
-        // 10k video anchors so unrelated-audio classification is active. All on
-        // the SAME dominant volume so their co-located audio can't be "related"
-        // via a spread of anchor dirs — the samples live in their own dir.
+        // 10k video files (excluded — never offered) to prove exclusion at
+        // scale doesn't cost accuracy.
         for i in 0..<10_000 {
-            records.append(rec(streamType: .videoAndAudio,
-                               fullPath: "/Volumes/Dominant/video/clip\(i).mov"))
+            records.append(rec(fullPath: "/Volumes/Dominant/video/clip\(i).mov",
+                               streamType: .videoAndAudio))
         }
-        // 90k unrelated audio ALL in one volume bucket, one directory → one
-        // matrix cell accumulating ~90k ids. This is the O(N²) tripwire.
+        // 90k .wav ALL in one volume bucket, one directory → one matrix cell
+        // accumulating ~90k ids. This is the O(N²) tripwire.
         for i in 0..<90_000 {
-            records.append(rec(streamType: .audioOnly,
-                               fullPath: "/Volumes/Dominant/loops/s\(i).wav"))
+            records.append(rec(fullPath: "/Volumes/Dominant/loops/s\(i).wav"))
         }
         #expect(records.count == 100_000)
 
         let start = Date()
         let c = NonVideoMediaPurge.classify(records: records)
         let elapsed = Date().timeIntervalSince(start)
-        // Strict budget — the single O(N) pass with amortized-O(1) appends is
-        // well under a second; a COW-per-append regression pushes ONE 90k cell
-        // into multi-second territory and trips this.
-        #expect(elapsed < 2.0, "classify(100k, single-volume) took \(elapsed)s")
+        #expect(elapsed < 2.0, "classify(100k, single-cell) took \(elapsed)s")
 
-        // Everything funnels into the one volume bucket.
+        #expect(c.extensions == ["wav"])        // .mov never offered
         #expect(c.volumeKeys == ["Dominant"])
-        let all = Set(NonVideoCategory.allCases)
-        #expect(c.totalCount(categories: all, volumeKeys: ["Dominant"]) == 90_000)
-        #expect(c.candidateIDs(categories: all, volumeKeys: ["Dominant"]).count == 90_000)
+        #expect(c.extensionCount("wav", volumeKeys: ["Dominant"]) == 90_000)
+        #expect(c.candidateIDs(extensions: ["wav"], volumeKeys: ["Dominant"]).count == 90_000)
 
         // Toggling is O(cells), not O(records): a batch of re-sums is instant.
         let toggleStart = Date()
         for _ in 0..<1_000 {
-            _ = c.totalCount(categories: all, volumeKeys: ["Dominant"])
+            _ = c.totalCount(extensions: ["wav"], volumeKeys: ["Dominant"])
         }
         let toggleElapsed = Date().timeIntervalSince(toggleStart)
         #expect(toggleElapsed < 0.5, "1000 re-sums took \(toggleElapsed)s")
@@ -243,7 +225,7 @@ struct NonVideoMediaPurgeClassificationTests {
 @Suite(.serialized) @MainActor
 struct NonVideoMediaPurgeRemovalTests {
 
-    @Test func purgeRemovesSelectedCategoriesAndKeepsPairsAndEssence() throws {
+    @Test func purgeExtensionVolumeScopedRemovesOnlySelectedCells() throws {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("vs-nonvideo-purge-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
@@ -253,42 +235,22 @@ struct NonVideoMediaPurgeRemovalTests {
         model.catalogStore = CatalogStore(directory: tmp)   // isolated store
         model.scanTargets.removeAll()
 
-        let video   = rec(streamType: .videoAndAudio, fullPath: "/Volumes/Fam/clip.mov")
-        let paired  = rec(streamType: .audioOnly,
-                          fullPath: "/Volumes/Pairs/audio/take7.mxf",
-                          pairGroupID: UUID())
-        let essence = rec(streamType: .ffprobeFailed, fullPath: "/Volumes/Avid/OMFI/v.mxf")
-        let coAudio = rec(streamType: .audioOnly, fullPath: "/Volumes/Avid/OMFI/a.mxf")
-        // NOTE (testing agent, 2026-07-21): the unrelated-audio music must live
-        // in a directory with NO video anchor, or the composed predicate keeps
-        // it. A cover-art mp3 is streamType .videoAndAudio, so UnrelatedAudio-
-        // Purge.isEssenceBearing counts it as a video anchor; audio co-located
-        // in the SAME dir as such an anchor is "related" and is KEPT (the
-        // conservative, keep-erring direction). The original fixture placed
-        // one/two.mp3 in the same /Volumes/Music/iTunes dir as `cover`, so they
-        // were spared and only `cover` was removed (removed == 1). Put the
-        // sample-library music in its own /Volumes/Music/samples dir — anchored
-        // by `video` on /Volumes/Fam elsewhere — so all three genuinely purge.
-        // The cover-art-anchor interaction itself is pinned as a regression
-        // sensor below (coverArtAnchorProtectsCoLocatedMusicOnSinglePass).
-        let music1  = rec(streamType: .audioOnly, fullPath: "/Volumes/Music/samples/one.mp3")
-        let music2  = rec(streamType: .audioOnly, fullPath: "/Volumes/Music/samples/two.mp3")
-        let cover   = rec(streamType: .videoAndAudio,
-                          fullPath: "/Volumes/Music/iTunes/art.mp3",
-                          videoCodec: "mjpeg", ext: "mp3")
+        // Target: {.m4a} × {Music}. Everything else must survive.
+        let musicM4a1 = rec(fullPath: "/Volumes/Music/iTunes/a.m4a")
+        let musicM4a2 = rec(fullPath: "/Volumes/Music/iTunes/b.m4a")
+        let musicMp3  = rec(fullPath: "/Volumes/Music/iTunes/c.mp3")       // other ext
+        let otherM4a  = rec(fullPath: "/Volumes/Other/x.m4a")             // other volume
+        let mov       = rec(fullPath: "/Volumes/Music/clip.mov",
+                            streamType: .videoAndAudio)                    // video — never offered
 
-        let survivors = [video, paired, essence, coAudio]
-        let doomed    = [music1, music2, cover]
+        let doomed    = [musicM4a1, musicM4a2]
+        let survivors = [musicMp3, otherM4a, mov]
         model.records = survivors + doomed
         model.searchIndex.rebuild(records: model.records)
 
-        let outcome = model.purgeNonVideoMedia(
-            categories: Set(NonVideoCategory.allCases),
-            volumeKeys: ["Music"])
-        let removed = outcome.removed
-
-        #expect(removed == doomed.count,
-                "expected \(doomed.count) removed on Music, got \(removed)")
+        let outcome = model.purgeNonVideoMedia(extensions: ["m4a"], volumeKeys: ["Music"])
+        #expect(outcome.removed == doomed.count,
+                "expected \(doomed.count) removed, got \(outcome.removed)")
         let paths = Set(model.records.map(\.fullPath))
         for d in doomed { #expect(!paths.contains(d.fullPath)) }
         for s in survivors { #expect(paths.contains(s.fullPath)) }
@@ -298,121 +260,72 @@ struct NonVideoMediaPurgeRemovalTests {
         #expect(reloaded.count == survivors.count)
     }
 
-    @Test func purgeRefusesUnrelatedAudioWithoutAnchors() throws {
+    @Test func purgeIsLiteralAndRemovesPairedRecords() throws {
+        // The redesign: extension-purge is LITERAL — paired records that match
+        // ARE removed (the user was shown "(N paired)"). Pin that so a future
+        // "protect pairs" keep-rule can't sneak back in silently.
         let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("vs-nonvideo-noanchor-\(UUID().uuidString)")
+            .appendingPathComponent("vs-nonvideo-paired-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         let model = VideoScanModel()
         model.catalogStore = CatalogStore(directory: tmp)
         model.scanTargets.removeAll()
-        // Audio-only catalog, no anchors.
-        model.records = [
-            rec(streamType: .audioOnly, fullPath: "/Volumes/Music/a.wav"),
-            rec(streamType: .audioOnly, fullPath: "/Volumes/Music/b.wav"),
-        ]
-        let before = model.records.count
-        let removed = model.purgeNonVideoMedia(categories: [.unrelatedAudio],
-                                               volumeKeys: ["Music"]).removed
-        #expect(removed == 0, "empty-anchor purge must remove nothing")
-        #expect(model.records.count == before)
+
+        let paired = rec(fullPath: "/Volumes/Music/take7.wav", pairGroupID: UUID())
+        let plain  = rec(fullPath: "/Volumes/Music/loop.wav")
+        model.records = [paired, plain]
+        model.searchIndex.rebuild(records: model.records)
+
+        let outcome = model.purgeNonVideoMedia(extensions: ["wav"], volumeKeys: ["Music"])
+        #expect(outcome.removed == 2, "literal purge removes paired records too")
+        #expect(model.records.isEmpty)
     }
 
-    @Test func purgeVolumeScopedLeavesOtherVolumes() throws {
+    @Test func purgeVideoExtensionIsANoOp() throws {
         let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("vs-nonvideo-scope-\(UUID().uuidString)")
+            .appendingPathComponent("vs-nonvideo-video-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         let model = VideoScanModel()
         model.catalogStore = CatalogStore(directory: tmp)
         model.scanTargets.removeAll()
-        let video = rec(streamType: .videoAndAudio, fullPath: "/Volumes/Fam/clip.mov")
-        let a1 = rec(streamType: .audioOnly, fullPath: "/Volumes/VolA/loops/a1.wav")
-        let b1 = rec(streamType: .audioOnly, fullPath: "/Volumes/VolB/loops/b1.wav")
-        model.records = [video, a1, b1]
+        let mov = rec(fullPath: "/Volumes/Fam/clip.mov", streamType: .videoAndAudio)
+        let wav = rec(fullPath: "/Volumes/Fam/loop.wav")
+        model.records = [mov, wav]
+        model.searchIndex.rebuild(records: model.records)
 
-        // Purge only VolA — VolB's unrelated audio must remain.
-        let removed = model.purgeNonVideoMedia(categories: [.unrelatedAudio],
-                                               volumeKeys: ["VolA"]).removed
-        #expect(removed == 1)
-        let paths = Set(model.records.map(\.fullPath))
-        #expect(!paths.contains(a1.fullPath))
-        #expect(paths.contains(b1.fullPath))
-        #expect(paths.contains(video.fullPath))
-
-        // The store on disk must agree — the removal persisted through the
-        // injected store, and VolB's record survived there too.
-        let reloaded = CatalogStore(directory: tmp).load()
-        let reloadedPaths = Set(reloaded.map(\.fullPath))
-        #expect(reloadedPaths.count == 2)
-        #expect(reloadedPaths.contains(b1.fullPath))
-        #expect(!reloadedPaths.contains(a1.fullPath))
+        // Even if a caller asks for "mov", classify never offers it → no-op.
+        let outcome = model.purgeNonVideoMedia(extensions: ["mov"], volumeKeys: ["Fam"])
+        #expect(outcome.removed == 0)
+        #expect(outcome == PurgeOutcome.none)
+        #expect(Set(model.records.map(\.fullPath)).contains(mov.fullPath))
     }
 
-    // MARK: Isolation — a candidate whose volume key is empty/unexpected is
-    // NOT removed when its volume isn't in the selection.
-    //
-    // VolumeReachability.volumeName(forPath:) returns "" for a bare filename
-    // (no /Volumes or /Users prefix, < 3 path components) and a non-"Music"
-    // token for other rooted paths (e.g. "/loose/x.wav" → "loose"). Such a
-    // record can still be a genuine unrelated-audio CANDIDATE, but the removal
-    // is volume-scoped: selecting only ["Music"] must spare it. This guards the
-    // scoping boundary against a "default/empty bucket leaks into every purge"
-    // regression — the worst-case would silently delete off-volume records.
-    @Test func purgeVolumeScopedSparesEmptyOrUnexpectedVolumeKey() throws {
+    @Test func purgeNothingSelectedIsNoOp() throws {
         let tmp = FileManager.default.temporaryDirectory
-            .appendingPathComponent("vs-nonvideo-emptykey-\(UUID().uuidString)")
+            .appendingPathComponent("vs-nonvideo-empty-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmp) }
 
         let model = VideoScanModel()
         model.catalogStore = CatalogStore(directory: tmp)
         model.scanTargets.removeAll()
+        model.records = [rec(fullPath: "/Volumes/Music/a.wav")]
 
-        let video = rec(streamType: .videoAndAudio, fullPath: "/Volumes/Fam/clip.mov")
-        // Genuine unrelated-audio candidate on the "Music" volume — will be
-        // removed when Music is selected.
-        let onMusic = rec(streamType: .audioOnly, fullPath: "/Volumes/Music/samples/m.wav")
-        // Same kind of candidate but with an EMPTY volume key (bare filename)…
-        let emptyKey = rec(streamType: .audioOnly, fullPath: "orphan.wav")
-        // …and one with an UNEXPECTED, non-Music volume key ("loose").
-        let oddKey = rec(streamType: .audioOnly, fullPath: "/loose/stray.wav")
-
-        // Precondition: both odd-key records really ARE candidates (so the only
-        // thing sparing them is volume scoping, not being non-candidates).
-        let c = NonVideoMediaPurge.classify(records: [video, onMusic, emptyKey, oddKey])
-        let all = Set(NonVideoCategory.allCases)
-        #expect(c.candidateIDs(categories: all, volumeKeys: [""]).contains(emptyKey.id))
-        #expect(c.candidateIDs(categories: all, volumeKeys: ["loose"]).contains(oddKey.id))
-
-        model.records = [video, onMusic, emptyKey, oddKey]
-
-        let removed = model.purgeNonVideoMedia(categories: [.unrelatedAudio],
-                                               volumeKeys: ["Music"]).removed
-        #expect(removed == 1, "only the Music-volume candidate should be removed")
-        let paths = Set(model.records.map(\.fullPath))
-        #expect(!paths.contains(onMusic.fullPath))     // removed
-        #expect(paths.contains(emptyKey.fullPath))     // spared — empty key
-        #expect(paths.contains(oddKey.fullPath))       // spared — unexpected key
-        #expect(paths.contains(video.fullPath))        // never a candidate
-
-        let reloaded = Set(CatalogStore(directory: tmp).load().map(\.fullPath))
-        #expect(reloaded.contains(emptyKey.fullPath))
-        #expect(reloaded.contains(oddKey.fullPath))
-        #expect(!reloaded.contains(onMusic.fullPath))
+        #expect(model.purgeNonVideoMedia(extensions: [], volumeKeys: ["Music"]).removed == 0)
+        #expect(model.purgeNonVideoMedia(extensions: ["wav"], volumeKeys: []).removed == 0)
+        #expect(model.records.count == 1)
     }
 
     // MARK: Outcome threading — count + recovery-snapshot path
     //
-    // The completion dialog (NonVideoMediaPurgeSheet) needs BOTH the removed
-    // count and the recovery-snapshot path to tell Rick "it's done, N removed,
-    // saved here." This pins that purgeNonVideoMedia surfaces both through
-    // PurgeOutcome. With an INJECTED temp store (not CatalogStore.shared) the
+    // The completion dialog needs BOTH the removed count and the recovery-
+    // snapshot path. With an INJECTED temp store (not CatalogStore.shared) the
     // snapshot is genuinely written to the temp dir even under XCTest, so we can
-    // assert a real, existing path — and that removed == 0 paths report a nil
-    // snapshot (nothing destroyed ⇒ nothing to recover).
+    // assert a real, existing path — and that removed == 0 paths report nil.
     @Test func purgeOutcomeReportsCountAndSnapshotPath() throws {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("vs-nonvideo-outcome-\(UUID().uuidString)")
@@ -423,27 +336,22 @@ struct NonVideoMediaPurgeRemovalTests {
         model.catalogStore = CatalogStore(directory: tmp)   // injected, not shared
         model.scanTargets.removeAll()
 
-        let video = rec(streamType: .videoAndAudio, fullPath: "/Volumes/Fam/clip.mov")
-        let m1 = rec(streamType: .audioOnly, fullPath: "/Volumes/Music/samples/one.wav")
-        let m2 = rec(streamType: .audioOnly, fullPath: "/Volumes/Music/samples/two.wav")
-        model.records = [video, m1, m2]
+        let m1 = rec(fullPath: "/Volumes/Music/samples/one.wav")
+        let m2 = rec(fullPath: "/Volumes/Music/samples/two.wav")
+        model.records = [m1, m2]
         model.searchIndex.rebuild(records: model.records)
 
-        // Non-empty purge → correct count AND a non-nil, on-disk snapshot path.
-        let outcome = model.purgeNonVideoMedia(categories: [.unrelatedAudio],
-                                               volumeKeys: ["Music"])
+        let outcome = model.purgeNonVideoMedia(extensions: ["wav"], volumeKeys: ["Music"])
         #expect(outcome.removed == 2, "expected 2 removed, got \(outcome.removed)")
         let snapshot = try #require(outcome.snapshotPath,
                                     "non-empty purge must report a recovery snapshot path")
         #expect(FileManager.default.fileExists(atPath: snapshot),
                 "reported snapshot must actually exist on disk: \(snapshot)")
 
-        // Zero/refusal path → removed == 0 and NO snapshot (nothing destroyed).
-        let noop = model.purgeNonVideoMedia(categories: [.unrelatedAudio],
-                                            volumeKeys: ["Music"])   // already purged
+        // Already purged → removed == 0 and NO snapshot.
+        let noop = model.purgeNonVideoMedia(extensions: ["wav"], volumeKeys: ["Music"])
         #expect(noop.removed == 0)
-        #expect(noop.snapshotPath == nil,
-                "a no-op purge must not write a recovery snapshot")
+        #expect(noop.snapshotPath == nil)
         #expect(noop == PurgeOutcome.none)
     }
 }

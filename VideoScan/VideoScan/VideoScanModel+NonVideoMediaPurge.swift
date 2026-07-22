@@ -3,21 +3,20 @@ import os
 
 // MARK: - Non-Video Media Purge — unified model entry point (2026-07-21)
 //
-// Model side of the single "Purge Non-Video Media…" dialog. It composes the
-// two existing category purges (cover-art music, unrelated audio) behind one
-// call parameterized by the selected categories and volumes. NO new purge
-// logic: the candidate set comes from NonVideoMediaPurge.classify (which
-// reuses the two QA-approved predicates), and the removal MIRRORS
-// purgeUnrelatedAudioRecords() / purgeCoverArtMusicRecords() EXACTLY —
-// snapshot-before-destroy with a fail-safe degrade, one array-level
-// removeAll, search-index rebuild, one synchronous save, undo-state clear,
-// and the same logging shape. Files on disk are NEVER touched.
+// Model side of the single "Purge Non-Video Media…" dialog. REDESIGN (Rick,
+// 2026-07-21): the dialog's "what to purge" control is a PURE EXTENSION
+// CHECKLIST, so this purge is parameterized by a set of file EXTENSIONS and a
+// set of volumes. It removes every catalog record whose lowercased extension
+// is in the selected set AND whose volume key is in the selected set —
+// LITERAL, including any A/V-paired records (the user was shown the
+// "(N paired)" annotation per Rick; the guard is visible, not hidden here).
 //
-// Empty-anchor guard: when .unrelatedAudio is requested but the catalog has
-// no video/essence anchors, the classification yields ZERO unrelated-audio
-// candidates (fail-safe built into classify), so nothing in that category can
-// be removed; we additionally LOG an explicit refusal for parity with
-// purgeUnrelatedAudioRecords(). Cover-art removal is unaffected by anchors.
+// The candidate set comes from NonVideoMediaPurge.classify (ONE O(N) pass),
+// and the removal MIRRORS the other purges EXACTLY: snapshot-before-destroy
+// with a fail-safe degrade, one array-level removeAll, search-index rebuild,
+// one synchronous save, undo-state clear, same logging shape. Video containers
+// and Avid essence are never offered by classify, so they can never be removed
+// here. Files on disk are NEVER touched.
 //
 // Memory: the Classification matrix (a few MB worst case, see
 // NonVideoMediaPurge.swift) plus one Set<UUID> of doomed IDs bounded by the
@@ -42,7 +41,7 @@ struct PurgeOutcome: Equatable {
 
 extension VideoScanModel {
 
-    /// Build the (category × volume) classification for the current catalog —
+    /// Build the (extension × volume) classification for the current catalog —
     /// the ONE O(N) pass the dialog computes on appear and then queries by
     /// cell arithmetic. Thin passthrough so the sheet doesn't reach into the
     /// free function directly.
@@ -50,20 +49,35 @@ extension VideoScanModel {
         NonVideoMediaPurge.classify(records: records)
     }
 
-    /// Remove every non-video-media record in the selected `categories` on the
-    /// selected `volumeKeys`. Returns a `PurgeOutcome` carrying the number of
-    /// records actually removed AND the recovery-snapshot path that was written
+    /// Remove every catalog record whose (lowercased) extension is in the
+    /// selected `extensions` AND whose volume key is in the selected
+    /// `volumeKeys`. Returns a `PurgeOutcome` carrying the number of records
+    /// actually removed AND the recovery-snapshot path that was written
     /// (`PurgeOutcome.none` = safe no-op: no snapshot, no save). The sheet uses
     /// both fields to render its completion confirmation.
     ///
-    /// Discipline mirrors purgeUnrelatedAudioRecords() EXACTLY:
-    /// snapshot-before-destroy with a fail-safe degrade, a single array-level
-    /// removeAll, index rebuild, one batched save, undo-state clear.
+    /// LITERAL removal — this includes A/V-paired records that match. The
+    /// paired-record risk is surfaced to the user by the dialog's "(N paired)"
+    /// annotation, per Rick; there is no hidden keep-rule for pairs here.
+    /// Video containers / Avid essence are never in the classification, so a
+    /// selection can never target them.
+    ///
+    /// Discipline mirrors the other purges EXACTLY: snapshot-before-destroy
+    /// with a fail-safe degrade, a single array-level removeAll, index rebuild,
+    /// one batched save, undo-state clear.
     @discardableResult
-    func purgeNonVideoMedia(categories: Set<NonVideoCategory>,
+    func purgeNonVideoMedia(extensions: Set<String>,
                             volumeKeys: Set<String>) -> PurgeOutcome {
-        guard !categories.isEmpty, !volumeKeys.isEmpty else {
-            log("Purge Non-Video Media: nothing selected — no categories or no volumes chosen. Nothing removed.")
+        // Normalize the incoming extension selection so ".MP3" / "MP3" / "mp3"
+        // all match the classification's lowercased, dot-stripped keys.
+        let wanted = Set(extensions.map { ext -> String in
+            var e = ext.lowercased()
+            if e.hasPrefix(".") { e.removeFirst() }
+            return e
+        })
+
+        guard !wanted.isEmpty, !volumeKeys.isEmpty else {
+            log("Purge Non-Video Media: nothing selected — no extensions or no volumes chosen. Nothing removed.")
             return .none
         }
 
@@ -71,21 +85,10 @@ extension VideoScanModel {
         // current catalog, never a stale count captured earlier.
         let classification = NonVideoMediaPurge.classify(records: records)
 
-        // Empty-anchor guard (parity with purgeUnrelatedAudioRecords): if the
-        // caller wants unrelated-audio but there are no video/essence anchors,
-        // that category is refused. classify already produced ZERO unrelated
-        // candidates in that case, so the doomed set below excludes it — we
-        // just log the refusal so the console explains the empty removal.
-        if categories.contains(.unrelatedAudio), !classification.hasVideoAnchors {
-            log("Purge Non-Video Media: REFUSED unrelated-audio category — this catalog has no video records to relate audio to. Re-scan your video volumes first. (Other selected categories still processed.)")
-            appLog.write("Purge Non-Video Media (REFUSED unrelated-audio): no video anchors in catalog")
-            nonVideoMediaPurgeLog.error("Refused unrelated-audio: no video anchors")
-        }
-
-        let doomed = classification.candidateIDs(categories: categories,
+        let doomed = classification.candidateIDs(extensions: wanted,
                                                  volumeKeys: volumeKeys)
         guard !doomed.isEmpty else {
-            log("Purge Non-Video Media: nothing to remove for the selected categories / volumes.")
+            log("Purge Non-Video Media: nothing to remove for the selected extensions / volumes.")
             return .none
         }
 
@@ -134,11 +137,11 @@ extension VideoScanModel {
         // Purged wholesale — any armed soft-delete undo banner is meaningless.
         clearPurgeUndoState()
 
-        let cats = categories.map(\.rawValue).sorted().joined(separator: ", ")
+        let exts = wanted.sorted().joined(separator: ", ")
         let snapNote = snapshotPath.map { " — recovery snapshot: \($0)" } ?? ""
-        log("Purge Non-Video Media: removed \(removed) record(s) [\(cats)] across \(volumeKeys.count) volume(s) from the catalog. Files on disk were untouched.\(snapNote)")
-        appLog.write("Purge Non-Video Media: removed \(removed) record(s) [\(cats)]\(snapNote)")
-        nonVideoMediaPurgeLog.info("Purged \(removed) record(s) of \(doomed.count) matched [\(cats)]")
+        log("Purge Non-Video Media: removed \(removed) record(s) [\(exts)] across \(volumeKeys.count) volume(s) from the catalog. Files on disk were untouched.\(snapNote)")
+        appLog.write("Purge Non-Video Media: removed \(removed) record(s) [\(exts)]\(snapNote)")
+        nonVideoMediaPurgeLog.info("Purged \(removed) record(s) of \(doomed.count) matched [\(exts)]")
         return PurgeOutcome(removed: removed, snapshotPath: snapshotPath)
     }
 }

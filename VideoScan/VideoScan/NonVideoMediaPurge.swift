@@ -1,44 +1,39 @@
 import Foundation
 
-// MARK: - Non-Video Media Purge — unified classification (catalog maintenance, 2026-07-21)
+// MARK: - Non-Video Media Purge — extension×volume classification (2026-07-21)
 //
-// The composition layer behind the single "Purge Non-Video Media…" dialog
-// that REPLACES the two separate purge commands (cover-art music, unrelated
-// audio). This file adds NO new purge logic — it REUSES the two existing,
-// QA-approved candidate predicates and organizes their results by CATEGORY
-// and by VOLUME so the dialog can offer live per-category / per-volume
-// counts and a top-locations breakdown without re-walking the catalog on
-// every checkbox toggle.
+// The composition layer behind the single "Purge Non-Video Media…" dialog.
+// REDESIGN (Rick, 2026-07-21): the "what to purge" control is now a PURE
+// EXTENSION CHECKLIST, not two smart categories. Every file EXTENSION present
+// in the catalog that is NOT a known video container / Avid essence type is
+// offered as its own checkbox with a live count and a "(N paired)" safety
+// annotation. The user opts in per extension; nothing is preselected.
 //
-//   • CoverArtMusicPurge.isCandidate      → category .coverArt
-//     (audio mis-tagged as video via embedded cover art; video-tagged)
-//   • UnrelatedAudioPurge.isCandidate     → category .unrelatedAudio
-//     (audio-only unrelated to any video; KEEPS curated pairs + essence)
-//
-// The two categories are DISJOINT by construction: cover-art candidates are
-// video-tagged (streamType videoAndAudio/videoOnly), unrelated-audio
-// candidates are audioOnly — no record can satisfy both. So the per-record
-// category is a clean 3-way {coverArt, unrelatedAudio, none}.
+// WHY PURE EXTENSION. Rick will spot-test this "as a user / me in 6 months":
+// an explicit, literal "remove all .cr3 / .mp3 on these volumes" is far easier
+// to reason about than two heuristic buckets. The former paired-record
+// PROTECTION now lives in a VISIBLE annotation — each row shows how many of
+// its records belong to an A/V pair ("(N paired)", orange) — so the user is
+// shown the risk rather than having it silently applied. Extension-purge is
+// LITERAL: it removes matching records INCLUDING paired ones. That is
+// intended, per Rick — the guard is the annotation, not a hidden keep-rule.
 //
 // EFFICIENT INTERACTIVE RECOMPUTE. `classify(records:)` does ONE O(N) pass:
-// for each record it computes (category, volumeKey) and folds it into a
-// small (category × volume) matrix of Cells. Each Cell carries the record
-// IDs (the removal key set) and a per-parent-directory tally (for the
-// top-locations breakdown). Toggling category / volume selections in the
-// dialog is then pure arithmetic over the matrix cells — sum a few Ints,
-// union a few small ID sets — never another pass over the ~100k records.
-// The O(N) pass runs ONCE (on the sheet's .onAppear / a model call), off the
-// SwiftUI view body, per the no-O(records)-work-in-a-view-body rule.
+// for each offered record it computes (extension, volumeKey) and folds it into
+// a small (extension × volume) matrix of Cells. Each Cell carries the record
+// IDs (the removal key set), a paired-record count (for the "(N paired)"
+// annotation), and a per-parent-directory tally (for the top-locations
+// breakdown). Toggling extension / volume selections in the dialog is then
+// pure arithmetic over the matrix cells — sum a few Ints, union a few small ID
+// sets — never another pass over the ~100k records. The O(N) pass runs ONCE
+// (on the sheet's .onAppear), off the SwiftUI view body, per the
+// no-O(records)-work-in-a-view-body rule.
 //
-// EMPTY-ANCHOR FAIL-SAFE. The unrelated-audio predicate is only meaningful
-// when the catalog has video/essence anchors to relate audio against; with
-// NO anchors EVERY audio-only record would look "unrelated" and the purge
-// must remove nothing (a catalog scanned before its video volumes were
-// online). We honor that here by NEVER classifying a record as
-// .unrelatedAudio when `hasVideoAnchors` is false — so the category's count
-// is 0 and its ID set is empty, exactly matching UnrelatedAudioPurge's own
-// `guard !sets.isEmpty` behavior. `hasVideoAnchors` is surfaced so the dialog
-// and the model purge can also refuse explicitly.
+// VIDEO / ESSENCE EXCLUSION. Known video containers and Avid essence are NEVER
+// offered here (never purgeable through this dialog) and the extensionless
+// bucket ("") is excluded too — a video-only Avid/QuickTime file often has no
+// extension, so offering "" would risk severing real footage. See
+// `excludedVideoExtensions`.
 //
 // VOLUME DERIVATION. A record's volume key is `VolumeReachability
 // .volumeName(forPath:)` — the SAME pure path-string derivation the
@@ -47,49 +42,90 @@ import Foundation
 // component). Pure, no disk I/O, so it is safe inside the O(N) pass and
 // deterministic for tests.
 //
-// MEMORY. Worst case the Cell ID arrays together hold one UUID per candidate
+// MEMORY. Worst case the Cell ID arrays together hold one UUID per offered
 // record — bounded by the catalog size (~100k → ~1.6 MB of UUIDs). The
 // per-directory tallies are bounded by the number of DISTINCT parent
-// directories among candidates (far smaller). Three video-side Set<String>
-// (~16k anchors) are built once by UnrelatedAudioPurge.videoSets. No media
-// bytes are ever read. A few MB total, negligible against `records` itself.
+// directories among candidates (far smaller). No media bytes are ever read. A
+// few MB total, negligible against `records` itself.
 //
 // (Swift `enum` with only static members ≈ a C++ namespace — no instances,
 // just a scoping shell for free functions.)
 
-/// The two purgeable non-video categories the dialog composes. Raw String
-/// so selections can round-trip through logs / defaults if ever needed.
-/// (Swift `enum: String, CaseIterable` ≈ a C++ scoped enum plus a compiler-
-/// generated `allCases` array.)
-enum NonVideoCategory: String, CaseIterable, Hashable, Identifiable {
-    case coverArt
-    case unrelatedAudio
-
-    var id: String { rawValue }
-
-    /// Human label for the dialog's checkbox.
-    var label: String {
-        switch self {
-        case .coverArt:       return "Cover-art music"
-        case .unrelatedAudio: return "Unrelated audio / sample libraries"
-        }
-    }
-}
-
 enum NonVideoMediaPurge {
 
+    // MARK: - Excluded (never-offered) extensions
+
+    /// Known video containers + Avid essence. Records with any of these
+    /// extensions — or with NO extension (the "" bucket) — are never offered
+    /// in the checklist and can never be removed through this dialog. Lower-
+    /// cased; the classify pass lowercases each record's extension before test.
+    /// (Swift `Set<String>` literal ≈ a std::unordered_set built once.)
+    static let excludedVideoExtensions: Set<String> = [
+        "mov", "mp4", "m4v", "avi", "mkv", "mts", "m2ts", "wmv", "flv",
+        "3gp", "3g2", "mpg", "mpeg", "mpe", "vob", "ogv", "webm",
+        "dv", "m2v", "mod", "tod", "mxf",
+    ]
+
+    /// Normalized extension for a record: lowercased, any leading dot stripped.
+    /// Empty means the extensionless bucket (excluded from the checklist).
+    static func normalizedExtension(_ record: VideoRecord) -> String {
+        var e = record.ext.lowercased()
+        if e.hasPrefix(".") { e.removeFirst() }
+        return e
+    }
+
+    /// True when this record's extension is OFFERED in the checklist (present,
+    /// non-empty, and not a known video/essence container).
+    static func isOffered(_ record: VideoRecord) -> Bool {
+        let e = normalizedExtension(record)
+        return !e.isEmpty && !excludedVideoExtensions.contains(e)
+    }
+
+    // MARK: - Human labels
+
+    /// Small static map from extension → short human label for clarity in the
+    /// checklist. Unmapped extensions fall back to "(.ext)". (Swift dictionary
+    /// literal ≈ a const std::unordered_map<string,string> initialized once.)
+    private static let extensionLabels: [String: String] = [
+        "cr3":  "Canon RAW photo",
+        "cr2":  "Canon RAW",
+        "dng":  "RAW photo",
+        "jpg":  "JPEG photo",
+        "jpeg": "JPEG photo",
+        "heic": "HEIC photo",
+        "png":  "PNG image",
+        "m4a":  "AAC audio",
+        "mp3":  "MP3 audio",
+        "wav":  "WAV audio",
+        "aif":  "AIFF audio",
+        "aiff": "AIFF audio",
+        "aac":  "audio",
+        "flac": "audio",
+    ]
+
+    /// Human label for an extension row. Falls back to "(.ext)" if unmapped so
+    /// even stray types render legibly.
+    static func label(forExtension ext: String) -> String {
+        let e = ext.lowercased()
+        return extensionLabels[e] ?? "(.\(e))"
+    }
+
+    // MARK: - Matrix pieces
+
     /// One parent directory and how many candidates live under it, for the
-    /// dialog's top-locations breakdown. Mirrors UnrelatedAudioPurge.TreeCount.
+    /// dialog's top-locations breakdown.
     struct TreeCount: Identifiable {
         let path: String
         let count: Int
         var id: String { path }
     }
 
-    /// A single (category × volume) matrix cell: the candidate record IDs in
-    /// that cell plus a per-parent-directory tally for the breakdown.
+    /// A single (extension × volume) matrix cell: the candidate record IDs in
+    /// that cell, how many of them belong to an A/V pair, and a per-parent-
+    /// directory tally for the breakdown.
     struct Cell {
         var ids: [UUID] = []
+        var pairedCount: Int = 0
         var dirCounts: [String: Int] = [:]
         var count: Int { ids.count }
     }
@@ -98,58 +134,69 @@ enum NonVideoMediaPurge {
     /// interactive numbers are derived from this by cheap cell arithmetic —
     /// no further catalog walks.
     struct Classification {
-        /// matrix[category][volumeKey] → Cell. Absent keys mean an empty cell.
-        let matrix: [NonVideoCategory: [String: Cell]]
-        /// Every volume key that has ANY candidate in ANY category, sorted
+        /// matrix[extension][volumeKey] → Cell. Absent keys mean an empty cell.
+        let matrix: [String: [String: Cell]]
+        /// Every offered extension present in the catalog, SORTED BY OVERALL
+        /// COUNT DESCENDING (biggest junk first), tie-broken by name ascending.
+        let extensions: [String]
+        /// Every volume key that holds ANY offered record, sorted
         /// case-insensitively for a stable dialog list.
         let volumeKeys: [String]
-        /// True iff the catalog has at least one video/essence anchor. When
-        /// false, `.unrelatedAudio` is never populated (empty-anchor fail-safe).
-        let hasVideoAnchors: Bool
-        /// Count of relationship anchors (video-bearing + recovered essence).
-        let anchorCount: Int
 
         // MARK: Interactive queries (pure cell arithmetic, no records walk)
 
-        /// Candidates in one category across the given volumes — the number
-        /// shown next to a CATEGORY checkbox for the currently-selected volumes.
-        func categoryCount(_ category: NonVideoCategory,
-                           volumeKeys keys: Set<String>) -> Int {
-            guard let byVolume = matrix[category] else { return 0 }
+        /// Candidates for one extension across the given volumes — the count
+        /// shown next to an EXTENSION checkbox for the currently-selected
+        /// volumes.
+        func extensionCount(_ ext: String,
+                            volumeKeys keys: Set<String>) -> Int {
+            guard let byVolume = matrix[ext] else { return 0 }
             var n = 0
             for k in keys { n += byVolume[k]?.count ?? 0 }
             return n
         }
 
-        /// Candidates on one volume across the given categories — the number
-        /// shown next to a VOLUME checkbox for the currently-selected categories.
-        func volumeCount(_ volumeKey: String,
-                         categories: Set<NonVideoCategory>) -> Int {
+        /// How many of one extension's records across the given volumes belong
+        /// to an A/V pair — the "(N paired)" safety annotation, scoped to the
+        /// currently-selected volumes (same scope as `extensionCount`).
+        func extensionPairedCount(_ ext: String,
+                                  volumeKeys keys: Set<String>) -> Int {
+            guard let byVolume = matrix[ext] else { return 0 }
             var n = 0
-            for c in categories { n += matrix[c]?[volumeKey]?.count ?? 0 }
+            for k in keys { n += byVolume[k]?.pairedCount ?? 0 }
             return n
         }
 
-        /// Grand total across the selected categories × volumes — the live
-        /// "Purge N records" number.
-        func totalCount(categories: Set<NonVideoCategory>,
+        /// Candidates on one volume across the given extensions — the count
+        /// shown next to a VOLUME checkbox for the currently-selected
+        /// extensions.
+        func volumeCount(_ volumeKey: String,
+                         extensions exts: Set<String>) -> Int {
+            var n = 0
+            for e in exts { n += matrix[e]?[volumeKey]?.count ?? 0 }
+            return n
+        }
+
+        /// Grand total across the selected extensions × volumes — the live
+        /// "Remove N records" number.
+        func totalCount(extensions exts: Set<String>,
                         volumeKeys keys: Set<String>) -> Int {
             var n = 0
-            for c in categories {
-                guard let byVolume = matrix[c] else { continue }
+            for e in exts {
+                guard let byVolume = matrix[e] else { continue }
                 for k in keys { n += byVolume[k]?.count ?? 0 }
             }
             return n
         }
 
-        /// The exact removal key set for the selected categories × volumes.
+        /// The exact removal key set for the selected extensions × volumes.
         /// Union of the relevant cells' ID arrays — O(selected candidates),
         /// never O(catalog).
-        func candidateIDs(categories: Set<NonVideoCategory>,
+        func candidateIDs(extensions exts: Set<String>,
                           volumeKeys keys: Set<String>) -> Set<UUID> {
             var ids = Set<UUID>()
-            for c in categories {
-                guard let byVolume = matrix[c] else { continue }
+            for e in exts {
+                guard let byVolume = matrix[e] else { continue }
                 for k in keys {
                     if let cell = byVolume[k] { ids.formUnion(cell.ids) }
                 }
@@ -157,17 +204,17 @@ enum NonVideoMediaPurge {
             return ids
         }
 
-        /// Top parent directories among the selected categories × volumes,
+        /// Top parent directories among the selected extensions × volumes,
         /// highest count first. Merges only the selected cells' per-directory
         /// tallies — iterates DISTINCT directories in-selection, not records.
         /// Also returns the grand total so the dialog can render "…and N more".
-        func topLocations(categories: Set<NonVideoCategory>,
+        func topLocations(extensions exts: Set<String>,
                           volumeKeys keys: Set<String>,
                           topN: Int = 6) -> (trees: [TreeCount], total: Int) {
             var perDir: [String: Int] = [:]
             var total = 0
-            for c in categories {
-                guard let byVolume = matrix[c] else { continue }
+            for e in exts {
+                guard let byVolume = matrix[e] else { continue }
                 for k in keys {
                     guard let cell = byVolume[k] else { continue }
                     total += cell.count
@@ -192,69 +239,69 @@ enum NonVideoMediaPurge {
         VolumeReachability.volumeName(forPath: fullPath)
     }
 
-    /// The 3-way category for a record given the precomputed video sets and
-    /// whether the catalog has anchors. Reuses BOTH existing predicates; adds
-    /// no new purge logic. Returns nil for "keep" (not a candidate).
-    static func category(for record: VideoRecord,
-                         videoSets sets: UnrelatedAudioPurge.VideoSets,
-                         hasVideoAnchors: Bool) -> NonVideoCategory? {
-        // Cover-art music: video-tagged audio (mjpeg/png cover art). Disjoint
-        // from unrelated-audio (which is audioOnly), so test it first.
-        if CoverArtMusicPurge.isCandidate(record) { return .coverArt }
-        // Unrelated audio-only — only meaningful with anchors present. Without
-        // anchors we classify NOTHING here (empty-anchor fail-safe), matching
-        // UnrelatedAudioPurge.candidates' own guard.
-        if hasVideoAnchors,
-           UnrelatedAudioPurge.isCandidate(record, videoSets: sets) {
-            return .unrelatedAudio
-        }
-        return nil
+    /// Parent-directory string for a full path — reuses the shared helper so
+    /// the top-locations breakdown matches the other purge dialogs exactly.
+    static func dir(ofFullPath fullPath: String) -> String {
+        UnrelatedAudioPurge.dir(ofFullPath: fullPath)
     }
 
-    /// ONE O(N) pass over `records`: build the (category × volume) matrix, the
-    /// sorted list of volumes that hold any candidate, and the anchor summary.
-    /// Everything the dialog needs is derived from the returned Classification
-    /// by cell arithmetic — this is the only full walk.
-    static func classify(records: [VideoRecord]) -> Classification {
-        let sets = UnrelatedAudioPurge.videoSets(in: records)
-        let hasAnchors = !sets.isEmpty
+    /// True when a record is part of an A/V pair — either grouped
+    /// (`pairGroupID`) or directly linked (`pairedWith`). Drives the
+    /// "(N paired)" annotation.
+    static func isPaired(_ record: VideoRecord) -> Bool {
+        record.pairGroupID != nil || record.pairedWith != nil
+    }
 
-        var matrix: [NonVideoCategory: [String: Cell]] = [:]
-        var anchorCount = 0
+    /// ONE O(N) pass over `records`: build the (extension × volume) matrix, the
+    /// count-descending list of offered extensions, and the sorted list of
+    /// volumes that hold any offered record. Everything the dialog needs is
+    /// derived from the returned Classification by cell arithmetic — this is
+    /// the only full walk.
+    static func classify(records: [VideoRecord]) -> Classification {
+        var matrix: [String: [String: Cell]] = [:]
         var volumeKeySet = Set<String>()
+        // Overall (all-volume) count per extension, for the descending sort.
+        var overallCount: [String: Int] = [:]
 
         for r in records {
-            if UnrelatedAudioPurge.isEssenceBearing(r) { anchorCount += 1 }
-            guard let cat = category(for: r, videoSets: sets, hasVideoAnchors: hasAnchors) else {
-                continue
-            }
+            guard isOffered(r) else { continue }
+            let ext = normalizedExtension(r)
             let vk = volumeKey(forFullPath: r.fullPath)
-            let dir = UnrelatedAudioPurge.dir(ofFullPath: r.fullPath)
+            let d = dir(ofFullPath: r.fullPath)
+            let paired = isPaired(r)
             volumeKeySet.insert(vk)
+            overallCount[ext, default: 0] += 1
+
             // DETACH before mutating: `removeValue` hands us the SOLE reference
             // to the inner dict / Cell, so `cell.ids.append` mutates in place
             // (amortized O(1)) instead of triggering copy-on-write of the whole
-            // accumulated array every iteration. A plain `matrix[cat]` read
+            // accumulated array every iteration. A plain `matrix[ext]` read
             // keeps a second reference alive → COW → O(k²) for a cell that
-            // accumulates k candidates (77k unrelated-audio collapsing into one
-            // volume bucket = billions of copies, multi-second freeze on the
-            // main thread). Restoring unique ownership makes this a true O(N)
-            // pass. (C++ analogy: reserve/emplace into a uniquely-owned vector
-            // vs. deep-copying a shared one on every push_back.)
-            var byVolume = matrix.removeValue(forKey: cat) ?? [:]
+            // accumulates k candidates (tens of thousands of one extension
+            // collapsing into one volume bucket = billions of copies, a
+            // multi-second freeze on the main thread — the beachball QA caught
+            // last round). Restoring unique ownership makes this a true O(N)
+            // pass. (C++ analogy: emplace into a uniquely-owned vector vs.
+            // deep-copying a shared one on every push_back.)
+            var byVolume = matrix.removeValue(forKey: ext) ?? [:]
             var cell = byVolume.removeValue(forKey: vk) ?? Cell()
             cell.ids.append(r.id)
-            cell.dirCounts[dir, default: 0] += 1
+            if paired { cell.pairedCount += 1 }
+            cell.dirCounts[d, default: 0] += 1
             byVolume[vk] = cell
-            matrix[cat] = byVolume
+            matrix[ext] = byVolume
         }
 
-        let sortedKeys = volumeKeySet.sorted {
+        let sortedExtensions = overallCount.keys.sorted {
+            let ca = overallCount[$0] ?? 0
+            let cb = overallCount[$1] ?? 0
+            return ca != cb ? ca > cb : $0 < $1
+        }
+        let sortedVolumeKeys = volumeKeySet.sorted {
             $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
         }
         return Classification(matrix: matrix,
-                              volumeKeys: sortedKeys,
-                              hasVideoAnchors: hasAnchors,
-                              anchorCount: anchorCount)
+                              extensions: sortedExtensions,
+                              volumeKeys: sortedVolumeKeys)
     }
 }
