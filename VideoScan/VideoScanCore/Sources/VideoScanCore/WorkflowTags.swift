@@ -71,18 +71,94 @@ public enum WorkflowTags {
 
 public enum UserNotesMigration {
 
-    /// True if `line` is a MACHINE note line. The ffprobe/scan-engine
-    /// probe notes stored in `notes` are ffmpeg stderr lines, which all
-    /// start with a bracketed component tag ("[mov,mp4,m4a @ 0x...]
-    /// moov atom not found") — the "[" prefix is the classifier the
-    /// approved design specifies.
+    /// True if `line` is a MACHINE note line. Three shapes qualify,
+    /// each derived from an actual writer in the codebase (QA fix
+    /// 2026-07-23 — File Journey stamps must not migrate to userNotes):
+    ///
+    ///   1. "[" prefix — ffprobe/ffmpeg stderr probe notes
+    ///      ("[mov,mp4,m4a @ 0x...] moov atom not found"), the shape
+    ///      the approved design named. Writer: ScanEngine.swift
+    ///      (`o.notes = stderrTrimmed`).
+    ///   2. File Journey stamps: "<Verb> <ISO8601>: <detail>" — see
+    ///      `isJourneyStampLine` for the verb list + writers.
+    ///   3. Two literal machine prefixes with no stamp:
+    ///      "Combined: "          (combined-record spec note,
+    ///                             VideoScanModel+Combine.swift)
+    ///      "MXF header parsed (" (ScanEngine.swift native-KLV fallback
+    ///                             note, "MXF header parsed (ffprobe
+    ///                             failed: ...)").
     public static func isMachineLine(_ line: Substring) -> Bool {
-        line.hasPrefix("[")
+        if line.hasPrefix("[") { return true }
+        if line.hasPrefix("Combined: ") { return true }
+        if line.hasPrefix("MXF header parsed (") { return true }
+        return isJourneyStampLine(line)
+    }
+
+    /// The verbs the MFO / relocate pipeline writes as File Journey
+    /// stamps, each producing lines of the exact shape
+    /// "<Verb> <ISO8601 stamp>: <detail>". DERIVED from the writers —
+    /// keep this list in lock-step with them:
+    ///
+    ///   "Transcode"      TranscodeJob.swift (sourceNote/derivedNote)
+    ///   "Balance Audio"  BalanceAudioJob.swift (sourceNote/derivedNote)
+    ///   "Cleanup"        CleanupJob.swift (sourceNote/derivedNote)
+    ///   "Reformat"       ReformatJob.swift (sourceNote/derivedNote)
+    ///   "Trim"           TrimJob.swift (sourceNote/derivedNote)
+    ///   "Reconcile"      VideoScanModel+Relocate.swift (reconcile
+    ///                    buckets + formatSafelyRedundantNote)
+    ///   "Migrate"        VideoScanModel+Relocate.swift (salvage /
+    ///                    migrate stamps)
+    public static let journeyStampVerbs: [String] = [
+        "Transcode",
+        "Balance Audio",
+        "Cleanup",
+        "Reformat",
+        "Trim",
+        "Reconcile",
+        "Migrate",
+    ]
+
+    /// True if `line` is a File Journey stamp: a known verb, a space,
+    /// then an ISO8601 date ("YYYY-MM-DDT…"). STRUCTURAL match on
+    /// purpose — the verb alone is not enough, because a human note
+    /// like "Transcoded this myself in 2019" or "Trim this one later"
+    /// must still count as human. Only the machine writers produce
+    /// verb + space + ISO-date-with-'T', so requiring the date shape
+    /// keeps real human notes migrating.
+    public static func isJourneyStampLine(_ line: Substring) -> Bool {
+        for verb in journeyStampVerbs {
+            let prefix = verb + " "
+            guard line.hasPrefix(prefix) else { continue }
+            if hasISODatePrefix(line.dropFirst(prefix.count)) { return true }
+        }
+        return false
+    }
+
+    /// True if `s` begins with "YYYY-MM-DDT" — the head of every
+    /// ISO8601DateFormatter stamp the writers above produce. ASCII-
+    /// digit strict so lookalike text can't misclassify a human note
+    /// as machine.
+    static func hasISODatePrefix(_ s: Substring) -> Bool {
+        let head = Array(s.prefix(11))
+        guard head.count == 11 else { return false }
+        for (i, ch) in head.enumerated() {
+            switch i {
+            case 4, 7:
+                if ch != "-" { return false }
+            case 10:
+                if ch != "T" { return false }
+            default:
+                guard let a = ch.asciiValue, a >= 48, a <= 57 else { return false }
+            }
+        }
+        return true
     }
 
     /// Split a legacy `notes` blob into (machine, human) halves,
-    /// newline-line-based: lines starting with "[" stay machine,
-    /// everything else is human text that belongs in `userNotes`.
+    /// newline-line-based: machine lines (see `isMachineLine` — probe
+    /// "[" lines, File Journey stamps, Combined/MXF-fallback literals)
+    /// stay put, everything else is human text that belongs in
+    /// `userNotes`.
     ///
     ///   * pure human note   → machine == "", human == notes
     ///   * pure machine note → machine == notes, human == ""

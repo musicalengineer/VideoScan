@@ -202,6 +202,78 @@ struct UserNotesMigrationTests {
         #expect(UserNotesMigration.migrate(notes: "", userNotes: "") == nil)
     }
 
+    // MARK: File Journey stamps stay machine (QA fix 2026-07-23)
+    //
+    // Every stamp string below mirrors an ACTUAL writer in the code —
+    // if a writer's note format changes, update UserNotesMigration
+    // .journeyStampVerbs AND these fixtures together.
+
+    /// One realistic line per writer. None may migrate.
+    private static let realJourneyStamps: [String] = [
+        // TranscodeJob.swift sourceNote/derivedNote
+        "Transcode 2026-07-01T18:00:12Z: Created archival derivative Clip 05_hevc.mov",
+        "Transcode 2026-07-01T18:00:12Z: archival derivative of Clip 05.dv",
+        // BalanceAudioJob.swift sourceNote/derivedNote
+        "Balance Audio 2026-07-18T14:22:05Z: Created balanced copy Clip 07_balanced.mov (left-only fixed; video copied unchanged)",
+        // CleanupJob.swift sourceNote/derivedNote
+        "Cleanup 2026-07-08T09:15:44Z: Created cleaned copy Tape12_clean.mov with VHS Quick Clean (vhs-quick-clean v1)",
+        // ReformatJob.swift sourceNote/derivedNote
+        "Reformat 2026-06-14T20:03:31Z: Reformatted to HEVC as Thanksgiving-Raw_hevc.mov",
+        "Reformat 2026-06-14T20:03:31Z: Derived from Thanksgiving-Raw_Default.mov via Reformat (HEVC)",
+        // TrimJob.swift sourceNote/derivedNote
+        "Trim 2026-07-16T11:40:00Z: Trimmed from Tape03.mov (kept 0:12–1:03:45, stream copy — no re-encode)",
+        // VideoScanModel+Relocate.swift reconcile buckets + formatSafelyRedundantNote
+        "Reconcile 2026-06-20T15:00:00Z: source file not found",
+        "Reconcile 2026-06-20T15:00:00Z: reason=dup-on-other-volume witnesses=[\"/Volumes/LaCie8TB/a.mov\"] totalWitnesses=2",
+        // VideoScanModel+Relocate.swift migrate stamps
+        "Migrate 2026-06-20T15:01:10Z: salvage recovered — re-copied and verified",
+        // VideoScanModel+Combine.swift spec note (no stamp)
+        "Combined: video V1993-06-14.mxf + audio A1993-06-14.mxf",
+        // ScanEngine.swift MXF fallback note (no stamp)
+        "MXF header parsed (ffprobe failed: Invalid data found when processing input)",
+    ]
+
+    @Test func realJourneyStampsStayInNotes() {
+        for stamp in Self.realJourneyStamps {
+            #expect(UserNotesMigration.migrate(notes: stamp, userNotes: "") == nil,
+                    "journey stamp must NOT migrate: '\(stamp)'")
+        }
+    }
+
+    /// Human notes that merely MENTION a journey verb (or start with a
+    /// near-miss of one) are still human — the classifier requires the
+    /// exact verb + space + ISO-date shape.
+    @Test func humanNotesMentioningVerbsStillMigrate() {
+        let humanNotes = [
+            "Transcoded this myself in 2019",           // verb+suffix, no stamp
+            "I should Transcode this for Donna",        // verb mid-sentence
+            "Trim this one later",                      // verb, no date
+            "Cleanup crew visible in the background",   // verb + plain words
+            "Migrate 1999 photos into this folder?",    // verb + bare year, no ISO shape
+            "Combined the two tapes by hand",           // no "Combined: " literal
+        ]
+        for note in humanNotes {
+            let result = UserNotesMigration.migrate(notes: note, userNotes: "")
+            #expect(result?.userNotes == note && result?.notes.isEmpty == true,
+                    "human note must migrate intact: '\(note)'")
+        }
+    }
+
+    /// Mixed blob: probe line + journey stamp + human lines → only the
+    /// human lines move, machine lines keep their order.
+    @Test func mixedStampAndHumanSplitsCorrectly() {
+        let notes = [
+            "[mov @ 0x0] moov atom not found",
+            "ask Breen about this tape",
+            "Transcode 2026-07-01T18:00:12Z: Created archival derivative Clip 05_hevc.mov",
+            "second human thought",
+        ].joined(separator: "\n")
+        let result = UserNotesMigration.migrate(notes: notes, userNotes: "")
+        #expect(result?.userNotes == "ask Breen about this tape\nsecond human thought")
+        #expect(result?.notes ==
+                "[mov @ 0x0] moov atom not found\nTranscode 2026-07-01T18:00:12Z: Created archival derivative Clip 05_hevc.mov")
+    }
+
     @Test func migrationIsIdempotent() {
         // Apply, then apply again to the RESULT — second pass must be nil
         // for every shape (the "idempotent by construction" claim).
@@ -209,6 +281,7 @@ struct UserNotesMigrationTests {
             "just a human note",
             "[machine] only",
             "[machine] line\nhuman line",
+            "Trim 2026-07-16T11:40:00Z: Created trimmed master x.mov\nkeep an eye on this one",
         ]
         for notes in shapes {
             guard let first = UserNotesMigration.migrate(notes: notes, userNotes: "") else {

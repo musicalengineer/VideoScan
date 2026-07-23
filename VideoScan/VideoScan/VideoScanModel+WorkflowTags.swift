@@ -90,13 +90,15 @@ extension VideoScanModel {
     // MARK: One-time notes → userNotes migration (catalog load)
 
     /// Move legacy HUMAN text out of machine `notes` into `userNotes`,
-    /// once, at catalog load. Rule (Rick-approved 2026-07-22 design):
-    /// only when `userNotes` is empty AND `notes` is non-empty; lines
-    /// starting with "[" (ffprobe stderr — the machine probe notes) stay
-    /// in `notes`, everything else MOVES to `userNotes`. Idempotent by
-    /// construction — after a move, `userNotes` is non-empty, so the
-    /// gate never fires again. Returns the number of records migrated;
-    /// the caller schedules a save when > 0.
+    /// once, at catalog load. Rule (Rick-approved 2026-07-22 design +
+    /// 2026-07-23 QA fix): only when `userNotes` is empty AND `notes`
+    /// is non-empty; MACHINE lines stay in `notes` — "[" probe lines,
+    /// File Journey stamps ("Transcode <ISO>: …" etc.), and the
+    /// Combined/MXF-fallback literals (see UserNotesMigration
+    /// .isMachineLine) — everything else MOVES to `userNotes`.
+    /// Idempotent by construction — after a move, `userNotes` is
+    /// non-empty, so the gate never fires again. Returns the number of
+    /// records migrated; the caller schedules a save when > 0.
     ///
     /// Runs BEFORE the search-index load/rebuild in
     /// restoreCatalogFromDisk so the haystacks are built from the
