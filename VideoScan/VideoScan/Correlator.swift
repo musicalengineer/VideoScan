@@ -106,6 +106,16 @@ enum Correlator {
     }
 
     private static func scoreCandidate(video v: VideoRecord, audio a: VideoRecord) -> Candidate? {
+        // GH #125 duration-compatibility gate at pair formation: files
+        // that cannot be the same program (or whose durations are
+        // unknown) are never offered as a candidate, regardless of how
+        // the other signals coincide. Shared rule with the production
+        // snap pipeline — see CorrelationScorer.durationCompatible.
+        guard CorrelationScorer.durationCompatible(
+            videoDuration: v.durationSeconds,
+            audioDuration: a.durationSeconds
+        ) else { return nil }
+
         var score = 0
         var reasons: [String] = []
 

@@ -71,6 +71,13 @@ extension CorrelationScorer {
     /// duration 3 / timestamp 3 / timecode 2 / directory 1 / tape 1,
     /// floor 3). Both the record path (`scoreCorrelatePair`) and the
     /// snap path below delegate here.
+    ///
+    /// NOTE (GH #125): the duration-compatibility gate is deliberately
+    /// NOT here — this rubric also feeds CatalogScopeEvidence's
+    /// "video-linked" classification, which protects audio from purge.
+    /// The gate lives at the pair-FORMATION sites
+    /// (`durationCompatible`, applied in scoreCorrelatePair,
+    /// assignPairs, Correlator.scoreCandidate, assignAvidPairs).
     static func scoreParts(
         vKey: String, audioFilename: String,
         vDuration: Double, aDuration: Double,
@@ -166,6 +173,13 @@ extension CorrelationScorer {
             // Score.
             for ai in pool {
                 let a = audios[ai]
+                // GH #125 duration-compatibility gate at pair formation:
+                // a 3808 s video must never be OFFERED a 125 s audio, no
+                // matter how the other signals coincide. Unknown/zero
+                // durations fail the gate too — do nothing rather than
+                // conflate.
+                guard durationCompatible(videoDuration: v.durationSeconds,
+                                         audioDuration: a.durationSeconds) else { continue }
                 if let (score, confidence, reasons) = scoreParts(
                     vKey: vKey, audioFilename: a.filename,
                     vDuration: v.durationSeconds, aDuration: a.durationSeconds,
@@ -205,7 +219,7 @@ extension CorrelationScorer {
     // MARK: - Avid cross-volume pipeline (off-main)
 
     /// Snapshot for the Avid clip-ID correlator: identity + the best-copy
-    /// ranking signals + the ledger flag.
+    /// ranking signals + the ledger flag + duration (GH #125 sanity gate).
     struct AvidSnap: Sendable {
         let id: UUID
         let filename: String
@@ -213,6 +227,7 @@ extension CorrelationScorer {
         let isPlayable: String
         let sizeBytes: Int64
         let isPaired: Bool
+        let durationSeconds: Double
     }
 
     @MainActor
@@ -222,7 +237,8 @@ extension CorrelationScorer {
                  fullPath: r.fullPath,
                  isPlayable: r.isPlayable,
                  sizeBytes: r.sizeBytes,
-                 isPaired: r.pairedWith != nil)
+                 isPaired: r.pairedWith != nil,
+                 durationSeconds: r.durationSeconds)
     }
 
     struct AvidResult: Sendable {
@@ -296,6 +312,23 @@ extension CorrelationScorer {
             }
             guard let bestVideo = bestSnapCopy(videos),
                   let bestAudio = bestSnapCopy(audios) else { continue }
+            // GH #125 duration sanity gate — the clip-ID path variant.
+            // Clip-ID identity is the strongest structural signal we
+            // have, and Avid video-only essence routinely probes with
+            // UNKNOWN duration (ffprobe fails on Avid RGBA — see the
+            // MXF-header-fallback backlog), so unknown durations still
+            // pair here — unlike the fuzzy scorer, where unknown fails
+            // the gate. But when BOTH durations are known and grossly
+            // mismatched, the essences cannot be the same program: do
+            // nothing rather than conflate. Both files stay unpaired
+            // orphans for manual review.
+            if bestVideo.durationSeconds > 0, bestAudio.durationSeconds > 0,
+               !durationCompatible(videoDuration: bestVideo.durationSeconds,
+                                   audioDuration: bestAudio.durationSeconds) {
+                videoOrphans += videos.count
+                audioOrphans += audios.count
+                continue
+            }
             assignments.append(PairAssignment(videoID: bestVideo.id,
                                               audioID: bestAudio.id,
                                               confidence: .high,

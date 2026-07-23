@@ -16,6 +16,38 @@ enum CorrelationScorer {
         let reasons: [String]
     }
 
+    // MARK: - Duration-Compatibility Gate (GH #125)
+
+    /// Hard gate: can this video-only + audio-only pair plausibly be the
+    /// same program? Mirrors the tolerance shape CombineVerifier's
+    /// audio-coverage check uses (`max(duration * 0.02, 2.0)`, commit
+    /// 3974f9d) so the correlator never OFFERS a pair the verifier would
+    /// reject after muxing.
+    ///
+    /// Incident (GH #125): Correlate paired a 3808 s video-only Avid MXF
+    /// with an unrelated 125.6 s audio-only MXF from the same directory
+    /// (directory + timestamp coincidence cleared the score floor), and
+    /// Combine then produced an hour-long family video with 2 minutes of
+    /// wrong audio. Project principle: do nothing rather than conflate.
+    ///
+    /// Rule: compatible iff BOTH durations are known (> 0, finite) and
+    /// `abs(v - a) <= max(2.0, 0.02 * max(v, a))`. Unknown/zero duration
+    /// on either side → NOT compatible: a pair we can't sanity-check is
+    /// never auto-offered as a confident match. (The Avid clip-ID path is
+    /// the deliberate exception — see `assignAvidPairs`.)
+    ///
+    /// This gates PAIR FORMATION only — it is intentionally NOT inside
+    /// `scoreParts`, because the rubric is also used by
+    /// CatalogScopeEvidence.isVideoLinked to protect audio from purge
+    /// classification; gating there could misclassify unknown-duration
+    /// audio essence as unlinked (the opposite data-loss direction).
+    static func durationCompatible(videoDuration: Double, audioDuration: Double) -> Bool {
+        guard videoDuration > 0, audioDuration > 0,
+              videoDuration.isFinite, audioDuration.isFinite else { return false }
+        let tolerance = max(2.0, 0.02 * max(videoDuration, audioDuration))
+        return abs(videoDuration - audioDuration) <= tolerance
+    }
+
     // MARK: - Filename Key
 
     static func filenameCorrelationKey(_ filename: String) -> String {
@@ -110,6 +142,12 @@ enum CorrelationScorer {
         durationTolerance: Double,
         timestampTolerance: TimeInterval
     ) -> Candidate? {
+        // GH #125 duration-compatibility gate: never form a candidate for
+        // files that cannot be the same program. Applied here — at pair
+        // FORMATION — so every caller (findBestPair, the legacy record
+        // pipeline, stress paths) gets the same protection.
+        guard durationCompatible(videoDuration: video.durationSeconds,
+                                 audioDuration: audio.durationSeconds) else { return nil }
         // Delegates to the shared rubric in CorrelationScorer+Snaps.swift
         // (2026-07-05) — the record path and the off-main snap path must
         // never drift apart.
@@ -183,6 +221,10 @@ enum CorrelationScorer {
         // original score >= 3 threshold — it has the broader correlation
         // context and can tolerate duration-only pairs in well-bounded
         // pools.
+        //
+        // GH #125: scoreCorrelatePair additionally applies the
+        // duration-compatibility gate, so grossly mismatched or
+        // unknown-duration pairs never reach the structural check.
         var best: Candidate?
         for other in opposites {
             let video = isVideo ? record : other
