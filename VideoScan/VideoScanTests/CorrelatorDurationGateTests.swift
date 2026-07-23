@@ -48,8 +48,12 @@ struct DurationGateMathTests {
     }
 
     @Test func justOverAbsoluteToleranceIsIncompatible() {
-        #expect(!CorrelationScorer.durationCompatible(videoDuration: 100.0, audioDuration: 97.8))
-        #expect(!CorrelationScorer.durationCompatible(videoDuration: 97.8, audioDuration: 100.0))
+        // 50 s-scale isolates the 2.0 s FLOOR branch: 2% of 50 is 1.0 s,
+        // so max(2.0, 1.0) = 2.0. A 2.2 s diff is just over the floor.
+        // (At 100 s the floor and the 2% branch coincide at 2.0 s, which
+        // would blur which branch is under test — NIT.)
+        #expect(!CorrelationScorer.durationCompatible(videoDuration: 50.0, audioDuration: 47.8))
+        #expect(!CorrelationScorer.durationCompatible(videoDuration: 47.8, audioDuration: 50.0))
     }
 
     @Test func percentBranchGovernsLongPrograms() {
@@ -170,22 +174,107 @@ struct DurationGatePairFormationTests {
                 "GH #125: Find Matching Audio must not surface a duration-incompatible pair")
     }
 
-    /// Unknown durations are not auto-offered as a confident match on
-    /// the fuzzy paths — even with a perfect Avid filename-key match.
-    /// (The clip-ID path in correlateAcrossVolumes still recovers such
-    /// pairs; see the Avid tests below.)
-    @Test func unknownDurationsAreNotAutoOfferedByFuzzyCorrelator() {
-        let video = makeAV(filename: "V01AB23.mxf", streamType: .videoOnly, duration: 0)
-        let audio = makeAV(filename: "A01AB23.mxf", streamType: .audioOnly, duration: 0)
+    // MARK: MAJOR 1 — unknown-duration structural-identity exemption
+    //
+    // The OMFI tape-name shape never reaches assignAvidPairs (its regex
+    // is `^\d+\.[AV]hex\.mxf$`), so it can only pair via the fuzzy paths.
+    // ffprobe routinely fails to report duration for exactly this Avid
+    // essence, and there is no manual escape (findBestPair is gated too).
+    // Fix: unknown durations pass the fuzzy gate ONLY on an exact
+    // filename-key identity match; refuse otherwise.
+
+    /// Canonical OMFI tape-name fixture (CatalogScopePolicyTests.swift
+    /// 176-188) with UNKNOWN durations must STILL pair on the fuzzy path
+    /// via filename-key identity — the regression MAJOR 1 fixes.
+    @Test func major1_omfiTapeNameUnknownDurationsStillPairOnIdentity() {
+        let video = makeAV(filename: "NewTape9V01.4B9C1586.8D8520.mxf",
+                           streamType: .videoOnly, duration: 0)
+        let audio = makeAV(filename: "NewTape9A01.4B9C1586.8D8520.mxf",
+                           streamType: .audioOnly, duration: 0)
+
+        Correlator.correlate(records: [video, audio])
+        #expect(video.pairedWith === audio,
+                "MAJOR 1: identity-matched OMFI clip must pair despite unknown durations")
+
+        let best = CorrelationScorer.findBestPair(
+            for: video, in: [video, audio],
+            durationTolerance: 1.0, timestampTolerance: 5.0)
+        #expect(best != nil,
+                "MAJOR 1: findBestPair must still surface the identity-matched unknown-duration pair")
+    }
+
+    /// Bare V/A + all-hex identity shape (00001.V…/00001.A…), unknown
+    /// durations — also pairs on identity through assignPairs.
+    @Test func major1_bareAvidIdentityUnknownDurationsPairInSnapPipeline() async {
+        let v = CorrelationScorer.Snap(
+            id: UUID(), filename: "00001.V14D1BBD3F.mxf",
+            directory: "/volA", durationSeconds: 0, dateCreatedRaw: nil,
+            timecode: "", tapeName: "")
+        let a = CorrelationScorer.Snap(
+            id: UUID(), filename: "00001.A14D1BBD3F.mxf",
+            directory: "/volA", durationSeconds: 0, dateCreatedRaw: nil,
+            timecode: "", tapeName: "")
+        let assignments = await CorrelationScorer.assignPairs(
+            videos: [v], audios: [a],
+            durationTolerance: 1.0, timestampTolerance: 5.0)
+        #expect(assignments.count == 1,
+                "MAJOR 1: identity carries unknown-duration pairs through the snap pipeline")
+    }
+
+    /// The OTHER direction: unknown durations WITHOUT identity (only
+    /// directory/timestamp coincidence) stay refused — do nothing rather
+    /// than conflate. This is the noisy class GH #125 protects.
+    @Test func major1_unknownDurationsWithoutIdentityStayRefused() {
+        let t0 = Date(timeIntervalSince1970: 1_720_000_000)
+        // Same directory + identical timestamp (structural directory
+        // signal + timestamp) but different filename keys and unknown
+        // durations — must NOT pair.
+        let video = makeAV(filename: "someclip.mxf", streamType: .videoOnly,
+                           duration: 0, dateCreated: t0)
+        let audio = makeAV(filename: "unrelated.wav", streamType: .audioOnly,
+                           duration: 0, dateCreated: t0)
 
         Correlator.correlate(records: [video, audio])
         #expect(video.pairedWith == nil,
-                "Unknown durations: do nothing rather than conflate")
+                "MAJOR 1: unknown durations with no identity match must stay refused")
 
         let best = CorrelationScorer.findBestPair(
             for: video, in: [video, audio],
             durationTolerance: 1.0, timestampTolerance: 5.0)
         #expect(best == nil)
+    }
+
+    /// Identity match does NOT override a KNOWN-incompatible duration —
+    /// mirror of the clip-ID rule. Same filename key, but 3808 s vs 125 s.
+    @Test func major1_identityDoesNotOverrideKnownIncompatibleDurations() {
+        let video = makeAV(filename: "NewTape9V01.4B9C1586.8D8520.mxf",
+                           streamType: .videoOnly, duration: 3808.27)
+        let audio = makeAV(filename: "NewTape9A01.4B9C1586.8D8520.mxf",
+                           streamType: .audioOnly, duration: 125.6255)
+
+        Correlator.correlate(records: [video, audio])
+        #expect(video.pairedWith == nil,
+                "MAJOR 1: identity must not carry a KNOWN-incompatible-duration pair")
+    }
+
+    /// Direct unit coverage of the fuzzy-gate helper's truth table.
+    @Test func major1_fuzzyGateTruthTable() {
+        // Both known, compatible → allowed regardless of identity.
+        #expect(CorrelationScorer.durationGatePermitsFuzzyPair(
+            videoDuration: 100, audioDuration: 100, filenameKeyMatches: false))
+        // Both known, incompatible → refused even WITH identity.
+        #expect(!CorrelationScorer.durationGatePermitsFuzzyPair(
+            videoDuration: 3808.27, audioDuration: 125.6255, filenameKeyMatches: true))
+        // Unknown + identity → allowed.
+        #expect(CorrelationScorer.durationGatePermitsFuzzyPair(
+            videoDuration: 0, audioDuration: 0, filenameKeyMatches: true))
+        #expect(CorrelationScorer.durationGatePermitsFuzzyPair(
+            videoDuration: 0, audioDuration: 60, filenameKeyMatches: true))
+        // Unknown + no identity → refused.
+        #expect(!CorrelationScorer.durationGatePermitsFuzzyPair(
+            videoDuration: 0, audioDuration: 0, filenameKeyMatches: false))
+        #expect(!CorrelationScorer.durationGatePermitsFuzzyPair(
+            videoDuration: 60, audioDuration: 0, filenameKeyMatches: false))
     }
 
     /// The gate is a FILTER, not a rescore: a compatible pair keeps its
@@ -253,6 +342,10 @@ struct DurationGatePairFormationTests {
     /// a clip-ID match is refused: the essences cannot be the same
     /// program (truncated or corrupt file) — do nothing rather than
     /// conflate. GH #125 rule applied to the clip-ID path.
+    ///
+    /// MAJOR 2: the refusal must be counted as a DISTINCT signal, not
+    /// folded into videoOrphans/audioOrphans (which the completion log
+    /// narrates as "no audio/video found" — false and misleading here).
     @Test func avidClipIDPathRefusesKnownIncompatibleDurations() async {
         func snap(_ name: String, duration: Double) -> CorrelationScorer.AvidSnap {
             CorrelationScorer.AvidSnap(
@@ -265,6 +358,130 @@ struct DurationGatePairFormationTests {
              snap("00001.A14D1BBD3F.mxf", duration: 125.6255)])
         #expect(result.assignments.isEmpty,
                 "Known-incompatible durations must not pair even on clip-ID identity")
+        #expect(result.durationRefusedClips == 1,
+                "MAJOR 2: the refusal must be counted as a distinct duration-refused clip")
+        #expect(result.videoOrphans == 0 && result.audioOrphans == 0,
+                "MAJOR 2: a refused clip has a counterpart — it is NOT an orphan")
+        #expect(result.durationRefusedDetails.count == 1,
+                "MAJOR 2: one detail line per refused clip for the completion log")
+        // The detail line must name both files AND both durations so the
+        // truncated-essence signal is actionable for manual review.
+        let detail = result.durationRefusedDetails.first ?? ""
+        #expect(detail.contains("00001.V14D1BBD3F.mxf"))
+        #expect(detail.contains("00001.A14D1BBD3F.mxf"))
+        #expect(detail.contains("3808") && detail.contains("125"))
+    }
+}
+
+// MARK: - MINOR 3: isVideoLinked stays ungated (purge protection)
+//
+// The gate lives at pair FORMATION, deliberately NOT inside scoreParts,
+// because scoreParts also feeds CatalogScopeEvidence.isVideoLinked —
+// which protects audio from purge classification. If the gate leaked in
+// there, unknown-duration or duration-incompatible audio that is
+// STRUCTURALLY linked to a video would be misclassified "unlinked" and
+// swept up by Purge (the opposite data-loss direction from GH #125).
+// This sensor pins that invariant; before, it hung on an incidental
+// duration:0 helper default.
+
+@Suite("isVideoLinked stays ungated (GH #125 MINOR 3)")
+struct IsVideoLinkedUngatedTests {
+
+    private func snap(
+        filename: String, directory: String = "/vol/Avid MediaFiles/MXF/1",
+        duration: Double = 0, timecode: String = "", tape: String = ""
+    ) -> CorrelationScorer.Snap {
+        CorrelationScorer.Snap(
+            id: UUID(), filename: filename, directory: directory,
+            durationSeconds: duration, dateCreatedRaw: nil,
+            timecode: timecode, tapeName: tape)
+    }
+
+    /// Unknown-duration audio that is STRUCTURALLY linked (filename-key
+    /// identity) to a catalog video must read as video-linked — even
+    /// though the fuzzy pairing gate would defer the auto-pair.
+    @Test func unknownDurationStructuralMatchIsStillVideoLinked() {
+        let video = snap(filename: "NewTape9V01.4B9C1586.8D8520.mxf", duration: 0)
+        let audio = snap(filename: "NewTape9A01.4B9C1586.8D8520.mxf", duration: 0)
+        let evidence = CatalogScopeEvidence(videoSnaps: [video])
+        #expect(evidence.isVideoLinked(audio),
+                "MINOR 3: purge protection must not depend on a known duration")
+    }
+
+    /// Duration-INCOMPATIBLE but structurally-linked audio (same
+    /// filename key, wildly different durations) must ALSO read as
+    /// video-linked: the rubric is ungated, so a truncated-but-related
+    /// essence is protected from purge rather than swept up.
+    @Test func durationIncompatibleStructuralMatchIsStillVideoLinked() {
+        let video = snap(filename: "NewTape9V01.4B9C1586.8D8520.mxf", duration: 3808.27)
+        let audio = snap(filename: "NewTape9A01.4B9C1586.8D8520.mxf", duration: 125.6255)
+        let evidence = CatalogScopeEvidence(videoSnaps: [video])
+        #expect(evidence.isVideoLinked(audio),
+                "MINOR 3: incompatible duration must not strip purge protection from a structural match")
+    }
+}
+
+// MARK: - MINOR 2: No-Match diagnostic (duration-refused vs no candidate)
+
+@MainActor
+@Suite("No-Match duration-refused diagnostic (GH #125 MINOR 2)")
+struct DurationRefusedDiagnosticTests {
+
+    private func makeAV(filename: String, streamType: StreamType,
+                        dir: String = "/vol/Avid MediaFiles/MXF/1",
+                        duration: Double = 0, dateCreated: Date? = nil) -> VideoRecord {
+        let r = VideoRecord()
+        r.filename = filename
+        r.directory = dir
+        r.fullPath = dir + "/" + filename
+        r.streamTypeRaw = streamType.rawValue
+        r.durationSeconds = duration
+        r.dateCreatedRaw = dateCreated
+        return r
+    }
+
+    /// A structurally-related file exists but was refused by the duration
+    /// gate → the alert must say "duration" not "score".
+    @Test func detectsStructuralCandidateRefusedByDurationGate() {
+        let video = makeAV(filename: "Untitled Sequence.04D1C4907.mxf",
+                           streamType: .videoOnly, duration: 3808.27,
+                           dateCreated: Date(timeIntervalSince1970: 1_720_000_000))
+        // Same directory (structural) + near timestamp, but incompatible
+        // duration → findBestPair returns nil, yet this is a duration
+        // refusal, not an absence of candidates.
+        let audio = makeAV(filename: "00047.PHYSA01.1_4D14D1C5284.mxf",
+                           streamType: .audioOnly, duration: 125.6255,
+                           dateCreated: Date(timeIntervalSince1970: 1_720_000_002))
+        #expect(CorrelationScorer.findBestPair(
+            for: video, in: [video, audio],
+            durationTolerance: 1.0, timestampTolerance: 5.0) == nil)
+        #expect(CorrelationScorer.hasDurationRefusedStructuralCandidate(
+            for: video, in: [video, audio],
+            durationTolerance: 1.0, timestampTolerance: 5.0),
+                "MINOR 2: a directory-linked but duration-incompatible file is a duration refusal")
+    }
+
+    /// No structurally-related file at all → the diagnostic is false, so
+    /// the alert keeps the original "no match" wording.
+    @Test func noStructuralCandidateReturnsFalse() {
+        let video = makeAV(filename: "clip_a.mov", streamType: .videoOnly,
+                           dir: "/vol/one", duration: 30.0)
+        let audio = makeAV(filename: "unrelated.wav", streamType: .audioOnly,
+                           dir: "/vol/two", duration: 999.0)
+        #expect(!CorrelationScorer.hasDurationRefusedStructuralCandidate(
+            for: video, in: [video, audio],
+            durationTolerance: 1.0, timestampTolerance: 5.0))
+    }
+
+    /// A compatible structural candidate exists (would pair) → not a
+    /// refusal; the diagnostic stays false so we never mislabel a real
+    /// match as a duration problem.
+    @Test func compatibleStructuralCandidateReturnsFalse() {
+        let video = makeAV(filename: "V01AB23.mxf", streamType: .videoOnly, duration: 30.0)
+        let audio = makeAV(filename: "A01AB23.mxf", streamType: .audioOnly, duration: 30.2)
+        #expect(!CorrelationScorer.hasDurationRefusedStructuralCandidate(
+            for: video, in: [video, audio],
+            durationTolerance: 1.0, timestampTolerance: 5.0))
     }
 }
 

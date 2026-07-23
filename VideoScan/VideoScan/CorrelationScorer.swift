@@ -19,10 +19,12 @@ enum CorrelationScorer {
     // MARK: - Duration-Compatibility Gate (GH #125)
 
     /// Hard gate: can this video-only + audio-only pair plausibly be the
-    /// same program? Mirrors the tolerance shape CombineVerifier's
-    /// audio-coverage check uses (`max(duration * 0.02, 2.0)`, commit
-    /// 3974f9d) so the correlator never OFFERS a pair the verifier would
-    /// reject after muxing.
+    /// same program? Same tolerance shape as CombineVerifier's
+    /// audio-coverage check (`max(duration * 0.02, 2.0)`, commit
+    /// 3974f9d), but symmetric off `max(v, a)` — stricter in the
+    /// audio-longer direction (the verifier only rejects audio SHORTER
+    /// than video). The correlator therefore never OFFERS a pair the
+    /// verifier would reject after muxing.
     ///
     /// Incident (GH #125): Correlate paired a 3808 s video-only Avid MXF
     /// with an unrelated 125.6 s audio-only MXF from the same directory
@@ -32,9 +34,10 @@ enum CorrelationScorer {
     ///
     /// Rule: compatible iff BOTH durations are known (> 0, finite) and
     /// `abs(v - a) <= max(2.0, 0.02 * max(v, a))`. Unknown/zero duration
-    /// on either side → NOT compatible: a pair we can't sanity-check is
-    /// never auto-offered as a confident match. (The Avid clip-ID path is
-    /// the deliberate exception — see `assignAvidPairs`.)
+    /// on either side → NOT compatible here. Unknown durations are
+    /// recovered only on a STRUCTURAL-IDENTITY match — the fuzzy paths
+    /// via `durationGatePermitsFuzzyPair` (filename-key identity), the
+    /// Avid path via clip-ID identity (see `assignAvidPairs`).
     ///
     /// This gates PAIR FORMATION only — it is intentionally NOT inside
     /// `scoreParts`, because the rubric is also used by
@@ -46,6 +49,36 @@ enum CorrelationScorer {
               videoDuration.isFinite, audioDuration.isFinite else { return false }
         let tolerance = max(2.0, 0.02 * max(videoDuration, audioDuration))
         return abs(videoDuration - audioDuration) <= tolerance
+    }
+
+    /// Pair-formation duration decision for the FUZZY/scored paths
+    /// (`scoreCorrelatePair`, `assignPairs`, `Correlator.scoreCandidate`).
+    ///
+    /// Mirror of the Avid clip-ID rule (GH #125, MAJOR 1): unknown
+    /// duration is OK only on an exact structural-identity match, and a
+    /// known-incompatible pair is always refused.
+    ///   - Both durations known: must be `durationCompatible`.
+    ///   - Either unknown: allowed ONLY when the filename-correlation-key
+    ///     identity matches exactly — the OMFI tape-name shape
+    ///     (`NewTape9V01.4B9C1586…` ↔ `NewTape9A01.4B9C1586…`) never
+    ///     reaches `assignAvidPairs` (its regex is `^\d+\.[AV]hex\.mxf$`),
+    ///     yet ffprobe routinely fails to report duration for exactly
+    ///     that Avid essence, and there is no manual escape (findBestPair
+    ///     is gated too). Identity carries it; non-identity coincidence
+    ///     does not.
+    static func durationGatePermitsFuzzyPair(
+        videoDuration: Double,
+        audioDuration: Double,
+        filenameKeyMatches: Bool
+    ) -> Bool {
+        let vKnown = videoDuration > 0 && videoDuration.isFinite
+        let aKnown = audioDuration > 0 && audioDuration.isFinite
+        if vKnown && aKnown {
+            return durationCompatible(videoDuration: videoDuration, audioDuration: audioDuration)
+        }
+        // At least one duration unknown — only exact filename-key
+        // identity may carry the pair through.
+        return filenameKeyMatches
     }
 
     // MARK: - Filename Key
@@ -142,12 +175,16 @@ enum CorrelationScorer {
         durationTolerance: Double,
         timestampTolerance: TimeInterval
     ) -> Candidate? {
-        // GH #125 duration-compatibility gate: never form a candidate for
-        // files that cannot be the same program. Applied here — at pair
-        // FORMATION — so every caller (findBestPair, the legacy record
-        // pipeline, stress paths) gets the same protection.
-        guard durationCompatible(videoDuration: video.durationSeconds,
-                                 audioDuration: audio.durationSeconds) else { return nil }
+        // GH #125 duration gate at pair FORMATION — every caller
+        // (findBestPair, the legacy record pipeline, stress paths) gets
+        // the same protection. Unknown durations pass only on an exact
+        // filename-key identity match (MAJOR 1); known-incompatible
+        // durations are always refused.
+        guard durationGatePermitsFuzzyPair(
+            videoDuration: video.durationSeconds,
+            audioDuration: audio.durationSeconds,
+            filenameKeyMatches: vKey == filenameCorrelationKey(audio.filename)
+        ) else { return nil }
         // Delegates to the shared rubric in CorrelationScorer+Snaps.swift
         // (2026-07-05) — the record path and the off-main snap path must
         // never drift apart.
@@ -243,6 +280,47 @@ enum CorrelationScorer {
             }
         }
         return best
+    }
+
+    /// Diagnostic for the "No Match Found" alerts (GH #125, MINOR 2):
+    /// did a structurally-related opposite-type record exist that WOULD
+    /// have paired but for the duration gate? Lets the UI say the
+    /// durations were unverifiable / incompatible instead of blaming the
+    /// score. O(records); call on a user action, never in a view body.
+    static func hasDurationRefusedStructuralCandidate(
+        for record: VideoRecord,
+        in allRecords: [VideoRecord],
+        durationTolerance: Double,
+        timestampTolerance: TimeInterval
+    ) -> Bool {
+        guard record.streamType == .videoOnly || record.streamType == .audioOnly else {
+            return false
+        }
+        let isVideo = record.streamType == .videoOnly
+        for other in allRecords where other.id != record.id
+            && other.streamType == (isVideo ? .audioOnly : .videoOnly) {
+            let video = isVideo ? record : other
+            let audio = isVideo ? other : record
+            let vKey = filenameCorrelationKey(video.filename)
+            // Would it score with a structural signal absent the gate?
+            guard let (_, _, reasons) = scoreParts(
+                vKey: vKey, audioFilename: audio.filename,
+                vDuration: video.durationSeconds, aDuration: audio.durationSeconds,
+                vDate: video.dateCreatedRaw, aDate: audio.dateCreatedRaw,
+                vTimecode: video.timecode, aTimecode: audio.timecode,
+                vDirectory: video.directory, aDirectory: audio.directory,
+                vTape: video.tapeName, aTape: audio.tapeName,
+                durationTolerance: durationTolerance,
+                timestampTolerance: timestampTolerance
+            ), !Set(reasons).isDisjoint(with: structuralSignals) else { continue }
+            // Structural candidate — refused ONLY if the duration gate blocks it.
+            let permitted = durationGatePermitsFuzzyPair(
+                videoDuration: video.durationSeconds,
+                audioDuration: audio.durationSeconds,
+                filenameKeyMatches: vKey == filenameCorrelationKey(audio.filename))
+            if !permitted { return true }
+        }
+        return false
     }
 
     // MARK: - Assignment
