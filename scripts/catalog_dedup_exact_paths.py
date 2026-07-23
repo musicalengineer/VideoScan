@@ -110,6 +110,32 @@ def main():
             else:
                 dropped.append(rec)
 
+    # Repoint pair references aimed at a dropped twin to its surviving copy
+    # (same fullPath, different id). Without this, survivors elsewhere in the
+    # catalog are left with dangling pairedWithID values — found the hard way
+    # on the 2026-07-23 live run (43 dangling refs, repaired separately).
+    twin_remap = {}
+    for rec in dropped:
+        keeper = seen_choice.get(rec["fullPath"])
+        if keeper is not None:
+            twin_remap[rec["id"]] = keeper["id"]
+    kept_ids = {r["id"] for r in keep}
+    repointed = 0
+    for rec in keep:
+        pw = rec.get("pairedWithID")
+        if pw and pw not in kept_ids:
+            if pw in twin_remap:
+                rec["pairedWithID"] = twin_remap[pw]
+                repointed += 1
+            else:
+                rec["pairedWithID"] = None
+                rec["pairGroupID"] = None
+                rec["pairConfidence"] = None
+                repointed += 1
+    print(f"pair references repointed/severed off dropped twins: {repointed}")
+    assert not any(r.get("pairedWithID") and r["pairedWithID"] not in kept_ids
+                   for r in keep), "dangling pair refs would remain — aborting"
+
     print(f"records: {len(recs)} -> {len(keep)}  (dropping {len(dropped)})")
     assert len(keep) + len(dropped) == len(recs)
     assert len({r['fullPath'] for r in keep}) == len(by_path), \
