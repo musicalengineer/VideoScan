@@ -48,25 +48,29 @@ def load(stream):
 
 def datestr(ts): return str(ts or "")[:10]
 
-rows = load(os.environ.get("TD_ROWS", "").splitlines())
-for r in rows:
+sensor_rows = load(os.environ.get("TD_ROWS", "").splitlines())
+for r in sensor_rows:
     r["_host"] = norm_host(r.get("host"))
     r["_date"] = datestr(r.get("ts"))
-rows.sort(key=lambda r: str(r.get("ts","")))
+sensor_rows.sort(key=lambda r: str(r.get("ts","")))
+
+# A dedicated POI replay is sensor evidence, not evidence that product tests
+# ran. Keep it out of every host/latest/green/delta calculation.
+test_rows = [r for r in sensor_rows if r.get("source") != "poi-cycle-metrics"]
 
 # Person metrics ride additively on nightly-local rows. Manual TestDriver rows
 # may omit them, so retain the newest metric-bearing row. No row yet is the
 # deliberate red readiness zero—not a fabricated 0% recognition result.
-person_rows = [r for r in rows
+person_rows = [r for r in test_rows
                if r.get("person_eval_readiness_pct") is not None
                and r.get("source") == "nightly-local"
                and r.get("branch") == "main"
                and r.get("dirty") is not True]
-cycle_rows = [r for r in rows
+cycle_rows = [r for r in sensor_rows
               if r.get("poi_cycle_stream_status") is not None
-              and r.get("source") == "nightly-local"
-              and r.get("branch") == "main"
-              and r.get("dirty") is not True]
+              and r.get("source") in {"nightly-local", "poi-cycle-metrics"}
+              and (r.get("source") == "poi-cycle-metrics"
+                   or (r.get("branch") == "main" and r.get("dirty") is not True))]
 cycle_sensor = cycle_rows[-1] if cycle_rows else None
 cycle_sensor_stale = True
 if cycle_sensor:
@@ -105,12 +109,12 @@ today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
 
 # Latest row per host (any status) — drives the table.
 latest = {}
-for r in rows:
+for r in test_rows:
     latest[r["_host"]] = r   # rows are sorted ascending, so last wins
 
 # "Current run" = newest GREEN row overall; baseline = newest green row on an
 # earlier date, for day-over-day deltas.
-greens = [r for r in rows if r.get("status") == "ok" and int(r.get("total") or 0) > 0]
+greens = [r for r in test_rows if r.get("status") == "ok" and int(r.get("total") or 0) > 0]
 current = greens[-1] if greens else None
 baseline = None
 if current:
@@ -169,15 +173,15 @@ if cycle_sensor:
     cycle_state = "stale" if cycle_sensor_stale else cycle_sensor.get("poi_cycle_stream_status", "invalid")
     print(f"POI cycle sensor: {cycle_state} | latest {cycle_sensor.get('poi_cycle_latest_label', '—')} ({cycle_sensor.get('poi_cycle_latest_evidence_tier', '—')}) | production {cycle_sensor.get('poi_cycle_production_label', '—')}")
 else:
-    print("POI cycle sensor: no nightly row")
+    print("POI cycle sensor: no sensor row")
 
 # ── Flags: things worth a look ───────────────────────────────────────
 flags = []
 
 if cycle_sensor is None:
-    flags.append("POI cycle stream has not reported through the nightly sensor.")
+    flags.append("POI cycle stream has not reported through its sensor.")
 elif cycle_sensor_stale:
-    flags.append("POI cycle nightly sensor is older than 36 hours.")
+    flags.append("POI cycle sensor is older than 36 hours.")
 elif cycle_sensor.get("poi_cycle_stream_status") != "ok":
     flags.append(f"POI cycle stream is {cycle_sensor.get('poi_cycle_stream_status', 'invalid')}.")
 
@@ -188,7 +192,7 @@ elif not eligible:
 elif isinstance(quality, (int, float)) and quality < 80:
     flags.append(f"Person-recognition identity F1 is {quality:.1f}/100 (target: 80+).")
 
-green_today = any(r["_date"] == today and r.get("status")=="ok" and int(r.get("total") or 0)>0 for r in rows)
+green_today = any(r["_date"] == today and r.get("status")=="ok" and int(r.get("total") or 0)>0 for r in test_rows)
 if not green_today:
     flags.append("CRITICAL: no green nightly run for today yet — failover may still be in progress, or all hosts failed.")
 

@@ -174,6 +174,15 @@ def cycle_metrics_for(path: pathlib.Path) -> dict[str, Any]:
         return {"poi_cycle_stream_status": "invalid", **empty}
 
 
+def cycle_only_metrics_for(path: pathlib.Path) -> dict[str, Any]:
+    """Return the validated public cycle sensor without person/test fields."""
+    return {
+        key: value
+        for key, value in cycle_metrics_for(path).items()
+        if key.startswith("poi_cycle_")
+    }
+
+
 def collect(
     manifest_path: pathlib.Path,
     app_path: pathlib.Path | None,
@@ -231,20 +240,29 @@ def collect(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--manifest", type=pathlib.Path, required=True)
+    parser.add_argument("--manifest", type=pathlib.Path)
     parser.add_argument("--app", type=pathlib.Path)
-    parser.add_argument("--report", type=pathlib.Path, required=True)
+    parser.add_argument("--report", type=pathlib.Path)
     parser.add_argument("--timeout-seconds", type=float, default=1_200)
     parser.add_argument("--allow-quality", action="store_true",
                         help="publish eligible quality fields after provenance review")
     parser.add_argument("--cycle-metrics", type=pathlib.Path,
                         default=DEFAULT_CYCLE_METRICS)
+    parser.add_argument("--cycle-only", action="store_true",
+                        help="emit only validated public poi_cycle_* sensor fields")
     args = parser.parse_args(argv)
+    cycle_path = args.cycle_metrics.expanduser().resolve()
+    if args.cycle_only:
+        print(json.dumps(cycle_only_metrics_for(cycle_path),
+                         separators=(",", ":"), sort_keys=True))
+        return 0
+    if args.manifest is None or args.report is None:
+        parser.error("--manifest and --report are required unless --cycle-only is used")
     row = collect(args.manifest.expanduser().resolve(),
                   args.app.expanduser().resolve() if args.app else None,
                   args.report.expanduser().resolve(), args.timeout_seconds,
                   allow_quality=args.allow_quality)
-    row.update(cycle_metrics_for(args.cycle_metrics.expanduser().resolve()))
+    row.update(cycle_metrics_for(cycle_path))
     print(json.dumps(row, separators=(",", ":"), sort_keys=True))
     return 0
 

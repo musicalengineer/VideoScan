@@ -355,6 +355,13 @@ const HISTORY_LOCAL = `./history.jsonl?${CACHE_BUSTER}`;
 const NIGHTLY_LOCAL = `./static_analysis.jsonl?${CACHE_BUSTER}`;
 const TESTDRIVER_LOCAL = `./testdriver.jsonl?${CACHE_BUSTER}`;
 const POI_CYCLES_LOCAL = `./poi_cycles.jsonl?${CACHE_BUSTER}`;
+const POI_CYCLE_SENSOR_SOURCES = new Set(["nightly-local", "poi-cycle-metrics"]);
+const isTestRunRow = row => row.source !== "poi-cycle-metrics";
+const isPoiCycleSensorRow = row =>
+  row.poi_cycle_stream_status != null &&
+  POI_CYCLE_SENSOR_SOURCES.has(row.source) &&
+  (row.source === "poi-cycle-metrics" ||
+    (row.branch === "main" && row.dirty !== true));
 
 // Resolved at load time. If the API call fails (rate limit, offline,
 // etc.) these stay null and the fetch path uses the branch-pinned URL.
@@ -626,7 +633,11 @@ async function loadData() {
   // Fetch the local-nightly stream before the POI section so the dashboard
   // can reconcile the canonical cycle graph with its daily regression sensor.
   const tdText = await fetchText(rawUrl("testdriver.jsonl"), TESTDRIVER_LOCAL);
-  const tdRows = tdText ? parseJsonl(tdText) : [];
+  const allTdRows = tdText ? parseJsonl(tdText) : [];
+  allTdRows.sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
+  // A poi-cycle-metrics replay refreshes only the POI sensor. It is not a
+  // product test run and must never affect host/latest/delta/chart state.
+  const tdRows = allTdRows.filter(isTestRunRow);
   tdRows.sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
   const tdLast = tdRows.length ? tdRows[tdRows.length - 1] : {};
 
@@ -639,12 +650,7 @@ async function loadData() {
     const latestCycle = poiCycles[poiCycles.length - 1];
     const previousCycle = poiCycles.length > 1 ? poiCycles[poiCycles.length - 2] : {};
     const productionCycle = poiCycles.find(row => row.productionBaseline === true);
-    const cycleSensorRows = tdRows.filter(row =>
-      row.poi_cycle_stream_status != null &&
-      row.source === "nightly-local" &&
-      row.branch === "main" &&
-      row.dirty !== true
-    );
+    const cycleSensorRows = allTdRows.filter(isPoiCycleSensorRow);
     const cycleSensor = cycleSensorRows.length ? cycleSensorRows[cycleSensorRows.length - 1] : null;
     const cycleSensorStale = cycleSensor && hoursSince(cycleSensor.ts) > PERSON_METRIC_STALE_HOURS;
     const cycleSensorMatches = cycleSensor && productionCycle &&
@@ -666,11 +672,11 @@ async function loadData() {
     poiCards.appendChild(card("Production Baseline",
       productionCycle ? `${productionCycle.cycleLabel} · ${metricPercent(productionCycle.balancedAccuracy)} BA` : "Not declared",
       null, null, false, productionCycle ? "var(--good)" : "var(--bad)"));
-    const sensorText = !cycleSensor ? "Awaiting nightly row"
+    const sensorText = !cycleSensor ? "Awaiting sensor row"
       : cycleSensorStale ? `Stale · ${cycleSensor.poi_cycle_production_label || "no baseline"}`
       : cycleSensorMatches ? `Current · ${cycleSensor.poi_cycle_production_label}`
       : `${cycleSensor.poi_cycle_stream_status} · baseline mismatch`;
-    poiCards.appendChild(card("Nightly Sensor", sensorText, null, null, false,
+    poiCards.appendChild(card("POI Sensor", sensorText, null, null, false,
       cycleSensorMatches && !cycleSensorStale ? "var(--good)" : "var(--bad)"));
 
     const poiLabels = poiCycles.map(row => `${row.cycleLabel}${row.evidenceTier === "development" ? " (dev)" : ""}`);
