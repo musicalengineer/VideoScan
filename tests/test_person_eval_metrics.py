@@ -1,6 +1,7 @@
 import importlib.util
 import pathlib
 import sys
+import tempfile
 import unittest
 
 
@@ -14,6 +15,26 @@ SPEC.loader.exec_module(module)
 
 
 class PersonEvaluationMetricsTests(unittest.TestCase):
+    def test_canonical_cycle_status_keeps_failed_latest_cycle_out_of_production_fields(self):
+        row = module.cycle_metrics_for(module.DEFAULT_CYCLE_METRICS)
+        self.assertEqual(row["poi_cycle_stream_status"], "ok")
+        self.assertEqual(row["poi_cycle_latest_label"], "C5")
+        self.assertEqual(row["poi_cycle_latest_evidence_tier"], "grade")
+        self.assertEqual(row["poi_cycle_latest_verdict"], "fail")
+        self.assertEqual(row["poi_cycle_production_label"], "C3")
+        self.assertNotIn("poi_cycle_latest_balanced_accuracy", row)
+
+    def test_missing_or_invalid_cycle_stream_is_visible_not_fabricated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = module.cycle_metrics_for(pathlib.Path(directory) / "missing.jsonl")
+            self.assertEqual(missing["poi_cycle_stream_status"], "missing")
+            self.assertIsNone(missing["poi_cycle_production_balanced_accuracy"])
+            invalid_path = pathlib.Path(directory) / "invalid.jsonl"
+            invalid_path.write_text('{"cycle":4}\n')
+            invalid = module.cycle_metrics_for(invalid_path)
+            self.assertEqual(invalid["poi_cycle_stream_status"], "invalid")
+            self.assertIsNone(invalid["poi_cycle_production_label"])
+
     def test_score_band_boundaries(self):
         cases = [
             (None, "red"), (float("nan"), "red"), (-1, "red"),

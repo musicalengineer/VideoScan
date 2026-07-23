@@ -35,10 +35,17 @@ def load_and_validate(path: Path) -> list[dict]:
         rows.append(row)
 
     cycles = [row["cycle"] for row in rows]
+    if not rows:
+        raise ValueError("cycle stream must contain at least one cycle")
     if len(cycles) != len(set(cycles)):
         raise ValueError("cycle numbers must be unique")
     if cycles != list(range(1, max(cycles, default=0) + 1)):
         raise ValueError(f"cycles must be contiguous and ordered from 1; got {cycles}")
+    production = [row for row in rows if row.get("productionBaseline") is True]
+    if rows and len(production) != 1:
+        raise ValueError("exactly one cycle must be marked productionBaseline")
+    if production and (production[0]["evidenceTier"], production[0]["verdict"]) != ("grade", "pass"):
+        raise ValueError("productionBaseline must be a passing grade, never development evidence")
     return rows
 
 
@@ -84,6 +91,25 @@ def mean(first: float | None, second: float | None) -> float | None:
 
 def serialize(rows: list[dict]) -> str:
     return "".join(json.dumps(row, separators=(",", ":"), sort_keys=True) + "\n" for row in rows)
+
+
+def nightly_summary(rows: list[dict]) -> dict:
+    """Return safe daily status without promoting the latest dev score."""
+    latest = rows[-1]
+    production = next(row for row in rows if row.get("productionBaseline") is True)
+    return {
+        "poi_cycle_stream_status": "ok",
+        "poi_cycle_count": len(rows),
+        "poi_cycle_latest_label": latest["cycleLabel"],
+        "poi_cycle_latest_evidence_tier": latest["evidenceTier"],
+        "poi_cycle_latest_verdict": latest["verdict"],
+        "poi_cycle_production_label": production["cycleLabel"],
+        "poi_cycle_production_commit": production["commit"],
+        "poi_cycle_production_balanced_accuracy": production["balancedAccuracy"],
+        "poi_cycle_production_precision": production["precision"],
+        "poi_cycle_production_recall": production["recall"],
+        "poi_cycle_production_f1": production["f1"],
+    }
 
 
 def publish(text: str, output: Path) -> bool:

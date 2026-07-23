@@ -623,6 +623,13 @@ async function loadData() {
     pointBorderColor: color,
   });
 
+  // Fetch the local-nightly stream before the POI section so the dashboard
+  // can reconcile the canonical cycle graph with its daily regression sensor.
+  const tdText = await fetchText(rawUrl("testdriver.jsonl"), TESTDRIVER_LOCAL);
+  const tdRows = tdText ? parseJsonl(tdText) : [];
+  tdRows.sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
+  const tdLast = tdRows.length ? tdRows[tdRows.length - 1] : {};
+
   // ---- POI improvement cycles ----
   const poiCycleText = await fetchText(rawUrl("poi_cycles.jsonl"), POI_CYCLES_LOCAL);
   const poiCycles = poiCycleText ? parseJsonl(poiCycleText) : [];
@@ -631,6 +638,18 @@ async function loadData() {
   if (poiCycles.length) {
     const latestCycle = poiCycles[poiCycles.length - 1];
     const previousCycle = poiCycles.length > 1 ? poiCycles[poiCycles.length - 2] : {};
+    const productionCycle = poiCycles.find(row => row.productionBaseline === true);
+    const cycleSensorRows = tdRows.filter(row =>
+      row.poi_cycle_stream_status != null &&
+      row.source === "nightly-local" &&
+      row.branch === "main" &&
+      row.dirty !== true
+    );
+    const cycleSensor = cycleSensorRows.length ? cycleSensorRows[cycleSensorRows.length - 1] : null;
+    const cycleSensorStale = cycleSensor && hoursSince(cycleSensor.ts) > PERSON_METRIC_STALE_HOURS;
+    const cycleSensorMatches = cycleSensor && productionCycle &&
+      cycleSensor.poi_cycle_stream_status === "ok" &&
+      cycleSensor.poi_cycle_production_label === productionCycle.cycleLabel;
     const tierLabel = latestCycle.evidenceTier === "development" ? "development (not a grade)" : "formal grade";
     poiCards.appendChild(card("Latest Cycle", `${latestCycle.cycleLabel} · ${latestCycle.verdict}`,
       null, null, false, latestCycle.verdict === "pass" ? "var(--good)" : latestCycle.verdict === "fail" ? "var(--bad)" : "var(--warn)"));
@@ -644,6 +663,15 @@ async function loadData() {
       previousCycle.f1, latestCycle.f1, false, "var(--orange)"));
     poiCards.appendChild(card("Evidence", tierLabel, null, null, false,
       latestCycle.evidenceTier === "development" ? "var(--warn)" : "var(--good)"));
+    poiCards.appendChild(card("Production Baseline",
+      productionCycle ? `${productionCycle.cycleLabel} · ${metricPercent(productionCycle.balancedAccuracy)} BA` : "Not declared",
+      null, null, false, productionCycle ? "var(--good)" : "var(--bad)"));
+    const sensorText = !cycleSensor ? "Awaiting nightly row"
+      : cycleSensorStale ? `Stale · ${cycleSensor.poi_cycle_production_label || "no baseline"}`
+      : cycleSensorMatches ? `Current · ${cycleSensor.poi_cycle_production_label}`
+      : `${cycleSensor.poi_cycle_stream_status} · baseline mismatch`;
+    poiCards.appendChild(card("Nightly Sensor", sensorText, null, null, false,
+      cycleSensorMatches && !cycleSensorStale ? "var(--good)" : "var(--bad)"));
 
     const poiLabels = poiCycles.map(row => `${row.cycleLabel}${row.evidenceTier === "development" ? " (dev)" : ""}`);
     new Chart(document.getElementById("chart-poi-cycles"), {
@@ -685,11 +713,6 @@ async function loadData() {
   drawLine("chart-regressions", labels, [{ label: "regression markers", data: col("regression_count"), ...lineStyle("#bc8cff") }]);
 
   // ---- TestDriver (local runs) ----
-  const tdText = await fetchText(rawUrl("testdriver.jsonl"), TESTDRIVER_LOCAL);
-  const tdRows = tdText ? parseJsonl(tdText) : [];
-  tdRows.sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
-  const tdLast = tdRows.length ? tdRows[tdRows.length - 1] : {};
-
   // ---- Person recognition readiness + quality ----
   // Person fields are additive to the robust nightly-local row. Ad-hoc
   // TestDriver rows may not carry them, so select the latest metric-bearing

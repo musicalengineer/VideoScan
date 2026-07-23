@@ -9,6 +9,7 @@ quality score remains null: "not measured" is not the same as 0% accurate.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import pathlib
@@ -17,6 +18,10 @@ import signal
 import subprocess
 import sys
 from typing import Any
+
+
+ROOT = pathlib.Path(__file__).resolve().parents[2]
+DEFAULT_CYCLE_METRICS = ROOT / "docs" / "poi-cycles" / "metrics.jsonl"
 
 
 def score_band(value: float | int | None) -> str:
@@ -140,6 +145,35 @@ def _load_json(path: pathlib.Path) -> dict[str, Any]:
     return value
 
 
+def cycle_metrics_for(path: pathlib.Path) -> dict[str, Any]:
+    """Validate the canonical cycle stream and expose only honest daily state."""
+    empty = {
+        "poi_cycle_count": 0,
+        "poi_cycle_latest_label": None,
+        "poi_cycle_latest_evidence_tier": None,
+        "poi_cycle_latest_verdict": None,
+        "poi_cycle_production_label": None,
+        "poi_cycle_production_commit": None,
+        "poi_cycle_production_balanced_accuracy": None,
+        "poi_cycle_production_precision": None,
+        "poi_cycle_production_recall": None,
+        "poi_cycle_production_f1": None,
+    }
+    if not path.exists():
+        return {"poi_cycle_stream_status": "missing", **empty}
+    try:
+        module_path = ROOT / "scripts" / "publish_poi_cycle_metrics.py"
+        spec = importlib.util.spec_from_file_location("poi_cycle_metrics_validator", module_path)
+        if spec is None or spec.loader is None:
+            raise ImportError("cycle metrics validator unavailable")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        rows = module.load_and_validate(path)
+        return module.nightly_summary(rows)
+    except (OSError, ValueError, ImportError, json.JSONDecodeError):
+        return {"poi_cycle_stream_status": "invalid", **empty}
+
+
 def collect(
     manifest_path: pathlib.Path,
     app_path: pathlib.Path | None,
@@ -203,11 +237,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout-seconds", type=float, default=1_200)
     parser.add_argument("--allow-quality", action="store_true",
                         help="publish eligible quality fields after provenance review")
+    parser.add_argument("--cycle-metrics", type=pathlib.Path,
+                        default=DEFAULT_CYCLE_METRICS)
     args = parser.parse_args(argv)
     row = collect(args.manifest.expanduser().resolve(),
                   args.app.expanduser().resolve() if args.app else None,
                   args.report.expanduser().resolve(), args.timeout_seconds,
                   allow_quality=args.allow_quality)
+    row.update(cycle_metrics_for(args.cycle_metrics.expanduser().resolve()))
     print(json.dumps(row, separators=(",", ":"), sort_keys=True))
     return 0
 

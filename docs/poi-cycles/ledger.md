@@ -35,7 +35,23 @@ GitHub Pages.
 
 | C2 | Calibrated reference set (audited clustering minClusterLink=0.35 + threshold 0.48; config sha256 bd515334…f6ce4b) | `poi/c02-refs-threshold` @ 3e5a4bb | **FAIL** | legacy 0.500/0.500 vs candidate 0.538/0.577 (2 paired AB/BA rounds) — never strictly > 15/26 | 2026-07-18 21:05 ET, codex | Recall 1.0 both arms. Candidate better than legacy in-round but ties the historical bar at best. Instability: references-used varied 17–25 on identical config+images; NotDonna-5 flipped FP→TN between rounds; 25/26 clips changed raw fields across rounds. Do not merge/promote. |
 
-| C3 | Minimum-hit confirmation floor (confirmed iff totalHits >= 7; config sha256 e981faa3…dbe7ea) | `poi/c03-minimum-hits` @ fbb8e6a | **PASS** | legacy 0.500/0.500 vs candidate **0.6154/0.6154** (2 fresh paired rounds, both strictly > 15/26 bar) | 2026-07-19 13:51 ET, codex | FIRST PASS. FN=0 both rounds; same 3 FPs corrected in both repeats (NotDonna-8/10/13); zero prediction flips across repeats in either arm (raw observations varied, none crossed a boundary); 104/104 processes clean; completion audit PASS. Frozen/unmerged — Rick decides integration. Report sha256 ccb48a15…3073bd. |
+| C3 | Minimum-hit confirmation floor (confirmed iff totalHits >= 7; config sha256 e981faa3…dbe7ea) | `poi/c03-minimum-hits` @ fbb8e6a | **PASS** | legacy 0.500/0.500 vs candidate **0.6154/0.6154** (2 fresh paired rounds, both strictly > 15/26 bar) | 2026-07-19 13:51 ET, codex | FIRST PASS. FN=0 both rounds; same 3 FPs corrected in both repeats (NotDonna-8/10/13); zero prediction flips across repeats in either arm (raw observations varied, none crossed a boundary); 104/104 processes clean; completion audit PASS. Merged by c4c1213 and promoted into production Person Finder by 2e85887. Report sha256 ccb48a15…3073bd. |
+
+| C5 | Embedding-quality pipeline (bwdif deinterlace + bottom-quartile quality pooling; config sha256 48cf5564…4b6e61b) | `poi/c05-embedding-quality` @ 9d30cb0 | **FAIL** | C3 control 0.6154/0.6154 vs candidate **0.6154/0.6923** — round 1 tied, not strictly greater | 2026-07-20 14:17 ET, codex | FN=0 both rounds; candidate corrected NotDonna-4/5 in round 2 but traded NotDonna-5 for NotDonna-10 in round 1. 104/104 processes clean; validation clean; corpus/references unchanged. Do not merge/promote. Report sha256 1bc9a9d0…0c7ae1. |
+
+## C5 detail (2026-07-20)
+
+Formal paired AB/BA grade against the promoted C3 floor-7 control. Candidate
+balanced accuracy was 0.6154 then 0.6923; the declared gate required strictly
+greater than 0.6153846154 in both rounds, so C5 fails despite the second-round
+gain. TP=13 and FN=0 in every arm/round. Candidate false positives were 10 then
+8; control false positives were 10 in both rounds. Prediction instability is
+the deciding weakness: round 1 corrected NotDonna-5 but newly flagged
+NotDonna-10; round 2 corrected NotDonna-4 and NotDonna-5. Only Donna-11 invoked
+deinterlacing; the corpus therefore primarily measured pooling. Full raw argv,
+stdout, stderr, exits, fingerprints, and reports are preserved under
+`/private/tmp/poi-c05-grade-9d30cb0-20260719T2255/`. JSON report sha256
+`1bc9a9d058720d2076b9d444d8ed416a4f72ef6cac36156bca48307d480c7ae1`.
 
 ## C4 status (2026-07-19, implementation complete — NOT YET GRADED)
 
@@ -54,8 +70,9 @@ wedge has CLEARED; UI-runner testmanagerd flake persists.
 
 ## C3 detail (2026-07-19)
 
-Eval-only change; production default untouched. Known limitations carried
-from the declaration: thin one-hit margin (weakest positive 8 vs strongest
+Originally graded as an eval-only change; subsequently merged and promoted
+into production Person Finder by 2e85887. Known limitations carried from the
+declaration: thin one-hit margin (weakest positive 8 vs strongest
 rejected negative 6) and absolute-count duration/frame-step bias — short
 genuine-Donna clips are the FN exposure; the current corpus contains none
 (sealed-holdout growth should include some). Note: legacy measured 0.500 in

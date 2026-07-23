@@ -62,6 +62,19 @@ person_rows = [r for r in rows
                and r.get("source") == "nightly-local"
                and r.get("branch") == "main"
                and r.get("dirty") is not True]
+cycle_rows = [r for r in rows
+              if r.get("poi_cycle_stream_status") is not None
+              and r.get("source") == "nightly-local"
+              and r.get("branch") == "main"
+              and r.get("dirty") is not True]
+cycle_sensor = cycle_rows[-1] if cycle_rows else None
+cycle_sensor_stale = True
+if cycle_sensor:
+    try:
+        cycle_time = datetime.datetime.fromisoformat(str(cycle_sensor.get("ts", "")).replace("Z", "+00:00"))
+        cycle_sensor_stale = (datetime.datetime.now(datetime.timezone.utc) - cycle_time).total_seconds() / 3600 > 36
+    except (TypeError, ValueError):
+        cycle_sensor_stale = True
 person = person_rows[-1] if person_rows else {
     "person_eval_readiness_pct": 0,
     "person_eval_readiness_band": "red",
@@ -152,9 +165,21 @@ if eligible:
     print(f"   precision {ps} | recall {rs} | FP {person.get('person_eval_false_positives', '—')} | FN {person.get('person_eval_false_negatives', '—')}")
 else:
     print(f"   {person.get('person_eval_status', 'not-configured')}: {person.get('person_eval_reason', 'quality not measured')}")
+if cycle_sensor:
+    cycle_state = "stale" if cycle_sensor_stale else cycle_sensor.get("poi_cycle_stream_status", "invalid")
+    print(f"POI cycle sensor: {cycle_state} | latest {cycle_sensor.get('poi_cycle_latest_label', '—')} ({cycle_sensor.get('poi_cycle_latest_evidence_tier', '—')}) | production {cycle_sensor.get('poi_cycle_production_label', '—')}")
+else:
+    print("POI cycle sensor: no nightly row")
 
 # ── Flags: things worth a look ───────────────────────────────────────
 flags = []
+
+if cycle_sensor is None:
+    flags.append("POI cycle stream has not reported through the nightly sensor.")
+elif cycle_sensor_stale:
+    flags.append("POI cycle nightly sensor is older than 36 hours.")
+elif cycle_sensor.get("poi_cycle_stream_status") != "ok":
+    flags.append(f"POI cycle stream is {cycle_sensor.get('poi_cycle_stream_status', 'invalid')}.")
 
 if readiness < 80:
     flags.append(f"Person-recognition benchmark readiness is {readiness:.0f}% ({person.get('person_eval_status','not-configured')}).")

@@ -63,7 +63,7 @@
 
 set -u
 
-NIGHTLY_SCRIPT_VERSION="2026-07-14-person-eval-r1"
+NIGHTLY_SCRIPT_VERSION="2026-07-19-poi-cycle-sensor-r1"
 REPO="$HOME/dev/VideoScan"
 LOGDIR="$HOME/Library/Logs/VideoScan"
 LOGFILE="$LOGDIR/nightly_test_$(date +%Y%m%d_%H%M%S).log"
@@ -71,7 +71,7 @@ PENDING_QUEUE="$LOGDIR/nightly-pending.jsonl"
 METRICS_WT="/tmp/nightly-metrics-wt"
 PERSON_EVAL_MANIFEST="${VIDEOSCAN_PERSON_EVAL_MANIFEST:-$REPO/output/person-eval-private/nightly/manifest.json}"
 PERSON_EVAL_REPORT="${VIDEOSCAN_PERSON_EVAL_REPORT:-$REPO/output/person-eval-private/nightly/latest-report.json}"
-PERSON_METRICS_JSON='{"person_eval_status":"not-configured","person_eval_reason":"quality-holdout-not-configured","person_eval_readiness_pct":0,"person_eval_readiness_band":"red","person_eval_publish_eligible":false,"person_eval_quality_score":null}'
+PERSON_METRICS_JSON='{"person_eval_status":"not-configured","person_eval_reason":"quality-holdout-not-configured","person_eval_readiness_pct":0,"person_eval_readiness_band":"red","person_eval_publish_eligible":false,"person_eval_quality_score":null,"poi_cycle_stream_status":"not-collected"}'
 
 mkdir -p "$LOGDIR"
 exec > "$LOGFILE" 2>&1
@@ -95,7 +95,7 @@ refresh_person_metrics() {
             --manifest "$PERSON_EVAL_MANIFEST" --report "$PERSON_EVAL_REPORT" \
             --app "$app" \
             --timeout-seconds "${VIDEOSCAN_PERSON_EVAL_TIMEOUT_SECONDS:-1200}" \
-            "${quality_flag[@]}" 2>>"$LOGFILE") || output=""
+            ${quality_flag[@]+"${quality_flag[@]}"} 2>>"$LOGFILE") || output=""
     else
         output=$(python3 tools/person-eval/nightly_metrics.py \
             --manifest "$PERSON_EVAL_MANIFEST" --report "$PERSON_EVAL_REPORT" \
@@ -104,7 +104,7 @@ refresh_person_metrics() {
     if [ -n "$output" ]; then
         PERSON_METRICS_JSON="$output"
     else
-        PERSON_METRICS_JSON='{"person_eval_status":"collector-failed","person_eval_reason":"person-metrics-collector-failed","person_eval_readiness_pct":0,"person_eval_readiness_band":"red","person_eval_publish_eligible":false,"person_eval_quality_score":null,"person_eval_quality_band":null}'
+        PERSON_METRICS_JSON='{"person_eval_status":"collector-failed","person_eval_reason":"person-metrics-collector-failed","person_eval_readiness_pct":0,"person_eval_readiness_band":"red","person_eval_publish_eligible":false,"person_eval_quality_score":null,"person_eval_quality_band":null,"poi_cycle_stream_status":"collector-failed"}'
     fi
     log "Person recognition metrics: $PERSON_METRICS_JSON"
 }

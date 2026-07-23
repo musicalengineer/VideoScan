@@ -370,7 +370,7 @@ else
 fi
 
 # ───────────────────────────────────────────────────────────────────
-# Test 9: every nightly row can carry the additive person-readiness fields.
+# Test 9: every nightly row can carry additive person and POI-cycle fields.
 # This pins the sensor that keeps the red 0 visible even on build/test failure
 # rows, without changing their original status or reason.
 # ───────────────────────────────────────────────────────────────────
@@ -382,19 +382,73 @@ if [ ! -s "$PERSON_LIB" ]; then
     fail "with_person_metrics could not be extracted from nightly_local_tests.sh"
 else
     merged=$(
-        PERSON_METRICS_JSON='{"person_eval_readiness_pct":0,"person_eval_readiness_band":"red","person_eval_quality_score":null}'
+        PERSON_METRICS_JSON='{"person_eval_readiness_pct":0,"person_eval_readiness_band":"red","person_eval_quality_score":null,"poi_cycle_stream_status":"ok","poi_cycle_production_label":"C3"}'
         source "$PERSON_LIB"
         with_person_metrics '{"status":"failed","reason":"build-rc:65","total":0}'
     )
     got=$(printf '%s' "$merged" | python3 -c '
 import json,sys
 r=json.load(sys.stdin)
-print(f"{r.get('"'"'status'"'"')}|{r.get('"'"'reason'"'"')}|{r.get('"'"'person_eval_readiness_pct'"'"')}|{r.get('"'"'person_eval_quality_score'"'"')}")
+print(f"{r.get('"'"'status'"'"')}|{r.get('"'"'reason'"'"')}|{r.get('"'"'person_eval_readiness_pct'"'"')}|{r.get('"'"'person_eval_quality_score'"'"')}|{r.get('"'"'poi_cycle_stream_status'"'"')}|{r.get('"'"'poi_cycle_production_label'"'"')}")
 ')
-    if [ "$got" = "failed|build-rc:65|0|None" ]; then
-        pass "failure row preserves status and gains red readiness 0 / quality null"
+    if [ "$got" = "failed|build-rc:65|0|None|ok|C3" ]; then
+        pass "failure row preserves status and gains person + POI cycle sensors"
     else
         fail "person metric merge broke row contract: got '$got'"
+    fi
+fi
+
+# ───────────────────────────────────────────────────────────────────
+# Test 10: refresh_person_metrics invokes the collector with and without
+# --allow-quality under macOS Bash 3.2 set -u. An empty array expansion must
+# not abort before python3 is called.
+# ───────────────────────────────────────────────────────────────────
+echo
+echo "== Test 10: person collector optional quality flag under set -u =="
+REFRESH_LIB="$SANDBOX/refresh_lib.sh"
+awk '/^refresh_person_metrics\(\) \{/,/^}$/' "$SCRIPT_DIR/nightly_local_tests.sh" > "$REFRESH_LIB"
+
+run_refresh_case() {
+    local allow_quality="$1"
+    local args_file="$2"
+    (
+        set -u
+        LOGFILE="$SANDBOX/person-collector.log"
+        PERSON_EVAL_MANIFEST="$SANDBOX/manifest.json"
+        PERSON_EVAL_REPORT="$SANDBOX/report.json"
+        PERSON_METRICS_JSON='{}'
+        VIDEOSCAN_PERSON_EVAL_ALLOW_QUALITY="$allow_quality"
+        # shellcheck disable=SC1090
+        source "$REFRESH_LIB"
+        log() { :; }
+        python3() {
+            printf '%s\n' "$*" > "$args_file"
+            printf '%s\n' '{"person_eval_status":"ok"}'
+        }
+        refresh_person_metrics "$SANDBOX/VideoScan"
+        [ "$PERSON_METRICS_JSON" = '{"person_eval_status":"ok"}' ]
+    )
+}
+
+if [ ! -s "$REFRESH_LIB" ]; then
+    fail "refresh_person_metrics could not be extracted from nightly_local_tests.sh"
+else
+    NO_QUALITY_ARGS="$SANDBOX/person-args-no-quality.txt"
+    if run_refresh_case 0 "$NO_QUALITY_ARGS" &&
+       [ -s "$NO_QUALITY_ARGS" ] &&
+       ! grep -q -- '--allow-quality' "$NO_QUALITY_ARGS"; then
+        pass "collector invoked without --allow-quality under set -u"
+    else
+        fail "collector aborted or received --allow-quality when opt-in was disabled"
+    fi
+
+    WITH_QUALITY_ARGS="$SANDBOX/person-args-with-quality.txt"
+    if run_refresh_case 1 "$WITH_QUALITY_ARGS" &&
+       [ -s "$WITH_QUALITY_ARGS" ] &&
+       grep -q -- '--allow-quality' "$WITH_QUALITY_ARGS"; then
+        pass "collector invoked with --allow-quality under set -u"
+    else
+        fail "collector aborted or omitted --allow-quality when opt-in was enabled"
     fi
 fi
 
