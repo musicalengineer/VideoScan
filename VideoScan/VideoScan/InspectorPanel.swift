@@ -157,6 +157,16 @@ struct InspectorPanel: View {
                         InspectorFamilyTagsView(record: rec)
                     }
 
+                    // Workflow tags (2026-07-23) — chip row + ⊕ add menu.
+                    // Sits right under Family Tags: this whole
+                    // neighborhood is "what Rick has said about this
+                    // record" (people, tags, dates). `.id(rec.id)` resets
+                    // the view's custom-entry draft when selection moves.
+                    inspectorSection("Tags", systemImage: "tag") {
+                        InspectorWorkflowTagsView(record: rec)
+                            .id(rec.id)
+                    }
+
                     // "When and who" area: the date entry sits right under
                     // Family Tags (GH #117 — the future tag-person picker
                     // and this share one neighborhood). `.id(rec.id)`
@@ -348,6 +358,19 @@ struct InspectorPanel: View {
                         }
                     }
 
+                    // userNotes split (2026-07-23): YOUR note text gets
+                    // its own section; the machine/probe notes keep the
+                    // original "Notes" section below (unchanged styling,
+                    // including the red ffprobe-failure treatment).
+                    if !rec.userNotes.isEmpty {
+                        inspectorSection("Your Notes", systemImage: "note.text") {
+                            Text(rec.userNotes)
+                                .font(.system(size: 12))
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+
                     if !rec.notes.isEmpty {
                         inspectorSection("Notes", systemImage: "exclamationmark.bubble") {
                             Text(rec.notes)
@@ -418,6 +441,9 @@ struct InspectorPanel: View {
         if rec.starRating > 0 {
             lines.append("  Rating: \(String(repeating: "★", count: rec.starRating))")
         }
+        if !rec.tags.isEmpty {
+            lines.append("  Tags: \(rec.tags.joined(separator: ", "))")
+        }
         if rec.hasAvidMetadata {
             if !rec.avidTapeName.isEmpty { add("Tape", rec.avidTapeName) }
             if !rec.avidClipName.isEmpty { add("Clip", rec.avidClipName) }
@@ -474,7 +500,11 @@ struct InspectorPanel: View {
         formatDuplicateSection(rec, add: add, section: section, appendLine: { lines.append($0) })
         formatAvidSection(rec, add: add, section: section)
 
-        // Notes
+        // Notes — your notes first, then the machine/probe notes.
+        if !rec.userNotes.isEmpty {
+            section("Your Notes")
+            lines.append("  \(rec.userNotes)")
+        }
         if !rec.notes.isEmpty {
             section("Notes")
             lines.append("  \(rec.notes)")

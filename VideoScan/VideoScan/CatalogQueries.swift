@@ -26,7 +26,8 @@ enum SearchField: String, Equatable {
     case caption      // sceneCaptions[].text
     case ocr          // ocrText + ocrDateCandidates
     case filename     // filename only (not path/dir)
-    case notes        // user-written notes (only via field prefix; never via plain substring on catalog bar)
+    case notes        // userNotes OR legacy machine notes (union; only via field prefix — machine notes never join plain substring search)
+    case tag          // workflow tags (tag:gold) — also in plain search, unlike notes
     case streamType   // structural filter on rec.streamType (audio/video/both/failed/none)
     case mediaKind    // GH #124: facet-family spelling (type:video / type:audio / type:video-only)
     case codec        // GH #124 layer 4: videoCodec OR audioCodec substring (codec:mp3, codec:prores)
@@ -39,6 +40,7 @@ enum SearchField: String, Equatable {
         case "ocr", "text":                 return .ocr
         case "filename", "name", "file":    return .filename
         case "notes", "note":               return .notes
+        case "tag", "tags":                 return .tag
         case "stream", "streamtype":        return .streamType
         case "type", "kind":                return .mediaKind
         case "codec", "codecs":             return .codec
@@ -291,7 +293,16 @@ nonisolated func pfFieldTokenMatches(_ field: SearchField, _ value: String, _ re
     case .filename:
         return rec.filename.lowercased().contains(n)
     case .notes:
-        return rec.notes.lowercased().contains(n)
+        // Union across the userNotes split (2026-07-23): the human text
+        // that used to live in `notes` migrated to `userNotes`, so
+        // note:/notes: matches EITHER field — nothing the user could
+        // previously find becomes unfindable.
+        return rec.userNotes.lowercased().contains(n)
+            || rec.notes.lowercased().contains(n)
+    case .tag:
+        // Workflow tags — substring, case-insensitive, same per-token
+        // semantics as people:. `tag:fix` matches "Fix Audio".
+        return rec.tags.contains { $0.lowercased().contains(n) }
     case .streamType:
         return pfStreamTypeAliasMatches(value: n, recordType: rec.streamType)
     case .mediaKind:
@@ -392,6 +403,12 @@ nonisolated func pfTokenMatches(_ token: SearchToken, _ rec: VideoRecord) -> Boo
         if rec.lifecycleStage.rawValue.lowercased().contains(n) { return true }
         if rec.archiveStage.rawValue.lowercased().contains(n) { return true }
         if rec.notes.lowercased().contains(n) { return true }
+        // userNotes split (2026-07-23): universal search always matched
+        // `notes`, so the human text that migrated to `userNotes` must
+        // keep matching here — nothing previously findable becomes
+        // unfindable. Workflow tags join too (human signal).
+        if rec.userNotes.lowercased().contains(n) { return true }
+        if rec.tags.contains(where: { $0.lowercased().contains(n) }) { return true }
         return false
     case .yearRange(let range):
         return pfYearsFromRecord(rec).contains(where: { range.contains($0) })
@@ -477,6 +494,14 @@ nonisolated func pfCatalogTokenMatches(_ token: SearchToken, _ rec: VideoRecord)
         // when the file mtime says 2024 (transcode date).
         if rec.ocrDateCandidates.contains(where: { $0.text.lowercased().contains(n) }) { return true }
         if rec.ocrText.contains(where: { $0.text.lowercased().contains(n) }) { return true }
+        // Workflow tags + user notes (2026-07-23) — HUMAN signal, so
+        // they join the plain-search field set (unlike machine `notes`,
+        // which stays field-prefix-only exactly as before: ffprobe
+        // stderr must never surface for a casual query). MUST stay
+        // aligned with CatalogSearchIndex.buildHaystack — correctness
+        // contract pinned by CatalogSearchIndexTests.
+        if rec.tags.contains(where: { $0.lowercased().contains(n) }) { return true }
+        if rec.userNotes.lowercased().contains(n) { return true }
         return false
     case .yearRange(let range):
         // Year shorthand fires on filename-embedded years (e.g. "Cape

@@ -632,9 +632,46 @@ extension CatalogContent {
                                 }
                             }
 
+                            // Workflow tags (2026-07-23) — separate from the
+                            // disposition "Tag" menu above: dispositions are
+                            // one-of (keep/junk verdicts), these are any-of
+                            // markers ("Follow Up", "Gold", your own words).
+                            // Each quick-pick toggles across the WHOLE
+                            // selection; a mixed selection applies to all.
+                            Menu("Tags") {
+                                ForEach(WorkflowTags.quickPicks, id: \.self) { tag in
+                                    let allHave = selectedRecs.allSatisfy {
+                                        WorkflowTags.contains($0.tags, tag)
+                                    }
+                                    // Toggle in a menu renders as a checkmark
+                                    // item. Binding get/set ≈ a C++ property
+                                    // with custom getter/setter: get feeds the
+                                    // checkmark, set runs the toggle action.
+                                    Toggle(tag, isOn: Binding(
+                                        get: { allHave },
+                                        set: { model.setTag(tag, on: selectedRecs, present: $0) }
+                                    ))
+                                }
+                                Divider()
+                                Button("Custom Tag\u{2026}") {
+                                    customTagTargetIDs = Set(selectedRecs.map(\.id))
+                                    customTagText = ""
+                                    showCustomTagAlert = true
+                                }
+                                if selectedRecs.contains(where: { !$0.tags.isEmpty }) {
+                                    Divider()
+                                    Button("Remove All Tags") {
+                                        model.removeAllTags(from: selectedRecs)
+                                    }
+                                }
+                            }
+
                             Button("Notes\u{2026}") {
                                 notesTarget = rec
-                                notesText = rec.notes
+                                // userNotes split (2026-07-23): the sheet
+                                // edits YOUR note text; machine probe notes
+                                // stay read-only in the inspector.
+                                notesText = rec.userNotes
                                 showNotesSheet = true
                             }
 
@@ -1129,7 +1166,30 @@ extension CatalogContent {
                     .font(.system(size: 11))
                     .foregroundColor(rec.mediaDisposition.color)
             }
-            if !rec.notes.isEmpty {
+            // Workflow tags (2026-07-23) — subtle teal chips, capped at
+            // two + "+N" overflow so the column never balloons. Same
+            // rounded-rect badge language as the inspector's stream-type
+            // badge. Full list rides in the tooltip below.
+            ForEach(Array(rec.tags.prefix(2)), id: \.self) { tag in
+                Text(tag)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(.teal)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Color.teal.opacity(0.12))
+                    )
+                    .lineLimit(1)
+            }
+            if rec.tags.count > 2 {
+                Text("+\(rec.tags.count - 2)")
+                    .font(.system(size: 9))
+                    .foregroundColor(.teal)
+            }
+            // Note icon covers YOUR notes and the machine probe notes —
+            // both mean "there's something written on this row".
+            if !rec.userNotes.isEmpty || !rec.notes.isEmpty {
                 Image(systemName: "note.text")
                     .font(.system(size: 9))
                     .foregroundColor(.secondary)
@@ -1140,9 +1200,22 @@ extension CatalogContent {
                     .foregroundColor(rec.archiveHealth.color)
             }
         }
-        .help(rec.notes.isEmpty
-              ? rec.mediaDisposition.rawValue
-              : "\(rec.mediaDisposition.rawValue) — \(rec.notes)")
+        .help(tagColumnHelp(for: rec))
+    }
+
+    /// Tooltip for the Tag column: disposition, then workflow tags,
+    /// then your note (machine probe notes stay in the inspector).
+    private func tagColumnHelp(for rec: VideoRecord) -> String {
+        var lines = [rec.mediaDisposition.rawValue]
+        if !rec.tags.isEmpty {
+            lines.append("Tags: \(rec.tags.joined(separator: ", "))")
+        }
+        if !rec.userNotes.isEmpty {
+            lines.append(rec.userNotes)
+        } else if !rec.notes.isEmpty {
+            lines.append(rec.notes)
+        }
+        return lines.joined(separator: "\n")
     }
 
     /// Render the family-tag column for one record. Confirmed names blue,

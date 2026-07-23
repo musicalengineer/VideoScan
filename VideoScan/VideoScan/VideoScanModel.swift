@@ -754,6 +754,16 @@ final class VideoScanModel: ObservableObject {
             // Persist the merged set so subsequent launches skip the backfill.
             catalogStore.scheduleSave(records: records)
         }
+        // One-time notes → userNotes split (2026-07-23): move legacy
+        // human text out of the machine `notes` field. Runs over the
+        // FULL assembled set (restored + backfilled) and BEFORE the
+        // search-index load/rebuild below so haystacks see the
+        // post-migration values. Idempotent — see migrateLegacyUserNotes.
+        let notesMigrated = migrateLegacyUserNotes()
+        if notesMigrated > 0 {
+            log("Moved your notes on \(notesMigrated) record(s) into the new Notes field (probe details stay separate).")
+            catalogStore.scheduleSave(records: records)
+        }
         enforcePhaseConsistency()
         repairCorruptedPhases()
         detectResumableTargets()

@@ -69,5 +69,7 @@ extension VideoRecord {
         case userDate
         case userDateConfidence
         case workspaceActive
+        case userNotes
+        case tags
     }
 }

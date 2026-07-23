@@ -54,6 +54,26 @@ public class VideoRecord: Identifiable, Decodable {
     public var directory: String = ""
     public var notes: String = ""
 
+    /// Rick's own free-text note for this record (tags-and-usernotes
+    /// split, 2026-07-23). Distinct from `notes`, which the pipeline
+    /// machines write (ffprobe stderr, File Journey stamps): the
+    /// "Notes…" editing UI reads/writes THIS field, it joins the
+    /// plain-search haystack (human signal), and machine `notes` stays
+    /// out of plain search. A one-time lazy migration at catalog load
+    /// moves legacy human text out of `notes` into here (see
+    /// UserNotesMigration). Additive — legacy catalogs decode as "",
+    /// and the DTO encodes the key only when non-empty, so old
+    /// catalog.json files round-trip byte-identical.
+    public var userNotes: String = ""
+
+    /// Workflow tags ("Follow Up", "Gold", custom free-form). Stored in
+    /// canonical display form, matched case-insensitively everywhere —
+    /// see WorkflowTags. Searchable via the `tag:` field token AND the
+    /// plain-search haystack. Additive — legacy catalogs decode as [],
+    /// and the DTO encodes the key only when non-empty, so old
+    /// catalog.json files round-trip byte-identical.
+    public var tags: [String] = []
+
     /// Provenance: where this record's file lived before the most recent
     /// Relocate. Set once at first migration, never overwritten — so even
     /// after multiple relocates, this still points at the *original* home.
@@ -413,6 +433,12 @@ public class VideoRecord: Identifiable, Decodable {
         fullPath                    = try c.decodeIfPresent(String.self, forKey: .fullPath) ?? ""
         directory                   = try c.decodeIfPresent(String.self, forKey: .directory) ?? ""
         notes                       = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        // Tags + user notes (2026-07-23) — additive optional, same
+        // migration pattern as suspectedPeople: legacy catalogs (no
+        // keys) come back empty; tagged/noted records round-trip
+        // unchanged. No catalog version bump required.
+        userNotes                   = try c.decodeIfPresent(String.self, forKey: .userNotes) ?? ""
+        tags                        = try c.decodeIfPresent([String].self, forKey: .tags) ?? []
         avidClipName                = try c.decodeIfPresent(String.self, forKey: .avidClipName) ?? ""
         avidMobID                   = try c.decodeIfPresent(String.self, forKey: .avidMobID) ?? ""
         avidMaterialUUID            = try c.decodeIfPresent(String.self, forKey: .avidMaterialUUID) ?? ""

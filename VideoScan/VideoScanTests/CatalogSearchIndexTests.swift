@@ -485,6 +485,79 @@ struct CatalogSearchIndexTests {
                 "Match must be the CapeCod1997 elevator clip, not an unrelated 'Cape' or 'elevator' record")
     }
 
+    // MARK: - Workflow tags + userNotes in haystack (2026-07-23)
+    //
+    // Tags and userNotes are HUMAN signal, so they joined the plain-
+    // search haystack; machine `notes` stays out. The haystack MUST
+    // stay aligned with pfCatalogTokenMatches' substring semantics —
+    // these tests pin both sides of that contract plus the update()
+    // path the tag mutators use.
+
+    /// A tag is findable via plain search AND the result agrees with
+    /// the canonical matcher (correctness contract).
+    @Test func haystackIncludesTags() {
+        let tagged = makeRecord(path: "/Volumes/X/tagged.mov")
+        tagged.tags = ["Fix Audio", "Gold"]
+        let plain = makeRecord(path: "/Volumes/X/plain.mov")
+        let idx = CatalogSearchIndex()
+        let all = [tagged, plain]
+        idx.rebuild(records: all)
+
+        for query in ["gold", "fix audio", "tag:gold", "tags:fix"] {
+            let viaIndex = Set(idx.filter(records: all, query: query).map { $0.fullPath })
+            let viaCanonical = Set(
+                all.filter { pfRecordFilenameOrPersonMatch($0, query: query) }
+                    .map { $0.fullPath }
+            )
+            #expect(viaIndex == viaCanonical,
+                    "Indexed and canonical results diverged for '\(query)'")
+            #expect(viaIndex == [tagged.fullPath],
+                    "'\(query)' must match exactly the tagged record")
+        }
+    }
+
+    /// userNotes joins plain search; machine `notes` (ffprobe stderr,
+    /// "[" lines) must NOT — the reason the notes/userNotes split
+    /// exists. Both sides checked against the canonical matcher.
+    @Test func haystackIncludesUserNotesButNotMachineNotes() {
+        let noted = makeRecord(path: "/Volumes/X/noted.mov")
+        noted.userNotes = "ask Breen about the zebra footage"
+        let machine = makeRecord(path: "/Volumes/X/machine.mov")
+        machine.notes = "[mov @ 0x0] zebra atom not found"
+        let idx = CatalogSearchIndex()
+        let all = [noted, machine]
+        idx.rebuild(records: all)
+
+        let viaIndex = Set(idx.filter(records: all, query: "zebra").map { $0.fullPath })
+        let viaCanonical = Set(
+            all.filter { pfRecordFilenameOrPersonMatch($0, query: "zebra") }
+                .map { $0.fullPath }
+        )
+        #expect(viaIndex == viaCanonical)
+        #expect(viaIndex == [noted.fullPath],
+                "plain search must reach userNotes but never machine notes")
+        // The machine note stays reachable via the explicit note: token.
+        #expect(idx.filter(records: all, query: "note:zebra").count == 2)
+    }
+
+    /// update() after a tag mutation makes the tag searchable without a
+    /// rebuild — the single-record refresh the tag mutators rely on.
+    @Test func updateReflectsTagMutation() {
+        let rec = makeRecord(path: "/Volumes/X/a.mov")
+        let idx = CatalogSearchIndex()
+        idx.rebuild(records: [rec])
+        #expect(idx.filter(records: [rec], query: "gold").isEmpty)
+
+        rec.tags = ["Gold"]
+        idx.update(rec)
+        #expect(idx.filter(records: [rec], query: "gold").count == 1)
+        #expect(idx.filter(records: [rec], query: "tag:gold").count == 1)
+
+        rec.tags = []
+        idx.update(rec)
+        #expect(idx.filter(records: [rec], query: "gold").isEmpty)
+    }
+
     // MARK: - Inverted index v1 (Rick 2026-06-16)
 
     /// Fast-path correctness: whole-word substring queries hit the

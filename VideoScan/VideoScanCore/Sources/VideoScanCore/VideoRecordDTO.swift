@@ -67,6 +67,8 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let fullPath: String
     public let directory: String
     public let notes: String
+    public let userNotes: String
+    public let tags: [String]
     public let avidClipName: String
     public let avidMobID: String
     public let avidMaterialUUID: String
@@ -171,6 +173,8 @@ public struct VideoRecordDTO: Sendable, Encodable {
         fullPath                    = r.fullPath
         directory                   = r.directory
         notes                       = r.notes
+        userNotes                   = r.userNotes
+        tags                        = r.tags
         avidClipName                = r.avidClipName
         avidMobID                   = r.avidMobID
         avidMaterialUUID            = r.avidMaterialUUID
@@ -275,6 +279,16 @@ public struct VideoRecordDTO: Sendable, Encodable {
         try c.encode(fullPath, forKey: .fullPath)
         try c.encode(directory, forKey: .directory)
         try c.encode(notes, forKey: .notes)
+        // Tags + user notes (2026-07-23): delta-minimal — written only
+        // when non-empty so pre-feature records round-trip
+        // byte-identical (byte-identity golden in
+        // CatalogStoreAsyncSaveTests stays green).
+        if !userNotes.isEmpty {
+            try c.encode(userNotes, forKey: .userNotes)
+        }
+        if !tags.isEmpty {
+            try c.encode(tags, forKey: .tags)
+        }
         try c.encode(avidClipName, forKey: .avidClipName)
         try c.encode(avidMobID, forKey: .avidMobID)
         try c.encode(avidMaterialUUID, forKey: .avidMaterialUUID)

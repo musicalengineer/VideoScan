@@ -26,7 +26,8 @@ import Foundation
 //   User-edit fields    — detectedPeople, suspectedPeople,
 //                         confirmedByUserPeople, rejectedPeople,
 //                         mediaDisposition, lifecycleStage,
-//                         archiveStage, starRating, junkScore, notes.
+//                         archiveStage, starRating, junkScore, notes,
+//                         tags, userNotes.
 //
 // What we DON'T preserve (the scan re-derives these from disk):
 //   filename, ext, size, sizeBytes, duration, durationSeconds,
@@ -79,6 +80,10 @@ struct RescanPreservedFields: Sendable {
     let starRating: Int
     let junkScore: Int
     let notes: String
+    // Workflow tags + user notes (2026-07-23) — user-authored, so a
+    // rescan must never destroy them (same contract as notes above).
+    let tags: [String]
+    let userNotes: String
 
     /// Catalog-scope set-aside state (2026-07-15). Preserved so a rescan's
     /// fresh instance can NEVER silently resurrect a set-aside record into
@@ -106,6 +111,8 @@ struct RescanPreservedFields: Sendable {
             || starRating != 0
             || junkScore != 0
             || !notes.isEmpty
+            || !tags.isEmpty
+            || !userNotes.isEmpty
             || setAsideReason != nil
     }
 
@@ -133,6 +140,8 @@ struct RescanPreservedFields: Sendable {
         self.starRating = rec.starRating
         self.junkScore = rec.junkScore
         self.notes = rec.notes
+        self.tags = rec.tags
+        self.userNotes = rec.userNotes
         self.setAsideReason = rec.setAsideReason
     }
 
@@ -164,6 +173,8 @@ struct RescanPreservedFields: Sendable {
         rec.starRating = self.starRating
         rec.junkScore = self.junkScore
         rec.notes = self.notes
+        rec.tags = self.tags
+        rec.userNotes = self.userNotes
         rec.setAsideReason = self.setAsideReason
     }
 }

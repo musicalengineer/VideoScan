@@ -342,9 +342,13 @@ final class CatalogSearchIndex {
     /// Persisted format version. Bump when the on-disk layout changes
     /// so old files force a rebuild instead of silently deserializing
     /// wrong shapes. v2 (2026-07-19): per-record year sets persisted
-    /// alongside haystacks (GH #123 PR D). v1 files are rejected → one
-    /// rebuild, then saved back as v2.
-    nonisolated static let persistedVersion: Int = 2
+    /// alongside haystacks (GH #123 PR D). v3 (2026-07-23): tags +
+    /// userNotes joined the haystack field set — a v2 file's haystacks
+    /// predate them (and predate the notes → userNotes migration that
+    /// runs the same launch), so v2 is rejected → one rebuild, then
+    /// saved back as v3. NOT a semantic layout change; the bump exists
+    /// purely to force that one refresh.
+    nonisolated static let persistedVersion: Int = 3
 
     /// Default location next to the catalog:
     /// `~/Library/Application Support/VideoScan/catalog.search-index.v1.plist`
@@ -576,6 +580,13 @@ final class CatalogSearchIndex {
         parts.append(contentsOf: rec.detectedPeople)
         parts.append(contentsOf: rec.suspectedPeople)
         parts.append(contentsOf: rec.confirmedByUserPeople.map { $0.name })
+        // Workflow tags + user notes (2026-07-23) — human signal, so
+        // they're plain-searchable. Machine `notes` deliberately stays
+        // OUT, exactly as before (field-prefix-only via note:). Aligned
+        // with pfCatalogTokenMatches' substring branch — correctness
+        // contract.
+        parts.append(contentsOf: rec.tags)
+        if !rec.userNotes.isEmpty { parts.append(rec.userNotes) }
         for cap in rec.sceneCaptions { parts.append(cap.text) }
         if let t = rec.audioTranscript { parts.append(t) }
         for hit in rec.ocrDateCandidates { parts.append(hit.text) }

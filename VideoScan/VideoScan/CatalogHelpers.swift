@@ -102,6 +102,14 @@ struct CatalogContent: View {
     @State var notesTarget: VideoRecord?
     @State var notesText: String = ""
 
+    // Workflow tags (2026-07-23): "Custom Tag…" alert backing. Targets
+    // are captured as IDs when the menu item is clicked (the context
+    // menu's record array is gone by the time the alert commits), then
+    // resolved against `records` at commit.
+    @State var showCustomTagAlert = false
+    @State var customTagText: String = ""
+    @State var customTagTargetIDs: Set<UUID> = []
+
     /// §2 Provenance & Audit Trail — File Journey sheet backing. Built
     /// fresh from the right-clicked record; the sheet binding drops the
     /// value on dismiss. Swift's `Identifiable?` ≈ a nullable handle that
@@ -554,12 +562,35 @@ struct CatalogContent: View {
                 notes: $notesText,
                 filename: notesTarget?.filename ?? "",
                 onConfirm: {
-                    notesTarget?.notes = notesText
-                    model.saveCatalogDebounced()
+                    // userNotes split (2026-07-23): the sheet edits YOUR
+                    // note field; machine probe notes are untouched. The
+                    // model helper also refreshes the search index so a
+                    // note: search reflects the edit immediately.
+                    if let target = notesTarget {
+                        model.setUserNotes(notesText, for: target)
+                    }
                     showNotesSheet = false
                 },
                 onCancel: { showNotesSheet = false }
             )
+        }
+        // "Custom Tag…" free-form entry (workflow tags, 2026-07-23).
+        // TextField-in-alert is the lightest chrome for one line of
+        // input; quick-picks stay in the Tags submenu / inspector ⊕.
+        .alert("Add a Tag", isPresented: $showCustomTagAlert) {
+            TextField("Your tag (like \u{201C}Fix Color\u{201D})", text: $customTagText)
+            Button("Add Tag") {
+                let targets = records.filter { customTagTargetIDs.contains($0.id) }
+                model.addTag(customTagText, to: targets)
+                customTagText = ""
+                customTagTargetIDs = []
+            }
+            Button("Cancel", role: .cancel) {
+                customTagText = ""
+                customTagTargetIDs = []
+            }
+        } message: {
+            Text("Tag the selected files with your own word or phrase. You can search for it later with tag:.")
         }
         // §2 Provenance & Audit Trail — File Journey sheet.
         .sheet(item: $fileJourneyPayload) { payload in

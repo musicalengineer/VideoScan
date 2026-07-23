@@ -72,6 +72,8 @@ extension VideoRecord {
         c.fullPath = fullPath
         c.directory = directory
         c.notes = notes
+        c.userNotes = userNotes
+        c.tags = tags
         c.originalFullPath = originalFullPath
         c.originVolume = originVolume
         c.wasCacheHit = wasCacheHit
