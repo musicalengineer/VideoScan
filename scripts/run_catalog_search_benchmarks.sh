@@ -101,7 +101,7 @@ cmd=(
   -derivedDataPath "$DERIVED_DATA"
   -parallel-testing-enabled NO
   -maximum-concurrent-test-device-destinations 1
-  -only-testing:VideoScanTests/CatalogSearchBenchmarkTests/fullBenchmarkMatrix
+  -only-testing:VideoScanTests/CatalogSearchBenchmarkTests
 )
 
 status=0

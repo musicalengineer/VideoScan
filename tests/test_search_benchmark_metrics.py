@@ -294,7 +294,11 @@ class SearchBenchmarkMetricsTests(unittest.TestCase):
         self.assertIn('TEST_RUNNER_VS_RUN_SEARCH_BENCH=1', runner)
         self.assertIn('--allow-m4', runner)
         self.assertIn('git status --porcelain', runner)
-        self.assertIn('-only-testing:VideoScanTests/CatalogSearchBenchmarkTests/fullBenchmarkMatrix', runner)
+        self.assertIn('-only-testing:VideoScanTests/CatalogSearchBenchmarkTests', runner)
+        self.assertNotIn(
+            '-only-testing:VideoScanTests/CatalogSearchBenchmarkTests/fullBenchmarkMatrix',
+            runner,
+        )
 
 
 if __name__ == "__main__":
