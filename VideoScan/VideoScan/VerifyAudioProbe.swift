@@ -169,6 +169,42 @@ enum VerifyAudioRules {
         return out
     }
 
+    /// Turn one raw alias detail (the tail of a marker line, e.g.
+    /// "stream 1, alias: path='/Avid MediaFiles/…', dir='1',
+    /// filename='…', volume='Media250', nlvl_from=-1, nlvl_to=-1.Set
+    /// enable_drefs to allow this.") into the line the SHEET shows:
+    /// the referenced path plus the drive it lived on —
+    /// "/Avid MediaFiles/… — on drive “Media250”". ffprobe's field
+    /// soup and the enable_drefs advice are developer jargon and must
+    /// never reach the dialog (Rick hit exactly that on 2026-07-24).
+    /// Fallback when the alias fields don't parse: the raw detail with
+    /// the trailing "Set enable_drefs…" sentence removed.
+    static func displayReferencedPath(_ detail: String) -> String {
+        if let path = firstSingleQuotedValue(after: "path=", in: detail) {
+            if let volume = firstSingleQuotedValue(after: "volume=", in: detail),
+               !volume.isEmpty {
+                return "\(path) — on drive “\(volume)”"
+            }
+            return path
+        }
+        var s = detail
+        if let advice = s.range(of: "Set enable_drefs") {
+            s = String(s[..<advice.lowerBound])
+        }
+        return s.trimmingCharacters(in: CharacterSet(charactersIn: " ."))
+    }
+
+    /// First 'single-quoted' value following `key` in `s`, or nil.
+    /// ffprobe prints alias fields as key='value' with no escaping, so
+    /// a path containing an apostrophe truncates at it — acceptable:
+    /// this feeds a human-readable hint, not a file operation.
+    static func firstSingleQuotedValue(after key: String, in s: String) -> String? {
+        guard let keyRange = s.range(of: key + "'") else { return nil }
+        let rest = s[keyRange.upperBound...]
+        guard let close = rest.firstIndex(of: "'") else { return nil }
+        return String(rest[..<close])
+    }
+
     /// True when the audio stream runs meaningfully SHORTER than the
     /// video (>10%). Only fires when both durations are known — an
     /// unknown duration must never manufacture a damage verdict.
@@ -470,8 +506,11 @@ enum VerifyAudioProbe {
                 "ffprobe exited with status \(probeResult.exitCode)")
         }
         let shape = try Self.shape(fromProbeJSON: data)
+        // Raw alias details, then mapped to the user-facing form the
+        // sheet renders (path + drive, never ffprobe field soup).
         let referencedPaths = VerifyAudioRules.referencedPaths(
             fromProbeStderr: probeResult.stderr)
+            .map(VerifyAudioRules.displayReferencedPath)
         try Task.checkCancellation()
 
         // ---- Levels pass (audio-only decode; seconds even for a

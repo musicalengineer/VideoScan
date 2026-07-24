@@ -82,6 +82,49 @@ struct VerifyAudioDrefParsingTests {
         """
         #expect(VerifyAudioRules.referencedPaths(fromProbeStderr: healthy).isEmpty)
     }
+
+    // The raw alias detail is ffprobe field soup; the sheet must never
+    // show it (Rick hit exactly that on the real JustPatsHouse.mov,
+    // 2026-07-24). displayReferencedPath reduces it to path + drive.
+
+    /// The exact alias detail ffprobe emitted for JustPatsHouse.mov's
+    /// video track — the line Rick saw leak into the dialog.
+    private static let realAliasDetail =
+        "stream 1, alias: path='/Avid MediaFiles/MXF/1/Thanksgiving2009-Pr4B189B28.mxf', dir='1', filename='Thanksgiving2009-Pr4B189B28.mxf', volume='Media250', nlvl_from=-1, nlvl_to=-1.Set enable_drefs to allow this."
+
+    @Test func displayFormatsRealAliasAsPathAndDrive() {
+        #expect(VerifyAudioRules.displayReferencedPath(Self.realAliasDetail)
+                == "/Avid MediaFiles/MXF/1/Thanksgiving2009-Pr4B189B28.mxf — on drive “Media250”")
+    }
+
+    @Test func displayOmitsDriveWhenVolumeMissingOrEmpty() {
+        #expect(VerifyAudioRules.displayReferencedPath(
+            "stream 0, alias: path='/Users/Shared/clip.wav', dir='x'")
+                == "/Users/Shared/clip.wav")
+        #expect(VerifyAudioRules.displayReferencedPath(
+            "alias: path='/a/b.mov', volume=''")
+                == "/a/b.mov")
+    }
+
+    @Test func displayFallbackStripsEnableDrefsAdvice() {
+        // No parseable path= field → raw detail survives, but the
+        // developer advice sentence must not.
+        #expect(VerifyAudioRules.displayReferencedPath(
+            "stream 2, unparseable alias.Set enable_drefs to allow this.")
+                == "stream 2, unparseable alias")
+        // Nothing to strip → unchanged.
+        #expect(VerifyAudioRules.displayReferencedPath("plain detail")
+                == "plain detail")
+    }
+
+    @Test func displayNeverEmitsJargonForRealAlias() {
+        // Sensor for the actual complaint: none of ffprobe's field
+        // names may survive formatting of a well-formed alias line.
+        let shown = VerifyAudioRules.displayReferencedPath(Self.realAliasDetail)
+        for jargon in ["enable_drefs", "nlvl", "alias:", "filename=", "dir="] {
+            #expect(!shown.contains(jargon), "jargon '\(jargon)' leaked")
+        }
+    }
 }
 
 // MARK: - Duration-mismatch boundary
