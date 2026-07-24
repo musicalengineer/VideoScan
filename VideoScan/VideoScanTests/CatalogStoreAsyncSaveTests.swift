@@ -258,7 +258,10 @@ struct CatalogStoreAsyncSaveTests {
             "volumeName": "MyBook3Terabytes", "remoteServerName": "macpro.local",
             "scannedAt": "2026-05-01T00:00:00Z", "scanRootLabel": "Movies"
           },
-          "purgedAt": "2026-06-01T00:00:00Z"
+          "purgedAt": "2026-06-01T00:00:00Z",
+          "audioVerifyStatus": "damaged",
+          "audioVerifyNote": "reference movie — media missing",
+          "audioVerifyDate": "2026-07-24T12:00:00Z"
         }
         """
         let decoder = JSONDecoder()
