@@ -300,3 +300,12 @@ identity-negative cases, and no result reports an engine error. Development
 and smoke suites can never publish a production quality score. Automation can
 add `--require-publishable`; an ineligible report is still written for
 diagnosis, but the command exits 4 so it cannot be mistaken for a nightly score.
+
+The nightly row also validates `docs/poi-cycles/metrics.jsonl`. It publishes a
+small POI status digest: latest cycle label/tier/verdict and the one cycle
+explicitly marked `productionBaseline`. Production score fields can only come
+from a passing formal grade. Development-cycle scores remain in the separately
+labeled cycle graph and are deliberately absent from the daily production
+fields. A missing, malformed, non-contiguous, or ambiguously marked stream is
+published as `poi_cycle_stream_status=missing|invalid`, never as a fabricated
+score.
