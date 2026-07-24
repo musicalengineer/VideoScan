@@ -141,6 +141,30 @@ enum RebuildAudioFix {
         }
         return nil
     }
+
+    /// Truncated-audio guard (QA finding 2, 2026-07-24): container
+    /// duration is the LONGEST track — the video is stream-copied full
+    /// length, so if ffmpeg's decode of the (by definition damaged)
+    /// source audio dies partway but exits 0, the container-duration
+    /// check alone would pass a repair carrying the exact #125-class
+    /// defect this feature exists to catch. Compare the AUDIO stream's
+    /// OWN duration against the picture (falling back to the source
+    /// duration for audio-only outputs), using the same >10% rule the
+    /// diagnosis uses. An UNKNOWN audio duration (0) never fires —
+    /// consistent with the diagnosis rule's "never manufacture a
+    /// verdict from a guess" (and .mov/pcm outputs always report it).
+    /// nil = acceptable; non-nil = the breach message. Pure.
+    static func truncatedAudioMismatch(observed: AudioVerifyShape,
+                                       sourceDuration: Double) -> String? {
+        let target = observed.videoDurationSeconds > 0
+            ? observed.videoDurationSeconds
+            : sourceDuration
+        guard VerifyAudioRules.hasDurationMismatch(
+            audioSeconds: observed.audioDurationSeconds,
+            videoSeconds: target) else { return nil }
+        return String(format: "rebuilt audio track runs %.1fs but the picture runs %.1fs — the audio re-encode died partway through",
+                      observed.audioDurationSeconds, target)
+    }
 }
 
 // MARK: - Job
@@ -468,6 +492,14 @@ final class RebuildAudioJob: @MainActor MediaFileOperationJob {
         let observed = try VerifyAudioProbe.shape(fromProbeJSON: data)
         if let mismatch = RebuildAudioFix.outputMismatch(
             observed: observed, sourceVideoCodec: sourceVideoCodec) {
+            throw RebuildVerificationError(message: mismatch)
+        }
+        // Truncated-audio guard (QA finding 2): the container check
+        // below reads the LONGEST track, which the full-length
+        // stream-copied video always satisfies — the AUDIO stream's own
+        // duration is what catches a decode that died partway.
+        if let mismatch = RebuildAudioFix.truncatedAudioMismatch(
+            observed: observed, sourceDuration: sourceDuration) {
             throw RebuildVerificationError(message: mismatch)
         }
         if sourceDuration > 0, observed.containerDurationSeconds > 0 {

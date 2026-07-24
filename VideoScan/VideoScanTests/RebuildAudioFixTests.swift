@@ -168,6 +168,61 @@ struct RebuildAudioFixTests {
             == "video codec changed (h264 → none)")
     }
 
+    // MARK: Truncated-audio guard (QA finding 2)
+
+    private func shortAudioShape(audio: Double, video: Double) -> AudioVerifyShape {
+        var s = observed()
+        s.audioDurationSeconds = audio
+        s.videoDurationSeconds = video
+        s.containerDurationSeconds = max(audio, video)
+        return s
+    }
+
+    @Test func truncatedAudioFailsAgainstThePicture() {
+        // The QA F2 shape: video stream-copied full length (6 s),
+        // audio decode died at 2 s — container duration (longest
+        // track) matches the source, so ONLY this rule catches it.
+        let mismatch = RebuildAudioFix.truncatedAudioMismatch(
+            observed: shortAudioShape(audio: 2, video: 6), sourceDuration: 6)
+        #expect(mismatch != nil)
+        #expect(mismatch?.contains("died partway") == true)
+    }
+
+    @Test func matchedDurationsPass() {
+        #expect(RebuildAudioFix.truncatedAudioMismatch(
+            observed: shortAudioShape(audio: 6, video: 6), sourceDuration: 6) == nil)
+        // Same >10% boundary as the diagnosis rule: exactly 10% shorter
+        // must NOT fire (rules stay consistent across diagnose/repair).
+        #expect(RebuildAudioFix.truncatedAudioMismatch(
+            observed: shortAudioShape(audio: 90, video: 100), sourceDuration: 100) == nil)
+        #expect(RebuildAudioFix.truncatedAudioMismatch(
+            observed: shortAudioShape(audio: 89, video: 100), sourceDuration: 100) != nil)
+    }
+
+    @Test func unknownAudioDurationNeverFires() {
+        // 0 = ffprobe didn't report a stream duration — never
+        // manufacture a verification failure from a guess (mov/pcm
+        // outputs always report it, so this stays theoretical).
+        #expect(RebuildAudioFix.truncatedAudioMismatch(
+            observed: shortAudioShape(audio: 0, video: 6), sourceDuration: 6) == nil)
+    }
+
+    @Test func audioOnlyOutputComparesAgainstSourceDuration() {
+        // No video stream (audio-only source): the picture target falls
+        // back to the SOURCE duration, so a half-length rebuilt track
+        // still fails.
+        var s = observed(videoCodec: nil)
+        s.audioDurationSeconds = 3
+        s.videoDurationSeconds = 0
+        s.containerDurationSeconds = 3
+        #expect(RebuildAudioFix.truncatedAudioMismatch(
+            observed: s, sourceDuration: 10) != nil)
+        s.audioDurationSeconds = 10
+        s.containerDurationSeconds = 10
+        #expect(RebuildAudioFix.truncatedAudioMismatch(
+            observed: s, sourceDuration: 10) == nil)
+    }
+
     // MARK: Free space
 
     @Test func requiredFreeBytesFormula() {
