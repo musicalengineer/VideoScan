@@ -136,6 +136,13 @@ Subagents operate in **full auto** within `~/dev/VideoScan` and `~/Library/Logs/
 - Delete files (move to repo `.trash/` instead)
 - Run unbounded memory operations
 
+## Machine usage policy
+
+- The M4 is Rick's interactive development machine. Treat his Engineering Room/Team Board presence as active until he declares a quiet window.
+- While Rick is active, do not launch VideoScan, run app-binary person evaluation, app smoke runs, or UI tests on the M4.
+- Route UI-touching work to the M5 or M1, or to an explicit Rick-declared M4 quiet window (for example, lunch or overnight).
+- Every new dispatched task must carry an explicit `machine`: `none` for headless work, or `m4`, `m5`, or `m1` for machine-bound work. Never infer an unrouted UI destination.
+
 ## Reporting style
 
 Manager uses **adaptive** reporting: verbose for novel work, summary for routine work. Rick can switch modes mid-session by saying "verbose" or "summary."

@@ -85,3 +85,5 @@ docs/history.jsonl
 # want to recover. Never commit.
 /.trash/
 .dd-gauntlet/
+tests/fixtures/perf/
+*.local.md
