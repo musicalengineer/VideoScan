@@ -7,6 +7,7 @@ FILE_COUNT="${VIDEOSCAN_PERF_FILE_COUNT:-12}"
 DURATION="${VIDEOSCAN_PERF_DURATION:-1.5}"
 TIME_LIMIT_MIN="${VIDEOSCAN_PERF_TIME_LIMIT_MIN:-10}"
 VERBOSE="${VIDEOSCAN_PERF_VERBOSE:-0}"
+PUBLISH="${VIDEOSCAN_PERF_PUBLISH:-0}"
 
 # Stable copy of the most recent successful results, for tooling that wants
 # a fixed path. The authoritative per-run copy lives in the mktemp run dir.
@@ -22,13 +23,15 @@ Options:
   --duration SECONDS        Duration of each generated media file. Default: 1.5.
   --time-limit MINUTES      Per-test time limit. Default: 10. Large corpora
                             (hundreds of files or long durations) need more.
+  --publish                 On success, append a row to metrics/benchmarks.jsonl
+                            on origin/metrics (via scripts/publish_bench_metrics.py).
   --help                    Show this help.
 
 Examples:
   scripts/run_generated_media_perf.sh
   scripts/run_generated_media_perf.sh --verbose
   scripts/run_generated_media_perf.sh --file-count 100 --duration 2.0
-  scripts/run_generated_media_perf.sh --file-count 1000 --duration 10 --time-limit 60
+  scripts/run_generated_media_perf.sh --file-count 1000 --duration 10 --time-limit 60 --publish
 
 Each run uses its own temp directory (results + xcodebuild log paths are
 printed at start), so concurrent runs don't interfere. On success the results
@@ -68,6 +71,10 @@ while [[ $# -gt 0 ]]; do
       fi
       TIME_LIMIT_MIN="$2"
       shift 2
+      ;;
+    --publish)
+      PUBLISH=1
+      shift
       ;;
     --help|-h)
       usage
@@ -164,3 +171,9 @@ if [[ $status -ne 0 ]]; then
 fi
 
 cp "$RESULTS" "$STABLE_RESULTS"
+
+if [[ "$PUBLISH" == "1" ]]; then
+  echo
+  echo "Publishing benchmark row to origin/metrics…"
+  python3 "$ROOT/scripts/publish_bench_metrics.py" "$RESULTS"
+fi
