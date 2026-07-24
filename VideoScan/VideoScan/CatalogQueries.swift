@@ -293,17 +293,7 @@ nonisolated func pfFieldTokenMatches(_ field: SearchField, _ value: String, _ re
     case .filename:
         return rec.filename.lowercased().contains(n)
     case .notes:
-        // Union across the userNotes split (2026-07-23): the human text
-        // that used to live in `notes` migrated to `userNotes`, so
-        // note:/notes: matches EITHER field — nothing the user could
-        // previously find becomes unfindable. The Verify Audio verdict
-        // note (GH #128) joins the union so `notes:damaged` /
-        // `notes:reference` batch-finds flagged rows — field-prefix
-        // ONLY, so this machine state stays out of plain search and
-        // CatalogSearchIndex's haystack is untouched.
-        return rec.userNotes.lowercased().contains(n)
-            || rec.notes.lowercased().contains(n)
-            || rec.audioVerifyNote.lowercased().contains(n)
+        return pfNotesFieldMatches(value: n, rec: rec)
     case .tag:
         // Workflow tags — substring, case-insensitive, same per-token
         // semantics as people:. `tag:fix` matches "Fix Audio".
@@ -315,6 +305,22 @@ nonisolated func pfFieldTokenMatches(_ field: SearchField, _ value: String, _ re
     case .codec:
         return pfCodecFieldMatches(value: n, rec: rec)
     }
+}
+
+/// `notes:` field match — the union across the userNotes split
+/// (2026-07-23): the human text that used to live in `notes` migrated
+/// to `userNotes`, so note:/notes: matches EITHER field — nothing the
+/// user could previously find becomes unfindable. The Verify Audio
+/// verdict note (GH #128) joins the union so `notes:damaged` /
+/// `notes:reference` batch-finds flagged rows — field-prefix ONLY, so
+/// this machine state stays out of plain search and
+/// CatalogSearchIndex's haystack is untouched. Extracted (like
+/// pfCodecFieldMatches below) to keep pfFieldTokenMatches' cyclomatic
+/// complexity in budget. `value` must already be lowercased.
+nonisolated func pfNotesFieldMatches(value: String, rec: VideoRecord) -> Bool {
+    rec.userNotes.lowercased().contains(value)
+        || rec.notes.lowercased().contains(value)
+        || rec.audioVerifyNote.lowercased().contains(value)
 }
 
 /// `codec:` field match — EITHER codec field, so `codec:mp3` finds
