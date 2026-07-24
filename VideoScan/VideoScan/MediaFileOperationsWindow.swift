@@ -578,6 +578,10 @@ extension MediaFileOperationKind {
         // derivative-producing verbs (mint/teal/indigo; indigo went to
         // Trim when the branches merged). GH #116.
         case .balanceAudio: return .pink
+        // Rebuild Audio Track (Verify Audio's repair, GH #128) — brown
+        // keeps the audio-repair pair (pink/brown) adjacent but
+        // distinguishable.
+        case .rebuildAudio: return .brown
         }
     }
 }

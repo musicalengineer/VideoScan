@@ -80,6 +80,11 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// stream-copied, `<stem>_balanced.<ext>` beside the original,
     /// which is never modified. GH #116, Rick 2026-07.
     case balanceAudio
+    /// "Rebuild Audio Track" — the Verify Audio repair (GH #128):
+    /// video stream-copied, audio re-encoded to pcm_s16le in a .mov,
+    /// `<stem>_RepairedAudio.mov` beside the original, which is never
+    /// modified. Rick 2026-07-24.
+    case rebuildAudio
 
     /// Badge text — rendered in small caps by the row view.
     /// `.extract` says "Faces" (not "Extract") since the verb split:
@@ -97,6 +102,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .cleanup: return "Clean Up"
         case .trim: return "Trim"
         case .balanceAudio: return "Balance"
+        case .rebuildAudio: return "Rebuild"
         }
     }
 
@@ -117,6 +123,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .cleanup: return "cleanup"
         case .trim: return "trim"
         case .balanceAudio: return "balance audio"
+        case .rebuildAudio: return "rebuild audio"
         }
     }
 }
@@ -722,6 +729,39 @@ final class MediaFileOperationsCenter: ObservableObject {
         job.start()
         fileOpsLog.info("balanceAudio started: \(record.filename, privacy: .public) class=\(analysis.classification.rawValue, privacy: .public) → \(job.outputURL.lastPathComponent, privacy: .public)")
         logStart(job, plan: "\(analysis.classification.rawValue) → \(job.outputURL.lastPathComponent)")
+        return job
+    }
+
+    /// Kick off "Rebuild Audio Track" — the Verify Audio repair
+    /// (GH #128): video stream-copied, audio re-encoded to pcm_s16le in
+    /// a .mov beside the original. The sheet already ran the diagnosis
+    /// (verify-then-repair); `reason` is the diagnosed cause, carried
+    /// into the derived record's File Journey stamp. Returns nil —
+    /// REFUSING the dispatch — when a rebuild is already active for
+    /// this same record (two jobs against one input would race on the
+    /// same planned output name).
+    @discardableResult
+    func startRebuildAudio(record: VideoRecord,
+                           reason: String,
+                           shape: AudioVerifyShape,
+                           model: VideoScanModel,
+                           plannedOutput: URL? = nil) -> RebuildAudioJob? {
+        let duplicate = jobs.contains { job in
+            guard job.state.isActive, let r = job as? RebuildAudioJob else { return false }
+            return r.record.id == record.id
+        }
+        guard !duplicate else {
+            fileOpsLog.notice("rebuildAudio REFUSED duplicate dispatch: \(record.filename, privacy: .public) already has an active rebuild job")
+            appLog.write("rebuild audio refused: \(record.filename) — a rebuild job for this file is already running; nothing was started")
+            return nil
+        }
+        let job = RebuildAudioJob(record: record, reason: reason,
+                                  shape: shape, model: model,
+                                  plannedOutput: plannedOutput)
+        add(job)
+        job.start()
+        fileOpsLog.info("rebuildAudio started: \(record.filename, privacy: .public) (\(reason, privacy: .public)) → \(job.outputURL.lastPathComponent, privacy: .public)")
+        logStart(job, plan: "\(reason) → \(job.outputURL.lastPathComponent)")
         return job
     }
 
