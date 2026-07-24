@@ -197,6 +197,13 @@ enum VerifyAudioRules {
         return Int(digits)
     }
 
+    /// The common prefix EVERY damaged-status note leads with (Manager
+    /// decision 2026-07-24): one `notes:damaged` query batch-finds all
+    /// red rows — no per-cause query zoo. The em dash separates prefix
+    /// from detail, so detail fragments must not carry their own em
+    /// dash (see the referenceMovie fragment's comma).
+    static let damagedNotePrefix = "Damaged audio — "
+
     /// Which findings mark the record DAMAGED (red row, batch-delete
     /// candidate). Everything else is reported in the sheet but leaves
     /// the record's status at "ok" — imbalance is repairable, silence /
@@ -221,11 +228,16 @@ enum VerifyAudioRules {
 
     /// Short machine note per finding — the catalog tooltip / notes:
     /// token text. Ordered damage-first so a damaged record's note
-    /// leads with why it's red.
+    /// leads with why it's red. Fragments stay UNPREFIXED — `note(for:)`
+    /// adds `damagedNotePrefix` once for damaged verdicts, and the
+    /// rebuild's File Journey `reason` uses the bare fragment.
     static func noteFragment(for finding: AudioVerifyFinding) -> String {
         switch finding {
         case .referenceMovie:
-            return "reference movie — media missing"
+            // Comma, not em dash: the damaged-note prefix already uses
+            // the em dash — "Damaged audio — reference movie, media
+            // missing" reads as one clause, not two dashes.
+            return "reference movie, media missing"
         case .unsupportedCodec(let codec, let decodable):
             return decodable
                 ? "invalid codec (\(codec))"
@@ -251,10 +263,17 @@ enum VerifyAudioRules {
     }
 
     /// Persisted `audioVerifyNote` — damage fragments first, joined
-    /// with "; ". "" for a clean bill of health.
+    /// with "; ". "" for a clean bill of health. Damaged verdicts lead
+    /// with `damagedNotePrefix` so ONE query (`notes:damaged`) batch-
+    /// finds every red row — the #128 batch-delete flow; ok-status
+    /// notes stay bare.
     static func note(for findings: [AudioVerifyFinding]) -> String {
         let ordered = findings.filter(isDamage) + findings.filter { !isDamage($0) }
-        return ordered.map(noteFragment(for:)).joined(separator: "; ")
+        let joined = ordered.map(noteFragment(for:)).joined(separator: "; ")
+        guard !joined.isEmpty else { return "" }
+        return findings.contains(where: isDamage)
+            ? damagedNotePrefix + joined
+            : joined
     }
 
     /// Build the findings list from the probed shape + (optional)

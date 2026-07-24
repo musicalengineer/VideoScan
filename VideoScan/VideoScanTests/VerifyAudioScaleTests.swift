@@ -30,13 +30,16 @@ struct VerifyAudioScaleSensorTests {
         // note contains "vfxglorb" — a nonsense marker guaranteed absent
         // from the generator's vocabulary, so any plain-search hit can
         // only have come from the verdict note (500 records total).
+        // The note uses the PRODUCTION shape ("Damaged audio — <detail>",
+        // Manager decision 2026-07-24) so the notes:damaged budget below
+        // measures the real batch-find, not a zero-hit scan.
         // Every 400th additionally gets an "ok" verdict with a
         // non-damage note, exercising the status-independent union.
         var damaged = 0
         for (i, rec) in corpus.enumerated() {
             if i % 200 == 0 {
                 rec.audioVerifyStatus = "damaged"
-                rec.audioVerifyNote = "reference movie — media missing; vfxglorb"
+                rec.audioVerifyNote = "Damaged audio — reference movie, media missing; vfxglorb"
                 rec.audioVerifyDate = Date(timeIntervalSince1970: 1_753_300_000)
                 damaged += 1
             } else if i % 400 == 1 {

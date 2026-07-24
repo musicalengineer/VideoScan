@@ -84,8 +84,11 @@ extension CatalogContent {
         }
         // Verify Audio damaged verdict (GH #128) — composes with every
         // state above (the red filename tint needs its "why" visible).
+        // The note self-describes since the "Damaged audio — <detail>"
+        // standardization, so no extra label — a label would double up
+        // as "Damaged audio: Damaged audio — …".
         if rec.audioVerifyStatus == "damaged" {
-            tip += "\n\n⚠️ Damaged audio: \(rec.audioVerifyNote.isEmpty ? "verify audio flagged this file" : rec.audioVerifyNote)"
+            tip += "\n\n⚠️ \(rec.audioVerifyNote.isEmpty ? "Damaged audio" : rec.audioVerifyNote)"
         }
         return tip
     }

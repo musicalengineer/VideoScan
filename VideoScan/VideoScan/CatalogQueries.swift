@@ -311,12 +311,14 @@ nonisolated func pfFieldTokenMatches(_ field: SearchField, _ value: String, _ re
 /// (2026-07-23): the human text that used to live in `notes` migrated
 /// to `userNotes`, so note:/notes: matches EITHER field — nothing the
 /// user could previously find becomes unfindable. The Verify Audio
-/// verdict note (GH #128) joins the union so `notes:damaged` /
-/// `notes:reference` batch-finds flagged rows — field-prefix ONLY, so
-/// this machine state stays out of plain search and
-/// CatalogSearchIndex's haystack is untouched. Extracted (like
-/// pfCodecFieldMatches below) to keep pfFieldTokenMatches' cyclomatic
-/// complexity in budget. `value` must already be lowercased.
+/// verdict note (GH #128) joins the union, and every damaged-status
+/// note leads with the standardized "Damaged audio — " prefix
+/// (VerifyAudioRules.damagedNotePrefix), so the ONE query
+/// `notes:damaged` batch-finds every red row — the #128 batch-delete
+/// flow. Field-prefix ONLY: this machine state stays out of plain
+/// search and CatalogSearchIndex's haystack is untouched. Extracted
+/// (like pfCodecFieldMatches below) to keep pfFieldTokenMatches'
+/// cyclomatic complexity in budget. `value` must already be lowercased.
 nonisolated func pfNotesFieldMatches(value: String, rec: VideoRecord) -> Bool {
     rec.userNotes.lowercased().contains(value)
         || rec.notes.lowercased().contains(value)

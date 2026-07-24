@@ -204,7 +204,9 @@ struct VerifyAudioMediaMatrixTests {
         #expect(audio < 3.5 && video > 9.0,
                 "probed durations off: audio \(audio)s video \(video)s")
         #expect(d.persistedStatus == "damaged")
-        #expect(d.persistedNote.hasPrefix("audio shorter than video"))
+        // Standardized batch-find shape (Manager 2026-07-24): damaged
+        // notes lead with "Damaged audio — ", then the cause.
+        #expect(d.persistedNote.hasPrefix("Damaged audio — audio shorter than video"))
     }
 
     @Test("silent track reported honestly, not damaged", .timeLimit(.minutes(2)))

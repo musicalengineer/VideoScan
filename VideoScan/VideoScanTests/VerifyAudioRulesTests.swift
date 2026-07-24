@@ -172,9 +172,14 @@ struct VerifyAudioStatusNoteTests {
 
     @Test func noteFragmentsExactStrings() {
         // These strings persist into catalog.json and drive the
-        // notes:-token batch-finds — pin them exactly.
+        // notes:-token batch-finds — pin them exactly. Fragments are
+        // UNPREFIXED: note(for:) adds "Damaged audio — " once for
+        // damaged verdicts (see the sensor below), and the rebuild
+        // job's File Journey reason uses the bare fragment.
+        // referenceMovie uses a comma (not an em dash) so the prefixed
+        // note doesn't read with two dashes.
         #expect(VerifyAudioRules.noteFragment(for: .referenceMovie(referencedPaths: []))
-                == "reference movie — media missing")
+                == "reference movie, media missing")
         #expect(VerifyAudioRules.noteFragment(for: .unsupportedCodec(codec: "qdm2", decodable: true))
                 == "invalid codec (qdm2)")
         #expect(VerifyAudioRules.noteFragment(for: .unsupportedCodec(codec: "cook", decodable: false))
@@ -197,20 +202,67 @@ struct VerifyAudioStatusNoteTests {
                 == "2 live audio tracks")
     }
 
-    @Test func noteOrdersDamageFirst() {
-        // A damaged record's note must LEAD with why it's red, whatever
+    @Test func noteOrdersDamageFirstAndPrefixesDamaged() {
+        // A damaged record's note must LEAD with the standardized
+        // "Damaged audio — " prefix, then why it's red — whatever
         // order the findings were produced in.
         let note = VerifyAudioRules.note(for: [
             .silentAudio,
             .unsupportedCodec(codec: "qdm2", decodable: true),
         ])
-        #expect(note == "invalid codec (qdm2); silent audio")
+        #expect(note == "Damaged audio — invalid codec (qdm2); silent audio")
 
         let note2 = VerifyAudioRules.note(for: [
             .channelImbalance(.mono),
             .durationMismatch(audioSeconds: 2, videoSeconds: 63),
         ])
-        #expect(note2 == "audio shorter than video (2s vs 63s); mono audio")
+        #expect(note2 == "Damaged audio — audio shorter than video (2s vs 63s); mono audio")
+    }
+
+    @Test func batchDeleteSensorEveryDamagedNoteBeginsWithDamagedAudio() {
+        // SENSOR (Manager decision 2026-07-24, the #128 batch-delete
+        // flow): Rick finds ALL red rows with the ONE query
+        // `notes:damaged`, which works iff every damaged-status note
+        // begins with the common prefix. Any new damage finding that
+        // forgets the prefix breaks batch-find silently — this pins it.
+        let damageFindings: [AudioVerifyFinding] = [
+            .referenceMovie(referencedPaths: ["x"]),
+            .durationMismatch(audioSeconds: 120, videoSeconds: 3600),
+            .unsupportedCodec(codec: "truespeech", decodable: true),
+            .unsupportedCodec(codec: "", decodable: false),
+        ]
+        for f in damageFindings {
+            let note = VerifyAudioRules.note(for: [f])
+            #expect(VerifyAudioRules.status(for: [f]) == "damaged")
+            #expect(note.hasPrefix(VerifyAudioRules.damagedNotePrefix),
+                    "damaged note '\(note)' must begin with '\(VerifyAudioRules.damagedNotePrefix)'")
+            // The prefix must also survive mixed damage + benign
+            // findings, in any order.
+            let mixed = VerifyAudioRules.note(for: [.silentAudio, f])
+            #expect(mixed.hasPrefix(VerifyAudioRules.damagedNotePrefix),
+                    "mixed-findings note '\(mixed)' must begin with '\(VerifyAudioRules.damagedNotePrefix)'")
+        }
+        // Pin the exact prefix spelling — `notes:damaged` matching
+        // depends on the word itself, and the em dash is the
+        // prefix/detail separator the tooltip relies on.
+        #expect(VerifyAudioRules.damagedNotePrefix == "Damaged audio — ")
+
+        // ok-status notes stay BARE — the prefix must never leak onto
+        // repairable/benign findings, or `notes:damaged` would surface
+        // rows that aren't red.
+        let okFindings: [AudioVerifyFinding] = [
+            .channelImbalance(.leftOnly),
+            .noAudioStream,
+            .silentAudio,
+            .surround(channels: 6),
+            .multipleProgramTracks(count: 2),
+        ]
+        for f in okFindings {
+            let note = VerifyAudioRules.note(for: [f])
+            #expect(VerifyAudioRules.status(for: [f]) == "ok")
+            #expect(!note.localizedCaseInsensitiveContains("damaged"),
+                    "ok-status note '\(note)' must not contain 'damaged'")
+        }
     }
 }
 
@@ -365,7 +417,7 @@ struct VerifyAudioFindingsCompositionTests {
             shape: shape(), balanceAnalysis: nil)
         #expect(!damaged.isHealthy)
         #expect(damaged.persistedStatus == "damaged")
-        #expect(damaged.persistedNote == "reference movie — media missing")
+        #expect(damaged.persistedNote == "Damaged audio — reference movie, media missing")
     }
 }
 

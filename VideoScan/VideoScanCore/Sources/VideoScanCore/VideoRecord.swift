@@ -393,12 +393,16 @@ public class VideoRecord: Identifiable, Decodable {
     /// (the tags/userNotes migration pattern, a769988).
     public var audioVerifyStatus: String = ""
 
-    /// Human-readable detail for `audioVerifyStatus` — e.g. "damaged
-    /// audio", "invalid codec (qdm2)", "reference movie — media
-    /// missing". Also carries non-damage findings ("silent audio",
-    /// "no audio stream") under status "ok" so the row tooltip can tell
-    /// the story. "" when never verified or verified clean. Same
-    /// additive/delta-minimal migration as `audioVerifyStatus`.
+    /// Human-readable detail for `audioVerifyStatus`. Damaged-status
+    /// notes ALWAYS lead with the standardized "Damaged audio — "
+    /// prefix — e.g. "Damaged audio — invalid codec (qdm2)",
+    /// "Damaged audio — reference movie, media missing" — so ONE query
+    /// (`notes:damaged`) batch-finds every red row (Manager decision
+    /// 2026-07-24; sensor in VerifyAudioRulesTests). Also carries
+    /// non-damage findings ("silent audio", "no audio stream") bare,
+    /// under status "ok", so the row tooltip can tell the story. ""
+    /// when never verified or verified clean. Same additive/
+    /// delta-minimal migration as `audioVerifyStatus`.
     public var audioVerifyNote: String = ""
 
     /// When Verify Audio last ran on this record. nil = never verified.
