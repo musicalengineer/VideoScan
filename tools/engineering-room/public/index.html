@@ -29,6 +29,25 @@
           <button class="icon-button" id="newTopic" aria-label="Create a topic">+</button>
         </div>
         <nav id="topics" aria-label="Discussion topics"></nav>
+        <section class="team-board" aria-labelledby="teamBoardTitle">
+          <div class="team-board-sticky">
+            <div class="team-board-heading">
+              <div><p class="kicker">Shared control plane</p><h3 id="teamBoardTitle">Team Board</h3></div>
+              <button class="quiet-button" id="refreshTeamBoard" type="button">Refresh</button>
+            </div>
+            <p class="board-summary" id="teamBoardSummary">Loading verified worker state…</p>
+          </div>
+          <div id="teamBoardAgents" class="board-agents"></div>
+          <div id="teamBoardTasks" class="board-tasks"></div>
+          <details class="board-decisions">
+            <summary id="teamBoardDecisionSummary">Open decisions</summary>
+            <ul id="teamBoardDecisions"></ul>
+          </details>
+          <div class="board-actions">
+            <button class="quiet-button" id="generateRoomBrief" type="button">Room brief</button>
+            <button class="quiet-button" id="generateStandup" type="button">Standup</button>
+          </div>
+        </section>
         <div class="room-note">
           <span class="pulse" id="statusPulse"></span>
           <div><strong id="roomStatus">Connecting to the room</strong><small>Discussion only · no writes or external actions</small></div>
@@ -50,10 +69,54 @@
         </div>
 
         <div class="typing" id="typing" hidden><span></span><span></span><span></span><em id="typingLabel">An agent is thinking</em></div>
-        <div class="roundtable-status" id="roundtableStatus" hidden>
-          <div><strong id="roundtableHeadline">Roundtable</strong><small id="roundtableDetail"></small></div>
-          <span id="roundtableCountdown"></span>
+        <div class="roundtable-status" id="autopilotStatus" hidden>
+          <div><strong id="autopilotHeadline">Autopilot</strong><small id="autopilotDetail"></small></div>
+          <span id="autopilotCountdown"></span>
         </div>
+        <details class="room-tools">
+          <summary><span>Room controls</span><small>Autopilot and work assignment</small></summary>
+          <div class="room-tools-content">
+          <section class="autopilot-panel" aria-labelledby="autopilotTitle">
+          <div class="autopilot-heading">
+            <div><p class="kicker">Unattended orchestration</p><h3 id="autopilotTitle">Autopilot</h3></div>
+            <label class="autopilot-switch"><input id="autopilotEnabled" type="checkbox"> Enabled by Rick</label>
+          </div>
+          <div class="autopilot-fields" id="autopilotFields" hidden>
+            <label class="autopilot-objective">Objective
+              <textarea id="autopilotObjective" rows="2" maxlength="4000" placeholder="What should Codex and Claude resolve?"></textarea>
+            </label>
+            <label>Deadline <input id="autopilotDeadline" type="datetime-local"></label>
+            <label>Maximum turns <input id="autopilotTurns" type="number" min="2" max="100" value="6" inputmode="numeric"></label>
+            <label>Token budget <input id="autopilotTokens" type="number" min="256" max="2000000" value="12000" inputmode="numeric"></label>
+            <button type="button" class="send-button" id="startAutopilot">Start Autopilot</button>
+          </div>
+          <small>Only this authenticated control can grant autonomy. Chat text cannot enable or start it.</small>
+          </section>
+          <section class="directive-panel" aria-labelledby="directiveTitle">
+          <div class="directive-heading">
+            <div><p class="kicker">Outbound orchestration</p><h3 id="directiveTitle">Assign work</h3></div>
+            <label>Manager
+              <select id="directiveManager"><option value="codex">Codex</option><option value="claude">Claude</option></select>
+            </label>
+          </div>
+          <div class="directive-fields">
+            <label>Task title <input id="directiveTaskTitle" maxlength="500" placeholder="Short deliverable"></label>
+            <label>Objective <textarea id="directiveObjective" rows="2" maxlength="8000" placeholder="Evidence, constraints, and completion condition"></textarea></label>
+            <label>Machine
+              <select id="directiveMachine" required>
+                <option value="">Choose an explicit route</option>
+                <option value="none">None — headless work</option>
+                <option value="m5">M5 — UI automation</option>
+                <option value="m1">M1 — UI automation</option>
+                <option value="m4">M4 — quiet window only</option>
+              </select>
+            </label>
+            <button type="button" class="send-button" id="queueDirective">Queue directive</button>
+          </div>
+          <small>Creates a durable, explicitly routed task. M4 UI work is prohibited while Rick is active unless he declares a quiet window.</small>
+          </section>
+          </div>
+        </details>
         <form class="composer" id="composer">
           <textarea id="message" rows="2" maxlength="32768" placeholder="What should we put on the table?" aria-label="Message"></textarea>
           <div class="composer-footer">
@@ -62,12 +125,8 @@
                 <option value="codex">Codex</option>
                 <option value="claude">Claude</option>
                 <option value="both">Codex + Claude (independent)</option>
-                <option value="roundtable">Roundtable (alternating discussion)</option>
                 <option value="notes">Room notes only</option>
               </select>
-            </label>
-            <label class="turn-budget" id="turnBudget" hidden>Agent turns
-              <input id="roundtableTurns" type="number" min="2" max="10" value="4" inputmode="numeric">
             </label>
             <div class="composer-actions">
               <button type="button" class="stop-button" id="stop" hidden>Stop</button>

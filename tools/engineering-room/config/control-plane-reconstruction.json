@@ -1,0 +1,212 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-17T11:57:00-04:00",
+  "rule": "Only direct feed/channel/current-session evidence receives a reporting state; all other discovered sessions are not-reporting.",
+  "tasks": [
+    {
+      "id": "coordination-control-plane",
+      "title": "Durable Engineering Room shared control plane",
+      "objective": "Implement registry, leases, heartbeats, event/decision log, task digests, Team Board, channel bridge, room briefs, and standups.",
+      "manager": "codex",
+      "state": "not-reporting",
+      "priority": 100,
+      "progress": "Implementation assigned by Rick on 2026-07-17.",
+      "source": "rick-directive",
+      "evidence": "Current Codex session directive"
+    },
+    {
+      "id": "trim-master-remediation",
+      "title": "Fix trim-master QA majors and minors",
+      "objective": "Remediate QA findings on the stream-copy trim feature.",
+      "manager": "claude",
+      "state": "not-reporting",
+      "priority": 80,
+      "progress": "Last reported dispatched at 11:52; current lease state comes only from fresh status-feed rows.",
+      "source": "agent-status-jsonl",
+      "evidence": "agent-status.jsonl row 4"
+    },
+    {
+      "id": "trim-master-qa",
+      "title": "QA review of feature/trim-master",
+      "objective": "Review stream-copy trim feature with source-safety focus.",
+      "manager": "claude",
+      "state": "done",
+      "priority": 70,
+      "progress": "Done: 0 blockers, 3 majors; source-safety verified.",
+      "source": "agent-status-jsonl",
+      "evidence": "agent-status.jsonl row 3"
+    },
+    {
+      "id": "donna-nightly-wiring",
+      "title": "Wire Donna development benchmark into nightly metrics",
+      "objective": "Run ArcFace evaluator nightly when private fixtures exist and publish development metrics without claiming holdout quality.",
+      "manager": "codex",
+      "state": "queued",
+      "priority": 75,
+      "progress": "Approved proposal; no registered worker.",
+      "source": "docs/team-channel/2026-07-16-claude-donna-benchmark-findings.md",
+      "evidence": "Manager Claude benchmark handoff"
+    },
+    {
+      "id": "donna-aggregation-experiment",
+      "title": "Pre-register and evaluate Donna hit-aggregation rules",
+      "objective": "Compare multi-hit and temporal-persistence rules against the labeled Donna development set without threshold fitting.",
+      "manager": "codex",
+      "state": "queued",
+      "priority": 85,
+      "progress": "Standup recommendation only; no registered worker.",
+      "source": "engineering-room-standup-2026-07-17",
+      "evidence": "Autopilot final summary at 2026-07-17T15:47:48Z"
+    },
+    {
+      "id": "existing-codex-qa-lane",
+      "title": "Existing Codex QA / accuracy-baseline lane",
+      "objective": "Prior QA session was described by Rick, but no direct session heartbeat or completion exists.",
+      "manager": "codex",
+      "state": "not-reporting",
+      "priority": 40,
+      "progress": "Unknown; not reporting.",
+      "source": "engineering-room-transcript",
+      "evidence": "Rick report on 2026-07-16; no direct agent event"
+    },
+    {
+      "id": "video-only-catalog",
+      "title": "Video-only catalog scope",
+      "objective": "Catalog-scope policy and tidy migration.",
+      "manager": "claude",
+      "state": "done",
+      "priority": 20,
+      "progress": "Reported shipped and pushed by Manager Claude.",
+      "source": "docs/team-channel/2026-07-17-claude-dashboard-contract.md",
+      "evidence": "Manager Claude standup lines"
+    },
+    {
+      "id": "nightly-metrics-2026-07-17",
+      "title": "Nightly metrics row — 2026-07-17",
+      "objective": "Publish current automated test metrics.",
+      "manager": "automation",
+      "state": "done",
+      "priority": 10,
+      "progress": "metrics branch commit 7f134aa at 02:05.",
+      "source": "git-worktree-evidence",
+      "evidence": "metrics branch latest commit"
+    },
+    {
+      "id": "cleanup-video-tests-paused",
+      "title": "Cleanup-video five-dimension tests",
+      "objective": "Historical feature worktree; current session status unknown.",
+      "manager": "claude",
+      "state": "not-reporting",
+      "priority": 0,
+      "progress": "Worktree exists; no heartbeat.",
+      "source": "git-worktree-evidence",
+      "evidence": "feature/cleanup-video-tests worktree"
+    },
+    {
+      "id": "perceptual-compare-paused",
+      "title": "Perceptual compare follow-ups",
+      "objective": "Historical locked worktree; process/session status is not a heartbeat.",
+      "manager": "claude",
+      "state": "not-reporting",
+      "priority": 0,
+      "progress": "Not reporting.",
+      "source": "git-worktree-evidence",
+      "evidence": "feature/perceptual-compare worktree"
+    },
+    {
+      "id": "stress-perf-paused",
+      "title": "Stress/performance tests worktree",
+      "objective": "Historical Codex worktree; current session status unknown.",
+      "manager": "codex",
+      "state": "not-reporting",
+      "priority": 0,
+      "progress": "Not reporting.",
+      "source": "git-worktree-evidence",
+      "evidence": "codex/stress-perf-tests-20260608-local worktree"
+    }
+  ],
+  "agents": [
+    {
+      "manager": "codex",
+      "agent": "manager",
+      "sessionId": "codex-control-plane-2026-07-17",
+      "state": "working",
+      "taskId": "coordination-control-plane",
+      "progress": "Implementing durable shared control plane.",
+      "source": "rick-directive",
+      "evidence": "Current Codex session",
+      "ts": "2026-07-17T11:57:00-04:00",
+      "leaseSeconds": 900
+    },
+    {
+      "manager": "codex",
+      "agent": "qa-session-unknown",
+      "state": "not-reporting",
+      "taskId": "existing-codex-qa-lane",
+      "progress": "No direct heartbeat or completion.",
+      "source": "engineering-room-transcript",
+      "evidence": "Rick described a QA Codex; exact session identity unknown",
+      "ts": "2026-07-16T16:38:33-04:00"
+    },
+    {
+      "manager": "claude",
+      "agent": "worktree/cleanup-video-tests",
+      "state": "not-reporting",
+      "taskId": "cleanup-video-tests-paused",
+      "progress": "Worktree exists; no current heartbeat.",
+      "source": "git-worktree-evidence",
+      "evidence": "feature/cleanup-video-tests",
+      "ts": "2026-07-17T11:57:00-04:00"
+    },
+    {
+      "manager": "claude",
+      "agent": "worktree/perceptual-compare",
+      "state": "not-reporting",
+      "taskId": "perceptual-compare-paused",
+      "progress": "Locked worktree is not proof of liveness.",
+      "source": "git-worktree-evidence",
+      "evidence": "feature/perceptual-compare",
+      "ts": "2026-07-17T11:57:00-04:00"
+    },
+    {
+      "manager": "codex",
+      "agent": "worktree/stress-perf",
+      "state": "not-reporting",
+      "taskId": "stress-perf-paused",
+      "progress": "Worktree exists; no current heartbeat.",
+      "source": "git-worktree-evidence",
+      "evidence": "codex/stress-perf-tests-20260608-local",
+      "ts": "2026-07-17T11:57:00-04:00"
+    },
+    {
+      "manager": "claude",
+      "agent": "worktree/video-only-catalog",
+      "state": "not-reporting",
+      "taskId": "video-only-catalog",
+      "progress": "Task reported done; worktree session has no heartbeat.",
+      "source": "git-worktree-evidence",
+      "evidence": "feature/video-only-catalog worktree",
+      "ts": "2026-07-17T11:57:00-04:00"
+    }
+  ],
+  "decisions": [
+    {
+      "id": "decision:donna-provisional-gate",
+      "taskId": "donna-aggregation-experiment",
+      "status": "open",
+      "question": "Should the provisional Donna aggregation gate require identity F1 above 68.3 and no more than 6 of 13 hard negatives firing?",
+      "owner": "rick",
+      "source": "engineering-room-standup-2026-07-17",
+      "ts": "2026-07-17T11:47:48-04:00"
+    },
+    {
+      "id": "decision:donna-second-frozen-set",
+      "taskId": "donna-aggregation-experiment",
+      "status": "open",
+      "question": "Should a second labeled frozen Donna set be commissioned today for out-of-set validation?",
+      "owner": "rick",
+      "source": "engineering-room-standup-2026-07-17",
+      "ts": "2026-07-17T11:47:48-04:00"
+    }
+  ]
+}

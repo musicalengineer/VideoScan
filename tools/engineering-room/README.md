@@ -39,12 +39,40 @@ Turn on **Read replies aloud** in each browser that should speak. To talk, click
 - Routes messages to **Codex**, **Claude**, **Codex + Claude**, or room notes.
   **Codex + Claude** starts two independent responses to Rick's same message;
   neither agent's output triggers the other.
-- Runs an explicit **Roundtable** only when Rick selects it and sends the
-  initiating message. Codex and Claude alternate, each receiving the latest
-  attributed peer response. The default budget is four agent turns (UI: 2–10;
-  hard server cap: 12). With a browser present, the room leaves an eight-second
-  intervention window between turns; unattended it continues quickly but never
-  beyond the fixed budget. Stop or any new Rick message cancels continuation.
+- Runs **Autopilot** only after Rick enables its dedicated authenticated UI
+  control and supplies an objective, deadline, maximum turns, and token budget.
+  Chat text and agent output cannot enable or start it. Codex and Claude then
+  alternate without more user messages, each receiving the latest attributed
+  peer response. A browser refresh restores the persisted transcript and run
+  state; a service restart safely recovers an active run.
+- Shows the current agent, completed/max turns, generated-output tokens,
+  provider-cost tokens/budget, deadline countdown, and last-activity heartbeat.
+  Stop, disabling Autopilot, or any new Rick
+  message cancels automatic continuation immediately.
+- Stores each agent message with the provider's response ID. Every Autopilot
+  turn must add a decision, evidence item, question, or disagreement; two
+  consecutive empty deltas stop the loop. Every terminal run writes a final
+  summary and open-decisions list to the transcript.
+- Builds each turn from compact run-scoped context: objective, running summary,
+  recent turns, and open decisions. Unrelated room history is not replayed into
+  every provider turn.
+- Maintains a durable shared control plane in the same SQLite database: agent
+  and task registry, session-owned leases, heartbeats, append-only events and
+  decisions, compact task-context digests, room briefs, and daily standups.
+  Missing or expired heartbeats are shown as **not reporting**, never inferred
+  from a worktree or an old message.
+- Ingests the manager JSONL status feed and `docs/team-channel/`, and injects a
+  compact verified Team Board, open decisions, and new manager-channel evidence
+  into both otherwise-toolless room seats. The sidebar Team Board survives a
+  browser refresh and exposes authenticated brief/standup controls.
+- Accepts outbound work only through the authenticated **Assign work** control.
+  A directive creates a durable queued task and manager-queue event. Registered
+  workers claim a session-owned lease, heartbeat progress onto the Team Board,
+  and complete through the broker; the broker then posts the attributed result
+  automatically into the room and through a durable `docs/team-channel/`
+  outbox. Failed channel writes remain pending and retry safely after restart;
+  the stable delivery key prevents duplicate files and room messages. Routine
+  assignments no longer require Rick to copy messages between manager sessions.
 - Streams both agents' responses and provides a Stop button.
 - Stores private room state outside Git.
 - Runs Codex with a read-only sandbox and denies every approval request.
@@ -59,8 +87,8 @@ Turn on **Read replies aloud** in each browser that should speak. To talk, click
 - Discussion and inspection only; it cannot approve writes, privilege escalation, or other mutations. Read-only commands remain available to Codex.
 - One active turn per agent. Asking both is bounded to one independent turn
   from each agent.
-- No unbounded or bot-triggered agent-to-agent loops. Roundtables are a
-  broker-owned, explicit, fixed-budget state machine and never resume after a restart.
+- No unbounded or chat-triggered agent-to-agent loops. Autopilot is a
+  broker-owned, explicitly enabled, deadline/turn/token-bounded state machine.
 - Exports, browser-controlled microphone capture, and
   GitHub integration remain deferred. Spoken replies and OS Dictation work now.
 
@@ -74,6 +102,45 @@ Turn on **Read replies aloud** in each browser that should speak. To talk, click
 | `ENGINEERING_ROOM_TOKEN_FILE` | `var/access-token` | Stable LAN token file |
 | `CODEX_BIN` | discovered locally | Absolute Codex executable path |
 | `CLAUDE_BIN` | discovered locally | Absolute Claude Code executable path |
+| `ENGINEERING_ROOM_STATUS_FEED` | `var/agent-status.jsonl` | Manager status JSONL ingestion source |
+| `ENGINEERING_ROOM_TEAM_CHANNEL` | `../../docs/team-channel` | Manager coordination channel directory |
+| `ENGINEERING_ROOM_RECONSTRUCTION_SEED` | `config/control-plane-reconstruction.json` | Evidence-backed one-time reconstruction seed |
+
+## Worker registration and recovery
+
+Existing Codex and Claude sessions do not need to restart. A worker registers
+or resumes its task with a session-owned lease, then emits a heartbeat at each
+checkpoint and at least once before the default 15-minute lease expires:
+
+```sh
+node scripts/team-control.mjs resume --manager codex --agent manager --session codex-manager-20260717 --task-id coordination-control-plane --task-title "Durable Engineering Room control plane" --machine none --progress "Implementing and testing"
+node scripts/team-control.mjs heartbeat --manager codex --agent manager --session codex-manager-20260717 --state working --task-state working --progress "Integration tests passing"
+```
+
+Claude headless workers register by proxy: `claude/manager` writes their
+spawn/heartbeat/terminal rows to `var/agent-status.jsonl`. The broker converts
+fresh working rows into expiring leases; a stale row becomes **not reporting**.
+The JSONL feed is compatibility evidence, not a competing lease authority: it
+cannot replace the session identity or claimed task of a worker whose explicit
+control-plane lease is still active.
+Use `node scripts/team-control.mjs board`, `brief`, or `standup` for an
+authenticated machine-readable view.
+
+Managers poll their durable outbound queue with:
+
+```sh
+node scripts/team-control.mjs queue --manager codex
+node scripts/team-control.mjs watch --manager codex
+```
+
+Workers use `resume` to claim a queued task, `heartbeat` while it is active, and
+then complete it with a structured result. Completion releases the lease and
+posts the result into the room plus an attributed manager-channel file:
+
+```sh
+node scripts/team-control.mjs complete --manager codex --agent testing/example \
+  --session example-session --task-id example-task --result-file /tmp/result.md
+```
 
 ## Tests
 

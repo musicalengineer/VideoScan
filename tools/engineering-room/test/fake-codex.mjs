@@ -14,10 +14,11 @@ lines.on("line", line => {
   if (request.method === "thread/resume") return send({ id: request.id, result: { thread: { id: request.params.threadId, status: { type: "idle" }, turns: [] } } });
   if (request.method === "turn/start") {
     const turnId = `fake-turn-${++turnNumber}`;
+    const autopilot = request.params.input?.some(item => item.text?.includes("AUTOPILOT DELTA"));
+    const text = autopilot ? `A measured reply.\n[AUTOPILOT DELTA: evidence] Codex evidence ${turnNumber}` : "A measured reply.";
     send({ id: request.id, result: { turn: { id: turnId, status: "inProgress", items: [] } } });
-    setTimeout(() => send({ method: "item/agentMessage/delta", params: { threadId: request.params.threadId, turnId, itemId: `item-${turnNumber}`, delta: "A measured " } }), 10);
-    setTimeout(() => send({ method: "item/agentMessage/delta", params: { threadId: request.params.threadId, turnId, itemId: `item-${turnNumber}`, delta: "reply." } }), 20);
-    setTimeout(() => send({ method: "turn/completed", params: { threadId: request.params.threadId, turn: { id: turnId, status: "completed", items: [{ id: `item-${turnNumber}`, type: "agentMessage", text: "A measured reply.", phase: "final_answer" }] } } }), 30);
+    setTimeout(() => send({ method: "item/agentMessage/delta", params: { threadId: request.params.threadId, turnId, itemId: `item-${turnNumber}`, delta: text } }), 10);
+    setTimeout(() => send({ method: "turn/completed", params: { threadId: request.params.threadId, turn: { id: turnId, status: "completed", usage: { input_tokens: 40, output_tokens: 10 }, items: [{ id: `item-${turnNumber}`, type: "agentMessage", text, phase: "final_answer" }] } } }), 20);
     return;
   }
   if (request.method === "turn/interrupt") return send({ id: request.id, result: {} });

@@ -10,7 +10,8 @@ import { CodexAppServerClient } from "./codex-client.mjs";
 import { ClaudeCliClient } from "./claude-client.mjs";
 import { RoomAgent } from "./room-agent.mjs";
 import { loadOrCreateAccessToken } from "./access-token.mjs";
-import { RoundtableController, normalizeTurns } from "./roundtable-controller.mjs";
+import { RoundtableController } from "./roundtable-controller.mjs";
+import { ControlPlane } from "./control-plane.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const toolRoot = resolve(here, "..");
@@ -35,11 +36,20 @@ const agents = {
 };
 const clients = new Set();
 let sequence = 0;
+const controlPlane = new ControlPlane({
+  database, repoRoot, toolRoot, publish,
+  statusFeed: process.env.ENGINEERING_ROOM_STATUS_FEED,
+  teamChannel: process.env.ENGINEERING_ROOM_TEAM_CHANNEL,
+  reconstructionSeed: process.env.ENGINEERING_ROOM_RECONSTRUCTION_SEED,
+});
+controlPlane.ingestAll();
+ensureDailyArtifacts();
 
 for (const agent of Object.values(agents)) agent.on("event", event => publish(event.type, event.data));
-const roundtable = new RoundtableController({
+const autopilot = new RoundtableController({
   agents, database, publish,
   transcript: attributedTranscript,
+  roomBrief: provider => controlPlane.seatBrief(provider),
   presence: () => clients.size > 0,
 });
 
@@ -61,12 +71,88 @@ const server = createServer(async (request, response) => {
       return json(response, 200, roomSnapshot());
     }
     if (request.method === "GET" && url.pathname === "/api/events") return openEvents(request, response);
+    if (request.method === "GET" && url.pathname === "/api/control-plane/board") return json(response, 200, controlPlane.board());
+    if (request.method === "GET" && url.pathname === "/api/control-plane/briefs/latest") return json(response, 200, controlPlane.latestBrief());
+    if (request.method === "GET" && url.pathname === "/api/control-plane/standups/latest") return json(response, 200, controlPlane.latestStandup());
+    if (request.method === "POST" && url.pathname === "/api/control-plane/ingest") {
+      const changed = controlPlane.ingestAll();
+      return json(response, 200, { changed, board: controlPlane.board() });
+    }
+    if (request.method === "POST" && url.pathname === "/api/control-plane/directives") {
+      return json(response, 201, controlPlane.createDirective(await readJson(request)));
+    }
+    const managerQueueMatch = url.pathname.match(/^\/api\/control-plane\/managers\/([a-zA-Z0-9._-]+)\/queue$/);
+    if (request.method === "GET" && managerQueueMatch) {
+      return json(response, 200, { manager: managerQueueMatch[1], queue: controlPlane.managerQueue(managerQueueMatch[1]) });
+    }
+    if (request.method === "POST" && url.pathname === "/api/control-plane/agents/register") {
+      return json(response, 201, controlPlane.registerAgent(await readJson(request)));
+    }
+    if (request.method === "POST" && url.pathname === "/api/control-plane/agents/heartbeat") {
+      return json(response, 200, controlPlane.heartbeat(await readJson(request)));
+    }
+    if (request.method === "POST" && url.pathname === "/api/control-plane/tasks") {
+      return json(response, 201, controlPlane.createTask(await readJson(request)));
+    }
+    const controlTaskMatch = url.pathname.match(/^\/api\/control-plane\/tasks\/(.+)$/);
+    if (controlTaskMatch && request.method === "PATCH") {
+      return json(response, 200, controlPlane.updateTask(decodeURIComponent(controlTaskMatch[1]), await readJson(request)));
+    }
+    const claimMatch = url.pathname.match(/^\/api\/control-plane\/tasks\/(.+)\/claim$/);
+    if (claimMatch && request.method === "POST") {
+      const body = await readJson(request);
+      return json(response, 200, controlPlane.claimTask({ ...body, taskId: decodeURIComponent(claimMatch[1]) }));
+    }
+    const completeMatch = url.pathname.match(/^\/api\/control-plane\/tasks\/(.+)\/complete$/);
+    if (completeMatch && request.method === "POST") {
+      const body = await readJson(request);
+      return json(response, 200, controlPlane.completeTask({ ...body, taskId: decodeURIComponent(completeMatch[1]) }));
+    }
+    if (request.method === "POST" && url.pathname === "/api/control-plane/events") {
+      return json(response, 201, controlPlane.recordEvent(await readJson(request)));
+    }
+    if (request.method === "POST" && url.pathname === "/api/control-plane/decisions") {
+      return json(response, 201, controlPlane.recordDecision(await readJson(request)));
+    }
+    if (request.method === "POST" && url.pathname === "/api/control-plane/briefs") {
+      const body = await readJson(request);
+      const brief = controlPlane.generateRoomBrief({ kind: body.kind });
+      if (body.publishToRoom) publishControlDigest(brief.digest, body.topicId);
+      return json(response, 201, brief);
+    }
+    if (request.method === "POST" && url.pathname === "/api/control-plane/standups") {
+      const body = await readJson(request);
+      const standup = controlPlane.generateStandup({ date: body.date });
+      if (body.publishToRoom) publishControlDigest(standup.digest, body.topicId);
+      return json(response, 201, standup);
+    }
+    if (request.method === "POST" && url.pathname === "/api/control-plane/channel/export") {
+      return json(response, 201, controlPlane.exportTeamChannel(await readJson(request)));
+    }
     if (request.method === "POST" && url.pathname === "/api/topics") {
       const body = await readJson(request);
       const title = validateText(body.title, 1, 120, "Topic title");
       const topic = database.createTopic(title);
       publish("topic.created", topic);
       return json(response, 201, topic);
+    }
+    if (request.method === "POST" && url.pathname === "/api/autopilot/control") {
+      const body = await readJson(request);
+      const state = await autopilot.setEnabled(body.enabled);
+      return json(response, 200, state);
+    }
+    if (request.method === "POST" && url.pathname === "/api/autopilot/start") {
+      const body = await readJson(request);
+      const objective = validateText(body.objective, 1, 4000, "Objective");
+      const topics = database.snapshot().topics;
+      const topicId = body.topicId ?? topics[0]?.id ?? null;
+      if (topicId && !topics.some(topic => topic.id === topicId)) throw httpError(400, "Unknown topic.");
+      const limits = autopilot.preflight({ turns: body.maxTurns, tokenBudget: body.tokenBudget, deadlineAt: body.deadlineAt });
+      const message = database.createMessage({ topicId, author: "rick", body: `Autopilot objective: ${objective}` });
+      publish("message.created", message);
+      const topicTitle = topics.find(topic => topic.id === topicId)?.title ?? "General discussion";
+      await autopilot.start({ message, topicTitle, objective, turns: limits.totalTurns, tokenBudget: limits.tokenBudget, deadlineAt: limits.deadlineAt });
+      return json(response, 202, { message, autopilot: autopilot.snapshot });
     }
     const topicMatch = url.pathname.match(/^\/api\/topics\/([0-9a-f-]+)$/i);
     if (request.method === "PATCH" && topicMatch) {
@@ -90,29 +176,20 @@ const server = createServer(async (request, response) => {
       const body = await readJson(request);
       const messageText = validateText(body.text, 1, 32768, "Message");
       const target = body.target ?? "codex";
-      if (!["codex", "claude", "both", "notes", "roundtable"].includes(target)) throw httpError(400, "That participant is not available.");
-      const roundtableTurns = target === "roundtable" ? normalizeTurns(body.turns ?? 4) : null;
+      if (!["codex", "claude", "both", "notes"].includes(target)) throw httpError(400, "That participant is not available.");
       const topics = database.snapshot().topics;
       const topicId = body.topicId ?? topics[0]?.id ?? null;
       if (topicId && !topics.some(topic => topic.id === topicId)) throw httpError(400, "Unknown topic.");
-      const wasRoundtableActive = roundtable.active;
-      if (wasRoundtableActive) await roundtable.interject();
-      if (target === "roundtable") {
-        if (wasRoundtableActive) await waitForAgentsIdle(Object.values(agents));
-        roundtable.preflight(roundtableTurns);
-      }
-      const recipients = target === "both" ? ["codex", "claude"] : ["notes", "roundtable"].includes(target) ? [] : [target];
+      const wasAutopilotActive = autopilot.active;
+      if (wasAutopilotActive) await autopilot.interject();
+      const recipients = target === "both" ? ["codex", "claude"] : target === "notes" ? [] : [target];
       const busy = recipients.filter(provider => agents[provider].status.busy);
-      if (busy.length && !wasRoundtableActive) throw httpError(409, `${busy.map(titleCase).join(" and ")} ${busy.length === 1 ? "is" : "are"} still answering. Use Stop or wait.`);
+      if (busy.length && !wasAutopilotActive) throw httpError(409, `${busy.map(titleCase).join(" and ")} ${busy.length === 1 ? "is" : "are"} still answering. Use Stop or wait.`);
       const message = database.createMessage({ topicId, author: "rick", body: messageText });
       publish("message.created", message);
       const topicTitle = topics.find(topic => topic.id === topicId)?.title ?? "General discussion";
-      if (target === "roundtable") {
-        await roundtable.start({ message, topicTitle, turns: roundtableTurns });
-        return json(response, 202, message);
-      }
       const transcript = attributedTranscript(topicId, message.id);
-      const route = () => recipients.forEach(provider => agents[provider].ask(message, topicTitle, transcript).catch(error => {
+      const route = () => recipients.forEach(provider => agents[provider].ask(message, topicTitle, transcript, { roomBrief: controlPlane.seatBrief(provider) }).catch(error => {
         if (error.code !== "BUSY") publish("room.error", { provider, message: publicError(error) });
       }));
       if (busy.length) waitForAgentsIdle(busy.map(provider => agents[provider])).then(route).catch(error => publish("room.error", { message: publicError(error) }));
@@ -120,9 +197,9 @@ const server = createServer(async (request, response) => {
       return json(response, 202, message);
     }
     if (request.method === "POST" && url.pathname === "/api/turns/current/interrupt") {
-      const stoppedRoundtable = await roundtable.stop("Stopped by Rick.");
-      const results = stoppedRoundtable ? [] : await Promise.all(Object.values(agents).map(agent => agent.interrupt().catch(() => false)));
-      const interrupted = stoppedRoundtable || results.some(Boolean);
+      const stoppedAutopilot = await autopilot.stop("Stopped by Rick.");
+      const results = stoppedAutopilot ? [] : await Promise.all(Object.values(agents).map(agent => agent.interrupt().catch(() => false)));
+      const interrupted = stoppedAutopilot || results.some(Boolean);
       return json(response, interrupted ? 202 : 409, { interrupted });
     }
     if (request.method === "GET") return await staticFile(url.pathname, response);
@@ -148,6 +225,7 @@ server.listen(port, host, async () => {
       publish("agent.connection", { provider, state: "disconnected", error: publicError(result.reason) });
       console.error(`${titleCase(provider)} is unavailable: ${publicError(result.reason)}`);
     });
+    await autopilot.recover();
   } catch (error) { console.error(`Room initialization failed: ${publicError(error)}`); }
 });
 
@@ -246,8 +324,25 @@ function roomSnapshot() {
     agents: Object.fromEntries(Object.entries(agents).map(([provider, agent]) => [provider, agent.status])),
     agent: agents.codex.status,
     participants: { rick: "present", codex: agents.codex.status.connection, claude: agents.claude.status.connection },
-    roundtable: roundtable.snapshot,
+    autopilot: autopilot.snapshot,
+    controlPlane: controlPlane.board(),
+    roomBrief: artifactMetadata(controlPlane.latestBrief()),
+    standup: artifactMetadata(controlPlane.latestStandup()),
   };
+}
+
+function artifactMetadata(artifact) {
+  if (!artifact) return null;
+  return { id: artifact.id, kind: artifact.kind, date: artifact.date, generatedAt: artifact.generatedAt, contentHash: artifact.contentHash };
+}
+
+function publishControlDigest(digest, requestedTopicId) {
+  const topics = database.snapshot().topics;
+  const topicId = requestedTopicId ?? topics[0]?.id ?? null;
+  if (topicId && !topics.some(topic => topic.id === topicId)) throw httpError(400, "Unknown topic.");
+  const message = database.createMessage({ topicId, author: "system", body: digest });
+  publish("message.created", message);
+  return message;
 }
 
 function attributedTranscript(topicId, excludingMessageId) {
@@ -311,12 +406,29 @@ function json(response, status, body) { response.writeHead(status, { "Content-Ty
 function text(response, status, body) { response.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" }); response.end(body); }
 
 function shutdown() {
+  clearInterval(controlPlanePoll);
+  clearInterval(dailyArtifactsPoll);
   codex.close();
   claude.close();
   for (const client of clients) client.end();
   clients.clear();
   server.close(() => { database.close(); process.exit(0); });
   setTimeout(() => process.exit(1), 3000).unref();
+}
+const controlPlanePoll = setInterval(() => {
+  try { controlPlane.ingestAll(); }
+  catch (error) { console.error(`Control-plane ingestion failed: ${publicError(error)}`); }
+}, 5000);
+controlPlanePoll.unref();
+const dailyArtifactsPoll = setInterval(ensureDailyArtifacts, 60 * 1000);
+dailyArtifactsPoll.unref();
+
+function ensureDailyArtifacts() {
+  try {
+    const date = new Date().toLocaleDateString("en-CA");
+    if (controlPlane.latestStandup()?.date !== date) controlPlane.generateStandup({ date });
+    if (!controlPlane.latestBrief()) controlPlane.generateRoomBrief({ kind: "startup" });
+  } catch (error) { console.error(`Daily control-plane generation failed: ${publicError(error)}`); }
 }
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);

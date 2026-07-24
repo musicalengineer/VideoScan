@@ -52,7 +52,7 @@ export class ClaudeCliClient extends EventEmitter {
       // silently replace Rick's existing Claude subscription login.
       env: roomEnvironment(process.env),
     });
-    const run = { child, turnId, text: "", stderr: "", resultError: "" };
+    const run = { child, turnId, text: "", stderr: "", resultError: "", providerResponseId: null, usage: null };
     this.process = run;
     child.stderr?.on("data", chunk => { run.stderr = (run.stderr + chunk).slice(-4096); });
     const lines = createInterface({ input: child.stdout });
@@ -64,7 +64,7 @@ export class ClaudeCliClient extends EventEmitter {
       if (code === 0 && !run.resultError && run.text.trim()) {
         this.resume = true;
         this.emit("connection", { state: "connected", detail: "Existing local Claude Code login verified." });
-        this.emit("notification", completed(threadId, turnId, "completed", run.text));
+        this.emit("notification", completed(threadId, turnId, "completed", run.text, run.providerResponseId, run.usage));
         return;
       }
       const detail = cleanError(run.resultError || run.stderr) || (code === 0 ? "Claude returned no response." : `Claude stopped (${signal ?? `exit ${code}`}).`);
@@ -79,13 +79,17 @@ export class ClaudeCliClient extends EventEmitter {
         if (isAuthFailure(detail)) this.emit("connection", { state: "auth-required", error: detail });
         this.emit("turnError", { turnId, message: explainFailure(detail) });
       }
-      else this.emit("notification", completed(threadId, turnId, status, run.text));
+      else this.emit("notification", completed(threadId, turnId, status, run.text, run.providerResponseId, run.usage));
     });
   }
 
   #receive(run, threadId, line) {
     let event;
     try { event = JSON.parse(line); } catch { return; }
+    if (event.type === "stream_event" && event.event?.type === "message_start") {
+      run.providerResponseId = event.event.message?.id ?? run.providerResponseId;
+      run.usage = event.event.message?.usage ?? run.usage;
+    }
     const delta = event.type === "stream_event" && event.event?.type === "content_block_delta" && event.event.delta?.type === "text_delta"
       ? event.event.delta.text : "";
     if (delta) {
@@ -93,6 +97,10 @@ export class ClaudeCliClient extends EventEmitter {
       this.emit("notification", { method: "item/agentMessage/delta", params: { threadId, turnId: run.turnId, delta } });
     }
     if (event.type === "result" && typeof event.result === "string" && !run.text.trim()) run.text = event.result;
+    if (event.type === "result") {
+      run.providerResponseId = event.message_id ?? event.uuid ?? run.providerResponseId;
+      run.usage = event.usage ?? run.usage;
+    }
     if (event.type === "result" && event.is_error) run.resultError = typeof event.result === "string" ? event.result : "Claude reported an unsuccessful turn.";
   }
 
@@ -103,8 +111,14 @@ export class ClaudeCliClient extends EventEmitter {
   }
 }
 
-function completed(threadId, turnId, status, text) {
-  return { method: "turn/completed", params: { threadId, turn: { id: turnId, status, items: text.trim() ? [{ type: "agentMessage", text: text.trim(), phase: "final_answer" }] : [] } } };
+function completed(threadId, turnId, status, text, responseId, usage) {
+  return {
+    method: "turn/completed",
+    params: {
+      threadId, responseId,
+      turn: { id: turnId, status, usage, items: text.trim() ? [{ type: "agentMessage", text: text.trim(), phase: "final_answer" }] : [] },
+    },
+  };
 }
 function cleanError(text) { return text.replace(/[\r\n]+/g, " ").trim().slice(0, 500); }
 function explainFailure(detail) {

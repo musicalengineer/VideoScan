@@ -47,6 +47,11 @@ export class RoomDatabase {
         started_at TEXT NOT NULL,
         completed_at TEXT
       );
+      CREATE TABLE IF NOT EXISTS room_state (
+        key TEXT PRIMARY KEY,
+        value_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
       CREATE INDEX IF NOT EXISTS messages_created_idx ON messages(created_at, id);
       CREATE INDEX IF NOT EXISTS messages_topic_idx ON messages(topic_id, created_at);
     `);
@@ -56,6 +61,24 @@ export class RoomDatabase {
     const columns = this.db.prepare("PRAGMA table_info(messages)").all();
     if (!columns.some(column => column.name === "speaker")) {
       this.db.exec("ALTER TABLE messages ADD COLUMN speaker TEXT");
+    }
+    if (!columns.some(column => column.name === "provider_response_id")) {
+      this.db.exec("ALTER TABLE messages ADD COLUMN provider_response_id TEXT");
+    }
+    if (!columns.some(column => column.name === "delta_kind")) {
+      this.db.exec("ALTER TABLE messages ADD COLUMN delta_kind TEXT");
+    }
+    if (!columns.some(column => column.name === "delta_detail")) {
+      this.db.exec("ALTER TABLE messages ADD COLUMN delta_detail TEXT");
+    }
+    this.db.exec("CREATE UNIQUE INDEX IF NOT EXISTS messages_provider_response_idx ON messages(provider_response_id) WHERE provider_response_id IS NOT NULL");
+
+    const turnColumns = this.db.prepare("PRAGMA table_info(turns)").all();
+    if (!turnColumns.some(column => column.name === "token_count")) {
+      this.db.exec("ALTER TABLE turns ADD COLUMN token_count INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!turnColumns.some(column => column.name === "generated_token_count")) {
+      this.db.exec("ALTER TABLE turns ADD COLUMN generated_token_count INTEGER NOT NULL DEFAULT 0");
     }
 
     const count = this.db.prepare("SELECT COUNT(*) AS count FROM topics").get().count;
@@ -98,11 +121,11 @@ export class RoomDatabase {
     return mapTopic(this.db.prepare("SELECT * FROM topics WHERE id = ?").get(id));
   }
 
-  createMessage({ topicId = null, author, body, kind = "message", replyTo = null }) {
+  createMessage({ topicId = null, author, body, kind = "message", replyTo = null, providerResponseId = null, deltaKind = null, deltaDetail = null }) {
     const storedAuthor = author === "claude" ? "system" : author;
-    const message = { id: randomUUID(), topicId, author, body, kind, replyTo, createdAt: new Date().toISOString() };
-    this.db.prepare("INSERT INTO messages(id,topic_id,author,speaker,kind,body,created_at,reply_to) VALUES(?,?,?,?,?,?,?,?)")
-      .run(message.id, topicId, storedAuthor, author, kind, body, message.createdAt, replyTo);
+    const message = { id: randomUUID(), topicId, author, body, kind, replyTo, providerResponseId, deltaKind, deltaDetail, createdAt: new Date().toISOString() };
+    this.db.prepare("INSERT INTO messages(id,topic_id,author,speaker,kind,body,created_at,reply_to,provider_response_id,delta_kind,delta_detail) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
+      .run(message.id, topicId, storedAuthor, author, kind, body, message.createdAt, replyTo, providerResponseId, deltaKind, deltaDetail);
     return message;
   }
 
@@ -131,10 +154,24 @@ export class RoomDatabase {
     return Number(result.changes);
   }
 
-  updateTurn(id, { externalTurnId = null, status }) {
+  updateTurn(id, { externalTurnId = null, status, tokenCount = 0, generatedTokenCount = 0 }) {
     const completedAt = ["completed", "failed", "interrupted"].includes(status) ? new Date().toISOString() : null;
-    this.db.prepare("UPDATE turns SET external_turn_id=COALESCE(?,external_turn_id), status=?, completed_at=? WHERE id=?")
-      .run(externalTurnId, status, completedAt, id);
+    this.db.prepare("UPDATE turns SET external_turn_id=COALESCE(?,external_turn_id), status=?, token_count=?, generated_token_count=?, completed_at=? WHERE id=?")
+      .run(externalTurnId, status, tokenCount, generatedTokenCount, completedAt, id);
+  }
+
+  getState(key, fallback = null) {
+    const row = this.db.prepare("SELECT value_json AS valueJson FROM room_state WHERE key=?").get(key);
+    if (!row) return fallback;
+    try { return JSON.parse(row.valueJson); } catch { return fallback; }
+  }
+
+  setState(key, value) {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO room_state(key,value_json,updated_at) VALUES(?,?,?)
+      ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at=excluded.updated_at
+    `).run(key, JSON.stringify(value), now);
   }
 }
 
@@ -143,5 +180,10 @@ function mapTopic(row) {
 }
 
 function mapMessage(row) {
-  return { id: row.id, topicId: row.topic_id, author: row.speaker ?? row.author, kind: row.kind, body: row.body, createdAt: row.created_at, replyTo: row.reply_to };
+  return {
+    id: row.id, topicId: row.topic_id, author: row.speaker ?? row.author, kind: row.kind,
+    body: row.body, createdAt: row.created_at, replyTo: row.reply_to,
+    providerResponseId: row.provider_response_id ?? null,
+    deltaKind: row.delta_kind ?? null, deltaDetail: row.delta_detail ?? null,
+  };
 }
