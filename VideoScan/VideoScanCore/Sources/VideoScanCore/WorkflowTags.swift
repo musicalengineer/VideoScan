@@ -104,6 +104,8 @@ public enum UserNotesMigration {
     ///   "Cleanup"        CleanupJob.swift (sourceNote/derivedNote)
     ///   "Reformat"       ReformatJob.swift (sourceNote/derivedNote)
     ///   "Trim"           TrimJob.swift (sourceNote/derivedNote)
+    ///   "Verify Audio"   RebuildAudioJob.swift (sourceNote/derivedNote,
+    ///                    GH #128)
     ///   "Reconcile"      VideoScanModel+Relocate.swift (reconcile
     ///                    buckets + formatSafelyRedundantNote)
     ///   "Migrate"        VideoScanModel+Relocate.swift (salvage /
@@ -114,6 +116,7 @@ public enum UserNotesMigration {
         "Cleanup",
         "Reformat",
         "Trim",
+        "Verify Audio",
         "Reconcile",
         "Migrate",
     ]

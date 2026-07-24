@@ -137,6 +137,9 @@ extension VideoRecord {
         c.userDate = userDate
         c.userDateConfidence = userDateConfidence
         c.workspaceActive = workspaceActive
+        c.audioVerifyStatus = audioVerifyStatus
+        c.audioVerifyNote = audioVerifyNote
+        c.audioVerifyDate = audioVerifyDate
         c.scanContext = scanContext
         return c
     }

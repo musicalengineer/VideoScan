@@ -382,6 +382,29 @@ public class VideoRecord: Identifiable, Decodable {
     /// Swift's `Bool = false` ≈ C++ in-class member initializer.
     public var workspaceActive: Bool = false
 
+    /// Verify Audio verdict (GH #128): "" = never verified, "ok" = the
+    /// audio checked out (or had a non-damage finding — see the note),
+    /// "damaged" = irreparable/bogus audio (reference movie with missing
+    /// media, invalid codec, audio much shorter than video). Damaged
+    /// records render RED in the catalog table so un-deleted ones can be
+    /// batch-found and removed later. Additive — legacy catalogs decode
+    /// as "" (never verified), and the DTO encodes the key only when
+    /// non-empty, so old catalog.json files round-trip byte-identical
+    /// (the tags/userNotes migration pattern, a769988).
+    public var audioVerifyStatus: String = ""
+
+    /// Human-readable detail for `audioVerifyStatus` — e.g. "damaged
+    /// audio", "invalid codec (qdm2)", "reference movie — media
+    /// missing". Also carries non-damage findings ("silent audio",
+    /// "no audio stream") under status "ok" so the row tooltip can tell
+    /// the story. "" when never verified or verified clean. Same
+    /// additive/delta-minimal migration as `audioVerifyStatus`.
+    public var audioVerifyNote: String = ""
+
+    /// When Verify Audio last ran on this record. nil = never verified.
+    /// (`Date?` ≈ C++ `std::optional<Date>`.) Same additive migration.
+    public var audioVerifyDate: Date?
+
     /// Provenance captured at scan time: which machine ran the scan, what
     /// kind of volume the file lived on (local/smb/nfs/afp), the volume's
     /// stable UUID if available, and the remote server name for network
@@ -534,6 +557,13 @@ public class VideoRecord: Identifiable, Decodable {
         // come back as false — i.e. "not in workspace." Import-to-workspace
         // (Pass B) is the only writer that sets this true.
         workspaceActive             = try c.decodeIfPresent(Bool.self, forKey: .workspaceActive) ?? false
+        // Verify Audio verdict (GH #128) — additive optional, same
+        // migration pattern as tags/userNotes: legacy catalogs (no keys)
+        // come back never-verified; verified records round-trip
+        // unchanged. No catalog version bump required.
+        audioVerifyStatus           = try c.decodeIfPresent(String.self, forKey: .audioVerifyStatus) ?? ""
+        audioVerifyNote             = try c.decodeIfPresent(String.self, forKey: .audioVerifyNote) ?? ""
+        audioVerifyDate             = try c.decodeIfPresent(Date.self, forKey: .audioVerifyDate)
         // Relocate provenance. Legacy catalogs (no keys) decode as nil and
         // remain treated as "never relocated." Once set on first migration
         // these keys are encoded on every subsequent write.

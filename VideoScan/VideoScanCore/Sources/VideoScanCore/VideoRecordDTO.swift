@@ -133,6 +133,9 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let drmProtected: Bool
     public let originalFullPath: String?
     public let originVolume: String?
+    public let audioVerifyStatus: String
+    public let audioVerifyNote: String
+    public let audioVerifyDate: Date?
 
     // MARK: Capture from a live VideoRecord (called ON the main actor)
 
@@ -237,6 +240,9 @@ public struct VideoRecordDTO: Sendable, Encodable {
         drmProtected                = r.drmProtected
         originalFullPath            = r.originalFullPath
         originVolume                = r.originVolume
+        audioVerifyStatus           = r.audioVerifyStatus
+        audioVerifyNote             = r.audioVerifyNote
+        audioVerifyDate             = r.audioVerifyDate
     }
 
     // MARK: Encode — VERBATIM from VideoRecord.encode(to:)
@@ -421,5 +427,17 @@ public struct VideoRecordDTO: Sendable, Encodable {
         // these add zero bytes to catalog.json.
         try c.encodeIfPresent(originalFullPath, forKey: .originalFullPath)
         try c.encodeIfPresent(originVolume, forKey: .originVolume)
+        // Verify Audio verdict (GH #128): delta-minimal — status/note
+        // written only when non-empty, date only when present, so
+        // never-verified records round-trip byte-identical (the
+        // byte-identity golden in CatalogStoreAsyncSaveTests stays
+        // green for legacy catalogs).
+        if !audioVerifyStatus.isEmpty {
+            try c.encode(audioVerifyStatus, forKey: .audioVerifyStatus)
+        }
+        if !audioVerifyNote.isEmpty {
+            try c.encode(audioVerifyNote, forKey: .audioVerifyNote)
+        }
+        try c.encodeIfPresent(audioVerifyDate, forKey: .audioVerifyDate)
     }
 }

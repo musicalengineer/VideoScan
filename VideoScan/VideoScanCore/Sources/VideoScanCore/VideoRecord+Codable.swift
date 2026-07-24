@@ -71,5 +71,8 @@ extension VideoRecord {
         case workspaceActive
         case userNotes
         case tags
+        case audioVerifyStatus
+        case audioVerifyNote
+        case audioVerifyDate
     }
 }
