@@ -293,6 +293,111 @@ struct VerifyAudioMediaMatrixTests {
         #expect(record.audioVerifyNote == "")
         #expect(record.audioVerifyDate == nil)
     }
+
+    // MARK: QA F1 — a transient I/O failure must never persist "damaged"
+
+    /// Shared analyze-failure injection: what AudioBalanceProbe.analyze
+    /// throws for EVERY nonzero ffmpeg exit — undecodable codec and
+    /// mid-decode I/O death look identical from the caller.
+    private static let analyzeThrows: VerifyAudioProbe.AnalyzeStep = { _ in
+        throw AudioBalanceProbeError.probeFailed(
+            "ffmpeg astats pass on audio stream 0 exited with status 1")
+    }
+
+    @Test("QA F1: analyze fails + source vanished (real recheck) → diagnosis THROWS, no damage verdict",
+          .timeLimit(.minutes(2)))
+    func analyzeFailureWithVanishedSourceThrows() async throws {
+        // Pre-QA behavior: ANY analyze failure became the undecodable-
+        // codec damage finding — a healthy file whose volume died
+        // mid-astats went permanently red into the notes:damaged
+        // batch-DELETE set. (True red-run impractical: the analyze/
+        // recheck seams did not exist before the fix; the failure mode
+        // is pinned instead by the reachable-source test below, which
+        // preserves the old conversion when the evidence supports it.)
+        try #require(VerifyAudioTestMedia.toolsAvailable)
+        let dir = try VerifyAudioTestMedia.makeScratchDir("io_vanish")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = try VerifyAudioTestMedia.generate(
+            into: dir, name: "test_verify_io_vanish.mov",
+            videoCodec: "libx264", extraVideoArgs: ["-preset", "ultrafast"],
+            audioCodec: "pcm_s16le")
+
+        // The injected analyze step simulates the drive dying MID-pass:
+        // it removes the file (what an eject/unmount looks like to the
+        // next stat) and throws exactly what the real analyze throws.
+        // The PRODUCTION recheck (sourceStillProbeable) then runs and
+        // must report unreachable.
+        let vanishAndThrow: VerifyAudioProbe.AnalyzeStep = { p in
+            try? FileManager.default.removeItem(atPath: p)
+            throw AudioBalanceProbeError.probeFailed(
+                "ffmpeg astats pass on audio stream 0 exited with status 1")
+        }
+        var thrown: Error?
+        do {
+            _ = try await VerifyAudioProbe.diagnose(path: path,
+                                                    analyzeOverride: vanishAndThrow)
+        } catch {
+            thrown = error
+        }
+        guard case AudioVerifyProbeError.probeFailed(let detail)? = thrown else {
+            Issue.record("expected probeFailed (diagnosis failure, nothing persisted), got \(String(describing: thrown))")
+            return
+        }
+        #expect(detail.contains("no verdict was recorded"),
+                "the failure message must say no verdict was recorded: \(detail)")
+    }
+
+    @Test("QA F1: analyze fails + mount stalled (injected recheck) → diagnosis THROWS",
+          .timeLimit(.minutes(2)))
+    func analyzeFailureWithStalledMountThrows() async throws {
+        try #require(VerifyAudioTestMedia.toolsAvailable)
+        let dir = try VerifyAudioTestMedia.makeScratchDir("io_stall")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = try VerifyAudioTestMedia.generate(
+            into: dir, name: "test_verify_io_stall.mov",
+            videoCodec: "libx264", extraVideoArgs: ["-preset", "ultrafast"],
+            audioCodec: "pcm_s16le")
+
+        // A stalled SMB mount can keep stat-ing while every read hangs —
+        // the injected recheck models "no longer probeable" without a
+        // real network volume.
+        var thrown: Error?
+        do {
+            _ = try await VerifyAudioProbe.diagnose(
+                path: path,
+                analyzeOverride: Self.analyzeThrows,
+                sourceRecheckOverride: { _ in false })
+        } catch {
+            thrown = error
+        }
+        guard case AudioVerifyProbeError.probeFailed? = thrown else {
+            Issue.record("expected probeFailed, got \(String(describing: thrown))")
+            return
+        }
+    }
+
+    @Test("QA F1: analyze fails + source STILL probeable (real recheck) → undecodable damage stands",
+          .timeLimit(.minutes(2)))
+    func analyzeFailureWithReachableSourceIsCodecDamage() async throws {
+        // The counterpart guard: when the file is still there and still
+        // shape-probeable, the evidence points at the codec — the
+        // damage finding must SURVIVE the QA F1 fix, or truly broken
+        // audio would stop being flagged.
+        try #require(VerifyAudioTestMedia.toolsAvailable)
+        let dir = try VerifyAudioTestMedia.makeScratchDir("io_reachable")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = try VerifyAudioTestMedia.generate(
+            into: dir, name: "test_verify_io_reachable.mov",
+            videoCodec: "libx264", extraVideoArgs: ["-preset", "ultrafast"],
+            audioCodec: "pcm_s16le")
+
+        let d = try await VerifyAudioProbe.diagnose(path: path,
+                                                    analyzeOverride: Self.analyzeThrows)
+        #expect(d.findings == [.unsupportedCodec(codec: "pcm_s16le", decodable: false)])
+        #expect(d.persistedStatus == "damaged")
+        #expect(d.persistedNote.hasPrefix("Damaged audio — undecodable audio"))
+        #expect(d.balanceAnalysis == nil)
+    }
 }
 
 // MARK: - Rebuild Audio Track — real round-trip
@@ -408,6 +513,53 @@ struct RebuildAudioJobRoundTripTests {
                 == "test_verify_rebuild_RepairedAudio 2.mov")
         #expect(FileManager.default.fileExists(
             atPath: first.publishedURL?.path ?? ""), "first output must survive the second run")
+    }
+
+    @Test("QA F2: truncated rebuilt audio FAILS verification — nothing promoted, nothing cataloged",
+          .timeLimit(.minutes(2)))
+    func truncatedAudioFailsVerification() async throws {
+        try #require(VerifyAudioTestMedia.toolsAvailable)
+        let dir = try VerifyAudioTestMedia.makeScratchDir("rebuild_truncated")
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        // 6 s of picture, 2 s of audio. After the rebuild the picture is
+        // stream-copied FULL LENGTH while the re-encoded audio ends at
+        // 2 s — byte-for-byte what a mid-decode death on damaged source
+        // audio leaves behind (ffmpeg can exit 0 for it). CONTAINER
+        // duration is the longest track (6 s), matching the source, so
+        // the pre-QA shape+container verification PASSED this truncated
+        // repair — this test was verified RED against that behavior
+        // before RebuildAudioFix.truncatedAudioMismatch existed
+        // (QA finding 2, 2026-07-24).
+        let path = try VerifyAudioTestMedia.generate(
+            into: dir, name: "test_verify_truncated.mp4",
+            videoCodec: "libx264", extraVideoArgs: ["-preset", "ultrafast"],
+            audioCodec: "aac", videoDuration: 6.0, audioDuration: 2.0)
+        let d = try await VerifyAudioProbe.diagnose(path: path)
+        let model = VideoScanModel()
+        let record = makeBalanceSourceRecord(
+            path: path, durationSeconds: d.shape.containerDurationSeconds,
+            audioCodec: d.shape.audioCodec)
+        model.records = [record]
+
+        let job = RebuildAudioJob(record: record, reason: "test",
+                                  shape: d.shape, model: model)
+        job.start()
+        await job.task?.value
+
+        guard case .failed(let message) = job.state else {
+            Issue.record("truncated repair must FAIL verification, got \(job.state)")
+            return
+        }
+        #expect(message.contains("Verification failed"),
+                "failure must be the verification gate, got: \(message)")
+        // The truncated repair must leave NO trace: nothing promoted,
+        // no partial debris, no catalog insertion, no journey stamps.
+        #expect(job.publishedURL == nil)
+        #expect(!FileManager.default.fileExists(atPath: job.outputURL.path))
+        #expect(partialDebris(in: dir).isEmpty)
+        #expect(model.records.count == 1, "no catalog insertion for a failed repair")
+        #expect(record.notes.isEmpty, "a failed rebuild must not stamp the source record")
     }
 
     @Test("ffmpeg failure leaves nothing — no partial, nothing at the final path",

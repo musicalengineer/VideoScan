@@ -425,10 +425,22 @@ enum VerifyAudioProbe {
 
     // MARK: Full diagnosis (I/O)
 
+    /// The levels step's signature — injectable so tests can force a
+    /// deterministic analyze failure (QA finding 1 seam; no real media
+    /// fails astats reproducibly). Production always uses
+    /// AudioBalanceProbe.analyze.
+    typealias AnalyzeStep = @Sendable (String) async throws -> AudioBalanceAnalysis
+    /// The post-analyze-failure reachability recheck — injectable for
+    /// the same reason. Production uses `sourceStillProbeable`.
+    typealias SourceRecheck = @Sendable (String) async -> Bool
+
     /// Diagnose one media file's audio: extended ffprobe (stderr kept
     /// for the dref reference-movie signal), then — when audio exists
     /// and the file is not a reference movie — the balance analyzer's
     /// per-stream astats pass for levels + classification.
+    ///
+    /// `analyzeOverride` / `sourceRecheckOverride` are TEST SEAMS only
+    /// (QA finding 1) — every production call site passes neither.
     ///
     /// `@concurrent`: runs on the global executor — safe to call from
     /// the @MainActor sheet without pinning the UI thread (file-header
@@ -436,7 +448,10 @@ enum VerifyAudioProbe {
     #if compiler(>=6.2)
     @concurrent
     #endif
-    static func diagnose(path: String) async throws -> AudioVerifyDiagnosis {
+    static func diagnose(path: String,
+                         analyzeOverride: AnalyzeStep? = nil,
+                         sourceRecheckOverride: SourceRecheck? = nil
+    ) async throws -> AudioVerifyDiagnosis {
         let ffprobe = ToolLocator.ffprobePath
         guard FileManager.default.isExecutableFile(atPath: ffprobe) else {
             throw AudioVerifyProbeError.toolUnavailable(
@@ -461,18 +476,43 @@ enum VerifyAudioProbe {
 
         // ---- Levels pass (audio-only decode; seconds even for a
         // two-hour tape). Skipped for reference movies (no essence to
-        // decode) and no-audio files. A decode failure is itself a
-        // finding, not a diagnosis failure.
+        // decode) and no-audio files. A decode failure on a STILL-
+        // REACHABLE file is itself a finding, not a diagnosis failure —
+        // but see the I/O split below.
         var analysis: AudioBalanceAnalysis?
         var analyzeFailed = false
         if referencedPaths.isEmpty, shape.audioStreams > 0 {
+            let analyze = analyzeOverride
+                ?? { try await AudioBalanceProbe.analyze(path: $0) }
             do {
-                analysis = try await AudioBalanceProbe.analyze(path: path)
+                analysis = try await analyze(path)
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
+                // QA finding 1 (2026-07-24): analyze throws the SAME
+                // probeFailed for EVERY nonzero ffmpeg exit — a truly
+                // undecodable codec AND a mid-decode I/O failure (SMB
+                // stall, ejected disk, sleeping drive; the levels pass
+                // decodes the whole track, a long window on hour-long
+                // tapes) are indistinguishable from here. Persisting
+                // "damaged" off an I/O failure would drop a HEALTHY
+                // file into the notes:damaged batch-DELETE set. So
+                // before converting the failure into codec evidence,
+                // re-check the source: still on disk AND still shape-
+                // probeable (sub-second). Unreachable / no longer
+                // probeable → diagnosis FAILURE (thrown — the sheet
+                // persists nothing). Still probeable → the evidence
+                // points at the codec, not the I/O path → the
+                // undecodable-codec damage finding stands.
+                let recheck = sourceRecheckOverride
+                    ?? { await sourceStillProbeable(path: $0) }
+                guard await recheck(path) else {
+                    verifyLog.notice("verify: levels pass failed for \((path as NSString).lastPathComponent, privacy: .public) and the source is no longer reachable/probeable — diagnosis failure, no verdict recorded (\(String(describing: error), privacy: .public))")
+                    throw AudioVerifyProbeError.probeFailed(
+                        "the file or its volume stopped responding while the audio was being read — no verdict was recorded; try again when the drive is reachable")
+                }
                 analyzeFailed = true
-                verifyLog.notice("verify: levels pass failed for \((path as NSString).lastPathComponent, privacy: .public) — \(String(describing: error), privacy: .public)")
+                verifyLog.notice("verify: levels pass failed for \((path as NSString).lastPathComponent, privacy: .public) with the source still probeable — treating as undecodable audio (\(String(describing: error), privacy: .public))")
             }
         }
         try Task.checkCancellation()
@@ -486,5 +526,31 @@ enum VerifyAudioProbe {
             findings: findings, shape: shape, balanceAnalysis: analysis)
         verifyLog.info("verify: \((path as NSString).lastPathComponent, privacy: .public) → \(diagnosis.isHealthy ? "healthy" : diagnosis.persistedNote, privacy: .public) (status=\(diagnosis.persistedStatus, privacy: .public), audioStreams=\(shape.audioStreams), refs=\(referencedPaths.count))")
         return diagnosis
+    }
+
+    /// Post-analyze-failure reachability recheck (QA finding 1): is the
+    /// source still on disk AND still shape-probeable? Re-stat first
+    /// (catches ejected/unmounted volumes without waiting on a probe),
+    /// then re-run the sub-second shape probe with a SHORT deadline — a
+    /// stalled network mount hangs rather than errors, and 15 s of
+    /// silence on a probe that normally answers in milliseconds is its
+    /// own answer. Any failure here means the I/O path (not the codec)
+    /// is the prime suspect, so the caller throws instead of persisting
+    /// a damage verdict.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    static func sourceStillProbeable(path: String) async -> Bool {
+        guard FileManager.default.fileExists(atPath: path) else { return false }
+        let ffprobe = ToolLocator.ffprobePath
+        let result = await ProcessRunner.runProcess(
+            executable: ffprobe,
+            arguments: shapeArgs(input: path),
+            stdoutLimitBytes: 1 << 20,
+            deadlineSeconds: 15)
+        guard result.exitCode == 0, let stdout = result.stdout,
+              let data = stdout.data(using: .utf8),
+              (try? shape(fromProbeJSON: data)) != nil else { return false }
+        return true
     }
 }
