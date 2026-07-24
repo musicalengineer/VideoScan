@@ -269,37 +269,52 @@ enum SearchBenchCorpus {
 
 // MARK: - Benchmark runner (the reusable measurement model)
 
-/// One measured case's statistics, in milliseconds.
-struct SearchBenchResult {
-    let bench: String       // subsystem label, e.g. "catalog-search"
-    let corpus: String      // corpus label, e.g. "100k"
-    let label: String       // query / operation label
-    let minMs: Double
-    let medianMs: Double
-    let p95Ms: Double
-    let hits: Int
+/// One raw measurement. Units travel with the values so a byte footprint can
+/// never be mistaken for a latency by the publisher or dashboard.
+struct SearchBenchResult: Codable {
+    let benchmark: String
+    let metric: String
+    let operation: String
+    let query: String?
+    let corpusId: String
+    let corpusVersion: Int
+    let corpusSeed: String
+    let recordCount: Int
+    let unit: String
+    let direction: String
+    let warmupCount: Int
+    let sampleCount: Int
+    let min: Double?
+    let median: Double?
+    let p95: Double?
+    let value: Double?
+    let resultCount: Int
+    let expectedResultCount: Int
+    let correct: Bool
 
     /// One aligned human-readable line. Grep key: SEARCHBENCH.
     var summaryLine: String {
-        String(format: "SEARCHBENCH | corpus=%-5@ | q=%-26@ | min=%8.2f med=%8.2f p95=%8.2f | hits=%d",
-               corpus as NSString, label as NSString, minMs, medianMs, p95Ms, hits)
+        if let min, let median, let p95 {
+            return String(format: "SEARCHBENCH | records=%d | op=%-20@ | q=%-26@ | warmup=%d n=%d min=%8.2f med=%8.2f p95=%8.2f %@ | hits=%d/%d",
+                          recordCount, operation as NSString, (query ?? "-") as NSString,
+                          warmupCount, sampleCount, min, median, p95, unit,
+                          resultCount, expectedResultCount)
+        }
+        return String(format: "SEARCHBENCH | records=%d | op=%-20@ | value=%.0f %@ | hits=%d/%d",
+                      recordCount, operation as NSString, value ?? 0, unit,
+                      resultCount, expectedResultCount)
     }
 
     /// One machine-readable JSON line, shaped for the project's metrics
     /// JSONL pipeline.
     var jsonLine: String {
-        let host = ProcessInfo.processInfo.hostName
-        let ts = ISO8601DateFormatter().string(from: Date())
-        // Hand-rolled to keep key order stable across runs (JSONEncoder
-        // dictionary ordering isn't) — nicer diffs in the metrics branch.
-        func esc(_ s: String) -> String {
-            s.replacingOccurrences(of: "\\", with: "\\\\")
-             .replacingOccurrences(of: "\"", with: "\\\"")
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(self),
+              let line = String(data: data, encoding: .utf8) else {
+            preconditionFailure("SearchBenchResult must always encode as JSON")
         }
-        return "{\"bench\":\"\(esc(bench))\",\"corpus\":\"\(esc(corpus))\","
-            + "\"query\":\"\(esc(label))\","
-            + String(format: "\"min_ms\":%.3f,\"median_ms\":%.3f,\"p95_ms\":%.3f,", minMs, medianMs, p95Ms)
-            + "\"hits\":\(hits),\"host\":\"\(esc(host))\",\"timestamp\":\"\(ts)\"}"
+        return line
     }
 }
 
@@ -313,10 +328,12 @@ struct SearchBenchResult {
 /// eligibility per needle, so the first pass of a query is structurally
 /// slower), measured runs feed the order statistics.
 struct SearchBenchRunner {
-    let bench: String
-    let corpus: String
+    static let corpusId = "catalog-search-synthetic"
+    static let corpusVersion = 1
+    let recordCount: Int
+    var exportsMeasurements = true
     var warmupIterations: Int = 3
-    var measuredIterations: Int = 10   // >= 10 per harness spec
+    var measuredIterations: Int = 20
 
     static func ms(_ d: Duration) -> Double {
         Double(d.components.seconds) * 1_000 + Double(d.components.attoseconds) / 1e15
@@ -325,7 +342,13 @@ struct SearchBenchRunner {
     /// Time `body` (warmup + measured) and return the stats. `body` returns
     /// the case's hit/result count so the benchmark can prove it measured a
     /// correct answer (a benchmark of a wrong answer is worthless).
-    func run(_ label: String, iterations: Int? = nil, _ body: () -> Int) -> SearchBenchResult {
+    func run(
+        operation: String,
+        query: String? = nil,
+        iterations: Int? = nil,
+        expectedResultCount: Int,
+        _ body: () -> Int
+    ) -> SearchBenchResult {
         let clock = ContinuousClock()
         let iters = max(1, iterations ?? measuredIterations)
         var hits = 0
@@ -339,28 +362,49 @@ struct SearchBenchRunner {
         let sorted = times.sorted()
         let p95Index = min(sorted.count - 1, Int((Double(sorted.count) * 0.95).rounded(.up)) - 1)
         return SearchBenchResult(
-            bench: bench, corpus: corpus, label: label,
-            minMs: sorted.first ?? 0,
-            medianMs: sorted[sorted.count / 2],
-            p95Ms: sorted[max(0, p95Index)],
-            hits: hits)
+            benchmark: "catalog-search", metric: "catalog_search_latency",
+            operation: operation, query: query,
+            corpusId: Self.corpusId, corpusVersion: Self.corpusVersion,
+            corpusSeed: String(format: "0x%016llx", SearchBenchCorpus.fixedSeed),
+            recordCount: recordCount, unit: "milliseconds",
+            direction: "lower", warmupCount: warmupIterations,
+            sampleCount: iters, min: sorted.first ?? 0,
+            median: sorted[sorted.count / 2], p95: sorted[max(0, p95Index)],
+            value: nil, resultCount: hits,
+            expectedResultCount: expectedResultCount,
+            correct: hits == expectedResultCount)
+    }
+
+    func footprint(bytes: Int) -> SearchBenchResult {
+        let value = Double(bytes)
+        return SearchBenchResult(
+            benchmark: "catalog-search", metric: "catalog_search_haystack_footprint",
+            operation: "haystack-footprint", query: nil,
+            corpusId: Self.corpusId, corpusVersion: Self.corpusVersion,
+            corpusSeed: String(format: "0x%016llx", SearchBenchCorpus.fixedSeed),
+            recordCount: recordCount, unit: "bytes", direction: "lower",
+            warmupCount: 0, sampleCount: 1, min: nil, median: nil,
+            p95: nil, value: value, resultCount: recordCount,
+            expectedResultCount: recordCount, correct: true)
     }
 
     /// Print the aligned summary line and append the JSON line to
     /// $VS_BENCH_OUT (if set). Appending (not truncating) so one metrics
     /// file can accumulate every corpus/case of a run.
-    func emit(_ result: SearchBenchResult) {
+    func emit(_ result: SearchBenchResult) throws {
         print(result.summaryLine)
+        guard exportsMeasurements else { return }
         guard let path = ProcessInfo.processInfo.environment["VS_BENCH_OUT"],
               !path.isEmpty else { return }
         let line = result.jsonLine + "\n"
         let url = URL(fileURLWithPath: path)
-        if let handle = try? FileHandle(forWritingTo: url) {
+        if FileManager.default.fileExists(atPath: path) {
+            let handle = try FileHandle(forWritingTo: url)
             defer { try? handle.close() }
-            _ = try? handle.seekToEnd()
-            try? handle.write(contentsOf: Data(line.utf8))
+            _ = try handle.seekToEnd()
+            try handle.write(contentsOf: Data(line.utf8))
         } else {
-            try? Data(line.utf8).write(to: url)
+            try Data(line.utf8).write(to: url, options: .withoutOverwriting)
         }
     }
 }

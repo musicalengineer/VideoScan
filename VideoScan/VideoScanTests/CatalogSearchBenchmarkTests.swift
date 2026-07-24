@@ -16,7 +16,7 @@
 //
 //   2. fullBenchmarkMatrix — HEAVY, gated behind VS_RUN_SEARCH_BENCH=1
 //      (like CombinePipelineIntegrationTests' env gate). Runs the full
-//      10-query matrix at 17k AND 100k, plus rebuild timing, saveToDisk +
+//      10-query matrix at 100k, plus rebuild timing, saveToDisk +
 //      loadFromDisk round-trip, and an approximate index-memory figure.
 //
 //   3. realCatalogBenchmark — optional. If VS_SEARCH_BENCH_CATALOG points
@@ -152,41 +152,44 @@ struct CatalogSearchBenchmarkTests {
     static func runMatrix(
         records: [VideoRecord],
         corpusLabel: String,
-        assertBudgets: Bool
-    ) {
-        let runner = SearchBenchRunner(bench: "catalog-search", corpus: corpusLabel)
+        assertBudgets: Bool,
+        exportsMeasurements: Bool = true
+    ) throws {
+        let runner = SearchBenchRunner(
+            recordCount: records.count,
+            exportsMeasurements: exportsMeasurements)
         let index = CatalogSearchIndex()
 
         // ---- rebuild() timing ----
-        let rebuild = runner.run("_rebuild", iterations: 3) {
+        let rebuild = runner.run(operation: "rebuild", iterations: 3,
+                                 expectedResultCount: records.count) {
             index.rebuild(records: records)
             return index.recordCount()
         }
-        runner.emit(rebuild)
-        #expect(rebuild.hits == records.count, "rebuild must index every record")
+        try runner.emit(rebuild)
+        #expect(rebuild.resultCount == records.count, "rebuild must index every record")
         #if !DEBUG
         if assertBudgets, records.count > 50_000 {
-            #expect(rebuild.medianMs <= 5_000,
-                    "rebuild median \(rebuild.medianMs) ms at \(corpusLabel) — budget 5000 ms")
+            let rebuildMedian = rebuild.median ?? .infinity
+            #expect(rebuildMedian <= 5_000,
+                    "rebuild median \(rebuildMedian) ms at \(corpusLabel) — budget 5000 ms")
         }
         #endif
 
         // ---- approximate index memory (haystack bytes) ----
         // Sum of per-record haystack UTF-8 sizes — the dominant term of the
-        // index's footprint (yearSets/wordIndex overhead excluded). Values
-        // land in the *_ms fields; the label makes the unit explicit.
+        // index's footprint (yearSets/wordIndex overhead excluded). This is
+        // exported as a single byte value, never as latency statistics.
         var haystackBytes = 0
         for rec in records { haystackBytes += CatalogSearchIndex.buildHaystack(rec).utf8.count }
-        let mb = Double(haystackBytes) / (1024 * 1024)
-        runner.emit(SearchBenchResult(
-            bench: "catalog-search", corpus: corpusLabel, label: "_haystack_memory_mb",
-            minMs: mb, medianMs: mb, p95Ms: mb, hits: records.count))
+        try runner.emit(runner.footprint(bytes: haystackBytes))
 
         // ---- saveToDisk + loadFromDisk round-trip ----
         let persistURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("search-bench-\(ProcessInfo.processInfo.processIdentifier)-\(corpusLabel).plist")
         defer { try? FileManager.default.removeItem(at: persistURL) }
-        let roundTrip = runner.run("_persist_roundtrip", iterations: 3) {
+        let roundTrip = runner.run(operation: "persist-roundtrip", iterations: 3,
+                                   expectedResultCount: records.count) {
             try? index.saveToDisk(at: persistURL)
             let fresh = CatalogSearchIndex()
             let ok = fresh.loadFromDisk(at: persistURL,
@@ -194,24 +197,26 @@ struct CatalogSearchBenchmarkTests {
                                         expectedRecordCount: records.count)
             return ok ? fresh.recordCount() : -1
         }
-        runner.emit(roundTrip)
-        #expect(roundTrip.hits == records.count,
-                "persistence round-trip must restore all \(records.count) records (got \(roundTrip.hits))")
+        try runner.emit(roundTrip)
+        #expect(roundTrip.resultCount == records.count,
+                "persistence round-trip must restore all \(records.count) records (got \(roundTrip.resultCount))")
 
         // ---- the query matrix ----
         for (query, tier) in matrix {
             let canonicalHits = assertCorrectness(records, index, query, corpusLabel: corpusLabel)
-            let result = runner.run(query) {
+            let result = runner.run(operation: "query", query: query,
+                                    expectedResultCount: canonicalHits) {
                 index.filter(records: records, query: query).count
             }
-            runner.emit(result)
-            #expect(result.hits == canonicalHits,
-                    "benchmark measured \(result.hits) hits for '\(query)' but canonical says \(canonicalHits)")
+            try runner.emit(result)
+            #expect(result.resultCount == canonicalHits,
+                    "benchmark measured \(result.resultCount) hits for '\(query)' but canonical says \(canonicalHits)")
             #if !DEBUG
             if assertBudgets {
                 let budget = queryBudgetMs(tier, corpusSize: records.count)
-                #expect(result.medianMs <= budget,
-                        "median for '\(query)' at \(corpusLabel) was \(result.medianMs) ms — budget \(budget) ms")
+                let median = result.median ?? .infinity
+                #expect(median <= budget,
+                        "median for '\(query)' at \(corpusLabel) was \(median) ms — budget \(budget) ms")
             }
             #endif
         }
@@ -250,7 +255,7 @@ struct CatalogSearchBenchmarkTests {
     /// The regression sensor that runs in every suite invocation. Small
     /// enough to stay cheap, real enough to catch a broken fast path,
     /// year-set drift, or an index/canonical divergence.
-    @Test func searchSmokeSensorAt17k() {
+    @Test func searchSmokeSensorAt17k() throws {
         let records = SearchBenchCorpus.make(17_000)
         #expect(Set(records.map(\.fullPath)).count == records.count,
                 "corpus fullPaths must be unique — index keys on fullPath")
@@ -258,7 +263,7 @@ struct CatalogSearchBenchmarkTests {
         index.rebuild(records: records)
         Self.assertPlantedNeedles(records, index, corpusLabel: "17k-smoke")
 
-        let runner = SearchBenchRunner(bench: "catalog-search-smoke", corpus: "17k")
+        let runner = SearchBenchRunner(recordCount: records.count, exportsMeasurements: false)
         // (query, Release-only budget ms): one linear-regime query
         // (infix-defeated name — the realistic worst common case), one
         // fast-path query, one yearRange query.
@@ -269,16 +274,18 @@ struct CatalogSearchBenchmarkTests {
         ]
         for (query, budget) in cases {
             let canonicalHits = Self.assertCorrectness(records, index, query, corpusLabel: "17k-smoke")
-            let result = runner.run(query) {
+            let result = runner.run(operation: "query", query: query,
+                                    expectedResultCount: canonicalHits) {
                 index.filter(records: records, query: query).count
             }
-            runner.emit(result)
-            #expect(result.hits == canonicalHits)
+            try runner.emit(result)
+            #expect(result.resultCount == canonicalHits)
             // Timing sensor is Release-only (a Debug run is not a perf
             // measurement — project build-mode policy).
             #if !DEBUG
-            #expect(result.medianMs <= budget,
-                    "smoke: median for '\(query)' was \(result.medianMs) ms — budget \(budget) ms at 17k")
+            let median = result.median ?? .infinity
+            #expect(median <= budget,
+                    "smoke: median for '\(query)' was \(median) ms — budget \(budget) ms at 17k")
             #else
             _ = budget
             #endif
@@ -289,10 +296,10 @@ struct CatalogSearchBenchmarkTests {
 
     @Test(.enabled(if: benchEnabled,
                    "set VS_RUN_SEARCH_BENCH=1 (TEST_RUNNER_VS_RUN_SEARCH_BENCH=1 via xcodebuild) to run the full benchmark"))
-    func fullBenchmarkMatrix() {
+    func fullBenchmarkMatrix() throws {
         let clock = ContinuousClock()
-        for n in [17_000, 100_000] {
-            let label = n == 17_000 ? "17k" : "100k"
+        for n in [100_000] {
+            let label = "100k"
             var records: [VideoRecord] = []
             let gen = clock.measure { records = SearchBenchCorpus.make(n) }
             print(String(format: "SEARCHBENCH | corpus=%-5@ | generated %d records in %.0f ms",
@@ -306,7 +313,7 @@ struct CatalogSearchBenchmarkTests {
             Self.assertPlantedNeedles(records, probe, corpusLabel: label)
             print("SEARCHBENCH | corpus=\(label) | indexed_words=\(probe.indexedWordCount())")
 
-            Self.runMatrix(records: records, corpusLabel: label, assertBudgets: true)
+            try Self.runMatrix(records: records, corpusLabel: label, assertBudgets: true)
         }
     }
 
@@ -330,6 +337,13 @@ struct CatalogSearchBenchmarkTests {
         try #require(!records.isEmpty, "real catalog copy decoded to zero records")
 
         let label = "real-\(records.count / 1000)k"
-        Self.runMatrix(records: records, corpusLabel: label, assertBudgets: false)
+        // A real catalog can contain private family metadata. It is useful
+        // for an operator-only spot check but must never enter raw publisher
+        // input, even when VS_BENCH_OUT is set for the synthetic suite.
+        try Self.runMatrix(
+            records: records,
+            corpusLabel: label,
+            assertBudgets: false,
+            exportsMeasurements: false)
     }
 }

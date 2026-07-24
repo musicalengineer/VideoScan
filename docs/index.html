@@ -262,6 +262,18 @@
   </div>
 </div>
 
+<!-- ============ CATALOG SEARCH PERFORMANCE ============ -->
+<h3 class="section-heading">Performance Benchmarks &mdash; Catalog Search</h3>
+<div class="cards" id="search-benchmark-cards"></div>
+<div class="charts">
+  <div class="chart-box">
+    <h2>100k synthetic catalog &mdash; comparable Release runs</h2>
+    <canvas id="chart-search-benchmarks"></canvas>
+    <div id="chart-search-benchmark-note" class="chart-note hidden">No validated catalog-search benchmarks have been published yet.</div>
+    <div id="search-benchmark-provenance" class="chart-note hidden"></div>
+  </div>
+</div>
+
 <!-- ============ PERSON RECOGNITION QUALITY SECTION ============ -->
 <h3 class="section-heading">Person Recognition &mdash; benchmark readiness and measured quality</h3>
 
@@ -355,6 +367,11 @@ const HISTORY_LOCAL = `./history.jsonl?${CACHE_BUSTER}`;
 const NIGHTLY_LOCAL = `./static_analysis.jsonl?${CACHE_BUSTER}`;
 const TESTDRIVER_LOCAL = `./testdriver.jsonl?${CACHE_BUSTER}`;
 const POI_CYCLES_LOCAL = `./poi_cycles.jsonl?${CACHE_BUSTER}`;
+const SEARCH_BENCHMARKS_LOCAL = `./search_benchmarks.jsonl?${CACHE_BUSTER}`;
+const EXPECTED_SEARCH_QUERIES = [
+  "d", "don", "donna", "xylotheremin", "zzqx", "donna christmas 1997",
+  "1990s", "people:donna", '"cape cod"', "pelicanwharf sunsetreel",
+];
 const POI_CYCLE_SENSOR_SOURCES = new Set(["nightly-local", "poi-cycle-metrics"]);
 const isTestRunRow = row => row.source !== "poi-cycle-metrics";
 const isPoiCycleSensorRow = row =>
@@ -698,6 +715,91 @@ async function loadData() {
     document.getElementById("chart-poi-cycles").classList.add("hidden");
     document.getElementById("chart-poi-cycle-note").classList.remove("hidden");
     poiCards.innerHTML = `<div class="card"><div class="label">Cycle metrics</div><div class="value">Not published</div></div>`;
+  }
+
+  // Dedicated catalog-search stream only. Never render the unrelated
+  // generated-media benchmarks.jsonl rows in this section.
+  const searchText = await fetchText(rawUrl("search_benchmarks.jsonl"), SEARCH_BENCHMARKS_LOCAL);
+  const searchRows = (searchText ? parseJsonl(searchText) : []).filter(row =>
+    row.schemaVersion === 1 && row.benchmark === "catalog-search" &&
+    row.configuration === "Release" && row.architecture === "arm64" &&
+    row.branch === "main" && row.dirty === false &&
+    row.corpus?.synthetic === true && row.corpus?.recordCount === 100000 &&
+    Array.isArray(row.measurements)
+  ).sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
+  const searchCards = document.getElementById("search-benchmark-cards");
+  const searchCanvas = document.getElementById("chart-search-benchmarks");
+  const searchNote = document.getElementById("chart-search-benchmark-note");
+  const searchProvenance = document.getElementById("search-benchmark-provenance");
+  const searchMeasurement = (row, operation, query = null) => row.measurements.find(value =>
+    value.operation === operation && (value.query ?? null) === query
+  );
+  const validSearchRows = searchRows.filter(row =>
+    searchMeasurement(row, "rebuild") && searchMeasurement(row, "query", "donna") &&
+    EXPECTED_SEARCH_QUERIES.every(query => searchMeasurement(row, "query", query))
+  );
+  if (validSearchRows.length) {
+    const latestSearch = validSearchRows[validSearchRows.length - 1];
+    // A trend is apples-to-apples only within the exact host/machine,
+    // macOS/Xcode toolchain, synthetic corpus identity/version/seed/count,
+    // and Release series.
+    const comparable = validSearchRows.filter(row =>
+      row.host === latestSearch.host &&
+      row.machineClass === latestSearch.machineClass &&
+      row.configuration === latestSearch.configuration &&
+      row.macOS?.version === latestSearch.macOS?.version &&
+      row.macOS?.build === latestSearch.macOS?.build &&
+      row.xcode?.version === latestSearch.xcode?.version &&
+      row.xcode?.build === latestSearch.xcode?.build &&
+      row.corpus.id === latestSearch.corpus.id && row.corpus.version === latestSearch.corpus.version &&
+      row.corpus.seed === latestSearch.corpus.seed && row.corpus.recordCount === latestSearch.corpus.recordCount
+    );
+    const previous = comparable.length > 1 ? comparable[comparable.length - 2] : null;
+    const donna = searchMeasurement(latestSearch, "query", "donna");
+    const priorDonna = previous ? searchMeasurement(previous, "query", "donna") : null;
+    const rebuild = searchMeasurement(latestSearch, "rebuild");
+    const priorRebuild = previous ? searchMeasurement(previous, "rebuild") : null;
+    const worstFor = row => row.measurements.filter(value => value.operation === "query")
+      .reduce((a, b) => a.median >= b.median ? a : b);
+    const worst = worstFor(latestSearch);
+    const priorWorst = previous ? worstFor(previous) : null;
+    searchCards.appendChild(card("Donna median", `${donna.median.toFixed(1)} ms`, priorDonna?.median, donna.median, true, "var(--accent)"));
+    searchCards.appendChild(card("Donna p95", `${donna.p95.toFixed(1)} ms`, priorDonna?.p95, donna.p95, true, "var(--purple)"));
+    searchCards.appendChild(card("Worst query median", `${worst.median.toFixed(1)} ms`, priorWorst?.median, worst.median, true, "var(--bad)"));
+    searchCards.appendChild(card("Rebuild median", `${rebuild.median.toFixed(1)} ms`, priorRebuild?.median, rebuild.median, true, "var(--warn)"));
+    searchCards.appendChild(card("Donna hits", donna.resultCount.toLocaleString(), priorDonna?.resultCount, donna.resultCount, false, "var(--good)"));
+    searchCards.appendChild(card("Comparable runs", comparable.length, null, null, false, "var(--muted)"));
+    const mac = latestSearch.macOS ? `macOS ${latestSearch.macOS.version} (${latestSearch.macOS.build})` : "macOS unknown";
+    searchProvenance.textContent =
+      `Latest: ${latestSearch.host || "unknown host"} · ${latestSearch.machineClass} · ${mac} · ` +
+      `${latestSearch.xcode?.version || "Xcode unknown"} · ${(latestSearch.commit || "unknown").slice(0, 8)} · ` +
+      `worst “${worst.query}” · ${donna.sampleCount} samples after ${donna.warmupCount} warmups.`;
+    searchProvenance.classList.remove("hidden");
+    if (comparable.length > 1) {
+      new Chart(searchCanvas, {
+        type: "line",
+        data: { labels: dateLabels(comparable), datasets: [
+          { label: "Donna median", data: comparable.map(row => searchMeasurement(row, "query", "donna").median), ...lineStyle("#58a6ff") },
+          { label: "Donna p95", data: comparable.map(row => searchMeasurement(row, "query", "donna").p95), ...lineStyle("#bc8cff") },
+          { label: "worst query median", data: comparable.map(row => worstFor(row).median), ...lineStyle("#f85149") },
+          { label: "rebuild median", data: comparable.map(row => searchMeasurement(row, "rebuild").median), ...lineStyle("#d29922") },
+        ]},
+        options: { ...chartDefaults, plugins: { ...chartDefaults.plugins,
+          legend: { display: true, labels: { color: "#8b949e" } } } },
+      });
+    } else {
+      searchCanvas.classList.add("hidden");
+      searchNote.textContent = `One validated ${latestSearch.machineClass}/100k/Release run is published; trend begins with the next comparable run.`;
+      searchNote.classList.remove("hidden");
+    }
+  } else {
+    searchCanvas.classList.add("hidden");
+    searchNote.classList.remove("hidden");
+    searchCards.innerHTML = `<div class="card" style="grid-column: 1 / -1;">
+      <div class="indicator" style="background: var(--muted)"></div>
+      <div class="label">No catalog-search benchmark data</div>
+      <div class="value" style="font-size: 14px;">Run the fixed 100k synthetic Release benchmark on an available M1 or M5.</div>
+    </div>`;
   }
 
   const coverageCanvas = document.getElementById("chart-coverage");
