@@ -296,9 +296,14 @@ nonisolated func pfFieldTokenMatches(_ field: SearchField, _ value: String, _ re
         // Union across the userNotes split (2026-07-23): the human text
         // that used to live in `notes` migrated to `userNotes`, so
         // note:/notes: matches EITHER field — nothing the user could
-        // previously find becomes unfindable.
+        // previously find becomes unfindable. The Verify Audio verdict
+        // note (GH #128) joins the union so `notes:damaged` /
+        // `notes:reference` batch-finds flagged rows — field-prefix
+        // ONLY, so this machine state stays out of plain search and
+        // CatalogSearchIndex's haystack is untouched.
         return rec.userNotes.lowercased().contains(n)
             || rec.notes.lowercased().contains(n)
+            || rec.audioVerifyNote.lowercased().contains(n)
     case .tag:
         // Workflow tags — substring, case-insensitive, same per-token
         // semantics as people:. `tag:fix` matches "Fix Audio".

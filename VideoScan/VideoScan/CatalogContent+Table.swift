@@ -82,6 +82,11 @@ extension CatalogContent {
         if !rec.scanContext.bundleContainer.isEmpty {
             tip += "\n\n📦 Inside video project bundle: \(rec.scanContext.bundleContainer)"
         }
+        // Verify Audio damaged verdict (GH #128) — composes with every
+        // state above (the red filename tint needs its "why" visible).
+        if rec.audioVerifyStatus == "damaged" {
+            tip += "\n\n⚠️ Damaged audio: \(rec.audioVerifyNote.isEmpty ? "verify audio flagged this file" : rec.audioVerifyNote)"
+        }
         return tip
     }
 
@@ -549,6 +554,28 @@ extension CatalogContent {
                               ? "Trim Master works on one file at a time."
                               : "Cut static or junk off the start and end — a perfect copy with no quality loss. The original is never changed.")
                         .accessibilityIdentifier("catalog.row.trimMaster")
+
+                        // Verify Audio — GH #128, Rick 2026-07-24. The
+                        // diagnose-first replacement for "bad audio"
+                        // dead-ends: one sheet that checks the sound
+                        // track (levels, codec, reference-movie drefs,
+                        // duration mismatch) and offers the matching
+                        // repair where one exists. Works on ANY
+                        // reachable row — even no-audio and
+                        // ffprobe-failed files get an honest verdict.
+                        // Disabled only while its repair job is already
+                        // running against this record.
+                        let rebuildRunning = fileOpsCenter.jobs.contains { job in
+                            guard job.state.isActive, let r = job as? RebuildAudioJob else { return false }
+                            return r.record.id == rec.id
+                        }
+                        Button("Verify Audio…") {
+                            verifyAudioRequest = VerifyAudioRequest(record: rec)
+                        }
+                        .disabled(!VolumeReachability.isReachable(path: rec.fullPath)
+                                  || rebuildRunning)
+                        .help("Check this file's sound track — levels, format, and whether the audio really belongs to the picture — and get a repair offer where one exists.")
+                        .accessibilityIdentifier("catalog.row.verifyAudio")
 
                         // Rick 2026-06-14: grey out (don't hide) when
                         // the file lacks the relevant stream. More

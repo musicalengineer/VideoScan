@@ -142,6 +142,9 @@ struct CatalogContent: View {
     /// Non-nil presents the "Balance Audio" analyze-then-confirm sheet
     /// (GH #116).
     @State var balanceRequest: BalanceAudioRequest?
+    /// Non-nil presents the "Verify Audio" diagnose-then-offer sheet
+    /// (GH #128).
+    @State var verifyAudioRequest: VerifyAudioRequest?
 
     /// "Find Online Version" came up empty — non-nil drives an alert
     /// explaining where copies exist (all offline) or that this is the
@@ -619,6 +622,11 @@ struct CatalogContent: View {
         // .sheet(item:) shape — never chained isPresented.
         .sheet(item: $balanceRequest) { request in
             BalanceAudioSheet(request: request)
+        }
+        // "Verify Audio" diagnose-then-offer (GH #128). Same
+        // .sheet(item:) shape.
+        .sheet(item: $verifyAudioRequest) { request in
+            VerifyAudioSheet(request: request)
         }
         // Music-triage review list (GH #124). Same .sheet(item:) shape.
         .sheet(item: $musicTriagePayload) { payload in

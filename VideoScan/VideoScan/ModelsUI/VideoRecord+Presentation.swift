@@ -21,6 +21,13 @@ extension VideoRecord {
         if streamType == .ffprobeFailed || streamType == .noStreams {
             return .red
         }
+        // Verify Audio verdict (GH #128): damaged audio shares the
+        // "damaged (red)" priority tier with unreadable files — these
+        // rows exist to be batch-found and deleted later, so the tint
+        // must survive every softer disposition below.
+        if audioVerifyStatus == "damaged" {
+            return .red
+        }
         if mediaDisposition == .confirmedJunk {
             return .secondary
         }
@@ -62,6 +69,11 @@ extension VideoRecord {
     var rowColor: Color {
         if let conf = pairConfidence {
             return conf.color
+        }
+        // Verify Audio damaged verdict (GH #128) — same red wash the
+        // ffprobeFailed state uses (one damaged-row language).
+        if audioVerifyStatus == "damaged" {
+            return Color.red.opacity(0.15)
         }
         switch streamType {
         case .videoOnly:     return Color.yellow.opacity(0.25)
