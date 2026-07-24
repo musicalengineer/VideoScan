@@ -23,9 +23,15 @@ struct GeneratedMediaPerformanceTests {
         envDouble("VIDEOSCAN_PERF_DURATION", default: 1.5)
     }
 
+    // Large corpora (run_generated_media_perf.sh --file-count 1000) blow past a
+    // fixed 10-minute budget, so the limit is tunable per invocation.
+    private static var timeLimitMinutes: Int {
+        envInt("VIDEOSCAN_PERF_TIME_LIMIT_MIN", default: 10)
+    }
+
     @Test(
         .disabled(if: !isEnabled, "Set VIDEOSCAN_PERF=1 to run generated-media benchmarks"),
-        .timeLimit(.minutes(10))
+        .timeLimit(.minutes(timeLimitMinutes))
     )
     func catalogProbeThroughputColdAndWarmCache() async throws {
         guard TestMediaGenerator.isAvailable else { return }
@@ -62,7 +68,7 @@ struct GeneratedMediaPerformanceTests {
 
     @Test(
         .disabled(if: !isEnabled, "Set VIDEOSCAN_PERF=1 to run generated-media benchmarks"),
-        .timeLimit(.minutes(10))
+        .timeLimit(.minutes(timeLimitMinutes))
     )
     func framePrefetcherDecodeThroughput() async throws {
         guard TestMediaGenerator.isAvailable else { return }
@@ -107,7 +113,7 @@ struct GeneratedMediaPerformanceTests {
 
     @Test(
         .disabled(if: !isEnabled, "Set VIDEOSCAN_PERF=1 to run generated-media benchmarks"),
-        .timeLimit(.minutes(10))
+        .timeLimit(.minutes(timeLimitMinutes))
     )
     func generatedMediaCleanupRemovesBenchmarkFiles() throws {
         guard TestMediaGenerator.isAvailable else { return }
@@ -285,8 +291,14 @@ struct GeneratedMediaPerformanceTests {
         return value
     }
 
+    // Per-run results path so concurrent invocations can't clobber each other;
+    // the fixed /tmp path remains as fallback for direct xcodebuild invocations.
     private static var metricsURL: URL {
-        URL(fileURLWithPath: "/tmp/videoscan_perf_results.txt")
+        if let path = ProcessInfo.processInfo.environment["VIDEOSCAN_PERF_RESULTS"],
+           !path.isEmpty {
+            return URL(fileURLWithPath: path)
+        }
+        return URL(fileURLWithPath: "/tmp/videoscan_perf_results.txt")
     }
 
     private static func emit(_ line: String) {
