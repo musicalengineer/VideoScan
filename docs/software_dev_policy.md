@@ -5,12 +5,22 @@ VideoScan, this is the process. It is deliberately short; follow it exactly.
 (Replaces `development_practices.md` and `features_and_branches.md`, 2026-07-25.
 Their full content lives in git history if you need the deep dives.)
 
-## The One Rule
+## The Merge Gate
 
-**Nothing merges to main unless BOTH are true:**
+**A branch merges to main when ALL of these hold (Rick's rules, 2026-07-25):**
 
-1. **It has been code-reviewed** by Claude or Codex (latest cloud model).
-2. **Rick has approved it** — normally by building and spot-testing the branch.
+1. **Fresh main first.** Merge the latest main back into your branch and
+   confirm the suite is green there before merging out.
+2. **Tests exist.** Feature → relevant tests (see Testing Rules). Bugfix →
+   regression test(s), RGRG (test seen to FAIL on the broken code, then pass
+   on the fix — the revert ritual) or at minimum RG.
+3. **Independent review.** A qualified agent — the most capable current model
+   of the OTHER side — reviewed the change: Codex reviews Claude's changes,
+   Claude reviews Codex's. Rick may review/approve himself instead; his usual
+   role is spot-testing the app in the affected area (the acid test).
+   If the cross-reviewer hasn't responded within ~4 hours or by next session
+   start, escalate: independent same-side review, or ask Rick.
+4. **Rick can waive any of this** to break a logjam. His call, not yours.
 
 Exception: documentation-only commits (`docs/`, team-channel messages) and
 metrics/CI publishes may go straight to main under standing permission.
@@ -20,9 +30,9 @@ Everything that touches code takes the gate.
 
 | Who | Role |
 |---|---|
-| Rick | Director / CTO. Final approval on every merge. Architect of record. |
-| Claude | Principal developer. Manages sub-agents (feature-dev, bug-fix, testing, qa, …). |
-| Codex | Principal test engineer. Owns the UI-test track and eval tooling. |
+| Rick | Director / CTO. Sets policy, spot-tests, breaks ties, can waive gates. |
+| Claude | Principal developer. Manages sub-agents (feature-dev, bug-fix, testing, qa, …). Reviews Codex's changes. |
+| Codex | Principal test engineer. Owns the UI-test track and eval tooling. Reviews Claude's changes. **Primary for the toughest code decisions.** |
 
 Claude ⇄ Codex coordination happens in `docs/team-channel/` (one file per
 message; see its README). Check it at session start and before touching
@@ -34,8 +44,9 @@ shared surfaces.
   `feature/…`, `fix/…`, `refactor/…`, `test/…`, `experiment/…`, `poi/…`
   (short-kebab).
 - **Main always builds and passes the unit suite.**
-- **Merge** = fast-forward after review + Rick's approval. If main moved,
-  rebase the branch onto `origin/main` first.
+- **Merge** = the gate above, then merge. If main moved, merge latest main
+  INTO your branch (no rebase/history-rewrite of pushed branches) and re-run
+  the suite before merging out.
 - **Never** force-push, rewrite history on main, or delete branches/files
   without asking. File deletions go to the repo `.trash/`, not `rm`.
 - **`~/dev/VideoScan` is Rick's checkout.** Never switch its branch, leave
@@ -91,7 +102,8 @@ xcodebuild test -project VideoScan/VideoScan.xcodeproj -scheme VideoScan \
   -destination 'platform=macOS' -only-testing:VideoScanTests \
   -derivedDataPath /path/to/isolated/dd
 
-# After review + Rick's approval (ff-merge)
+# When the gate is satisfied
+git merge origin/main        # freshen the branch, re-run suite
 git push origin <branch>:main
 ```
 
