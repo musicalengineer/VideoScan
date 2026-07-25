@@ -203,6 +203,13 @@ final class RebuildAudioJob: @MainActor MediaFileOperationJob {
     /// Test seam: overrides ToolLocator's ffmpeg (failure injection).
     private let ffmpegPathOverride: String?
 
+    /// Per-disk pacing (GH #132): the render is a long sequential
+    /// read+write against the source's volume — held for the whole run
+    /// via PairCompareJob's recursive withPermit idiom so a batch of
+    /// rebuilds against one HDD runs one at a time. Empty = ungated
+    /// (SSD/internal, and legacy test call sites).
+    private let gates: [MediaVolumeGate]
+
     private weak var model: VideoScanModel?
 
     let canPause = false
@@ -235,11 +242,13 @@ final class RebuildAudioJob: @MainActor MediaFileOperationJob {
          shape: AudioVerifyShape,
          model: VideoScanModel,
          plannedOutput: URL? = nil,
+         gates: [MediaVolumeGate] = [],
          ffmpegPathOverride: String? = nil) {
         self.record = record
         self.reason = reason
         self.shape = shape
         self.model = model
+        self.gates = gates
         self.ffmpegPathOverride = ffmpegPathOverride
         self.subtitleText = "Preparing to rebuild the audio track…"
         self.outputURL = plannedOutput
@@ -251,7 +260,28 @@ final class RebuildAudioJob: @MainActor MediaFileOperationJob {
         guard task == nil else { return }
         task = Task { [weak self] in
             guard let self else { return }
-            await self.runRebuild()
+            await self.runHoldingGates(self.gates[...])
+        }
+    }
+
+    /// Acquire each volume gate in order, then run the rebuild while
+    /// holding all of them (PairCompareJob's recursive withPermit idiom
+    /// — release is guaranteed even on cancellation). While queued the
+    /// row reads "Waiting for <volume>…".
+    private func runHoldingGates(_ remaining: ArraySlice<MediaVolumeGate>) async {
+        guard let gate = remaining.first else {
+            await runRebuild()
+            return
+        }
+        subtitleText = "Waiting for \(gate.label)…"
+        do {
+            try await gate.semaphore.withPermit { [weak self] in
+                await self?.runHoldingGates(remaining.dropFirst())
+            }
+        } catch {
+            // Only CancellationError escapes withPermit here — the user
+            // cancelled while queued behind another job.
+            finishCancelled()
         }
     }
 

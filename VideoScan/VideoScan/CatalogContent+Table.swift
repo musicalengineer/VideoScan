@@ -616,27 +616,68 @@ extension CatalogContent {
                               : "Cut static or junk off the start and end — a perfect copy with no quality loss. The original is never changed.")
                         .accessibilityIdentifier("catalog.row.trimMaster")
 
-                        // Verify Audio — GH #128, Rick 2026-07-24. The
-                        // diagnose-first replacement for "bad audio"
-                        // dead-ends: one sheet that checks the sound
-                        // track (levels, codec, reference-movie drefs,
-                        // duration mismatch) and offers the matching
-                        // repair where one exists. Works on ANY
-                        // reachable row — even no-audio and
-                        // ffprobe-failed files get an honest verdict.
-                        // Disabled only while its repair job is already
-                        // running against this record.
-                        let rebuildRunning = fileOpsCenter.jobs.contains { job in
-                            guard job.state.isActive, let r = job as? RebuildAudioJob else { return false }
-                            return r.record.id == rec.id
+                        // Verify Audio — GH #128 + #135, Rick 2026-07-24.
+                        // The diagnosis checks the sound track (levels,
+                        // codec, reference-movie drefs, duration
+                        // mismatch) and persists the verdict. It runs as
+                        // MFO jobs for ANY selection size — the levels
+                        // pass decodes the whole track (minutes on long
+                        // tapes), so it must never block the catalog in
+                        // a modal sheet. Results are read afterwards via
+                        // "Verification Results…" below (instant — the
+                        // computed diagnosis is cached, nothing re-runs).
+                        let verifiableRecs = activeRecs.filter {
+                            VolumeReachability.isReachable(path: $0.fullPath)
                         }
-                        Button("Verify Audio…") {
-                            verifyAudioRequest = VerifyAudioRequest(record: rec)
+                        Button(activeRecs.count > 1
+                               ? "Verify Audio (\(activeRecs.count) Files)"
+                               : "Verify Audio") {
+                            for r in verifiableRecs {
+                                fileOpsCenter.startVerifyAudio(record: r, model: model)
+                            }
+                            openWindow(id: "combine")
                         }
-                        .disabled(!VolumeReachability.isReachable(path: rec.fullPath)
-                                  || rebuildRunning)
-                        .help("Check this file's sound track — levels, format, and whether the audio really belongs to the picture — and get a repair offer where one exists.")
+                        .disabled(verifiableRecs.isEmpty)
+                        .help("Check the sound track — levels, format, and whether the audio really belongs to the picture. Runs in the operations window; the catalog stays usable.")
                         .accessibilityIdentifier("catalog.row.verifyAudio")
+
+                        // Verification Results — instant presentation of
+                        // the already-computed diagnosis (GH #135). Shown
+                        // only when this session's verify produced one;
+                        // the sheet performs NO probe and NO levels
+                        // decode (its request type requires a computed
+                        // diagnosis). Repair offers live there.
+                        if activeRecs.count == 1,
+                           let cached = fileOpsCenter.verifyDiagnosis(forRecordID: rec.id) {
+                            Button("Verification Results…") {
+                                verifyAudioRequest = VerifyAudioRequest(
+                                    record: rec, diagnosis: cached)
+                            }
+                            .help("Show what Verify Audio found for this file — instantly, without checking it again — plus any repair offer.")
+                            .accessibilityIdentifier("catalog.row.verifyResults")
+                        }
+
+                        // Repair Damaged Audio — the batch repair verb
+                        // (GH #132 P1): re-verifies each damaged row and
+                        // chains straight into Rebuild Audio Track when
+                        // the damage is the repairable codec class. The
+                        // Center's duplicate guards protect re-clicks.
+                        let damagedRecs = verifiableRecs.filter {
+                            $0.audioVerifyStatus == "damaged"
+                        }
+                        if !damagedRecs.isEmpty {
+                            Button(damagedRecs.count > 1
+                                   ? "Repair Damaged Audio (\(damagedRecs.count) Files)"
+                                   : "Repair Damaged Audio") {
+                                for r in damagedRecs {
+                                    fileOpsCenter.startVerifyAudio(
+                                        record: r, model: model, autoRepair: true)
+                                }
+                                openWindow(id: "combine")
+                            }
+                            .help("Re-check each damaged file and, where the damage is fixable (an old sound format), rebuild a repaired copy next to the original. Originals are never changed.")
+                            .accessibilityIdentifier("catalog.row.repairDamagedAudio")
+                        }
 
                         // Rick 2026-06-14: grey out (don't hide) when
                         // the file lacks the relevant stream. More

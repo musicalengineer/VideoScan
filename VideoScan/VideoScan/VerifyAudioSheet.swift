@@ -1,52 +1,55 @@
 import SwiftUI
 
-// MARK: - Verify Audio sheet (diagnose-then-offer)
+// MARK: - Verification Results sheet
 //
-// "Verify Audio…" — GH #128. Presented via `.sheet(item:)` from the
-// catalog row context menu (NEVER chained isPresented sheets —
-// documented antipattern). Mirrors BalanceAudioSheet's analyze-first
-// shape, but generalized: the diagnosis produces a FINDINGS LIST, and
-// each finding carries at most ONE action button where a repair exists
-// (Balance Audio for imbalance, Rebuild Audio Track for codec trouble).
-// Healthy files get the "All is well" verdict with the full tech
-// readout. No jargon dead-ends — every finding explains itself in
-// family language and says what (if anything) can be done.
+// GH #128 originally ran the diagnosis INSIDE this sheet — but the
+// levels pass decodes the whole audio track (minutes on long tapes) and
+// the sheet is window-modal, so the catalog sat blocked (GH #135, Rick
+// 2026-07-24). The diagnosis now ALWAYS runs as a VerifyAudioJob in the
+// Media File Operations window; this sheet is purely the RESULTS
+// presentation: it renders an ALREADY-COMPUTED AudioVerifyDiagnosis
+// (from the Center's session cache) instantly — no probe, no levels
+// decode, nothing to wait for. The compiler enforces that contract:
+// `VerifyAudioRequest.diagnosis` is non-optional, so a pre-diagnosis
+// presentation is unrepresentable.
 //
-// The diagnosis verdict PERSISTS: on completion the record's
-// audioVerifyStatus / audioVerifyNote / audioVerifyDate are written
-// (damaged rows render red in the catalog so Rick can batch-find and
-// delete them later).
+// The verdict was already persisted by the job (audioVerifyStatus /
+// audioVerifyNote / audioVerifyDate) — this sheet writes nothing.
+// The repair-offer buttons (Balance Audio / Rebuild Audio Track) live
+// here exactly as before.
+//
+// Presented via `.sheet(item:)` from the catalog row context menu
+// ("Verification Results…") — NEVER chained isPresented sheets
+// (documented antipattern).
 //
 // Text sizes are deliberately generous (.title2/.body, nothing smaller
 // than .callout) — large readable text is an accessibility need here,
 // not polish.
 
-/// A pending sheet presentation. Fresh ID per menu click (same shape as
-/// BalanceAudioRequest).
+/// A pending results presentation. Fresh ID per menu click (same shape
+/// as BalanceAudioRequest). Carries the record AND its computed
+/// diagnosis — the diagnosis is required, which is what guarantees this
+/// sheet can never block on a probe.
 struct VerifyAudioRequest: Identifiable {
     let id = UUID()
     let record: VideoRecord
+    let diagnosis: AudioVerifyDiagnosis
 }
 
 struct VerifyAudioSheet: View {
     @EnvironmentObject private var fileOpsCenter: MediaFileOperationsCenter
+    // Passed whole into startBalanceAudio/startRebuildAudio (the repair
+    // dispatches) — no property reads here, and that's intentional.
+    // vs-lint:disable-next vs-env-object-unused
     @EnvironmentObject private var model: VideoScanModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openWindow) private var openWindow
 
     let request: VerifyAudioRequest
 
-    /// The diagnose-first phase. (≈ a C++ tagged union / std::variant.)
-    private enum Phase {
-        case analyzing
-        case diagnosed(AudioVerifyDiagnosis)
-        case failed(String)
-    }
-    @State private var phase: Phase = .analyzing
-
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Verify Audio")
+            Text("Verification Results")
                 .font(.title2.weight(.semibold))
                 .accessibilityIdentifier("verifySheet.title")
 
@@ -55,36 +58,10 @@ struct VerifyAudioSheet: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
 
-            switch phase {
-            case .analyzing:
-                HStack(spacing: 10) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Checking the audio track…")
-                        .font(.body)
-                        .foregroundColor(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 20)
-                .accessibilityIdentifier("verifySheet.analyzing")
-
-            case .failed(let message):
-                Label {
-                    Text(message)
-                        .font(.body)
-                        .fixedSize(horizontal: false, vertical: true)
-                } icon: {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundColor(.orange)
-                }
-                .accessibilityIdentifier("verifySheet.error")
-
-            case .diagnosed(let diagnosis):
-                if diagnosis.isHealthy {
-                    healthyView(diagnosis)
-                } else {
-                    findingsView(diagnosis)
-                }
+            if request.diagnosis.isHealthy {
+                healthyView(request.diagnosis)
+            } else {
+                findingsView(request.diagnosis)
             }
 
             HStack {
@@ -96,9 +73,6 @@ struct VerifyAudioSheet: View {
         }
         .padding(24)
         .frame(width: 600)
-        // Runs once per presentation; the probe is @concurrent so the
-        // decode never touches the main thread.
-        .task { await runDiagnosis() }
     }
 
     // MARK: Healthy — "All is well" + tech readout
@@ -204,7 +178,7 @@ struct VerifyAudioSheet: View {
         // the red catalog row has an obvious source.
         if diagnosis.persistedStatus == "damaged" {
             Label {
-                Text("This file's audio is damaged — it's now marked red in the catalog so you can find it again later.")
+                Text("This file's audio is damaged — it's marked red in the catalog so you can find it again later.")
                     .font(.body.weight(.medium))
                     .fixedSize(horizontal: false, vertical: true)
             } icon: {
@@ -365,35 +339,6 @@ struct VerifyAudioSheet: View {
     }
 
     // MARK: Actions
-
-    private func runDiagnosis() async {
-        let path = request.record.fullPath
-        do {
-            let diagnosis = try await VerifyAudioProbe.diagnose(path: path)
-            phase = .diagnosed(diagnosis)
-            persistVerdict(diagnosis)
-        } catch AudioVerifyProbeError.toolUnavailable(let detail) {
-            phase = .failed(detail)
-        } catch AudioVerifyProbeError.probeFailed(let detail) {
-            phase = .failed("Could not check the audio — \(detail)")
-        } catch is CancellationError {
-            // Sheet dismissed mid-probe — nothing to show or persist.
-        } catch {
-            phase = .failed("Could not check the audio — \(error.localizedDescription)")
-        }
-    }
-
-    /// Write the verdict onto the record (the persistent damaged
-    /// marking the red rows key off) and schedule the debounced save —
-    /// same persistence path the Tag menu uses. A failed probe never
-    /// writes anything: "couldn't check" is not a verdict.
-    private func persistVerdict(_ diagnosis: AudioVerifyDiagnosis) {
-        let rec = request.record
-        rec.audioVerifyStatus = diagnosis.persistedStatus
-        rec.audioVerifyNote = diagnosis.persistedNote
-        rec.audioVerifyDate = Date()
-        model.saveCatalogDebounced()
-    }
 
     private func startBalance(_ analysis: AudioBalanceAnalysis) {
         fileOpsCenter.startBalanceAudio(record: request.record,

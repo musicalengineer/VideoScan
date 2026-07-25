@@ -85,6 +85,13 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// `<stem>_RepairedAudio.mov` beside the original, which is never
     /// modified. Rick 2026-07-24.
     case rebuildAudio
+    /// "Verify Audio" — the diagnosis itself as a job (GH #135, Rick
+    /// 2026-07-24): the levels pass decodes the whole audio track
+    /// (minutes on long tapes), so it runs HERE, never in a modal
+    /// sheet over the catalog. Single- and multi-select both dispatch
+    /// these; the results sheet presents the already-computed
+    /// diagnosis afterwards without re-running anything.
+    case verifyAudio
 
     /// Badge text — rendered in small caps by the row view.
     /// `.extract` says "Faces" (not "Extract") since the verb split:
@@ -103,6 +110,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .trim: return "Trim"
         case .balanceAudio: return "Balance"
         case .rebuildAudio: return "Rebuild"
+        case .verifyAudio: return "Verify"
         }
     }
 
@@ -124,6 +132,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .trim: return "trim"
         case .balanceAudio: return "balance audio"
         case .rebuildAudio: return "rebuild audio"
+        case .verifyAudio: return "verify audio"
         }
     }
 }
@@ -377,6 +386,42 @@ final class MediaFileOperationsCenter: ObservableObject {
 
     var runningCount: Int {
         jobs.filter { $0.state.isActive }.count
+    }
+
+    // MARK: Verify Audio diagnosis cache (GH #135)
+    //
+    // Completed VerifyAudioJobs park their computed AudioVerifyDiagnosis
+    // here, keyed by record id, so "Verification Results…" can present
+    // it instantly — no re-probe, and NEVER a re-run of the levels pass
+    // (the whole-track decode that motivated moving verify off the
+    // sheet). Session-scoped, newest-wins per record.
+    //
+    // Memory: a diagnosis is a few small value structs (findings +
+    // shape + optional per-channel levels) — well under 1 KB each.
+    // FIFO-capped at 200 entries ⇒ worst case ~200 KB.
+
+    private var verifyDiagnoses: [UUID: AudioVerifyDiagnosis] = [:]
+    private var verifyDiagnosisOrder: [UUID] = []
+    static let verifyDiagnosisCap = 200
+
+    /// The most recent completed diagnosis for a record this session,
+    /// or nil (never verified this session / evicted by the cap).
+    func verifyDiagnosis(forRecordID id: UUID) -> AudioVerifyDiagnosis? {
+        verifyDiagnoses[id]
+    }
+
+    /// Store (newest-wins) with FIFO eviction at the cap. Internal so
+    /// tests can seed the cache directly.
+    func storeVerifyDiagnosis(_ diagnosis: AudioVerifyDiagnosis, forRecordID id: UUID) {
+        if verifyDiagnoses[id] == nil {
+            verifyDiagnosisOrder.append(id)
+            if verifyDiagnosisOrder.count > Self.verifyDiagnosisCap {
+                let evicted = verifyDiagnosisOrder.removeFirst()
+                verifyDiagnoses[evicted] = nil
+            }
+        }
+        verifyDiagnoses[id] = diagnosis
+        objectWillChange.send()   // context menus key off cache presence
     }
 
     // MARK: List management
@@ -755,13 +800,73 @@ final class MediaFileOperationsCenter: ObservableObject {
             appLog.write("rebuild audio refused: \(record.filename) — a rebuild job for this file is already running; nothing was started")
             return nil
         }
+        // Per-disk pacing (GH #132): the rebuild is a long sequential
+        // read+write on the source's volume — it takes the same gates
+        // compare/extract do, so a 25-job batch on one HDD renders one
+        // at a time instead of thrashing the disk.
         let job = RebuildAudioJob(record: record, reason: reason,
                                   shape: shape, model: model,
-                                  plannedOutput: plannedOutput)
+                                  plannedOutput: plannedOutput,
+                                  gates: gatePlan(forPaths: [record.fullPath]))
         add(job)
         job.start()
         fileOpsLog.info("rebuildAudio started: \(record.filename, privacy: .public) (\(reason, privacy: .public)) → \(job.outputURL.lastPathComponent, privacy: .public)")
         logStart(job, plan: "\(reason) → \(job.outputURL.lastPathComponent)")
+        return job
+    }
+
+    /// Kick off "Verify Audio" as an MFO job (GH #135 — the levels pass
+    /// decodes the whole audio track, so it must never block the UI in
+    /// a sheet). Persists the verdict on completion, parks the computed
+    /// diagnosis in the cache for "Verification Results…", and — when
+    /// `autoRepair` is set (the batch "Repair Damaged Audio" path) —
+    /// chains straight into `startRebuildAudio` for an unsupported-codec
+    /// finding (the Center's duplicate guard protects the chain).
+    /// Returns nil — REFUSING the dispatch — when a verify job is
+    /// already active for this same record.
+    ///
+    /// `diagnoseOverride` is a TEST SEAM only (the VerifyAudioProbe
+    /// override convention) — every production call site passes nil.
+    @discardableResult
+    func startVerifyAudio(record: VideoRecord,
+                          model: VideoScanModel,
+                          autoRepair: Bool = false,
+                          diagnoseOverride: (@Sendable (String) async throws -> AudioVerifyDiagnosis)? = nil) -> VerifyAudioJob? {
+        let duplicate = jobs.contains { job in
+            guard job.state.isActive, let v = job as? VerifyAudioJob else { return false }
+            return v.record.id == record.id
+        }
+        guard !duplicate else {
+            fileOpsLog.notice("verifyAudio REFUSED duplicate dispatch: \(record.filename, privacy: .public) already has an active verify job")
+            appLog.write("verify audio refused: \(record.filename) — a verify job for this file is already running; nothing was started")
+            return nil
+        }
+        let job = VerifyAudioJob(record: record,
+                                 model: model,
+                                 autoRepair: autoRepair,
+                                 gates: gatePlan(forPaths: [record.fullPath]),
+                                 diagnoseOverride: diagnoseOverride)
+        job.onDiagnosis = { [weak self, weak model] job, diagnosis in
+            guard let self else { return }
+            self.storeVerifyDiagnosis(diagnosis, forRecordID: job.record.id)
+            guard job.autoRepair, let model else { return }
+            // One repair verb per finding kind: the rebuild covers the
+            // unsupported/undecodable-codec class only. Other findings
+            // (reference movie, wrong-audio) have no automatic repair.
+            if let finding = diagnosis.findings.first(where: {
+                if case .unsupportedCodec = $0 { return true }
+                return false
+            }) {
+                self.startRebuildAudio(record: job.record,
+                                       reason: VerifyAudioRules.noteFragment(for: finding),
+                                       shape: diagnosis.shape,
+                                       model: model)
+            }
+        }
+        add(job)
+        job.start()
+        fileOpsLog.info("verifyAudio started: \(record.filename, privacy: .public) (autoRepair=\(autoRepair))")
+        logStart(job, plan: autoRepair ? "diagnose + repair if damaged" : "diagnose the audio track")
         return job
     }
 

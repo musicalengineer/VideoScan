@@ -582,6 +582,9 @@ extension MediaFileOperationKind {
         // keeps the audio-repair pair (pink/brown) adjacent but
         // distinguishable.
         case .rebuildAudio: return .brown
+        // Verify Audio (the diagnosis as a job, GH #135) — yellow reads
+        // as "checking", distinct from its brown repair sibling.
+        case .verifyAudio: return .yellow
         }
     }
 }
