@@ -491,6 +491,53 @@ struct VerifyAudioMediaMatrixTests {
         }
         #expect(!recheckRan.isSet, "timeout must not trigger the reachability recheck")
     }
+
+    @Test("GH #136 (QA MINOR-2): SHAPE-probe timeout inside analyze → diagnose throws, no damage verdict, recheck not consulted",
+          .timeLimit(.minutes(2)))
+    func shapeProbeTimeoutThrowsWithoutDamageVerdict() async throws {
+        // AudioBalanceProbe.analyze's 60 s ffprobe shape probe now throws
+        // .timedOut(afterSeconds: 60) when the runner's deadline killed
+        // ffprobe (previously a generic probeFailed — which reached the
+        // reachability recheck and, on a stalled-then-recovered mount,
+        // could still mint a damage verdict from a runner kill). Pin the
+        // whole diagnose-level contract for that error shape.
+        try #require(VerifyAudioTestMedia.toolsAvailable)
+        let dir = try VerifyAudioTestMedia.makeScratchDir("timeout_shape")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = try VerifyAudioTestMedia.generate(
+            into: dir, name: "test_verify_timeout_shape.mov",
+            videoCodec: "libx264", extraVideoArgs: ["-preset", "ultrafast"],
+            audioCodec: "pcm_s16le")
+
+        let recheckRan = LockedFlagBox()
+        var thrown: Error?
+        do {
+            _ = try await VerifyAudioProbe.diagnose(
+                path: path,
+                analyzeOverride: { _ in
+                    // Exactly what the shape-probe guard throws post-fix.
+                    throw AudioBalanceProbeError.timedOut(afterSeconds: 60)
+                },
+                sourceRecheckOverride: { _ in
+                    recheckRan.set()
+                    return true   // "recovered mount" — the trap case
+                })
+        } catch {
+            thrown = error
+        }
+        guard case AudioVerifyProbeError.probeFailed(let detail)? = thrown else {
+            Issue.record("shape-probe timeout must throw a diagnosis failure, got \(String(describing: thrown))")
+            return
+        }
+        #expect(!recheckRan.isSet,
+                "shape-probe timeout must not trigger the reachability recheck")
+        let lower = detail.lowercased()
+        #expect(!lower.contains("undecodable") && !lower.contains("codec")
+                && !lower.contains("damaged"),
+                "no damage language for a runner kill: \(detail)")
+        #expect(detail.contains("no verdict was recorded"),
+                "message must promise nothing was recorded: \(detail)")
+    }
 }
 
 /// Minimal thread-safe flag for @Sendable test closures.

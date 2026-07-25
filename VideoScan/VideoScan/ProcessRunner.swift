@@ -183,6 +183,12 @@ enum ProcessRunner {
         /// indistinguishable — which is how a healthy 63.7 GB archive got
         /// a persisted "undecodable audio" damage verdict. Defaults false;
         /// callers that don't care see no change (additive).
+        ///
+        /// RACE NOTE: `timedOut` can be true alongside `exitCode == 0` —
+        /// the child may finish in the instant between the deadline
+        /// firing and the SIGTERM landing. Consumers must gate on a
+        /// nonzero exit FIRST and only then consult `timedOut`;
+        /// `succeeded` already answers correctly for that race.
         var timedOut: Bool = false
 
         var succeeded: Bool { exitCode == 0 && stdout != nil }

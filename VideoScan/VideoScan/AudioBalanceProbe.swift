@@ -158,7 +158,7 @@ enum AudioBalanceProbe {
     static let levelsDeadlineCapSeconds: Double = 1800
     /// Demux budget: the astats passes decode ONLY the audio, but ffmpeg
     /// must still demux (read) the whole container to reach it — the
-    /// dominant cost on big files. 100 MB/s is a conservative sequential-
+    /// dominant cost on big files. 100 MiB/s is a conservative sequential-
     /// read rate for the external HDDs the archives live on; SSDs finish
     /// far inside the budget. Proof case: a 63.7 GB / 2h03m ffv1 mkv
     /// needs > 300 s just to stream the bytes, which is exactly how a
@@ -307,6 +307,17 @@ enum AudioBalanceProbe {
             deadlineSeconds: 60)
         guard probeResult.exitCode == 0, let stdout = probeResult.stdout,
               let data = stdout.data(using: .utf8) else {
+            // Same GH #136 rule as the astats passes below: a deadline
+            // kill is OUR timeout, never file evidence. Without this, a
+            // shape-probe kill (stalled mount) surfaced as a generic
+            // probeFailed, which Verify Audio's analyze-failure path
+            // arbitrates with the reachability recheck — and a mount
+            // that recovers inside the 15 s recheck window would mint a
+            // damage verdict from a runner kill. Gate on nonzero exit
+            // first (see Result.timedOut race note).
+            if probeResult.timedOut, probeResult.exitCode != 0 {
+                throw AudioBalanceProbeError.timedOut(afterSeconds: 60)
+            }
             throw AudioBalanceProbeError.probeFailed(
                 "ffprobe exited with status \(probeResult.exitCode)")
         }
