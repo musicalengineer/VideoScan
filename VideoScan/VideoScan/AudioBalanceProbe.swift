@@ -131,11 +131,49 @@ enum AudioBalanceProbeError: Error, Equatable {
     case toolUnavailable(String)
     case noAudioStream
     case probeFailed(String)
+    /// The astats pass hit OUR OWN per-run time limit (GH #136) — the
+    /// runner killed ffmpeg, the file said nothing about itself. A
+    /// distinct case, NOT probeFailed: Verify Audio's analyze-failure
+    /// classification converts a probeFailed on a still-reachable file
+    /// into an "undecodable audio" DAMAGE verdict, and that verdict
+    /// feeds the notes:damaged batch-delete flow. A timeout is neither
+    /// unreachable nor undecodable — it must never become damage
+    /// evidence. Balance Audio's own callers treat it as a plain
+    /// analysis failure, exactly like probeFailed, just with an honest
+    /// message.
+    case timedOut(afterSeconds: Int)
 }
 
 // MARK: - Probe
 
 enum AudioBalanceProbe {
+
+    // MARK: Levels-pass deadline (GH #136 — pinned in ONE place)
+
+    /// Floor for the astats-pass deadline: the historical 300 s, plenty
+    /// for any normal-sized file even on a slow spinning volume.
+    static let levelsDeadlineFloorSeconds: Double = 300
+    /// Hard cap: even a giant archive on a struggling disk gets at most
+    /// 30 minutes per pass before we give up honestly.
+    static let levelsDeadlineCapSeconds: Double = 1800
+    /// Demux budget: the astats passes decode ONLY the audio, but ffmpeg
+    /// must still demux (read) the whole container to reach it — the
+    /// dominant cost on big files. 100 MB/s is a conservative sequential-
+    /// read rate for the external HDDs the archives live on; SSDs finish
+    /// far inside the budget. Proof case: a 63.7 GB / 2h03m ffv1 mkv
+    /// needs > 300 s just to stream the bytes, which is exactly how a
+    /// healthy file used to blow the old fixed deadline.
+    static let levelsDemuxBudgetBytesPerSecond: Double = 100 * 1024 * 1024
+
+    /// Deadline for one astats pass, scaled to the file's size:
+    /// max(300 s, ceil(bytes / 100 MiB-per-s)), capped at 1800 s.
+    /// Unknown/zero size falls back to the floor. Pure — unit-tested in
+    /// BalanceAudioProbeTests.
+    static func levelsDeadlineSeconds(forFileSizeBytes bytes: Int64) -> Double {
+        guard bytes > 0 else { return levelsDeadlineFloorSeconds }
+        let scaled = (Double(bytes) / levelsDemuxBudgetBytesPerSecond).rounded(.up)
+        return min(max(levelsDeadlineFloorSeconds, scaled), levelsDeadlineCapSeconds)
+    }
 
     // MARK: Pure argument builders (unit-tested, no I/O)
 
@@ -275,6 +313,14 @@ enum AudioBalanceProbe {
         var shape = try Self.shape(fromProbeJSON: data)
         try Task.checkCancellation()
 
+        // ---- Scaled deadline for the full-decode passes (GH #136):
+        // both astats passes demux the whole container, so their time
+        // budget must follow the file's size. Repo-standard attributes
+        // read; unknown size → the 300 s floor.
+        let fileSizeBytes = ((try? FileManager.default
+            .attributesOfItem(atPath: path))?[.size] as? NSNumber)?.int64Value ?? 0
+        let passDeadline = levelsDeadlineSeconds(forFileSizeBytes: fileSizeBytes)
+
         // ---- Per-channel levels of EVERY audio stream (audio-only
         // decode, one pass each — 12-bit DV tapes carry two pairs).
         var perStream: [[AudioChannelLevels]] = []
@@ -282,8 +328,14 @@ enum AudioBalanceProbe {
             let levelsResult = await ProcessRunner.runProcess(
                 executable: ffmpeg,
                 arguments: levelsArgs(input: path, audioStreamOrdinal: ordinal),
-                deadlineSeconds: 300)
+                deadlineSeconds: passDeadline)
             guard levelsResult.exitCode == 0 else {
+                if levelsResult.timedOut {
+                    // OUR deadline killed ffmpeg — says nothing about the
+                    // file. Distinct case so callers can never mistake it
+                    // for decode failure (GH #136).
+                    throw AudioBalanceProbeError.timedOut(afterSeconds: Int(passDeadline))
+                }
                 throw AudioBalanceProbeError.probeFailed(
                     "ffmpeg astats pass on audio stream \(ordinal) exited with status \(levelsResult.exitCode)")
             }
@@ -332,8 +384,11 @@ enum AudioBalanceProbe {
             let diffResult = await ProcessRunner.runProcess(
                 executable: ffmpeg,
                 arguments: differenceArgs(input: path, audioStreamOrdinal: chosenOrdinal),
-                deadlineSeconds: 300)
+                deadlineSeconds: passDeadline)
             guard diffResult.exitCode == 0 else {
+                if diffResult.timedOut {
+                    throw AudioBalanceProbeError.timedOut(afterSeconds: Int(passDeadline))
+                }
                 throw AudioBalanceProbeError.probeFailed(
                     "ffmpeg difference pass exited with status \(diffResult.exitCode)")
             }

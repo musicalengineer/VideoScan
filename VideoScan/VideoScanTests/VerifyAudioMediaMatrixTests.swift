@@ -398,6 +398,107 @@ struct VerifyAudioMediaMatrixTests {
         #expect(d.persistedNote.hasPrefix("Damaged audio — undecodable audio"))
         #expect(d.balanceAnalysis == nil)
     }
+
+    // MARK: GH #136 — a levels-pass TIMEOUT must never persist "damaged"
+
+    @Test("GH #136: levels pass times out on a reachable file → diagnosis THROWS, no damage language, nothing persisted",
+          .timeLimit(.minutes(2)))
+    func analyzeTimeoutThrowsInsteadOfDamageVerdict() async throws {
+        // The Cape-1992 bug: a healthy 63.7 GB mkv blew the fixed 300 s
+        // astats deadline; the killed ffmpeg surfaced as probeFailed, the
+        // QA F1 recheck found the file (correctly) still reachable, and
+        // the diagnosis persisted "Damaged audio — undecodable audio
+        // (aac)" — a wrong verdict feeding the notes:damaged batch-DELETE
+        // flow. Post-fix: the timeout is a DISTINCT error; even with the
+        // source demonstrably reachable (recheck forced true), diagnose
+        // must throw a diagnosis failure, never produce a verdict.
+        try #require(VerifyAudioTestMedia.toolsAvailable)
+        let dir = try VerifyAudioTestMedia.makeScratchDir("timeout")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = try VerifyAudioTestMedia.generate(
+            into: dir, name: "test_verify_timeout.mkv",
+            videoCodec: "ffv1",
+            audioCodec: "aac")
+
+        let timeoutThrow: VerifyAudioProbe.AnalyzeStep = { _ in
+            throw AudioBalanceProbeError.timedOut(afterSeconds: 300)
+        }
+        let record = VideoRecord()
+        record.fullPath = path
+        var thrown: Error?
+        do {
+            _ = try await VerifyAudioProbe.diagnose(
+                path: path,
+                analyzeOverride: timeoutThrow,
+                sourceRecheckOverride: { _ in true })   // reachable — the trap case
+        } catch {
+            thrown = error
+        }
+        guard case AudioVerifyProbeError.probeFailed(let detail)? = thrown else {
+            Issue.record("timeout must throw a diagnosis failure, got \(String(describing: thrown))")
+            return
+        }
+        // Honest, friendly, and free of codec-damage language.
+        #expect(detail.contains("ran out of time"),
+                "message must say the check ran out of time: \(detail)")
+        #expect(detail.contains("no verdict was recorded"),
+                "message must promise nothing was recorded: \(detail)")
+        let lower = detail.lowercased()
+        #expect(!lower.contains("undecodable") && !lower.contains("codec")
+                && !lower.contains("damaged") && !lower.contains("deadline")
+                && !lower.contains("exit"),
+                "no damage/jargon language in a timeout message: \(detail)")
+        // And the record's verdict fields were never written.
+        #expect(record.audioVerifyStatus == "")
+        #expect(record.audioVerifyNote == "")
+        #expect(record.audioVerifyDate == nil)
+    }
+
+    @Test("GH #136: timeout bypasses the reachability recheck — the recheck must not even run",
+          .timeLimit(.minutes(2)))
+    func analyzeTimeoutNeverConsultsReachability() async throws {
+        // The recheck exists to arbitrate probeFailed (I/O vs codec).
+        // For a timeout there is nothing to arbitrate — if the recheck
+        // ran and the volume happened to hiccup, a timeout could morph
+        // into the unreachable message, muddying the honest "too large"
+        // story. Pin: the recheck closure is never invoked.
+        try #require(VerifyAudioTestMedia.toolsAvailable)
+        let dir = try VerifyAudioTestMedia.makeScratchDir("timeout_norecheck")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = try VerifyAudioTestMedia.generate(
+            into: dir, name: "test_verify_timeout_norecheck.mov",
+            videoCodec: "libx264", extraVideoArgs: ["-preset", "ultrafast"],
+            audioCodec: "pcm_s16le")
+
+        let recheckRan = LockedFlagBox()
+        var thrown: Error?
+        do {
+            _ = try await VerifyAudioProbe.diagnose(
+                path: path,
+                analyzeOverride: { _ in
+                    throw AudioBalanceProbeError.timedOut(afterSeconds: 653)
+                },
+                sourceRecheckOverride: { _ in
+                    recheckRan.set()
+                    return false
+                })
+        } catch {
+            thrown = error
+        }
+        guard case AudioVerifyProbeError.probeFailed? = thrown else {
+            Issue.record("expected probeFailed, got \(String(describing: thrown))")
+            return
+        }
+        #expect(!recheckRan.isSet, "timeout must not trigger the reachability recheck")
+    }
+}
+
+/// Minimal thread-safe flag for @Sendable test closures.
+private final class LockedFlagBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    func set() { lock.lock(); value = true; lock.unlock() }
+    var isSet: Bool { lock.lock(); defer { lock.unlock() }; return value }
 }
 
 // MARK: - Rebuild Audio Track — real round-trip

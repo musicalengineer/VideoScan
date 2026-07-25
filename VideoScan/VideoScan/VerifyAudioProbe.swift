@@ -527,6 +527,18 @@ enum VerifyAudioProbe {
                 analysis = try await analyze(path)
             } catch is CancellationError {
                 throw CancellationError()
+            } catch AudioBalanceProbeError.timedOut(let seconds) {
+                // GH #136: the levels pass was stopped by OUR OWN time
+                // limit — the file said nothing about itself, so this is
+                // a diagnosis FAILURE (thrown; the sheet persists
+                // nothing), never damage evidence. No reachability
+                // recheck: the file is typically perfectly reachable —
+                // that's precisely why the old path misread the timeout
+                // as "undecodable audio" and dropped a healthy 63.7 GB
+                // archive into the notes:damaged batch-DELETE set.
+                verifyLog.notice("verify: levels pass hit its \(seconds)s time limit for \((path as NSString).lastPathComponent, privacy: .public) — diagnosis failure, no verdict recorded")
+                throw AudioVerifyProbeError.probeFailed(
+                    "this file is very large — the audio check ran out of time before finishing; no verdict was recorded and nothing changed. Try again when the drive is less busy")
             } catch {
                 // QA finding 1 (2026-07-24): analyze throws the SAME
                 // probeFailed for EVERY nonzero ffmpeg exit — a truly

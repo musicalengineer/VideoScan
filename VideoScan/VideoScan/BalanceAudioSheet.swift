@@ -297,6 +297,10 @@ struct BalanceAudioSheet: View {
             phase = .failed(detail)
         } catch AudioBalanceProbeError.probeFailed(let detail) {
             phase = .failed("Could not analyze the audio — \(detail)")
+        } catch AudioBalanceProbeError.timedOut {
+            // GH #136: our own time limit stopped the analysis — same
+            // failed phase as any other probe failure, honest wording.
+            phase = .failed("This file is very large — the audio analysis ran out of time before finishing. Nothing was changed; try again when the drive is less busy.")
         } catch {
             phase = .failed("Could not analyze the audio — \(error.localizedDescription)")
         }

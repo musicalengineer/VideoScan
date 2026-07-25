@@ -175,6 +175,15 @@ enum ProcessRunner {
         let stdout: String?
         let stderr: String
         let exitCode: Int32
+        /// True when THIS run's `deadlineSeconds` expired and the runner
+        /// itself signalled the child (GH #136). Exit codes alone cannot
+        /// carry this: ffmpeg traps SIGTERM and exits nonzero exactly like
+        /// a genuine decode failure, so without this flag "we killed it at
+        /// our own deadline" and "the tool failed on the file" are
+        /// indistinguishable — which is how a healthy 63.7 GB archive got
+        /// a persisted "undecodable audio" damage verdict. Defaults false;
+        /// callers that don't care see no change (additive).
+        var timedOut: Bool = false
 
         var succeeded: Bool { exitCode == 0 && stdout != nil }
     }
@@ -266,6 +275,11 @@ enum ProcessRunner {
         let stderrStreamer = LineStreamer(lineHandler: stderrLine)
         let completion = CompletionBox<Result>()
         let launchState = ProcessLaunchState()
+        // Set exactly once, when the per-run deadline fires (before the
+        // SIGTERM goes out); the terminationHandler copies it into
+        // `Result.timedOut`. Task-cancellation kills do NOT set it — only
+        // the runner's own deadline does (GH #136).
+        let deadlineFlag = DeadlineFlag()
 
         let stdoutHandle = stdoutPipe.fileHandleForReading
         let stderrHandle = stderrPipe.fileHandleForReading
@@ -321,7 +335,8 @@ enum ProcessRunner {
                     stdoutHandle: stdoutHandle, stderrHandle: stderrHandle,
                     stdoutCollector: stdoutCollector, stderrCollector: stderrCollector,
                     stdoutStreamer: stdoutStreamer, stderrStreamer: stderrStreamer,
-                    completion: completion, lifecycle: lifecycle
+                    completion: completion, lifecycle: lifecycle,
+                    deadlineFlag: deadlineFlag
                 )
                 guard !Task.isCancelled, launchState.markLaunchingUnlessCancelled() else {
                     stdoutHandle.readabilityHandler = nil
@@ -335,7 +350,7 @@ enum ProcessRunner {
                     deadlineSeconds: deadlineSeconds, killGraceSeconds: killGraceSeconds,
                     stdoutHandle: stdoutHandle, stderrHandle: stderrHandle,
                     completion: completion, lifecycle: lifecycle,
-                    launchState: launchState
+                    launchState: launchState, deadlineFlag: deadlineFlag
                 )
             }
         } onCancel: {
@@ -350,6 +365,7 @@ enum ProcessRunner {
                     killGraceSeconds: killGraceSeconds,
                     stdoutHandle: stdoutHandle, stderrHandle: stderrHandle,
                     completion: completion, lifecycle: lifecycle,
+                    deadlineFlag: deadlineFlag,
                     reason: "cancelled"
                 )
             }
@@ -367,7 +383,8 @@ enum ProcessRunner {
         stdoutStreamer: LineStreamer,
         stderrStreamer: LineStreamer,
         completion: CompletionBox<Result>,
-        lifecycle: PipeLifecycle
+        lifecycle: PipeLifecycle,
+        deadlineFlag: DeadlineFlag
     ) -> (@Sendable (Process) -> Void) {
         return { process in
             stdoutHandle.readabilityHandler = nil
@@ -402,7 +419,8 @@ enum ProcessRunner {
                 Result(
                     stdout: stdoutCollector.string,
                     stderr: stderrCollector.string ?? "",
-                    exitCode: process.terminationStatus
+                    exitCode: process.terminationStatus,
+                    timedOut: deadlineFlag.didFire
                 )
             )
         }
@@ -419,7 +437,8 @@ enum ProcessRunner {
         stderrHandle: FileHandle,
         completion: CompletionBox<Result>,
         lifecycle: PipeLifecycle,
-        launchState: ProcessLaunchState
+        launchState: ProcessLaunchState,
+        deadlineFlag: DeadlineFlag
     ) {
         do {
             try proc.run()
@@ -432,7 +451,8 @@ enum ProcessRunner {
                     stdoutHandle: stdoutHandle,
                     stderrHandle: stderrHandle,
                     completion: completion,
-                    lifecycle: lifecycle
+                    lifecycle: lifecycle,
+                    deadlineFlag: deadlineFlag
                 )
             }
             if launchState.isCancelled, proc.isRunning {
@@ -442,6 +462,7 @@ enum ProcessRunner {
                     killGraceSeconds: killGraceSeconds,
                     stdoutHandle: stdoutHandle, stderrHandle: stderrHandle,
                     completion: completion, lifecycle: lifecycle,
+                    deadlineFlag: deadlineFlag,
                     reason: "cancelled"
                 )
             }
@@ -469,7 +490,8 @@ enum ProcessRunner {
         stdoutHandle: FileHandle,
         stderrHandle: FileHandle,
         completion: CompletionBox<Result>,
-        lifecycle: PipeLifecycle
+        lifecycle: PipeLifecycle,
+        deadlineFlag: DeadlineFlag
     ) {
         let tool = (executable as NSString).lastPathComponent
         // Cancellable work item, NOT a bare asyncAfter closure: when the
@@ -478,6 +500,9 @@ enum ProcessRunner {
         // remaining deadline (walker-subtree-loss incident, 2026-07-02).
         lifecycle.schedule(on: DispatchQueue.global(qos: .utility), after: afterSeconds) {
             guard proc.isRunning else { return }
+            // Mark BEFORE signalling so the terminationHandler (which can
+            // run immediately after terminate()) always sees it (GH #136).
+            deadlineFlag.markFired()
             processRunnerLog.warning("\(tool, privacy: .public) pid \(proc.processIdentifier) exceeded \(afterSeconds, format: .fixed(precision: 0), privacy: .public)s deadline — sending SIGTERM")
             proc.terminate()
             escalateAfterTerminate(
@@ -485,6 +510,7 @@ enum ProcessRunner {
                 killGraceSeconds: killGraceSeconds,
                 stdoutHandle: stdoutHandle, stderrHandle: stderrHandle,
                 completion: completion, lifecycle: lifecycle,
+                deadlineFlag: deadlineFlag,
                 reason: "deadline \(Int(afterSeconds))s"
             )
         }
@@ -510,6 +536,7 @@ enum ProcessRunner {
         stderrHandle: FileHandle,
         completion: CompletionBox<Result>,
         lifecycle: PipeLifecycle,
+        deadlineFlag: DeadlineFlag,
         reason: String
     ) {
         let tool = (executable as NSString).lastPathComponent
@@ -530,7 +557,8 @@ enum ProcessRunner {
                 if lifecycle.abandon() {
                     completion.resume(Result(stdout: nil,
                                              stderr: "timed out (\(reason)); process unkillable, abandoned",
-                                             exitCode: -1))
+                                             exitCode: -1,
+                                             timedOut: deadlineFlag.didFire))
                 }
             }
         }
@@ -685,6 +713,28 @@ enum ProcessRunner {
                 for handle in writeHandles { try? handle.close() }
             }
             return true
+        }
+    }
+
+    /// One-way latch: set when THIS run's `deadlineSeconds` expired (GH
+    /// #136). Written on the deadline's utility queue, read from the
+    /// terminationHandler's GCD thread — hence the lock. (For Rick: a
+    /// mutex-guarded bool; std::atomic<bool> would do in C++, but the
+    /// repo's convention for these tiny boxes is NSLock.)
+    private final class DeadlineFlag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var fired = false
+
+        func markFired() {
+            lock.lock()
+            fired = true
+            lock.unlock()
+        }
+
+        var didFire: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return fired
         }
     }
 

@@ -163,4 +163,62 @@ struct ProcessRunnerConsolidationTests {
         #expect(result.exitCode == 0)
         #expect((result.stdout?.count ?? 0) <= 64 * 1024 + 256)
     }
+
+    // MARK: deadline-kill vs natural exit (GH #136)
+
+    // A deadline kill must be DISTINGUISHABLE from a natural nonzero
+    // exit: ffmpeg traps SIGTERM and exits nonzero just like a decode
+    // failure, and conflating the two is how a healthy 63.7 GB archive
+    // got a persisted "undecodable audio" damage verdict.
+    @Test func deadlineKillSetsTimedOut() async throws {
+        let result = await ProcessRunner.runProcess(
+            executable: "/bin/sleep",
+            arguments: ["30"],
+            deadlineSeconds: 0.5,
+            killGraceSeconds: 2.0
+        )
+        #expect(result.timedOut, "deadline kill must surface as timedOut")
+        #expect(result.exitCode != 0)
+    }
+
+    @Test func naturalNonzeroExitIsNotTimedOut() async throws {
+        let result = await ProcessRunner.runProcess(
+            executable: "/usr/bin/false",
+            arguments: [],
+            deadlineSeconds: 60
+        )
+        #expect(result.exitCode != 0)
+        #expect(!result.timedOut, "a genuine failure must never masquerade as a timeout")
+    }
+
+    @Test func cleanExitUnderDeadlineIsNotTimedOut() async throws {
+        let result = await ProcessRunner.runProcess(
+            executable: "/bin/echo",
+            arguments: ["fast"],
+            deadlineSeconds: 60
+        )
+        #expect(result.exitCode == 0)
+        #expect(!result.timedOut)
+    }
+
+    // Task cancellation also kills the child — but that is the CALLER's
+    // choice, not the runner's deadline; it must not read as a timeout.
+    @Test func cancellationKillIsNotTimedOut() async throws {
+        let box = LineBox()
+        let task = Task {
+            await ProcessRunner.runProcess(
+                executable: shellPath,
+                arguments: ["-c", "echo up; sleep 30"],
+                stdoutLine: { box.append($0) },
+                killGraceSeconds: 2.0
+            )
+        }
+        for _ in 0..<200 where !box.lines.contains("up") {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        task.cancel()
+        let result = await task.value
+        #expect(result.exitCode != 0)
+        #expect(!result.timedOut, "cancellation must not read as a deadline timeout")
+    }
 }

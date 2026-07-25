@@ -85,3 +85,55 @@ struct BalanceAudioProbeTests {
         }
     }
 }
+
+// MARK: - Levels-pass deadline scaling (GH #136 — pure, no I/O)
+
+@Suite("Balance Audio — levels deadline scaling")
+struct BalanceAudioLevelsDeadlineTests {
+
+    private func deadline(_ bytes: Int64) -> Double {
+        AudioBalanceProbe.levelsDeadlineSeconds(forFileSizeBytes: bytes)
+    }
+
+    @Test("small and unknown sizes get the historical 300 s floor")
+    func smallFilesGetFloor() {
+        #expect(deadline(0) == 300)                       // unknown size
+        #expect(deadline(-1) == 300)                      // defensive
+        #expect(deadline(1_000_000) == 300)               // 1 MB
+        #expect(deadline(10 * 1024 * 1024 * 1024) == 300) // 10 GiB → 103 s scaled, floor wins
+    }
+
+    @Test("floor boundary: exactly 300 s of demux budget stays 300, one byte more rounds up")
+    func floorBoundary() {
+        let floorBytes: Int64 = 300 * 100 * 1024 * 1024   // 300 s at 100 MiB/s
+        #expect(deadline(floorBytes) == 300)
+        #expect(deadline(floorBytes + 1) == 301)          // ceil
+    }
+
+    @Test("the Cape-1992 proof case: 63.7 GB scales to ~653 s — past the old fixed 300 s")
+    func capeProofCaseScales() {
+        // 63.7 GiB / (100 MiB/s) = 652.3 s → ceil 653. The old fixed
+        // 300 s deadline could never finish this file; the scaled one
+        // budgets the demux honestly.
+        let bytes = Int64(63.7 * 1024 * 1024 * 1024)
+        #expect(deadline(bytes) == 653)
+        #expect(deadline(bytes) > AudioBalanceProbe.levelsDeadlineFloorSeconds)
+        #expect(deadline(bytes) < AudioBalanceProbe.levelsDeadlineCapSeconds)
+    }
+
+    @Test("huge archives cap at 1800 s")
+    func hugeFilesCap() {
+        #expect(deadline(1024 * 1024 * 1024 * 1024) == 1800)  // 1 TiB
+        #expect(deadline(Int64.max) == 1800)
+    }
+
+    @Test("monotone: a bigger file never gets less time")
+    func monotone() {
+        var previous = 0.0
+        for gib in [1, 20, 40, 64, 100, 200, 500] {
+            let d = deadline(Int64(gib) * 1024 * 1024 * 1024)
+            #expect(d >= previous, "deadline shrank at \(gib) GiB")
+            previous = d
+        }
+    }
+}
