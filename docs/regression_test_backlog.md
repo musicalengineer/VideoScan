@@ -1,7 +1,7 @@
 # Regression-Test Backlog
 
 **Last updated:** 2026-05-02
-**Purpose:** A prioritized list of fixed bugs that deserve a regression test under the regression-test-by-revert pattern (see `development_practices.md`). Each entry has a sketch of how to test, current status, and an honest call on feasibility.
+**Purpose:** A prioritized list of fixed bugs that deserve a regression test under the regression-test-by-revert pattern (see `software_dev_policy.md`). Each entry has a sketch of how to test, current status, and an honest call on feasibility.
 
 The bar: **every entry should produce a test that has been *seen to fail* on the broken code.** Tests that have never failed are theater — they don't lock the bug out, they just inflate coverage.
 

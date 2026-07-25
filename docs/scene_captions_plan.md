@@ -266,7 +266,7 @@ process survives. They run on every full suite sweep (no
   FD north star captions complement
 - [Family Media Training Model](family_media_training_model.md) — long-arc
   plan for family-specific recognition
-- [Features and Branches](features_and_branches.md) — branching policy
+- [Features and Branches](software_dev_policy.md) — branching policy
 - `scripts/vlm_caption.py` — Python prototype that proves the captioner
   works end-to-end; the Swift port mirrors its data shape
 - `tests/test_vlm_caption.py` — sanity smoke test for the prototype

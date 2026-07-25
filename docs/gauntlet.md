@@ -75,7 +75,7 @@ unit-only.
 
 ### Remote on the M1 (the primary execution target)
 
-Same recipe as the MBP test runner (see `docs/development_practices.md`
+Same recipe as the MBP test runner (see `docs/software_dev_policy.md`
 § "Running tests on the MBP" and memory `feedback_mbp_fast_user_switching`):
 **sync via git only** (never rsync), and wrap the run in `launchctl submit`
 so it binds the Aqua bootstrap — a bare `ssh … xcodebuild test` aborts at
