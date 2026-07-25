@@ -184,6 +184,81 @@ struct RepairLifecycleFilterTests {
     }
 }
 
+// MARK: - Awaiting-confirmation worklist (GH #132 P3)
+
+@MainActor
+@Suite("RepairLifecycle — awaiting-confirmation worklist")
+struct AwaitingConfirmationWorklistTests {
+
+    private func makeRepair(name: String, confirmed: Bool) -> VideoRecord {
+        let r = VideoRecord()
+        r.filename = name
+        r.fullPath = "/Volumes/T/\(name)"
+        r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        r.derivedFrom = UUID()
+        r.derivationKind = "rebuildAudio"
+        if confirmed { r.repairConfirmedDate = Date() }
+        return r
+    }
+
+    @Test func viewFilterCaseExistsWithFriendlyLabel() {
+        // The View-menu item is generated from allCases — pin the case,
+        // its family-language label, and its icon.
+        #expect(CatalogViewFilter.allCases.contains(.awaitingConfirmation))
+        #expect(CatalogViewFilter.awaitingConfirmation.rawValue == "Repaired — Awaiting Confirmation")
+        #expect(CatalogViewFilter.awaitingConfirmation.icon == "checkmark.seal")
+    }
+
+    @Test func worklistComposesWithTheHiddenStateFilters() {
+        // computeFiltered()'s order: purge → set-aside → superseded →
+        // kind facet → … → view filters. An awaiting repair passes; a
+        // confirmed repair, a plain record, and a superseded original
+        // (its repair confirmed) do not.
+        let awaiting = makeRepair(name: "a_RepairedAudio.mov", confirmed: false)
+        let confirmed = makeRepair(name: "b_RepairedAudio.mov", confirmed: true)
+        let plain = VideoRecord()
+        plain.filename = "plain.mov"
+        plain.fullPath = "/Volumes/T/plain.mov"
+        plain.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        let supersededOriginal = VideoRecord()
+        supersededOriginal.filename = "b.mov"
+        supersededOriginal.fullPath = "/Volumes/T/b.mov"
+        supersededOriginal.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        supersededOriginal.supersededByID = confirmed.id
+
+        let all = [awaiting, confirmed, plain, supersededOriginal]
+        var out = pfApplyPurgeFilter(all, showRemoved: false)
+        out = pfApplySetAsideFilter(out, showSetAside: false)
+        out = pfApplySupersededFilter(out, showSuperseded: false)
+        out = pfApplyKindFacet(out, facet: .videoBearing)
+        out = out.filter(pfAwaitingConfirmation)
+
+        #expect(out.map(\.filename) == ["a_RepairedAudio.mov"],
+                "the worklist shows exactly the repairs waiting for Rick's OK")
+
+        // Even with Show superseded ON, the worklist keeps only
+        // awaiting repairs — a retired original is not awaiting anything.
+        var revealed = pfApplySupersededFilter(all, showSuperseded: true)
+        revealed = revealed.filter(pfAwaitingConfirmation)
+        #expect(revealed.map(\.filename) == ["a_RepairedAudio.mov"])
+    }
+
+    @Test func worklistDrainsAsRepairsAreConfirmed() {
+        let model = VideoScanModel()
+        let original = VideoRecord()
+        original.filename = "tape.mov"
+        original.fullPath = "/Volumes/T/tape.mov"
+        let repair = makeRepair(name: "tape_RepairedAudio.mov", confirmed: false)
+        repair.derivedFrom = original.id
+        model.records = [original, repair]
+
+        #expect(model.records.filter(pfAwaitingConfirmation).count == 1)
+        #expect(model.confirmRepair(repairID: repair.id))
+        #expect(model.records.filter(pfAwaitingConfirmation).isEmpty,
+                "confirming removes the repair from the worklist")
+    }
+}
+
 // MARK: - Scale (100k) — checklist dimension 2
 
 @MainActor

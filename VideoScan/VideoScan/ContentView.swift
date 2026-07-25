@@ -150,15 +150,20 @@ enum CatalogViewFilter: String, CaseIterable, Hashable {
     case hasFamily        = "Has Family"
     case workspaceOnly    = "In Workspace"
     case untaggedOnly     = "Untagged (junk candidate)"
+    /// Repair-lifecycle worklist (GH #132 P3): repair copies waiting
+    /// for Rick's one-click "Sounds Good" — the listen-then-confirm
+    /// queue. Backed by pfAwaitingConfirmation.
+    case awaitingConfirmation = "Repaired — Awaiting Confirmation"
 
     var icon: String {
         switch self {
-        case .videoAndAudioOnly: return "film"
-        case .unpairedOnly:      return "exclamationmark.triangle"
-        case .ratedOnly:         return "star.fill"
-        case .hasFamily:         return "person.2.fill"
-        case .workspaceOnly:     return "hammer.fill"
-        case .untaggedOnly:      return "questionmark.folder"
+        case .videoAndAudioOnly:    return "film"
+        case .unpairedOnly:         return "exclamationmark.triangle"
+        case .ratedOnly:            return "star.fill"
+        case .hasFamily:            return "person.2.fill"
+        case .workspaceOnly:        return "hammer.fill"
+        case .untaggedOnly:         return "questionmark.folder"
+        case .awaitingConfirmation: return "checkmark.seal"
         }
     }
 }

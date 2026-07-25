@@ -475,6 +475,11 @@ struct CatalogContent: View {
         if viewFilters.contains(.untaggedOnly) {
             out = out.filter(pfRecordIsUntagged)
         }
+        // Repair-lifecycle worklist (GH #132 P3): only repair copies
+        // still waiting for Rick's confirmation.
+        if viewFilters.contains(.awaitingConfirmation) {
+            out = out.filter(pfAwaitingConfirmation)
+        }
         return out
     }
 
