@@ -290,7 +290,10 @@ struct InspectorPanel: View {
                             }
                             if rec.isAwaitingConfirmation {
                                 inspectorRow("Status", "Waiting for your OK — play it, then confirm")
-                                if repairSource != nil {
+                                // Purged / set-aside repair copies are not
+                                // confirmable (QA M1) — the model refuses
+                                // too; this keeps the button honest.
+                                if repairSource != nil, !rec.isPurged, !rec.isSetAside {
                                     Button("Sounds Good — Confirm Repair") {
                                         onConfirmRepair?(rec.id)
                                     }

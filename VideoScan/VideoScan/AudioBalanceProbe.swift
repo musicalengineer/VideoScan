@@ -144,6 +144,26 @@ enum AudioBalanceProbeError: Error, Equatable {
     case timedOut(afterSeconds: Int)
 }
 
+// Family-language messages (QA m2, 2026-07-24): before this, any path
+// that fell back on `error.localizedDescription` — e.g. Balance Audio's
+// post-fix verify catch — showed Rick raw type soup like
+// "(VideoScan.AudioBalanceProbeError error 3.)". Every case gets an
+// honest sentence; the timeout mirrors VerifyAudioProbe's #136 wording.
+extension AudioBalanceProbeError: LocalizedError {
+    var errorDescription: String? {
+        switch self {
+        case .toolUnavailable(let detail):
+            return "The audio tools aren't available\(detail.isEmpty ? "" : " — \(detail)"). Nothing was changed."
+        case .noAudioStream:
+            return "This file has no audio track to check. Nothing was changed."
+        case .probeFailed(let detail):
+            return "The audio couldn't be read\(detail.isEmpty ? "" : " — \(detail)"). Nothing was changed."
+        case .timedOut(let afterSeconds):
+            return "This file is very large — the check ran out of time after \(afterSeconds) seconds without finishing. Nothing was changed; try again when the drive is less busy."
+        }
+    }
+}
+
 // MARK: - Probe
 
 enum AudioBalanceProbe {

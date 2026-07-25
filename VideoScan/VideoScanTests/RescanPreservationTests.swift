@@ -328,6 +328,39 @@ struct RescanPreservationTests {
         #expect(model.pendingPreservedFields[target.searchPath] == nil)
     }
 
+    @Test func relinkRunsEvenWhenThePreservationMapIsEmpty() {
+        // QA m1 (overnight review 2026-07-24): the only record under the
+        // rescanned tree is a pointer TARGET carrying nothing restorable
+        // itself — a plain original that an awaiting repair on ANOTHER
+        // volume points at. The old `guard !map.isEmpty else { return 0 }`
+        // returned BEFORE the re-link pass, leaving the repair's
+        // derivedFrom dangling once the rescan minted a fresh id —
+        // Confirm could never find the original again.
+        let model = VideoScanModel()
+        let target = CatalogScanTarget(searchPath: "/Volumes/B")
+        let original = freshlyScannedRecord(path: "/Volumes/B/tape.mov")
+        let repair = VideoRecord()
+        repair.filename = "tape_RepairedAudio.mov"
+        repair.fullPath = "/Volumes/A/tape_RepairedAudio.mov"
+        repair.derivedFrom = original.id
+        repair.derivationKind = "rebuildAudio"
+        model.records = [original, repair]
+        model.scanTargets = [target]
+
+        model.snapshotPreservedFieldsForRescan(of: target)
+        #expect(model.pendingPreservedFields[target.searchPath]?.isEmpty == true,
+                "precondition: the pointer target carries nothing restorable, so the map is empty")
+        model.records.removeAll { $0.fullPath.hasPrefix("/Volumes/B") }
+
+        let fresh = freshlyScannedRecord(path: "/Volumes/B/tape.mov")   // fresh id
+        let restored = model.applyPreservedFieldsAfterRescan(of: target, onto: [fresh])
+
+        #expect(restored == 0, "nothing restorable — but the re-link must still run")
+        #expect(repair.derivedFrom == fresh.id,
+                "the repair's pointer follows the original's fresh id")
+        #expect(repair.isAwaitingConfirmation, "the repair stays in the confirm worklist")
+    }
+
     @Test func twoConcurrentRescansDoNotCollide() {
         // Each target keys its snapshot by searchPath so a
         // simultaneous rescan of two volumes can't cross-contaminate.

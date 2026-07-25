@@ -265,6 +265,61 @@ struct RepairLifecycleTests {
                 "only the confirmed member is in the undo batch")
     }
 
+    // MARK: QA hardening (overnight review 2026-07-24)
+
+    @Test func confirmOfAPurgedRepairIsACompleteNoOp() {
+        // QA M1 sensor: the inspector's confirm button was reachable for
+        // a PURGED repair copy — confirming it would supersede the
+        // original too, hiding the footage behind TWO invisible records.
+        // The model-layer gate must refuse regardless of entry point.
+        let model = VideoScanModel()
+        let (original, repair) = makePair(model: model)
+        repair.purgedAt = Date()
+
+        #expect(!model.confirmRepair(repairID: repair.id))
+        #expect(repair.repairConfirmedDate == nil)
+        #expect(repair.notes.isEmpty, "no half-applied stamp")
+        #expect(original.supersededByID == nil, "the original stays visible")
+        #expect(original.notes.isEmpty, "the original is untouched")
+        #expect(model.lastConfirmBatch == nil, "no undo target armed for a no-op")
+    }
+
+    @Test func confirmOfASetAsideRepairIsACompleteNoOp() {
+        // Same M1 gate, set-aside flavor.
+        let model = VideoScanModel()
+        let (original, repair) = makePair(model: model)
+        repair.setAsideReason = "video-only scope"
+
+        #expect(!model.confirmRepair(repairID: repair.id))
+        #expect(repair.repairConfirmedDate == nil)
+        #expect(original.supersededByID == nil)
+        #expect(original.notes.isEmpty)
+        #expect(model.lastConfirmBatch == nil)
+    }
+
+    @Test func undoRestoresTheOriginalEvenWhenTheRepairRecordIsGone() {
+        // QA m3: undo used to `continue` past the WHOLE snapshot when
+        // the repair record was missing — stranding the original in the
+        // superseded shadow with no repair to point at.
+        let model = VideoScanModel()
+        let (original, repair) = makePair(model: model)
+        original.notes = "Verify Audio 2026-07-24T18:00:12Z: repaired copy written to tape_RepairedAudio.mov"
+        let originalNotesBefore = original.notes
+
+        #expect(model.confirmRepair(repairID: repair.id))
+        #expect(original.isSuperseded)
+
+        // Hard-delete the repair record out from under the armed undo.
+        model.records.removeAll { $0.id == repair.id }
+
+        #expect(model.undoConfirmRepair(),
+                "the original side still restores — undo must not no-op")
+        #expect(original.supersededByID == nil)
+        #expect(!original.isSuperseded)
+        #expect(original.notes == originalNotesBefore,
+                "the Confirm stamp is removed, prior journey kept")
+    }
+
     @Test func manualUnsupersedeDropsTheStaleUndoBanner() {
         let model = VideoScanModel()
         let (original, repair) = makePair(model: model)

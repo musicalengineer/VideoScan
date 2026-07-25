@@ -13,6 +13,34 @@ import Foundation
 @Suite("Balance Audio — probe media matrix", .serialized)
 struct BalanceAudioProbeTests {
 
+    // MARK: Error language (QA m2, overnight review 2026-07-24)
+
+    @Test("probe errors speak family language — never raw type soup")
+    func probeErrorDescriptionsAreFamilyLanguage() {
+        // The #136 giant-file case surfaced through Balance verify's
+        // generic catch as "(VideoScan.AudioBalanceProbeError error 3.)".
+        // Every case must carry an honest errorDescription; the timeout
+        // mirrors VerifyAudioProbe's "ran out of time" wording.
+        let timeout = AudioBalanceProbeError.timedOut(afterSeconds: 1800)
+        let msg = timeout.localizedDescription
+        #expect(msg.contains("ran out of time"))
+        #expect(!msg.contains("AudioBalanceProbeError"), "no type names")
+        #expect(!msg.contains("VideoScan."), "no module names")
+        #expect(!msg.contains("error 3"), "no raw NSError case soup")
+
+        let allCases: [AudioBalanceProbeError] = [
+            .toolUnavailable("ffmpeg not found"),
+            .noAudioStream,
+            .probeFailed("ffprobe exited with status 1"),
+            .timedOut(afterSeconds: 60),
+        ]
+        for error in allCases {
+            let described = error.errorDescription ?? ""
+            #expect(!described.isEmpty, "every case carries a message: \(error)")
+            #expect(!described.contains("AudioBalanceProbeError"))
+        }
+    }
+
     @Test("classifies every channel case from real mp4/h264+aac fixtures",
           .timeLimit(.minutes(3)))
     func matrixAAC() async throws {

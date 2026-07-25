@@ -261,15 +261,21 @@ extension VideoScanModel {
         onto targetRecords: [VideoRecord]
     ) -> Int {
         let oldIDs = pendingRescanOldIDs.removeValue(forKey: target.searchPath) ?? [:]
-        guard let map = pendingPreservedFields.removeValue(forKey: target.searchPath),
-              !map.isEmpty
-        else { return 0 }
+        let map = pendingPreservedFields.removeValue(forKey: target.searchPath) ?? [:]
         var restored = 0
         for rec in targetRecords {
             guard let snap = map[rec.fullPath] else { continue }
             snap.apply(to: rec)
             restored += 1
         }
+        // Re-link runs even when the preservation map is EMPTY (QA m1,
+        // 2026-07-24): pendingRescanOldIDs was captured for exactly this
+        // case — pointer TARGETS often carry nothing worth restoring
+        // themselves (an awaiting repair's original is a plain record),
+        // yet records elsewhere in the catalog point at their pre-rescan
+        // ids. The old early-return left those pointers dangling.
+        // NOTE: must stay AFTER the apply loop — apply() restores the
+        // pointer fields the relink then remaps.
         relinkLifecyclePointersAfterRescan(oldIDs: oldIDs,
                                            targetRecords: targetRecords)
         return restored

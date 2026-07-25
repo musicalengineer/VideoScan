@@ -45,6 +45,11 @@ enum ExternalRepairAdoption {
 enum AdoptRepairError: LocalizedError, Equatable {
     case originalNotFound
     case fileUnreadable(String)
+    /// QA B1 (2026-07-24): the picker opens in the damaged file's own
+    /// folder, so a stray double-click can land on the original itself.
+    /// Adopting a file as its OWN repair would orphan the record
+    /// (dangling derivedFrom, Confirm no-ops forever) — refuse it.
+    case sameFileAsOriginal
 
     var errorDescription: String? {
         switch self {
@@ -52,6 +57,8 @@ enum AdoptRepairError: LocalizedError, Equatable {
             return "The damaged file this repair belongs to is no longer in the catalog — nothing was linked."
         case .fileUnreadable(let detail):
             return "That file couldn't be read as media\(detail.isEmpty ? "" : " (\(detail))") — nothing was linked. Check that it plays, then try again."
+        case .sameFileAsOriginal:
+            return "That's the same file as the damaged original — pick the repaired copy instead. Nothing was linked."
         }
     }
 }
@@ -186,10 +193,17 @@ extension VideoScanModel {
     func confirmRepairs(repairIDs: Set<UUID>) -> Int {
         guard !repairIDs.isEmpty else { return 0 }
         var snapshots: [ConfirmSnapshot] = []
+        let stampFormatter = ISO8601DateFormatter()
         for repair in records where repairIDs.contains(repair.id) {
+            // QA M1 (2026-07-24): a purged or set-aside repair copy must
+            // not be confirmable — confirming it would supersede the
+            // original too, hiding the footage behind TWO invisible
+            // records. Model-layer gate so every entry point (context
+            // menu, inspector button, future callers) is covered.
             guard repair.isAwaitingConfirmation,
+                  !repair.isPurged, !repair.isSetAside,
                   let originalID = repair.derivedFrom,
-                  let original = records.first(where: { $0.id == originalID })
+                  let original = record(forID: originalID)
             else { continue }
 
             // Snapshot BEFORE mutation so undo restores exactly.
@@ -214,7 +228,7 @@ extension VideoScanModel {
             // File Journey stamps — exact "<Verb> <ISO8601>: detail"
             // shape; "Confirm" is in journeyStampVerbs (lock-step, or
             // these would migrate into userNotes).
-            let stamp = ISO8601DateFormatter().string(from: Date())
+            let stamp = stampFormatter.string(from: Date())
             let repairNote = "Confirm \(stamp): repair confirmed by Rick — replaces \(original.filename)"
             let originalNote = "Confirm \(stamp): superseded by \(repair.filename) — confirmed by Rick"
             repair.notes = repair.notes.isEmpty
@@ -252,30 +266,36 @@ extension VideoScanModel {
         lastConfirmBatch = nil
         var restored = 0
         for snap in batch.snapshots {
-            guard let repair = records.first(where: { $0.id == snap.repairID }) else {
-                continue
+            // QA m3 (2026-07-24): each side restores independently — a
+            // missing repair record (hard-deleted after confirm) must
+            // NOT strand the original in the superseded shadow.
+            var touchedSomething = false
+            if let repair = record(forID: snap.repairID) {
+                repair.tags = snap.repairTags
+                repair.userNotes = snap.repairUserNotes
+                repair.confirmedByUserPeople = snap.repairConfirmedByUserPeople
+                repair.rejectedPeople = snap.repairRejectedPeople
+                repair.starRating = snap.repairStarRating
+                repair.mediaDisposition = snap.repairMediaDisposition
+                repair.lifecycleStage = snap.repairLifecycleStage
+                repair.archiveStage = snap.repairArchiveStage
+                repair.userDate = snap.repairUserDate
+                repair.userDateConfidence = snap.repairUserDateConfidence
+                repair.notes = snap.repairNotes
+                repair.repairConfirmedDate = nil
+                searchIndex.update(repair)
+                touchedSomething = true
+                lifecycleLog.info("confirm undo: \(repair.filename, privacy: .public) back to awaiting confirmation")
             }
-            repair.tags = snap.repairTags
-            repair.userNotes = snap.repairUserNotes
-            repair.confirmedByUserPeople = snap.repairConfirmedByUserPeople
-            repair.rejectedPeople = snap.repairRejectedPeople
-            repair.starRating = snap.repairStarRating
-            repair.mediaDisposition = snap.repairMediaDisposition
-            repair.lifecycleStage = snap.repairLifecycleStage
-            repair.archiveStage = snap.repairArchiveStage
-            repair.userDate = snap.repairUserDate
-            repair.userDateConfidence = snap.repairUserDateConfidence
-            repair.notes = snap.repairNotes
-            repair.repairConfirmedDate = nil
-            searchIndex.update(repair)
 
-            if let original = records.first(where: { $0.id == snap.originalID }) {
+            if let original = record(forID: snap.originalID) {
                 original.notes = snap.originalNotes
                 original.supersededByID = nil
                 searchIndex.update(original)
+                touchedSomething = true
+                lifecycleLog.info("confirm undo: \(original.filename, privacy: .public) un-superseded")
             }
-            restored += 1
-            lifecycleLog.info("confirm undo: \(repair.filename, privacy: .public) back to awaiting confirmation")
+            if touchedSomething { restored += 1 }
         }
         guard restored > 0 else { return false }
         saveCatalogDebounced()
@@ -294,30 +314,65 @@ extension VideoScanModel {
     /// JustPatsHouse_Recovered_v2 case) as the repaired copy of a
     /// damaged record: probe it, wire the same two-way provenance the
     /// rebuild writes (derivedFrom + "externalRepair" + "Verify Audio"
-    /// journey stamps), carry the hand-entered date, and upsert by
-    /// fullPath (re-adopting an already-cataloged path updates the
-    /// record, never duplicates it). The result enters the
+    /// journey stamps), carry the hand-entered date, and enter the
     /// repaired-unconfirmed state automatically (derivedFrom set,
     /// repairConfirmedDate nil) — confirm is still Rick's click.
     /// A probe failure throws and inserts NOTHING.
+    ///
+    /// QA B1 hardening (2026-07-24):
+    ///   * Picking the ORIGINAL itself is refused (the picker opens in
+    ///     the damaged file's own folder — a self-pick would replace
+    ///     the original with a self-orphaned "repair" and lose its
+    ///     whole catalog journey).
+    ///   * A path collision with an ALREADY-CATALOGED record merges
+    ///     provenance onto that record IN PLACE — its id and every
+    ///     human field (tags, userNotes, people, starRating, verdicts,
+    ///     dispositions) survive; only derivedFrom/derivationKind, the
+    ///     journey stamp, and a nil-only date carryover are written.
+    ///     The old upsert substituted a brand-new instance, silently
+    ///     discarding all of that.
     @MainActor
     @discardableResult
     func adoptExternalRepair(originalID: UUID, fileURL: URL) async throws -> VideoRecord {
-        guard let original = records.first(where: { $0.id == originalID }) else {
+        guard let original = record(forID: originalID) else {
             throw AdoptRepairError.originalNotFound
         }
-        let newRec = await probeFile(url: fileURL)
-        guard newRec.streamType != .ffprobeFailed else {
-            throw AdoptRepairError.fileUnreadable(newRec.isPlayable)
+        // A repair must be a DIFFERENT file than its original — refuse
+        // the self-pick before touching anything (raw, standardized,
+        // and catalog-resolved forms of the picked path all checked).
+        guard fileURL.path != original.fullPath,
+              fileURL.standardizedFileURL.path != original.fullPath,
+              record(forPath: fileURL.path)?.id != original.id else {
+            throw AdoptRepairError.sameFileAsOriginal
+        }
+
+        let probed = await probeFile(url: fileURL)
+        guard probed.streamType != .ffprobeFailed else {
+            throw AdoptRepairError.fileUnreadable(probed.isPlayable)
+        }
+
+        // Already cataloged? Merge in place — never substitute a new
+        // instance. Otherwise the fresh probe joins the catalog.
+        // (Resolved AFTER the probe's await — the MainActor can
+        // interleave other catalog work while ffprobe runs.)
+        let adopted: VideoRecord
+        if let existing = record(forPath: fileURL.path) {
+            adopted = existing
+        } else {
+            adopted = probed
+            records.append(probed)
         }
 
         // Same provenance shape as RebuildAudioJob.catalogRebuildOutput.
-        newRec.derivedFrom = original.id
-        newRec.derivationKind = ExternalRepairAdoption.derivationKind
+        adopted.derivedFrom = original.id
+        adopted.derivationKind = ExternalRepairAdoption.derivationKind
         // The adopted copy is the same footage — Rick's hand-entered
-        // date carries over with its confidence (GH #117 convention).
-        newRec.userDate = original.userDate
-        newRec.userDateConfidence = original.userDateConfidence
+        // date carries over with its confidence (GH #117 convention),
+        // but a date he already put on the adopted record itself wins.
+        if adopted.userDate == nil {
+            adopted.userDate = original.userDate
+            adopted.userDateConfidence = original.userDateConfidence
+        }
 
         // "Verify Audio" journey stamps both ways — the existing verb
         // (already in journeyStampVerbs), no new verb needed.
@@ -327,23 +382,21 @@ extension VideoScanModel {
         original.notes = original.notes.isEmpty
             ? sourceNote
             : "\(original.notes)\n\(sourceNote)"
-        newRec.notes = newRec.notes.isEmpty
+        adopted.notes = adopted.notes.isEmpty
             ? derivedNote
-            : "\(newRec.notes)\n\(derivedNote)"
+            : "\(adopted.notes)\n\(derivedNote)"
 
-        if let existing = records.firstIndex(where: { $0.fullPath == fileURL.path }) {
-            records[existing] = newRec
-        } else {
-            records.append(newRec)
-        }
-        searchIndex.update(newRec)
+        // Index ordering (QA B1 ride-along): the adopted record last, so
+        // on any same-key overlap the record that OWNS the path after
+        // this call also owns the index entry.
         searchIndex.update(original)
+        searchIndex.update(adopted)
         NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
         saveCatalogDebounced()
 
         lifecycleLog.info("adopt: \(fileURL.lastPathComponent, privacy: .public) linked as repaired copy of \(original.filename, privacy: .public)")
         appLog.write("link repaired copy: \(fileURL.lastPathComponent) adopted as repaired copy of \(original.filename) — awaiting confirmation")
-        return newRec
+        return adopted
     }
 
     // MARK: Un-supersede
@@ -357,7 +410,7 @@ extension VideoScanModel {
     /// Returns true when a record was actually mutated.
     @discardableResult
     func unsupersede(id: UUID) -> Bool {
-        guard let rec = records.first(where: { $0.id == id }),
+        guard let rec = record(forID: id),
               rec.supersededByID != nil else { return false }
         rec.supersededByID = nil
         searchIndex.update(rec)
