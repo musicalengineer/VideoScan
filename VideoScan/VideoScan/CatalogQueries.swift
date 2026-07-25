@@ -703,8 +703,13 @@ nonisolated func pfTriageBandCounts(
 ///
 /// NOT for exports/backups — those carry the catalog itself and must
 /// keep set-aside records; use `pfExportableRecords` there.
+///
+/// Superseded exclusion added with GH #132: a retired original (its
+/// confirmed repair replaced it) must never be offered as a dup /
+/// correlate / analysis candidate — the repaired copy is the record
+/// that participates now.
 nonisolated func pfActiveRecords(_ records: [VideoRecord]) -> [VideoRecord] {
-    records.filter { !$0.isPurged && !$0.isSetAside }
+    records.filter { !$0.isPurged && !$0.isSetAside && !$0.isSuperseded }
 }
 
 /// Return the records that EXPORTS and BACKUPS carry: everything except
@@ -718,6 +723,9 @@ nonisolated func pfActiveRecords(_ records: [VideoRecord]) -> [VideoRecord] {
 ///     on a fresh machine).
 ///   * Purged records remain LOCAL-ONLY (the standing "local trash never
 ///     travels" policy) — exports still exclude them.
+///   * Superseded records (GH #132) also travel: provenance + archive
+///     status must stay readable years from now, so a retired original
+///     rides along WITH its `supersededByID` marker.
 ///
 /// Shape rationale: exports are the ONLY surfaces whose job is carrying
 /// the catalog rather than presenting a view of it, so this is the
@@ -736,6 +744,20 @@ nonisolated func pfPurgedRecords(_ records: [VideoRecord]) -> [VideoRecord] {
 /// Return the set-aside records — the "Show set-aside files" view.
 nonisolated func pfSetAsideRecords(_ records: [VideoRecord]) -> [VideoRecord] {
     records.filter { $0.isSetAside }
+}
+
+/// Return the superseded records — the "Show superseded" view (GH #132:
+/// originals retired by a confirmed repair).
+nonisolated func pfSupersededRecords(_ records: [VideoRecord]) -> [VideoRecord] {
+    records.filter { $0.isSuperseded }
+}
+
+/// Repair copies waiting for Rick's one-click confirmation (GH #132) —
+/// the "Repaired — Awaiting Confirmation" worklist. Pure wrapper over
+/// the derived flag so the view filter, badge math, and tests share one
+/// definition.
+nonisolated func pfAwaitingConfirmation(_ rec: VideoRecord) -> Bool {
+    rec.isAwaitingConfirmation
 }
 
 /// Apply the soft-delete filter. When `showRemoved` is false (the default
@@ -765,6 +787,18 @@ nonisolated func pfApplySetAsideFilter(
     return records.filter { !$0.isSetAside }
 }
 
+/// Apply the superseded filter (GH #132). Third independent sibling of
+/// the purge and set-aside filters — composes the same way, so the user
+/// can view any combination of (active | +removed) × (in-scope |
+/// +set-aside) × (current | +superseded).
+nonisolated func pfApplySupersededFilter(
+    _ records: [VideoRecord],
+    showSuperseded: Bool
+) -> [VideoRecord] {
+    if showSuperseded { return records }
+    return records.filter { !$0.isSuperseded }
+}
+
 /// The record base the toolbar's search-hit badge counts over. MUST be
 /// the same purge → set-aside → kind-facet pre-filter, in the same
 /// order, that `computeFiltered()` applies before running the search —
@@ -778,12 +812,15 @@ nonisolated func pfSearchBadgeBase(
     _ records: [VideoRecord],
     showRemoved: Bool,
     showSetAside: Bool,
+    showSuperseded: Bool,
     kindFacet: CatalogKindFacet
 ) -> [VideoRecord] {
     pfApplyKindFacet(
-        pfApplySetAsideFilter(
-            pfApplyPurgeFilter(records, showRemoved: showRemoved),
-            showSetAside: showSetAside),
+        pfApplySupersededFilter(
+            pfApplySetAsideFilter(
+                pfApplyPurgeFilter(records, showRemoved: showRemoved),
+                showSetAside: showSetAside),
+            showSuperseded: showSuperseded),
         facet: kindFacet)
 }
 

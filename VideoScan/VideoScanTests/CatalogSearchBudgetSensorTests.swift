@@ -49,6 +49,9 @@ struct CatalogSearchBudgetSensorTests {
     ) -> (rows: [VideoRecord], badge: Int) {
         var out = pfApplyPurgeFilter(records, showRemoved: false)
         out = pfApplySetAsideFilter(out, showSetAside: false)
+        // Superseded filter (GH #132) — third sibling, lock-step with
+        // computeFiltered().
+        out = pfApplySupersededFilter(out, showSuperseded: false)
         guard !query.isEmpty else { return (out, 0) }
         out = index.filter(records: out, query: query)
         return (out, out.count)
@@ -145,7 +148,7 @@ struct CatalogSearchBudgetSensorTests {
             // facet layer itself is pinned by MediaKindFacetTests.
             let oldToolbarScan = index.count(
                 records: pfSearchBadgeBase(corpus, showRemoved: false, showSetAside: false,
-                                           kindFacet: .everything),
+                                           showSuperseded: false, kindFacet: .everything),
                 query: q)
             #expect(derived == oldToolbarScan,
                     "PR B badge for '\(q)' (\(derived)) != old toolbar scan (\(oldToolbarScan))")

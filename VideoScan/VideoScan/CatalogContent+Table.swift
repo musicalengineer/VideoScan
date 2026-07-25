@@ -59,6 +59,41 @@ extension CatalogContent {
         }
     }
 
+    /// Right-click menu for superseded rows (repair lifecycle, GH #132).
+    /// Same minimal shape as the purged / set-aside menus: superseded
+    /// originals are inert until restored — no Combine/Correlate/Tag.
+    /// "Show Repaired Copy in Catalog" jumps to the record that replaced
+    /// this one.
+    @ViewBuilder
+    private func supersededRowContextMenu(rec: VideoRecord, selectedRecs: [VideoRecord]) -> some View {
+        let supersededSelection = selectedRecs.filter { $0.isSuperseded }
+        if supersededSelection.count == 1, let repairID = rec.supersededByID,
+           model.record(forID: repairID) != nil {
+            Button {
+                onShowRepairedCopy?(repairID)
+            } label: {
+                Label("Show Repaired Copy in Catalog",
+                      systemImage: "arrow.triangle.swap")
+            }
+            .accessibilityIdentifier("catalog.row.showRepairedCopy")
+        }
+        Button {
+            for r in supersededSelection { _ = model.unsupersede(id: r.id) }
+        } label: {
+            Label(supersededSelection.count > 1
+                  ? "Restore \(supersededSelection.count) Originals (Un-supersede)"
+                  : "Restore Original (Un-supersede)",
+                  systemImage: "arrow.uturn.backward.circle")
+        }
+        .help("Bring this original back into the catalog's default view. The repaired copy stays too — nothing on disk changes.")
+        .accessibilityIdentifier("catalog.row.unsupersede")
+        if VolumeReachability.isReachable(path: rec.fullPath) {
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.selectFile(rec.fullPath, inFileViewerRootedAtPath: "")
+            }
+        }
+    }
+
     /// Filename-cell tooltip: directory + state suffix, plus the pro-video
     /// bundle tag when the file lives inside a project bundle ("Look Inside
     /// Video Project Bundles", 2026-07-02). Kept as a helper so the bundle
@@ -72,6 +107,14 @@ extension CatalogContent {
                 .flatMap { CatalogScopePolicy.SetAsideReason(rawValue: $0)?.friendlyLabel }
                 ?? "outside catalog scope"
             tip = "\(rec.directory) (set aside — \(label.lowercased()))"
+        } else if rec.isSuperseded {
+            // Repair lifecycle (GH #132): name the replacing file when we
+            // can still resolve it — the "why is this row brown" answer.
+            let replacement = rec.supersededByID
+                .flatMap { model.record(forID: $0)?.filename }
+            tip = replacement == nil
+                ? "\(rec.directory) (superseded by its repaired copy)"
+                : "\(rec.directory) (superseded by \(replacement ?? ""))"
         } else if let reason = rec.unanalyzableReason {
             tip = "\(rec.directory)\n\n⚠️ \(reason)"
         } else if offline {
@@ -104,6 +147,7 @@ extension CatalogContent {
                 let purged = rec.isPurged
                 let workspaceActive = rec.workspaceActive
                 let setAside = rec.isSetAside
+                let superseded = rec.isSuperseded
                 HStack(spacing: 4) {
                     if purged {
                         // Trash-slash icon makes the "removed" state obvious
@@ -119,6 +163,13 @@ extension CatalogContent {
                         Image(systemName: "archivebox")
                             .font(.system(size: 10))
                             .foregroundColor(.purple)
+                    } else if superseded {
+                        // Swap arrows = "a confirmed repair replaced this
+                        // original" (GH #132). Brown to stay distinct from
+                        // purge-orange and set-aside-purple.
+                        Image(systemName: "arrow.triangle.swap")
+                            .font(.system(size: 10))
+                            .foregroundColor(.brown)
                     } else if rec.isLikelyUnanalyzable {
                         // Red "!" — file's video / audio codec was
                         // deprecated by AVFoundation (svq3, qdm2,
@@ -147,14 +198,15 @@ extension CatalogContent {
                         // both offline-secondary and pair-blue/green when set.
                         // Workspace tint (.mint / turquoise) sits between
                         // purged-orange (highest priority) and the rest.
-                        .italic(offline || purged || setAside)
+                        .italic(offline || purged || setAside || superseded)
                         .foregroundColor(purged ? .orange
                             : (setAside ? .purple
-                                : (workspaceActive ? .mint
-                                    : (offline ? .secondary
-                                        : (showPairsOnly && rec.pairedWith != nil
-                                           ? (rec.streamType == .videoOnly ? .blue : .green)
-                                           : rec.filenameColor)))))
+                                : (superseded ? .brown
+                                    : (workspaceActive ? .mint
+                                        : (offline ? .secondary
+                                            : (showPairsOnly && rec.pairedWith != nil
+                                               ? (rec.streamType == .videoOnly ? .blue : .green)
+                                               : rec.filenameColor))))))
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 2)
@@ -285,9 +337,10 @@ extension CatalogContent {
             // Restore / Remove menu items use the same record set their
             // actions operate on (label counts == operated-on counts).
             // Swift's `.filter` ≈ C++ std::copy_if into a new vector.
-            let activeRecs = selectedRecs.filter { !$0.isPurged && !$0.isSetAside }
+            let activeRecs = selectedRecs.filter { !$0.isPurged && !$0.isSetAside && !$0.isSuperseded }
             let purgedRecs = selectedRecs.filter { $0.isPurged }
             let setAsideRecs = selectedRecs.filter { $0.isSetAside && !$0.isPurged }
+            let supersededRecs = selectedRecs.filter { $0.isSuperseded && !$0.isPurged && !$0.isSetAside }
             if let id = ids.first,
                let rec = records.first(where: { $0.id == id }) {
                 // Pure-purged selection: minimal menu (Restore + Reveal).
@@ -299,17 +352,22 @@ extension CatalogContent {
                 // purged row doesn't silently apply destructive ops to it.
                 // Spec: "active-only row actions must be gated on
                 // purgedRecs.isEmpty".
-                if !activeRecs.isEmpty || rec.isPurged || rec.isSetAside {
+                if !activeRecs.isEmpty || rec.isPurged || rec.isSetAside || rec.isSuperseded {
                     if rec.isPurged && activeRecs.isEmpty {
                         purgedRowContextMenu(rec: rec, selectedRecs: selectedRecs)
                     } else if rec.isSetAside && activeRecs.isEmpty {
                         setAsideRowContextMenu(rec: rec, selectedRecs: selectedRecs)
+                    } else if rec.isSuperseded && activeRecs.isEmpty {
+                        // Pure-superseded selection: minimal menu (Show
+                        // Repaired Copy + Restore + Reveal) — GH #132.
+                        supersededRowContextMenu(rec: rec, selectedRecs: selectedRecs)
                     } else {
                         // Active or mixed selection — show the full menu,
                         // gating active-row actions on the selection being
-                        // free of BOTH purged and set-aside rows (inert
-                        // states must never receive destructive ops).
+                        // free of ALL inert states (purged / set-aside /
+                        // superseded rows must never receive destructive ops).
                         let pureActive = purgedRecs.isEmpty && setAsideRecs.isEmpty
+                            && supersededRecs.isEmpty
                         Button(VolumeReachability.isReachable(path: rec.fullPath)
                                ? "Reveal in Finder"
                                : "Reveal in Finder (offline)") {
@@ -892,6 +950,21 @@ extension CatalogContent {
                             }
                             .help("Clear the set-aside marker on the selected rows so they show up in lists and searches again.")
                         }
+
+                        // Restore Original — visible when a mixed selection
+                        // pulled in superseded rows (pure superseded gets
+                        // the minimal menu above). GH #132.
+                        if !supersededRecs.isEmpty {
+                            Button {
+                                for r in supersededRecs { _ = model.unsupersede(id: r.id) }
+                            } label: {
+                                Label(supersededRecs.count > 1
+                                      ? "Restore \(supersededRecs.count) Originals (Un-supersede)"
+                                      : "Restore Original (Un-supersede)",
+                                      systemImage: "arrow.uturn.backward.circle")
+                            }
+                            .help("Bring these originals back into the catalog's default view. Their repaired copies stay too — nothing on disk changes.")
+                        }
                     }
                 }
             }
@@ -914,6 +987,8 @@ extension CatalogContent {
         .onChange(of: kindFacet) { tableData = computeFiltered() }
         .onChange(of: showRemoved) { tableData = computeFiltered() }
         .onChange(of: showSetAside) { tableData = computeFiltered() }
+        // Superseded reveal toggle (GH #132).
+        .onChange(of: showSuperseded) { tableData = computeFiltered() }
         .onChange(of: model.lastTidyBatch) { tableData = computeFiltered() }
         // Re-compute when purge state flips on any record (purge, undo, restore).
         // We key off lastPurgedBatch so mutations from the model are observed.

@@ -68,6 +68,10 @@ struct CatalogToolbar<Dashboard: View>: View {
     /// no matching video) render alongside active rows (italic + purple).
     /// Persisted in @AppStorage("catalogShowSetAside") by the parent.
     @Binding var showSetAside: Bool
+    /// When on, superseded rows (originals retired by a confirmed repair,
+    /// GH #132) render alongside active rows (italic + brown). Session-
+    /// scoped @State in the parent — deliberately NOT persisted.
+    @Binding var showSuperseded: Bool
     @ViewBuilder let dashboardContent: () -> Dashboard
 
     /// Tidy Catalog dry-run sheet (catalog scope, 2026-07-15). Owned here
@@ -594,6 +598,20 @@ struct CatalogToolbar<Dashboard: View>: View {
             .help(showSetAside
                   ? "Set-aside files are visible — italic + purple. Right-click one to put it back. Click to hide."
                   : "Click to show the files Tidy Catalog set aside (photos, music, audio with no matching video).")
+
+            // Show superseded toggle (GH #132) — reveals originals that a
+            // confirmed repair replaced, so Rick can inspect or restore
+            // them. Files on disk are never touched by the app.
+            Toggle(isOn: $showSuperseded) {
+                Label("Show superseded", systemImage: "arrow.triangle.swap")
+                    .labelStyle(.titleAndIcon)
+                    .foregroundColor(showSuperseded ? .brown : .secondary)
+            }
+            .toggleStyle(.button)
+            .controlSize(.small)
+            .help(showSuperseded
+                  ? "Superseded originals (replaced by a confirmed repair) are visible — italic + brown. Right-click one to restore it. Click to hide."
+                  : "Click to show originals that a confirmed repair has replaced. Their files are never touched.")
 
             // Tidy Catalog — dry-run first, apply on confirm (nag-button
             // pattern: the button performs the fix, starting with a report).

@@ -215,7 +215,7 @@ struct CatalogSearchProfileBench {
     static func badgeCount(_ records: [VideoRecord], _ index: CatalogSearchIndex, _ query: String) -> Int {
         index.count(
             records: pfSearchBadgeBase(records, showRemoved: false, showSetAside: false,
-                                       kindFacet: .everything),
+                                       showSuperseded: false, kindFacet: .everything),
             query: query)
     }
 

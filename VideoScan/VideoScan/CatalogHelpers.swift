@@ -53,6 +53,12 @@ struct CatalogContent: View {
     /// browse and put them back. When false (default), they are hidden —
     /// records and files are untouched. Independent of `showRemoved`.
     var showSetAside: Bool = false
+    /// When true, superseded rows (originals retired by a confirmed
+    /// repair, GH #132) are included in the table so Rick can inspect or
+    /// restore them. When false (default), they are hidden — records and
+    /// files untouched. Session-scoped in the parent (deliberately NOT
+    /// persisted, unlike showRemoved/showSetAside).
+    var showSuperseded: Bool = false
     /// Media-kind facet (GH #124): which stream shapes the table shows.
     /// Default `.videoBearing` — audio-only rows hidden until the user
     /// flips the toolbar facet chip. Applied in computeFiltered AFTER the
@@ -87,6 +93,9 @@ struct CatalogContent: View {
     /// catalog on (originalID + online copy IDs) and selects the best
     /// copy. Mirrors onShowPair's contract.
     var onShowOnlineCopies: ((_ focusIDs: Set<UUID>, _ selectID: UUID) -> Void)?
+    /// "Show Repaired Copy in Catalog" on a superseded original (GH #132)
+    /// — parent focuses the catalog on the repair record and selects it.
+    var onShowRepairedCopy: ((_ repairID: UUID) -> Void)?
 
     @State private var player: AVPlayer?
     @State private var isPlaying = false
@@ -343,6 +352,11 @@ struct CatalogContent: View {
         // never match a default search (Rick: cruft is "only bothersome if
         // it shows up in a list or in a search").
         out = pfApplySetAsideFilter(out, showSetAside: showSetAside)
+        // Superseded filter (GH #132) — third sibling of the two above.
+        // Originals retired by a confirmed repair stay out of the default
+        // view (their repaired copy represents the footage now) until the
+        // "Show superseded" toggle reveals them.
+        out = pfApplySupersededFilter(out, showSuperseded: showSuperseded)
         // Media-kind facet (GH #124) — the default Videos facet drops the
         // ~80k audio-only rows here, BEFORE search/pairs/View filters, so
         // every downstream pass (and the table itself) works the small

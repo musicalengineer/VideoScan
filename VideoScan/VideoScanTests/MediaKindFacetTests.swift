@@ -97,11 +97,11 @@ struct KindFacetTruthTableTests {
         let audio = kindRec("a.mp3", stream: .audioOnly)
         let base = pfSearchBadgeBase([video, audio],
                                      showRemoved: false, showSetAside: false,
-                                     kindFacet: .videoBearing)
+                                     showSuperseded: false, kindFacet: .videoBearing)
         #expect(base.map(\.id) == [video.id])
         let all = pfSearchBadgeBase([video, audio],
                                     showRemoved: false, showSetAside: false,
-                                    kindFacet: .everything)
+                                    showSuperseded: false, kindFacet: .everything)
         #expect(all.count == 2)
     }
 }

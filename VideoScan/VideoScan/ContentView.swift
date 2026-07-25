@@ -283,6 +283,11 @@ struct CatalogView: View {
     /// OFF — set-aside rows hidden until the user opts in. Independent of
     /// `showRemoved` (distinct states, distinct toggles).
     @AppStorage("catalogShowSetAside") private var showSetAside: Bool = false
+    /// Whether superseded rows (originals retired by a confirmed repair,
+    /// GH #132) are included in the table. Session-scoped `@State` —
+    /// deliberately NOT persisted (Manager decision 2026-07-24): the
+    /// default view should always come back clean on relaunch.
+    @State private var showSuperseded: Bool = false
     /// Strict-catalog policy: scan targets that have never been scanned and
     /// aren't currently doing anything are hidden from the Scan Volumes
     /// table by default. The user opts in with a small toggle near the table.
@@ -424,6 +429,7 @@ struct CatalogView: View {
                 showDisconnectedMedia: $showDisconnectedMedia,
                 showRemoved: $showRemoved,
                 showSetAside: $showSetAside,
+                showSuperseded: $showSuperseded,
                 dashboardContent: {
                     if model.isScanning || model.isCombining {
                         CompactDashboard(
@@ -458,6 +464,7 @@ struct CatalogView: View {
                 showDisconnectedMedia: showDisconnectedMedia,
                 showRemoved: showRemoved,
                 showSetAside: showSetAside,
+                showSuperseded: showSuperseded,
                 // Media-kind facet (GH #124) — persisted on the model,
                 // flipped by the toolbar facet chip.
                 kindFacet: model.kindFacetSetting.facet,
@@ -521,6 +528,18 @@ struct CatalogView: View {
                     selectedIDs = [selectID]
                     focusMatchScore = nil
                     focusLabel = "Online copies"
+                },
+                onShowRepairedCopy: { repairID in
+                    // GH #132 — jump from a superseded original to the
+                    // repair that replaced it. Same focus mechanics as
+                    // Online copies.
+                    searchText = ""
+                    selectedVolumeIDs = []
+                    showPairsOnly = false
+                    filterByIDs = [repairID]
+                    selectedIDs = [repairID]
+                    focusMatchScore = nil
+                    focusLabel = "Repaired copy"
                 }
             )
             .onChange(of: selectedIDs) {

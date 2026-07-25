@@ -315,7 +315,7 @@ struct SetAsideVisibilityTests {
         // the facet leg of the badge base is pinned by MediaKindFacetTests.
         let defaultBase = pfSearchBadgeBase(model.records,
                                             showRemoved: false, showSetAside: false,
-                                            kindFacet: .everything)
+                                            showSuperseded: false, kindFacet: .everything)
         #expect(model.searchIndex.count(records: defaultBase, query: "donna") == 1,
                 "badge must not count set-aside or purged hits the table hides")
         // Parity sensor: badge base == the table's pre-search base
@@ -331,12 +331,12 @@ struct SetAsideVisibilityTests {
         // "Show set-aside files" on: the set-aside hit is counted too.
         let browseBase = pfSearchBadgeBase(model.records,
                                            showRemoved: false, showSetAside: true,
-                                           kindFacet: .everything)
+                                           showSuperseded: false, kindFacet: .everything)
         #expect(model.searchIndex.count(records: browseBase, query: "donna") == 2)
         // "Show removed" on as well: all three count.
         let allBase = pfSearchBadgeBase(model.records,
                                         showRemoved: true, showSetAside: true,
-                                        kindFacet: .everything)
+                                        showSuperseded: false, kindFacet: .everything)
         #expect(model.searchIndex.count(records: allBase, query: "donna") == 3)
     }
 
