@@ -239,6 +239,17 @@ struct HoldoutReviewQueue: Equatable, Sendable {
         return nil
     }
 
+    /// Reload THIS queue's CSV fresh from disk. The review sheet must
+    /// seed its working copy through here at open — a discovery-time
+    /// snapshot can be stale (hand edit in an editor, badge re-clicked
+    /// before the post-dismiss refresh publishes, queue regenerated),
+    /// and the write-through in recordAnswer rewrites the whole file:
+    /// answering against stale memory would silently revert whatever
+    /// changed on disk since the snapshot. QA 2026-07-25 blocker.
+    func freshCopyFromDisk() throws -> HoldoutReviewQueue {
+        try Self.load(csvURL: csvURL)
+    }
+
     // MARK: Answer write-back (write-through, atomic)
 
     /// Record Rick's answer for one row and persist the WHOLE CSV

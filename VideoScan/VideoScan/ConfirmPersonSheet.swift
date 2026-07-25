@@ -52,9 +52,10 @@ struct ConfirmSheetTarget: Identifiable {
 struct ConfirmPersonSheet: View {
 
     let profile: POIProfile
-    /// Present ⇒ holdout mode. The sheet takes a mutable working copy
-    /// into `holdout` on appear (value semantics — the copy + its CSV
-    /// are the source of truth while the sheet is up).
+    /// Present ⇒ holdout mode. Used for mode detection and the CSV
+    /// location — the mutable working copy in `holdout` is reloaded
+    /// FRESH from disk in startHoldout(), never seeded from this
+    /// snapshot (stale-snapshot clobber, QA 2026-07-25).
     var holdoutQueue: HoldoutReviewQueue? = nil
 
     @EnvironmentObject var personFinderModel: PersonFinderModel
@@ -540,13 +541,34 @@ struct ConfirmPersonSheet: View {
 
     /// Entry point in holdout mode (replaces prepareSetup). No scoring,
     /// no ValidationLabelStore, no catalog reads beyond nothing at all —
-    /// just position onto the first unanswered row.
+    /// reload the queue fresh from disk and position onto the first
+    /// unanswered row.
+    ///
+    /// The working copy MUST come from disk, not from the discovery-time
+    /// snapshot in `holdoutQueue`: recordAnswer rewrites the whole CSV
+    /// from memory, so a stale snapshot's first write-through would
+    /// silently revert any answers/hand edits that landed on disk after
+    /// discovery. On load failure we surface the error and show the done
+    /// pane — NEVER fall back to the snapshot, which is exactly the
+    /// clobber path. QA 2026-07-25 blocker; regression test:
+    /// regression_staleSnapshotOpenPreservesExternalAnswer.
     private func startHoldout() {
-        holdout = holdoutQueue
-        if let idx = holdoutQueue?.firstPendingIndex {
-            phase = .labeling
-            holdoutGo(to: idx)
-        } else {
+        guard let snapshot = holdoutQueue else {
+            phase = .summary
+            return
+        }
+        do {
+            let fresh = try snapshot.freshCopyFromDisk()
+            holdout = fresh
+            if let idx = fresh.firstPendingIndex {
+                phase = .labeling
+                holdoutGo(to: idx)
+            } else {
+                phase = .summary
+            }
+        } catch {
+            holdout = nil
+            holdoutSaveError = "Could not reload review queue: \(error.localizedDescription)"
             phase = .summary
         }
     }

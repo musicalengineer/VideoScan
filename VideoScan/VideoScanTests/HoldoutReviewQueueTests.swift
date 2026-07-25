@@ -290,6 +290,38 @@ struct HoldoutReviewQueueTests {
         #expect(reloaded.rows.filter(\.isPending).count == q.pendingCount)
     }
 
+    // regression: stale-snapshot open clobbered answers recorded on disk
+    // after discovery — the first in-app answer rewrote the whole CSV
+    // from stale memory, destroying external answers/hand edits
+    // (QA 2026-07-25 blocker). The sheet's startHoldout() must seed its
+    // working copy through freshCopyFromDisk(), never from the
+    // discovery-time snapshot.
+    @Test func regression_staleSnapshotOpenPreservesExternalAnswer() throws {
+        let dir = try makeTempDir()
+        let url = try writeCSV(fixtureText, in: dir)
+        // Discovery-time snapshot — what ConfirmSheetTarget carries.
+        let snapshot = try HoldoutReviewQueue.load(csvURL: url)
+
+        // Behind the snapshot's back: row B gets answered externally
+        // (hand edit in an editor, or a prior sheet session's write).
+        var external = try HoldoutReviewQueue.load(csvURL: url)
+        try external.recordAnswer(reviewId: "BBBB00000002", confirm: "yes",
+                                  notes: "answered externally")
+
+        // Sheet opens with the now-stale snapshot; the working copy is
+        // seeded via freshCopyFromDisk() — the open-time reload decision.
+        var opened = try snapshot.freshCopyFromDisk()
+        // First in-app answer, on a DIFFERENT row.
+        try opened.recordAnswer(reviewId: "AAAA00000001", confirm: "no", notes: "")
+
+        // The externally recorded answer must SURVIVE the write-through.
+        let reloaded = try HoldoutReviewQueue.load(csvURL: url)
+        #expect(reloaded.rows[1].rickConfirm == "yes")
+        #expect(reloaded.rows[1].notes == "answered externally")
+        #expect(reloaded.rows[0].rickConfirm == "no")
+        #expect(reloaded.pendingCount == 0)
+    }
+
     // MARK: - 4. Byte round-trip
 
     @Test func roundTrip_untouchedLoadSerializeIsByteIdentical() throws {
