@@ -84,3 +84,4 @@
 {"ts":"2026-07-22T08:08:24Z","sha":"e593dc82","run_kind":"nightly","concurrency_warnings":79,"strict_warning_total":263,"codeql_findings":0,"tsan_issues":null,"swiftlint_strict":96,"periphery_aggressive":0}
 {"ts":"2026-07-23T08:04:06Z","sha":"452bea1c","run_kind":"nightly","concurrency_warnings":79,"strict_warning_total":259,"codeql_findings":0,"tsan_issues":null,"swiftlint_strict":96,"periphery_aggressive":0}
 {"ts":"2026-07-24T08:02:42Z","sha":"c0dd10f4","run_kind":"nightly","concurrency_warnings":79,"strict_warning_total":266,"codeql_findings":0,"tsan_issues":null,"swiftlint_strict":96,"periphery_aggressive":0}
+{"ts":"2026-07-25T07:43:44Z","sha":"1af1238e","run_kind":"nightly","concurrency_warnings":19,"strict_warning_total":75,"codeql_findings":0,"tsan_issues":null,"swiftlint_strict":100,"periphery_aggressive":0}
