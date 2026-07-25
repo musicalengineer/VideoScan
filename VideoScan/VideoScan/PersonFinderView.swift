@@ -112,6 +112,13 @@ struct PersonFinderView: View {
     /// so the family portraits read as the centerpiece — Rick wants the app
     /// to feel like it's about people first when he shows it off.
     @AppStorage("peopleGalleryHeight") var peopleGalleryHeight: Double = 180
+    /// Watches output/person-eval-private/ for the newest blind holdout
+    /// queue and drives the Review badge on the matching PersonCard.
+    /// Refreshed when the gallery appears and when the review sheet
+    /// closes (both in PersonFinderView+People.swift). Rick 2026-07-25.
+    /// (`@StateObject` ≈ the view OWNS this heap object across renders,
+    /// vs `@ObservedObject` which merely borrows one.)
+    @StateObject var holdoutReview = HoldoutReviewCenter()
 
     // MARK: Loaded Faces Strip — compact scan-readiness indicator
     // (UI lives in PersonFinderView+Faces.swift; stored state stays here.)

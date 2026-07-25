@@ -12,6 +12,23 @@
 // affordances on the right.
 //
 // Rick 2026-06-16.
+//
+// HOLDOUT MODE (Rick 2026-07-25): the same sheet also hosts the blind
+// holdout review — the Review badge on a PersonCard opens it with a
+// non-nil holdoutQueue. In holdout mode the sheet is a different animal
+// under the same roof:
+//   • BLIND — none of the prediction machinery runs or renders. No
+//     candidate scoring (prepareSetup is never called), no signalsView,
+//     no scores, no detected-person data. The pane renders ONLY from
+//     HoldoutReviewRow, a struct that structurally cannot carry a model
+//     opinion (pinned by HoldoutReviewQueueTests' blindness sensor).
+//     Rick's eyes are the uncontaminated ground truth — POI-leakage
+//     contract, team-channel 2026-07-25-1115.
+//   • Output goes ONLY to the queue CSV (write-through per answer,
+//     atomic). ValidationLabelStore and catalogWriteback are skipped
+//     entirely — holdout answers must never touch model/candidate state.
+//   • Resume — opening lands on the first unanswered row; answered rows
+//     are skipped (Back can revisit/edit them).
 
 import AVKit
 import AppKit
@@ -23,11 +40,23 @@ import SwiftUI
 struct ConfirmSheetTarget: Identifiable {
     let id = UUID()
     let profile: POIProfile
+    /// Non-nil → open in blind holdout-review mode on this queue.
+    let holdoutQueue: HoldoutReviewQueue?
+
+    init(profile: POIProfile, holdoutQueue: HoldoutReviewQueue? = nil) {
+        self.profile = profile
+        self.holdoutQueue = holdoutQueue
+    }
 }
 
 struct ConfirmPersonSheet: View {
 
     let profile: POIProfile
+    /// Present ⇒ holdout mode. The sheet takes a mutable working copy
+    /// into `holdout` on appear (value semantics — the copy + its CSV
+    /// are the source of truth while the sheet is up).
+    var holdoutQueue: HoldoutReviewQueue? = nil
+
     @EnvironmentObject var personFinderModel: PersonFinderModel
     @EnvironmentObject var catalogModel: VideoScanModel
     @Environment(\.dismiss) private var dismiss
@@ -47,7 +76,9 @@ struct ConfirmPersonSheet: View {
 
     /// Sheet phase. .setup shows the round-size picker and availability
     /// stats; .labeling is the existing per-candidate review; .summary
-    /// is the end-of-round report. Rick 2026-06-16.
+    /// is the end-of-round report. Rick 2026-06-16. Holdout mode never
+    /// enters .setup — it starts straight in .labeling (or .summary if
+    /// nothing is pending) since there is no scoring to configure.
     @State private var phase: Phase = .setup
     enum Phase { case setup, labeling, summary }
 
@@ -65,6 +96,23 @@ struct ConfirmPersonSheet: View {
 
     private let controlK: Int = 5
 
+    // MARK: Holdout-mode state
+
+    /// Mutable working copy of the queue — every answer writes through
+    /// to the CSV via recordAnswer, so this mirrors disk at all times.
+    @State private var holdout: HoldoutReviewQueue?
+    @State private var holdoutIndex: Int = 0
+    /// Notes draft for the CURRENT row — prefilled from the row when
+    /// navigating so Back-and-edit round-trips cleanly.
+    @State private var holdoutNotes: String = ""
+    /// stat() result for the current row's file, computed on navigation
+    /// (not in the view body — no file I/O per render).
+    @State private var holdoutReachable: Bool = true
+    @State private var holdoutSaveError: String?
+    @State private var holdoutAnsweredThisSession: Int = 0
+
+    private var isHoldout: Bool { holdoutQueue != nil }
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -74,7 +122,9 @@ struct ConfirmPersonSheet: View {
             footer
         }
         .frame(width: 760, height: 640)
-        .onAppear(perform: prepareSetup)
+        .onAppear {
+            if isHoldout { startHoldout() } else { prepareSetup() }
+        }
         .onDisappear { thumbnailLoadTask?.cancel() }
     }
 
@@ -82,18 +132,24 @@ struct ConfirmPersonSheet: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Image(systemName: "person.crop.circle.badge.checkmark")
+            Image(systemName: isHoldout ? "eye.circle" : "person.crop.circle.badge.checkmark")
                 .font(.title2)
                 .foregroundStyle(.tint)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Confirm \(profile.name)")
+                Text(isHoldout ? "Review \(profile.name) — holdout" : "Confirm \(profile.name)")
                     .font(.headline)
-                Text("Rate each candidate — your labels train the model and update the catalog.")
+                Text(isHoldout
+                     ? "Blind review — watch each video and answer. No hints or scores are shown; your eyes are the ground truth."
+                     : "Rate each candidate — your labels train the model and update the catalog.")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
             }
             Spacer()
-            if phase == .labeling && !candidates.isEmpty {
+            if isHoldout, let q = holdout {
+                Text("\(q.answeredCount) of \(q.rows.count) answered")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(.secondary)
+            } else if phase == .labeling && !candidates.isEmpty {
                 Text("\(currentIndex + 1) of \(candidates.count)")
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(.secondary)
@@ -107,36 +163,48 @@ struct ConfirmPersonSheet: View {
 
     @ViewBuilder
     private var content: some View {
-        switch phase {
-        case .setup:
-            ConfirmSetupPane(
-                personName: profile.name,
-                stats: stats,
-                availOnline: fullCandidatePool.filter { $0.reachable }.count,
-                roundSize: $roundSize
-            )
-        case .labeling:
-            if candidates.isEmpty {
-                emptyState
-            } else {
-                let candidate = candidates[currentIndex]
-                HStack(alignment: .top, spacing: 16) {
-                    thumbnailView(for: candidate)
-                        .frame(width: 320)
-                    signalsView(for: candidate)
-                }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 12)
+        if isHoldout {
+            // Holdout content deliberately bypasses the setup/scoring
+            // panes and signalsView — see BLIND contract in the file
+            // header comment.
+            switch phase {
+            case .labeling:
+                holdoutPane
+            default:
+                holdoutDonePane
             }
-        case .summary:
-            let summary = personFinderModel.validationLabels.roundSummary(
-                for: profile.name, since: roundStart
-            )
-            ConfirmSummaryPane(personName: profile.name, summary: summary)
+        } else {
+            switch phase {
+            case .setup:
+                ConfirmSetupPane(
+                    personName: profile.name,
+                    stats: stats,
+                    availOnline: fullCandidatePool.filter { $0.reachable }.count,
+                    roundSize: $roundSize
+                )
+            case .labeling:
+                if candidates.isEmpty {
+                    emptyState
+                } else {
+                    let candidate = candidates[currentIndex]
+                    HStack(alignment: .top, spacing: 16) {
+                        thumbnailView(path: candidate.recordPath, filename: candidate.filename)
+                            .frame(width: 320)
+                        signalsView(for: candidate)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                }
+            case .summary:
+                let summary = personFinderModel.validationLabels.roundSummary(
+                    for: profile.name, since: roundStart
+                )
+                ConfirmSummaryPane(personName: profile.name, summary: summary)
+            }
         }
     }
 
-    private func thumbnailView(for candidate: PersonCandidateScore) -> some View {
+    private func thumbnailView(path: String, filename: String) -> some View {
         VStack(spacing: 8) {
             ZStack {
                 RoundedRectangle(cornerRadius: 8)
@@ -152,7 +220,7 @@ struct ConfirmPersonSheet: View {
                         .controlSize(.small)
                 }
             }
-            Text(candidate.filename)
+            Text(filename)
                 .font(.system(size: 11, design: .monospaced))
                 .lineLimit(2)
                 .truncationMode(.middle)
@@ -160,7 +228,7 @@ struct ConfirmPersonSheet: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             HStack(spacing: 8) {
                 Button {
-                    openInQuickTime(candidate.recordPath)
+                    openInQuickTime(path)
                 } label: {
                     Label("Open in QuickTime", systemImage: "play.rectangle")
                 }
@@ -168,7 +236,7 @@ struct ConfirmPersonSheet: View {
                 .controlSize(.small)
                 .help("Watch the full video before rating")
                 Button {
-                    revealInFinder(candidate.recordPath)
+                    revealInFinder(path)
                 } label: {
                     Image(systemName: "folder")
                 }
@@ -269,38 +337,254 @@ struct ConfirmPersonSheet: View {
 
     private var footer: some View {
         HStack {
-            // Roll-up of labels saved this round — present from the
-            // first rating onward so the user always knows their
-            // progress is real, even if they Cancel mid-round.
-            if !roundLabels.isEmpty {
+            if isHoldout {
+                if let err = holdoutSaveError {
+                    Label(err, systemImage: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(.red)
+                        .lineLimit(2)
+                } else if holdoutAnsweredThisSession > 0 {
+                    Text("\(holdoutAnsweredThisSession) answered this session \u{00B7} saved to CSV")
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary)
+                }
+            } else if !roundLabels.isEmpty {
+                // Roll-up of labels saved this round — present from the
+                // first rating onward so the user always knows their
+                // progress is real, even if they Cancel mid-round.
                 Text("\(roundLabels.count) labeled this round \u{00B7} saved")
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
             }
             Spacer()
-            switch phase {
-            case .setup:
-                Button("Cancel") { dismiss() }
-                    .buttonStyle(.bordered)
-                    .keyboardShortcut(.cancelAction)
-                Button("Begin \u{2192}") { startRound() }
+            if isHoldout {
+                // Every answer is already on disk — Close never loses work.
+                Button(phase == .summary ? "Done" : "Close") { dismiss() }
                     .buttonStyle(.borderedProminent)
-                    .disabled(stats == nil || (stats?.candidatesSurfaced ?? 0) == 0)
-                    .keyboardShortcut(.return, modifiers: [])
-            case .labeling:
-                Button("Finish & Show Summary") { phase = .summary }
-                    .disabled(roundLabels.isEmpty)
-                Button(roundLabels.isEmpty ? "Cancel" : "Save & Close") { dismiss() }
-                    .buttonStyle(.bordered)
-                    .keyboardShortcut(.cancelAction)
-            case .summary:
-                Button("Done") { dismiss() }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.return, modifiers: [])
+                    .keyboardShortcut(phase == .summary ? .defaultAction : .cancelAction)
+            } else {
+                switch phase {
+                case .setup:
+                    Button("Cancel") { dismiss() }
+                        .buttonStyle(.bordered)
+                        .keyboardShortcut(.cancelAction)
+                    Button("Begin \u{2192}") { startRound() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(stats == nil || (stats?.candidatesSurfaced ?? 0) == 0)
+                        .keyboardShortcut(.return, modifiers: [])
+                case .labeling:
+                    Button("Finish & Show Summary") { phase = .summary }
+                        .disabled(roundLabels.isEmpty)
+                    Button(roundLabels.isEmpty ? "Cancel" : "Save & Close") { dismiss() }
+                        .buttonStyle(.bordered)
+                        .keyboardShortcut(.cancelAction)
+                case .summary:
+                    Button("Done") { dismiss() }
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut(.return, modifiers: [])
+                }
             }
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
+    }
+
+    // MARK: - Holdout panes
+
+    /// The blind review pane. Renders ONLY from HoldoutReviewRow —
+    /// thumbnail/open/reveal, a yes/no question, and notes. Nothing else.
+    @ViewBuilder
+    private var holdoutPane: some View {
+        if let q = holdout, q.rows.indices.contains(holdoutIndex) {
+            let row = q.rows[holdoutIndex]
+            HStack(alignment: .top, spacing: 16) {
+                thumbnailView(path: row.fullPath, filename: row.filename)
+                    .frame(width: 320)
+                holdoutAnswerView(for: row)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
+        } else {
+            holdoutDonePane
+        }
+    }
+
+    private func holdoutAnswerView(for row: HoldoutReviewRow) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Is \(profile.name) in this video?")
+                .font(.system(size: 13).weight(.medium))
+            Text("Watch as much as you need — answer from what you see, not from memory of the filename.")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if !row.isPending {
+                // Reached via Back — show the saved answer; a new click
+                // overwrites it in the CSV.
+                Label("Currently answered: \(row.rickConfirm) \u{2014} answering again overwrites",
+                      systemImage: "pencil.circle")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+            }
+            if !holdoutReachable {
+                Label("Volume offline — open won't work", systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    holdoutAnswer("yes")
+                } label: {
+                    Label("Yes", systemImage: "checkmark.circle.fill")
+                        .frame(maxWidth: .infinity)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.bordered)
+                .tint(.green)
+                .help("\(profile.name) is visible in this video")
+                Button {
+                    holdoutAnswer("no")
+                } label: {
+                    Label("No", systemImage: "xmark.circle.fill")
+                        .frame(maxWidth: .infinity)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+                .help("\(profile.name) is not visible in this video")
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Notes (optional)")
+                    .font(.system(size: 11).weight(.medium))
+                    .foregroundColor(.secondary)
+                TextField("e.g. brief glimpse at 2:10, poor lighting", text: $holdoutNotes)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            Spacer()
+
+            HStack {
+                Button("Back") { holdoutGo(to: holdoutIndex - 1) }
+                    .buttonStyle(.borderless)
+                    .disabled(holdoutIndex == 0)
+                    .help("Revisit the previous video (answered ones can be re-answered)")
+                Spacer()
+                Button("Skip") { holdoutSkip() }
+                    .buttonStyle(.borderless)
+                    .help("Leave this one unanswered for now and move on")
+            }
+            .font(.caption)
+        }
+    }
+
+    private var holdoutDonePane: some View {
+        VStack(spacing: 10) {
+            Image(systemName: (holdout?.pendingCount ?? 0) == 0
+                  ? "checkmark.seal.fill" : "hourglass")
+                .font(.system(size: 36))
+                .foregroundColor((holdout?.pendingCount ?? 0) == 0 ? .green : .orange)
+            if let q = holdout {
+                if q.pendingCount == 0 {
+                    Text("All \(q.rows.count) videos answered")
+                        .font(.headline)
+                    Text("The review CSV is complete \u{2014} nothing further to do here. The grading side takes it from the file; your answers never touch the model from this app.")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 440)
+                } else {
+                    Text("\(q.pendingCount) still pending")
+                        .font(.headline)
+                    Text("You skipped some \u{2014} the Review badge stays up until every row has an answer. Reopen anytime; you'll land on the first unanswered video.")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 440)
+                    Button("Continue Reviewing") {
+                        if let idx = holdout?.firstPendingIndex {
+                            holdoutGo(to: idx)
+                            phase = .labeling
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                }
+            } else {
+                Text("No review queue found")
+                    .font(.headline)
+            }
+        }
+        .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Holdout lifecycle
+
+    /// Entry point in holdout mode (replaces prepareSetup). No scoring,
+    /// no ValidationLabelStore, no catalog reads beyond nothing at all —
+    /// just position onto the first unanswered row.
+    private func startHoldout() {
+        holdout = holdoutQueue
+        if let idx = holdoutQueue?.firstPendingIndex {
+            phase = .labeling
+            holdoutGo(to: idx)
+        } else {
+            phase = .summary
+        }
+    }
+
+    /// Navigate to a row: reset the thumbnail, prefill the notes draft,
+    /// and stat the file once (kept out of the view body).
+    private func holdoutGo(to idx: Int) {
+        guard let q = holdout, q.rows.indices.contains(idx) else { return }
+        thumbnailLoadTask?.cancel()
+        thumbnail = nil
+        holdoutIndex = idx
+        holdoutNotes = q.rows[idx].notes
+        holdoutReachable = FileManager.default.fileExists(atPath: q.rows[idx].fullPath)
+        if holdoutReachable {
+            loadThumbnail(path: q.rows[idx].fullPath)
+        }
+    }
+
+    /// Record yes/no + notes for the current row. Write-through: the CSV
+    /// on disk is updated before we advance, so a crash loses nothing.
+    private func holdoutAnswer(_ confirm: String) {
+        guard var q = holdout, q.rows.indices.contains(holdoutIndex) else { return }
+        let row = q.rows[holdoutIndex]
+        do {
+            try q.recordAnswer(reviewId: row.reviewId, confirm: confirm, notes: holdoutNotes)
+            holdout = q
+            holdoutSaveError = nil
+            holdoutAnsweredThisSession += 1
+            holdoutAdvance()
+        } catch {
+            // Leave the user on this row — nothing was recorded.
+            holdoutSaveError = "Could not save answer: \(error.localizedDescription)"
+        }
+    }
+
+    private func holdoutAdvance() {
+        guard let q = holdout else { return }
+        if let next = q.nextPendingIndex(after: holdoutIndex) {
+            holdoutGo(to: next)
+        } else if q.rows.indices.contains(holdoutIndex), q.rows[holdoutIndex].isPending {
+            // Skipped the only remaining pending row — stay put.
+        } else {
+            phase = .summary
+        }
+    }
+
+    private func holdoutSkip() {
+        guard let q = holdout else { return }
+        if let next = q.nextPendingIndex(after: holdoutIndex) {
+            holdoutGo(to: next)
+        } else {
+            // Nothing else pending — show the "still pending" done pane
+            // (this row remains unanswered by choice).
+            phase = .summary
+        }
     }
 
     // MARK: - Round lifecycle
@@ -338,7 +622,7 @@ struct ConfirmPersonSheet: View {
         currentIndex = 0
         phase = .labeling
         if !candidates.isEmpty {
-            loadThumbnail(for: candidates[0])
+            loadThumbnail(path: candidates[0].recordPath)
         }
     }
 
@@ -420,7 +704,7 @@ struct ConfirmPersonSheet: View {
         thumbnail = nil
         if currentIndex + 1 < candidates.count {
             currentIndex += 1
-            loadThumbnail(for: candidates[currentIndex])
+            loadThumbnail(path: candidates[currentIndex].recordPath)
         } else {
             // Out of candidates — show the summary automatically
             phase = .summary
@@ -443,14 +727,12 @@ struct ConfirmPersonSheet: View {
         }
         thumbnailLoadTask?.cancel()
         currentIndex -= 1
-        loadThumbnail(for: candidates[currentIndex])
+        loadThumbnail(path: candidates[currentIndex].recordPath)
     }
 
     // MARK: - Thumbnail loading
 
-    private func loadThumbnail(for candidate: PersonCandidateScore) {
-        guard candidate.reachable else { return }
-        let path = candidate.recordPath
+    private func loadThumbnail(path: String) {
         thumbnailLoadTask = Task { @MainActor in
             let img = await Self.generateThumbnail(for: path)
             if !Task.isCancelled {

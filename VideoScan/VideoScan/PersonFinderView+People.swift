@@ -8,6 +8,13 @@
 // (Swift extension ≈ C++ partial class via free member functions: no new
 // stored state allowed, methods share the same `self`; `private` here
 // means file-private to THIS file.)
+//
+// 2026-07-25: added the holdout Review badge — nag-button pattern: the
+// badge IS the entry point that performs the review (one verb, one
+// meaning). It appears on a person's card only while the newest blind
+// holdout queue (HoldoutReviewQueue.discover) is for that person and has
+// pending rows; it opens ConfirmPersonSheet in blind holdout mode and
+// disappears once every row is answered.
 
 import SwiftUI
 import AppKit
@@ -80,6 +87,40 @@ extension PersonFinderView {
                     .stroke(Color.orange.opacity(0.35), lineWidth: 1)
             )
             .transition(.opacity.combined(with: .move(edge: .top)))
+        }
+    }
+
+    /// Holdout Review badge — shown on a PersonCard while the newest
+    /// blind review queue is for this person and still has pending rows.
+    /// Clicking it opens the review directly (nag-button pattern: the
+    /// badge performs the work). Visibility state lives in
+    /// holdoutReview (PersonFinderView.swift); no file I/O happens here.
+    ///
+    /// PLACEMENT NOTE: currently overlaid top-trailing on the card —
+    /// deliberately a self-contained view so moving it is a one-line
+    /// change wherever Rick wants it after spot-test.
+    @ViewBuilder
+    func holdoutReviewBadge(for profile: POIProfile) -> some View {
+        if let queue = holdoutReview.pendingQueue(for: profile.name) {
+            Button {
+                confirmTarget = ConfirmSheetTarget(profile: profile, holdoutQueue: queue)
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "eye.fill")
+                    Text("Review \(queue.pendingCount)")
+                }
+                .font(.system(size: max(9, personNameFontSize * 0.72), weight: .semibold))
+                .foregroundColor(.white)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(Color.orange))
+                .overlay(
+                    Capsule().stroke(Color(NSColor.windowBackgroundColor), lineWidth: 1.5)
+                )
+            }
+            .buttonStyle(.plain)
+            .help("\(queue.pendingCount) holdout video\(queue.pendingCount == 1 ? "" : "s") awaiting your blind yes/no review — click to start")
+            .accessibilityIdentifier("pf.holdout.review.\(profile.name)")
         }
     }
 
@@ -164,6 +205,13 @@ extension PersonFinderView {
                                        imageSize: personImageSize,
                                        cardWidth: personCardWidth,
                                        nameFontSize: personNameFontSize)
+                                // Holdout Review badge — top-trailing over
+                                // the portrait. The Button in the overlay
+                                // wins the click over the card's
+                                // onTapGesture below (deepest view first).
+                                .overlay(alignment: .topTrailing) {
+                                    holdoutReviewBadge(for: profile)
+                                }
                                 .opacity(isBeingScanned ? 0.7 : 1.0)
                                 // Gauntlet flow 1 right-clicks the card to
                                 // reach "Search for <name>…". Test-only.
@@ -307,6 +355,9 @@ extension PersonFinderView {
         .padding(.top, 10)
         .padding(.bottom, model.savedProfiles.isEmpty ? 10 : 0)
         .background(Color(NSColor.windowBackgroundColor))
+        // Discover the newest holdout queue off the view body — a tiny
+        // directory scan + 36-row CSV parse, but it's still file I/O.
+        .task { await holdoutReview.refresh() }
         .alert("Delete '\(confirmDeleteProfile?.name ?? "")' and all reference photos?",
                isPresented: Binding(
             get: { confirmDeleteProfile != nil },
@@ -351,8 +402,12 @@ extension PersonFinderView {
                 }
             }
         }
-        .sheet(item: $confirmTarget) { target in
-            ConfirmPersonSheet(profile: target.profile)
+        .sheet(item: $confirmTarget, onDismiss: {
+            // Re-read the queue CSV so the Review badge count drops as
+            // answers land and the badge disappears when the queue is done.
+            Task { await holdoutReview.refresh() }
+        }) { target in
+            ConfirmPersonSheet(profile: target.profile, holdoutQueue: target.holdoutQueue)
                 .environmentObject(model)
                 .environmentObject(catalogModel)
         }
