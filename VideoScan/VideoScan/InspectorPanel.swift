@@ -19,6 +19,14 @@ struct InspectorPanel: View {
     /// trimmed from; `trimDerivatives` = trimmed versions of this one.
     var trimSource: VideoRecord?
     var trimDerivatives: [VideoRecord] = []
+    /// Repair lifecycle (GH #132), resolved by the CALLER (O(1) id-index
+    /// lookups — no O(records) work in this view body). `repairSource` =
+    /// the record this repair copy was made from; `repairCopy` = the
+    /// repaired record that superseded this one.
+    var repairSource: VideoRecord?
+    var repairCopy: VideoRecord?
+    /// One-click confirm for the selected awaiting-confirmation repair.
+    var onConfirmRepair: ((UUID) -> Void)?
 
     var body: some View {
         if let rec = record {
@@ -264,6 +272,36 @@ struct InspectorPanel: View {
                             }
                             ForEach(trimDerivatives, id: \.id) { derived in
                                 trimLinkRow(label: "Trimmed version", target: derived)
+                            }
+                        }
+                    }
+
+                    // Repair lifecycle (GH #132) — shown on repair
+                    // copies (awaiting or confirmed) and on superseded
+                    // originals. The confirm button is the same
+                    // one-click verb the context menu offers.
+                    if rec.isAwaitingConfirmation || rec.repairConfirmedDate != nil || rec.isSuperseded {
+                        inspectorSection("Repair", systemImage: "checkmark.seal") {
+                            if let source = repairSource {
+                                repairLinkRow(label: "Repaired from", target: source)
+                            }
+                            if let copy = repairCopy {
+                                repairLinkRow(label: "Repaired copy", target: copy)
+                            }
+                            if rec.isAwaitingConfirmation {
+                                inspectorRow("Status", "Waiting for your OK — play it, then confirm")
+                                if repairSource != nil {
+                                    Button("Sounds Good — Confirm Repair") {
+                                        onConfirmRepair?(rec.id)
+                                    }
+                                    .controlSize(.small)
+                                    .help("Keep this repaired copy as the one to use. The original is hidden from the everyday view — never deleted — and your tags, notes, people, and ratings carry over.")
+                                    .accessibilityIdentifier("inspector.confirmRepair")
+                                }
+                            } else if let confirmedAt = rec.repairConfirmedDate {
+                                inspectorRow("Status", "Confirmed \(confirmedAt.formatted(date: .abbreviated, time: .shortened))")
+                            } else if rec.isSuperseded {
+                                inspectorRow("Status", "Superseded — hidden from the everyday view, never deleted")
                             }
                         }
                     }
@@ -705,6 +743,39 @@ struct InspectorPanel: View {
             } label: {
                 HStack(spacing: 4) {
                     Image(systemName: "scissors")
+                        .font(.system(size: 9))
+                    Text(target.filename)
+                        .font(.system(size: 11, weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .foregroundColor(.accentColor)
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering in
+                if hovering {
+                    NSCursor.pointingHand.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            Spacer()
+        }
+    }
+
+    /// Clickable record link for the Repair section — trimLinkRow's
+    /// visual language with the lifecycle's swap glyph (GH #132).
+    private func repairLinkRow(label: String, target: VideoRecord) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text(label)
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+                .frame(width: 80, alignment: .trailing)
+            Button {
+                onSelectRecord?(target.id)
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.triangle.swap")
                         .font(.system(size: 9))
                     Text(target.filename)
                         .font(.system(size: 11, weight: .medium))

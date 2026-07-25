@@ -277,6 +277,25 @@ struct CatalogContent: View {
         return model.record(forID: sourceID)
     }
 
+    /// The record the selected repair copy was made from (GH #132) —
+    /// O(1) via the model's id index. Only resolves for repair-kind
+    /// derivatives (rebuildAudio / externalRepair), so the inspector's
+    /// Repair section never claims trim/balance outputs.
+    private var repairSource: VideoRecord? {
+        guard let rec = selectedRecord,
+              VideoRecord.repairDerivationKinds.contains(rec.derivationKind ?? ""),
+              let sourceID = rec.derivedFrom else { return nil }
+        return model.record(forID: sourceID)
+    }
+
+    /// The repaired record that superseded the selected original
+    /// (GH #132) — O(1) via the model's id index.
+    private var repairCopy: VideoRecord? {
+        guard let rec = selectedRecord,
+              let copyID = rec.supersededByID else { return nil }
+        return model.record(forID: copyID)
+    }
+
     private func volumeRoot(for path: String) -> String {
         if path.hasPrefix("/Volumes/") {
             let parts = path.split(separator: "/", maxSplits: 3)
@@ -473,6 +492,8 @@ struct CatalogContent: View {
                     purgeUndoBanner
                     // Same affordance for the most recent Tidy Catalog apply.
                     tidyUndoBanner
+                    // …and for the most recent Confirm Repair (GH #132).
+                    confirmUndoBanner
                     // Music-triage suggestion (GH #124 layer 2, nag-button
                     // pattern). Reads the memoized candidate list — no
                     // O(records) work per body eval.
@@ -523,7 +544,12 @@ struct CatalogContent: View {
                         onSelect(id)
                     },
                     trimSource: trimSource,
-                    trimDerivatives: trimDerivatives
+                    trimDerivatives: trimDerivatives,
+                    repairSource: repairSource,
+                    repairCopy: repairCopy,
+                    onConfirmRepair: { id in
+                        _ = model.confirmRepair(repairID: id)
+                    }
                 )
                 .frame(minWidth: 260, idealWidth: 300, maxWidth: 400)
             }
@@ -897,6 +923,56 @@ struct CatalogContent: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
                     .stroke(Color.purple.opacity(0.35), lineWidth: 1)
+            )
+            .padding(.horizontal, 12)
+            .padding(.top, 6)
+            .transition(.opacity.combined(with: .move(edge: .top)))
+        }
+    }
+
+    // Inline undo affordance for the most recent "Sounds Good — Confirm
+    // Repair" (GH #132) — brown to match the superseded palette,
+    // otherwise the same layout and dismissal rules as its siblings
+    // above (no auto-dismiss timer; Rick wants to take his time).
+    @ViewBuilder
+    private var confirmUndoBanner: some View {
+        if let batch = model.lastConfirmBatch {
+            HStack(spacing: 10) {
+                Image(systemName: "checkmark.seal")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(.brown)
+                let n = batch.snapshots.count
+                Text("Confirmed \(n) repair\(n == 1 ? "" : "s") — the original\(n == 1 ? " is" : "s are") hidden, never deleted.")
+                    .font(.system(size: 12))
+                    .foregroundColor(.primary)
+                Button("Undo") {
+                    _ = model.undoConfirmRepair()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+
+                Spacer()
+
+                Button {
+                    model.dismissConfirmUndoBanner()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(Color.secondary, Color.secondary.opacity(0.2))
+                }
+                .buttonStyle(.plain)
+                .help("Dismiss — superseded originals stay hidden until you flip “Show superseded” and right-click → Restore Original")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.brown.opacity(0.12))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.brown.opacity(0.35), lineWidth: 1)
             )
             .padding(.horizontal, 12)
             .padding(.top, 6)

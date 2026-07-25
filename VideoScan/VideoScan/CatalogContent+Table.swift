@@ -140,7 +140,55 @@ extension CatalogContent {
 
     // Internal (not private): the view body in CatalogHelpers.swift embeds
     // this table in the left pane.
+    //
+    // Split (GH #132): the Table-with-columns expression and its long
+    // modifier chain were ONE expression, and the chain's growth (extra
+    // onChange keys) pushed the combined type-check past Xcode's budget.
+    // `catalogTableBase` isolates the columns; this var owns the chain.
     var catalogTable: some View {
+        tableWithMenus
+        .onAppear { tableData = computeFiltered() }
+        .onChange(of: records.count) { tableData = computeFiltered() }
+        .onChange(of: searchText) { tableData = computeFiltered() }
+        .onChange(of: filterTargetPaths) { tableData = computeFiltered() }
+        .onChange(of: showPairsOnly) { tableData = computeFiltered() }
+        .onChange(of: filterByIDs) { tableData = computeFiltered() }
+        .onChange(of: viewFilters) { tableData = computeFiltered() }
+        // Reachable-only baseline opt-out (2026-07-20).
+        .onChange(of: showDisconnectedMedia) { tableData = computeFiltered() }
+        // Media-kind facet chip flip (GH #124).
+        .onChange(of: kindFacet) { tableData = computeFiltered() }
+        .onChange(of: showRemoved) { tableData = computeFiltered() }
+        .onChange(of: showSetAside) { tableData = computeFiltered() }
+        // Superseded reveal toggle (GH #132).
+        .onChange(of: showSuperseded) { tableData = computeFiltered() }
+        .onChange(of: model.lastTidyBatch) { tableData = computeFiltered() }
+        // Re-compute when purge state flips on any record (purge, undo, restore).
+        // We key off lastPurgedBatch so mutations from the model are observed.
+        .onChange(of: model.lastPurgedBatch) { tableData = computeFiltered() }
+        // Confirm Repair supersedes originals (and undo restores them) —
+        // same observation pattern as the purge batch (GH #132).
+        .onChange(of: model.lastConfirmBatch) { tableData = computeFiltered() }
+    }
+
+    /// Sort + menus stage of the split — see `catalogTable`'s note.
+    private var tableWithMenus: some View {
+        catalogTableBase
+        .onChange(of: sortOrder) {
+            onSort(sortOrder)
+            tableData.sort(using: sortOrder)
+        }
+        .contextMenu(forSelectionType: UUID.self) { ids in
+            rowContextMenu(ids: ids)
+        } primaryAction: { ids in
+            // Double-click / Return on row(s) → smart open (QuickTime when
+            // the cataloged codecs guarantee picture+sound, else VLC).
+            let recs = ids.compactMap { id in records.first { $0.id == id } }
+            MediaOpener.open(recs)
+        }
+    }
+
+    private var catalogTableBase: some View {
         Table(tableData, selection: $selectedIDs, sortOrder: $sortOrder) {
             TableColumn("Filename", value: \.filename) { rec in
                 let offline = !VolumeReachability.isReachable(path: rec.fullPath)
@@ -327,713 +375,730 @@ extension CatalogContent {
                 .width(min: 80, ideal: 95)
             }
         }
-        .onChange(of: sortOrder) {
-            onSort(sortOrder)
-            tableData.sort(using: sortOrder)
-        }
-        .contextMenu(forSelectionType: UUID.self) { ids in
-            let selectedRecs = ids.compactMap { id in records.first { $0.id == id } }
-            // Mixed-selection split. Each predicate is computed once so the
-            // Restore / Remove menu items use the same record set their
-            // actions operate on (label counts == operated-on counts).
-            // Swift's `.filter` ≈ C++ std::copy_if into a new vector.
-            let activeRecs = selectedRecs.filter { !$0.isPurged && !$0.isSetAside && !$0.isSuperseded }
-            let purgedRecs = selectedRecs.filter { $0.isPurged }
-            let setAsideRecs = selectedRecs.filter { $0.isSetAside && !$0.isPurged }
-            let supersededRecs = selectedRecs.filter { $0.isSuperseded && !$0.isPurged && !$0.isSetAside }
-            if let id = ids.first,
-               let rec = records.first(where: { $0.id == id }) {
-                // Pure-purged selection: minimal menu (Restore + Reveal).
-                // Pure set-aside selection: minimal menu (Put Back + Reveal).
-                // Mixed selection: show the full active menu PLUS a Restore
-                // item for the purged subset; row-targeted active actions
-                // (Combine, Rename, Tag, etc.) are gated on
-                // `purgedRecs.isEmpty` so a multi-select that pulled in any
-                // purged row doesn't silently apply destructive ops to it.
-                // Spec: "active-only row actions must be gated on
-                // purgedRecs.isEmpty".
-                if !activeRecs.isEmpty || rec.isPurged || rec.isSetAside || rec.isSuperseded {
-                    if rec.isPurged && activeRecs.isEmpty {
-                        purgedRowContextMenu(rec: rec, selectedRecs: selectedRecs)
-                    } else if rec.isSetAside && activeRecs.isEmpty {
-                        setAsideRowContextMenu(rec: rec, selectedRecs: selectedRecs)
-                    } else if rec.isSuperseded && activeRecs.isEmpty {
-                        // Pure-superseded selection: minimal menu (Show
-                        // Repaired Copy + Restore + Reveal) — GH #132.
-                        supersededRowContextMenu(rec: rec, selectedRecs: selectedRecs)
-                    } else {
-                        // Active or mixed selection — show the full menu,
-                        // gating active-row actions on the selection being
-                        // free of ALL inert states (purged / set-aside /
-                        // superseded rows must never receive destructive ops).
-                        let pureActive = purgedRecs.isEmpty && setAsideRecs.isEmpty
-                            && supersededRecs.isEmpty
-                        Button(VolumeReachability.isReachable(path: rec.fullPath)
-                               ? "Reveal in Finder"
-                               : "Reveal in Finder (offline)") {
-                            if VolumeReachability.isReachable(path: rec.fullPath) {
-                                NSWorkspace.shared.selectFile(rec.fullPath, inFileViewerRootedAtPath: "")
-                            } else {
-                                let alert = NSAlert()
-                                alert.messageText = "File Offline"
-                                alert.informativeText = "The volume containing this file is not mounted.\n\n\(rec.fullPath)"
-                                alert.alertStyle = .informational
-                                alert.addButton(withTitle: "OK")
-                                alert.runModal()
-                            }
-                        }
-                        Button("Open in QuickTime Player") {
-                            if let qtURL = NSWorkspace.shared.urlForApplication(
-                                withBundleIdentifier: "com.apple.QuickTimePlayerX"
-                            ) {
-                                NSWorkspace.shared.open(
-                                    [URL(fileURLWithPath: rec.fullPath)],
-                                    withApplicationAt: qtURL,
-                                    configuration: NSWorkspace.OpenConfiguration()
-                                )
-                            }
-                        }
-                        // Explicit manual override sibling of the QuickTime
-                        // item above — forces VLC regardless of the smart
-                        // double-click auto-decision. Falls back to the
-                        // system default handler when VLC isn't installed.
-                        Button("Open in VLC") {
-                            MediaOpener.openInVLC([rec])
-                        }
+    }
 
-                        Divider()
+    /// The row context menu, extracted WHOLE from the Table's modifier
+    /// chain (GH #132): the menu plus the grown onChange chain pushed the
+    /// single `catalogTable` expression past Xcode's type-check budget.
+    /// Same medicine as onlineCopyMenu / tagColumnCell — a dedicated
+    /// function gives the compiler a small, isolated context.
+    ///
+    /// Lint note: this body is the SAME menu that previously lived
+    /// inline in the `.contextMenu` closure (where the function-body
+    /// rules couldn't see it) — the extraction is behavior-preserving,
+    /// not new complexity. Decomposing the menu into per-section
+    /// builders is real refactor work for reviewed daylight, not an
+    /// overnight feature branch (refactor-scope rule).
+    @ViewBuilder
+    // swiftlint:disable:next cyclomatic_complexity function_body_length
+    private func rowContextMenu(ids: Set<UUID>) -> some View {
+        let selectedRecs = ids.compactMap { id in records.first { $0.id == id } }
+        // Mixed-selection split. Each predicate is computed once so the
+        // Restore / Remove menu items use the same record set their
+        // actions operate on (label counts == operated-on counts).
+        // Swift's `.filter` ≈ C++ std::copy_if into a new vector.
+        let activeRecs = selectedRecs.filter { !$0.isPurged && !$0.isSetAside && !$0.isSuperseded }
+        let purgedRecs = selectedRecs.filter { $0.isPurged }
+        let setAsideRecs = selectedRecs.filter { $0.isSetAside && !$0.isPurged }
+        let supersededRecs = selectedRecs.filter { $0.isSuperseded && !$0.isPurged && !$0.isSetAside }
+        if let id = ids.first,
+           let rec = records.first(where: { $0.id == id }) {
+            // Pure-purged selection: minimal menu (Restore + Reveal).
+            // Pure set-aside selection: minimal menu (Put Back + Reveal).
+            // Mixed selection: show the full active menu PLUS a Restore
+            // item for the purged subset; row-targeted active actions
+            // (Combine, Rename, Tag, etc.) are gated on
+            // `purgedRecs.isEmpty` so a multi-select that pulled in any
+            // purged row doesn't silently apply destructive ops to it.
+            // Spec: "active-only row actions must be gated on
+            // purgedRecs.isEmpty".
+            if !activeRecs.isEmpty || rec.isPurged || rec.isSetAside || rec.isSuperseded {
+                if rec.isPurged && activeRecs.isEmpty {
+                    purgedRowContextMenu(rec: rec, selectedRecs: selectedRecs)
+                } else if rec.isSetAside && activeRecs.isEmpty {
+                    setAsideRowContextMenu(rec: rec, selectedRecs: selectedRecs)
+                } else if rec.isSuperseded && activeRecs.isEmpty {
+                    // Pure-superseded selection: minimal menu (Show
+                    // Repaired Copy + Restore + Reveal) — GH #132.
+                    supersededRowContextMenu(rec: rec, selectedRecs: selectedRecs)
+                } else {
+                    // Active or mixed selection — show the full menu,
+                    // gating active-row actions on the selection being
+                    // free of ALL inert states (purged / set-aside /
+                    // superseded rows must never receive destructive ops).
+                    let pureActive = purgedRecs.isEmpty && setAsideRecs.isEmpty
+                        && supersededRecs.isEmpty
+                    Button(VolumeReachability.isReachable(path: rec.fullPath)
+                           ? "Reveal in Finder"
+                           : "Reveal in Finder (offline)") {
+                        if VolumeReachability.isReachable(path: rec.fullPath) {
+                            NSWorkspace.shared.selectFile(rec.fullPath, inFileViewerRootedAtPath: "")
+                        } else {
+                            let alert = NSAlert()
+                            alert.messageText = "File Offline"
+                            alert.informativeText = "The volume containing this file is not mounted.\n\n\(rec.fullPath)"
+                            alert.alertStyle = .informational
+                            alert.addButton(withTitle: "OK")
+                            alert.runModal()
+                        }
+                    }
+                    Button("Open in QuickTime Player") {
+                        if let qtURL = NSWorkspace.shared.urlForApplication(
+                            withBundleIdentifier: "com.apple.QuickTimePlayerX"
+                        ) {
+                            NSWorkspace.shared.open(
+                                [URL(fileURLWithPath: rec.fullPath)],
+                                withApplicationAt: qtURL,
+                                configuration: NSWorkspace.OpenConfiguration()
+                            )
+                        }
+                    }
+                    // Explicit manual override sibling of the QuickTime
+                    // item above — forces VLC regardless of the smart
+                    // double-click auto-decision. Falls back to the
+                    // system default handler when VLC isn't installed.
+                    Button("Open in VLC") {
+                        MediaOpener.openInVLC([rec])
+                    }
 
-                        // File operations — every verb that runs as a job
-                        // in the Media File Operations window lives in this
-                        // ONE section, alphabetized (Rick 2026-06-10). New
-                        // verbs (merge, analyze, …) join here, in order.
-                        if pureActive, let partner = rec.pairedWith {
-                            Button("Combine This Pair…") {
-                                let video = rec.streamType == .videoOnly ? rec : partner
-                                let audio = rec.streamType == .audioOnly ? rec : partner
-                                onCombinePair?(video, audio)
-                            }
-                            .accessibilityIdentifier("catalog.row.combineThisPair")
-                        }
-                        if pureActive, selectedRecs.count == 2,
-                           let fileA = selectedRecs.first,
-                           let fileB = selectedRecs.last {
-                            // Quick two-file check — exact copies, same
-                            // movie in a different wrapper, or genuinely
-                            // different? Only with exactly two rows
-                            // selected. Distinct from the volume-level
-                            // Compare & Rescue feature.
-                            Button("Compare These Two Files…") {
-                                fileOpsCenter.startCompare(
-                                    recordA: fileA, recordB: fileB)
-                                openWindow(id: "combine")
-                            }
-                            .disabled(!VolumeReachability.isReachable(path: fileA.fullPath)
-                                      || !VolumeReachability.isReachable(path: fileB.fullPath))
-                            .help("Check whether these two files are exact copies, the same movie in a different wrapper, or genuinely different.")
-                            .accessibilityIdentifier("catalog.row.compareTwoFiles")
-                        }
-                        // Extract Facial Frames — best portrait frames as
-                        // lossless PNGs, Vision face-quality ranked (Donna's
-                        // Aug 4 birthday print). Disabled when the file is
-                        // offline. (Renamed from "Extract Frames…" when the
-                        // ffmpeg-only verb below was added, 2026-06-10.)
-                        Button("Extract Facial Frames…") {
-                            startFrameRip(for: rec)
-                        }
-                        .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
-                        .accessibilityIdentifier("catalog.row.extractFacialFrames")
-                        // Extract Frames — ffmpeg-only frame export (every
-                        // frame / every Nth / N per second), no Vision.
-                        // Opens an options sheet first: this verb can write
-                        // tens of thousands of PNGs, so the user sees the
-                        // frame-count + disk estimate before anything runs.
-                        Button("Extract Frames…") {
-                            ripAllFramesTarget = rec
-                        }
-                        .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
-                        .accessibilityIdentifier("catalog.row.extractFrames")
+                    Divider()
 
-                        // Find Matching Audio — Rick 2026-06-14 (renamed
-                        // from "Repair Audio" with GH #116, which freed
-                        // the repair/fix verb space for Balance Audio).
-                        // Video-only files only. Auto-finds the
-                        // highest-confidence audio-only match (same
-                        // scorer Find A/V Pair uses) and pre-fills the
-                        // Combine sheet. Internal names + accessibility
-                        // ids deliberately unchanged — visible strings
-                        // only.
-                        if rec.streamType == .videoOnly {
-                            Button("Find Matching Audio…") {
-                                repairAudio(for: rec)
-                                openWindow(id: "combine")
-                            }
-                            .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
-                            .accessibilityIdentifier("catalog.row.repairAudio")
+                    // File operations — every verb that runs as a job
+                    // in the Media File Operations window lives in this
+                    // ONE section, alphabetized (Rick 2026-06-10). New
+                    // verbs (merge, analyze, …) join here, in order.
+                    if pureActive, let partner = rec.pairedWith {
+                        Button("Combine This Pair…") {
+                            let video = rec.streamType == .videoOnly ? rec : partner
+                            let audio = rec.streamType == .audioOnly ? rec : partner
+                            onCombinePair?(video, audio)
                         }
-
-                        // Find Matching Video — symmetric verb for
-                        // audio-only files (Rick 2026-06-15; renamed from
-                        // "Repair Video" alongside the audio verb so the
-                        // pair reads consistently). Same CorrelationScorer
-                        // works both directions: given an audio-only
-                        // record, it returns the best video-only match.
-                        if rec.streamType == .audioOnly {
-                            Button("Find Matching Video…") {
-                                repairVideo(for: rec)
-                                openWindow(id: "combine")
-                            }
-                            .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
-                            .accessibilityIdentifier("catalog.row.repairVideo")
-                        }
-
-                        // Analyze applies to the FULL selection (fix
-                        // 2026-07-14 — it used only ids.first, so
-                        // multi-selecting N files analyzed just one;
-                        // the Tag menu below is the pattern). Jobs
-                        // wait their turn behind a running batch, so
-                        // the old currentStatus.isActive disable is
-                        // gone — intent is never blocked, just queued.
-                        Button(activeRecs.count > 1
-                               ? "Analyze \(activeRecs.count) Files"
-                               : "Analyze") {
-                            requestAnalyze(forAll: activeRecs, stages: AnalyzeStage.all)
-                        }
-                        .disabled(!activeRecs.contains {
-                            VolumeReachability.isReachable(path: $0.fullPath)
-                        })
-                        .accessibilityIdentifier("catalog.row.analyze")
-
-                        // Balance Audio — GH #116, Rick 2026-07. Fixes
-                        // one-sided (classically left-only) audio from
-                        // old tape ingests. Opens an analyze-then-confirm
-                        // sheet; the fix runs as a BalanceAudioJob in the
-                        // operations window. Needs an audio stream, an
-                        // online volume, and no balance already running
-                        // against this same record (the Center refuses
-                        // duplicates too — this disable is the courtesy
-                        // layer).
-                        let balanceRunning = fileOpsCenter.jobs.contains { job in
-                            guard job.state.isActive, let b = job as? BalanceAudioJob else { return false }
-                            return b.record.id == rec.id
-                        }
-                        Button("Balance Audio…") {
-                            balanceRequest = BalanceAudioRequest(record: rec)
-                        }
-                        .disabled(!VolumeReachability.isReachable(path: rec.fullPath)
-                                  || balanceRunning
-                                  || rec.streamType != .videoAndAudio)
-                        .help(rec.streamType == .videoAndAudio
-                              ? "Check whether the sound sits on only one channel (common on old tape ingests) and fix it automatically. The original is never changed."
-                              : "This file has no audio track alongside its video to balance.")
-                        .accessibilityIdentifier("catalog.row.balanceAudio")
-
-                        // Transcode — opens a configuration sheet for format
-                        // and destination instead of assuming the source disk.
-                        // Disabled when the file is offline OR another
-                        // transcode is already running for this same record
-                        // (the per-file disable prevents the user from
-                        // queueing two competing encodes against one input).
-                        let transcodeRunning = fileOpsCenter.jobs.contains { job in
-                            guard job.state.isActive, let t = job as? TranscodeJob else { return false }
-                            return t.record.id == rec.id
-                        }
-                        let transcodeBlocked = !VolumeReachability.isReachable(path: rec.fullPath)
-                            || transcodeRunning
-                        Menu("Transcode") {
-                            Button("For Editing…") {
-                                configureTranscode(for: rec, preset: .editingLT)
-                            }
-                            .disabled(transcodeBlocked)
-                            .accessibilityIdentifier("catalog.row.transcodeEditing")
-
-                            // Archival splits into an "access copy"
-                            // (HEVC, everyday viewing) and a verified
-                            // lossless preservation master (FFV1 v3, for
-                            // a possible LoC deposit). Nested so the menu
-                            // doesn't grow flat and the two archival
-                            // intents read as a pair.
-                            Menu("For Archival…") {
-                                Button("Access Copy (HEVC 10-bit)") {
-                                    configureTranscode(for: rec, preset: .archival)
-                                }
-                                .disabled(transcodeBlocked)
-                                .accessibilityIdentifier("catalog.row.transcodeArchival")
-
-                                Button("Preservation Master (FFV1 v3, verified)") {
-                                    configureTranscode(for: rec, preset: .preservation)
-                                }
-                                .disabled(transcodeBlocked)
-                                .accessibilityIdentifier("catalog.row.transcodePreservation")
-                            }
-                        }
-
-                        // Clean Up Video — named cleanup RECIPES (v1:
-                        // "VHS Quick Clean"). Selecting one opens a
-                        // friendly confirmation sheet; the render runs as
-                        // a CleanupJob in the operations window. Needs a
-                        // video stream, an online volume, and no cleanup
-                        // already running against this same record.
-                        // Registry is a tiny compile-time constant array —
-                        // no O(records) work here.
-                        let cleanupRunning = fileOpsCenter.jobs.contains { job in
-                            guard job.state.isActive, let c = job as? CleanupJob else { return false }
-                            return c.record.id == rec.id
-                        }
-                        let cleanupBlocked = !VolumeReachability.isReachable(path: rec.fullPath)
-                            || cleanupRunning
-                            || !(rec.streamType == .videoAndAudio || rec.streamType == .videoOnly)
-                        Menu("Clean Up Video") {
-                            ForEach(CleanupRecipeRegistry.builtIn) { recipe in
-                                Button("\(recipe.displayName)…") {
-                                    cleanupRequest = CleanupRequest(record: rec, recipe: recipe)
-                                }
-                                .disabled(cleanupBlocked)
-                                .accessibilityIdentifier("catalog.row.cleanup.\(recipe.id)")
-                            }
-                        }
-
-                        // Trim Master — cut static/junk off the head and
-                        // tail of an archival capture with a stream copy
-                        // (no re-encode, no quality loss). Single-file
-                        // operation in v1: disabled for multi-select.
-                        // Needs a video stream, an online volume, and no
-                        // trim already running against this record.
-                        let trimRunning = fileOpsCenter.jobs.contains { job in
-                            guard job.state.isActive, let t = job as? TrimJob else { return false }
-                            return t.record.id == rec.id
-                        }
-                        let trimBlocked = !VolumeReachability.isReachable(path: rec.fullPath)
-                            || trimRunning
-                            || activeRecs.count > 1
-                            || !(rec.streamType == .videoAndAudio || rec.streamType == .videoOnly)
-                        Button("Trim Master…") {
-                            trimRequest = TrimRequest(record: rec)
-                        }
-                        .disabled(trimBlocked)
-                        .help(activeRecs.count > 1
-                              ? "Trim Master works on one file at a time."
-                              : "Cut static or junk off the start and end — a perfect copy with no quality loss. The original is never changed.")
-                        .accessibilityIdentifier("catalog.row.trimMaster")
-
-                        // Verify Audio — GH #128 + #135, Rick 2026-07-24.
-                        // The diagnosis checks the sound track (levels,
-                        // codec, reference-movie drefs, duration
-                        // mismatch) and persists the verdict. It runs as
-                        // MFO jobs for ANY selection size — the levels
-                        // pass decodes the whole track (minutes on long
-                        // tapes), so it must never block the catalog in
-                        // a modal sheet. Results are read afterwards via
-                        // "Verification Results…" below (instant — the
-                        // computed diagnosis is cached, nothing re-runs).
-                        let verifiableRecs = activeRecs.filter {
-                            VolumeReachability.isReachable(path: $0.fullPath)
-                        }
-                        Button(activeRecs.count > 1
-                               ? "Verify Audio (\(activeRecs.count) Files)"
-                               : "Verify Audio") {
-                            for r in verifiableRecs {
-                                fileOpsCenter.startVerifyAudio(record: r, model: model)
-                            }
+                        .accessibilityIdentifier("catalog.row.combineThisPair")
+                    }
+                    if pureActive, selectedRecs.count == 2,
+                       let fileA = selectedRecs.first,
+                       let fileB = selectedRecs.last {
+                        // Quick two-file check — exact copies, same
+                        // movie in a different wrapper, or genuinely
+                        // different? Only with exactly two rows
+                        // selected. Distinct from the volume-level
+                        // Compare & Rescue feature.
+                        Button("Compare These Two Files…") {
+                            fileOpsCenter.startCompare(
+                                recordA: fileA, recordB: fileB)
                             openWindow(id: "combine")
                         }
-                        .disabled(verifiableRecs.isEmpty)
-                        .help("Check the sound track — levels, format, and whether the audio really belongs to the picture. Runs in the operations window; the catalog stays usable.")
-                        .accessibilityIdentifier("catalog.row.verifyAudio")
+                        .disabled(!VolumeReachability.isReachable(path: fileA.fullPath)
+                                  || !VolumeReachability.isReachable(path: fileB.fullPath))
+                        .help("Check whether these two files are exact copies, the same movie in a different wrapper, or genuinely different.")
+                        .accessibilityIdentifier("catalog.row.compareTwoFiles")
+                    }
+                    // Extract Facial Frames — best portrait frames as
+                    // lossless PNGs, Vision face-quality ranked (Donna's
+                    // Aug 4 birthday print). Disabled when the file is
+                    // offline. (Renamed from "Extract Frames…" when the
+                    // ffmpeg-only verb below was added, 2026-06-10.)
+                    Button("Extract Facial Frames…") {
+                        startFrameRip(for: rec)
+                    }
+                    .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
+                    .accessibilityIdentifier("catalog.row.extractFacialFrames")
+                    // Extract Frames — ffmpeg-only frame export (every
+                    // frame / every Nth / N per second), no Vision.
+                    // Opens an options sheet first: this verb can write
+                    // tens of thousands of PNGs, so the user sees the
+                    // frame-count + disk estimate before anything runs.
+                    Button("Extract Frames…") {
+                        ripAllFramesTarget = rec
+                    }
+                    .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
+                    .accessibilityIdentifier("catalog.row.extractFrames")
 
-                        // Verification Results — instant presentation of
-                        // the already-computed diagnosis (GH #135). Shown
-                        // only when this session's verify produced one;
-                        // the sheet performs NO probe and NO levels
-                        // decode (its request type requires a computed
-                        // diagnosis). Repair offers live there.
-                        if activeRecs.count == 1,
-                           let cached = fileOpsCenter.verifyDiagnosis(forRecordID: rec.id) {
-                            Button("Verification Results…") {
-                                verifyAudioRequest = VerifyAudioRequest(
-                                    record: rec, diagnosis: cached)
-                            }
-                            .help("Show what Verify Audio found for this file — instantly, without checking it again — plus any repair offer.")
-                            .accessibilityIdentifier("catalog.row.verifyResults")
+                    // Find Matching Audio — Rick 2026-06-14 (renamed
+                    // from "Repair Audio" with GH #116, which freed
+                    // the repair/fix verb space for Balance Audio).
+                    // Video-only files only. Auto-finds the
+                    // highest-confidence audio-only match (same
+                    // scorer Find A/V Pair uses) and pre-fills the
+                    // Combine sheet. Internal names + accessibility
+                    // ids deliberately unchanged — visible strings
+                    // only.
+                    if rec.streamType == .videoOnly {
+                        Button("Find Matching Audio…") {
+                            repairAudio(for: rec)
+                            openWindow(id: "combine")
                         }
+                        .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
+                        .accessibilityIdentifier("catalog.row.repairAudio")
+                    }
 
-                        // Repair Damaged Audio — the batch repair verb
-                        // (GH #132 P1): re-verifies each damaged row and
-                        // chains straight into Rebuild Audio Track when
-                        // the damage is the repairable codec class. The
-                        // Center's duplicate guards protect re-clicks.
-                        let damagedRecs = verifiableRecs.filter {
-                            $0.audioVerifyStatus == "damaged"
+                    // Find Matching Video — symmetric verb for
+                    // audio-only files (Rick 2026-06-15; renamed from
+                    // "Repair Video" alongside the audio verb so the
+                    // pair reads consistently). Same CorrelationScorer
+                    // works both directions: given an audio-only
+                    // record, it returns the best video-only match.
+                    if rec.streamType == .audioOnly {
+                        Button("Find Matching Video…") {
+                            repairVideo(for: rec)
+                            openWindow(id: "combine")
                         }
-                        if !damagedRecs.isEmpty {
-                            Button(damagedRecs.count > 1
-                                   ? "Repair Damaged Audio (\(damagedRecs.count) Files)"
-                                   : "Repair Damaged Audio") {
-                                for r in damagedRecs {
-                                    fileOpsCenter.startVerifyAudio(
-                                        record: r, model: model, autoRepair: true)
-                                }
-                                openWindow(id: "combine")
-                            }
-                            .help("Re-check each damaged file and, where the damage is fixable (an old sound format), rebuild a repaired copy next to the original. Originals are never changed.")
-                            .accessibilityIdentifier("catalog.row.repairDamagedAudio")
+                        .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
+                        .accessibilityIdentifier("catalog.row.repairVideo")
+                    }
+
+                    // Analyze applies to the FULL selection (fix
+                    // 2026-07-14 — it used only ids.first, so
+                    // multi-selecting N files analyzed just one;
+                    // the Tag menu below is the pattern). Jobs
+                    // wait their turn behind a running batch, so
+                    // the old currentStatus.isActive disable is
+                    // gone — intent is never blocked, just queued.
+                    Button(activeRecs.count > 1
+                           ? "Analyze \(activeRecs.count) Files"
+                           : "Analyze") {
+                        requestAnalyze(forAll: activeRecs, stages: AnalyzeStage.all)
+                    }
+                    .disabled(!activeRecs.contains {
+                        VolumeReachability.isReachable(path: $0.fullPath)
+                    })
+                    .accessibilityIdentifier("catalog.row.analyze")
+
+                    // Balance Audio — GH #116, Rick 2026-07. Fixes
+                    // one-sided (classically left-only) audio from
+                    // old tape ingests. Opens an analyze-then-confirm
+                    // sheet; the fix runs as a BalanceAudioJob in the
+                    // operations window. Needs an audio stream, an
+                    // online volume, and no balance already running
+                    // against this same record (the Center refuses
+                    // duplicates too — this disable is the courtesy
+                    // layer).
+                    let balanceRunning = fileOpsCenter.jobs.contains { job in
+                        guard job.state.isActive, let b = job as? BalanceAudioJob else { return false }
+                        return b.record.id == rec.id
+                    }
+                    Button("Balance Audio…") {
+                        balanceRequest = BalanceAudioRequest(record: rec)
+                    }
+                    .disabled(!VolumeReachability.isReachable(path: rec.fullPath)
+                              || balanceRunning
+                              || rec.streamType != .videoAndAudio)
+                    .help(rec.streamType == .videoAndAudio
+                          ? "Check whether the sound sits on only one channel (common on old tape ingests) and fix it automatically. The original is never changed."
+                          : "This file has no audio track alongside its video to balance.")
+                    .accessibilityIdentifier("catalog.row.balanceAudio")
+
+                    // Transcode — opens a configuration sheet for format
+                    // and destination instead of assuming the source disk.
+                    // Disabled when the file is offline OR another
+                    // transcode is already running for this same record
+                    // (the per-file disable prevents the user from
+                    // queueing two competing encodes against one input).
+                    let transcodeRunning = fileOpsCenter.jobs.contains { job in
+                        guard job.state.isActive, let t = job as? TranscodeJob else { return false }
+                        return t.record.id == rec.id
+                    }
+                    let transcodeBlocked = !VolumeReachability.isReachable(path: rec.fullPath)
+                        || transcodeRunning
+                    Menu("Transcode") {
+                        Button("For Editing…") {
+                            configureTranscode(for: rec, preset: .editingLT)
                         }
+                        .disabled(transcodeBlocked)
+                        .accessibilityIdentifier("catalog.row.transcodeEditing")
 
-                        // Rick 2026-06-14: grey out (don't hide) when
-                        // the file lacks the relevant stream. More
-                        // discoverable than absent — the user learns
-                        // "Transcribe Audio exists but this file has
-                        // no audio" instead of wondering where it went.
-                        let hasAudio = (rec.streamType == .videoAndAudio || rec.streamType == .audioOnly)
-                        // NOT raw streamType (QA F9): an mp3's cover art
-                        // probes as a video stream — classify first so
-                        // audio/photo files can't launch a captions job
-                        // that runs with hasNoVideo and fails confusingly.
-                        let hasVideo = pfCanGenerateSceneCaptions(
-                            streamTypeRaw: rec.streamTypeRaw, filename: rec.filename)
-                        Button("Transcribe Audio") {
-                            requestAnalyze(for: rec, stages: [.transcript])
+                        // Archival splits into an "access copy"
+                        // (HEVC, everyday viewing) and a verified
+                        // lossless preservation master (FFV1 v3, for
+                        // a possible LoC deposit). Nested so the menu
+                        // doesn't grow flat and the two archival
+                        // intents read as a pair.
+                        Menu("For Archival…") {
+                            Button("Access Copy (HEVC 10-bit)") {
+                                configureTranscode(for: rec, preset: .archival)
+                            }
+                            .disabled(transcodeBlocked)
+                            .accessibilityIdentifier("catalog.row.transcodeArchival")
+
+                            Button("Preservation Master (FFV1 v3, verified)") {
+                                configureTranscode(for: rec, preset: .preservation)
+                            }
+                            .disabled(transcodeBlocked)
+                            .accessibilityIdentifier("catalog.row.transcodePreservation")
                         }
-                        .disabled(!hasAudio
-                                  || !VolumeReachability.isReachable(path: rec.fullPath))
-                        .help(hasAudio
-                              ? "Run Whisper to produce a transcript of the audio track."
-                              : "This file has no audio stream to transcribe.")
-                        .accessibilityIdentifier("catalog.row.transcribeAudio")
+                    }
 
-                        Button("Generate Scene Captions") {
-                            requestAnalyze(for: rec, stages: [.captions])
+                    // Clean Up Video — named cleanup RECIPES (v1:
+                    // "VHS Quick Clean"). Selecting one opens a
+                    // friendly confirmation sheet; the render runs as
+                    // a CleanupJob in the operations window. Needs a
+                    // video stream, an online volume, and no cleanup
+                    // already running against this same record.
+                    // Registry is a tiny compile-time constant array —
+                    // no O(records) work here.
+                    let cleanupRunning = fileOpsCenter.jobs.contains { job in
+                        guard job.state.isActive, let c = job as? CleanupJob else { return false }
+                        return c.record.id == rec.id
+                    }
+                    let cleanupBlocked = !VolumeReachability.isReachable(path: rec.fullPath)
+                        || cleanupRunning
+                        || !(rec.streamType == .videoAndAudio || rec.streamType == .videoOnly)
+                    Menu("Clean Up Video") {
+                        ForEach(CleanupRecipeRegistry.builtIn) { recipe in
+                            Button("\(recipe.displayName)…") {
+                                cleanupRequest = CleanupRequest(record: rec, recipe: recipe)
+                            }
+                            .disabled(cleanupBlocked)
+                            .accessibilityIdentifier("catalog.row.cleanup.\(recipe.id)")
                         }
-                        .disabled(!hasVideo
-                                  || !VolumeReachability.isReachable(path: rec.fullPath))
-                        .help(hasVideo
-                              ? "Run the VLM to extract scene descriptions + OCR text/dates from video frames."
-                              : "This file has no video stream to caption.")
-                        .accessibilityIdentifier("catalog.row.generateCaptions")
+                    }
 
-                        if pureActive {
-                            Divider()
+                    // Trim Master — cut static/junk off the head and
+                    // tail of an archival capture with a stream copy
+                    // (no re-encode, no quality loss). Single-file
+                    // operation in v1: disabled for multi-select.
+                    // Needs a video stream, an online volume, and no
+                    // trim already running against this record.
+                    let trimRunning = fileOpsCenter.jobs.contains { job in
+                        guard job.state.isActive, let t = job as? TrimJob else { return false }
+                        return t.record.id == rec.id
+                    }
+                    let trimBlocked = !VolumeReachability.isReachable(path: rec.fullPath)
+                        || trimRunning
+                        || activeRecs.count > 1
+                        || !(rec.streamType == .videoAndAudio || rec.streamType == .videoOnly)
+                    Button("Trim Master…") {
+                        trimRequest = TrimRequest(record: rec)
+                    }
+                    .disabled(trimBlocked)
+                    .help(activeRecs.count > 1
+                          ? "Trim Master works on one file at a time."
+                          : "Cut static or junk off the start and end — a perfect copy with no quality loss. The original is never changed.")
+                    .accessibilityIdentifier("catalog.row.trimMaster")
 
-                            Button("Rename…") {
-                                renameTarget = rec
-                                renameText = (rec.filename as NSString).deletingPathExtension
-                                showRenameSheet = true
-                            }
+                    // Verify Audio / Verification Results / Repair
+                    // Damaged Audio / Confirm Repair — extracted to
+                    // a dedicated builder (GH #132/#135) so the
+                    // context-menu expression stays inside Xcode's
+                    // type-check budget (same fix as onlineCopyMenu).
+                    audioLifecycleMenuItems(rec: rec,
+                                            activeRecs: activeRecs,
+                                            pureActive: pureActive)
 
-                            Divider()
+                    // Rick 2026-06-14: grey out (don't hide) when
+                    // the file lacks the relevant stream. More
+                    // discoverable than absent — the user learns
+                    // "Transcribe Audio exists but this file has
+                    // no audio" instead of wondering where it went.
+                    let hasAudio = (rec.streamType == .videoAndAudio || rec.streamType == .audioOnly)
+                    // NOT raw streamType (QA F9): an mp3's cover art
+                    // probes as a video stream — classify first so
+                    // audio/photo files can't launch a captions job
+                    // that runs with hasNoVideo and fails confusingly.
+                    let hasVideo = pfCanGenerateSceneCaptions(
+                        streamTypeRaw: rec.streamTypeRaw, filename: rec.filename)
+                    Button("Transcribe Audio") {
+                        requestAnalyze(for: rec, stages: [.transcript])
+                    }
+                    .disabled(!hasAudio
+                              || !VolumeReachability.isReachable(path: rec.fullPath))
+                    .help(hasAudio
+                          ? "Run Whisper to produce a transcript of the audio track."
+                          : "This file has no audio stream to transcribe.")
+                    .accessibilityIdentifier("catalog.row.transcribeAudio")
 
-                            Menu("Tag") {
-                                Button {
-                                    for r in selectedRecs { r.mediaDisposition = .important }
-                                    model.saveCatalogDebounced()
-                                } label: {
-                                    Label("Important", systemImage: "star.fill")
-                                }
-                                Button {
-                                    for r in selectedRecs { r.mediaDisposition = .recoverable }
-                                    model.saveCatalogDebounced()
-                                } label: {
-                                    Label("Recoverable", systemImage: "wrench.and.screwdriver.fill")
-                                }
+                    Button("Generate Scene Captions") {
+                        requestAnalyze(for: rec, stages: [.captions])
+                    }
+                    .disabled(!hasVideo
+                              || !VolumeReachability.isReachable(path: rec.fullPath))
+                    .help(hasVideo
+                          ? "Run the VLM to extract scene descriptions + OCR text/dates from video frames."
+                          : "This file has no video stream to caption.")
+                    .accessibilityIdentifier("catalog.row.generateCaptions")
 
-                                Divider()
+                    if pureActive {
+                        Divider()
 
-                                Button {
-                                    for r in selectedRecs { r.mediaDisposition = .suspectedJunk }
-                                    model.saveCatalogDebounced()
-                                } label: {
-                                    Label("Suspected Junk", systemImage: "exclamationmark.triangle")
-                                }
-                                Button {
-                                    for r in selectedRecs { r.mediaDisposition = .confirmedJunk }
-                                    model.saveCatalogDebounced()
-                                } label: {
-                                    Label("Junk", systemImage: "xmark.circle.fill")
-                                }
-
-                                Divider()
-
-                                Button {
-                                    for r in selectedRecs { r.mediaDisposition = .unreviewed }
-                                    model.saveCatalogDebounced()
-                                } label: {
-                                    Label("Clear Tag", systemImage: "arrow.counterclockwise")
-                                }
-                            }
-
-                            // Workflow tags (2026-07-23) — separate from the
-                            // disposition "Tag" menu above: dispositions are
-                            // one-of (keep/junk verdicts), these are any-of
-                            // markers ("Follow Up", "Gold", your own words).
-                            // Each quick-pick toggles across the WHOLE
-                            // selection; a mixed selection applies to all.
-                            Menu("Tags") {
-                                ForEach(WorkflowTags.quickPicks, id: \.self) { tag in
-                                    let allHave = selectedRecs.allSatisfy {
-                                        WorkflowTags.contains($0.tags, tag)
-                                    }
-                                    // Toggle in a menu renders as a checkmark
-                                    // item. Binding get/set ≈ a C++ property
-                                    // with custom getter/setter: get feeds the
-                                    // checkmark, set runs the toggle action.
-                                    Toggle(tag, isOn: Binding(
-                                        get: { allHave },
-                                        set: { model.setTag(tag, on: selectedRecs, present: $0) }
-                                    ))
-                                }
-                                Divider()
-                                Button("Custom Tag\u{2026}") {
-                                    customTagTargetIDs = Set(selectedRecs.map(\.id))
-                                    customTagText = ""
-                                    showCustomTagAlert = true
-                                }
-                                if selectedRecs.contains(where: { !$0.tags.isEmpty }) {
-                                    Divider()
-                                    Button("Remove All Tags") {
-                                        model.removeAllTags(from: selectedRecs)
-                                    }
-                                }
-                            }
-
-                            Button("Notes\u{2026}") {
-                                notesTarget = rec
-                                // userNotes split (2026-07-23): the sheet
-                                // edits YOUR note text; machine probe notes
-                                // stay read-only in the inspector.
-                                notesText = rec.userNotes
-                                showNotesSheet = true
-                            }
-
-                            // Show duplicate group matches
-                            let groupMatches = records.filter {
-                                $0.id != rec.id && $0.duplicateGroupID != nil && $0.duplicateGroupID == rec.duplicateGroupID
-                            }
-                            if !groupMatches.isEmpty {
-                                let onlineMatches = groupMatches.filter {
-                                    VolumeReachability.isReachable(path: $0.fullPath)
-                                }
-
-                                if !onlineMatches.isEmpty {
-                                    // Extracted to a dedicated method so Xcode 16.4 has a tiny,
-                                    // isolated type-check context for the Menu→ForEach→Section→
-                                    // ForEach chain. Inline, the compiler was leaking
-                                    // ChartContentBuilder candidates into overload resolution.
-                                    onlineCopyMenu(onlineMatches: onlineMatches)
-                                }
-
-                                Menu("All Matches (\(groupMatches.count))") {
-                                    ForEach(groupMatches) { dup in
-                                        let online = VolumeReachability.isReachable(path: dup.fullPath)
-                                        Button {
-                                            selectedIDs = [dup.id]
-                                            onSelect(dup.id)
-                                        } label: {
-                                            let vol = VolumeReachability.displayLabel(forPath: dup.fullPath)
-                                            Text("\(dup.filename) — \(vol)\(online ? "" : " (offline)")")
-                                        }
-                                    }
-                                }
-                            }
-
-                            // ("Compare These Two Files…" moved to the
-                            // file-operations section near the top of this
-                            // menu — Rick 2026-06-10: all fileops verbs
-                            // grouped + alphabetized.)
-
-                            if rec.streamType.needsCorrelation {
-                                Divider()
-                                Button("Find A/V Pair") {
-                                    onFindAVPair?(rec)
-                                }
-                                .help("Show this file's best matching pair in the catalog, including any online duplicates of either side.")
-                            }
-                            // ("Combine This Pair…" likewise lives in the
-                            // file-operations section now.)
-
-                            // Find Online Version — only offered when the
-                            // file itself is unreachable (the verb answers
-                            // "this one's offline, what CAN I use?").
-                            // Strict identity match, never the fuzzy
-                            // duplicate scorer — see OnlineCopyFinder.
-                            if !VolumeReachability.isReachable(path: rec.fullPath) {
-                                Divider()
-                                Button {
-                                    findOnlineVersion(for: rec)
-                                } label: {
-                                    Label("Find Online Version",
-                                          systemImage: "externaldrive.badge.checkmark")
-                                }
-                                .help("Locate a copy of this file on a volume that is mounted right now and show it in the catalog.")
-                                .accessibilityIdentifier("catalog.row.findOnlineVersion")
-                            }
-                            Divider()
-                            Button {
-                                onShowInArchive?(rec)
-                            } label: {
-                                Label("Show in Archive", systemImage: "archivebox")
-                            }
-                            // §2 Provenance & Audit Trail — surface the
-                            // File Journey timeline for this record. Works
-                            // on every active row, including ones with no
-                            // relocate history (the timeline just shows
-                            // Origin → Current). Active-only — purged
-                            // rows don't need it.
-                            Button {
-                                fileJourneyPayload = model.makeFileJourney(for: rec)
-                            } label: {
-                                Label("Show this file's journey",
-                                      systemImage: "mappin.and.ellipse")
-                            }
-                            .accessibilityIdentifier("catalog.row.showJourney")
-                            Button("Copy Path") {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(rec.fullPath, forType: .string)
-                            }
-                        } // end pureActive
+                        Button("Rename…") {
+                            renameTarget = rec
+                            renameText = (rec.filename as NSString).deletingPathExtension
+                            showRenameSheet = true
+                        }
 
                         Divider()
 
-                        // Remove from Catalog — visible when the selection
-                        // contains at least one active row. The label and the
-                        // action both operate on `activeRecs` exclusively, so
-                        // a mixed selection's purged rows are never
-                        // double-stamped and the count in the label matches
-                        // the count actually mutated.
-                        if !activeRecs.isEmpty {
+                        Menu("Tag") {
+                            Button {
+                                for r in selectedRecs { r.mediaDisposition = .important }
+                                model.saveCatalogDebounced()
+                            } label: {
+                                Label("Important", systemImage: "star.fill")
+                            }
+                            Button {
+                                for r in selectedRecs { r.mediaDisposition = .recoverable }
+                                model.saveCatalogDebounced()
+                            } label: {
+                                Label("Recoverable", systemImage: "wrench.and.screwdriver.fill")
+                            }
+
+                            Divider()
+
+                            Button {
+                                for r in selectedRecs { r.mediaDisposition = .suspectedJunk }
+                                model.saveCatalogDebounced()
+                            } label: {
+                                Label("Suspected Junk", systemImage: "exclamationmark.triangle")
+                            }
+                            Button {
+                                for r in selectedRecs { r.mediaDisposition = .confirmedJunk }
+                                model.saveCatalogDebounced()
+                            } label: {
+                                Label("Junk", systemImage: "xmark.circle.fill")
+                            }
+
+                            Divider()
+
+                            Button {
+                                for r in selectedRecs { r.mediaDisposition = .unreviewed }
+                                model.saveCatalogDebounced()
+                            } label: {
+                                Label("Clear Tag", systemImage: "arrow.counterclockwise")
+                            }
+                        }
+
+                        // Workflow tags (2026-07-23) — separate from the
+                        // disposition "Tag" menu above: dispositions are
+                        // one-of (keep/junk verdicts), these are any-of
+                        // markers ("Follow Up", "Gold", your own words).
+                        // Each quick-pick toggles across the WHOLE
+                        // selection; a mixed selection applies to all.
+                        Menu("Tags") {
+                            ForEach(WorkflowTags.quickPicks, id: \.self) { tag in
+                                let allHave = selectedRecs.allSatisfy {
+                                    WorkflowTags.contains($0.tags, tag)
+                                }
+                                // Toggle in a menu renders as a checkmark
+                                // item. Binding get/set ≈ a C++ property
+                                // with custom getter/setter: get feeds the
+                                // checkmark, set runs the toggle action.
+                                Toggle(tag, isOn: Binding(
+                                    get: { allHave },
+                                    set: { model.setTag(tag, on: selectedRecs, present: $0) }
+                                ))
+                            }
+                            Divider()
+                            Button("Custom Tag\u{2026}") {
+                                customTagTargetIDs = Set(selectedRecs.map(\.id))
+                                customTagText = ""
+                                showCustomTagAlert = true
+                            }
+                            if selectedRecs.contains(where: { !$0.tags.isEmpty }) {
+                                Divider()
+                                Button("Remove All Tags") {
+                                    model.removeAllTags(from: selectedRecs)
+                                }
+                            }
+                        }
+
+                        Button("Notes\u{2026}") {
+                            notesTarget = rec
+                            // userNotes split (2026-07-23): the sheet
+                            // edits YOUR note text; machine probe notes
+                            // stay read-only in the inspector.
+                            notesText = rec.userNotes
+                            showNotesSheet = true
+                        }
+
+                        // Show duplicate group matches
+                        let groupMatches = records.filter {
+                            $0.id != rec.id && $0.duplicateGroupID != nil && $0.duplicateGroupID == rec.duplicateGroupID
+                        }
+                        if !groupMatches.isEmpty {
+                            let onlineMatches = groupMatches.filter {
+                                VolumeReachability.isReachable(path: $0.fullPath)
+                            }
+
+                            if !onlineMatches.isEmpty {
+                                // Extracted to a dedicated method so Xcode 16.4 has a tiny,
+                                // isolated type-check context for the Menu→ForEach→Section→
+                                // ForEach chain. Inline, the compiler was leaking
+                                // ChartContentBuilder candidates into overload resolution.
+                                onlineCopyMenu(onlineMatches: onlineMatches)
+                            }
+
+                            Menu("All Matches (\(groupMatches.count))") {
+                                ForEach(groupMatches) { dup in
+                                    let online = VolumeReachability.isReachable(path: dup.fullPath)
+                                    Button {
+                                        selectedIDs = [dup.id]
+                                        onSelect(dup.id)
+                                    } label: {
+                                        let vol = VolumeReachability.displayLabel(forPath: dup.fullPath)
+                                        Text("\(dup.filename) — \(vol)\(online ? "" : " (offline)")")
+                                    }
+                                }
+                            }
+                        }
+
+                        // ("Compare These Two Files…" moved to the
+                        // file-operations section near the top of this
+                        // menu — Rick 2026-06-10: all fileops verbs
+                        // grouped + alphabetized.)
+
+                        if rec.streamType.needsCorrelation {
+                            Divider()
+                            Button("Find A/V Pair") {
+                                onFindAVPair?(rec)
+                            }
+                            .help("Show this file's best matching pair in the catalog, including any online duplicates of either side.")
+                        }
+                        // ("Combine This Pair…" likewise lives in the
+                        // file-operations section now.)
+
+                        // Find Online Version — only offered when the
+                        // file itself is unreachable (the verb answers
+                        // "this one's offline, what CAN I use?").
+                        // Strict identity match, never the fuzzy
+                        // duplicate scorer — see OnlineCopyFinder.
+                        if !VolumeReachability.isReachable(path: rec.fullPath) {
+                            Divider()
+                            Button {
+                                findOnlineVersion(for: rec)
+                            } label: {
+                                Label("Find Online Version",
+                                      systemImage: "externaldrive.badge.checkmark")
+                            }
+                            .help("Locate a copy of this file on a volume that is mounted right now and show it in the catalog.")
+                            .accessibilityIdentifier("catalog.row.findOnlineVersion")
+                        }
+                        Divider()
+                        Button {
+                            onShowInArchive?(rec)
+                        } label: {
+                            Label("Show in Archive", systemImage: "archivebox")
+                        }
+                        // §2 Provenance & Audit Trail — surface the
+                        // File Journey timeline for this record. Works
+                        // on every active row, including ones with no
+                        // relocate history (the timeline just shows
+                        // Origin → Current). Active-only — purged
+                        // rows don't need it.
+                        Button {
+                            fileJourneyPayload = model.makeFileJourney(for: rec)
+                        } label: {
+                            Label("Show this file's journey",
+                                  systemImage: "mappin.and.ellipse")
+                        }
+                        .accessibilityIdentifier("catalog.row.showJourney")
+                        Button("Copy Path") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(rec.fullPath, forType: .string)
+                        }
+                    } // end pureActive
+
+                    Divider()
+
+                    // Remove from Catalog — visible when the selection
+                    // contains at least one active row. The label and the
+                    // action both operate on `activeRecs` exclusively, so
+                    // a mixed selection's purged rows are never
+                    // double-stamped and the count in the label matches
+                    // the count actually mutated.
+                    if !activeRecs.isEmpty {
+                        Button(role: .destructive) {
+                            let targetIDs = Set(activeRecs.map { $0.id })
+                            _ = model.purgeRecords(ids: targetIDs)
+                        } label: {
+                            Label(activeRecs.count > 1
+                                  ? "Remove \(activeRecs.count) from Catalog"
+                                  : "Remove from Catalog",
+                                  systemImage: "trash.slash")
+                        }
+                        .help("Hide these records from the default view. The files on disk are not deleted; toggle Show Removed in the toolbar to recover.")
+                    }
+
+                    // Delete File — per-row parity with the triage window's
+                    // batch path (Rick 2026-06-15). Move to Trash is
+                    // recoverable; Delete Permanently shows a confirmation
+                    // alert first. Both call deleteConfirmedJunk, which
+                    // already handles offline-skip, already-missing, and
+                    // per-file failures on a detached task. Distinct from
+                    // Remove from Catalog (above) which only hides the row.
+                    if !activeRecs.isEmpty {
+                        Menu {
                             Button(role: .destructive) {
-                                let targetIDs = Set(activeRecs.map { $0.id })
-                                _ = model.purgeRecords(ids: targetIDs)
+                                let targets = activeRecs
+                                Task { @MainActor in
+                                    let result = await model.deleteConfirmedJunk(targets, mode: .toTrash)
+                                    reportDeleteResult(result, mode: .toTrash)
+                                }
                             } label: {
-                                Label(activeRecs.count > 1
-                                      ? "Remove \(activeRecs.count) from Catalog"
-                                      : "Remove from Catalog",
-                                      systemImage: "trash.slash")
+                                Label("Move to Trash", systemImage: "trash")
                             }
-                            .help("Hide these records from the default view. The files on disk are not deleted; toggle Show Removed in the toolbar to recover.")
-                        }
+                            .accessibilityIdentifier("catalog.row.deleteToTrash")
 
-                        // Delete File — per-row parity with the triage window's
-                        // batch path (Rick 2026-06-15). Move to Trash is
-                        // recoverable; Delete Permanently shows a confirmation
-                        // alert first. Both call deleteConfirmedJunk, which
-                        // already handles offline-skip, already-missing, and
-                        // per-file failures on a detached task. Distinct from
-                        // Remove from Catalog (above) which only hides the row.
-                        if !activeRecs.isEmpty {
-                            Menu {
-                                Button(role: .destructive) {
-                                    let targets = activeRecs
+                            Button(role: .destructive) {
+                                let targets = activeRecs
+                                let count = targets.count
+                                let alert = NSAlert()
+                                alert.messageText = count == 1
+                                    ? "Delete \u{201C}\(targets[0].filename)\u{201D} permanently?"
+                                    : "Delete \(count) files permanently?"
+                                alert.informativeText = "This cannot be undone \u{2014} the file\(count == 1 ? " is" : "s are") removed from disk immediately, not moved to Trash."
+                                alert.alertStyle = .critical
+                                alert.addButton(withTitle: "Delete Permanently")
+                                alert.addButton(withTitle: "Cancel")
+                                if alert.runModal() == .alertFirstButtonReturn {
                                     Task { @MainActor in
-                                        let result = await model.deleteConfirmedJunk(targets, mode: .toTrash)
-                                        reportDeleteResult(result, mode: .toTrash)
+                                        let result = await model.deleteConfirmedJunk(targets, mode: .permanent)
+                                        reportDeleteResult(result, mode: .permanent)
                                     }
-                                } label: {
-                                    Label("Move to Trash", systemImage: "trash")
                                 }
-                                .accessibilityIdentifier("catalog.row.deleteToTrash")
-
-                                Button(role: .destructive) {
-                                    let targets = activeRecs
-                                    let count = targets.count
-                                    let alert = NSAlert()
-                                    alert.messageText = count == 1
-                                        ? "Delete \u{201C}\(targets[0].filename)\u{201D} permanently?"
-                                        : "Delete \(count) files permanently?"
-                                    alert.informativeText = "This cannot be undone \u{2014} the file\(count == 1 ? " is" : "s are") removed from disk immediately, not moved to Trash."
-                                    alert.alertStyle = .critical
-                                    alert.addButton(withTitle: "Delete Permanently")
-                                    alert.addButton(withTitle: "Cancel")
-                                    if alert.runModal() == .alertFirstButtonReturn {
-                                        Task { @MainActor in
-                                            let result = await model.deleteConfirmedJunk(targets, mode: .permanent)
-                                            reportDeleteResult(result, mode: .permanent)
-                                        }
-                                    }
-                                } label: {
-                                    Label("Delete Permanently\u{2026}", systemImage: "trash.fill")
-                                }
-                                .accessibilityIdentifier("catalog.row.deletePermanently")
                             } label: {
-                                Label(activeRecs.count > 1
-                                      ? "Delete \(activeRecs.count) Files"
-                                      : "Delete File",
-                                      systemImage: "xmark.bin")
+                                Label("Delete Permanently\u{2026}", systemImage: "trash.fill")
                             }
-                            .help("Move the file(s) to Trash or remove them from disk permanently. Distinct from \u{201C}Remove from Catalog\u{201D} which only hides the row.")
+                            .accessibilityIdentifier("catalog.row.deletePermanently")
+                        } label: {
+                            Label(activeRecs.count > 1
+                                  ? "Delete \(activeRecs.count) Files"
+                                  : "Delete File",
+                                  systemImage: "xmark.bin")
                         }
+                        .help("Move the file(s) to Trash or remove them from disk permanently. Distinct from \u{201C}Remove from Catalog\u{201D} which only hides the row.")
+                    }
 
-                        // Restore to Catalog — visible when the selection
-                        // contains at least one purged row. Symmetric with
-                        // Remove: label count == operated-on count.
-                        if !purgedRecs.isEmpty {
-                            Button {
-                                for r in purgedRecs { _ = model.restoreRecord(id: r.id) }
-                            } label: {
-                                Label(purgedRecs.count > 1
-                                      ? "Restore \(purgedRecs.count) to Catalog"
-                                      : "Restore to Catalog",
-                                      systemImage: "arrow.uturn.backward.circle")
-                            }
-                            .help("Clear the removed marker on the selected rows.")
+                    // Restore to Catalog — visible when the selection
+                    // contains at least one purged row. Symmetric with
+                    // Remove: label count == operated-on count.
+                    if !purgedRecs.isEmpty {
+                        Button {
+                            for r in purgedRecs { _ = model.restoreRecord(id: r.id) }
+                        } label: {
+                            Label(purgedRecs.count > 1
+                                  ? "Restore \(purgedRecs.count) to Catalog"
+                                  : "Restore to Catalog",
+                                  systemImage: "arrow.uturn.backward.circle")
                         }
+                        .help("Clear the removed marker on the selected rows.")
+                    }
 
-                        // Put Back in Catalog — visible when the selection
-                        // contains at least one set-aside row (mixed
-                        // selection; pure set-aside gets the minimal menu).
-                        if !setAsideRecs.isEmpty {
-                            Button {
-                                _ = model.restoreSetAsideRecords(ids: Set(setAsideRecs.map(\.id)))
-                            } label: {
-                                Label(setAsideRecs.count > 1
-                                      ? "Put \(setAsideRecs.count) Back in Catalog"
-                                      : "Put Back in Catalog",
-                                      systemImage: "arrow.uturn.backward.circle")
-                            }
-                            .help("Clear the set-aside marker on the selected rows so they show up in lists and searches again.")
+                    // Put Back in Catalog — visible when the selection
+                    // contains at least one set-aside row (mixed
+                    // selection; pure set-aside gets the minimal menu).
+                    if !setAsideRecs.isEmpty {
+                        Button {
+                            _ = model.restoreSetAsideRecords(ids: Set(setAsideRecs.map(\.id)))
+                        } label: {
+                            Label(setAsideRecs.count > 1
+                                  ? "Put \(setAsideRecs.count) Back in Catalog"
+                                  : "Put Back in Catalog",
+                                  systemImage: "arrow.uturn.backward.circle")
                         }
+                        .help("Clear the set-aside marker on the selected rows so they show up in lists and searches again.")
+                    }
 
-                        // Restore Original — visible when a mixed selection
-                        // pulled in superseded rows (pure superseded gets
-                        // the minimal menu above). GH #132.
-                        if !supersededRecs.isEmpty {
-                            Button {
-                                for r in supersededRecs { _ = model.unsupersede(id: r.id) }
-                            } label: {
-                                Label(supersededRecs.count > 1
-                                      ? "Restore \(supersededRecs.count) Originals (Un-supersede)"
-                                      : "Restore Original (Un-supersede)",
-                                      systemImage: "arrow.uturn.backward.circle")
-                            }
-                            .help("Bring these originals back into the catalog's default view. Their repaired copies stay too — nothing on disk changes.")
+                    // Restore Original — visible when a mixed selection
+                    // pulled in superseded rows (pure superseded gets
+                    // the minimal menu above). GH #132.
+                    if !supersededRecs.isEmpty {
+                        Button {
+                            for r in supersededRecs { _ = model.unsupersede(id: r.id) }
+                        } label: {
+                            Label(supersededRecs.count > 1
+                                  ? "Restore \(supersededRecs.count) Originals (Un-supersede)"
+                                  : "Restore Original (Un-supersede)",
+                                  systemImage: "arrow.uturn.backward.circle")
                         }
+                        .help("Bring these originals back into the catalog's default view. Their repaired copies stay too — nothing on disk changes.")
                     }
                 }
             }
-        } primaryAction: { ids in
-            // Double-click / Return on row(s) → smart open (QuickTime when
-            // the cataloged codecs guarantee picture+sound, else VLC).
-            let recs = ids.compactMap { id in records.first { $0.id == id } }
-            MediaOpener.open(recs)
         }
-        .onAppear { tableData = computeFiltered() }
-        .onChange(of: records.count) { tableData = computeFiltered() }
-        .onChange(of: searchText) { tableData = computeFiltered() }
-        .onChange(of: filterTargetPaths) { tableData = computeFiltered() }
-        .onChange(of: showPairsOnly) { tableData = computeFiltered() }
-        .onChange(of: filterByIDs) { tableData = computeFiltered() }
-        .onChange(of: viewFilters) { tableData = computeFiltered() }
-        // Reachable-only baseline opt-out (2026-07-20).
-        .onChange(of: showDisconnectedMedia) { tableData = computeFiltered() }
-        // Media-kind facet chip flip (GH #124).
-        .onChange(of: kindFacet) { tableData = computeFiltered() }
-        .onChange(of: showRemoved) { tableData = computeFiltered() }
-        .onChange(of: showSetAside) { tableData = computeFiltered() }
-        // Superseded reveal toggle (GH #132).
-        .onChange(of: showSuperseded) { tableData = computeFiltered() }
-        .onChange(of: model.lastTidyBatch) { tableData = computeFiltered() }
-        // Re-compute when purge state flips on any record (purge, undo, restore).
-        // We key off lastPurgedBatch so mutations from the model are observed.
-        .onChange(of: model.lastPurgedBatch) { tableData = computeFiltered() }
+    }
+
+
+    /// Verify Audio + repair-lifecycle context-menu cluster (GH #128 /
+    /// #132 / #135), extracted from the row context menu so the menu's
+    /// ViewBuilder expression stays inside Xcode's type-check budget
+    /// (the onlineCopyMenu precedent).
+    ///
+    ///   Verify Audio (N Files)      — dispatch VerifyAudioJob rows to
+    ///     the MFO window for ANY selection size. The levels pass
+    ///     decodes the whole track (minutes on long tapes), so it must
+    ///     never block the catalog in a modal sheet (GH #135).
+    ///   Verification Results…       — instant presentation of the
+    ///     already-computed diagnosis; the sheet performs NO probe and
+    ///     NO levels decode (its request type requires a diagnosis).
+    ///   Repair Damaged Audio (N)    — re-verify each damaged row and
+    ///     chain into Rebuild Audio Track when the damage is the
+    ///     repairable codec class (GH #132 P1).
+    ///   Sounds Good — Confirm Repair — the lifecycle heart (GH #132
+    ///     P2): Confirm stamps both records, human metadata carries
+    ///     over, the original is retired (hidden, never deleted). The
+    ///     banner above the table offers one-tap undo.
+    @ViewBuilder
+    private func audioLifecycleMenuItems(rec: VideoRecord,
+                                         activeRecs: [VideoRecord],
+                                         pureActive: Bool) -> some View {
+        let verifiableRecs = activeRecs.filter {
+            VolumeReachability.isReachable(path: $0.fullPath)
+        }
+        Button(activeRecs.count > 1
+               ? "Verify Audio (\(activeRecs.count) Files)"
+               : "Verify Audio") {
+            for r in verifiableRecs {
+                fileOpsCenter.startVerifyAudio(record: r, model: model)
+            }
+            openWindow(id: "combine")
+        }
+        .disabled(verifiableRecs.isEmpty)
+        .help("Check the sound track — levels, format, and whether the audio really belongs to the picture. Runs in the operations window; the catalog stays usable.")
+        .accessibilityIdentifier("catalog.row.verifyAudio")
+
+        if activeRecs.count == 1,
+           let cached = fileOpsCenter.verifyDiagnosis(forRecordID: rec.id) {
+            Button("Verification Results…") {
+                verifyAudioRequest = VerifyAudioRequest(
+                    record: rec, diagnosis: cached)
+            }
+            .help("Show what Verify Audio found for this file — instantly, without checking it again — plus any repair offer.")
+            .accessibilityIdentifier("catalog.row.verifyResults")
+        }
+
+        let damagedRecs = verifiableRecs.filter {
+            $0.audioVerifyStatus == "damaged"
+        }
+        if !damagedRecs.isEmpty {
+            Button(damagedRecs.count > 1
+                   ? "Repair Damaged Audio (\(damagedRecs.count) Files)"
+                   : "Repair Damaged Audio") {
+                for r in damagedRecs {
+                    fileOpsCenter.startVerifyAudio(
+                        record: r, model: model, autoRepair: true)
+                }
+                openWindow(id: "combine")
+            }
+            .help("Re-check each damaged file and, where the damage is fixable (an old sound format), rebuild a repaired copy next to the original. Originals are never changed.")
+            .accessibilityIdentifier("catalog.row.repairDamagedAudio")
+        }
+
+        let awaitingRecs = pureActive
+            ? activeRecs.filter {
+                $0.isAwaitingConfirmation
+                    && $0.derivedFrom.flatMap { model.record(forID: $0) } != nil
+            }
+            : []
+        if !awaitingRecs.isEmpty {
+            Button(awaitingRecs.count > 1
+                   ? "Sounds Good — Confirm \(awaitingRecs.count) Repairs"
+                   : "Sounds Good — Confirm Repair") {
+                _ = model.confirmRepairs(
+                    repairIDs: Set(awaitingRecs.map(\.id)))
+            }
+            .help("You've listened and it sounds right: keep this repaired copy as the one to use. The original is hidden from the everyday view — never deleted — and your tags, notes, people, and ratings carry over.")
+            .accessibilityIdentifier("catalog.row.confirmRepair")
+        }
     }
 
     /// Extracted "Find Online Copy" submenu for the active-row context

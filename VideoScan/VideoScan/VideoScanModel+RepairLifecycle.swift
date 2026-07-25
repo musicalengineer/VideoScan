@@ -1,13 +1,249 @@
 import Foundation
+import os
 
 // MARK: - Repair lifecycle (GH #132)
 //
 // identify → repair → confirm → supersede. This file owns the catalog-
-// level state transitions: confirming a repair (Commit 4) and restoring
-// a superseded original. The app NEVER touches the original's bytes —
-// retire/restore are catalog-only, exactly like purge and set-aside.
+// level state transitions:
+//
+//   confirmRepair(s) — Rick's one-click "Sounds Good": stamps both
+//                     records with the "Confirm" journey verb (in
+//                     UserNotesMigration.journeyStampVerbs — lock-step),
+//                     copies the HUMAN metadata original → repair,
+//                     stamps repairConfirmedDate, and retires the
+//                     original (supersededByID = repair.id). Human
+//                     confirmation is the permanent gate — automated
+//                     verification once passed a staggered v1 mux that
+//                     Rick's eyes caught.
+//   undoConfirmRepair — exact restore of the most recent confirm batch
+//                     (the banner's one-tap undo, LastPurgedBatch
+//                     pattern: session-scoped, one batch at a time).
+//   unsupersede     — "Restore Original (Un-supersede)".
+//
+// The app NEVER touches the original's bytes — retire/restore are
+// catalog-only, exactly like purge and set-aside.
+//
+// TODO(#132 follow-up): dossier-channel carryover (captions/transcripts
+// from the original) is deliberately out of scope — Rick can Analyze
+// the repair; cheap to widen later (Manager decision 2026-07-24 #1).
+
+private let lifecycleLog = Logger(subsystem: "Rick-Breen.VideoScan",
+                                  category: "repairLifecycle")
 
 extension VideoScanModel {
+
+    // MARK: Undo snapshots
+
+    /// Everything ONE confirm mutated, captured BEFORE mutation so undo
+    /// restores EXACTLY — including the human-metadata fields the
+    /// inheritance merged into the repair.
+    struct ConfirmSnapshot: Equatable {
+        let repairID: UUID
+        let originalID: UUID
+        // Repair-side pre-confirm values (inheritance targets + stamp).
+        let repairTags: [String]
+        let repairUserNotes: String
+        let repairConfirmedByUserPeople: [ConfirmedTag]
+        let repairRejectedPeople: [String]
+        let repairStarRating: Int
+        let repairMediaDisposition: MediaDisposition
+        let repairLifecycleStage: LifecycleStage
+        let repairArchiveStage: ArchiveStage
+        let repairUserDate: String?
+        let repairUserDateConfidence: String?
+        let repairNotes: String
+        // Original-side pre-confirm values.
+        let originalNotes: String
+    }
+
+    /// The most recent confirm action (single click or multi-select
+    /// batch). One banner target at a time — a new confirm supersedes
+    /// the previous batch, exactly like LastPurgedBatch.
+    struct LastConfirmBatch: Equatable {
+        let snapshots: [ConfirmSnapshot]
+    }
+
+    // MARK: Human-metadata inheritance
+
+    /// Copy the HUMAN metadata from the original onto its repair
+    /// (Confirm-time carryover, GH #132 §3 — machine metadata is
+    /// re-derived by the repair's own probe and is NOT copied; the
+    /// original's `notes` File Journey lines are per-file and stay put).
+    ///
+    /// Merge rules — never clobber values Rick already put on the
+    /// repair:
+    ///   tags                    union (case-insensitive, WorkflowTags)
+    ///   userNotes               copy; append with a newline when the
+    ///                           repair already has text
+    ///   confirmedByUserPeople   union by name (repair's entries win)
+    ///   rejectedPeople          union
+    ///   starRating              max of the two
+    ///   mediaDisposition        copy only while repair is unreviewed
+    ///   lifecycleStage          copy only while repair is cataloged
+    ///   archiveStage            copy only while repair is .none
+    ///   userDate(+confidence)   copy only when repair's is nil
+    @MainActor
+    func applyHumanMetadataInheritance(from original: VideoRecord, to repair: VideoRecord) {
+        for tag in original.tags {
+            repair.tags = WorkflowTags.adding(tag, to: repair.tags)
+        }
+        if !original.userNotes.isEmpty {
+            repair.userNotes = repair.userNotes.isEmpty
+                ? original.userNotes
+                : "\(repair.userNotes)\n\(original.userNotes)"
+        }
+        for confirmed in original.confirmedByUserPeople
+        where !repair.confirmedByUserPeople.contains(where: {
+            $0.name.compare(confirmed.name, options: .caseInsensitive) == .orderedSame
+        }) {
+            repair.confirmedByUserPeople.append(confirmed)
+        }
+        for name in original.rejectedPeople where !repair.rejectedPeople.contains(name) {
+            repair.rejectedPeople.append(name)
+        }
+        repair.starRating = max(repair.starRating, original.starRating)
+        if repair.mediaDisposition == .unreviewed {
+            repair.mediaDisposition = original.mediaDisposition
+        }
+        if repair.lifecycleStage == .cataloged {
+            repair.lifecycleStage = original.lifecycleStage
+        }
+        if repair.archiveStage == .none {
+            repair.archiveStage = original.archiveStage
+        }
+        if repair.userDate == nil {
+            repair.userDate = original.userDate
+            repair.userDateConfidence = original.userDateConfidence
+        }
+    }
+
+    // MARK: Confirm
+
+    /// The one-click "Sounds Good — Confirm Repair". Returns false (a
+    /// complete no-op — nothing mutated, nothing saved) when the id is
+    /// not an awaiting-confirmation repair or its original is gone from
+    /// the catalog; true after the full stamp + inherit + supersede.
+    /// Idempotent: a second confirm of the same repair is a no-op
+    /// (repairConfirmedDate is already set).
+    @MainActor
+    @discardableResult
+    func confirmRepair(repairID: UUID) -> Bool {
+        confirmRepairs(repairIDs: [repairID]) == 1
+    }
+
+    /// Multi-select confirm: every awaiting-confirmation repair in
+    /// `repairIDs` whose original is still in the catalog gets the full
+    /// stamp + inherit + supersede; the rest are skipped. Arms ONE undo
+    /// batch covering everything confirmed here (a later confirm
+    /// supersedes it). Returns the count actually confirmed.
+    @MainActor
+    @discardableResult
+    func confirmRepairs(repairIDs: Set<UUID>) -> Int {
+        guard !repairIDs.isEmpty else { return 0 }
+        var snapshots: [ConfirmSnapshot] = []
+        for repair in records where repairIDs.contains(repair.id) {
+            guard repair.isAwaitingConfirmation,
+                  let originalID = repair.derivedFrom,
+                  let original = records.first(where: { $0.id == originalID })
+            else { continue }
+
+            // Snapshot BEFORE mutation so undo restores exactly.
+            snapshots.append(ConfirmSnapshot(
+                repairID: repair.id,
+                originalID: original.id,
+                repairTags: repair.tags,
+                repairUserNotes: repair.userNotes,
+                repairConfirmedByUserPeople: repair.confirmedByUserPeople,
+                repairRejectedPeople: repair.rejectedPeople,
+                repairStarRating: repair.starRating,
+                repairMediaDisposition: repair.mediaDisposition,
+                repairLifecycleStage: repair.lifecycleStage,
+                repairArchiveStage: repair.archiveStage,
+                repairUserDate: repair.userDate,
+                repairUserDateConfidence: repair.userDateConfidence,
+                repairNotes: repair.notes,
+                originalNotes: original.notes))
+
+            applyHumanMetadataInheritance(from: original, to: repair)
+
+            // File Journey stamps — exact "<Verb> <ISO8601>: detail"
+            // shape; "Confirm" is in journeyStampVerbs (lock-step, or
+            // these would migrate into userNotes).
+            let stamp = ISO8601DateFormatter().string(from: Date())
+            let repairNote = "Confirm \(stamp): repair confirmed by Rick — replaces \(original.filename)"
+            let originalNote = "Confirm \(stamp): superseded by \(repair.filename) — confirmed by Rick"
+            repair.notes = repair.notes.isEmpty
+                ? repairNote
+                : "\(repair.notes)\n\(repairNote)"
+            original.notes = original.notes.isEmpty
+                ? originalNote
+                : "\(original.notes)\n\(originalNote)"
+
+            repair.repairConfirmedDate = Date()
+            original.supersededByID = repair.id
+
+            searchIndex.update(repair)
+            searchIndex.update(original)
+            lifecycleLog.info("confirm: \(repair.filename, privacy: .public) confirmed — supersedes \(original.filename, privacy: .public)")
+            appLog.write("confirm repair: \(repair.filename) confirmed by Rick — replaces \(original.filename) (original hidden, never deleted)")
+        }
+        guard !snapshots.isEmpty else { return 0 }
+        saveCatalogDebounced()
+        lastConfirmBatch = LastConfirmBatch(snapshots: snapshots)
+        return snapshots.count
+    }
+
+    // MARK: Undo
+
+    /// Exact restore of the most recent confirm batch: each repair's
+    /// inherited fields, both records' notes (dropping the Confirm
+    /// stamps), the confirm dates, and the originals' supersede markers.
+    /// Returns true when something was restored; drops the banner
+    /// either way.
+    @MainActor
+    @discardableResult
+    func undoConfirmRepair() -> Bool {
+        guard let batch = lastConfirmBatch else { return false }
+        lastConfirmBatch = nil
+        var restored = 0
+        for snap in batch.snapshots {
+            guard let repair = records.first(where: { $0.id == snap.repairID }) else {
+                continue
+            }
+            repair.tags = snap.repairTags
+            repair.userNotes = snap.repairUserNotes
+            repair.confirmedByUserPeople = snap.repairConfirmedByUserPeople
+            repair.rejectedPeople = snap.repairRejectedPeople
+            repair.starRating = snap.repairStarRating
+            repair.mediaDisposition = snap.repairMediaDisposition
+            repair.lifecycleStage = snap.repairLifecycleStage
+            repair.archiveStage = snap.repairArchiveStage
+            repair.userDate = snap.repairUserDate
+            repair.userDateConfidence = snap.repairUserDateConfidence
+            repair.notes = snap.repairNotes
+            repair.repairConfirmedDate = nil
+            searchIndex.update(repair)
+
+            if let original = records.first(where: { $0.id == snap.originalID }) {
+                original.notes = snap.originalNotes
+                original.supersededByID = nil
+                searchIndex.update(original)
+            }
+            restored += 1
+            lifecycleLog.info("confirm undo: \(repair.filename, privacy: .public) back to awaiting confirmation")
+        }
+        guard restored > 0 else { return false }
+        saveCatalogDebounced()
+        return true
+    }
+
+    /// Dismiss the confirm-undo banner without restoring.
+    @MainActor
+    func dismissConfirmUndoBanner() {
+        lastConfirmBatch = nil
+    }
+
+    // MARK: Un-supersede
 
     /// Clear the superseded marker on a single record — "Restore
     /// Original (Un-supersede)" on a superseded row. The original
@@ -23,6 +259,14 @@ extension VideoScanModel {
         rec.supersededByID = nil
         searchIndex.update(rec)
         saveCatalogDebounced()
+        // A manual restore of a record inside the armed undo batch makes
+        // that undo stale — drop the banner (restoreRecord's rule,
+        // simplified to whole-batch because partial confirm-undo would
+        // half-restore a stamp pair).
+        if lastConfirmBatch?.snapshots.contains(where: { $0.originalID == id }) == true {
+            lastConfirmBatch = nil
+        }
+        lifecycleLog.info("unsupersede: \(rec.filename, privacy: .public) restored to the default view")
         return true
     }
 }

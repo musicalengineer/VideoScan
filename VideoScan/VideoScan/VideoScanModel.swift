@@ -947,6 +947,13 @@ final class VideoScanModel: ObservableObject {
     /// session-scope one-target-at-a-time semantics as lastPurgedBatch.
     @Published var lastTidyBatch: LastTidyBatch?
 
+    // MARK: - Repair-lifecycle undo state (logic in VideoScanModel+RepairLifecycle.swift)
+
+    /// The confirm-repair undo banner observes this (GH #132). nil = no
+    /// banner shown. Same session-scope one-target-at-a-time semantics
+    /// as lastPurgedBatch.
+    @Published var lastConfirmBatch: LastConfirmBatch?
+
     // MARK: - Cover-Art Music Purge (logic in VideoScanModel+CoverArtMusicPurge.swift)
 
     /// Drives the "Purge Cover-Art Music Records…" confirmation sheet.
