@@ -111,9 +111,14 @@ def extract_metadata(probe):
         "notes":           "",
     }
 
-    fmt     = probe.get("format", {})
-    streams = probe.get("streams", [])
-    tags    = fmt.get("tags", {}) or {}
+    fmt       = probe.get("format", {})
+    streams   = probe.get("streams", [])
+
+    # Isolation gates: normalize poison so rest of function is safe
+    if not isinstance(fmt, dict): fmt = {}
+    if not isinstance(streams, (list, tuple)): streams = []
+
+    tags       = fmt.get("tags", {}) or {}
 
     # Container / format
     meta["container"] = fmt.get("format_long_name") or fmt.get("format_name", "")
@@ -146,6 +151,8 @@ def extract_metadata(probe):
     has_audio = False
 
     for s in streams:
+        # Isolation gate: skip non-dict stream items
+        if not isinstance(s, dict): continue
         ctype = s.get("codec_type", "")
         stags = s.get("tags", {}) or {}
 
