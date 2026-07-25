@@ -95,6 +95,52 @@ struct HoldoutReviewQueueTests {
         }
     }
 
+    @Test func parse_rejectsBlankDuplicateAndInvalidContractValues() throws {
+        let dir = try makeTempDir()
+        #expect(throws: HoldoutReviewQueue.QueueError.blankReviewId(line: 2)) {
+            _ = try HoldoutReviewQueue.load(csvURL: writeCSV(
+                csvText([",/a.mov,,"]), in: dir, name: "blank-id.csv"))
+        }
+        #expect(throws: HoldoutReviewQueue.QueueError.blankPath(line: 2)) {
+            _ = try HoldoutReviewQueue.load(csvURL: writeCSV(
+                csvText(["A,,,"]), in: dir, name: "blank-path.csv"))
+        }
+        #expect(throws: HoldoutReviewQueue.QueueError.duplicateReviewId("A")) {
+            _ = try HoldoutReviewQueue.load(csvURL: writeCSV(
+                csvText(["A,/a.mov,,", "A,/b.mov,,"]),
+                in: dir, name: "duplicate.csv"))
+        }
+    }
+
+    @Test func parse_strayAnswerValueIsPreservedButRemainsPending() throws {
+        // LOAD is lenient: one hand-edited stray cell ("Yes", "maybe")
+        // must not make the queue unloadable (and the badge silently
+        // vanish). Stored values are byte-verbatim — no lowercasing on
+        // load. Classification is strict-but-tolerant of whitespace:
+        // ONLY an exact trimmed "yes"/"no" closes the gate; any other
+        // value (even "Yes") remains PENDING so the badge stays lit
+        // until Rick replaces it with an exact yes/no through the app.
+        // Writes are strict too (see writeback_rejectsInvalidAnswer...).
+        let dir = try makeTempDir()
+        let text = csvText([
+            "AAAA00000001,/Volumes/T/a.mov,Yes,",
+            "BBBB00000002,/Volumes/T/b.mov,maybe,had to squint",
+            "CCCC00000003,/Volumes/T/c.mov,,",
+        ])
+        let url = try writeCSV(text, in: dir)
+        let q = try HoldoutReviewQueue.load(csvURL: url)
+
+        #expect(q.rows[0].rickConfirm == "Yes")     // verbatim, not "yes"
+        #expect(q.rows[0].isPending)                // only exact lowercase yes/no closes gate
+        #expect(q.rows[1].rickConfirm == "maybe")   // verbatim
+        #expect(q.rows[1].isPending)                // unknown value ≠ gate answer
+        #expect(q.rows[2].isPending)                // blank = pending
+        #expect(q.pendingCount == 3)
+        #expect(q.firstPendingIndex == 0)
+        // Byte-verbatim round trip survives the stray values.
+        #expect(q.serialized() == (try Data(contentsOf: url)))
+    }
+
     @Test func parse_lfOnlyLineEndingsAlsoAccepted() throws {
         // Defensive: a hand edit in a Unix editor may convert CRLF → LF.
         let dir = try makeTempDir()
@@ -223,6 +269,27 @@ struct HoldoutReviewQueueTests {
         #expect(reloaded.rows.count == 3)   // no duplicate rows
     }
 
+    @Test func writeback_rejectsInvalidAnswerAndMaintainsCachedCount() throws {
+        let dir = try makeTempDir()
+        let url = try writeCSV(fixtureText, in: dir)
+        var q = try HoldoutReviewQueue.load(csvURL: url)
+        #expect(q.pendingCount == 2)
+        // WRITES are strict yes/no even though load is lenient.
+        #expect(throws: HoldoutReviewQueue.QueueError.invalidAnswer("maybe")) {
+            try q.recordAnswer(reviewId: "AAAA00000001", confirm: "maybe", notes: "")
+        }
+        #expect(q.pendingCount == 2)
+        try q.recordAnswer(reviewId: "AAAA00000001", confirm: "yes", notes: "")
+        #expect(q.pendingCount == 1)
+        // Re-answering an already-answered row must not double-decrement.
+        try q.recordAnswer(reviewId: "AAAA00000001", confirm: "no", notes: "changed")
+        #expect(q.pendingCount == 1)
+        // Cached count agrees with a fresh recount from disk.
+        let reloaded = try HoldoutReviewQueue.load(csvURL: url)
+        #expect(reloaded.pendingCount == q.pendingCount)
+        #expect(reloaded.rows.filter(\.isPending).count == q.pendingCount)
+    }
+
     // MARK: - 4. Byte round-trip
 
     @Test func roundTrip_untouchedLoadSerializeIsByteIdentical() throws {
@@ -299,6 +366,24 @@ struct HoldoutReviewQueueTests {
         #expect(HoldoutReviewQueue.discover(repoRoot: root)?.personName == "Donna")
     }
 
+    @Test func discovery_emptyPersonSidecarIsAnError() throws {
+        // A sidecar that EXISTS but is blank is a broken config, not a
+        // silent fall-back to Donna — surface it via the throwing path
+        // (the People UI shows the error label instead of a wrong badge).
+        let root = try makeTempDir()
+        let dated = root.appendingPathComponent("output/person-eval-private/2026-07-23", isDirectory: true)
+        try FileManager.default.createDirectory(at: dated, withIntermediateDirectories: true)
+        _ = try writeCSV(fixtureText, in: dated)
+        try Data("  \n".utf8).write(
+            to: dated.appendingPathComponent(HoldoutReviewQueue.personSidecarFilename))
+
+        #expect(throws: HoldoutReviewQueue.QueueError.invalidPersonSidecar) {
+            _ = try HoldoutReviewQueue.discoverLatest(repoRoot: root)
+        }
+        // The non-throwing badge path degrades to nil, never crashes.
+        #expect(HoldoutReviewQueue.discover(repoRoot: root) == nil)
+    }
+
     @Test func discovery_personSidecarOverridesDefault() throws {
         let root = try makeTempDir()
         let dated = root.appendingPathComponent("output/person-eval-private/2026-07-23", isDirectory: true)
@@ -308,6 +393,59 @@ struct HoldoutReviewQueueTests {
             to: dated.appendingPathComponent(HoldoutReviewQueue.personSidecarFilename))
 
         #expect(HoldoutReviewQueue.discover(repoRoot: root)?.personName == "Timmy")
+    }
+
+    @Test func discovery_rejectsBlankPersonSidecar() throws {
+        let root = try makeTempDir()
+        let dated = root.appendingPathComponent(
+            "output/person-eval-private/2026-07-23", isDirectory: true)
+        try FileManager.default.createDirectory(at: dated, withIntermediateDirectories: true)
+        _ = try writeCSV(fixtureText, in: dated)
+        try Data(" \n".utf8).write(
+            to: dated.appendingPathComponent(HoldoutReviewQueue.personSidecarFilename))
+        #expect(throws: HoldoutReviewQueue.QueueError.invalidPersonSidecar) {
+            _ = try HoldoutReviewQueue.discoverLatest(repoRoot: root)
+        }
+    }
+
+    @Test func discovery_propagatesDirectoryReadFailure() throws {
+        let root = try makeTempDir()
+        let output = root.appendingPathComponent("output", isDirectory: true)
+        try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
+        try Data("not a directory".utf8).write(
+            to: output.appendingPathComponent("person-eval-private"))
+        #expect(throws: Error.self) {
+            _ = try HoldoutReviewQueue.discoverLatest(repoRoot: root)
+        }
+    }
+
+    @Test func discovery_throwingVariantSurfacesMalformedNewestQueue() throws {
+        let root = try makeTempDir()
+        let dated = root.appendingPathComponent(
+            "output/person-eval-private/2026-07-30", isDirectory: true)
+        try FileManager.default.createDirectory(at: dated, withIntermediateDirectories: true)
+        _ = try writeCSV("wrong,header\r\n", in: dated)
+        #expect(throws: HoldoutReviewQueue.QueueError.self) {
+            _ = try HoldoutReviewQueue.discoverLatest(repoRoot: root)
+        }
+    }
+
+    @Test func scale_loadsOneHundredThousandRowsWithinBudget() throws {
+        let dir = try makeTempDir()
+        var text = Self.header + "\r\n"
+        text.reserveCapacity(4_500_000)
+        for index in 0..<100_000 {
+            text += "R\(index),/Volumes/Test/video_\(index).mov,,\r\n"
+        }
+        let url = try writeCSV(text, in: dir)
+        let clock = ContinuousClock()
+        var loaded: HoldoutReviewQueue?
+        let elapsed = try clock.measure {
+            loaded = try HoldoutReviewQueue.load(csvURL: url)
+        }
+        #expect(loaded?.rows.count == 100_000)
+        #expect(loaded?.pendingCount == 100_000)
+        #expect(elapsed < .seconds(8))
     }
 
     // MARK: - 6. Blindness sensor
@@ -340,7 +478,7 @@ struct HoldoutReviewQueueTests {
         let labels = Mirror(reflecting: q).children.compactMap(\.label)
         // csvURL/personName/header/rows — file plumbing only. (Mirror
         // shows the backing store `rows` for the private(set) property.)
-        #expect(Set(labels) == ["csvURL", "personName", "header", "rows"])
+        #expect(Set(labels) == ["csvURL", "personName", "header", "rows", "pendingCount"])
 
         let forbidden = ["score", "signal", "candidate", "predict", "detect",
                          "confidence", "rating", "match", "model"]

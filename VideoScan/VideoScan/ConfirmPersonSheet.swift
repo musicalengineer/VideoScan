@@ -398,8 +398,23 @@ struct ConfirmPersonSheet: View {
         if let q = holdout, q.rows.indices.contains(holdoutIndex) {
             let row = q.rows[holdoutIndex]
             HStack(alignment: .top, spacing: 16) {
-                thumbnailView(path: row.fullPath, filename: row.filename)
+                if holdoutReachable {
+                    thumbnailView(path: row.fullPath, filename: row.filename)
+                        .frame(width: 320)
+                } else {
+                    VStack(spacing: 10) {
+                        Image(systemName: "externaldrive.badge.exclamationmark")
+                            .font(.system(size: 34))
+                        Text("Video is offline")
+                            .font(.headline)
+                        Text(row.filename)
+                            .font(.caption.monospaced())
+                            .lineLimit(2)
+                    }
+                    .foregroundColor(.secondary)
                     .frame(width: 320)
+                    .frame(maxHeight: .infinity)
+                }
                 holdoutAnswerView(for: row)
             }
             .padding(.horizontal, 20)
@@ -443,6 +458,7 @@ struct ConfirmPersonSheet: View {
                 .buttonStyle(.bordered)
                 .tint(.green)
                 .help("\(profile.name) is visible in this video")
+                .disabled(!holdoutReachable)
                 Button {
                     holdoutAnswer("no")
                 } label: {
@@ -453,6 +469,7 @@ struct ConfirmPersonSheet: View {
                 .buttonStyle(.bordered)
                 .tint(.red)
                 .help("\(profile.name) is not visible in this video")
+                .disabled(!holdoutReachable)
             }
 
             VStack(alignment: .leading, spacing: 4) {

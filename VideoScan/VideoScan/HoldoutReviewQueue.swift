@@ -28,6 +28,12 @@
 
 import Combine   // ObservableObject/@Published for HoldoutReviewCenter
 import Foundation
+import os
+
+private let holdoutReviewLog = Logger(
+    subsystem: "Rick-Breen.VideoScan",
+    category: "poi.holdout-review"
+)
 
 // MARK: - Row
 
@@ -46,7 +52,11 @@ struct HoldoutReviewRow: Equatable, Sendable {
     var extraColumns: [String]
 
     var isPending: Bool {
-        rickConfirm.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let normalized = rickConfirm.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Unknown hand-edited values are preserved, but never count as a
+        // completed gate answer. The badge stays lit until Rick replaces
+        // them with an exact yes/no through the app.
+        return normalized != "yes" && normalized != "no"
     }
     var filename: String { (fullPath as NSString).lastPathComponent }
 }
@@ -64,6 +74,8 @@ struct HoldoutReviewQueue: Equatable, Sendable {
     /// reviewId, fullPath, rickConfirm(yes/no), notes).
     let header: [String]
     private(set) var rows: [HoldoutReviewRow]
+    /// Maintained during load/writeback so SwiftUI rendering stays O(1).
+    private(set) var pendingCount: Int
 
     static let csvFilename = "rick-review-neutral.csv"
     static let personSidecarFilename = "rick-review-neutral.person.txt"
@@ -77,7 +89,6 @@ struct HoldoutReviewQueue: Equatable, Sendable {
             .appendingPathComponent("dev/VideoScan", isDirectory: true)
     }
 
-    var pendingCount: Int { rows.lazy.filter { $0.isPending }.count }
     var answeredCount: Int { rows.count - pendingCount }
     var firstPendingIndex: Int? { rows.firstIndex { $0.isPending } }
 
@@ -103,6 +114,13 @@ struct HoldoutReviewQueue: Equatable, Sendable {
         case missingHeader
         case badHeader([String])
         case shortRow(line: Int)
+        case blankReviewId(line: Int)
+        case blankPath(line: Int)
+        case duplicateReviewId(String)
+        /// Thrown by recordAnswer only — WRITES must be clean yes/no.
+        /// Load is deliberately lenient about stray answer values.
+        case invalidAnswer(String)
+        case invalidPersonSidecar
         case unknownReviewId(String)
 
         var errorDescription: String? {
@@ -111,6 +129,12 @@ struct HoldoutReviewQueue: Equatable, Sendable {
             case .missingHeader:        return "Review CSV is empty (no header row)"
             case .badHeader(let h):     return "Unexpected review CSV header: \(h.joined(separator: ","))"
             case .shortRow(let line):   return "Review CSV row \(line) has fewer than 4 columns"
+            case .blankReviewId(let line): return "Review CSV row \(line) has a blank reviewId"
+            case .blankPath(let line): return "Review CSV row \(line) has a blank fullPath"
+            case .duplicateReviewId(let id): return "Review CSV contains duplicate reviewId \(id)"
+            case .invalidAnswer(let value):
+                return "Invalid answer '\(value)' — expected yes or no"
+            case .invalidPersonSidecar: return "Review queue person sidecar is empty"
             case .unknownReviewId(let id): return "reviewId \(id) is not in the queue"
             }
         }
@@ -133,25 +157,49 @@ struct HoldoutReviewQueue: Equatable, Sendable {
         }
         var rows: [HoldoutReviewRow] = []
         rows.reserveCapacity(records.count - 1)
+        var seenReviewIDs = Set<String>()
+        var pendingCount = 0
         for (i, rec) in records.dropFirst().enumerated() {
-            guard rec.count >= 4 else { throw QueueError.shortRow(line: i + 2) }
-            rows.append(HoldoutReviewRow(
+            let line = i + 2
+            guard rec.count >= 4 else { throw QueueError.shortRow(line: line) }
+            guard !rec[0].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw QueueError.blankReviewId(line: line)
+            }
+            guard !rec[1].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw QueueError.blankPath(line: line)
+            }
+            guard seenReviewIDs.insert(rec[0]).inserted else {
+                throw QueueError.duplicateReviewId(rec[0])
+            }
+            // Lenient on read for byte preservation, strict for completion:
+            // an unknown hand-edited value stays in the row but isPending
+            // remains true until the app replaces it with exact yes/no.
+            let row = HoldoutReviewRow(
                 reviewId: rec[0],
                 fullPath: rec[1],
                 rickConfirm: rec[2],
                 notes: rec[3],
                 extraColumns: Array(rec.dropFirst(4))
-            ))
+            )
+            if row.isPending { pendingCount += 1 }
+            rows.append(row)
         }
         let sidecar = csvURL.deletingLastPathComponent()
             .appendingPathComponent(personSidecarFilename)
-        let sidecarName = (try? String(contentsOf: sidecar, encoding: .utf8))?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let sidecarName: String
+        if FileManager.default.fileExists(atPath: sidecar.path) {
+            sidecarName = try String(contentsOf: sidecar, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !sidecarName.isEmpty else { throw QueueError.invalidPersonSidecar }
+        } else {
+            sidecarName = defaultPersonName
+        }
         return HoldoutReviewQueue(
             csvURL: csvURL,
-            personName: sidecarName.isEmpty ? defaultPersonName : sidecarName,
+            personName: sidecarName,
             header: header,
-            rows: rows
+            rows: rows,
+            pendingCount: pendingCount
         )
     }
 
@@ -161,20 +209,32 @@ struct HoldoutReviewQueue: Equatable, Sendable {
     /// queue or it fails to parse — a broken queue must never crash the
     /// People UI.
     static func discover(repoRoot: URL = defaultRepoRoot) -> HoldoutReviewQueue? {
+        do {
+            return try discoverLatest(repoRoot: repoRoot)
+        } catch {
+            holdoutReviewLog.error("Review queue discovery failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    /// Throwing variant used by the UI so malformed newest queues are
+    /// distinguishable from "no review is pending."
+    static func discoverLatest(repoRoot: URL = defaultRepoRoot) throws -> HoldoutReviewQueue? {
         let evalDir = repoRoot.appendingPathComponent(
             "output/person-eval-private", isDirectory: true)
-        guard let entries = try? FileManager.default.contentsOfDirectory(
+        guard FileManager.default.fileExists(atPath: evalDir.path) else { return nil }
+        let entries = try FileManager.default.contentsOfDirectory(
             at: evalDir,
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
-        ) else { return nil }
+        )
         let dirs = entries
             .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
             .sorted { $0.lastPathComponent > $1.lastPathComponent }
         for dir in dirs {
             let csv = dir.appendingPathComponent(csvFilename)
             guard FileManager.default.fileExists(atPath: csv.path) else { continue }
-            if let queue = try? load(csvURL: csv) { return queue }
+            return try load(csvURL: csv)
         }
         return nil
     }
@@ -186,12 +246,17 @@ struct HoldoutReviewQueue: Equatable, Sendable {
     /// nothing). `.atomic` is Foundation's temp-file-in-same-directory +
     /// rename(2), so a reader never sees a torn file.
     mutating func recordAnswer(reviewId: String, confirm: String, notes: String) throws {
+        guard confirm == "yes" || confirm == "no" else {
+            throw QueueError.invalidAnswer(confirm)
+        }
         guard let i = rows.firstIndex(where: { $0.reviewId == reviewId }) else {
             throw QueueError.unknownReviewId(reviewId)
         }
+        let wasPending = rows[i].isPending
         rows[i].rickConfirm = confirm
         rows[i].notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         try serialized().write(to: csvURL, options: [.atomic])
+        if wasPending { pendingCount -= 1 }
     }
 
     // MARK: Serialization (Python csv.writer compatible)
@@ -308,6 +373,7 @@ struct HoldoutReviewQueue: Equatable, Sendable {
 final class HoldoutReviewCenter: ObservableObject {
 
     @Published private(set) var queue: HoldoutReviewQueue?
+    @Published private(set) var errorMessage: String?
 
     private let repoRoot: URL
 
@@ -322,13 +388,19 @@ final class HoldoutReviewCenter: ObservableObject {
     /// Concurrency — see the project's concurrency-trap memory.)
     func refresh() async {
         let root = repoRoot
-        let found = await Self.discover(root: root)
-        queue = found
+        do {
+            queue = try await Self.discover(root: root)
+            errorMessage = nil
+        } catch {
+            queue = nil
+            errorMessage = error.localizedDescription
+            holdoutReviewLog.error("Review queue unavailable: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     @concurrent
-    private static func discover(root: URL) async -> HoldoutReviewQueue? {
-        HoldoutReviewQueue.discover(repoRoot: root)
+    private static func discover(root: URL) async throws -> HoldoutReviewQueue? {
+        try HoldoutReviewQueue.discoverLatest(repoRoot: root)
     }
 
     /// The queue that should light the Review badge on `personName`'s

@@ -113,7 +113,7 @@ extension PersonFinderView {
                 .foregroundColor(.white)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
-                .background(Capsule().fill(Color.orange))
+                .background(Capsule().fill(Color.purple))
                 .overlay(
                     Capsule().stroke(Color(NSColor.windowBackgroundColor), lineWidth: 1.5)
                 )
@@ -144,6 +144,15 @@ extension PersonFinderView {
                         .font(.callout)
                         .foregroundColor(.secondary)
                 }
+            }
+
+            if let error = holdoutReview.errorMessage {
+                Label("Blind review queue could not be loaded",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .help(error)
+                    .accessibilityValue(error)
             }
 
             if model.savedProfiles.isEmpty {
