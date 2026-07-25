@@ -38,6 +38,32 @@ extension VideoRecord {
     /// reveals purged. Restore is `setAsideReason = nil`.
     public var isSetAside: Bool { setAsideReason != nil }
 
+    /// True when a confirmed repair has replaced this record (GH #132).
+    /// Hidden from default views like purged / set-aside rows, but a
+    /// DISTINCT reversible state: "Show superseded" reveals these, and
+    /// restore is `supersededByID = nil`. The replacing record's id is
+    /// in `supersededByID`.
+    public var isSuperseded: Bool { supersededByID != nil }
+
+    /// The `derivationKind` values that mean "this record is a REPAIR of
+    /// its `derivedFrom` source" (GH #132). Lock-step with the writers:
+    /// "rebuildAudio" = RebuildAudioFix.derivationKind (RebuildAudioJob),
+    /// "externalRepair" = an adopted externally-repaired file (Link
+    /// Repaired Copy…). Trim/balance/cleanup derivatives are NOT repairs
+    /// — they never enter the confirm lifecycle.
+    public static let repairDerivationKinds: Set<String> = ["rebuildAudio", "externalRepair"]
+
+    /// True when this record is a repair copy waiting for Rick's
+    /// one-click confirmation (GH #132): it was derived from another
+    /// record by a repair operation, and `repairConfirmedDate` is still
+    /// nil. Human confirmation is the permanent gate — this drives the
+    /// "Repaired — Awaiting Confirmation" worklist filter.
+    public var isAwaitingConfirmation: Bool {
+        derivedFrom != nil
+            && repairConfirmedDate == nil
+            && Self.repairDerivationKinds.contains(derivationKind ?? "")
+    }
+
     /// True when EITHER the stored needsReformat flag is set OR the
     /// codec strings match a known-problematic legacy codec. The
     /// catalog UI's red `!` badge reads this so already-cataloged

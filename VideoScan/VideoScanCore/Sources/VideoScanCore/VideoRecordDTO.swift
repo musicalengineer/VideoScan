@@ -136,6 +136,8 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let audioVerifyStatus: String
     public let audioVerifyNote: String
     public let audioVerifyDate: Date?
+    public let supersededByID: UUID?
+    public let repairConfirmedDate: Date?
 
     // MARK: Capture from a live VideoRecord (called ON the main actor)
 
@@ -243,6 +245,8 @@ public struct VideoRecordDTO: Sendable, Encodable {
         audioVerifyStatus           = r.audioVerifyStatus
         audioVerifyNote             = r.audioVerifyNote
         audioVerifyDate             = r.audioVerifyDate
+        supersededByID              = r.supersededByID
+        repairConfirmedDate         = r.repairConfirmedDate
     }
 
     // MARK: Encode — VERBATIM from VideoRecord.encode(to:)
@@ -439,5 +443,10 @@ public struct VideoRecordDTO: Sendable, Encodable {
             try c.encode(audioVerifyNote, forKey: .audioVerifyNote)
         }
         try c.encodeIfPresent(audioVerifyDate, forKey: .audioVerifyDate)
+        // Repair lifecycle (GH #132): delta-minimal — both keys written
+        // only when present, so never-superseded / never-confirmed
+        // records (all legacy records) round-trip byte-identical.
+        try c.encodeIfPresent(supersededByID, forKey: .supersededByID)
+        try c.encodeIfPresent(repairConfirmedDate, forKey: .repairConfirmedDate)
     }
 }

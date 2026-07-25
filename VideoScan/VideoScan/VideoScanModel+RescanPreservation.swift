@@ -91,6 +91,14 @@ struct RescanPreservedFields: Sendable {
     /// or an explicit "Put Back in Catalog" flips this field.
     let setAsideReason: String?
 
+    /// Repair-lifecycle state (GH #132). Same sensor contract as
+    /// setAsideReason: a rescan must NEVER resurrect a superseded
+    /// original into the default view, and must never un-confirm a
+    /// confirmed repair — only "Restore Original (Un-supersede)" flips
+    /// supersededByID.
+    let supersededByID: UUID?
+    let repairConfirmedDate: Date?
+
     /// True if this snapshot carries anything worth restoring.
     /// Records that have only scan-derived data don't need to be in
     /// the snapshot map at all — caller can use this to filter and
@@ -114,6 +122,8 @@ struct RescanPreservedFields: Sendable {
             || !tags.isEmpty
             || !userNotes.isEmpty
             || setAsideReason != nil
+            || supersededByID != nil
+            || repairConfirmedDate != nil
     }
 
     @MainActor
@@ -143,6 +153,8 @@ struct RescanPreservedFields: Sendable {
         self.tags = rec.tags
         self.userNotes = rec.userNotes
         self.setAsideReason = rec.setAsideReason
+        self.supersededByID = rec.supersededByID
+        self.repairConfirmedDate = rec.repairConfirmedDate
     }
 
     /// Apply the snapshotted fields onto a freshly-scanned record.
@@ -176,6 +188,8 @@ struct RescanPreservedFields: Sendable {
         rec.tags = self.tags
         rec.userNotes = self.userNotes
         rec.setAsideReason = self.setAsideReason
+        rec.supersededByID = self.supersededByID
+        rec.repairConfirmedDate = self.repairConfirmedDate
     }
 }
 

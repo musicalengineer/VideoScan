@@ -409,6 +409,28 @@ public class VideoRecord: Identifiable, Decodable {
     /// (`Date?` ≈ C++ `std::optional<Date>`.) Same additive migration.
     public var audioVerifyDate: Date?
 
+    /// Repair lifecycle (GH #132): set on the ORIGINAL record when Rick
+    /// confirms a repair — points at the repaired record that replaces
+    /// it. nil = normal record (the vast majority); non-nil = superseded:
+    /// hidden from default views (like purgedAt / setAsideReason, but a
+    /// DISTINCT third state with distinct restore semantics — restore is
+    /// `supersededByID = nil`). The file's bytes are NEVER touched by
+    /// the app; this is catalog-level retirement only. Combine's future
+    /// hide-on-verified-success (#125) sets this same field on parents —
+    /// this IS the shared supersede mechanism. Additive — legacy
+    /// catalogs decode as nil, the DTO encodes the key only when
+    /// present, so old catalog.json files round-trip byte-identical.
+    public var supersededByID: UUID?
+
+    /// Repair lifecycle (GH #132): set on the REPAIR record (a record
+    /// with `derivedFrom` + a repair `derivationKind`) when Rick clicks
+    /// "Sounds Good — Confirm Repair". nil = repaired but not yet
+    /// human-confirmed (the awaiting-confirmation worklist state).
+    /// Human confirmation is the permanent gate — automated verification
+    /// once passed a staggered v1 mux that Rick's eyes caught. Same
+    /// additive / delta-minimal migration as `supersededByID`.
+    public var repairConfirmedDate: Date?
+
     /// Provenance captured at scan time: which machine ran the scan, what
     /// kind of volume the file lived on (local/smb/nfs/afp), the volume's
     /// stable UUID if available, and the remote server name for network
@@ -568,6 +590,11 @@ public class VideoRecord: Identifiable, Decodable {
         audioVerifyStatus           = try c.decodeIfPresent(String.self, forKey: .audioVerifyStatus) ?? ""
         audioVerifyNote             = try c.decodeIfPresent(String.self, forKey: .audioVerifyNote) ?? ""
         audioVerifyDate             = try c.decodeIfPresent(Date.self, forKey: .audioVerifyDate)
+        // Repair lifecycle (GH #132) — additive optional, same migration
+        // pattern: legacy catalogs (no keys) come back nil = normal /
+        // unconfirmed; superseded/confirmed records round-trip unchanged.
+        supersededByID              = try c.decodeIfPresent(UUID.self, forKey: .supersededByID)
+        repairConfirmedDate         = try c.decodeIfPresent(Date.self, forKey: .repairConfirmedDate)
         // Relocate provenance. Legacy catalogs (no keys) decode as nil and
         // remain treated as "never relocated." Once set on first migration
         // these keys are encoded on every subsequent write.

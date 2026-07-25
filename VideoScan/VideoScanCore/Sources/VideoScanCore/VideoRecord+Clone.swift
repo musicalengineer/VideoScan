@@ -140,6 +140,8 @@ extension VideoRecord {
         c.audioVerifyStatus = audioVerifyStatus
         c.audioVerifyNote = audioVerifyNote
         c.audioVerifyDate = audioVerifyDate
+        c.supersededByID = supersededByID
+        c.repairConfirmedDate = repairConfirmedDate
         c.scanContext = scanContext
         return c
     }

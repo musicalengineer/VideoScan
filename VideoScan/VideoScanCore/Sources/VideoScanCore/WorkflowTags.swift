@@ -110,6 +110,8 @@ public enum UserNotesMigration {
     ///                    buckets + formatSafelyRedundantNote)
     ///   "Migrate"        VideoScanModel+Relocate.swift (salvage /
     ///                    migrate stamps)
+    ///   "Confirm"        VideoScanModel+RepairLifecycle.swift (repair
+    ///                    confirmed / superseded stamps, GH #132)
     public static let journeyStampVerbs: [String] = [
         "Transcode",
         "Balance Audio",
@@ -119,6 +121,7 @@ public enum UserNotesMigration {
         "Verify Audio",
         "Reconcile",
         "Migrate",
+        "Confirm",
     ]
 
     /// True if `line` is a File Journey stamp: a known verb, a space,

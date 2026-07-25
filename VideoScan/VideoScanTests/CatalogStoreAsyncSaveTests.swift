@@ -261,7 +261,9 @@ struct CatalogStoreAsyncSaveTests {
           "purgedAt": "2026-06-01T00:00:00Z",
           "audioVerifyStatus": "damaged",
           "audioVerifyNote": "reference movie — media missing",
-          "audioVerifyDate": "2026-07-24T12:00:00Z"
+          "audioVerifyDate": "2026-07-24T12:00:00Z",
+          "supersededByID": "44444444-4444-4444-4444-444444444444",
+          "repairConfirmedDate": "2026-07-24T18:00:00Z"
         }
         """
         let decoder = JSONDecoder()
@@ -494,6 +496,12 @@ struct CatalogStoreAsyncSaveTests {
                 "Legacy catalog JSON no longer round-trips byte-identical — a field decode/encode drifted")
         #expect(!reencoded.contains("cleanupRecipe"),
                 "cleanup provenance keys leaked into a legacy record's JSON")
+        // Repair lifecycle (GH #132): same zero-byte contract — the golden
+        // predates supersededByID/repairConfirmedDate, so neither key may
+        // appear after a round trip.
+        #expect(!reencoded.contains("supersededByID")
+                    && !reencoded.contains("repairConfirmedDate"),
+                "repair-lifecycle keys leaked into a legacy record's JSON")
     }
 
     // MARK: Golden constants (captured 2026-06-29 via goldenEncoder())
