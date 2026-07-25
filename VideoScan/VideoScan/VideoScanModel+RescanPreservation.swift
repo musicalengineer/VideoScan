@@ -99,6 +99,18 @@ struct RescanPreservedFields: Sendable {
     let supersededByID: UUID?
     let repairConfirmedDate: Date?
 
+    /// Derivation provenance (deep-test finding 1, GH #132, 2026-07-24):
+    /// WITHOUT these, a routine rescan silently dropped every
+    /// unconfirmed repair out of the awaiting-confirmation worklist
+    /// forever (isAwaitingConfirmation needs derivedFrom + a repair
+    /// derivationKind) and broke confirmed repairs' inspector links —
+    /// the exact curated-state-loss class this file exists to prevent.
+    /// The restored pointer VALUE can still be stale (the scan mints
+    /// fresh ids) — finding 2's re-link pass in
+    /// `applyPreservedFieldsAfterRescan` fixes that.
+    let derivedFrom: UUID?
+    let derivationKind: String?
+
     /// True if this snapshot carries anything worth restoring.
     /// Records that have only scan-derived data don't need to be in
     /// the snapshot map at all — caller can use this to filter and
@@ -124,6 +136,8 @@ struct RescanPreservedFields: Sendable {
             || setAsideReason != nil
             || supersededByID != nil
             || repairConfirmedDate != nil
+            || derivedFrom != nil
+            || derivationKind != nil
     }
 
     @MainActor
@@ -155,6 +169,8 @@ struct RescanPreservedFields: Sendable {
         self.setAsideReason = rec.setAsideReason
         self.supersededByID = rec.supersededByID
         self.repairConfirmedDate = rec.repairConfirmedDate
+        self.derivedFrom = rec.derivedFrom
+        self.derivationKind = rec.derivationKind
     }
 
     /// Apply the snapshotted fields onto a freshly-scanned record.
@@ -190,6 +206,8 @@ struct RescanPreservedFields: Sendable {
         rec.setAsideReason = self.setAsideReason
         rec.supersededByID = self.supersededByID
         rec.repairConfirmedDate = self.repairConfirmedDate
+        rec.derivedFrom = self.derivedFrom
+        rec.derivationKind = self.derivationKind
     }
 }
 
@@ -215,13 +233,19 @@ extension VideoScanModel {
     @MainActor
     func snapshotPreservedFieldsForRescan(of target: CatalogScanTarget) {
         var map: [String: RescanPreservedFields] = [:]
+        var oldIDs: [String: UUID] = [:]
         for rec in records where PathScope.contains(rec.fullPath, within: target.searchPath) { // regression: codex C2
+            // Every record's pre-rescan id — the re-link pass needs the
+            // POINTER TARGETS too, which may carry nothing else worth
+            // restoring (deep-test finding 2).
+            oldIDs[rec.fullPath] = rec.id
             let snap = RescanPreservedFields(from: rec)
             if snap.isWorthRestoring {
                 map[rec.fullPath] = snap
             }
         }
         pendingPreservedFields[target.searchPath] = map
+        pendingRescanOldIDs[target.searchPath] = oldIDs
     }
 
     /// Apply the snapshotted fields onto freshly-scanned records.
@@ -236,6 +260,7 @@ extension VideoScanModel {
         of target: CatalogScanTarget,
         onto targetRecords: [VideoRecord]
     ) -> Int {
+        let oldIDs = pendingRescanOldIDs.removeValue(forKey: target.searchPath) ?? [:]
         guard let map = pendingPreservedFields.removeValue(forKey: target.searchPath),
               !map.isEmpty
         else { return 0 }
@@ -245,7 +270,71 @@ extension VideoScanModel {
             snap.apply(to: rec)
             restored += 1
         }
+        relinkLifecyclePointersAfterRescan(oldIDs: oldIDs,
+                                           targetRecords: targetRecords)
         return restored
+    }
+
+    /// Re-link the repair-lifecycle pointers after a rescan (deep-test
+    /// finding 2, GH #132). The scan merge mints FRESH record ids
+    /// (only move-adoption preserves them), so a restored
+    /// `supersededByID` / `derivedFrom` still holds the pointer
+    /// target's PRE-RESCAN id and stops resolving — a superseded
+    /// original stays safely hidden but "Show Repaired Copy in
+    /// Catalog" breaks, and confirm can no longer find an awaiting
+    /// repair's original.
+    ///
+    /// Mechanism: join the pre-rescan fullPath → oldID capture with the
+    /// fresh instances (same fullPath) to build oldID → newID, then
+    /// remap both pointers wherever the OLD id has a mapping — on the
+    /// fresh instances AND on every record elsewhere in the catalog
+    /// that points INTO the rescanned tree (repair on volume A,
+    /// original on rescanned volume B). Pointers whose old id has no
+    /// mapping are left alone: either the target lives outside the
+    /// rescan (its id is unchanged and still resolves) or its file
+    /// genuinely vanished (nothing to re-link). Identity mappings from
+    /// move-adopted ids are harmless no-ops.
+    @MainActor
+    private func relinkLifecyclePointersAfterRescan(
+        oldIDs: [String: UUID],
+        targetRecords: [VideoRecord]
+    ) {
+        guard !oldIDs.isEmpty else { return }
+        var oldToNew: [UUID: UUID] = [:]
+        oldToNew.reserveCapacity(targetRecords.count)
+        for rec in targetRecords {
+            if let oldID = oldIDs[rec.fullPath] {
+                oldToNew[oldID] = rec.id
+            }
+        }
+        guard !oldToNew.isEmpty else { return }
+
+        func relink(_ rec: VideoRecord) {
+            if let sup = rec.supersededByID, let fresh = oldToNew[sup], fresh != sup {
+                rec.supersededByID = fresh
+            }
+            if let src = rec.derivedFrom, let fresh = oldToNew[src], fresh != src {
+                rec.derivedFrom = fresh
+            }
+        }
+        for rec in targetRecords { relink(rec) }
+        // Records OUTSIDE the rescanned tree can point into it — the
+        // old instances under the root are about to be replaced by the
+        // merge, so touching them is harmless; everything else gets its
+        // pointers fixed. One O(catalog) pass, pointer fields only.
+        for rec in records { relink(rec) }
+
+        // A confirm-undo batch armed before this rescan references the
+        // PRE-RESCAN ids; after the instance swap its Undo would be a
+        // silent no-op. Drop the stale banner — precisely, only when it
+        // references a record this rescan replaced with a NEW id.
+        if let batch = lastConfirmBatch,
+           batch.snapshots.contains(where: { snap in
+               (oldToNew[snap.repairID] ?? snap.repairID) != snap.repairID
+                   || (oldToNew[snap.originalID] ?? snap.originalID) != snap.originalID
+           }) {
+            lastConfirmBatch = nil
+        }
     }
 
     /// Discard the preservation snapshot WITHOUT restoring it.
@@ -257,5 +346,6 @@ extension VideoScanModel {
     @MainActor
     func discardPreservedFieldsSnapshot(of target: CatalogScanTarget) {
         pendingPreservedFields.removeValue(forKey: target.searchPath)
+        pendingRescanOldIDs.removeValue(forKey: target.searchPath)
     }
 }

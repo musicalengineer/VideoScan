@@ -101,8 +101,15 @@ extension VideoScanModel {
     ///   tags                    union (case-insensitive, WorkflowTags)
     ///   userNotes               copy; append with a newline when the
     ///                           repair already has text
-    ///   confirmedByUserPeople   union by name (repair's entries win)
-    ///   rejectedPeople          union
+    ///   confirmedByUserPeople   transfer only when the repair has NO
+    ///                           judgment for that person — neither a
+    ///                           confirmation NOR a rejection (deep-test
+    ///                           finding 3: the repair-side judgment is
+    ///                           Rick's most recent decision and the
+    ///                           one-tier invariant must hold, matching
+    ///                           ConfirmPersonSheet.catalogWriteback)
+    ///   rejectedPeople          same no-judgment rule, both tiers
+    ///                           checked, case-insensitive (finding 4)
     ///   starRating              max of the two
     ///   mediaDisposition        copy only while repair is unreviewed
     ///   lifecycleStage          copy only while repair is cataloged
@@ -118,13 +125,25 @@ extension VideoScanModel {
                 ? original.userNotes
                 : "\(repair.userNotes)\n\(original.userNotes)"
         }
+        // People tiers (deep-test findings 3 + 4): a person lives in
+        // EXACTLY ONE tier, and the repair's own judgment — confirmed
+        // OR rejected — is Rick's most recent decision, so an
+        // original-side entry transfers only when the repair has NO
+        // judgment at all for that person. All identity comparisons
+        // case-insensitive, like every other people comparison in the
+        // app (ConfirmPersonSheet.catalogWriteback).
+        func repairHasJudgment(for name: String) -> Bool {
+            repair.confirmedByUserPeople.contains {
+                $0.name.compare(name, options: .caseInsensitive) == .orderedSame
+            } || repair.rejectedPeople.contains {
+                $0.compare(name, options: .caseInsensitive) == .orderedSame
+            }
+        }
         for confirmed in original.confirmedByUserPeople
-        where !repair.confirmedByUserPeople.contains(where: {
-            $0.name.compare(confirmed.name, options: .caseInsensitive) == .orderedSame
-        }) {
+        where !repairHasJudgment(for: confirmed.name) {
             repair.confirmedByUserPeople.append(confirmed)
         }
-        for name in original.rejectedPeople where !repair.rejectedPeople.contains(name) {
+        for name in original.rejectedPeople where !repairHasJudgment(for: name) {
             repair.rejectedPeople.append(name)
         }
         repair.starRating = max(repair.starRating, original.starRating)

@@ -93,13 +93,13 @@ struct RepairInheritanceEdgeTests {
 
         model.applyHumanMetadataInheritance(from: original, to: repair)
 
+        // Fixed (deep-test finding 3): the repair-side judgment wins and
+        // the one-tier invariant holds.
         let confirmedNames = repair.confirmedByUserPeople.map(\.name)
-        withKnownIssue("GH #132 merge defect: cross-tier people conflict — the repair's explicit rejection must win and the one-tier invariant must hold (reported; production fix pending)") {
-            #expect(!confirmedNames.contains("Donna"),
-                    "Rick's explicit No on the repair is his most recent decision — the original's stale confirmation must not resurrect Donna")
-            #expect(!(confirmedNames.contains("Donna") && repair.rejectedPeople.contains("Donna")),
-                    "one-tier invariant: a person must never be confirmed AND rejected on the same record")
-        }
+        #expect(!confirmedNames.contains("Donna"),
+                "Rick's explicit No on the repair is his most recent decision — the original's stale confirmation must not resurrect Donna")
+        #expect(!(confirmedNames.contains("Donna") && repair.rejectedPeople.contains("Donna")),
+                "one-tier invariant: a person must never be confirmed AND rejected on the same record")
     }
 
     @Test func repairSideConfirmationMustBeatOriginalSideRejection() {
@@ -110,10 +110,9 @@ struct RepairInheritanceEdgeTests {
 
         model.applyHumanMetadataInheritance(from: original, to: repair)
 
-        withKnownIssue("GH #132 merge defect: reverse cross-tier conflict — the original's rejection must not land next to the repair's confirmation (reported)") {
-            #expect(!repair.rejectedPeople.contains("Donna"),
-                    "the repair's explicit confirmation wins; Donna must not enter rejectedPeople")
-        }
+        // Fixed (deep-test finding 3, reverse direction).
+        #expect(!repair.rejectedPeople.contains("Donna"),
+                "the repair's explicit confirmation wins; Donna must not enter rejectedPeople")
     }
 
     @Test func rejectedPeopleUnionMustBeCaseInsensitive() {
@@ -128,11 +127,11 @@ struct RepairInheritanceEdgeTests {
 
         model.applyHumanMetadataInheritance(from: original, to: repair)
 
+        // Fixed (deep-test finding 4): the union is case-insensitive
+        // like every other people comparison.
         let unique = Set(repair.rejectedPeople.map { $0.lowercased() })
-        withKnownIssue("GH #132 merge defect: rejectedPeople union is case-sensitive, unlike every other people comparison (reported)") {
-            #expect(repair.rejectedPeople.count == unique.count,
-                    "case-variant duplicate in rejectedPeople: \(repair.rejectedPeople)")
-        }
+        #expect(repair.rejectedPeople.count == unique.count,
+                "case-variant duplicate in rejectedPeople: \(repair.rejectedPeople)")
     }
 
     @Test func multiLineUserNotesComposeRepairFirstInOrder() {
@@ -261,15 +260,16 @@ struct RepairLifecycleRescanInterleavingTests {
         #expect(freshRepair.repairConfirmedDate != nil,
                 "a rescan must never un-confirm a confirmed repair")
 
-        // The supersede marker survives — but it points at the repair's
-        // PRE-RESCAN id, and record ids are minted fresh by the scan.
-        // "Show Repaired Copy in Catalog" resolves supersededByID against
-        // the live catalog, so the link must survive an instance swap.
-        withKnownIssue("GH #132 rescan defect: supersededByID dangles after a rescan mints a new id for the repair (reported; needs id- or path-level re-linking)") {
-            let resolves = model.records.contains { $0.id == freshOriginal.supersededByID }
-            #expect(resolves,
-                    "supersededByID must resolve to a live record after a rescan")
-        }
+        // The supersede marker survives AND resolves: record ids are
+        // minted fresh by the scan, so the apply pass re-links the
+        // pointer via the fullPath → old-id join (deep-test finding 2,
+        // fixed). "Show Repaired Copy in Catalog" must keep working
+        // across an instance swap.
+        let resolves = model.records.contains { $0.id == freshOriginal.supersededByID }
+        #expect(resolves,
+                "supersededByID must resolve to a live record after a rescan")
+        #expect(freshOriginal.supersededByID == freshRepair.id,
+                "…and to the repair's FRESH instance specifically")
     }
 
     @Test func awaitingRepairMustSurviveARescan() async throws {
@@ -286,12 +286,14 @@ struct RepairLifecycleRescanInterleavingTests {
                                  paths: [original.fullPath, repair.fullPath])
         let freshRepair = try #require(fresh[repair.fullPath])
 
-        withKnownIssue("GH #132 rescan defect: derivedFrom/derivationKind are not rescan-preserved, so an awaiting repair drops out of the confirm lifecycle on any routine rescan (reported)") {
-            #expect(freshRepair.isAwaitingConfirmation,
-                    "an unconfirmed repair must still be awaiting confirmation after a rescan")
-            #expect(model.confirmRepair(repairID: freshRepair.id),
-                    "confirm must still work after a rescan")
-        }
+        // Fixed (deep-test finding 1 + the finding-2 re-link):
+        // derivedFrom/derivationKind are rescan-preserved AND the
+        // derivedFrom pointer is re-linked to the original's fresh id,
+        // so the worklist survives and confirm still resolves the pair.
+        #expect(freshRepair.isAwaitingConfirmation,
+                "an unconfirmed repair must still be awaiting confirmation after a rescan")
+        #expect(model.confirmRepair(repairID: freshRepair.id),
+                "confirm must still work after a rescan")
     }
 
     @Test func undoAfterARescanNeverHalfRestores() async throws {

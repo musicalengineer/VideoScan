@@ -659,6 +659,18 @@ final class VideoScanModel: ObservableObject {
     /// See VideoScanModel+RescanPreservation.swift for the contract.
     var pendingPreservedFields: [String: [String: RescanPreservedFields]] = [:]
 
+    /// Sibling of `pendingPreservedFields` (deep-test finding 2, GH
+    /// #132): fullPath → the record's PRE-RESCAN id for EVERY record
+    /// under the target (not just worth-restoring ones — the target of
+    /// a lifecycle pointer may itself carry no curated fields). The
+    /// scan merge mints fresh ids, so restored `supersededByID` /
+    /// `derivedFrom` values go stale; the apply pass joins this map
+    /// with the fresh instances (by fullPath) to build old-id → new-id
+    /// and re-link both pointers. Transient — cleared on apply/discard.
+    /// Memory: ~path + 16 bytes per record; ~12 MB worst case at 100k,
+    /// held only for the duration of one rescan.
+    var pendingRescanOldIDs: [String: [String: UUID]] = [:]
+
     /// Test seam (ScanMergeScopeTests): invoked by the scan-merge existence
     /// sweep right after its initial root-reachability check passes, so the
     /// millisecond-unmount-window recheck can be exercised deterministically
