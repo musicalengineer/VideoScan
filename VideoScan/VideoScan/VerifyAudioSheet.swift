@@ -13,10 +13,19 @@ import SwiftUI
 // `VerifyAudioRequest.diagnosis` is non-optional, so a pre-diagnosis
 // presentation is unrepresentable.
 //
+// GH #137 (Rick 2026-07-25): Verify Audio is now the SINGLE entry point
+// for examining audio — the standalone "Balance Audio…" catalog verb
+// and its analyze-from-scratch sheet are retired. Everything that sheet
+// promised before dispatching the render now lives on this sheet's
+// channel-imbalance finding: what the fix will do, the raw-DV container
+// note, the dropped-silent-tracks note, and the planned destination
+// name. The Balance button dispatches the render with the diagnosis's
+// already-computed analysis — a fresh decode is unrepresentable here
+// too (`startBalanceAudio(record:fromDiagnosis:model:plannedOutput:)`
+// reads `diagnosis.balanceAnalysis`, it cannot probe).
+//
 // The verdict was already persisted by the job (audioVerifyStatus /
 // audioVerifyNote / audioVerifyDate) — this sheet writes nothing.
-// The repair-offer buttons (Balance Audio / Rebuild Audio Track) live
-// here exactly as before.
 //
 // Presented via `.sheet(item:)` from the catalog row context menu
 // ("Verification Results…") — NEVER chained isPresented sheets
@@ -26,10 +35,9 @@ import SwiftUI
 // than .callout) — large readable text is an accessibility need here,
 // not polish.
 
-/// A pending results presentation. Fresh ID per menu click (same shape
-/// as BalanceAudioRequest). Carries the record AND its computed
-/// diagnosis — the diagnosis is required, which is what guarantees this
-/// sheet can never block on a probe.
+/// A pending results presentation. Fresh ID per menu click. Carries the
+/// record AND its computed diagnosis — the diagnosis is required, which
+/// is what guarantees this sheet can never block on a probe.
 struct VerifyAudioRequest: Identifiable {
     let id = UUID()
     let record: VideoRecord
@@ -46,6 +54,14 @@ struct VerifyAudioSheet: View {
     @Environment(\.openWindow) private var openWindow
 
     let request: VerifyAudioRequest
+
+    /// Planned `<stem>_balanced.<ext>` beside the original, container-
+    /// aware (raw DV publishes as .mov). Computed ONCE per presentation
+    /// in `.task` — `balancedOutputURL` uniquifies against files on
+    /// disk, and that little bit of I/O doesn't belong in `body`. The
+    /// SAME URL is displayed and handed to the render job (the m3
+    /// convention: never show a name the job won't plan to use).
+    @State private var plannedBalanceDestination: URL?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -73,6 +89,17 @@ struct VerifyAudioSheet: View {
         }
         .padding(24)
         .frame(width: 600)
+        .task {
+            // Only the actionable imbalance path shows a destination.
+            guard let analysis = request.diagnosis.balanceAnalysis,
+                  request.diagnosis.findings.contains(where: {
+                      if case .channelImbalance = $0 { return true }
+                      return false
+                  }) else { return }
+            plannedBalanceDestination = BalanceAudioFix.balancedOutputURL(
+                forSourcePath: request.record.fullPath,
+                containerFormat: analysis.shape.containerFormat)
+        }
     }
 
     // MARK: Healthy — "All is well" + tech readout
@@ -129,8 +156,8 @@ struct VerifyAudioSheet: View {
         }
     }
 
-    /// One row per measured channel — same presentation as
-    /// BalanceAudioSheet's level rows.
+    /// One row per measured channel: "Left — has sound (−18 dB)" /
+    /// "Right — silent". Channels beyond 2 are numbered.
     @ViewBuilder
     private func channelLevelRows(_ m: AudioBalanceMeasurements) -> some View {
         ForEach(Array(m.channels.enumerated()), id: \.offset) { index, channel in
@@ -207,25 +234,7 @@ struct VerifyAudioSheet: View {
             VStack(alignment: .leading, spacing: 8) {
                 switch finding {
                 case .channelImbalance(let c):
-                    Label {
-                        Text(c.familyDescription)
-                            .font(.body)
-                            .fixedSize(horizontal: false, vertical: true)
-                    } icon: {
-                        Image(systemName: "speaker.wave.1")
-                            .foregroundColor(.orange)
-                    }
-                    Text("Balance Audio can fix this — the picture is copied exactly, only the sound is touched, and your original file is never changed.")
-                        .font(.callout)
-                        .foregroundColor(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if let analysis = diagnosis.balanceAnalysis {
-                        Button("Balance Audio") {
-                            startBalance(analysis)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .accessibilityIdentifier("verifySheet.balanceButton")
-                    }
+                    channelImbalanceRow(c, diagnosis: diagnosis)
 
                 case .unsupportedCodec(let codec, let decodable):
                     Label {
@@ -338,15 +347,121 @@ struct VerifyAudioSheet: View {
         }
     }
 
+    /// The channel-imbalance finding — since GH #137 this row IS the
+    /// Balance Audio offer, carrying everything the retired standalone
+    /// sheet promised before its Balance button: the finding, what the
+    /// fix will do, the raw-DV wrapper note, the dropped-silent-tracks
+    /// note, the never-touch-the-original promise, and the planned
+    /// destination name.
+    @ViewBuilder
+    private func channelImbalanceRow(_ c: AudioChannelClass,
+                                     diagnosis: AudioVerifyDiagnosis) -> some View {
+        Label {
+            Text(c.familyDescription)
+                .font(.body)
+                .fixedSize(horizontal: false, vertical: true)
+        } icon: {
+            Image(systemName: "speaker.wave.1")
+                .foregroundColor(.orange)
+        }
+
+        if let analysis = diagnosis.balanceAnalysis {
+            Label {
+                Text(fixDescription(c))
+                    .font(.body)
+                    .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: "speaker.wave.2.circle.fill")
+                    .foregroundColor(.accentColor)
+            }
+            Label {
+                Text("The picture is copied exactly — only the sound is touched.")
+                    .font(.body)
+            } icon: {
+                Image(systemName: "film")
+                    .foregroundColor(.accentColor)
+            }
+            if BalanceAudioFix.isRawDVContainer(analysis.shape.containerFormat) {
+                // Honest about the wrapper change: the raw DV file
+                // can't hold the balanced sound, so the copy is
+                // QuickTime — the video inside is the same untouched DV.
+                Label {
+                    Text("This raw DV file can't hold the balanced sound, so the copy is packaged as QuickTime (.mov). The DV picture inside is untouched.")
+                        .font(.body)
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "shippingbox")
+                        .foregroundColor(.accentColor)
+                }
+                .accessibilityIdentifier("verifySheet.dvContainerNote")
+            }
+            if !analysis.droppedStreamIndices.isEmpty {
+                // "won't be used", not "removed": accurate for every
+                // container (QuickTime genuinely drops the pair; other
+                // muxers with fixed audio slots may keep an empty one).
+                Label {
+                    Text(analysis.droppedStreamIndices.count == 1
+                         ? "The tape's extra silent track won't be used in the balanced copy."
+                         : "The tape's extra silent tracks won't be used in the balanced copy.")
+                        .font(.body)
+                } icon: {
+                    Image(systemName: "speaker.slash.fill")
+                        .foregroundColor(.secondary)
+                }
+            }
+            Label {
+                Text("Your original file is never changed.")
+                    .font(.body.weight(.medium))
+            } icon: {
+                Image(systemName: "lock.shield.fill")
+                    .foregroundColor(.green)
+            }
+            if let destination = plannedBalanceDestination {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("The balanced copy will be saved next to it as:")
+                            .font(.body)
+                        Text(destination.lastPathComponent)
+                            .font(.body.monospaced())
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                } icon: {
+                    Image(systemName: "doc.badge.plus")
+                        .foregroundColor(.accentColor)
+                }
+            }
+            Button("Balance Audio") {
+                startBalance(diagnosis)
+            }
+            .buttonStyle(.borderedProminent)
+            .accessibilityIdentifier("verifySheet.balanceButton")
+        }
+    }
+
+    private func fixDescription(_ c: AudioChannelClass) -> String {
+        switch c {
+        case .leftOnly:
+            return "The left channel's sound will be copied to both speakers."
+        case .rightOnly:
+            return "The right channel's sound will be copied to both speakers."
+        case .mono:
+            return "The mono sound will be spread evenly to both speakers."
+        default:
+            return c.familyDescription
+        }
+    }
+
     // MARK: Actions
 
-    private func startBalance(_ analysis: AudioBalanceAnalysis) {
+    private func startBalance(_ diagnosis: AudioVerifyDiagnosis) {
         fileOpsCenter.startBalanceAudio(record: request.record,
-                                        analysis: analysis,
-                                        model: model)
+                                        fromDiagnosis: diagnosis,
+                                        model: model,
+                                        plannedOutput: plannedBalanceDestination)
         dismiss()
-        // Same handoff BalanceAudioSheet uses: open the operations
-        // window (progress + Cancel live there) after dismissal starts.
+        // Same handoff CleanupSheet uses: open the operations window
+        // (progress + Cancel live there) after the dismissal starts.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             openWindow(id: "combine")
         }

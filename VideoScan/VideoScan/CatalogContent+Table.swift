@@ -564,29 +564,11 @@ extension CatalogContent {
                     })
                     .accessibilityIdentifier("catalog.row.analyze")
 
-                    // Balance Audio — GH #116, Rick 2026-07. Fixes
-                    // one-sided (classically left-only) audio from
-                    // old tape ingests. Opens an analyze-then-confirm
-                    // sheet; the fix runs as a BalanceAudioJob in the
-                    // operations window. Needs an audio stream, an
-                    // online volume, and no balance already running
-                    // against this same record (the Center refuses
-                    // duplicates too — this disable is the courtesy
-                    // layer).
-                    let balanceRunning = fileOpsCenter.jobs.contains { job in
-                        guard job.state.isActive, let b = job as? BalanceAudioJob else { return false }
-                        return b.record.id == rec.id
-                    }
-                    Button("Balance Audio…") {
-                        balanceRequest = BalanceAudioRequest(record: rec)
-                    }
-                    .disabled(!VolumeReachability.isReachable(path: rec.fullPath)
-                              || balanceRunning
-                              || rec.streamType != .videoAndAudio)
-                    .help(rec.streamType == .videoAndAudio
-                          ? "Check whether the sound sits on only one channel (common on old tape ingests) and fix it automatically. The original is never changed."
-                          : "This file has no audio track alongside its video to balance.")
-                    .accessibilityIdentifier("catalog.row.balanceAudio")
+                    // (The standalone "Balance Audio…" verb retired with
+                    // the GH #137 consolidation — Verify Audio is the
+                    // single audio-examination entry point, and its
+                    // results sheet offers Balance as a treatment. The
+                    // balance RENDER still runs as a BalanceAudioJob.)
 
                     // Transcode — opens a configuration sheet for format
                     // and destination instead of assuming the source disk.

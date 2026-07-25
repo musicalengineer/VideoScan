@@ -746,12 +746,16 @@ final class MediaFileOperationsCenter: ObservableObject {
         return job
     }
 
-    /// Kick off "Balance Audio" on a single record. The sheet already
-    /// ran the analyzer (analyze-then-confirm); the job re-verifies the
-    /// output after the fix. Returns nil — REFUSING the dispatch — when
-    /// a balance job is already active for this same record (the
-    /// MFO-layer duplicate guard: two concurrent jobs against one input
-    /// would race on the same planned output name). GH #116.
+    /// Kick off "Balance Audio" on a single record. The caller supplies
+    /// an ALREADY-COMPUTED analysis — since the GH #137 consolidation
+    /// the analyzer only ever runs inside a VerifyAudioJob, and the
+    /// Verify results sheet's Balance offer forwards its diagnosis's
+    /// analysis here (use the `fromDiagnosis` overload below). The job
+    /// re-verifies the output after the fix. Returns nil — REFUSING the
+    /// dispatch — when a balance job is already active for this same
+    /// record (the MFO-layer duplicate guard: two concurrent jobs
+    /// against one input would race on the same planned output name).
+    /// GH #116.
     @discardableResult
     func startBalanceAudio(record: VideoRecord,
                            analysis: AudioBalanceAnalysis,
@@ -775,6 +779,26 @@ final class MediaFileOperationsCenter: ObservableObject {
         fileOpsLog.info("balanceAudio started: \(record.filename, privacy: .public) class=\(analysis.classification.rawValue, privacy: .public) → \(job.outputURL.lastPathComponent, privacy: .public)")
         logStart(job, plan: "\(analysis.classification.rawValue) → \(job.outputURL.lastPathComponent)")
         return job
+    }
+
+    /// Balance Audio straight from a completed Verify diagnosis — the
+    /// GH #137 consolidation entry point (the Verify results sheet's
+    /// "Balance Audio" button). The diagnosis already CONTAINS the
+    /// balance analysis, so this can never trigger a fresh decode;
+    /// a diagnosis without one (reference movie, no-audio, undecodable
+    /// track) returns nil and starts nothing — the sheet never shows
+    /// the button in those cases, this guard is the model-layer twin.
+    @discardableResult
+    func startBalanceAudio(record: VideoRecord,
+                           fromDiagnosis diagnosis: AudioVerifyDiagnosis,
+                           model: VideoScanModel,
+                           plannedOutput: URL? = nil) -> BalanceAudioJob? {
+        guard let analysis = diagnosis.balanceAnalysis else {
+            fileOpsLog.notice("balanceAudio dispatch skipped: \(record.filename, privacy: .public) — diagnosis carries no balance analysis")
+            return nil
+        }
+        return startBalanceAudio(record: record, analysis: analysis,
+                                 model: model, plannedOutput: plannedOutput)
     }
 
     /// Kick off "Rebuild Audio Track" — the Verify Audio repair

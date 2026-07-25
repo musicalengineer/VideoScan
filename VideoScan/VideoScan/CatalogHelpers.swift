@@ -148,11 +148,9 @@ struct CatalogContent: View {
     @State var cleanupRequest: CleanupRequest?
     /// Non-nil presents the "Trim Master…" in/out point sheet.
     @State var trimRequest: TrimRequest?
-    /// Non-nil presents the "Balance Audio" analyze-then-confirm sheet
-    /// (GH #116).
-    @State var balanceRequest: BalanceAudioRequest?
-    /// Non-nil presents the "Verify Audio" diagnose-then-offer sheet
-    /// (GH #128).
+    /// Non-nil presents the "Verification Results" sheet (GH #128/#135;
+    /// since the GH #137 consolidation it also carries the Balance
+    /// Audio offer — the retired standalone Balance sheet's job).
     @State var verifyAudioRequest: VerifyAudioRequest?
 
     /// "Find Online Version" came up empty — non-nil drives an alert
@@ -663,13 +661,9 @@ struct CatalogContent: View {
         .sheet(item: $trimRequest) { request in
             TrimSheet(request: request)
         }
-        // "Balance Audio" analyze-then-confirm (GH #116). Same
-        // .sheet(item:) shape — never chained isPresented.
-        .sheet(item: $balanceRequest) { request in
-            BalanceAudioSheet(request: request)
-        }
-        // "Verify Audio" diagnose-then-offer (GH #128). Same
-        // .sheet(item:) shape.
+        // "Verification Results" (GH #128/#135) — presentation-only;
+        // carries the Balance Audio offer since the GH #137
+        // consolidation. Same .sheet(item:) shape.
         .sheet(item: $verifyAudioRequest) { request in
             VerifyAudioSheet(request: request)
         }

@@ -118,9 +118,10 @@ struct AudioVerifyDiagnosis: Sendable {
     var shape: AudioVerifyShape
     /// Per-channel levels + classification when the astats pass ran
     /// (nil for reference movies, no-audio, and undecodable tracks).
-    /// Handed verbatim to `startBalanceAudio` when the imbalance
-    /// finding's button is clicked — same analyze-then-confirm contract
-    /// BalanceAudioSheet uses.
+    /// Handed verbatim to `startBalanceAudio(record:fromDiagnosis:…)`
+    /// when the imbalance finding's button is clicked — since the
+    /// GH #137 consolidation this is the ONLY road to a balance render,
+    /// so the render can never trigger a fresh decode.
     var balanceAnalysis: AudioBalanceAnalysis?
 
     var isHealthy: Bool { findings.isEmpty }
