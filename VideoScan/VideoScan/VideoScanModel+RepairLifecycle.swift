@@ -30,6 +30,32 @@ import os
 private let lifecycleLog = Logger(subsystem: "Rick-Breen.VideoScan",
                                   category: "repairLifecycle")
 
+// MARK: - External repair adoption (Link Repaired Copy…, GH #132 P4)
+
+/// Provenance tag for adopted externally-repaired files — the sibling
+/// of `RebuildAudioFix.derivationKind`. Lock-step with
+/// `VideoRecord.repairDerivationKinds` (sensor in the adoption tests):
+/// falling out of that set would silently drop adopted files from the
+/// confirm lifecycle.
+enum ExternalRepairAdoption {
+    static let derivationKind = "externalRepair"
+}
+
+/// Why an adoption was refused — family language, surfaced in an alert.
+enum AdoptRepairError: LocalizedError, Equatable {
+    case originalNotFound
+    case fileUnreadable(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .originalNotFound:
+            return "The damaged file this repair belongs to is no longer in the catalog — nothing was linked."
+        case .fileUnreadable(let detail):
+            return "That file couldn't be read as media\(detail.isEmpty ? "" : " (\(detail))") — nothing was linked. Check that it plays, then try again."
+        }
+    }
+}
+
 extension VideoScanModel {
 
     // MARK: Undo snapshots
@@ -241,6 +267,64 @@ extension VideoScanModel {
     @MainActor
     func dismissConfirmUndoBanner() {
         lastConfirmBatch = nil
+    }
+
+    // MARK: Adopt an externally-repaired file (Link Repaired Copy…)
+
+    /// Catalog a file Rick repaired OUTSIDE the app (the
+    /// JustPatsHouse_Recovered_v2 case) as the repaired copy of a
+    /// damaged record: probe it, wire the same two-way provenance the
+    /// rebuild writes (derivedFrom + "externalRepair" + "Verify Audio"
+    /// journey stamps), carry the hand-entered date, and upsert by
+    /// fullPath (re-adopting an already-cataloged path updates the
+    /// record, never duplicates it). The result enters the
+    /// repaired-unconfirmed state automatically (derivedFrom set,
+    /// repairConfirmedDate nil) — confirm is still Rick's click.
+    /// A probe failure throws and inserts NOTHING.
+    @MainActor
+    @discardableResult
+    func adoptExternalRepair(originalID: UUID, fileURL: URL) async throws -> VideoRecord {
+        guard let original = records.first(where: { $0.id == originalID }) else {
+            throw AdoptRepairError.originalNotFound
+        }
+        let newRec = await probeFile(url: fileURL)
+        guard newRec.streamType != .ffprobeFailed else {
+            throw AdoptRepairError.fileUnreadable(newRec.isPlayable)
+        }
+
+        // Same provenance shape as RebuildAudioJob.catalogRebuildOutput.
+        newRec.derivedFrom = original.id
+        newRec.derivationKind = ExternalRepairAdoption.derivationKind
+        // The adopted copy is the same footage — Rick's hand-entered
+        // date carries over with its confidence (GH #117 convention).
+        newRec.userDate = original.userDate
+        newRec.userDateConfidence = original.userDateConfidence
+
+        // "Verify Audio" journey stamps both ways — the existing verb
+        // (already in journeyStampVerbs), no new verb needed.
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let sourceNote = "Verify Audio \(stamp): repaired copy linked: \(fileURL.lastPathComponent)"
+        let derivedNote = "Verify Audio \(stamp): adopted as repaired copy of \(original.filename)"
+        original.notes = original.notes.isEmpty
+            ? sourceNote
+            : "\(original.notes)\n\(sourceNote)"
+        newRec.notes = newRec.notes.isEmpty
+            ? derivedNote
+            : "\(newRec.notes)\n\(derivedNote)"
+
+        if let existing = records.firstIndex(where: { $0.fullPath == fileURL.path }) {
+            records[existing] = newRec
+        } else {
+            records.append(newRec)
+        }
+        searchIndex.update(newRec)
+        searchIndex.update(original)
+        NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
+        saveCatalogDebounced()
+
+        lifecycleLog.info("adopt: \(fileURL.lastPathComponent, privacy: .public) linked as repaired copy of \(original.filename, privacy: .public)")
+        appLog.write("link repaired copy: \(fileURL.lastPathComponent) adopted as repaired copy of \(original.filename) — awaiting confirmation")
+        return newRec
     }
 
     // MARK: Un-supersede

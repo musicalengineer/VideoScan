@@ -1083,6 +1083,19 @@ extension CatalogContent {
             .accessibilityIdentifier("catalog.row.repairDamagedAudio")
         }
 
+        // Link Repaired Copy… (GH #132 P4) — Rick fixed the file
+        // himself in another tool; adopt that file as this damaged
+        // record's repaired copy (same two-way provenance the in-app
+        // rebuild writes; enters the awaiting-confirmation state).
+        if pureActive, activeRecs.count == 1,
+           rec.audioVerifyStatus == "damaged" {
+            Button("Link Repaired Copy…") {
+                linkRepairedCopy(for: rec)
+            }
+            .help("Already repaired this file with another tool? Pick that repaired file and it joins the catalog as this one's repaired copy — then confirm it when it sounds right.")
+            .accessibilityIdentifier("catalog.row.linkRepairedCopy")
+        }
+
         let awaitingRecs = pureActive
             ? activeRecs.filter {
                 $0.isAwaitingConfirmation
@@ -1098,6 +1111,36 @@ extension CatalogContent {
             }
             .help("You've listened and it sounds right: keep this repaired copy as the one to use. The original is hidden from the everyday view — never deleted — and your tags, notes, people, and ratings carry over.")
             .accessibilityIdentifier("catalog.row.confirmRepair")
+        }
+    }
+
+    /// "Link Repaired Copy…" handler (GH #132 P4): pick the externally-
+    /// repaired file, adopt it onto the damaged record, and select the
+    /// new row. Failures (unreadable file, vanished original) alert with
+    /// the model's family-language message and change nothing.
+    private func linkRepairedCopy(for rec: VideoRecord) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the repaired copy of \(rec.filename)"
+        panel.prompt = "Link Repaired Copy"
+        panel.directoryURL = URL(fileURLWithPath: rec.directory, isDirectory: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        Task { @MainActor in
+            do {
+                let newRec = try await model.adoptExternalRepair(
+                    originalID: rec.id, fileURL: url)
+                selectedIDs = [newRec.id]
+                onSelect(newRec.id)
+            } catch {
+                let alert = NSAlert()
+                alert.messageText = "Couldn't Link the Repaired Copy"
+                alert.informativeText = error.localizedDescription
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+            }
         }
     }
 
