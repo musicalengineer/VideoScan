@@ -97,11 +97,11 @@ struct HoldoutReviewQueue: Equatable, Sendable {
     /// caller lands on the next open question, and a Skip on the last
     /// remaining pending row returns nil (caller decides to stay put).
     func nextPendingIndex(after idx: Int) -> Int? {
-        guard !rows.isEmpty else { return nil }
         let n = rows.count
-        for step in 1..<max(n, 2) {
+        guard n > 1 else { return nil }
+        // Steps 1..<n visit every index except idx itself, in wrap order.
+        for step in 1..<n {
             let i = (idx + step) % n
-            if i == idx { break }
             if rows[i].isPending { return i }
         }
         return nil
@@ -203,6 +203,17 @@ struct HoldoutReviewQueue: Equatable, Sendable {
         )
     }
 
+    /// Reload THIS queue's CSV fresh from disk. The review sheet must
+    /// seed its working copy through here at open — a discovery-time
+    /// snapshot can be stale (hand edit in an editor, badge re-clicked
+    /// before the post-dismiss refresh publishes, queue regenerated),
+    /// and the write-through in recordAnswer rewrites the whole file:
+    /// answering against stale memory would silently revert whatever
+    /// changed on disk since the snapshot. QA 2026-07-25 blocker.
+    func freshCopyFromDisk() throws -> HoldoutReviewQueue {
+        try Self.load(csvURL: csvURL)
+    }
+
     /// Find the NEWEST queue under <repoRoot>/output/person-eval-private/.
     /// Directory names are dated YYYY-MM-DD, so lexicographic descending
     /// order == newest first. Returns nil (badge hidden) when there is no
@@ -228,8 +239,13 @@ struct HoldoutReviewQueue: Equatable, Sendable {
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
         )
+        // Only dated YYYY-MM-DD directories participate. Anything else
+        // (archive/, scratch/) sorts ABOVE digits in ASCII descending
+        // order and would permanently shadow the real queues.
+        // QA 2026-07-25 minor 2.
         let dirs = entries
             .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+            .filter { isDatedQueueDirName($0.lastPathComponent) }
             .sorted { $0.lastPathComponent > $1.lastPathComponent }
         for dir in dirs {
             let csv = dir.appendingPathComponent(csvFilename)
@@ -239,15 +255,20 @@ struct HoldoutReviewQueue: Equatable, Sendable {
         return nil
     }
 
-    /// Reload THIS queue's CSV fresh from disk. The review sheet must
-    /// seed its working copy through here at open — a discovery-time
-    /// snapshot can be stale (hand edit in an editor, badge re-clicked
-    /// before the post-dismiss refresh publishes, queue regenerated),
-    /// and the write-through in recordAnswer rewrites the whole file:
-    /// answering against stale memory would silently revert whatever
-    /// changed on disk since the snapshot. QA 2026-07-25 blocker.
-    func freshCopyFromDisk() throws -> HoldoutReviewQueue {
-        try Self.load(csvURL: csvURL)
+    /// `^\d{4}-\d{2}-\d{2}$` — done with a plain byte scan rather than
+    /// the Regex engine (no availability/feature-flag baggage, and it
+    /// reads like the strchr-style check it is).
+    static func isDatedQueueDirName(_ name: String) -> Bool {
+        let bytes = Array(name.utf8)
+        guard bytes.count == 10 else { return false }
+        for (i, b) in bytes.enumerated() {
+            if i == 4 || i == 7 {
+                if b != UInt8(ascii: "-") { return false }
+            } else if b < UInt8(ascii: "0") || b > UInt8(ascii: "9") {
+                return false
+            }
+        }
+        return true
     }
 
     // MARK: Answer write-back (write-through, atomic)
@@ -256,6 +277,12 @@ struct HoldoutReviewQueue: Equatable, Sendable {
     /// immediately (write-through — a crash after this call loses
     /// nothing). `.atomic` is Foundation's temp-file-in-same-directory +
     /// rename(2), so a reader never sees a torn file.
+    ///
+    /// Order matters: build the updated serialization and WRITE it
+    /// before committing to `rows`/`pendingCount` — if the write throws,
+    /// memory must still match disk (QA 2026-07-25 minor 1). Commit-
+    /// after-write is the same discipline as a WAL: no in-memory state
+    /// change until the durable write succeeded.
     mutating func recordAnswer(reviewId: String, confirm: String, notes: String) throws {
         guard confirm == "yes" || confirm == "no" else {
             throw QueueError.invalidAnswer(confirm)
@@ -264,9 +291,12 @@ struct HoldoutReviewQueue: Equatable, Sendable {
             throw QueueError.unknownReviewId(reviewId)
         }
         let wasPending = rows[i].isPending
-        rows[i].rickConfirm = confirm
-        rows[i].notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
-        try serialized().write(to: csvURL, options: [.atomic])
+        var updatedRows = rows
+        updatedRows[i].rickConfirm = confirm
+        updatedRows[i].notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        try Self.serialize(header: header, rows: updatedRows)
+            .write(to: csvURL, options: [.atomic])
+        rows = updatedRows
         if wasPending { pendingCount -= 1 }
     }
 
@@ -277,9 +307,15 @@ struct HoldoutReviewQueue: Equatable, Sendable {
     /// only when they contain , " \r or \n, embedded quotes doubled.
     /// A load→serialize round trip of an untouched file is byte-identical.
     func serialized() -> Data {
-        var out = Self.csvLine(header)
+        Self.serialize(header: header, rows: rows)
+    }
+
+    /// Static so recordAnswer can serialize a candidate row set BEFORE
+    /// committing it to `self` (write-then-commit ordering above).
+    static func serialize(header: [String], rows: [HoldoutReviewRow]) -> Data {
+        var out = csvLine(header)
         for row in rows {
-            out += Self.csvLine(
+            out += csvLine(
                 [row.reviewId, row.fullPath, row.rickConfirm, row.notes]
                 + row.extraColumns)
         }

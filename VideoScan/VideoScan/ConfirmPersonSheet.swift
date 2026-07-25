@@ -52,10 +52,10 @@ struct ConfirmSheetTarget: Identifiable {
 struct ConfirmPersonSheet: View {
 
     let profile: POIProfile
-    /// Present ⇒ holdout mode. Used for mode detection and the CSV
-    /// location — the mutable working copy in `holdout` is reloaded
-    /// FRESH from disk in startHoldout(), never seeded from this
-    /// snapshot (stale-snapshot clobber, QA 2026-07-25).
+    /// Present ⇒ holdout mode. Used for mode detection, initial display
+    /// state, and the CSV location — the mutable working copy in
+    /// `holdout` is reloaded FRESH from disk in startHoldout(), never
+    /// seeded from this snapshot (stale-snapshot clobber, QA 2026-07-25).
     var holdoutQueue: HoldoutReviewQueue? = nil
 
     @EnvironmentObject var personFinderModel: PersonFinderModel
@@ -113,6 +113,35 @@ struct ConfirmPersonSheet: View {
     @State private var holdoutAnsweredThisSession: Int = 0
 
     private var isHoldout: Bool { holdoutQueue != nil }
+
+    /// Seeds holdout-mode display state at construction so the FIRST
+    /// body evaluation already renders the right pane — with the old
+    /// onAppear-only initialization, phase started at .setup and the
+    /// first holdout render fell through to the done pane ("No review
+    /// queue found" flash). QA 2026-07-25 minor 3.
+    ///
+    /// The snapshot here is display-only; the authoritative working copy
+    /// is reloaded from disk in startHoldout() (onAppear fires before
+    /// any interaction is possible, so no answer can ever hit the
+    /// snapshot). The reload is NOT done in init because SwiftUI may
+    /// re-run a view's init on every parent render — file I/O belongs in
+    /// onAppear, which runs once per presentation.
+    init(profile: POIProfile, holdoutQueue: HoldoutReviewQueue? = nil) {
+        self.profile = profile
+        self.holdoutQueue = holdoutQueue
+        guard let snapshot = holdoutQueue else { return }
+        // `_holdout` is the property wrapper's backing storage — writing
+        // `State(initialValue:)` here ≈ a C++ member-initializer list;
+        // after init you go through the wrapped property instead.
+        _holdout = State(initialValue: snapshot)
+        if let idx = snapshot.firstPendingIndex {
+            _phase = State(initialValue: .labeling)
+            _holdoutIndex = State(initialValue: idx)
+            _holdoutNotes = State(initialValue: snapshot.rows[idx].notes)
+        } else {
+            _phase = State(initialValue: .summary)
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -596,7 +625,9 @@ struct ConfirmPersonSheet: View {
             try q.recordAnswer(reviewId: row.reviewId, confirm: confirm, notes: holdoutNotes)
             holdout = q
             holdoutSaveError = nil
-            holdoutAnsweredThisSession += 1
+            // A re-answer via Back edits an existing answer — it doesn't
+            // grow the session's answered tally.
+            if row.isPending { holdoutAnsweredThisSession += 1 }
             holdoutAdvance()
         } catch {
             // Leave the user on this row — nothing was recorded.
@@ -604,12 +635,12 @@ struct ConfirmPersonSheet: View {
         }
     }
 
+    /// Only called after a successful answer, so the current row is
+    /// never pending here — either another row is, or we're done.
     private func holdoutAdvance() {
         guard let q = holdout else { return }
         if let next = q.nextPendingIndex(after: holdoutIndex) {
             holdoutGo(to: next)
-        } else if q.rows.indices.contains(holdoutIndex), q.rows[holdoutIndex].isPending {
-            // Skipped the only remaining pending row — stay put.
         } else {
             phase = .summary
         }

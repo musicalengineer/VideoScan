@@ -322,6 +322,26 @@ struct HoldoutReviewQueueTests {
         #expect(reloaded.pendingCount == 0)
     }
 
+    // regression: recordAnswer mutated rows BEFORE the throwing write —
+    // on write failure, memory diverged from disk (QA 2026-07-25 minor 1).
+    @Test func regression_failedWriteLeavesMemoryMatchingDisk() throws {
+        let dir = try makeTempDir()
+        let url = try writeCSV(fixtureText, in: dir)
+        var q = try HoldoutReviewQueue.load(csvURL: url)
+
+        // Make the atomic write fail: remove the CSV's directory.
+        try FileManager.default.removeItem(at: dir)
+        #expect(throws: Error.self) {
+            try q.recordAnswer(reviewId: "AAAA00000001", confirm: "yes",
+                               notes: "lost to disk")
+        }
+        // Nothing reached disk, so nothing may change in memory either.
+        #expect(q.rows[0].rickConfirm.isEmpty)
+        #expect(q.rows[0].notes.isEmpty)
+        #expect(q.rows[0].isPending)
+        #expect(q.pendingCount == 2)
+    }
+
     // MARK: - 4. Byte round-trip
 
     @Test func roundTrip_untouchedLoadSerializeIsByteIdentical() throws {
@@ -381,6 +401,24 @@ struct HoldoutReviewQueueTests {
 
         let q = HoldoutReviewQueue.discover(repoRoot: root)
         #expect(q?.rows.first?.reviewId == "OLD000000001")
+    }
+
+    // regression: discovery sorted ALL subdirectories lexicographically —
+    // any letter-named dir (archive/, scratch/) sorts above digits and
+    // permanently shadowed the real dated queues (QA 2026-07-25 minor 2).
+    @Test func regression_discoveryIgnoresNonDatedDirectories() throws {
+        let root = try makeTempDir()
+        let dated = root.appendingPathComponent("output/person-eval-private/2026-07-23", isDirectory: true)
+        let archive = root.appendingPathComponent("output/person-eval-private/archive", isDirectory: true)
+        try FileManager.default.createDirectory(at: dated, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: archive, withIntermediateDirectories: true)
+        _ = try writeCSV(csvText(["DATED0000001,/Volumes/T/dated.mov,,"]), in: dated)
+        _ = try writeCSV(csvText(["ARCH00000001,/Volumes/T/arch.mov,,"]), in: archive)
+
+        // "archive" > "2026-07-23" in ASCII descending sort — it must be
+        // filtered out, not win.
+        let q = HoldoutReviewQueue.discover(repoRoot: root)
+        #expect(q?.rows.first?.reviewId == "DATED0000001")
     }
 
     @Test func discovery_missingTreeReturnsNilNotCrash() throws {
