@@ -19,6 +19,19 @@
 #   CLAUDE_WAKE_CMD        wake command for claude (default: claude -p --model opus)
 #     Claude wakes default to Opus deliberately: channel triage does not need
 #     the top model. The woken agent can tell Rick if a full session is needed.
+#   QWEN_WAKE_CMD          gofer command (Rick's M5 qwen via its codex profile,
+#                          e.g. "codex exec --profile qwen-m5 -"). Electricity-
+#                          only. Used for the NAG lane below; unset = nags fall
+#                          back to re-waking the delinquent agent directly.
+#   NAG_SECONDS            unanswered-message age before a nag (default 14400
+#                          = 4h, matching the merge-gate escalation window)
+#
+# Gofer lane: a message addressed to an agent that has had no reply for
+# NAG_SECONDS gets a reminder — posted in-channel by the qwen gofer (free)
+# rather than by a billed model. The gofer only carries messages; it never
+# reviews code or makes decisions (software_dev_policy.md reserves those for
+# the most capable models). "Answered" is a heuristic: any later channel
+# message authored by the recipient.
 
 set -u
 
@@ -29,6 +42,7 @@ LOG_DIR="$HOME/Library/Logs/VideoScan"
 SEEN="$STATE_DIR/seen.txt"
 INTERVAL="${CHANNEL_POLL_SECONDS:-120}"
 COOLDOWN="${CHANNEL_WAKE_COOLDOWN:-1800}"
+NAG_SECONDS="${NAG_SECONDS:-14400}"
 DRY_RUN="${DRY_RUN:-0}"
 
 mkdir -p "$STATE_DIR" "$LOG_DIR"
@@ -94,6 +108,66 @@ wake() {
 # author = 5th hyphen-separated token of YYYY-MM-DD-HHMM-author-slug.md
 author_of() { print -r -- "${1:t}" | cut -d- -f5 }
 
+# recipient = the "to" line of the message header (markdown or YAML form)
+recipient_of() {
+  head -15 "$1" | sed -n -E 's/^(\*\*To:\*\*|to:) *([A-Za-z+ ]+).*/\2/p' \
+    | head -1 | tr '[:upper:]' '[:lower:]' | tr -d ' '
+}
+
+# Has the recipient authored any channel message after this one? (heuristic)
+answered() {
+  local file="$1" agent="$2" base="${1:t}"
+  for f in "$CHANNEL"/*.md(N); do
+    [[ "${f:t}" > "$base" && "$(author_of "$f")" == "$agent" ]] && return 0
+  done
+  return 1
+}
+
+gofer_nag() {
+  local agent="$1" bases="$2"
+  local prompt="You are the team gofer for $REPO (message carrier only — no code
+review, no decisions, no other work). These team-channel messages addressed to
+$agent have had no reply for over $(( NAG_SECONDS / 3600 )) hours: $bases.
+Post ONE short reminder in docs/team-channel per its README — filename author
+'qwen', addressed to $agent, listing those messages and noting the merge-gate
+escalation window — then commit it with prefix 'docs(team-channel):' and push
+origin main. Nothing else."
+  if [[ "$DRY_RUN" == 1 ]]; then log "DRY_RUN: would gofer-nag $agent re: $bases"; return 0; fi
+  if [[ -n "${QWEN_WAKE_CMD:-}" ]]; then
+    log "gofer-nag (qwen) $agent re: $bases"
+    ( cd "$REPO" && print -r -- "$prompt" | ${=QWEN_WAKE_CMD} ) \
+      >> "$LOG_DIR/channel-watcher-qwen.log" 2>&1 &
+  else
+    log "gofer-nag (fallback: direct re-wake) $agent re: $bases"
+    wake "$agent" "UNANSWERED for $(( NAG_SECONDS / 3600 ))h: $bases" 1
+  fi
+}
+
+nag_pass() {
+  local now=$(( $(date +%s) ))
+  local -A overdue=()
+  # NB: declared once outside the loop — zsh's `local x` (no assignment) on an
+  # already-set local PRINTS x=value, so re-declaring per iteration spams stdout.
+  local base to
+  for f in "$CHANNEL"/*.md(N); do
+    base="${f:t}"
+    [[ "$base" == "README.md" ]] && continue
+    (( now - $(stat -f %m "$f") < NAG_SECONDS )) && continue
+    to="$(recipient_of "$f")"
+    [[ "$to" == "codex" || "$to" == "claude" ]] || continue
+    answered "$f" "$to" && continue
+    overdue[$to]="${overdue[$to]:+${overdue[$to]}, }$base"
+  done
+  # one batched nag per agent per NAG_SECONDS
+  local agent
+  for agent in ${(k)overdue}; do
+    local nagstamp="$STATE_DIR/last-nag-$agent"
+    [[ -f "$nagstamp" ]] && (( now - $(stat -f %m "$nagstamp") < NAG_SECONDS )) && continue
+    touch "$nagstamp"
+    gofer_nag "$agent" "${overdue[$agent]}"
+  done
+}
+
 poll_once() {
   [[ -d "$CHANNEL" ]] || { log "channel dir missing: $CHANNEL"; return 1 }
   touch "$SEEN"
@@ -107,6 +181,11 @@ poll_once() {
       claude) new_for_codex+=("$base") ;;
       codex)  new_for_claude+=("$base") ;;
       rick)   new_for_codex+=("$base"); new_for_claude+=("$base") ;;
+      qwen)   # gofer reminders wake their addressee (never qwen itself)
+        case "$(recipient_of "$f")" in
+          codex)  new_for_codex+=("$base") ;;
+          claude) new_for_claude+=("$base") ;;
+        esac ;;
       *)      log "unrecognized author in: $base" ;;
     esac
   done
@@ -119,6 +198,7 @@ poll_once() {
       wake "$agent" "deferred:"
     fi
   done
+  nag_pass
   return 0
 }
 

@@ -13,6 +13,18 @@ actual new message wakes the addressed agent with a tiny triage-only prompt.
 - Poll every 2 min (config `CHANNEL_POLL_SECONDS`); wake commands overridable
   via `CODEX_WAKE_CMD` / `CLAUDE_WAKE_CMD`
 
+## Gofer lane (Rick's M5 qwen — electricity-only)
+
+A directly-addressed message with no reply for 4 h (`NAG_SECONDS`, matches the
+merge-gate escalation window) triggers ONE batched reminder per agent: the
+qwen gofer (`QWEN_WAKE_CMD`, e.g. codex CLI with the M5 qwen profile) posts a
+short qwen-authored nag in-channel listing the overdue items; the watcher then
+wakes the nag's addressee like any other message. No `QWEN_WAKE_CMD` set →
+falls back to re-waking the agent directly. The gofer is a message carrier
+only — it never reviews code or makes decisions (software_dev_policy.md
+reserves those for the most capable models). "Answered" heuristic: any later
+channel message authored by the recipient.
+
 ## Install (M4, launchd)
 
 ```sh
