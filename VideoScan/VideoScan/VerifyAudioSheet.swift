@@ -42,6 +42,27 @@ struct VerifyAudioRequest: Identifiable {
     let id = UUID()
     let record: VideoRecord
     let diagnosis: AudioVerifyDiagnosis
+    let onFindMatchingAudio: () -> Void
+}
+
+/// Runs catalog actions only after the results sheet starts dismissing.
+/// The injected scheduler keeps this ordering unit-testable without UI tests.
+@MainActor
+enum VerifyAudioDismissHandoff {
+    typealias Scheduler = (@escaping () -> Void) -> Void
+
+    static func perform(
+        dismiss: () -> Void,
+        action: @escaping () -> Void,
+        schedule: Scheduler = { action in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                action()
+            }
+        }
+    ) {
+        dismiss()
+        schedule(action)
+    }
 }
 
 struct VerifyAudioSheet: View {
@@ -266,10 +287,15 @@ struct VerifyAudioSheet: View {
                         Image(systemName: "speaker.slash")
                             .foregroundColor(.secondary)
                     }
-                    Text("If its sound exists as a separate file in the catalog, close this window and right-click the row → “Find Matching Audio…” to pair them up.")
+                    Text("If its sound exists as a separate file in the catalog, VideoScan can look for the best match and prepare the pair.")
                         .font(.callout)
                         .foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    Button("Find Matching Audio…") {
+                        startFindMatchingAudio()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityIdentifier("verifySheet.findMatchingAudioButton")
 
                 case .referenceMovie(let paths):
                     Label {
@@ -453,6 +479,14 @@ struct VerifyAudioSheet: View {
     }
 
     // MARK: Actions
+
+    private func startFindMatchingAudio() {
+        // regression: presenting the pair sheet or alert before this sheet
+        // dismisses races SwiftUI's modal state machine.
+        VerifyAudioDismissHandoff.perform(
+            dismiss: { dismiss() },
+            action: request.onFindMatchingAudio)
+    }
 
     private func startBalance(_ diagnosis: AudioVerifyDiagnosis) {
         fileOpsCenter.startBalanceAudio(record: request.record,

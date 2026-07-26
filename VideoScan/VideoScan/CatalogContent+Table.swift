@@ -1042,7 +1042,12 @@ extension CatalogContent {
            let cached = fileOpsCenter.verifyDiagnosis(forRecordID: rec.id) {
             Button("Verification Results…") {
                 verifyAudioRequest = VerifyAudioRequest(
-                    record: rec, diagnosis: cached)
+                    record: rec,
+                    diagnosis: cached,
+                    onFindMatchingAudio: {
+                        repairAudio(for: rec)
+                        openWindow(id: "combine")
+                    })
             }
             .help("Show what Verify Audio found for this file — instantly, without checking it again — plus any repair offer.")
             .accessibilityIdentifier("catalog.row.verifyResults")

@@ -187,9 +187,13 @@ final class VerifyAudioJob: @MainActor MediaFileOperationJob {
     /// from the retired sheet flow. A failed probe never reaches here:
     /// "couldn't check" is not a verdict.
     private func persistVerdict(_ diagnosis: AudioVerifyDiagnosis) {
-        record.audioVerifyStatus = diagnosis.persistedStatus
-        record.audioVerifyNote = diagnosis.persistedNote
-        record.audioVerifyDate = Date()
+        // regression: a rescan may replace the class instance while the
+        // diagnosis runs. Commit onto the current catalog object by UUID.
+        let currentRecord = model?.records.first(where: { $0.id == record.id })
+            ?? record
+        currentRecord.audioVerifyStatus = diagnosis.persistedStatus
+        currentRecord.audioVerifyNote = diagnosis.persistedNote
+        currentRecord.audioVerifyDate = Date()
         model?.saveCatalogDebounced()
     }
 

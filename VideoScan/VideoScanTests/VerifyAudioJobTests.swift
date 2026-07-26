@@ -106,6 +106,41 @@ struct VerifyAudioJobLogicTests {
                 "damaged notes keep the standardized batch-find prefix")
     }
 
+    @Test func verdictPersistsToReplacementRecordWithSameID() async throws {
+        // regression: a rescan can replace the record class instance while
+        // diagnosis is in flight. Persistence must resolve the current object
+        // by UUID rather than mutate the detached request reference.
+        let model = VideoScanModel()
+        let original = makeRecord(name: "rescan.mov")
+        model.records = [original]
+        let gate = AsyncSemaphore(limit: 1)
+        try await gate.wait()
+        let job = VerifyAudioJob(
+            record: original,
+            model: model,
+            diagnoseOverride: { _ in
+                try await gate.wait()
+                await gate.signal()
+                return healthyDiagnosis()
+            })
+        job.start()
+
+        try await Task.sleep(for: .milliseconds(50))
+        let replacement = VideoRecord(id: original.id)
+        replacement.filename = original.filename
+        replacement.fullPath = original.fullPath
+        replacement.directory = original.directory
+        replacement.streamTypeRaw = original.streamTypeRaw
+        model.records = [replacement]
+        await gate.signal()
+        await job.task?.value
+
+        #expect(replacement.audioVerifyStatus == "ok")
+        #expect(replacement.audioVerifyDate != nil)
+        #expect(original.audioVerifyStatus.isEmpty,
+                "the detached pre-rescan instance must remain untouched")
+    }
+
     @Test func failedProbePersistsNothing() async throws {
         // "Couldn't check" is not a verdict — the GH #128 transient-I/O
         // rule must survive the sheet → job move.
@@ -128,6 +163,38 @@ struct VerifyAudioJobLogicTests {
         #expect(rec.audioVerifyNote == "")
         #expect(rec.audioVerifyDate == nil)
         #expect(job.diagnosis == nil)
+    }
+}
+
+@Suite("VerifyAudio results action handoff")
+@MainActor
+struct VerifyAudioResultsActionHandoffTests {
+
+    @Test func findMatchingAudioDismissesBeforeCatalogAction() {
+        // regression: the Combine sheet/no-match alert must not race the
+        // still-present Verification Results sheet.
+        var events: [String] = []
+        VerifyAudioDismissHandoff.perform(
+            dismiss: { events.append("dismiss") },
+            action: { events.append("act") },
+            schedule: { action in
+                events.append("schedule")
+                action()
+            })
+        #expect(events == ["dismiss", "schedule", "act"])
+    }
+
+    @Test func requestCarriesFindMatchingAudioAction() {
+        var invoked = false
+        let request = VerifyAudioRequest(
+            record: makeRecord(name: "picture-only.mov"),
+            diagnosis: AudioVerifyDiagnosis(
+                findings: [.noAudioStream],
+                shape: AudioVerifyShape(),
+                balanceAnalysis: nil),
+            onFindMatchingAudio: { invoked = true })
+        request.onFindMatchingAudio()
+        #expect(invoked)
     }
 }
 
@@ -183,7 +250,10 @@ struct VerifyAudioCenterDispatchTests {
         // computed diagnosis — the pre-diagnosis blocking sheet is
         // unrepresentable.
         if let cached {
-            let request = VerifyAudioRequest(record: rec, diagnosis: cached)
+            let request = VerifyAudioRequest(
+                record: rec,
+                diagnosis: cached,
+                onFindMatchingAudio: {})
             #expect(request.diagnosis.isHealthy)
         }
     }
