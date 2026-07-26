@@ -12,6 +12,15 @@
 //     VideoScanModel. One prewarm run at a time; starting a new run (or a
 //     scan) cancels the previous one.
 //
+// Preview routing (2026-07-26): the prewarm snapshot now carries each
+// record's routing fields (container / videoCodec / needsReformat) so
+// the shared renderThumbnailCGImage core can send AVFoundation-hostile
+// files (FFV1/Matroska masters) straight to ffmpeg instead of letting
+// AVF grind through container sniffing per file. The run also consults
+// the model's ThumbnailFailureStore (negative cache) so files that
+// already failed cost one stat per run, not a repeat decode failure —
+// and records fresh failures for the interactive path to skip too.
+//
 // Memory contract (Rick's M4 Max, "use RAM aggressively but leave ~4 GB
 // headroom"): thumbnails are capped at 480x270 (~0.5 MB of bitmap each),
 // generated ONE frame per file — never batch-loaded. The shared NSCache
@@ -19,8 +28,8 @@
 // and NSCache additionally evicts under system memory pressure. The
 // prewarm loop also checks free RAM before dispatching each file and
 // stops early below the 4 GB headroom floor. Worst-case footprint:
-// 8 GB of cached thumbnails + (concurrency × one AVAssetImageGenerator
-// decoder working set) transient.
+// 8 GB of cached thumbnails + (concurrency × one decoder working set —
+// AVAssetImageGenerator or a single-frame ffmpeg child) transient.
 
 import Foundation
 import AppKit
@@ -120,6 +129,16 @@ enum ThumbnailPrecachePlanner {
 
 // MARK: - Precacher (orchestration)
 
+/// Per-file prewarm work item: the path plus the routing fields the
+/// shared single-frame core needs (preview routing, 2026-07-26). A
+/// Sendable value snapshot — VideoRecord instances never cross into the
+/// detached task. Swift tuple-of-value-types ≈ a C++ aggregate struct
+/// passed by value.
+private typealias PrecacheItem = (path: String,
+                                  container: String,
+                                  videoCodec: String,
+                                  needsReformat: Bool)
+
 /// Owns the single in-flight prewarm task. Owned by VideoScanModel so the
 /// catalog view, scan lifecycle, and future callers share one instance.
 ///
@@ -159,14 +178,21 @@ final class ThumbnailPrecacher {
         cancel(reason: "superseded by new prewarm request")
         guard !candidates.isEmpty else { return }
 
-        // Snapshot Sendable data only — paths, not VideoRecord instances.
-        let paths = candidates.map(\.fullPath)
+        // Snapshot Sendable data only — paths + routing fields, not
+        // VideoRecord instances (preview routing, 2026-07-26).
+        let items: [PrecacheItem] = candidates.map {
+            ($0.fullPath, $0.container, $0.videoCodec, $0.needsReformat)
+        }
+        // The store itself is Sendable (lock-guarded); grab the reference
+        // on the main actor so the detached task never touches the model
+        // for it.
+        let failureStore = model.thumbnailFailureStore
         let bound = max(1, concurrency)
         let label = volumeLabel
         let runID = UUID()
         currentRunID = runID
 
-        precacheLog.info("Prewarm start — \(label, privacy: .public): \(paths.count) candidates, concurrency \(bound)")
+        precacheLog.info("Prewarm start — \(label, privacy: .public): \(items.count) candidates, concurrency \(bound)")
 
         task = Task.detached(priority: .utility) { [weak model, weak self] in
             let started = CFAbsoluteTimeGetCurrent()
@@ -174,14 +200,26 @@ final class ThumbnailPrecacher {
             // Generate one thumbnail; returns true on a cache store.
             // autoreleasepool for the synchronous bitmap work lives inside
             // storePrecachedThumbnail (main-actor side).
-            @Sendable func generateOne(_ path: String) async -> Bool {
+            @Sendable func generateOne(_ item: PrecacheItem) async -> Bool {
                 if Task.isCancelled { return false }
-                guard let cg = try? await VideoScanModel.renderThumbnailCGImage(path: path) else {
+                // Negative cache: this file already failed and hasn't
+                // changed on disk — one stat instead of a repeat
+                // deadline-bounded decode failure.
+                if failureStore.isKnownFailure(atPath: item.path) { return false }
+                guard let cg = try? await VideoScanModel.renderThumbnailCGImage(
+                    path: item.path,
+                    container: item.container,
+                    videoCodec: item.videoCodec,
+                    needsReformat: item.needsReformat) else {
+                    // Remember the failure so neither this run's siblings
+                    // (future runs, really — each path is dispatched once)
+                    // nor the interactive path pays for it again.
+                    failureStore.recordFailure(forPath: item.path)
                     return false
                 }
                 if Task.isCancelled { return false }
                 await MainActor.run { [weak model] in
-                    model?.storePrecachedThumbnail(cg, forPath: path)
+                    model?.storePrecachedThumbnail(cg, forPath: item.path)
                 }
                 return true
             }
@@ -196,7 +234,7 @@ final class ThumbnailPrecacher {
             // within one window. (AsyncSemaphore would also work; the
             // window keeps the task count itself bounded.)
             await withTaskGroup(of: Bool.self) { group in
-                var iterator = paths.makeIterator()
+                var iterator = items.makeIterator()
                 var inFlight = 0
 
                 while inFlight < bound, let next = iterator.next() {
@@ -232,7 +270,7 @@ final class ThumbnailPrecacher {
             } else if stoppedForMemory {
                 precacheLog.warning("Prewarm stopped early (low memory headroom) — \(label, privacy: .public): \(generated) cached, \(failed) skipped/failed (\(String(format: "%.1f", secs))s)")
             } else {
-                precacheLog.info("Prewarm complete — \(label, privacy: .public): \(generated)/\(paths.count) cached, \(failed) skipped/failed (\(String(format: "%.1f", secs))s)")
+                precacheLog.info("Prewarm complete — \(label, privacy: .public): \(generated)/\(items.count) cached, \(failed) skipped/failed (\(String(format: "%.1f", secs))s)")
             }
 
             // Clear `task` so isRunning reads false after a natural finish —

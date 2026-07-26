@@ -80,6 +80,13 @@ struct CatalogContent: View {
     let previewImage: NSImage?
     let previewFilename: String
     let previewOfflineVolumeName: String?
+    /// Preview generation failed (or negative-cache hit) for the current
+    /// selection — render the "NO PREVIEW" placeholder instead of leaving
+    /// the ProgressView spinning forever (preview routing, 2026-07-26).
+    /// `var` + default (same pattern as showSetAside) so existing
+    /// callers/tests that don't care about the preview pane compile
+    /// unchanged.
+    var previewUnavailable: Bool = false
     @Binding var showInspector: Bool
     let onSort: ([KeyPathComparator<VideoRecord>]) -> Void
     let onSelect: (UUID?) -> Void
@@ -1106,6 +1113,26 @@ struct CatalogContent: View {
                                     .buttonStyle(.plain)
                                 }
                             }
+                        } else if previewUnavailable {
+                            // Preview generation failed (AVF + ffmpeg both
+                            // struck out, or the negative cache remembered
+                            // it). Same placeholder family as MEDIA OFFLINE /
+                            // AUDIO ONLY — the spinner below is reserved for
+                            // genuinely in-flight generation.
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(Color.black)
+                                VStack(spacing: 6) {
+                                    Image(systemName: "film.slash")
+                                        .font(.system(size: 36))
+                                        .foregroundColor(.gray.opacity(0.8))
+                                    Text("NO PREVIEW")
+                                        .font(.system(size: 16, weight: .bold, design: .monospaced))
+                                        .foregroundColor(.gray)
+                                }
+                            }
+                            .frame(maxWidth: 480, maxHeight: 180)
+                            .aspectRatio(16.0/9.0, contentMode: .fit)
                         } else if selectedRecord?.streamType == .audioOnly {
                             ZStack {
                                 RoundedRectangle(cornerRadius: 6)

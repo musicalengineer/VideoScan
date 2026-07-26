@@ -479,6 +479,7 @@ struct CatalogView: View {
                 previewImage: model.previewImage,
                 previewFilename: model.previewFilename,
                 previewOfflineVolumeName: model.previewOfflineVolumeName,
+                previewUnavailable: model.previewUnavailable,
                 showInspector: $showInspector,
                 onSort: { model.records.sort(using: $0) },
                 onSelect: { id in
