@@ -54,6 +54,18 @@ import os
 //     it is consulted before L2, and only genuine generation failures
 //     are recorded (cancellation/ffmpegUnavailable excluded, as before).
 //
+// Content-aware best frame (Phase B piece 1 commit 2, 2026-07-26):
+//   - renderBestPreviewCGImage — BACKGROUND path only (prewarm); the
+//     interactive path stays the fast single 0.5 s frame. Rips ≤4
+//     candidate frames at offsets planned from the CATALOG duration
+//     (PreviewBestFramePlan — no ffprobe at preview time), scores them
+//     (PreviewFrameScorer), returns the winner; all-near-solid keeps
+//     the 25% frame so a decodable file never loses its preview to a
+//     blue VHS lead-in. AVF-routed files rip all candidates from ONE
+//     asset via generateCGImagesAsynchronously(forTimes:); ffmpeg-routed
+//     files reuse the single-frame rip per offset with cancellation
+//     checks between candidates.
+//
 // runFFProbe is a thin convenience that any extension may want — kept
 // nearby because both generateThumbnail and ffprobe live in the "preview /
 // quick peek at one file" mental bucket.
@@ -103,6 +115,37 @@ private final class AVFDeadlineBox: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return fired
+    }
+}
+
+/// Accumulates the AVF batch candidate rips (best-frame pass) across
+/// the generator's per-time callbacks, and reports when the LAST
+/// callback has landed so the awaiting continuation resumes exactly
+/// once. `@unchecked Sendable` tiny-box per the repo convention: every
+/// member access is inside the lock. AVF delivers exactly one callback
+/// per requested time — including for cancelled/failed times — which is
+/// what makes the countdown sound. For Rick: a mutex-guarded results
+/// vector + countdown, standing in for a condition variable.
+private final class AVFCandidateCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var frames: [(offset: Double, image: CGImage)] = []
+    private var remaining: Int
+
+    init(expecting count: Int) { self.remaining = count }
+
+    /// Record one callback; true when this was the final one.
+    func record(offset: Double, image: CGImage?) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if let image { frames.append((offset, image)) }
+        remaining -= 1
+        return remaining == 0
+    }
+
+    var collected: [(offset: Double, image: CGImage)] {
+        lock.lock()
+        defer { lock.unlock() }
+        return frames
     }
 }
 
@@ -238,16 +281,18 @@ extension VideoScanModel {
         }
     }
 
-    /// ffmpeg tier: rip exactly one frame at t=0.5s to a temp PNG (scaled
-    /// to ≤480 wide, height even for the encoder), load it via ImageIO.
-    /// If the first attempt yields no frame — a sub-half-second clip has
-    /// nothing at 0.5s — retry once from t=0. Same ProcessRunner +
-    /// ToolLocator + input-seek (-ss before -i) shape as CaptionRunner's
-    /// extractFramesViaFFmpeg.
+    /// ffmpeg tier: rip exactly one frame to a temp PNG (scaled to ≤480
+    /// wide, height even for the encoder), load it via ImageIO. `seeks`
+    /// is a try-in-order ladder; the default rips at t=0.5s and — if
+    /// that yields no frame, e.g. a sub-half-second clip — retries once
+    /// from t=0. The best-frame pass passes a single candidate offset
+    /// instead. Same ProcessRunner + ToolLocator + input-seek (-ss
+    /// before -i) shape as CaptionRunner's extractFramesViaFFmpeg.
     ///
     /// Memory: one ≤480-wide PNG in RAM per call (~0.5 MB decoded),
     /// deleted from disk on exit — nothing accumulates.
-    private nonisolated static func renderPreviewFrameViaFFmpeg(path: String) async throws -> CGImage {
+    private nonisolated static func renderPreviewFrameViaFFmpeg(path: String,
+                                                                seeks: [String] = ["0.5", "0"]) async throws -> CGImage {
         let ffmpeg = ToolLocator.ffmpegPath
         guard FileManager.default.isExecutableFile(atPath: ffmpeg) else {
             previewLog.notice("ffmpeg preview tier unavailable (no executable at \(ffmpeg, privacy: .public))")
@@ -257,7 +302,7 @@ extension VideoScanModel {
             .appendingPathComponent("vs_preview_\(UUID().uuidString).png")
         defer { try? FileManager.default.removeItem(at: tmpPNG) }
 
-        for seek in ["0.5", "0"] {
+        for seek in seeks {
             try Task.checkCancellation()
             let rip = await ProcessRunner.runProcess(
                 executable: ffmpeg,
@@ -298,6 +343,146 @@ extension VideoScanModel {
             }
         }
         throw PreviewFrameError.noFrameProduced
+    }
+
+    // MARK: - Best-frame core (background path only)
+
+    /// Content-aware best-frame generation — used by the PREWARM /
+    /// background pass only; the interactive path keeps the fast single
+    /// 0.5 s frame (renderThumbnailCGImage) for immediate display.
+    ///
+    /// Rips candidate frames at PreviewBestFramePlan.candidateOffsets
+    /// (≤4, planned from the CATALOG duration — never ffprobe here),
+    /// scores each with PreviewFrameScorer, returns the winner. When
+    /// every candidate is near-solid (wall-to-wall blue leader) it
+    /// keeps the 25% frame — a decodable file never downgrades to "no
+    /// preview" just because its content is boring. Short/unknown
+    /// durations degenerate to the plain single-frame core.
+    ///
+    /// Cancellation discipline matches the single-frame path: checks
+    /// between candidates, CancellationError propagates out untouched so
+    /// a cancelled pass can never be recorded as a file failure by the
+    /// caller. ffmpegUnavailable also propagates (environment problem —
+    /// no point attempting further candidates).
+    ///
+    /// Memory: at most 4 candidate CGImages at ≤480 wide (~2 MB total)
+    /// + one 64×64 scoring buffer, all released on return.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func renderBestPreviewCGImage(path: String,
+                                                     container: String,
+                                                     videoCodec: String,
+                                                     likelyUnanalyzable: Bool,
+                                                     durationSeconds: Double) async throws -> CGImage {
+        let offsets = PreviewBestFramePlan.candidateOffsets(durationSeconds: durationSeconds)
+        guard offsets.count > 1 else {
+            // Short or unknown duration — nothing to choose between.
+            return try await renderThumbnailCGImage(path: path,
+                                                    container: container,
+                                                    videoCodec: videoCodec,
+                                                    likelyUnanalyzable: likelyUnanalyzable)
+        }
+
+        let route = PreviewFrameRouter.previewRoute(container: container,
+                                                    videoCodec: videoCodec,
+                                                    likelyUnanalyzable: likelyUnanalyzable)
+        var candidates: [(offset: Double, image: CGImage)] = []
+
+        if route == .avFoundation {
+            // One asset open, all candidate times in one batch request.
+            // Batch errors are swallowed (not thrown): the ffmpeg loop
+            // below is the arbiter, mirroring the single-frame tier
+            // order (AVF → one ffmpeg attempt).
+            candidates = (try? await renderCandidateFramesViaAVFoundation(path: path,
+                                                                          offsets: offsets)) ?? []
+            // The batch is deadline-bounded, not cancellation-
+            // interruptible — surface a cancel that arrived mid-batch
+            // NOW, before any caching happens.
+            try Task.checkCancellation()
+        }
+
+        if candidates.isEmpty {
+            // ffmpeg-routed files, or the AVF batch produced nothing.
+            // One single-frame rip per candidate offset; a dry offset
+            // (seek past EOF) just drops out of the lineup.
+            for offset in offsets {
+                try Task.checkCancellation()
+                do {
+                    let image = try await renderPreviewFrameViaFFmpeg(
+                        path: path,
+                        seeks: [String(format: "%.2f", offset)])
+                    candidates.append((offset, image))
+                } catch {
+                    if error is CancellationError
+                        || (error as? PreviewFrameError) == .ffmpegUnavailable {
+                        throw error
+                    }
+                    continue
+                }
+            }
+        }
+
+        guard !candidates.isEmpty else {
+            // No candidate decoded at all — hand the file to the plain
+            // single-frame core, whose 0.5 s + t=0 retry ladder is the
+            // final word before the caller records a failure.
+            return try await renderThumbnailCGImage(path: path,
+                                                    container: container,
+                                                    videoCodec: videoCodec,
+                                                    likelyUnanalyzable: likelyUnanalyzable)
+        }
+
+        let scores = candidates.map { PreviewFrameScorer.score($0.image)?.combined ?? 0 }
+        let chosen = PreviewBestFramePlan.chooseIndex(
+            scores: scores,
+            offsets: candidates.map(\.offset),
+            fallbackOffset: PreviewBestFramePlan.fallbackOffset(durationSeconds: durationSeconds),
+            threshold: PreviewFrameScorer.nearSolidThreshold) ?? 0
+        previewLog.debug("best-frame pick t=\(String(format: "%.1f", candidates[chosen].offset), privacy: .public)s (score \(String(format: "%.3f", scores[chosen]), privacy: .public), \(candidates.count) candidates) — \((path as NSString).lastPathComponent, privacy: .public)")
+        return candidates[chosen].image
+    }
+
+    /// AVF candidate rips for the best-frame pass: all offsets from ONE
+    /// AVURLAsset via generateCGImagesAsynchronously(forTimes:) — the
+    /// asset open (the expensive part) is paid once, and per-time
+    /// keyframe rips are cheap. Shares the single-frame tier's deadline
+    /// watchdog: at the deadline, cancelAllCGImageGeneration completes
+    /// every outstanding time's callback as cancelled, the collector's
+    /// countdown hits zero, and the await resumes with whatever frames
+    /// landed in time (possibly none — caller falls through to ffmpeg).
+    private nonisolated static func renderCandidateFramesViaAVFoundation(
+        path: String,
+        offsets: [Double]) async throws -> [(offset: Double, image: CGImage)] {
+        let asset = AVURLAsset(url: URL(fileURLWithPath: path))
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 480, height: 270)
+
+        let box = AVFDeadlineBox(generator)
+        let deadline = avfPreviewDeadlineSeconds
+        let watchdog = Task {
+            try await Task.sleep(for: .seconds(deadline))
+            box.fireDeadline()
+        }
+        defer { watchdog.cancel() }
+
+        let times = offsets.map { NSValue(time: CMTime(seconds: $0, preferredTimescale: 600)) }
+        let collector = AVFCandidateCollector(expecting: times.count)
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            box.generator.generateCGImagesAsynchronously(forTimes: times) { requestedTime, image, _, _, _ in
+                // requestedTime round-trips through CMTime ticks, so it
+                // is only ≈ the planned offset — downstream matching
+                // (fallback pick) uses a tolerance for exactly this.
+                if collector.record(offset: requestedTime.seconds, image: image) {
+                    cont.resume()
+                }
+            }
+        }
+        if box.deadlineFired {
+            previewLog.notice("AVFoundation candidate batch timed out (\(Int(deadline))s) — \((path as NSString).lastPathComponent, privacy: .public): \(collector.collected.count)/\(times.count) frames kept")
+        }
+        return collector.collected
     }
 
     /// Store a prewarmed/generated CGImage into the cache with its byte

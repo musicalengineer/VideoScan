@@ -27,6 +27,14 @@
 // instead of a media rip — and writes fresh generations through to
 // disk as well as L1. Disk hits populate L1.
 //
+// Best-frame (commit 2): the prewarm is the BACKGROUND pass that owns
+// the disk cache's "best" tier — it generates via the content-scored
+// renderBestPreviewCGImage (≤4 candidate rips, VHS blue-leader-proof)
+// and upgrades "fast" entries the interactive path left behind. A
+// best-tier disk hit is terminal (decode + L1, no rips); a fast-tier
+// hit is published to L1 immediately for instant browsing, then the
+// best-frame generation replaces it in both caches.
+//
 // Memory contract (Rick's M4 Max, "use RAM aggressively but leave ~4 GB
 // headroom"): thumbnails are capped at 480x270 (~0.5 MB of bitmap each),
 // generated ONE frame per file — never batch-loaded. The shared NSCache
@@ -142,10 +150,13 @@ enum ThumbnailPrecachePlanner {
 /// passed by value. `likelyUnanalyzable` is the record's derived
 /// `isLikelyUnanalyzable` (stored needsReformat OR the canonical
 /// legacy-codec list), evaluated at snapshot time on the main actor.
+/// `durationSeconds` (ffprobe-stamped at scan time) feeds the
+/// best-frame candidate plan — preview time never re-probes.
 private typealias PrecacheItem = (path: String,
                                   container: String,
                                   videoCodec: String,
-                                  likelyUnanalyzable: Bool)
+                                  likelyUnanalyzable: Bool,
+                                  durationSeconds: Double)
 
 /// Owns the single in-flight prewarm task. Owned by VideoScanModel so the
 /// catalog view, scan lifecycle, and future callers share one instance.
@@ -189,7 +200,8 @@ final class ThumbnailPrecacher {
         // Snapshot Sendable data only — paths + routing fields, not
         // VideoRecord instances (preview routing, 2026-07-26).
         let items: [PrecacheItem] = candidates.map {
-            ($0.fullPath, $0.container, $0.videoCodec, $0.isLikelyUnanalyzable)
+            ($0.fullPath, $0.container, $0.videoCodec, $0.isLikelyUnanalyzable,
+             $0.durationSeconds)
         }
         // Both stores are Sendable (lock-guarded); grab the references
         // on the main actor so the detached task never touches the model
@@ -227,15 +239,24 @@ final class ThumbnailPrecacher {
                     await MainActor.run { [weak model] in
                         model?.storePrecachedThumbnail(diskHit, forPath: item.path)
                     }
-                    return true
+                    // Best-tier entries are terminal. A fast-tier hit is
+                    // published above for instant browsing, then falls
+                    // through so the best-frame generation below
+                    // UPGRADES it in both caches.
+                    if diskCache.storedTier(path: item.path,
+                                            mtime: signature.mtime,
+                                            size: signature.size) == .best {
+                        return true
+                    }
                 }
                 let cg: CGImage
                 do {
-                    cg = try await VideoScanModel.renderThumbnailCGImage(
+                    cg = try await VideoScanModel.renderBestPreviewCGImage(
                         path: item.path,
                         container: item.container,
                         videoCodec: item.videoCodec,
-                        likelyUnanalyzable: item.likelyUnanalyzable)
+                        likelyUnanalyzable: item.likelyUnanalyzable,
+                        durationSeconds: item.durationSeconds)
                 } catch {
                     // Remember GENUINE failures so neither future runs nor
                     // the interactive path pays for them again — but never
@@ -255,16 +276,15 @@ final class ThumbnailPrecacher {
                     return false
                 }
                 if Task.isCancelled { return false }
-                // Write-through to disk (already off-main here). Tier
-                // "fast": this prewarm still rips the single 0.5 s frame;
-                // the content-scored "best" tier is the background
-                // best-frame pass's job.
+                // Write-through to disk (already off-main here) at tier
+                // "best" — the store reaps any superseded fast payload
+                // for the same key.
                 if let signature {
                     diskCache.store(cg,
                                     path: item.path,
                                     mtime: signature.mtime,
                                     size: signature.size,
-                                    tier: .fast)
+                                    tier: .best)
                 }
                 await MainActor.run { [weak model] in
                     model?.storePrecachedThumbnail(cg, forPath: item.path)
