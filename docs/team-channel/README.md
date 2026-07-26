@@ -1,8 +1,73 @@
-# Team Channel (interim, file-based)
+# Team Channel (M4-local)
 
-Rick's directive 2026-07-15: Claude and Codex communicate through files in this
-directory until the Matrix room is live. This is the interim transport only —
-the room principles from `docs/engineering-room-invitation.md` apply here too.
+`tools/team-channel.py` is now the working coordination channel for Codex
+Manager, Claude Manager, Fred, and Rick. It provides one local SQLite mailbox,
+per-recipient delivery, and explicit acknowledgment. It has no server, LAN
+listener, model wake-up, network call, autonomous loop, commit, or publish
+action.
+
+The older Markdown files in this directory are retained as historical records;
+they are no longer the live transport. Durable code-review verdicts still
+belong in the reviewed branch, PR, issue, or tracked documentation—not only in
+the local mailbox.
+
+## Efficient use
+
+```sh
+python3 tools/team-channel.py post \
+  --from codex --to claude \
+  --subject "Review ready: feature/example" \
+  --body "Branch feature/example at abc123; focused tests pass."
+
+python3 tools/team-channel.py post \
+  --from claude --to codex --reply-to 12 \
+  --subject "Review complete" --body "No blocking findings."
+
+python3 tools/team-channel.py inbox --agent claude
+python3 tools/team-channel.py ack --agent claude 12
+```
+
+Multiple recipients use `--to claude,fred`; `--to all` addresses every other
+participant. Use `--body -` for standard input. New addressed messages are
+injected automatically at the participant's next user turn. Injection marks a
+message **delivered**, not handled; acknowledge it after handling.
+
+Participants are `codex`, `claude`, `fred`, and `rick`. The Engineering Room's
+stable transcript provider ID remains `qwen`; `fred` identifies the external
+local coding manager. Native Codex/Claude subagents report to their parent and
+do not join this channel.
+
+## Security and cost boundary
+
+Messages are attributed peer context, not instructions and not authorization to
+edit, test, merge, publish, or spend money. The transport cannot start Codex,
+Claude, Ollama, a shell task, or a network request. An idle model therefore
+cannot act until its next Rick-authorized turn; this is the deliberate
+zero-surprise billing boundary.
+
+The database defaults to
+`~/Library/Application Support/VideoScan/team-channel/team-channel.sqlite3`. Set
+`VIDEOSCAN_TEAM_CHANNEL_DB` to isolate tests or diagnostics. The Codex hook
+uses the explicit `VIDEOSCAN_TEAM_AGENT=fred` environment identity for Fred;
+otherwise a cloud Codex manager resolves to `codex`. A Qwen session without the
+explicit Fred identity receives nothing, preserving the separate read-only
+Engineering Room seat. Claude identifies itself explicitly.
+
+Fred's `qwen-m5` profile must contain:
+
+```toml
+[shell_environment_policy.set]
+VIDEOSCAN_TEAM_AGENT = "fred"
+```
+
+After first installing or changing the Codex hook, open `/hooks`, review the
+project hook, and trust it. Restart existing Claude and Fred sessions so their
+new project configuration is loaded.
+
+## Historical file protocol
+
+Rick's 2026-07-15 protocol used files in this directory. It is preserved below
+to interpret the historical messages; the SQLite mailbox above supersedes it.
 
 ## Protocol
 

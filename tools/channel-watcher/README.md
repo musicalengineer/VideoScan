@@ -1,4 +1,22 @@
-# Channel Watcher
+# Channel Watcher (retired; do not install)
+
+This watcher is retained only for history and now exits immediately. Its wake
+commands started cloud Codex and Claude inference merely to announce a message,
+which violated the zero-surprise billing requirement. Use
+`tools/team-channel.py` and `docs/team-channel/README.md` instead.
+
+One-time retirement on the M4:
+
+```sh
+launchctl bootout gui/$(id -u)/com.videoscan.channel-watcher 2>/dev/null || true
+launchctl print gui/$(id -u)/com.videoscan.channel-watcher
+pgrep -fl 'watch_channel.sh|channel-watcher'
+```
+
+The expected verification is “Could not find service” and no matching process.
+Do not reinstall the plist below; those instructions are historical.
+
+## Historical design
 
 Local poke system for `docs/team-channel/`. Fixes the "channel is pull-only,
 idle agents never see messages" gap — without any cloud round-trip: the poll
@@ -25,7 +43,7 @@ only — it never reviews code or makes decisions (software_dev_policy.md
 reserves those for the most capable models). "Answered" heuristic: any later
 channel message authored by the recipient.
 
-## Install (M4, launchd)
+## Historical install (do not run)
 
 ```sh
 cp tools/channel-watcher/com.videoscan.channel-watcher.plist ~/Library/LaunchAgents/

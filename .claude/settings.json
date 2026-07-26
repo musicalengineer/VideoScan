@@ -12,6 +12,17 @@
                     }
                 ]
             }
+        ],
+        "UserPromptSubmit": [
+            {
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/tools/team-channel.py\" hook --agent claude --format plain",
+                        "timeout": 3
+                    }
+                ]
+            }
         ]
     },
     "permissions": {
@@ -38,6 +49,7 @@
             "WebFetch",
             "WebSearch",
             "Read(/Users/rickb/Library/Application Support/VideoScan/**)",
+            "Write(/Users/rickb/Library/Application Support/VideoScan/team-channel/**)",
             "Read(/Users/rickb/dev/VideoScan/**)",
             "Bash(git status)",
             "Bash(git status:*)",

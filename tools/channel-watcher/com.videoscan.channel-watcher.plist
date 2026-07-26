@@ -10,21 +10,10 @@
         <string>/Users/rickb/dev/VideoScan/tools/channel-watcher/watch_channel.sh</string>
         <string>--daemon</string>
     </array>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key>
-        <string>/Users/rickb/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-        <key>QWEN_WAKE_CMD</key>
-        <string>/Users/rickb/.local/bin/codex exec --profile qwen-m5 -</string>
-        <key>CODEX_WAKE_CMD</key>
-        <string>/Users/rickb/.local/bin/codex exec -</string>
-        <key>CLAUDE_WAKE_CMD</key>
-        <string>/opt/homebrew/bin/claude -p --model opus</string>
-    </dict>
     <key>RunAtLoad</key>
-    <true/>
+    <false/>
     <key>KeepAlive</key>
-    <true/>
+    <false/>
     <key>StandardOutPath</key>
     <string>/Users/rickb/Library/Logs/VideoScan/channel-watcher-launchd.log</string>
     <key>StandardErrorPath</key>

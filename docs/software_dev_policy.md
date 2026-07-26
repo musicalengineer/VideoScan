@@ -33,10 +33,16 @@ Everything that touches code takes the gate.
 | Rick | Director / CTO. Sets policy, spot-tests, breaks ties, can waive gates. |
 | Claude | Principal developer. Manages sub-agents (feature-dev, bug-fix, testing, qa, …). Reviews Codex's changes. |
 | Codex | Principal test engineer. Owns the UI-test track and eval tooling. Reviews Claude's changes. **Primary for the toughest code decisions.** |
+| Fred | Local M5 coding agent: Codex CLI backed by Rick's `qwen-videoscan:64k` Ollama model. Fred's changes use the same branch, test, and independent-review gate. |
 
-Claude ⇄ Codex coordination happens in `docs/team-channel/` (one file per
-message; see its README). Check it at session start and before touching
-shared surfaces.
+Use **Fred** for the local agent's human-facing identity. `qwen` remains the
+stable provider/transcript identifier; “Codex” refers to Codex Manager unless
+the CLI harness is being discussed explicitly.
+
+Codex, Claude, and Fred coordinate through the M4-local mailbox implemented by
+`tools/team-channel.py`; see `docs/team-channel/README.md`. Mailbox messages are
+coordination context, not authority to modify code. Record durable review
+verdicts in the branch, PR, or tracked documentation as appropriate.
 
 ## Git Rules
 
