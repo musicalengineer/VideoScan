@@ -29,6 +29,25 @@
 //     entirely — holdout answers must never touch model/candidate state.
 //   • Resume — opening lands on the first unanswered row; answered rows
 //     are skipped (Back can revisit/edit them).
+//
+// HDD PERFORMANCE (fix/review-sheet-performance, 2026-07-26): review
+// media lives on the LaCie USB HDD. Three changes keep the pane usable
+// there:
+//   • Thumbnails go through the ROUTED renderer (ReviewThumbnailRenderer
+//     → shared PreviewFrameRouter decision + AVF watchdog + ffmpeg
+//     fallback, midpoint framing when the catalog knows the duration)
+//     instead of the old private AVF-only generator. Catalog media
+//     metadata (container/codec/duration) is allowed under the blind
+//     contract — it is not detection/scoring data.
+//   • NO blocking I/O on the main actor: the per-navigation fileExists
+//     stat and the per-answer CSV reload+rewrite both run in background
+//     tasks; answers are optimistic (advance immediately) with writes
+//     STRICTLY serialized in click order via a task chain, and each
+//     write still merges onto fresh disk state inside
+//     HoldoutReviewQueue.recordAnswer (QA-gated semantic, unchanged).
+//   • Read-ahead + spindle keepalive (HoldoutReadAhead.swift) warm the
+//     next pending files and keep the LaCie from parking its heads
+//     between answers.
 
 import AVKit
 import AppKit
@@ -106,13 +125,57 @@ struct ConfirmPersonSheet: View {
     /// Notes draft for the CURRENT row — prefilled from the row when
     /// navigating so Back-and-edit round-trips cleanly.
     @State private var holdoutNotes: String = ""
-    /// stat() result for the current row's file, computed on navigation
-    /// (not in the view body — no file I/O per render).
+    /// stat() result for the current row's file. Computed in a BACKGROUND
+    /// task on navigation (never in the view body, never on the main
+    /// actor — a stat against a spun-down USB HDD can stall for seconds).
+    /// Optimistically true while the stat is in flight.
     @State private var holdoutReachable: Bool = true
     @State private var holdoutSaveError: String?
     @State private var holdoutAnsweredThisSession: Int = 0
 
+    // MARK: HDD-performance state (fix/review-sheet-performance)
+
+    /// True when thumbnail generation FAILED for the current row — shows
+    /// the placeholder instead of an eternal spinner.
+    @State private var thumbnailFailed: Bool = false
+    /// Background stat() for the current row (cancelled on navigation).
+    @State private var reachabilityTask: Task<Void, Never>?
+    /// Tail of the serialized answer-write chain. Each new answer chains
+    /// onto the previous task, so CSV read-modify-writes execute strictly
+    /// one at a time, in click order — two quick answers can never
+    /// interleave. Deliberately NOT cancelled on dismiss: queued answers
+    /// must reach the CSV.
+    @State private var holdoutWriteChain: Task<Void, Never>?
+    /// reviewIds of WAS-PENDING answers whose background write hasn't
+    /// committed yet. Used to (a) keep navigation from revisiting a row
+    /// the user just answered, (b) show optimistic answered/pending
+    /// counts. The in-memory queue itself is only mutated after the
+    /// durable write succeeds (WAL discipline, QA 2026-07-25 minor 1).
+    @State private var inFlightAnswerIds: Set<String> = []
+    /// Catalog MEDIA metadata (container/codec/duration) by fullPath for
+    /// the rows/candidates of this session — routing input for the
+    /// thumbnail renderer. Built once per session (one pass over
+    /// records), never in the view body. Media facts only — no
+    /// detection/scoring data crosses into the blind pane.
+    @State private var mediaMetaByPath: [String: HoldoutMediaMeta] = [:]
+    /// Read-ahead: warms the next pending files (head+tail bytes) and
+    /// pre-generates the next thumbnail, one file at a time.
+    @State private var prefetcher = HoldoutReviewPrefetcher()
+    /// Keeps the LaCie spindle from head-parking between answers.
+    @State private var keepalive = HoldoutSpindleKeepalive()
+
     private var isHoldout: Bool { holdoutQueue != nil }
+
+    /// Pending/answered counts adjusted for in-flight background writes,
+    /// so the header and done pane tick immediately on an answer (the
+    /// authoritative queue state follows when the write commits).
+    private var holdoutEffectivePending: Int {
+        max(0, (holdout?.pendingCount ?? 0) - inFlightAnswerIds.count)
+    }
+    private var holdoutEffectiveAnswered: Int {
+        guard let q = holdout else { return 0 }
+        return q.rows.count - holdoutEffectivePending
+    }
 
     /// Seeds holdout-mode display state at construction so the FIRST
     /// body evaluation already renders the right pane — with the old
@@ -155,7 +218,16 @@ struct ConfirmPersonSheet: View {
         .onAppear {
             if isHoldout { startHoldout() } else { prepareSetup() }
         }
-        .onDisappear { thumbnailLoadTask?.cancel() }
+        .onDisappear {
+            thumbnailLoadTask?.cancel()
+            reachabilityTask?.cancel()
+            prefetcher.cancelAll()
+            keepalive.stop()
+            // holdoutWriteChain is NOT cancelled: any queued answers
+            // still land in the CSV (each write is a self-contained
+            // merge-onto-fresh-disk snapshot — nothing here references
+            // dismantled view state).
+        }
     }
 
     // MARK: - Header
@@ -176,7 +248,10 @@ struct ConfirmPersonSheet: View {
             }
             Spacer()
             if isHoldout, let q = holdout {
-                Text("\(q.answeredCount) of \(q.rows.count) answered")
+                // Effective counts: an optimistically advanced answer
+                // ticks the header immediately even while its serialized
+                // background write is still in flight.
+                Text("\(holdoutEffectiveAnswered) of \(q.rows.count) answered")
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(.secondary)
             } else if phase == .labeling && !candidates.isEmpty {
@@ -245,6 +320,18 @@ struct ConfirmPersonSheet: View {
                         .resizable()
                         .aspectRatio(contentMode: .fit)
                         .cornerRadius(8)
+                } else if thumbnailFailed {
+                    // Generation failed (routed AVF + ffmpeg both struck
+                    // out) — show a static placeholder, never an eternal
+                    // spinner. The video itself may still play fine in
+                    // QuickTime below.
+                    VStack(spacing: 6) {
+                        Image(systemName: "film")
+                            .font(.system(size: 28))
+                        Text("No preview")
+                            .font(.caption)
+                    }
+                    .foregroundColor(.secondary)
                 } else {
                     ProgressView()
                         .controlSize(.small)
@@ -527,13 +614,16 @@ struct ConfirmPersonSheet: View {
     }
 
     private var holdoutDonePane: some View {
+        // Effective counts throughout: a just-answered last row shows
+        // "all answered" immediately, even while its serialized write is
+        // still committing in the background.
         VStack(spacing: 10) {
-            Image(systemName: (holdout?.pendingCount ?? 0) == 0
+            Image(systemName: holdoutEffectivePending == 0
                   ? "checkmark.seal.fill" : "hourglass")
                 .font(.system(size: 36))
-                .foregroundColor((holdout?.pendingCount ?? 0) == 0 ? .green : .orange)
+                .foregroundColor(holdoutEffectivePending == 0 ? .green : .orange)
             if let q = holdout {
-                if q.pendingCount == 0 {
+                if holdoutEffectivePending == 0 {
                     Text("All \(q.rows.count) videos answered")
                         .font(.headline)
                     Text("The review CSV is complete \u{2014} nothing further to do here. The grading side takes it from the file; your answers never touch the model from this app.")
@@ -542,7 +632,7 @@ struct ConfirmPersonSheet: View {
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 440)
                 } else {
-                    Text("\(q.pendingCount) still pending")
+                    Text("\(holdoutEffectivePending) still pending")
                         .font(.headline)
                     Text("You skipped some \u{2014} the Review badge stays up until every row has an answer. Reopen anytime; you'll land on the first unanswered video.")
                         .font(.callout)
@@ -550,7 +640,7 @@ struct ConfirmPersonSheet: View {
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 440)
                     Button("Continue Reviewing") {
-                        if let idx = holdout?.firstPendingIndex {
+                        if let idx = firstPendingIndexSkippingInFlight() {
                             holdoutGo(to: idx)
                             phase = .labeling
                         }
@@ -592,8 +682,15 @@ struct ConfirmPersonSheet: View {
         do {
             let fresh = try snapshot.freshCopyFromDisk()
             holdout = fresh
+            // Catalog MEDIA metadata for the queue's files, one pass over
+            // records (media facts only — the blind pane never sees
+            // detection/scoring data).
+            buildMediaMeta(for: Set(fresh.rows.map(\.fullPath)))
             if let idx = fresh.firstPendingIndex {
                 phase = .labeling
+                // Spindle keepalive for the whole labeling session — see
+                // HoldoutSpindleKeepalive for the head-park rationale.
+                keepalive.start()
                 holdoutGo(to: idx)
             } else {
                 phase = .summary
@@ -606,43 +703,138 @@ struct ConfirmPersonSheet: View {
     }
 
     /// Navigate to a row: reset the thumbnail, prefill the notes draft,
-    /// and stat the file once (kept out of the view body).
+    /// and kick off the background stat + thumbnail load. NO synchronous
+    /// file I/O here — a fileExists against a spun-down USB HDD can
+    /// stall the main thread for seconds, which was navigation bug #2 of
+    /// the LaCie review slowness (2026-07-26).
     private func holdoutGo(to idx: Int) {
         guard let q = holdout, q.rows.indices.contains(idx) else { return }
         thumbnailLoadTask?.cancel()
+        reachabilityTask?.cancel()
         thumbnail = nil
+        thumbnailFailed = false
         holdoutIndex = idx
         holdoutNotes = q.rows[idx].notes
-        holdoutReachable = FileManager.default.fileExists(atPath: q.rows[idx].fullPath)
-        if holdoutReachable {
-            loadThumbnail(path: q.rows[idx].fullPath)
+        let path = q.rows[idx].fullPath
+        keepalive.setCurrentPath(path)
+
+        // Optimistic: render as reachable immediately; the background
+        // stat corrects to the offline pane if the file is gone. The
+        // thumbnail load starts right away — on a spun-up disk it wins;
+        // on a missing file it fails fast and the stat verdict lands.
+        holdoutReachable = true
+        reachabilityTask = Task { @MainActor in
+            let exists = await Self.statFileExists(path)
+            guard !Task.isCancelled, holdoutIndex == idx else { return }
+            holdoutReachable = exists
+            if !exists {
+                thumbnailLoadTask?.cancel()
+                thumbnail = nil
+            }
         }
+        loadThumbnail(path: path)
     }
 
-    /// Record yes/no + notes for the current row. Write-through: the CSV
-    /// on disk is updated before we advance, so a crash loses nothing.
+    /// stat() off the main actor (house convention: @concurrent so the
+    /// blocking call can't inherit the caller's actor).
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    private nonisolated static func statFileExists(_ path: String) async -> Bool {
+        FileManager.default.fileExists(atPath: path)
+    }
+
+    /// Record yes/no + notes for the current row. Still write-through —
+    /// every answer is durably in the CSV moments after the click — but
+    /// the CSV reload+rewrite now runs OFF the main actor (bug #2:
+    /// synchronous Data(contentsOf:) + atomic rewrite per answer stalled
+    /// the UI on slow disks). The UI advances optimistically; writes are
+    /// chained so they execute strictly one at a time in click order
+    /// (two quick answers can never interleave the read-modify-write),
+    /// and each write STILL merges onto a fresh disk load inside
+    /// HoldoutReviewQueue.recordAnswer — the QA-gated semantic (commit
+    /// 65fbfcf) is untouched, only the executor changed.
     private func holdoutAnswer(_ confirm: String) {
-        guard var q = holdout, q.rows.indices.contains(holdoutIndex) else { return }
+        guard let q = holdout, q.rows.indices.contains(holdoutIndex) else { return }
         let row = q.rows[holdoutIndex]
+        let notes = holdoutNotes
+        let snapshot = q          // Sendable value copy for the writer
+        let wasPending = row.isPending
+        let filename = row.filename
+
+        if wasPending { inFlightAnswerIds.insert(row.reviewId) }
+        holdoutSaveError = nil
+
+        let previous = holdoutWriteChain
+        holdoutWriteChain = Task { @MainActor in
+            _ = await previous?.value   // strict FIFO across answers
+            let result = await Self.performAnswerWrite(
+                queue: snapshot, reviewId: row.reviewId,
+                confirm: confirm, notes: notes)
+            // Commit-after-write, on the main actor: memory only ever
+            // reflects what is durably on disk (WAL discipline).
+            switch result {
+            case .success(let updated):
+                holdout = updated
+                if wasPending { holdoutAnsweredThisSession += 1 }
+            case .failure(let error):
+                holdoutSaveError = "Could not save answer for \(filename): \(error.localizedDescription) \u{2014} the row is still pending; use Back to re-answer."
+            }
+            if wasPending { inFlightAnswerIds.remove(row.reviewId) }
+        }
+        holdoutAdvance()
+    }
+
+    /// The CSV read-modify-write, off the main actor. Delegates entirely
+    /// to HoldoutReviewQueue.recordAnswer, which reloads the CSV fresh
+    /// from disk as the merge base — the snapshot's staleness cannot
+    /// clobber external edits (QA 2026-07-25 gate finding 1; regression
+    /// tests pin it).
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    private nonisolated static func performAnswerWrite(
+        queue: HoldoutReviewQueue, reviewId: String,
+        confirm: String, notes: String
+    ) async -> Result<HoldoutReviewQueue, any Error> {
+        var q = queue
         do {
-            try q.recordAnswer(reviewId: row.reviewId, confirm: confirm, notes: holdoutNotes)
-            holdout = q
-            holdoutSaveError = nil
-            // A re-answer via Back edits an existing answer — it doesn't
-            // grow the session's answered tally.
-            if row.isPending { holdoutAnsweredThisSession += 1 }
-            holdoutAdvance()
+            try q.recordAnswer(reviewId: reviewId, confirm: confirm, notes: notes)
+            return .success(q)
         } catch {
-            // Leave the user on this row — nothing was recorded.
-            holdoutSaveError = "Could not save answer: \(error.localizedDescription)"
+            return .failure(error)
         }
     }
 
-    /// Only called after a successful answer, so the current row is
-    /// never pending here — either another row is, or we're done.
+    /// Next/first pending row EXCLUDING rows whose answer write is still
+    /// in flight — the in-memory queue marks those pending until the
+    /// durable write commits, but navigation must not bounce the user
+    /// back onto a row they just answered.
+    private func nextPendingIndexSkippingInFlight(after idx: Int,
+                                                  in q: HoldoutReviewQueue) -> Int? {
+        let n = q.rows.count
+        guard n > 1 else { return nil }
+        for step in 1..<n {
+            let i = (idx + step) % n
+            let r = q.rows[i]
+            if r.isPending && !inFlightAnswerIds.contains(r.reviewId) { return i }
+        }
+        return nil
+    }
+
+    private func firstPendingIndexSkippingInFlight() -> Int? {
+        guard let q = holdout else { return nil }
+        return q.rows.firstIndex {
+            $0.isPending && !inFlightAnswerIds.contains($0.reviewId)
+        }
+    }
+
+    /// Called right after an answer is enqueued (or a Skip) — the current
+    /// row is either in flight or deliberately left pending; move to the
+    /// next actionable one.
     private func holdoutAdvance() {
         guard let q = holdout else { return }
-        if let next = q.nextPendingIndex(after: holdoutIndex) {
+        if let next = nextPendingIndexSkippingInFlight(after: holdoutIndex, in: q) {
             holdoutGo(to: next)
         } else {
             phase = .summary
@@ -651,13 +843,60 @@ struct ConfirmPersonSheet: View {
 
     private func holdoutSkip() {
         guard let q = holdout else { return }
-        if let next = q.nextPendingIndex(after: holdoutIndex) {
+        if let next = nextPendingIndexSkippingInFlight(after: holdoutIndex, in: q) {
             holdoutGo(to: next)
         } else {
             // Nothing else pending — show the "still pending" done pane
             // (this row remains unanswered by choice).
             phase = .summary
         }
+    }
+
+    /// Build the fullPath → media-metadata map for this session's files
+    /// in ONE pass over the catalog (never per navigation, never in a
+    /// view body). Files not in the catalog simply have no entry — the
+    /// renderer then takes the shared default (AVF watchdog + ffmpeg
+    /// fallback) path.
+    private func buildMediaMeta(for paths: Set<String>) {
+        guard !paths.isEmpty else {
+            mediaMetaByPath = [:]
+            return
+        }
+        var map: [String: HoldoutMediaMeta] = [:]
+        map.reserveCapacity(paths.count)
+        for rec in catalogModel.records where paths.contains(rec.fullPath) {
+            map[rec.fullPath] = HoldoutMediaMeta(
+                container: rec.container,
+                videoCodec: rec.videoCodec,
+                durationSeconds: rec.durationSeconds,
+                likelyUnanalyzable: rec.isLikelyUnanalyzable)
+        }
+        mediaMetaByPath = map
+    }
+
+    /// Queue read-ahead for the next few pending rows (holdout mode
+    /// only). Called from the thumbnail-load completion so the disk sees
+    /// strictly one reader at a time — the prefetcher additionally
+    /// serializes its own batches internally.
+    private func scheduleHoldoutPrefetch() {
+        guard isHoldout, let q = holdout, phase == .labeling else { return }
+        var entries: [HoldoutReviewPrefetcher.Entry] = []
+        let n = q.rows.count
+        guard n > 0 else { return }
+        var i = holdoutIndex
+        for _ in 0..<max(n - 1, 0) {
+            i = (i + 1) % n
+            let r = q.rows[i]
+            guard r.isPending, !inFlightAnswerIds.contains(r.reviewId) else { continue }
+            entries.append(HoldoutReviewPrefetcher.Entry(
+                path: r.fullPath,
+                meta: mediaMetaByPath[r.fullPath],
+                // Pre-decode a thumbnail only for the NEXT item; bytes
+                // warming covers the rest of the window.
+                wantsThumbnail: entries.isEmpty))
+            if entries.count >= HoldoutReviewPrefetcher.lookahead { break }
+        }
+        if !entries.isEmpty { prefetcher.schedule(entries: entries) }
     }
 
     // MARK: - Round lifecycle
@@ -694,6 +933,9 @@ struct ConfirmPersonSheet: View {
         candidates = Array(onlineOnly.prefix(roundSize))
         currentIndex = 0
         phase = .labeling
+        // Media metadata for thumbnail routing (confirm mode reads the
+        // catalog anyway, so this leaks nothing new).
+        buildMediaMeta(for: Set(candidates.map(\.recordPath)))
         if !candidates.isEmpty {
             loadThumbnail(path: candidates[0].recordPath)
         }
@@ -804,37 +1046,67 @@ struct ConfirmPersonSheet: View {
     }
 
     // MARK: - Thumbnail loading
+    //
+    // ROUTED (fix/review-sheet-performance, 2026-07-26). The old private
+    // generator here was AVF-only with NO routing/deadline/fallback and
+    // — worse — awaited asset.load(.duration) first, which on an
+    // AVF-hostile or moov-at-end file on the LaCie meant minutes of
+    // container grinding before the midpoint request even started. Now:
+    // catalog metadata routes the decoder up front, AVF runs under the
+    // shared watchdog, ffmpeg is the fallback, failures show a
+    // placeholder and land in the model's negative cache.
 
     private func loadThumbnail(path: String) {
+        thumbnailFailed = false
+        // Read-ahead may have pre-decoded this exact frame — instant.
+        if let cg = prefetcher.cachedThumbnail(for: path) {
+            thumbnail = NSImage(cgImage: cg, size: .zero)
+            scheduleHoldoutPrefetch()
+            return
+        }
+        let meta = mediaMetaByPath[path]
+        // Captured on the main actor; the store itself is the shared
+        // lock-guarded negative cache (same instance the catalog preview
+        // pane uses, so a file that failed THERE skips the retry HERE).
+        let failureStore = catalogModel.thumbnailFailureStore
         thumbnailLoadTask = Task { @MainActor in
-            let img = await Self.generateThumbnail(for: path)
-            if !Task.isCancelled {
-                self.thumbnail = img
+            let img = await Self.loadRoutedThumbnail(path: path, meta: meta,
+                                                     failureStore: failureStore)
+            guard !Task.isCancelled else { return }
+            if let img {
+                self.thumbnail = NSImage(cgImage: img, size: .zero)
+            } else {
+                self.thumbnail = nil
+                self.thumbnailFailed = true
             }
+            // Start read-ahead only once the current item's disk work is
+            // done — one reader at a time keeps the HDD sequential.
+            scheduleHoldoutPrefetch()
         }
     }
 
-    private static func generateThumbnail(for path: String) async -> NSImage? {
-        let url = URL(fileURLWithPath: path)
-        let asset = AVURLAsset(url: url)
-        let generator = AVAssetImageGenerator(asset: asset)
-        generator.appliesPreferredTrackTransform = true
-        generator.maximumSize = CGSize(width: 480, height: 270)
-        let durationSeconds: Double
+    /// Negative-cache check + routed render + failure recording, all off
+    /// the main actor (isKnownFailure stats the file).
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    private nonisolated static func loadRoutedThumbnail(
+        path: String, meta: HoldoutMediaMeta?,
+        failureStore: ThumbnailFailureStore
+    ) async -> CGImage? {
+        if failureStore.isKnownFailure(atPath: path) { return nil }
         do {
-            durationSeconds = try await asset.load(.duration).seconds
+            return try await ReviewThumbnailRenderer.render(path: path, meta: meta)
         } catch {
-            return nil
-        }
-        let midpoint = CMTime(seconds: max(durationSeconds * 0.5, 0.5), preferredTimescale: 600)
-        return await withCheckedContinuation { (cont: CheckedContinuation<NSImage?, Never>) in
-            generator.generateCGImageAsynchronously(for: midpoint) { cg, _, _ in
-                if let cg {
-                    cont.resume(returning: NSImage(cgImage: cg, size: .zero))
-                } else {
-                    cont.resume(returning: nil)
-                }
+            // Same exclusions as the catalog path (QA 2026-07-26):
+            // cancellation says nothing about the file, and a missing
+            // ffmpeg binary is an environment failure — neither may
+            // poison the negative cache against a good file.
+            if !(error is CancellationError), !Task.isCancelled,
+               (error as? PreviewFrameError) != .ffmpegUnavailable {
+                failureStore.recordFailure(forPath: path)
             }
+            return nil
         }
     }
 
