@@ -1,0 +1,9 @@
+[shell_environment_policy]
+inherit = "core"
+
+[shell_environment_policy.set]
+PATH = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+
+[sandbox_workspace_write]
+writable_roots = ["/Users/rickb/Library/Application Support/VideoScan/team-channel"]
+network_access = false

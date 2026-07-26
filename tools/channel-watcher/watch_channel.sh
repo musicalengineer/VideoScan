@@ -1,4 +1,9 @@
 #!/bin/zsh
+# RETIRED: model inference must never be used as a notification transport.
+# This file is kept for history and fails closed. Use ../team-channel.py.
+print -u2 -- "channel-watcher is retired; use tools/team-channel.py"
+exit 2
+
 # team-channel watcher — turns a new channel message into a LOCAL poke of the
 # addressed agent. The poll itself costs zero tokens and zero network: it
 # watches the channel directory on disk (both agents write here before
