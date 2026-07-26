@@ -750,6 +750,35 @@ struct RebuildAudioJobRoundTripTests {
         #expect(partialDebris(in: dir).isEmpty)
     }
 
+    // regression: GH #129 — cancel() before start() must not invoke ffmpeg.
+    @Test("cancel before start never begins a rebuild render",
+          .timeLimit(.minutes(2)))
+    func cancelBeforeStartSkipsRender() async throws {
+        try #require(VerifyAudioTestMedia.toolsAvailable)
+        let dir = try VerifyAudioTestMedia.makeScratchDir("rebuild_cancel_before_start")
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let (record, shape, model) = try await makeFixture(in: dir)
+        let marker = dir.appendingPathComponent("renderer_was_invoked")
+        let renderer = dir.appendingPathComponent("witness-renderer.sh")
+        try "#!/bin/sh\n/usr/bin/touch '\(marker.path)'\nexit 1\n"
+            .write(to: renderer, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: renderer.path)
+
+        let job = RebuildAudioJob(record: record, reason: "test", shape: shape,
+                                  model: model, ffmpegPathOverride: renderer.path)
+        job.cancel()
+        job.start()
+        await job.task?.value
+
+        #expect(job.state == .cancelled, "expected cancelled, got \(job.state)")
+        #expect(!FileManager.default.fileExists(atPath: marker.path),
+                "a pre-start cancellation must stop before invoking the renderer")
+        #expect(!FileManager.default.fileExists(atPath: job.outputURL.path))
+        #expect(partialDebris(in: dir).isEmpty)
+    }
+
     @Test("duplicate dispatch against the same record is refused at the MFO layer",
           .timeLimit(.minutes(2)))
     func doubleDispatchRefused() async throws {
