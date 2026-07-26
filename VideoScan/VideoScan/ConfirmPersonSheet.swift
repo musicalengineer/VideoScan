@@ -52,6 +52,13 @@
 import AVKit
 import AppKit
 import SwiftUI
+import os
+
+/// File-scope (not a member) so escaped write-chain tasks can log after
+/// the view is gone. Same category as the queue itself — one trail for
+/// the whole holdout pipeline.
+private let holdoutSheetLog = Logger(subsystem: "Rick-Breen.VideoScan",
+                                     category: "poi.holdout-review")
 
 /// Identifiable wrapper so `.sheet(item:)` can drive the sheet from
 /// PersonFinderView. The id is per-presentation, not per-profile, so
@@ -79,6 +86,9 @@ struct ConfirmPersonSheet: View {
 
     @EnvironmentObject var personFinderModel: PersonFinderModel
     @EnvironmentObject var catalogModel: VideoScanModel
+    /// The badge center — outlives this sheet, so background write
+    /// failures reported to it survive dismissal (QA 2026-07-26 🟠).
+    @EnvironmentObject var holdoutCenter: HoldoutReviewCenter
     @Environment(\.dismiss) private var dismiss
 
     @State private var candidates: [PersonCandidateScore] = []
@@ -159,8 +169,12 @@ struct ConfirmPersonSheet: View {
     /// detection/scoring data crosses into the blind pane.
     @State private var mediaMetaByPath: [String: HoldoutMediaMeta] = [:]
     /// Read-ahead: warms the next pending files (head+tail bytes) and
-    /// pre-generates the next thumbnail, one file at a time.
-    @State private var prefetcher = HoldoutReviewPrefetcher()
+    /// pre-generates the next thumbnail, one file at a time. Created in
+    /// startHoldout (not at property init) so its render closure can
+    /// consult the model's shared negative cache — a known-bad NEXT row
+    /// must not re-attempt a full render on every navigation
+    /// (QA 2026-07-26 🟡 2).
+    @State private var prefetcher: HoldoutReviewPrefetcher?
     /// Keeps the LaCie spindle from head-parking between answers.
     @State private var keepalive = HoldoutSpindleKeepalive()
 
@@ -221,7 +235,7 @@ struct ConfirmPersonSheet: View {
         .onDisappear {
             thumbnailLoadTask?.cancel()
             reachabilityTask?.cancel()
-            prefetcher.cancelAll()
+            prefetcher?.cancelAll()
             keepalive.stop()
             // holdoutWriteChain is NOT cancelled: any queued answers
             // still land in the CSV (each write is a self-contained
@@ -616,17 +630,28 @@ struct ConfirmPersonSheet: View {
     private var holdoutDonePane: some View {
         // Effective counts throughout: a just-answered last row shows
         // "all answered" immediately, even while its serialized write is
-        // still committing in the background.
-        VStack(spacing: 10) {
-            Image(systemName: holdoutEffectivePending == 0
-                  ? "checkmark.seal.fill" : "hourglass")
+        // still committing in the background. But the COMPLETION claim
+        // ("the CSV is complete") is only made once every in-flight
+        // write has actually committed — until then the honest state is
+        // "still saving" (QA 2026-07-26 🟠 c).
+        let fullyCommitted = holdoutEffectivePending == 0 && inFlightAnswerIds.isEmpty
+        return VStack(spacing: 10) {
+            Image(systemName: fullyCommitted ? "checkmark.seal.fill" : "hourglass")
                 .font(.system(size: 36))
-                .foregroundColor(holdoutEffectivePending == 0 ? .green : .orange)
+                .foregroundColor(fullyCommitted ? .green : .orange)
             if let q = holdout {
-                if holdoutEffectivePending == 0 {
+                if fullyCommitted {
                     Text("All \(q.rows.count) videos answered")
                         .font(.headline)
                     Text("The review CSV is complete \u{2014} nothing further to do here. The grading side takes it from the file; your answers never touch the model from this app.")
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 440)
+                } else if holdoutEffectivePending == 0 {
+                    Text("All \(q.rows.count) videos answered")
+                        .font(.headline)
+                    Text("Finishing saving \(inFlightAnswerIds.count) answer\(inFlightAnswerIds.count == 1 ? "" : "s")\u{2026} This view updates when the CSV write completes.")
                         .font(.callout)
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
@@ -682,10 +707,23 @@ struct ConfirmPersonSheet: View {
         do {
             let fresh = try snapshot.freshCopyFromDisk()
             holdout = fresh
+            // A prior session's write failure has done its job once the
+            // user is back in front of the (still-pending) row.
+            holdoutCenter.clearAnswerWriteFailure()
             // Catalog MEDIA metadata for the queue's files, one pass over
             // records (media facts only — the blind pane never sees
             // detection/scoring data).
             buildMediaMeta(for: Set(fresh.rows.map(\.fullPath)))
+            // Prefetch render closure guards on the shared negative
+            // cache — same gate as the interactive path — but does NOT
+            // record failures (best-effort; nil is not a fact about the
+            // file). QA 2026-07-26 🟡 2.
+            let failureStore = catalogModel.thumbnailFailureStore
+            prefetcher = HoldoutReviewPrefetcher(
+                renderThumbnail: { path, meta in
+                    guard !failureStore.isKnownFailure(atPath: path) else { return nil }
+                    return await ReviewThumbnailRenderer.renderOrNil(path: path, meta: meta)
+                })
             if let idx = fresh.firstPendingIndex {
                 phase = .labeling
                 // Spindle keepalive for the whole labeling session — see
@@ -765,6 +803,10 @@ struct ConfirmPersonSheet: View {
         if wasPending { inFlightAnswerIds.insert(row.reviewId) }
         holdoutSaveError = nil
 
+        // Captured HERE (view installed, wrapper resolved) so the escaped
+        // task holds the center CLASS REFERENCE — a failure landing after
+        // dismissal must not go through dead @EnvironmentObject storage.
+        let center = holdoutCenter
         let previous = holdoutWriteChain
         holdoutWriteChain = Task { @MainActor in
             _ = await previous?.value   // strict FIFO across answers
@@ -778,7 +820,15 @@ struct ConfirmPersonSheet: View {
                 holdout = updated
                 if wasPending { holdoutAnsweredThisSession += 1 }
             case .failure(let error):
+                // Three surfaces, because the sheet may already be gone
+                // (QA 2026-07-26 🟠): the in-sheet banner, the log trail,
+                // and the badge center the gallery watches. The row is
+                // still pending on disk — nothing was written — so the
+                // badge count stays honest too.
+                holdoutSheetLog.error("holdout answer write FAILED — file: \(filename, privacy: .public), reviewId: \(row.reviewId, privacy: .public), error: \(error.localizedDescription, privacy: .public)")
                 holdoutSaveError = "Could not save answer for \(filename): \(error.localizedDescription) \u{2014} the row is still pending; use Back to re-answer."
+                center.reportAnswerWriteFailure(
+                    "The answer for \(filename) was not saved (\(error.localizedDescription)). Its row is still pending \u{2014} reopen the review to answer it again.")
             }
             if wasPending { inFlightAnswerIds.remove(row.reviewId) }
         }
@@ -896,7 +946,7 @@ struct ConfirmPersonSheet: View {
                 wantsThumbnail: entries.isEmpty))
             if entries.count >= HoldoutReviewPrefetcher.lookahead { break }
         }
-        if !entries.isEmpty { prefetcher.schedule(entries: entries) }
+        if !entries.isEmpty { prefetcher?.schedule(entries: entries) }
     }
 
     // MARK: - Round lifecycle
@@ -1059,7 +1109,7 @@ struct ConfirmPersonSheet: View {
     private func loadThumbnail(path: String) {
         thumbnailFailed = false
         // Read-ahead may have pre-decoded this exact frame — instant.
-        if let cg = prefetcher.cachedThumbnail(for: path) {
+        if let cg = prefetcher?.cachedThumbnail(for: path) {
             thumbnail = NSImage(cgImage: cg, size: .zero)
             scheduleHoldoutPrefetch()
             return

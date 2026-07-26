@@ -105,6 +105,12 @@ final class HoldoutReviewPrefetcher: @unchecked Sendable {
     private let toucher: any ReviewFileToucher
     private let renderThumbnail: @Sendable (String, HoldoutMediaMeta?) async -> CGImage?
 
+    /// NOTE: the DEFAULT render closure calls the renderer directly with
+    /// no negative-cache gate — production wiring (ConfirmPersonSheet.
+    /// startHoldout) supplies a closure that consults the model's shared
+    /// ThumbnailFailureStore first, so a known-bad next row doesn't
+    /// re-attempt a full render on every navigation (QA 2026-07-26).
+    /// The default exists for tests and keeps this file store-agnostic.
     init(toucher: any ReviewFileToucher = RealReviewFileToucher(),
          renderThumbnail: @escaping @Sendable (String, HoldoutMediaMeta?) async -> CGImage?
             = { await ReviewThumbnailRenderer.renderOrNil(path: $0, meta: $1) }) {

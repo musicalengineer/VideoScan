@@ -445,6 +445,18 @@ final class HoldoutReviewCenter: ObservableObject {
     @Published private(set) var queue: HoldoutReviewQueue?
     @Published private(set) var errorMessage: String?
 
+    /// Most recent background answer-write failure (QA 2026-07-26 🟠).
+    /// The review sheet's serialized writes can fail AFTER the sheet is
+    /// dismissed — codex's grading tooling co-owns the CSV, so a
+    /// mid-session queue regeneration makes queued writes throw
+    /// unknownReviewId — and the sheet's own @State error banner is dead
+    /// by then. Reported here (the badge center outlives the sheet) so
+    /// the People gallery shows a durable warning; the dropped row stays
+    /// pending on disk, so the badge count agrees. Cleared when the
+    /// review sheet next OPENS successfully — the user is back in front
+    /// of the still-pending row, so the warning has done its job.
+    @Published private(set) var answerWriteFailure: String?
+
     private let repoRoot: URL
 
     init(repoRoot: URL = HoldoutReviewQueue.defaultRepoRoot) {
@@ -471,6 +483,18 @@ final class HoldoutReviewCenter: ObservableObject {
     @concurrent
     private static func discover(root: URL) async throws -> HoldoutReviewQueue? {
         try HoldoutReviewQueue.discoverLatest(repoRoot: root)
+    }
+
+    /// See `answerWriteFailure` — called from the review sheet's write
+    /// chain (which holds a strong reference to the center, so a
+    /// post-dismissal failure still lands here).
+    func reportAnswerWriteFailure(_ message: String) {
+        answerWriteFailure = message
+    }
+
+    /// Called when the review sheet opens on a fresh disk load.
+    func clearAnswerWriteFailure() {
+        answerWriteFailure = nil
     }
 
     /// The queue that should light the Review badge on `personName`'s

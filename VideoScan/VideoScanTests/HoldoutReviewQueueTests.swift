@@ -578,6 +578,30 @@ struct HoldoutReviewQueueTests {
         #expect(elapsed < .seconds(8))
     }
 
+    // MARK: - 5b. Center write-failure surface (QA 2026-07-26 🟠)
+
+    /// The review sheet's serialized answer writes can fail AFTER the
+    /// sheet is dismissed (external queue regeneration → unknownReviewId
+    /// on every queued write). The center is the durable surface the
+    /// gallery watches. Pins: report sticks, a badge refresh does NOT
+    /// clear it (refresh runs on every gallery appearance), and only the
+    /// explicit clear — the sheet reopening — removes it.
+    @Test @MainActor func center_answerWriteFailureSurvivesRefreshUntilCleared() async throws {
+        let root = try makeTempDir()   // no queue tree — refresh finds nil
+        let center = HoldoutReviewCenter(repoRoot: root)
+        #expect(center.answerWriteFailure == nil)
+
+        center.reportAnswerWriteFailure("The answer for a.mov was not saved")
+        #expect(center.answerWriteFailure == "The answer for a.mov was not saved")
+
+        await center.refresh()
+        #expect(center.answerWriteFailure == "The answer for a.mov was not saved",
+                "badge refresh must not silently swallow a write-failure trace")
+
+        center.clearAnswerWriteFailure()
+        #expect(center.answerWriteFailure == nil)
+    }
+
     // MARK: - 6. Blindness sensor
 
     /// Pins the POI-leakage contract: the ONLY data the holdout sheet

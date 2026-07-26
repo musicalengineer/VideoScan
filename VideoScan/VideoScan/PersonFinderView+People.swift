@@ -155,6 +155,17 @@ extension PersonFinderView {
                     .accessibilityValue(error)
             }
 
+            // Durable trace of a background answer-write failure — the
+            // review sheet may already be dismissed when a queued write
+            // fails (QA 2026-07-26 🟠). Cleared when the review reopens.
+            if let writeFailure = holdoutReview.answerWriteFailure {
+                Label(writeFailure, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundColor(.red)
+                    .help(writeFailure)
+                    .accessibilityValue(writeFailure)
+            }
+
             if model.savedProfiles.isEmpty {
                 // Empty state — prominent Add Person button
                 VStack(spacing: 10) {
@@ -419,6 +430,9 @@ extension PersonFinderView {
             ConfirmPersonSheet(profile: target.profile, holdoutQueue: target.holdoutQueue)
                 .environmentObject(model)
                 .environmentObject(catalogModel)
+                // Badge center rides along so post-dismissal write
+                // failures have somewhere durable to land.
+                .environmentObject(holdoutReview)
         }
         .sheet(item: $confirmationsTarget) { target in
             ConfirmationsView(profile: target.profile, onConfirmMore: {
