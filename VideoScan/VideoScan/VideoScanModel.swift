@@ -131,6 +131,11 @@ final class VideoScanModel: ObservableObject {
     /// mounted. CatalogContent renders an "Volume Offline" placeholder
     /// instead of trying to load a thumbnail.
     @Published var previewOfflineVolumeName: String?
+    /// True when preview generation FAILED (or negative-cache hit) for the
+    /// CURRENT selection. CatalogContent renders a "NO PREVIEW" placeholder
+    /// instead of an eternal spinner (preview routing, 2026-07-26). Reset
+    /// by clearPreview and on every new selection request.
+    @Published var previewUnavailable: Bool = false
 
     /// Set by an operation that can't proceed because an external tool
     /// is missing (e.g. ffmpeg not installed). The view binds an alert to
@@ -428,6 +433,15 @@ final class VideoScanModel: ObservableObject {
     /// evicts under system memory pressure, and the .memoryPressureAutoPause
     /// observer in init clears it outright when scans hit the RAM floor.
     let thumbnailCache: NSCache<NSString, NSImage> = VideoScanModel.makeThumbnailCache()
+
+    /// Negative cache for preview generation (preview routing, 2026-07-26):
+    /// files that failed to yield a frame, keyed by fullPath with their
+    /// (mtime, size) at failure time — consulted by generateThumbnail and
+    /// the precacher BEFORE attempting, so a known-bad file costs one stat
+    /// instead of a deadline-bounded decode failure every selection. A
+    /// repaired/replaced file (signature mismatch) retries automatically.
+    /// Capped at 10k entries (~2–3 MB worst case) — see ThumbnailFailureStore.
+    let thumbnailFailureStore = ThumbnailFailureStore()
 
     /// Pending debounced thumbnail generation (see requestThumbnailDebounced
     /// in VideoScanModel+Thumbnail). Cancelled and replaced on every
@@ -1008,6 +1022,7 @@ final class VideoScanModel: ObservableObject {
         previewImage = nil
         previewFilename = ""
         previewOfflineVolumeName = nil
+        previewUnavailable = false
         saveCatalogNow()
     }
 
