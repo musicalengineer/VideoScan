@@ -245,6 +245,36 @@ struct BalanceAudioJobTests {
 
     // MARK: Negative — cancel / failure leave nothing
 
+    // regression: GH #129 — cancel() before start() must not invoke ffmpeg.
+    @Test("cancel before start never begins a balance render",
+          .timeLimit(.minutes(2)))
+    func cancelBeforeStartSkipsRender() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let dir = try BalanceAudioTestMedia.makeScratchDir("cancel_before_start")
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let (record, analysis, model) = try await makeFixture(
+            .leftOnly, wrapper: .mp4H264Aac, in: dir)
+        let marker = dir.appendingPathComponent("renderer_was_invoked")
+        let renderer = dir.appendingPathComponent("witness-renderer.sh")
+        try "#!/bin/sh\n/usr/bin/touch '\(marker.path)'\nexit 1\n"
+            .write(to: renderer, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: renderer.path)
+
+        let job = BalanceAudioJob(record: record, analysis: analysis, model: model,
+                                  ffmpegPathOverride: renderer.path)
+        job.cancel()
+        job.start()
+        await job.task?.value
+
+        #expect(job.state == .cancelled, "expected cancelled, got \(job.state)")
+        #expect(!FileManager.default.fileExists(atPath: marker.path),
+                "a pre-start cancellation must stop before invoking the renderer")
+        #expect(!FileManager.default.fileExists(atPath: job.outputURL.path))
+        #expect(partialDebris(in: dir).isEmpty)
+    }
+
     @Test("cancel leaves nothing at the final path and no partial debris",
           .timeLimit(.minutes(2)))
     func cancelLeavesNothing() async throws {

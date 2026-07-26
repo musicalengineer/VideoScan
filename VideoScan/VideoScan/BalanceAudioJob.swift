@@ -403,6 +403,10 @@ final class BalanceAudioJob: MediaFileOperationJob {
     // MARK: Run
 
     private func runBalance() async {
+        guard state != .cancelling else {
+            finishCancelled()
+            return
+        }
         let inputPath = record.fullPath
         let classification = analysis.classification
         // (videoscan.log START line is written by the Center's

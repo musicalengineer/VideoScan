@@ -295,6 +295,10 @@ final class RebuildAudioJob: @MainActor MediaFileOperationJob {
     // MARK: Run
 
     private func runRebuild() async {
+        guard state != .cancelling else {
+            finishCancelled()
+            return
+        }
         let inputPath = record.fullPath
         verifyLog.info("rebuild START: \(self.record.filename, privacy: .public) (\(self.reason, privacy: .public)) → \(self.outputURL.lastPathComponent, privacy: .public)")
 
