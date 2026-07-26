@@ -58,7 +58,7 @@ struct PreviewFrameRouteTests {
     func hostileRoutesToFFmpeg(container: String, codec: String, label: String) {
         #expect(PreviewFrameRouter.previewRoute(container: container,
                                                 videoCodec: codec,
-                                                needsReformat: false) == .ffmpegDirect,
+                                                likelyUnanalyzable: false) == .ffmpegDirect,
                 "\(label): \(container) / \(codec) must never instantiate an AVURLAsset")
     }
 
@@ -75,7 +75,7 @@ struct PreviewFrameRouteTests {
     func friendlyRoutesToAVFoundation(container: String, codec: String) {
         #expect(PreviewFrameRouter.previewRoute(container: container,
                                                 videoCodec: codec,
-                                                needsReformat: false) == .avFoundation)
+                                                likelyUnanalyzable: false) == .avFoundation)
     }
 
     @Test("Container matching is substring-based and case-insensitive")
@@ -87,7 +87,7 @@ struct PreviewFrameRouteTests {
                          "some Matroska variant"] {
             #expect(PreviewFrameRouter.previewRoute(container: spelling,
                                                     videoCodec: "h264",
-                                                    needsReformat: false) == .ffmpegDirect,
+                                                    likelyUnanalyzable: false) == .ffmpegDirect,
                     "container spelling '\(spelling)' must match the matroska token")
         }
     }
@@ -96,13 +96,13 @@ struct PreviewFrameRouteTests {
     func codecCaseInsensitive() {
         #expect(PreviewFrameRouter.previewRoute(container: "QuickTime / MOV",
                                                 videoCodec: "FFV1",
-                                                needsReformat: false) == .ffmpegDirect)
+                                                likelyUnanalyzable: false) == .ffmpegDirect)
         #expect(PreviewFrameRouter.previewRoute(container: "QuickTime / MOV",
                                                 videoCodec: " ffv1 ",
-                                                needsReformat: false) == .ffmpegDirect)
+                                                likelyUnanalyzable: false) == .ffmpegDirect)
         #expect(PreviewFrameRouter.previewRoute(container: "AVI (Audio Video Interleaved)",
                                                 videoCodec: "Indeo5",
-                                                needsReformat: false) == .ffmpegDirect)
+                                                likelyUnanalyzable: false) == .ffmpegDirect)
     }
 
     @Test("needsReformat is a backstop: forces ffmpegDirect even for friendly metadata")
@@ -111,12 +111,12 @@ struct PreviewFrameRouteTests {
         // — the static tables not knowing the codec must not matter.
         #expect(PreviewFrameRouter.previewRoute(container: "QuickTime / MOV",
                                                 videoCodec: "h264",
-                                                needsReformat: true) == .ffmpegDirect)
+                                                likelyUnanalyzable: true) == .ffmpegDirect)
         // And it must NOT flip friendly files when false (guards against
         // an inverted flag).
         #expect(PreviewFrameRouter.previewRoute(container: "QuickTime / MOV",
                                                 videoCodec: "h264",
-                                                needsReformat: false) == .avFoundation)
+                                                likelyUnanalyzable: false) == .avFoundation)
     }
 
     // MARK: - Scale (checklist dimension 2)
@@ -138,7 +138,7 @@ struct PreviewFrameRouteTests {
                 let route = PreviewFrameRouter.previewRoute(
                     container: containers[i % containers.count],
                     videoCodec: codecs[i % codecs.count],
-                    needsReformat: i % 17 == 0)
+                    likelyUnanalyzable: i % 17 == 0)
                 if route == .ffmpegDirect { ffmpegCount += 1 }
             }
         }
@@ -341,7 +341,7 @@ struct ThumbnailFailureStoreTests {
         _ = store.isKnownFailure(atPath: file.path)
         _ = PreviewFrameRouter.previewRoute(container: "Matroska / WebM",
                                             videoCodec: "ffv1",
-                                            needsReformat: false)
+                                            likelyUnanalyzable: false)
         let added = relevantKeys().subtracting(before)
         #expect(added.isEmpty,
                 "preview routing wrote UserDefaults keys: \(added)")

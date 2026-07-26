@@ -58,7 +58,7 @@ struct PreviewFrameMediaMatrixTests {
             path: path,
             container: probedContainer,
             videoCodec: probedCodec,
-            needsReformat: false)
+            likelyUnanalyzable: false)
         // A real decoded frame, scaled within the 480-wide preview cap.
         #expect(cg.width > 0 && cg.height > 0)
         #expect(cg.width <= 480,
@@ -82,7 +82,7 @@ struct PreviewFrameMediaMatrixTests {
             path: path,
             container: "Matroska / WebM",
             videoCodec: "ffv1",
-            needsReformat: false)
+            likelyUnanalyzable: false)
         #expect(cg.width > 0 && cg.height > 0)
     }
 
@@ -115,7 +115,7 @@ struct PreviewFrameMediaMatrixTests {
             path: path,
             container: "Matroska / WebM",
             videoCodec: "ffv1",
-            needsReformat: false)
+            likelyUnanalyzable: false)
         let elapsed = clock.now - start
 
         #expect(cg.width > 0 && cg.height > 0)
