@@ -6,30 +6,26 @@
 // runs on synthetic images from PreviewTestImageSupport — no media, no
 // I/O, deterministic seeds.
 //
-// IMPORTANT FINDING (2026-07-26, testing agent): the file-header claim
-// in PreviewFrameScorer.swift that analog static "scores near-solid LOW
-// just like blue leader and black" is FALSE as implemented. Measured on
-// the replicated algorithm and confirmed against the real one below:
+// FINDING RESOLVED (2026-07-26): the testing agent falsified the
+// original single-scale design's claim that analog static "scores
+// near-solid LOW" — measured combined ≈ 0.058–0.084, up to 8× above
+// the 0.01 threshold, because dominantColorFraction stays low (~0.07–
+// 0.40) for averaged noise. Fixed the same day with the two-scale
+// structure-retention gate (stddev of 8×8 block means over stddev of
+// the 64×64 downsample, entering `combined` SQUARED): noise loses
+// ~√blockArea of its stddev under the second averaging (retention
+// ~0.11–0.14), structure survives it (~0.97–1.0). Re-measured after
+// the fix, sizes 320×240 → 1920×1080:
 //
-//     input (480x270, the real ripped-frame size)   combined
-//     solid blue / solid black                      0.000
-//     grayscale static (VHS snow)                   ~0.059
-//     RGB static                                    ~0.060
-//     two-tone scene                                ~0.260
-//     nearSolidThreshold                            0.010
+//     solid blue / solid black       0.000
+//     grayscale static (VHS snow)    0.0002–0.0013
+//     RGB static                     0.0002–0.0017 (worst 320×240)
+//     two-tone scene                 0.260
+//     smooth gradient                0.373
+//     nearSolidThreshold             0.010
 //
-// The downsample low-pass DOES attenuate the noise variance hard
-// (per-pixel stddev ~74 → luma stddev ~8–16 after the 64×64 draw), but
-// the dominantColorFraction term stays LOW for noise (~0.07–0.40 —
-// averaged colors straddle several 16-level buckets around mid-gray),
-// so `combined` lands ~6× ABOVE the threshold. Static is therefore
-// treated as "content", not leader. Behavioral blast radius today is
-// small (chooseIndex picks the max score, and real scenes outscore
-// static ~4×), but the header's calibration table also claims a murky
-// scene scores ~0.08 — grayscale static at 320×240 measures 0.084, so
-// a static frame CAN outrank a genuinely murky scene on low-res
-// sources. Reported to Manager; the withKnownIssue test below pins the
-// divergence and will flip when the calibration is fixed.
+// The former withKnownIssue pin below is PROMOTED to real assertions
+// covering the size range, per the fix handoff.
 
 import Testing
 import Foundation
@@ -99,22 +95,39 @@ struct PreviewFrameScorerTests {
                 "rgb static stddev \(rgb.lumaStdDev) — the low-pass has stopped averaging")
     }
 
-    @Test("KNOWN ISSUE: static does NOT score near-solid as the design claims")
-    func staticNearSolidClaimIsCurrentlyFalse() throws {
-        // PreviewFrameScorer.swift's header claims static "scores
-        // near-solid LOW just like blue leader and black". Measured:
-        // combined ≈ 0.06 at 480×270 — 6× ABOVE the 0.01 threshold,
-        // because dominantColorFraction stays low for averaged noise.
-        // withKnownIssue = expected-failure marker (like GTest's
-        // DISABLED_ prefix, but it FAILS the build the day the issue
-        // stops reproducing — forcing this pin to be promoted to a real
-        // assertion when the calibration is fixed).
-        withKnownIssue("scorer calibration: static clears nearSolidThreshold — reported to Manager 2026-07-26") {
-            let gray = try #require(PreviewFrameScorer.score(
-                PreviewTestImages.grayNoise(seed: 42)))
-            #expect(gray.combined <= PreviewFrameScorer.nearSolidThreshold,
-                    "gray static combined \(gray.combined) vs threshold \(PreviewFrameScorer.nearSolidThreshold)")
-        }
+    @Test("static scores near-solid across source sizes (promoted from withKnownIssue)",
+          arguments: [(320, 240), (480, 270), (1920, 1080)])
+    func staticScoresNearSolid(width: Int, height: Int) throws {
+        // Formerly a withKnownIssue pin (calibration falsified
+        // 2026-07-26); promoted after the two-scale structure-retention
+        // fix. 320×240 is the worst case — least pre-averaging in the
+        // 64×64 draw, hence the highest base score — measured 0.0013
+        // (gray) / 0.0017 (rgb) against the 0.01 threshold.
+        let gray = try #require(PreviewFrameScorer.score(
+            PreviewTestImages.grayNoise(seed: 42, width: width, height: height)))
+        #expect(gray.combined <= PreviewFrameScorer.nearSolidThreshold,
+                "gray static \(width)x\(height) combined \(gray.combined) vs threshold \(PreviewFrameScorer.nearSolidThreshold)")
+        let rgb = try #require(PreviewFrameScorer.score(
+            PreviewTestImages.rgbNoise(seed: 7, width: width, height: height)))
+        #expect(rgb.combined <= PreviewFrameScorer.nearSolidThreshold,
+                "rgb static \(width)x\(height) combined \(rgb.combined) vs threshold \(PreviewFrameScorer.nearSolidThreshold)")
+        // The component that closes the gate: noise must NOT retain its
+        // variance under the second averaging.
+        #expect(gray.structureRetention < 0.3,
+                "gray static retention \(gray.structureRetention) — the two-scale gate has stopped closing")
+    }
+
+    @Test("scenes retain structure under the second averaging (retention ≈ 1)")
+    func scenesRetainStructure() throws {
+        // The other half of the two-scale contract: content's retention
+        // must stay near 1 or the squared gate would start suppressing
+        // real frames.
+        let scene = try #require(PreviewFrameScorer.score(PreviewTestImages.twoTone()))
+        let grad = try #require(PreviewFrameScorer.score(PreviewTestImages.gradient()))
+        #expect(scene.structureRetention > 0.9,
+                "two-tone retention \(scene.structureRetention)")
+        #expect(grad.structureRetention > 0.9,
+                "gradient retention \(grad.structureRetention)")
     }
 
     @Test("static still ranks strictly below a real scene (what chooseIndex relies on)")
@@ -133,25 +146,40 @@ struct PreviewFrameScorerTests {
 
     // MARK: - FrameScore arithmetic (LOGIC)
 
-    @Test("combined = clamped(stddev/128) × (1 − dominance)")
+    @Test("combined = clamped(stddev/128) × (1 − dominance) × retention²")
     func combinedFormulaPinned() {
         // Direct construction — no image needed; pins the formula so a
-        // refactor can't silently reweight the two signals.
+        // refactor can't silently reweight the three signals.
         let mid = PreviewFrameScorer.FrameScore(lumaStdDev: 64,
-                                                dominantColorFraction: 0.5)
+                                                dominantColorFraction: 0.5,
+                                                structureRetention: 1.0)
         #expect(abs(mid.combined - 0.25) < 1e-12)
 
         // stddev term clamps at 1.0 (a stddev of 200 is not "more than
         // fully contrasty").
         let clamped = PreviewFrameScorer.FrameScore(lumaStdDev: 300,
-                                                    dominantColorFraction: 0)
+                                                    dominantColorFraction: 0,
+                                                    structureRetention: 1.0)
         #expect(clamped.combined == 1.0)
 
         // Full dominance zeroes the score regardless of contrast —
         // the multiplicative gate the header documents.
         let dominated = PreviewFrameScorer.FrameScore(lumaStdDev: 127,
-                                                      dominantColorFraction: 1.0)
+                                                      dominantColorFraction: 1.0,
+                                                      structureRetention: 1.0)
         #expect(dominated.combined == 0.0)
+
+        // Retention enters SQUARED (2026-07-26 recalibration): 0.5
+        // retention quarters the score, and zero retention zeroes it
+        // regardless of contrast and color diversity.
+        let halfRetained = PreviewFrameScorer.FrameScore(lumaStdDev: 64,
+                                                         dominantColorFraction: 0.5,
+                                                         structureRetention: 0.5)
+        #expect(abs(halfRetained.combined - 0.0625) < 1e-12)
+        let unretained = PreviewFrameScorer.FrameScore(lumaStdDev: 127,
+                                                       dominantColorFraction: 0,
+                                                       structureRetention: 0)
+        #expect(unretained.combined == 0.0)
     }
 
     // MARK: - Time budget (SCALE)

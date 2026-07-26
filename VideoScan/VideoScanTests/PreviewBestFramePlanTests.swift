@@ -59,15 +59,26 @@ struct PreviewBestFramePlanTests {
             #expect(!offsets.isEmpty, "duration \(duration) produced an empty plan")
             duration += duration < 30 ? 0.1 : 97.3
         }
-        // NOT tested: durationSeconds = .infinity. It TRAPS (SIGTRAP,
-        // verified out-of-process 2026-07-26): `Int((offset * 10)
-        // .rounded())` in candidateOffsets is an unchecked Double→Int
-        // conversion, and Int(.infinity) crashes rather than throwing.
-        // A crashing assertion would take the whole suite down, so the
-        // hazard is REPORTED to the Manager instead: garbage catalog
-        // duration data (non-finite, or > ~1.8e18 s) crashes the
-        // prewarm. Fix shape: guard durationSeconds.isFinite in the
-        // top guard alongside the >= check.
+        // .infinity and absurd finite durations are covered by
+        // garbageDurationsDegrade below — testable since the 2026-07-26
+        // fix; pre-fix they SIGTRAPped the test host (see that test).
+    }
+
+    @Test("garbage durations degenerate to [0.5] instead of trapping", arguments: [
+        Double.infinity, -Double.infinity, 2e18, 1e300,
+        PreviewBestFramePlan.maxSaneDurationSeconds + 1
+    ])
+    func garbageDurationsDegrade(duration: Double) {
+        // Regression sensor for the 2026-07-26 🔴: `Int((offset * 10)
+        // .rounded())` in the dedupe traps on non-finite doubles AND on
+        // finite values past ~1.8e18 (Int.max / 5). Pre-fix, a poisoned
+        // catalog durationSeconds crashed the whole prewarm — this test
+        // couldn't even be written because the trap killed the test
+        // host. The isPlannable guard (finite + ≤ maxSaneDurationSeconds,
+        // ~115 days) now routes all of it to the plain single-frame
+        // plan. NaN is covered by degenerateDurations above.
+        #expect(PreviewBestFramePlan.candidateOffsets(durationSeconds: duration) == [0.5])
+        #expect(PreviewBestFramePlan.fallbackOffset(durationSeconds: duration) == 0.5)
     }
 
     // MARK: - fallbackOffset

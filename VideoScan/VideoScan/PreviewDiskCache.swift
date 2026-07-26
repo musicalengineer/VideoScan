@@ -342,9 +342,17 @@ final class PreviewDiskCache: @unchecked Sendable {
         var reaped = 0
         for entry in payloads.sorted(by: { $0.mtime < $1.mtime }) {
             guard total > Self.sizeCapBytes else { break }
-            try? fm.removeItem(at: entry.url)
-            total -= entry.size
-            reaped += 1
+            // Only count bytes that actually left the disk — decrementing
+            // on a failed remove (permissions, races) would under-reap
+            // and leave the cache over cap while claiming success
+            // (testing agent 🟡, 2026-07-26).
+            do {
+                try fm.removeItem(at: entry.url)
+                total -= entry.size
+                reaped += 1
+            } catch {
+                diskCacheLog.notice("Prune could not remove \(entry.url.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
         }
         diskCacheLog.info("Preview disk cache pruned \(reaped) oldest entries — now \(total / (1024 * 1024)) MB")
     }
