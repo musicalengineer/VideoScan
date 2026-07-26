@@ -115,6 +115,27 @@ struct RescanPreservationTests {
         #expect(!RescanPreservedFields(from: r).isWorthRestoring)
     }
 
+    // regression: GH #113 — a purged record is a catalog tombstone, so a
+    // same-path rescan must preserve it even when it has no other curated data.
+    @Test func purgedRecordDoesNotResurrectOnRescan() {
+        let purgedAt = Date(timeIntervalSince1970: 1_720_000_000)
+        let original = VideoRecord()
+        original.filename = "purged.mov"
+        original.fullPath = "/Volumes/Test/purged.mov"
+        original.purgedAt = purgedAt
+
+        let snap = RescanPreservedFields(from: original)
+        #expect(snap.isWorthRestoring,
+                "purgedAt alone must keep the snapshot in the rescan map")
+
+        let fresh = freshlyScannedRecord(path: original.fullPath)
+        #expect(fresh.purgedAt == nil)
+        snap.apply(to: fresh)
+
+        #expect(fresh.purgedAt == purgedAt,
+                "rescan must not silently return purged media to the catalog")
+    }
+
     @Test func applyRestoresFieldsButDoesNotTouchScanDerived() {
         let original = dossierLoadedRecord()
         let snap = RescanPreservedFields(from: original)
@@ -185,6 +206,8 @@ struct RescanPreservationTests {
         original.starRating = 5
         original.junkScore = 7
         original.notes = "reunion reel, second tape"
+        let purgedAt = Date(timeIntervalSince1970: 1_670_000_000)
+        original.purgedAt = purgedAt
 
         let snap = RescanPreservedFields(from: original)
 
@@ -225,6 +248,7 @@ struct RescanPreservationTests {
         #expect(fresh.starRating == 5)
         #expect(fresh.junkScore == 7)
         #expect(fresh.notes == "reunion reel, second tape")
+        #expect(fresh.purgedAt == purgedAt)
 
         // Scan-derived field left untouched by apply().
         #expect(fresh.videoCodec == "hevc-NEW")
