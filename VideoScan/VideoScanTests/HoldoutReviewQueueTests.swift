@@ -322,6 +322,66 @@ struct HoldoutReviewQueueTests {
         #expect(reloaded.pendingCount == 0)
     }
 
+    // regression: recordAnswer rewrote the WHOLE CSV from in-memory queue
+    // state — an external edit landing while the sheet was OPEN (codex's
+    // Python tooling, a hand edit) was silently reverted wholesale by the
+    // next in-app answer. recordAnswer must merge-on-write: reload disk as
+    // the base, replace only the answered row (QA 2026-07-25 gate finding 1).
+    @Test func regression_externalEditDuringOpenSessionSurvivesRecordAnswer() throws {
+        let dir = try makeTempDir()
+        let url = try writeCSV(fixtureText, in: dir)
+        // Sheet opens with a fresh load — then STAYS open.
+        var opened = try HoldoutReviewQueue.load(csvURL: url)
+
+        // Behind the open sheet's back: an external tool answers row B,
+        // exactly as apply_label_csv-lineage tooling or a hand edit would.
+        var external = try HoldoutReviewQueue.load(csvURL: url)
+        try external.recordAnswer(reviewId: "BBBB00000002", confirm: "yes",
+                                  notes: "answered externally mid-session")
+
+        // In-app answer on a DIFFERENT row, from the still-open copy.
+        try opened.recordAnswer(reviewId: "AAAA00000001", confirm: "no",
+                                notes: "not her")
+
+        let reloaded = try HoldoutReviewQueue.load(csvURL: url)
+        // The external modification SURVIVES the in-app write-through...
+        #expect(reloaded.rows[1].rickConfirm == "yes")
+        #expect(reloaded.rows[1].notes == "answered externally mid-session")
+        // ...AND the in-app answer is recorded.
+        #expect(reloaded.rows[0].rickConfirm == "no")
+        #expect(reloaded.rows[0].notes == "not her")
+        #expect(reloaded.pendingCount == 0)
+        // The open copy's cached state tracks the merged truth it wrote.
+        #expect(opened.rows[1].rickConfirm == "yes")
+        #expect(opened.pendingCount == 0)
+    }
+
+    // regression companion (same finding): if an external writer REMOVED
+    // the row being answered (truncated queue regenerated mid-session),
+    // that's an error on the existing strict path — never re-append the
+    // row from memory, never clobber the truncation.
+    @Test func regression_externallyRemovedRowIsAnErrorNotAClobber() throws {
+        let dir = try makeTempDir()
+        let url = try writeCSV(fixtureText, in: dir)
+        var opened = try HoldoutReviewQueue.load(csvURL: url)
+
+        // External truncation: row A vanishes from disk.
+        let truncated = csvText([
+            "BBBB00000002,\"/Volumes/T/iPhoto/Jul 23, 2010/IMG_0532.MOV\",,",
+            "CCCC00000003,/Volumes/T/plain/IMG_0003.MOV,no,too dark to tell",
+        ])
+        try Data(truncated.utf8).write(to: url)
+
+        #expect(throws: HoldoutReviewQueue.QueueError.unknownReviewId("AAAA00000001")) {
+            try opened.recordAnswer(reviewId: "AAAA00000001", confirm: "yes", notes: "")
+        }
+        // Disk keeps the external truncation, byte-for-byte.
+        #expect(try Data(contentsOf: url) == Data(truncated.utf8))
+        // Nothing was saved, so memory must not have changed either.
+        #expect(opened.rows.count == 3)
+        #expect(opened.pendingCount == 2)
+    }
+
     // regression: recordAnswer mutated rows BEFORE the throwing write —
     // on write failure, memory diverged from disk (QA 2026-07-25 minor 1).
     @Test func regression_failedWriteLeavesMemoryMatchingDisk() throws {

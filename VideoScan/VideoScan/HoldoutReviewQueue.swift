@@ -207,9 +207,10 @@ struct HoldoutReviewQueue: Equatable, Sendable {
     /// seed its working copy through here at open — a discovery-time
     /// snapshot can be stale (hand edit in an editor, badge re-clicked
     /// before the post-dismiss refresh publishes, queue regenerated),
-    /// and the write-through in recordAnswer rewrites the whole file:
-    /// answering against stale memory would silently revert whatever
-    /// changed on disk since the snapshot. QA 2026-07-25 blocker.
+    /// and the sheet's pending count / row list should show what's
+    /// actually on disk. QA 2026-07-25 blocker. (Data safety no longer
+    /// depends on this: recordAnswer merges onto a fresh disk load — see
+    /// its comment — so a stale working copy can't clobber the file.)
     func freshCopyFromDisk() throws -> HoldoutReviewQueue {
         try Self.load(csvURL: csvURL)
     }
@@ -273,31 +274,53 @@ struct HoldoutReviewQueue: Equatable, Sendable {
 
     // MARK: Answer write-back (write-through, atomic)
 
-    /// Record Rick's answer for one row and persist the WHOLE CSV
-    /// immediately (write-through — a crash after this call loses
-    /// nothing). `.atomic` is Foundation's temp-file-in-same-directory +
-    /// rename(2), so a reader never sees a torn file.
+    /// Record Rick's answer for one row and persist it immediately
+    /// (write-through — a crash after this call loses nothing). `.atomic`
+    /// is Foundation's temp-file-in-same-directory + rename(2), so a
+    /// reader never sees a torn file.
     ///
-    /// Order matters: build the updated serialization and WRITE it
-    /// before committing to `rows`/`pendingCount` — if the write throws,
-    /// memory must still match disk (QA 2026-07-25 minor 1). Commit-
-    /// after-write is the same discipline as a WAL: no in-memory state
-    /// change until the durable write succeeded.
+    /// MERGE-ON-WRITE (QA 2026-07-25 gate finding 1): the CSV is
+    /// re-loaded from disk here and the disk rows are the base — ONLY
+    /// the answered row's rickConfirm/notes are replaced, everything
+    /// else round-trips byte-verbatim through the lenient load. An
+    /// external writer (codex's grading tooling, a hand edit) that
+    /// touched the file while the review sheet was open therefore
+    /// survives the next in-app answer; the clobber window shrinks from
+    /// sheet-lifetime to the instant between this reload and the rename.
+    /// If the reload fails (file deleted/corrupt mid-session) or the
+    /// reviewId no longer exists on disk (external truncation), the
+    /// answer is NOT saved and the error surfaces exactly like a write
+    /// failure — never fall back to rewriting from memory, that IS the
+    /// clobber.
+    ///
+    /// Order matters: reload, apply, WRITE, and only then commit to
+    /// `self` — if anything throws, memory must still match what the
+    /// sheet last showed (QA 2026-07-25 minor 1). Commit-after-write is
+    /// the same discipline as a WAL: no in-memory state change until the
+    /// durable write succeeded.
     mutating func recordAnswer(reviewId: String, confirm: String, notes: String) throws {
         guard confirm == "yes" || confirm == "no" else {
             throw QueueError.invalidAnswer(confirm)
         }
-        guard let i = rows.firstIndex(where: { $0.reviewId == reviewId }) else {
+        // Disk is the base, not memory. Same strict load as everywhere
+        // else — a mid-session corruption throws here rather than being
+        // papered over by a memory rewrite.
+        var disk = try Self.load(csvURL: csvURL)
+        guard let i = disk.rows.firstIndex(where: { $0.reviewId == reviewId }) else {
             throw QueueError.unknownReviewId(reviewId)
         }
-        let wasPending = rows[i].isPending
-        var updatedRows = rows
+        let wasPending = disk.rows[i].isPending
+        var updatedRows = disk.rows
         updatedRows[i].rickConfirm = confirm
         updatedRows[i].notes = notes.trimmingCharacters(in: .whitespacesAndNewlines)
-        try Self.serialize(header: header, rows: updatedRows)
+        try Self.serialize(header: disk.header, rows: updatedRows)
             .write(to: csvURL, options: [.atomic])
-        rows = updatedRows
-        if wasPending { pendingCount -= 1 }
+        // Struct-wide commit (`self = value` is legal in a mutating
+        // method — think C++ `*this = other`): rows, pendingCount, and
+        // header all track the merged truth we just wrote.
+        disk.rows = updatedRows
+        if wasPending { disk.pendingCount -= 1 }
+        self = disk
     }
 
     // MARK: Serialization (Python csv.writer compatible)

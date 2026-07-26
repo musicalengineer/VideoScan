@@ -573,14 +573,17 @@ struct ConfirmPersonSheet: View {
     /// reload the queue fresh from disk and position onto the first
     /// unanswered row.
     ///
-    /// The working copy MUST come from disk, not from the discovery-time
-    /// snapshot in `holdoutQueue`: recordAnswer rewrites the whole CSV
-    /// from memory, so a stale snapshot's first write-through would
-    /// silently revert any answers/hand edits that landed on disk after
-    /// discovery. On load failure we surface the error and show the done
-    /// pane — NEVER fall back to the snapshot, which is exactly the
-    /// clobber path. QA 2026-07-25 blocker; regression test:
-    /// regression_staleSnapshotOpenPreservesExternalAnswer.
+    /// The working copy still comes from disk, not from the
+    /// discovery-time snapshot in `holdoutQueue`, so the sheet shows the
+    /// real pending rows/count (a snapshot can predate hand edits or a
+    /// regenerated queue). Data safety no longer hinges on this open-time
+    /// reload: recordAnswer merges each answer onto a fresh disk load
+    /// (QA 2026-07-25 gate finding 1), so even a stale working copy
+    /// cannot clobber external edits. On load failure we surface the
+    /// error and show the done pane — never fall back to the snapshot.
+    /// QA 2026-07-25 blocker; regression tests:
+    /// regression_staleSnapshotOpenPreservesExternalAnswer,
+    /// regression_externalEditDuringOpenSessionSurvivesRecordAnswer.
     private func startHoldout() {
         guard let snapshot = holdoutQueue else {
             phase = .summary
