@@ -443,6 +443,15 @@ final class VideoScanModel: ObservableObject {
     /// Capped at 10k entries (~2–3 MB worst case) — see ThumbnailFailureStore.
     let thumbnailFailureStore = ThumbnailFailureStore()
 
+    /// Persistent on-disk preview cache — L2 behind `thumbnailCache`
+    /// (Phase B piece 1, 2026-07-26). Keyed on (path, mtime, size) so a
+    /// changed file misses automatically; 2 GB cap pruned at background
+    /// QoS on launch. Lookup order everywhere: L1 NSCache → this →
+    /// generate, write-through to both. See PreviewDiskCache.swift.
+    /// (The production root self-redirects to a temp sandbox under a
+    /// unit-test host — same gate as MetadataCache.defaultPath.)
+    let previewDiskCache = PreviewDiskCache(rootURL: PreviewDiskCache.productionRootURL)
+
     /// Pending debounced thumbnail generation (see requestThumbnailDebounced
     /// in VideoScanModel+Thumbnail). Cancelled and replaced on every
     /// selection step; only the row the user rests on pays for generation.

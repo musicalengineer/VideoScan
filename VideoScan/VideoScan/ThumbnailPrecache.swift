@@ -21,6 +21,12 @@
 // already failed cost one stat per run, not a repeat decode failure —
 // and records fresh failures for the interactive path to skip too.
 //
+// Preview disk cache (Phase B piece 1, 2026-07-26): the prewarm now
+// checks the persistent L2 (PreviewDiskCache) before generating — after
+// a relaunch, a warmed volume costs one stat + JPEG decode per record
+// instead of a media rip — and writes fresh generations through to
+// disk as well as L1. Disk hits populate L1.
+//
 // Memory contract (Rick's M4 Max, "use RAM aggressively but leave ~4 GB
 // headroom"): thumbnails are capped at 480x270 (~0.5 MB of bitmap each),
 // generated ONE frame per file — never batch-loaded. The shared NSCache
@@ -185,10 +191,11 @@ final class ThumbnailPrecacher {
         let items: [PrecacheItem] = candidates.map {
             ($0.fullPath, $0.container, $0.videoCodec, $0.isLikelyUnanalyzable)
         }
-        // The store itself is Sendable (lock-guarded); grab the reference
+        // Both stores are Sendable (lock-guarded); grab the references
         // on the main actor so the detached task never touches the model
-        // for it.
+        // for them.
         let failureStore = model.thumbnailFailureStore
+        let diskCache = model.previewDiskCache
         let bound = max(1, concurrency)
         let label = volumeLabel
         let runID = UUID()
@@ -208,6 +215,20 @@ final class ThumbnailPrecacher {
                 // changed on disk — one stat instead of a repeat
                 // deadline-bounded decode failure.
                 if failureStore.isKnownFailure(atPath: item.path) { return false }
+                // L2 disk cache (Phase B piece 1): a payload persisted by
+                // an earlier session/run means one JPEG decode instead of
+                // a media rip. Signature nil (dead volume mid-run) →
+                // skip L2 and let generation report the truth.
+                let signature = PreviewDiskCache.fileSignature(atPath: item.path)
+                if let signature,
+                   let diskHit = diskCache.lookup(path: item.path,
+                                                  mtime: signature.mtime,
+                                                  size: signature.size) {
+                    await MainActor.run { [weak model] in
+                        model?.storePrecachedThumbnail(diskHit, forPath: item.path)
+                    }
+                    return true
+                }
                 let cg: CGImage
                 do {
                     cg = try await VideoScanModel.renderThumbnailCGImage(
@@ -234,6 +255,17 @@ final class ThumbnailPrecacher {
                     return false
                 }
                 if Task.isCancelled { return false }
+                // Write-through to disk (already off-main here). Tier
+                // "fast": this prewarm still rips the single 0.5 s frame;
+                // the content-scored "best" tier is the background
+                // best-frame pass's job.
+                if let signature {
+                    diskCache.store(cg,
+                                    path: item.path,
+                                    mtime: signature.mtime,
+                                    size: signature.size,
+                                    tier: .fast)
+                }
                 await MainActor.run { [weak model] in
                     model?.storePrecachedThumbnail(cg, forPath: item.path)
                 }

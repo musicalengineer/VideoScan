@@ -42,6 +42,18 @@ import os
 //     cache) and publish previewUnavailable so the pane shows "NO
 //     PREVIEW" instead of an eternal spinner.
 //
+// Preview disk cache (Phase B piece 1, 2026-07-26):
+//   - Lookup order is now L1 NSCache → L2 PreviewDiskCache → generate,
+//     with write-through to BOTH on generation. Disk hits populate L1.
+//     The L2 probe (one stat + JPEG decode) happens inside the detached
+//     generation task — never on the main actor.
+//   - The interactive path stores its single 0.5 s frame at tier "fast";
+//     the background/prewarm pass owns tier "best" (see PreviewDiskCache
+//     for the tier contract — best never downgrades to fast).
+//   - Negative-cache (ThumbnailFailureStore) semantics are UNCHANGED:
+//     it is consulted before L2, and only genuine generation failures
+//     are recorded (cancellation/ffmpegUnavailable excluded, as before).
+//
 // runFFProbe is a thin convenience that any extension may want — kept
 // nearby because both generateThumbnail and ffprobe live in the "preview /
 // quick peek at one file" mental bucket.
@@ -418,13 +430,47 @@ extension VideoScanModel {
         let videoCodec = record.videoCodec
         let likelyUnanalyzable = record.isLikelyUnanalyzable
         let failureStore = thumbnailFailureStore
+        let diskCache = previewDiskCache
         Task.detached { [weak self] in
+            // L2 disk cache probe (Phase B piece 1) — one stat + JPEG
+            // decode, deliberately OFF the main actor. Signature nil
+            // (file vanished between reachability check and here) just
+            // skips L2 both ways; generation below reports the truth.
+            let signature = PreviewDiskCache.fileSignature(atPath: cacheKeyString)
+            if let signature,
+               let diskHit = diskCache.lookup(path: cacheKeyString,
+                                              mtime: signature.mtime,
+                                              size: signature.size) {
+                // Disk hits populate L1, then publish through it — same
+                // single storage path as a fresh generation.
+                await MainActor.run {
+                    guard let self else { return }
+                    self.storePrecachedThumbnail(diskHit, forPath: cacheKeyString)
+                    if self.previewRequestPath == cacheKeyString {
+                        self.previewImage = self.thumbnailCache.object(forKey: cacheKeyString as NSString)
+                        self.previewUnavailable = false
+                    }
+                }
+                return
+            }
             do {
                 let cgImage = try await VideoScanModel.renderThumbnailCGImage(
                     path: cacheKeyString,
                     container: container,
                     videoCodec: videoCodec,
                     likelyUnanalyzable: likelyUnanalyzable)
+                // Write-through L2 first (already off-main here). Tier
+                // "fast": this is the interactive single 0.5 s frame —
+                // the background pass may later upgrade it to "best".
+                // Signature from BEFORE generation is correct: the key
+                // must describe the file we just decoded.
+                if let signature {
+                    diskCache.store(cgImage,
+                                    path: cacheKeyString,
+                                    mtime: signature.mtime,
+                                    size: signature.size,
+                                    tier: .fast)
+                }
                 // CGImage is Sendable; NSImage and NSString aren't. Build
                 // both on the main actor so we never cross actor boundaries
                 // with them.
