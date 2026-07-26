@@ -105,10 +105,12 @@ struct PreviewFrameRouteTests {
                                                 likelyUnanalyzable: false) == .ffmpegDirect)
     }
 
-    @Test("needsReformat is a backstop: forces ffmpegDirect even for friendly metadata")
-    func needsReformatBackstop() {
-        // The analyzer already proved AVFoundation can't decode this file
-        // — the static tables not knowing the codec must not matter.
+    @Test("likelyUnanalyzable is a backstop: forces ffmpegDirect even for friendly metadata")
+    func likelyUnanalyzableBackstop() {
+        // The record's derived isLikelyUnanalyzable flag (stored
+        // needsReformat OR the canonical UnplayableLegacyCodecs list)
+        // already says AVFoundation can't decode this file — the static
+        // tables above not knowing the codec must not matter.
         #expect(PreviewFrameRouter.previewRoute(container: "QuickTime / MOV",
                                                 videoCodec: "h264",
                                                 likelyUnanalyzable: true) == .ffmpegDirect)
