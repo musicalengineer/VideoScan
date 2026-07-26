@@ -29,8 +29,8 @@ import os
 // Preview routing (2026-07-26):
 //   - renderThumbnailCGImage is now ROUTED: the pure
 //     PreviewFrameRouter.previewRoute decision (cataloged container /
-//     videoCodec / needsReformat) picks AVFoundation or ffmpeg BEFORE
-//     any media object exists. FFV1/Matroska masters used to stall the
+//     videoCodec / isLikelyUnanalyzable) picks AVFoundation or ffmpeg
+//     BEFORE any media object exists. FFV1/Matroska masters used to stall the
 //     pane 30 s–1 min+ while AVFoundation ground through container
 //     sniffing it could never finish — they now go straight to a
 //     single-frame ffmpeg rip (same two-tier design the caption
@@ -135,7 +135,11 @@ extension VideoScanModel {
     /// any AVFoundation object is created — an mkv/FFV1 record never
     /// instantiates an AVURLAsset. Routing fields come from the catalog
     /// record (ffprobe-stamped at scan time), so callers must pass them
-    /// through rather than re-probing.
+    /// through rather than re-probing. `likelyUnanalyzable` is the
+    /// record's `isLikelyUnanalyzable` derived flag — stored
+    /// needsReformat OR the canonical UnplayableLegacyCodecs list — so
+    /// this core shares one source of truth with the catalog's red `!`
+    /// badge instead of growing its own drifting codec list.
     ///
     /// `@concurrent`: under Approachable Concurrency a plain `nonisolated
     /// async` runs on its CALLER's actor — today's callers are both
@@ -151,10 +155,10 @@ extension VideoScanModel {
     nonisolated static func renderThumbnailCGImage(path: String,
                                                    container: String,
                                                    videoCodec: String,
-                                                   needsReformat: Bool) async throws -> CGImage {
+                                                   likelyUnanalyzable: Bool) async throws -> CGImage {
         let route = PreviewFrameRouter.previewRoute(container: container,
                                                     videoCodec: videoCodec,
-                                                    needsReformat: needsReformat)
+                                                    likelyUnanalyzable: likelyUnanalyzable)
         let filename = (path as NSString).lastPathComponent
         switch route {
         case .ffmpegDirect:
@@ -259,6 +263,15 @@ extension VideoScanModel {
                             "-vf", "scale='min(480,iw)':-2",
                             "-y", tmpPNG.path],
                 deadlineSeconds: ffmpegPreviewDeadlineSeconds)
+            // CANCELLATION, not failure (QA 🔴, 2026-07-26): when the
+            // awaiting task is cancelled mid-rip, ProcessRunner's
+            // cancellation handler SIGTERMs the child and returns
+            // exitCode -1 — indistinguishable from a genuine decode
+            // failure by exit code alone. Surface it as CancellationError
+            // HERE so a cancelled prewarm can never fall through to
+            // noFrameProduced and poison the negative cache against a
+            // perfectly good file.
+            try Task.checkCancellation()
             // ffmpeg can exit 0 with no frame written (seek past EOF on
             // a very short clip) — the PNG actually decoding is the real
             // success test, hence the load inside the condition.
@@ -398,10 +411,12 @@ extension VideoScanModel {
         // Capture the cache key as Sendable String, not NSString. Re-bridge
         // inside the MainActor block where the NSCache lives. Routing
         // fields ride along the same way (all Sendable value types).
+        // isLikelyUnanalyzable (not raw needsReformat) so routing shares
+        // the canonical legacy-codec list with the red `!` badge.
         let cacheKeyString = record.fullPath
         let container = record.container
         let videoCodec = record.videoCodec
-        let needsReformat = record.needsReformat
+        let likelyUnanalyzable = record.isLikelyUnanalyzable
         let failureStore = thumbnailFailureStore
         Task.detached { [weak self] in
             do {
@@ -409,7 +424,7 @@ extension VideoScanModel {
                     path: cacheKeyString,
                     container: container,
                     videoCodec: videoCodec,
-                    needsReformat: needsReformat)
+                    likelyUnanalyzable: likelyUnanalyzable)
                 // CGImage is Sendable; NSImage and NSString aren't. Build
                 // both on the main actor so we never cross actor boundaries
                 // with them.
@@ -427,8 +442,18 @@ extension VideoScanModel {
             } catch {
                 // Remember the failure (stat happens here, off-main) so
                 // the next selection of this row skips straight to the
-                // "NO PREVIEW" state.
-                failureStore.recordFailure(forPath: cacheKeyString)
+                // "NO PREVIEW" state. Two exclusions (QA 2026-07-26):
+                //   - CancellationError says nothing about the file —
+                //     recording it would stamp a good file "bad" for the
+                //     rest of the session (defensive here; the precacher
+                //     path is where cancellation actually happens today).
+                //   - ffmpegUnavailable is an ENVIRONMENT failure (no
+                //     ffmpeg binary), also not a fact about this file.
+                if !(error is CancellationError),
+                   !Task.isCancelled,
+                   (error as? PreviewFrameError) != .ffmpegUnavailable {
+                    failureStore.recordFailure(forPath: cacheKeyString)
+                }
                 await MainActor.run { [weak self] in
                     guard let self else { return }
                     // Generation failed for the CURRENT selection → showing

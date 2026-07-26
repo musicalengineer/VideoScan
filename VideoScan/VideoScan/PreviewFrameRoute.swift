@@ -74,12 +74,18 @@ enum PreviewFrameRouter {
     /// - Parameters:
     ///   - container: ffprobe `format_long_name` from the catalog record.
     ///   - videoCodec: ffprobe `codec_name` from the catalog record.
-    ///   - needsReformat: the record's analyzer-confirmed "AVFoundation
-    ///     can't decode this" flag — a dynamic backstop for codecs the
-    ///     static lists don't know about.
+    ///   - likelyUnanalyzable: the record's `isLikelyUnanalyzable`
+    ///     derived flag (VideoRecord+Derived.swift) — the stored
+    ///     analyzer-confirmed needsReformat marker OR the CANONICAL
+    ///     legacy-codec list in VideoScanCore's UnplayableLegacyCodecs.
+    ///     Passing the derived flag (not raw needsReformat) keeps this
+    ///     router from becoming a fourth drifting copy of that list:
+    ///     the sets above stay a fast static tier for the mkv/ffv1
+    ///     cases they name, and everything the canonical list knows
+    ///     (svq3/qdm2/cinepak/indeo/…) routes correctly through here.
     static func previewRoute(container: String,
                              videoCodec: String,
-                             needsReformat: Bool) -> PreviewRoute {
+                             likelyUnanalyzable: Bool) -> PreviewRoute {
         let cont = container.lowercased()
         if avfHostileContainerTokens.contains(where: { cont.contains($0) }) {
             return .ffmpegDirect
@@ -91,7 +97,7 @@ enum PreviewFrameRouter {
         if avfHostileVideoCodecPrefixes.contains(where: { codec.hasPrefix($0) }) {
             return .ffmpegDirect
         }
-        if needsReformat {
+        if likelyUnanalyzable {
             return .ffmpegDirect
         }
         return .avFoundation

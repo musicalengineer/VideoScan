@@ -133,11 +133,13 @@ enum ThumbnailPrecachePlanner {
 /// shared single-frame core needs (preview routing, 2026-07-26). A
 /// Sendable value snapshot — VideoRecord instances never cross into the
 /// detached task. Swift tuple-of-value-types ≈ a C++ aggregate struct
-/// passed by value.
+/// passed by value. `likelyUnanalyzable` is the record's derived
+/// `isLikelyUnanalyzable` (stored needsReformat OR the canonical
+/// legacy-codec list), evaluated at snapshot time on the main actor.
 private typealias PrecacheItem = (path: String,
                                   container: String,
                                   videoCodec: String,
-                                  needsReformat: Bool)
+                                  likelyUnanalyzable: Bool)
 
 /// Owns the single in-flight prewarm task. Owned by VideoScanModel so the
 /// catalog view, scan lifecycle, and future callers share one instance.
@@ -181,7 +183,7 @@ final class ThumbnailPrecacher {
         // Snapshot Sendable data only — paths + routing fields, not
         // VideoRecord instances (preview routing, 2026-07-26).
         let items: [PrecacheItem] = candidates.map {
-            ($0.fullPath, $0.container, $0.videoCodec, $0.needsReformat)
+            ($0.fullPath, $0.container, $0.videoCodec, $0.isLikelyUnanalyzable)
         }
         // The store itself is Sendable (lock-guarded); grab the reference
         // on the main actor so the detached task never touches the model
@@ -206,15 +208,29 @@ final class ThumbnailPrecacher {
                 // changed on disk — one stat instead of a repeat
                 // deadline-bounded decode failure.
                 if failureStore.isKnownFailure(atPath: item.path) { return false }
-                guard let cg = try? await VideoScanModel.renderThumbnailCGImage(
-                    path: item.path,
-                    container: item.container,
-                    videoCodec: item.videoCodec,
-                    needsReformat: item.needsReformat) else {
-                    // Remember the failure so neither this run's siblings
-                    // (future runs, really — each path is dispatched once)
-                    // nor the interactive path pays for it again.
-                    failureStore.recordFailure(forPath: item.path)
+                let cg: CGImage
+                do {
+                    cg = try await VideoScanModel.renderThumbnailCGImage(
+                        path: item.path,
+                        container: item.container,
+                        videoCodec: item.videoCodec,
+                        likelyUnanalyzable: item.likelyUnanalyzable)
+                } catch {
+                    // Remember GENUINE failures so neither future runs nor
+                    // the interactive path pays for them again — but never
+                    // (QA 🔴, 2026-07-26):
+                    //   - cancellation: clicking volume B cancels volume
+                    //     A's in-flight rips (ProcessRunner SIGTERMs the
+                    //     child); the file is fine, and recording it here
+                    //     would stamp its UNCHANGED (mtime,size) →
+                    //     "NO PREVIEW" for the rest of the session.
+                    //   - ffmpegUnavailable: environment failure (no
+                    //     ffmpeg binary), not a fact about the file.
+                    if !(error is CancellationError),
+                       !Task.isCancelled,
+                       (error as? PreviewFrameError) != .ffmpegUnavailable {
+                        failureStore.recordFailure(forPath: item.path)
+                    }
                     return false
                 }
                 if Task.isCancelled { return false }
