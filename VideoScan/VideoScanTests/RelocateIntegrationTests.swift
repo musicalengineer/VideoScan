@@ -15,7 +15,7 @@ import Foundation
 //
 // All tests are @MainActor because relocateVolume is.
 
-@Suite(.serialized) @MainActor
+@Suite(.serialized, .timeLimit(.minutes(1))) @MainActor
 struct RelocateIntegrationTests {
 
     // MARK: - Fixtures
