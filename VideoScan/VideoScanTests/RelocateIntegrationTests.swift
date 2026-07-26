@@ -54,17 +54,16 @@ struct RelocateIntegrationTests {
         return r
     }
 
-    /// Poll until the post-flight summary lands. Under the §3 queue
-    /// (2026-05-31) `isRelocating` stays true through `.awaitingDone`
-    /// until the user dismisses the summary, so the canonical "work is
-    /// finished" signal is `pendingRelocateSummary != nil`. Same
-    /// observable outcome as the pre-queue test (catalog mutated, dest
-    /// written) — just a different waypoint.
-    private func waitForRelocateDone(_ model: VideoScanModel, timeout: TimeInterval = 60) async {
-        let deadline = Date().addingTimeInterval(timeout)
-        while model.pendingRelocateSummary == nil && Date() < deadline {
-            try? await Task.sleep(nanoseconds: 50_000_000)  // 50ms
-        }
+    /// Await the runner itself instead of polling a MainActor-owned side
+    /// effect. Wall-clock polling can consume its whole deadline while a
+    /// loaded test process delays the queued runner; worse, the old helper
+    /// silently returned on timeout and let every downstream assertion fail.
+    private func waitForRelocateDone(_ model: VideoScanModel) async throws {
+        let runner = try #require(model.relocateRunnerTask,
+                                  "relocateVolume must install its runner synchronously")
+        await runner.value
+        _ = try #require(model.pendingRelocateSummary,
+                        "relocate runner completed without publishing its summary")
     }
 
     // MARK: - Tests
@@ -105,7 +104,7 @@ struct RelocateIntegrationTests {
             skipAlreadyRelocated: true
         )
         model.relocateVolume(options)
-        await waitForRelocateDone(model)
+        try await waitForRelocateDone(model)
 
         // Every record's fullPath now points under dest, provenance stamped.
         for rec in model.records {
@@ -154,7 +153,7 @@ struct RelocateIntegrationTests {
             dryRun: false,
             skipAlreadyRelocated: true
         ))
-        await waitForRelocateDone(model)
+        try await waitForRelocateDone(model)
 
         // Good record migrated.
         let goodRec = try #require(model.records.first { $0.filename == "good.bin" })
@@ -190,7 +189,7 @@ struct RelocateIntegrationTests {
             dryRun: true,
             skipAlreadyRelocated: true
         ))
-        await waitForRelocateDone(model)
+        try await waitForRelocateDone(model)
 
         // Record path UNCHANGED.
         #expect(rec.fullPath == src.path)
@@ -229,7 +228,7 @@ struct RelocateIntegrationTests {
             dryRun: true,
             skipAlreadyRelocated: true
         ))
-        await waitForRelocateDone(model)
+        try await waitForRelocateDone(model)
 
         // No pre-relocate snapshot file may exist after a dry-run.
         let catalogDirContents = try FileManager.default.contentsOfDirectory(atPath: ws.catalog.path)
@@ -266,7 +265,7 @@ struct RelocateIntegrationTests {
             dryRun: false,
             skipAlreadyRelocated: true
         ))
-        await waitForRelocateDone(model)
+        try await waitForRelocateDone(model)
 
         // The live record migrated...
         #expect(rec.fullPath.hasPrefix(ws.dest.path))
@@ -318,7 +317,7 @@ struct RelocateIntegrationTests {
             dryRun: false,
             skipAlreadyRelocated: true
         ))
-        await waitForRelocateDone(model)
+        try await waitForRelocateDone(model)
 
         #expect(rec.fullPath == preCopiedDest.path)
         #expect(rec.originalFullPath == src.path)
@@ -358,7 +357,7 @@ struct RelocateIntegrationTests {
             dryRun: false,
             skipAlreadyRelocated: true
         ))
-        await waitForRelocateDone(model)
+        try await waitForRelocateDone(model)
 
         // File moved + verified...
         #expect(rec.fullPath.hasPrefix(ws.dest.path))
@@ -393,7 +392,7 @@ struct RelocateIntegrationTests {
             dryRun: false,
             skipAlreadyRelocated: true
         ))
-        await waitForRelocateDone(model)
+        try await waitForRelocateDone(model)
 
         #expect(model.dashboard.relocateSkipped == 1)
         #expect(rec.fullPath == src.path)  // unchanged
@@ -443,7 +442,7 @@ struct RelocateIntegrationTests {
             dryRun: false,
             skipAlreadyRelocated: false
         ))
-        await waitForRelocateDone(model)
+        try await waitForRelocateDone(model)
 
         // Re-attempted and verified: copied to dest, stale failure cleared.
         #expect(rec.fullPath.hasPrefix(ws.dest.path))
@@ -491,7 +490,7 @@ struct RelocateIntegrationTests {
             dryRun: false,
             skipAlreadyRelocated: false
         ))
-        await waitForRelocateDone(model)
+        try await waitForRelocateDone(model)
 
         #expect(model.dashboard.relocateAdopted == 1)
         #expect(model.dashboard.relocateSucceeded == 0)   // NOT re-copied
@@ -534,7 +533,7 @@ struct RelocateIntegrationTests {
             dryRun: false,
             skipAlreadyRelocated: false
         ))
-        await waitForRelocateDone(model)
+        try await waitForRelocateDone(model)
 
         #expect(model.dashboard.relocateAdopted == 1)
         #expect(model.dashboard.relocateSucceeded == 0)   // adopted, not copied
