@@ -84,6 +84,9 @@ struct RescanPreservedFields: Sendable {
     // rescan must never destroy them (same contract as notes above).
     let tags: [String]
     let userNotes: String
+    /// Catalog soft-delete tombstone (GH #113). Without preservation, a
+    /// same-path rescan silently resurrects the record as active.
+    let purgedAt: Date?
 
     /// Catalog-scope set-aside state (2026-07-15). Preserved so a rescan's
     /// fresh instance can NEVER silently resurrect a set-aside record into
@@ -133,6 +136,7 @@ struct RescanPreservedFields: Sendable {
             || !notes.isEmpty
             || !tags.isEmpty
             || !userNotes.isEmpty
+            || purgedAt != nil
             || setAsideReason != nil
             || supersededByID != nil
             || repairConfirmedDate != nil
@@ -166,6 +170,7 @@ struct RescanPreservedFields: Sendable {
         self.notes = rec.notes
         self.tags = rec.tags
         self.userNotes = rec.userNotes
+        self.purgedAt = rec.purgedAt
         self.setAsideReason = rec.setAsideReason
         self.supersededByID = rec.supersededByID
         self.repairConfirmedDate = rec.repairConfirmedDate
@@ -203,6 +208,7 @@ struct RescanPreservedFields: Sendable {
         rec.notes = self.notes
         rec.tags = self.tags
         rec.userNotes = self.userNotes
+        rec.purgedAt = self.purgedAt
         rec.setAsideReason = self.setAsideReason
         rec.supersededByID = self.supersededByID
         rec.repairConfirmedDate = self.repairConfirmedDate
