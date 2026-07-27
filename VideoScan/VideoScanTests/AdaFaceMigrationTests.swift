@@ -163,6 +163,50 @@ struct AdaFaceMigrationTests {
                 "Engine column must separate backend rows in the per-video cache")
     }
 
+    // MARK: Portable settings snapshot (codex post-merge blocker 4)
+
+    @Test func settingsSnapshotRoundTripsAdafaceThreshold() throws {
+        var s = PersonFinderSettings()
+        s.adafaceThreshold = 0.37
+        s.arcfaceThreshold = 0.44
+        s.recognitionEngine = .adaface
+
+        let data = try JSONEncoder().encode(SettingsSnapshot(from: s))
+        let decoded = try JSONDecoder().decode(SettingsSnapshot.self, from: data)
+
+        var target = PersonFinderSettings()   // defaults: ada 0.30 / arc 0.40
+        decoded.apply(to: &target)
+        #expect(target.adafaceThreshold == 0.37,
+                "Imported snapshot must carry adafaceThreshold, not reset to default")
+        #expect(target.arcfaceThreshold == 0.44)
+        #expect(target.recognitionEngine == .adaface)
+    }
+
+    @Test func preAdafaceSnapshotKeepsTargetThreshold() throws {
+        // A snapshot exported before the field existed — no adafaceThreshold
+        // key. Decode must succeed and apply() must leave the target's
+        // current value untouched (mirror of the nil-means-no-change rule).
+        let legacyJSON = """
+        {"version":1,"savedAt":700000000,"personName":"Donna","threshold":0.5,
+         "minFaceConfidence":0.55,"frameStep":5,"pad":2,"minDuration":1,
+         "minPresenceSecs":5,"requirePrimary":false,"concurrency":8,
+         "skipBundles":false,"skipCatalogBadFiles":true,"largestFaceOnly":false,
+         "previewRate":5,"arcfaceThreshold":0.41,
+         "recognitionEngine":"dlib/Python (accurate)"}
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        let snapshot = try decoder.decode(SettingsSnapshot.self, from: Data(legacyJSON.utf8))
+
+        var target = PersonFinderSettings()
+        target.adafaceThreshold = 0.33   // user's local tune must survive import
+        snapshot.apply(to: &target)
+        #expect(target.adafaceThreshold == 0.33,
+                "Missing key in old snapshot must not clobber the local value")
+        #expect(target.recognitionEngine == .adaface,
+                "Snapshot engine token migrates like every other persisted token")
+    }
+
     // MARK: Hybrid cache keying (QA #144 merge condition)
     //
     // Hybrid rows carry only the VISION threshold in the key's threshold
