@@ -56,6 +56,13 @@ struct PersistedJobDescriptor: Codable, Equatable, Identifiable {
     /// never be persisted in practice.
     let statusRaw: String?
 
+    /// Embed-variant namespace token the scan's cache keys were built with
+    /// (PersonFinderCache.embedVariant(for:) at persist time). Optional so
+    /// descriptors written before 2026-07-27 (#144 codex post-merge review)
+    /// decode as nil → "" (correct for their vision/arcface-unaligned rows).
+    /// Rehydration passes it verbatim — no reconstruction logic to drift.
+    let embedVariant: String?
+
     /// Explicit init with `statusRaw` defaulted to nil so existing test
     /// fixtures that construct descriptors via the memberwise init don't
     /// have to be updated for the field added 2026-06-03. New production
@@ -76,7 +83,8 @@ struct PersistedJobDescriptor: Codable, Equatable, Identifiable {
         clipsFound: Int,
         presenceSecs: Double,
         elapsedSecs: Double,
-        statusRaw: String? = nil
+        statusRaw: String? = nil,
+        embedVariant: String? = nil
     ) {
         self.id = id
         self.personName = personName
@@ -94,6 +102,7 @@ struct PersistedJobDescriptor: Codable, Equatable, Identifiable {
         self.presenceSecs = presenceSecs
         self.elapsedSecs = elapsedSecs
         self.statusRaw = statusRaw
+        self.embedVariant = embedVariant
     }
 }
 

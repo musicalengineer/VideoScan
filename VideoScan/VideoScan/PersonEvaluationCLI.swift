@@ -29,6 +29,16 @@ enum PersonEvaluationCLI {
         var minFaceConfidence: Float?
         var largestFaceOnly = false
         var facePresenceOnly = false
+        // ISOLATED legacy-dlib replay arm (codex post-merge #3). dlib was
+        // removed from RecognitionEngine (#144) but historical eval
+        // manifests still say `--engine dlib`; this CLI-only token keeps
+        // them replayable against the kept-deprecated
+        // scripts/face_recognize.py. Deliberately NOT a RecognitionEngine
+        // case — Search can never see it, and the dlib-cannot-reappear
+        // registry sensor stays intact.
+        var legacyDlib = false
+        var pythonPath: String?          // --python-path (default: ToolLocator)
+        var recognitionScript: String?   // --recognition-script (default: repo script)
         // POI cycle 03 — minimum-hit confirmation floor (eval-only A/B
         // surface). nil = flag not given. Parse validation guarantees the
         // pair is coherent: `minHits` is set iff `aggregationMode` is
@@ -219,6 +229,11 @@ enum PersonEvaluationCLI {
             // face an unmatched face while preserving the production decoder,
             // sampling, orientation, detector, watchdog, and face counter.
             result = await vision()
+        } else if options.legacyDlib {
+            // Isolated legacy replay — never dispatched from Search.
+            result = await Self.legacyDlibProcessVideo(
+                options: options, settings: configuredSettings, logFn: log
+            )
         } else { switch options.engine {
         case .vision: result = await vision()
         case .arcface: result = await arcface()
@@ -234,9 +249,13 @@ enum PersonEvaluationCLI {
         // the already-computed total differs between modes.
         let rule = options.presenceRule
 
+        // Legacy replays report "dlib" — the exact token historical outputs
+        // carried, so old and new runs diff cleanly.
+        let engineLabel = options.facePresenceOnly ? "FacePresence/Vision"
+            : (options.legacyDlib ? "dlib" : options.engine.displayName)
         return Output(
             schemaVersion: 2, person: options.facePresenceOnly ? "" : options.person,
-            engine: options.facePresenceOnly ? "FacePresence/Vision" : options.engine.displayName,
+            engine: engineLabel,
             video: options.video, facesDetected: result.facesDetected, hits: result.totalHits,
             bestDistance: await distanceAccumulator.value() ?? result.segments.map(\.bestDistance).min(),
             segments: result.segments.map {
@@ -264,10 +283,19 @@ enum PersonEvaluationCLI {
             case "--person-eval": break
             case "--engine":
                 let raw = try value(after: argument).lowercased()
-                guard let engine = RecognitionEngine.allCases.first(where: {
+                if raw == "dlib" {
+                    // Legacy replay token — see Options.legacyDlib. Matches
+                    // what pre-#144 manifests emitted (displayName "dlib").
+                    options.legacyDlib = true
+                } else if let engine = RecognitionEngine.allCases.first(where: {
                     $0.displayName.lowercased() == raw || $0.title.lowercased() == raw
-                }) else { throw CLIError("unknown engine: \(raw)") }
-                options.engine = engine
+                }) {
+                    options.engine = engine
+                } else {
+                    throw CLIError("unknown engine: \(raw)")
+                }
+            case "--python-path": options.pythonPath = try value(after: argument)
+            case "--recognition-script": options.recognitionScript = try value(after: argument)
             case "--person": options.person = try value(after: argument)
             case "--references": options.references = try value(after: argument)
             case "--video": options.video = try value(after: argument)
@@ -347,5 +375,128 @@ enum PersonEvaluationCLI {
         let message: String
         init(_ message: String) { self.message = message }
         var errorDescription: String? { message }
+    }
+}
+
+// MARK: - Isolated legacy-dlib replay arm (codex post-merge #3, #144)
+//
+// dlib's Search seat was replaced by AdaFace, but historical eval manifests
+// (tools/person-eval/label_queue_to_manifest.py output) still say
+// `--engine dlib`. This arm keeps those replays working by shelling out to
+// the kept-deprecated scripts/face_recognize.py — a trimmed adaptation of
+// the removed pfProcessVideoWithDlib (git 39d9997). CONTAINMENT RULES:
+//  - not a RecognitionEngine case (the registry sensor proves Search can
+//    never show or dispatch it)
+//  - reachable ONLY through the CLI `--engine dlib` token
+//  - no PauseGate/MemoryPressureMonitor coupling — evals run one video per
+//    process; the RSS budget is a fixed env hint to the script
+
+extension PersonEvaluationCLI {
+
+    private struct LegacyDlibSegmentJSON: Codable {
+        let start: Double
+        let end: Double
+        let bestDist: Float
+        let avgDist: Float
+        let hitCount: Int
+        enum CodingKeys: String, CodingKey {
+            case start, end
+            case bestDist = "best_dist"
+            case avgDist  = "avg_dist"
+            case hitCount = "hit_count"
+        }
+    }
+
+    private struct LegacyDlibResultJSON: Codable {
+        let video: String
+        let duration: Double
+        let fps: Double
+        let error: String?
+        let facesDetected: Int
+        let hits: Int
+        let bestDist: Float?
+        let segments: [LegacyDlibSegmentJSON]
+        enum CodingKeys: String, CodingKey {
+            case video, duration, fps, error, segments, hits
+            case facesDetected = "faces_detected"
+            case bestDist      = "best_dist"
+        }
+    }
+
+    /// Default script location when --recognition-script isn't given:
+    /// prefer the working copy's script (repo-relative), fall back to the
+    /// canonical checkout. Internal for the parse/validation tests.
+    static func legacyDlibDefaultScript() -> String {
+        let candidates = [
+            FileManager.default.currentDirectoryPath + "/scripts/face_recognize.py",
+            NSHomeDirectory() + "/dev/VideoScan/scripts/face_recognize.py"
+        ]
+        return candidates.first { FileManager.default.fileExists(atPath: $0) } ?? candidates[1]
+    }
+
+    static func legacyDlibProcessVideo(
+        options: Options,
+        settings: PersonFinderSettings,
+        logFn: @escaping @Sendable (String) async -> Void
+    ) async -> pfVideoResult? {
+        let python = options.pythonPath ?? ToolLocator.pythonPath
+        let script = options.recognitionScript ?? legacyDlibDefaultScript()
+        let filename = (options.video as NSString).lastPathComponent
+
+        await logFn("legacy-dlib: python=\(python)")
+        await logFn("legacy-dlib: script=\(script)")
+        guard FileManager.default.isExecutableFile(atPath: python) else {
+            await logFn("legacy-dlib: Python executable not found or not executable — pass --python-path")
+            return nil
+        }
+        guard FileManager.default.fileExists(atPath: script) else {
+            await logFn("legacy-dlib: recognition script not found — pass --recognition-script")
+            return nil
+        }
+
+        let stdout = await ProcessRunner.runStreaming(
+            executable: python,
+            arguments: [
+                script,
+                "--ref-path", settings.referencePath,
+                "--video", options.video,
+                "--threshold", String(format: "%.4f", settings.threshold),
+                "--frame-step", String(settings.frameStep),
+                "--min-conf", String(format: "%.4f", settings.minFaceConfidence),
+                "--pad", String(format: "%.2f", settings.pad),
+                "--min-duration", String(format: "%.2f", settings.minDuration)
+            ],
+            environment: [
+                // Fixed budget: single-video eval process, no monitor coupling.
+                "FACE_RECOG_MAX_RSS_MB": "2048"
+            ],
+            stderrLine: { line in Task { await logFn("  " + line) } }
+        )
+
+        guard let jsonStr = stdout else {
+            await logFn("legacy-dlib: failed to launch Python process")
+            return nil
+        }
+        guard let parsed = try? JSONDecoder().decode(
+            LegacyDlibResultJSON.self, from: Data(jsonStr.utf8)) else {
+            let snippet = String(jsonStr.prefix(240)).replacingOccurrences(of: "\n", with: " ")
+            await logFn("legacy-dlib: invalid JSON from script: \(snippet)")
+            return nil
+        }
+        if let err = parsed.error {
+            await logFn("legacy-dlib: script error: \(err)")
+            return pfVideoResult(filename: filename, filePath: options.video,
+                                 durationSeconds: parsed.duration, fps: parsed.fps,
+                                 totalHits: 0, segments: [],
+                                 facesDetected: parsed.facesDetected)
+        }
+        let segs = parsed.segments.map {
+            pfSegment(startSecs: $0.start, endSecs: $0.end,
+                      bestDistance: $0.bestDist, avgDistance: $0.avgDist)
+        }
+        return pfVideoResult(filename: filename, filePath: options.video,
+                             durationSeconds: parsed.duration, fps: parsed.fps,
+                             totalHits: parsed.hits, segments: segs,
+                             facesDetected: parsed.facesDetected)
     }
 }

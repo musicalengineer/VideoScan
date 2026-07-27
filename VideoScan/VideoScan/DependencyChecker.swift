@@ -66,6 +66,28 @@ enum DependencyChecker {
         )
     }
 
+    /// Filmstrip preview rips frames via ffmpeg — and for MKV/FFV1
+    /// masters there is NO alternate play surface (AVKit can't decode
+    /// them), so a missing ffmpeg must surface as the standard dialog,
+    /// never a dead play click (codex review, 2026-07-27).
+    /// `environment`/`fileManager` are injectable so tests can simulate
+    /// a bare machine — on a host with Homebrew ffmpeg the candidate
+    /// scan would otherwise always pass.
+    static func checkFilmstripPreview(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> MissingDependency? {
+        checkTool(
+            displayName: "ffmpeg",
+            context: "play filmstrip preview",
+            candidates: ToolLocator.ffmpegCandidates,
+            envVar: ToolLocator.ffmpegEnvVar,
+            installHint: "brew install ffmpeg",
+            environment: environment,
+            fileManager: fileManager
+        )
+    }
+
     /// Generic worker. A tool is "available" if either the env-var
     /// override points at an executable file, or one of the built-in
     /// candidate paths is executable — mirroring `ToolLocator.resolve`.

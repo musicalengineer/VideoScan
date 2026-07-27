@@ -19,6 +19,14 @@
 //   mxf/mpeg2video        — project-policy archival interchange fixture.
 //   avi/dv                — routes .avFoundation but AVF can't open
 //       AVI: pins the batch-failure → ffmpeg-loop fallback arm.
+//   mxf/mpeg2video        — the checklist's mxf column and the app's
+//       raison d'être (recovered Avid masters): both the router's
+//       .avFoundation pick and the likelyUnanalyzable → .ffmpegDirect
+//       arm real catalogs mostly take (codex review, 2026-07-27).
+//
+// AVF-arm tests run with an injected bogus ffmpegPath so a silent
+// fall-through to the ffmpeg loop fails loudly (ffmpegUnavailable)
+// instead of passing on the wrong arm (codex test-gap c).
 //
 // Plus the failure contracts: per-frame failures tolerated (past-EOF
 // offsets just drop out), all-fail throws noFrameProduced, and an
@@ -100,6 +108,26 @@ struct PreviewFilmstripMediaMatrixTests {
         ])
         return out
     }
+
+    /// mxf/mpeg2video — THE format this app exists for (orphaned Avid
+    /// MXF recovery); the checklist's mxf column. TestMediaGenerator
+    /// has no mxf recipe, so build it directly (recipe verified against
+    /// Homebrew ffmpeg 2026-07-27: ffprobe reports container
+    /// "MXF (Material eXchange Format)", codec "mpeg2video").
+    private func generateMPEG2MXF(duration: Double) throws -> String {
+        let out = tempPath("mxf")
+        try runFFmpeg([
+            "-f", "lavfi", "-i", "testsrc=duration=\(duration):size=320x240:rate=25",
+            "-c:v", "mpeg2video", "-pix_fmt", "yuv420p", "-an", out
+        ])
+        return out
+    }
+
+    /// A path that can never resolve to an executable — passed as the
+    /// injected ffmpegPath so any silent AVF-arm → ffmpeg-loop
+    /// fall-through throws ffmpegUnavailable instead of quietly
+    /// passing the test (codex test-gap c, 2026-07-27).
+    private static let noFFmpeg = "/dev/null/definitely-not-ffmpeg"
 
     // MARK: - Shared assertions
 
@@ -206,7 +234,7 @@ struct PreviewFilmstripMediaMatrixTests {
 
     // MARK: - .avFoundation batch arm
 
-    @Test("mp4/h264 exercises the AVFoundation one-asset batch arm")
+    @Test("mp4/h264 exercises the AVFoundation one-asset batch arm — PROVEN via disabled ffmpeg")
     func h264BatchArm() async throws {
         let path = try generateH264MP4(duration: 8.0)
         defer { TestMediaGenerator.cleanup(path) }
@@ -215,22 +243,27 @@ struct PreviewFilmstripMediaMatrixTests {
                                                      videoCodec: "h264",
                                                      likelyUnanalyzable: false) == .avFoundation)
 
+        // ffmpegPath is a bogus binary: if the AVF batch produced
+        // nothing and the renderer silently fell to the ffmpeg loop
+        // (the old silent-pass hole, codex test-gap c), this throws
+        // ffmpegUnavailable and the test fails LOUDLY. Success below
+        // therefore proves AVFoundation itself decoded every frame.
         let strip = try await VideoScanModel.renderPreviewFilmstrip(
             path: path,
             container: "QuickTime / MOV",
             videoCodec: "h264",
             likelyUnanalyzable: false,
-            durationSeconds: 8.0)
+            durationSeconds: 8.0,
+            ffmpegPath: Self.noFFmpeg)
 
         // The AVF batch reports requested times back — allow a little
-        // slack for frames the generator declines near EOF, but a count
-        // this low would mean the batch arm silently fell to ffmpeg.
+        // slack for frames the generator declines near EOF.
         #expect(strip.frames.count >= 12,
                 "AVF batch arm kept only \(strip.frames.count)/16 frames")
         expectMonotonic(strip.frames, "h264-batch")
     }
 
-    @Test("mov/prores yields a full monotonic strip")
+    @Test("mov/prores yields a full monotonic strip from the AVF arm — PROVEN via disabled ffmpeg")
     func proresMov() async throws {
         let path = try TestMediaGenerator.generate(
             container: "mov",
@@ -240,43 +273,66 @@ struct PreviewFilmstripMediaMatrixTests {
             prefix: "test_gen_filmstrip_prores")
         defer { TestMediaGenerator.cleanup(path) }
 
+        // Same disabled-ffmpeg proof as h264BatchArm: success = AVF arm.
         let strip = try await VideoScanModel.renderPreviewFilmstrip(
             path: path,
             container: "QuickTime / MOV",
             videoCodec: "prores",
             likelyUnanalyzable: false,
-            durationSeconds: 6.0)
+            durationSeconds: 6.0,
+            ffmpegPath: Self.noFFmpeg)
         #expect(strip.frames.count >= 12)
         expectMonotonic(strip.frames, "prores")
     }
 
-    @Test("mxf/mpeg2video yields a monotonic archival strip")
-    func mxfMPEG2Video() async throws {
-        let repoRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let path = repoRoot
-            .appendingPathComponent("tests/fixtures/videos/test_video_only.mxf")
-            .path
-        try #require(FileManager.default.fileExists(atPath: path),
-                     "tracked synthetic MXF fixture is missing")
+    // MARK: - MXF (the format this app exists for)
 
-        try #require(PreviewFrameRouter.previewRoute(
+    @Test("mxf/mpeg2video renders a strip on BOTH arms: the router's .avFoundation pick and the ffmpegDirect override")
+    func mxfBothArms() async throws {
+        let path = try generateMPEG2MXF(duration: 8.0)
+        defer { TestMediaGenerator.cleanup(path) }
+
+        // The router's chosen arm for a clean mxf/mpeg2video record:
+        // .avFoundation (MXF isn't in the hostile container tokens and
+        // mpeg2video isn't a hostile codec). macOS's MXF support is
+        // spotty — where the AVF batch can't open the container this
+        // also pins the batch-failure → ffmpeg-loop fallback, same
+        // contract as avi/dv. Either way the strip MUST land: this is
+        // the recovered-Avid-master browsing path.
+        let route = PreviewFrameRouter.previewRoute(
             container: "MXF (Material eXchange Format)",
             videoCodec: "mpeg2video",
-            likelyUnanalyzable: false) == .avFoundation)
+            likelyUnanalyzable: false)
+        try #require(route == .avFoundation,
+                     "router arm moved for mxf/mpeg2video — update this matrix pin deliberately")
 
-        let strip = try await VideoScanModel.renderPreviewFilmstrip(
+        let viaRoutedArm = try await VideoScanModel.renderPreviewFilmstrip(
             path: path,
             container: "MXF (Material eXchange Format)",
             videoCodec: "mpeg2video",
             likelyUnanalyzable: false,
-            durationSeconds: 5.005)
+            durationSeconds: 8.0)
+        #expect(viaRoutedArm.frames.count >= 8,
+                "routed arm kept only \(viaRoutedArm.frames.count) MXF frames")
+        expectMonotonic(viaRoutedArm.frames, "mxf-routed")
 
-        #expect(strip.frames.count >= 8,
-                "MXF filmstrip retained only \(strip.frames.count) frames")
-        expectMonotonic(strip.frames, "mxf-mpeg2video")
+        // Real recovered Avid masters frequently carry needsReformat →
+        // isLikelyUnanalyzable → .ffmpegDirect, so pin the per-offset
+        // ffmpeg arm against MXF too — that's the arm most of Rick's
+        // catalog will actually use.
+        try #require(PreviewFrameRouter.previewRoute(
+            container: "MXF (Material eXchange Format)",
+            videoCodec: "mpeg2video",
+            likelyUnanalyzable: true) == .ffmpegDirect)
+        let viaFFmpegArm = try await VideoScanModel.renderPreviewFilmstrip(
+            path: path,
+            container: "MXF (Material eXchange Format)",
+            videoCodec: "mpeg2video",
+            likelyUnanalyzable: true,
+            durationSeconds: 8.0)
+        #expect(viaFFmpegArm.frames.count >= 12,
+                "ffmpegDirect arm kept only \(viaFFmpegArm.frames.count) MXF frames")
+        expectMonotonic(viaFFmpegArm.frames, "mxf-ffmpeg")
     }
 
     @Test("avi/dv yields a monotonic strip (batch arm or its ffmpeg fallback)")

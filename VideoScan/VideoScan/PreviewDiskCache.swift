@@ -311,6 +311,17 @@ final class PreviewDiskCache: @unchecked Sendable {
 
     // MARK: - Filmstrip payloads (filmstrip preview, 2026-07-27)
 
+    /// Ceiling for a strip frame's offset, in milliseconds — aligned
+    /// with PreviewBestFramePlan.maxSaneDurationSeconds so the plan and
+    /// the cache agree on what a "sane" media timestamp is (~115 days).
+    /// This is the write-side twin of the plan's SIGTRAP guard: a huge
+    /// FINITE Double passes an isFinite check but `Int(x.rounded())`
+    /// still traps past ~9.2e18 (codex adversarial finding #40,
+    /// 2026-07-27) — so the seconds value is bounded BEFORE the
+    /// millisecond conversion, and the parser below rejects the same
+    /// range on read (a hand-crafted filename must not trap either).
+    static let maxStripOffsetMillis = Int(PreviewBestFramePlan.maxSaneDurationSeconds * 1000)
+
     /// Strip payload filename:
     /// "<key>-strip-<index>-of-<count>-<offsetMillis>.jpg".
     /// Pure and static for tests.
@@ -337,7 +348,16 @@ final class PreviewDiskCache: @unchecked Sendable {
               let index = Int(parts[0]),
               let count = Int(parts[2]),
               let offsetMillis = Int(parts[3]),
-              count > 0, index >= 0, index < count, offsetMillis >= 0 else {
+              count > 0, index >= 0, index < count,
+              // Same sane-offset ceiling as storeFilmstrip (see
+              // maxStripOffsetMillis): a hand-crafted filename with a
+              // huge-but-parseable offset must be a MISS, not a value
+              // that flows downstream into second→millisecond math that
+              // traps (TrimTimecode.format's Int64 conversion is within
+              // one ulp of overflow at Int.max millis). Int.init(String)
+              // already returns nil on overflow — this closes the
+              // in-range-but-insane window.
+              offsetMillis >= 0, offsetMillis <= maxStripOffsetMillis else {
             return nil
         }
         return (key, index, count, offsetMillis)
@@ -351,16 +371,25 @@ final class PreviewDiskCache: @unchecked Sendable {
     /// failure aborts the whole store (never publish a set we know is
     /// short); a write failure mid-set leaves a PARTIAL set on disk,
     /// which lookup treats as a miss and the prune eventually reaps.
-    /// Frames with a non-finite offset are refused outright — the
-    /// millisecond conversion below would trap (same SIGTRAP class as
-    /// PreviewBestFramePlan's duration guard). Disk I/O — off the main
-    /// actor.
+    /// Frames with a non-finite, negative, or insane offset (past
+    /// PreviewBestFramePlan.maxSaneDurationSeconds) are refused
+    /// outright — the millisecond conversion below TRAPS on huge
+    /// finite Doubles too, not just non-finite ones (codex adversarial
+    /// finding #40: Double.greatestFiniteMagnitude sailed through the
+    /// old isFinite guard straight into `Int(x.rounded())`). Whole-
+    /// store abort, consistent with the non-finite behavior: a strip
+    /// with one insane timestamp is a corrupt strip, not a shorter
+    /// one. Disk I/O — off the main actor.
     func storeFilmstrip(_ frames: [(offsetSeconds: Double, image: CGImage)],
                         path: String,
                         mtime: TimeInterval,
                         size: Int64) {
         guard !frames.isEmpty,
-              frames.allSatisfy({ $0.offsetSeconds.isFinite && $0.offsetSeconds >= 0 }) else {
+              frames.allSatisfy({
+                  $0.offsetSeconds.isFinite
+                      && $0.offsetSeconds >= 0
+                      && $0.offsetSeconds <= PreviewBestFramePlan.maxSaneDurationSeconds
+              }) else {
             return
         }
         let key = Self.cacheKey(path: path, mtime: mtime, size: size)

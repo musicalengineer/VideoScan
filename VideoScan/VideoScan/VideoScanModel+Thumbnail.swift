@@ -315,8 +315,14 @@ extension VideoScanModel {
     /// Memory: one ≤480-wide PNG in RAM per call (~0.5 MB decoded),
     /// deleted from disk on exit — nothing accumulates.
     private nonisolated static func renderPreviewFrameViaFFmpeg(path: String,
-                                                                seeks: [String] = ["0.5", "0"]) async throws -> CGImage {
-        let ffmpeg = ToolLocator.ffmpegPath
+                                                                seeks: [String] = ["0.5", "0"],
+                                                                ffmpegPath: String = ToolLocator.ffmpegPath) async throws -> CGImage {
+        // `ffmpegPath` is injectable (defaults to the real ToolLocator
+        // resolution) so the filmstrip media-matrix tests can prove the
+        // AVFoundation arm produced the frames — with a bogus path here,
+        // any silent fall-through to the ffmpeg loop throws
+        // ffmpegUnavailable instead of quietly passing (codex 2026-07-27).
+        let ffmpeg = ffmpegPath
         guard FileManager.default.isExecutableFile(atPath: ffmpeg) else {
             previewLog.notice("ffmpeg preview tier unavailable (no executable at \(ffmpeg, privacy: .public))")
             throw PreviewFrameError.ffmpegUnavailable
@@ -581,6 +587,7 @@ extension VideoScanModel {
                                                    likelyUnanalyzable: Bool,
                                                    durationSeconds: Double,
                                                    frameCount: Int = PreviewFilmstripPlan.defaultFrameCount,
+                                                   ffmpegPath: String = ToolLocator.ffmpegPath,
                                                    onFrameProgress: (@Sendable (Int, Int) -> Void)? = nil) async throws -> PreviewFilmstrip {
         let offsets = PreviewFilmstripPlan.offsets(durationSeconds: durationSeconds,
                                                    frameCount: frameCount)
@@ -618,6 +625,7 @@ extension VideoScanModel {
         if candidates.isEmpty {
             candidates = try await ripFilmstripFramesViaFFmpeg(path: path,
                                                                offsets: offsets,
+                                                               ffmpegPath: ffmpegPath,
                                                                onFrameProgress: onFrameProgress)
         }
 
@@ -659,6 +667,7 @@ extension VideoScanModel {
     private nonisolated static func ripFilmstripFramesViaFFmpeg(
         path: String,
         offsets: [Double],
+        ffmpegPath: String = ToolLocator.ffmpegPath,
         onFrameProgress: (@Sendable (Int, Int) -> Void)?) async throws -> [(offset: Double, image: CGImage)] {
         let total = offsets.count
         var collected: [(offset: Double, image: CGImage)] = []
@@ -669,7 +678,8 @@ extension VideoScanModel {
             do {
                 let image = try await renderPreviewFrameViaFFmpeg(
                     path: path,
-                    seeks: [String(format: "%.3f", offset)])
+                    seeks: [String(format: "%.3f", offset)],
+                    ffmpegPath: ffmpegPath)
                 return (offset, image)
             } catch {
                 // Tolerated per-frame failure (seek past EOF, decoder

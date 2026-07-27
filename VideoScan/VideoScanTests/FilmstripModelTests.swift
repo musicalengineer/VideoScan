@@ -50,6 +50,32 @@ struct FilmstripRouteGateSensorTests {
                 "friendly records must keep the real AVPlayer path")
     }
 
+    /// Every isExecutableFile probe says no — a bare machine, no matter
+    /// what's really installed on the test host. (For Rick: subclass
+    /// override as dependency injection — FileManager is the seam.)
+    private final class NoExecutableFileManager: FileManager {
+        override func isExecutableFile(atPath path: String) -> Bool { false }
+    }
+
+    @Test("checkFilmstripPreview: bare machine → ffmpeg MissingDependency; env override to a real executable → nil")
+    func filmstripDependencyProbe() {
+        let missing = DependencyChecker.checkFilmstripPreview(
+            environment: [:],
+            fileManager: NoExecutableFileManager())
+        #expect(missing?.displayName == "ffmpeg")
+        #expect(missing?.context == "play filmstrip preview")
+        #expect(missing?.installHint.contains("brew install") == true)
+        #expect(missing?.searchedPaths.isEmpty == false,
+                "the dialog's 'where we searched' block would be empty")
+
+        // Positive arm without touching host state: the env override
+        // points at a universally-executable binary (same trick as
+        // ModelTests' ToolLocator cases).
+        #expect(DependencyChecker.checkFilmstripPreview(
+            environment: [ToolLocator.ffmpegEnvVar: "/bin/ls"],
+            fileManager: FileManager.default) == nil)
+    }
+
     @Test("PreviewFilmstripState.isActive matches only its own path")
     func stateIsActive() {
         let frame = PreviewFilmstrip.Frame(offsetSeconds: 0.5,
@@ -87,6 +113,69 @@ struct FilmstripModelStateTests {
         model.stopFilmstrip()
         guard case .idle = model.filmstripState else {
             Issue.record("stopFilmstrip left state \(model.filmstripState)")
+            return
+        }
+    }
+
+    private func makeMKVRecord(path: String) -> VideoRecord {
+        let r = VideoRecord()
+        r.fullPath = path
+        r.filename = (path as NSString).lastPathComponent
+        r.container = "Matroska / WebM"
+        r.videoCodec = "ffv1"
+        r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        r.durationSeconds = 8.0
+        return r
+    }
+
+    private static let simulatedMissingFFmpeg = MissingDependency(
+        displayName: "ffmpeg",
+        context: "play filmstrip preview",
+        installHint: "brew install ffmpeg",
+        searchedPaths: ["/simulated"])
+
+    @Test("missing ffmpeg: interactive click raises the app's MissingDependency alert — no task, no dead click, pane untouched")
+    func missingFFmpegInteractiveRaisesAlert() {
+        let model = VideoScanModel()
+        let rec = makeMKVRecord(path: "/v/a.mkv")
+        model.previewRequestPath = rec.fullPath
+        model.previewImage = NSImage(cgImage: PreviewTestImages.twoTone(),
+                                     size: NSSize(width: 64, height: 64))
+
+        model.requestFilmstrip(for: rec,
+                               dependencyCheck: { Self.simulatedMissingFFmpeg })
+
+        // The EXISTING app-wide alert mechanism carries the failure…
+        #expect(model.missingDependency == Self.simulatedMissingFFmpeg,
+                "missing ffmpeg must surface through the standard MissingDependency alert")
+        // …and nothing else moved: no phantom task, no loading state,
+        // thumbnail + play overlay exactly as they were.
+        #expect(model.filmstripTask == nil)
+        #expect(model.previewImage != nil)
+        #expect(!model.previewUnavailable)
+        guard case .idle = model.filmstripState else {
+            Issue.record("preflight failure left filmstrip state \(model.filmstripState)")
+            return
+        }
+    }
+
+    @Test("missing ffmpeg: prewarm skips SILENTLY — no alert, no task")
+    func missingFFmpegPrewarmStaysSilent() {
+        let model = VideoScanModel()
+        model.prewarmFilmstripIfNeeded(
+            item: .init(path: "/v/a.mkv",
+                        container: "Matroska / WebM",
+                        videoCodec: "ffv1",
+                        likelyUnanalyzable: false,
+                        durationSeconds: 8.0),
+            dependencyCheck: { Self.simulatedMissingFFmpeg })
+
+        #expect(model.missingDependency == nil,
+                "background prewarm must never raise the dependency dialog")
+        #expect(model.filmstripTask == nil,
+                "prewarm launched a doomed generation with no ffmpeg")
+        guard case .idle = model.filmstripState else {
+            Issue.record("silent prewarm skip left state \(model.filmstripState)")
             return
         }
     }
@@ -271,6 +360,109 @@ struct FilmstripGenerationIsolationTests {
             .contentsOfDirectory(atPath: root.path)
             .filter { $0.hasPrefix("\(key)-strip-") }
         #expect(stripFiles.count == 3, "strip set changed under a listing-only early-out")
+    }
+
+    // MARK: 1c. In-flight cancel / stale publish (codex test-gap a)
+
+    @Test("switching rows mid-generation: the old row's frames NEVER publish, cancellation records nothing")
+    func rowSwitchMidGenerationNeverPublishesStaleFrames() async throws {
+        let pathA = try TestMediaGenerator.generate(
+            container: "mkv",
+            streams: .videoOnly,
+            videoCodec: "ffv1",
+            duration: 8.0,
+            prefix: "test_gen_filmstrip_switch")
+        defer { TestMediaGenerator.cleanup(pathA) }
+        let model = VideoScanModel()
+        defer { sweepStripPayloads(of: model, forMediaPath: pathA) }
+
+        model.previewRequestPath = pathA
+        model.requestFilmstrip(for: makeRecord(path: pathA, durationSeconds: 8.0))
+        try #require(model.filmstripTask != nil)
+        // Let it get genuinely mid-generation (first frame reported)
+        // before pulling the rug — a cancel-before-first-rip would test
+        // less than the gap asks for.
+        _ = try await poll(timeoutSeconds: 30) { model.filmstripLatestProgress.done >= 1 }
+
+        // The row switch, exactly as the selection-change hook does it.
+        let pathB = "/v/other-row.mkv"
+        model.previewRequestPath = pathB
+        model.resetFilmstrip(forNewPath: pathB)
+
+        // Observe a grace window generously past any queued MainActor
+        // hop from the cancelled run: A must never surface.
+        for _ in 0..<15 {
+            try await Task.sleep(for: .milliseconds(100))
+            #expect(!model.filmstripState.isActive(forPath: pathA),
+                    "cancelled row A published \(model.filmstripState) after the switch")
+        }
+        guard case .idle = model.filmstripState else {
+            Issue.record("state after mid-generation switch: \(model.filmstripState)")
+            return
+        }
+        // Cancellation is not a fact about the file (poison class).
+        #expect(!model.filmstripFailedPaths.contains(pathA))
+        #expect(!model.thumbnailFailureStore.isKnownFailure(atPath: pathA))
+    }
+
+    // MARK: 1d. Prewarm → interactive promotion (codex test-gap b)
+
+    @Test("play click during an in-flight prewarm promotes it — same run (no double rip), completes as interactive .ready")
+    func promotionCompletesInteractiveWithoutSecondRip() async throws {
+        let path = try TestMediaGenerator.generate(
+            container: "mkv",
+            streams: .videoOnly,
+            videoCodec: "ffv1",
+            duration: 8.0,
+            prefix: "test_gen_filmstrip_promote")
+        defer { TestMediaGenerator.cleanup(path) }
+        let model = VideoScanModel()
+        defer { sweepStripPayloads(of: model, forMediaPath: path) }
+        let rec = makeRecord(path: path, durationSeconds: 8.0)
+        model.previewRequestPath = path
+
+        model.prewarmFilmstripIfNeeded(item: .init(record: rec))
+        try #require(model.filmstripTask != nil, "prewarm never started")
+        try #require(!model.filmstripTaskIsInteractive)
+        let runBeforeClick = model.filmstripRunID
+
+        // The click. No awaits between start and here beyond #require —
+        // but even if the prewarm finished first, a fresh interactive
+        // run would betray itself below via a CHANGED runID.
+        model.requestFilmstrip(for: rec)
+
+        #expect(model.filmstripRunID == runBeforeClick,
+                "promotion started a SECOND run — the same master would rip twice")
+        #expect(model.filmstripTaskIsInteractive)
+        guard case .loading(let p, _, let total) = model.filmstripState, p == path else {
+            Issue.record("promotion did not publish loading state: \(model.filmstripState)")
+            return
+        }
+        #expect(total >= 1)
+
+        // The promoted run must complete as INTERACTIVE: .ready publishes.
+        let ready = try await poll {
+            if case .ready(path, let frames) = model.filmstripState {
+                return !frames.isEmpty
+            }
+            return false
+        }
+        #expect(ready, "promoted prewarm never published .ready (state: \(model.filmstripState))")
+        #expect(!model.filmstripFailedPaths.contains(path))
+    }
+
+    /// Remove this media path's strip payloads from the model's
+    /// (shared, per-process) redirected cache root — the e2e test
+    /// counts whole-root strip files, so every generating test sweeps
+    /// its own key.
+    private func sweepStripPayloads(of model: VideoScanModel, forMediaPath path: String) {
+        guard let sig = PreviewDiskCache.fileSignature(atPath: path) else { return }
+        let key = PreviewDiskCache.cacheKey(path: path, mtime: sig.mtime, size: sig.size)
+        let root = model.previewDiskCache.rootURL
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []
+        where name.hasPrefix("\(key)-strip-") {
+            try? FileManager.default.removeItem(at: root.appendingPathComponent(name))
+        }
     }
 
     // MARK: 2 + strip cache redirect, end to end

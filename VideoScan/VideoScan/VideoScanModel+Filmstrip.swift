@@ -101,7 +101,23 @@ extension VideoScanModel {
     /// Interactive: the preview pane's play button for an
     /// ffmpegDirect-routed record. Publishes loading state immediately,
     /// then either serves the disk-cached strip or generates one.
-    func requestFilmstrip(for record: VideoRecord) {
+    ///
+    /// `dependencyCheck` is the injectable preflight seam (defaults to
+    /// the real DependencyChecker probe) — tests simulate a bare
+    /// machine without touching global tool state.
+    func requestFilmstrip(for record: VideoRecord,
+                          dependencyCheck: () -> MissingDependency? = { DependencyChecker.checkFilmstripPreview() }) {
+        // Preflight ffmpeg BEFORE any state change (codex 🔴 2026-07-27:
+        // a missing ffmpeg was a dead click — the run failed off-screen
+        // and idled, and MKV/FFV1 has no alternate play surface to fall
+        // back to). Same mechanism as Scan/Combine: raise the app-wide
+        // MissingDependency alert and leave the pane exactly as it was
+        // (thumbnail + play overlay).
+        if let missing = dependencyCheck() {
+            missingDependency = missing
+            return
+        }
+
         let item = FilmstripWorkItem(record: record)
 
         // Coalesce: a prewarm already ripping THIS file is promoted to
@@ -141,13 +157,21 @@ extension VideoScanModel {
     /// after a fast thumbnail lands for an ffmpegDirect-routed row, so
     /// the strip is usually on disk before the user ever clicks play.
     /// All guards live HERE so callers can invoke it unconditionally.
-    func prewarmFilmstripIfNeeded(item: FilmstripWorkItem) {
+    /// Same injectable preflight seam as requestFilmstrip.
+    func prewarmFilmstripIfNeeded(item: FilmstripWorkItem,
+                                  dependencyCheck: () -> MissingDependency? = { DependencyChecker.checkFilmstripPreview() }) {
         guard PreviewFrameRouter.previewRoute(container: item.container,
                                               videoCodec: item.videoCodec,
                                               likelyUnanalyzable: item.likelyUnanalyzable) == .ffmpegDirect else {
             return
         }
         guard !filmstripFailedPaths.contains(item.path) else { return }
+        // Missing ffmpeg: SILENT skip — background work never raises
+        // dialogs (the interactive click surfaces the alert), and
+        // launching a doomed generation would just burn a subprocess
+        // attempt per keystroke. A few stats, same cost class as the
+        // reachability gate below.
+        guard dependencyCheck() == nil else { return }
         if filmstripTask != nil {
             // Never cancel an interactive request in favor of a prewarm;
             // same-path prewarm is already doing this exact work.

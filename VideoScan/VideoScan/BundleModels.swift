@@ -107,6 +107,10 @@ struct SettingsSnapshot: Codable {
     var largestFaceOnly: Bool
     var previewRate: Int
     var arcfaceThreshold: Float
+    /// Optional for decode-compat: snapshots exported before #144 (QA round
+    /// 2) lack this key; nil ⇒ leave the target's current value untouched
+    /// instead of silently resetting an imported profile to the default.
+    var adafaceThreshold: Float?
     var recognitionEngine: String
 
     init(from settings: PersonFinderSettings) {
@@ -125,6 +129,7 @@ struct SettingsSnapshot: Codable {
         self.largestFaceOnly = settings.largestFaceOnly
         self.previewRate = settings.previewRate
         self.arcfaceThreshold = settings.arcfaceThreshold
+        self.adafaceThreshold = settings.adafaceThreshold
         self.recognitionEngine = settings.recognitionEngine.rawValue
     }
 
@@ -145,6 +150,9 @@ struct SettingsSnapshot: Codable {
         settings.largestFaceOnly = largestFaceOnly
         settings.previewRate = previewRate
         settings.arcfaceThreshold = arcfaceThreshold
+        // Mirrors arcfaceThreshold; nil (pre-#144 snapshot) keeps the
+        // target's existing value rather than resetting to the default.
+        if let v = adafaceThreshold { settings.adafaceThreshold = v }
         if let eng = RecognitionEngine.migratePersisted(recognitionEngine) {
             settings.recognitionEngine = eng
         }
