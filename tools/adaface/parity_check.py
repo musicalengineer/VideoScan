@@ -15,7 +15,15 @@ cosine ~0.5-0.9, not 0.999+.
 Usage:
   python tools/adaface/parity_check.py \
       --ckpt ... --mlpackage models/adaface_ir50_webface4m.mlpackage \
-      --images tests/fixtures/photos [--min-cosine 0.999]
+      --images tests/fixtures/photos [--min-cosine 0.9985]
+
+Gate defaults to 0.9985 — the DEPLOYED artifact is fp16 (same precision as
+the ArcFace package) and fp16 weight quantization alone costs up to ~0.001
+cosine (observed min 0.998992 across 30 fixtures), so the shipped model must
+not exit 1 against its own gate. When verifying the conversion PIPELINE with
+an fp32 build (convert_adaface_coreml.py --precision fp32), pass
+--min-cosine 0.999 — fp32 parity is ~1.000000 and anything below 0.999 there
+means a real preprocessing/channel-order bug, not quantization.
 
 Exit code 0 = all images pass; 1 = any failure (CI-friendly).
 """
@@ -59,7 +67,8 @@ def main() -> None:
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--mlpackage", required=True)
     ap.add_argument("--images", required=True, help="dir of test images")
-    ap.add_argument("--min-cosine", type=float, default=0.999)
+    ap.add_argument("--min-cosine", type=float, default=0.9985,
+                    help="fp16 deployed gate; use 0.999 for fp32 pipeline verification")
     args = ap.parse_args()
 
     import coremltools as ct

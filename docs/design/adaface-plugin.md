@@ -81,8 +81,10 @@ CPU_ONLY compute for determinism):**
   preprocessing/channel-order/normalization pipeline is exact.
 - fp16 conversion (the deployed artifact, same precision as the ArcFace
   `w600k_r50` package, 83 MB): **29/30 ≥ 0.999**, min 0.998992, typical
-  0.9994–0.9997. The single sub-gate image is weight-quantization noise
-  (proven by the fp32 run), not a conversion bug.
+  0.9994–0.9997. The single sub-0.999 image is weight-quantization noise
+  (proven by the fp32 run), not a conversion bug. Accordingly the script's
+  default gate is **0.9985** (deployed fp16 artifact: 30/30 pass); fp32
+  pipeline-verification runs should pass `--min-cosine 0.999`.
 - Toolchain: Python 3.12 venv, torch 2.7.0, coremltools 8.3.0. (The shared
   project venv is Python 3.14, where coremltools' native BlobWriter fails
   to load — do not use it for conversion.)
@@ -156,7 +158,8 @@ peak RSS 301 MB (within the 768 MB/worker budget).
   (`ArcFacePredictor` slots hold ArcFace models; borrowing them from the
   AdaFace path would be a cross-model bug).
 - Worst-case memory: one 112×112×4 crop + one 512-float embedding per
-  in-flight face, model weights ~175 MB fp16 once per worker; budgeted at
+  in-flight face, model weights 83 MB fp16 (measured on-disk .mlpackage,
+  identical to the ArcFace package) once per worker; budgeted at
   768 MB/worker in `MemoryPressureMonitor` (same as ArcFace).
 
 ## 8. dlib removal & migration

@@ -28,6 +28,7 @@ the converted model. See docs/design/adaface-plugin.md.
 """
 
 import argparse
+import hashlib
 import os
 import sys
 
@@ -37,6 +38,22 @@ import torch  # noqa: E402
 import adaface_net  # noqa: E402  (vendored net.py, MIT)
 
 MODEL_VERSION = "adaface-ir50wf4m-v1"
+
+# Pinned checkpoint digest — torch.load(weights_only=False) unpickles
+# arbitrary code, so REFUSE anything that isn't the exact provenance-
+# documented file. Swapping checkpoints deliberately = update this constant
+# AND bump MODEL_VERSION (it namespaces the app's result cache).
+EXPECTED_CKPT_SHA256 = (
+    "52cca7c64808fea6f44f9b9aee2b0e091bf96c1ab4f6e31bedcdf5d77009b4f8"
+)
+
+
+def _sha256(path: str, chunk: int = 1 << 20) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        while block := f.read(chunk):
+            h.update(block)
+    return h.hexdigest()
 
 
 class EmbeddingOnly(torch.nn.Module):
@@ -52,10 +69,19 @@ class EmbeddingOnly(torch.nn.Module):
 
 
 def load_backbone(ckpt_path: str) -> torch.nn.Module:
+    # Hash gate BEFORE any unpickling — weights_only=False executes
+    # arbitrary pickled code, so only the pinned checkpoint may pass.
+    digest = _sha256(ckpt_path)
+    if digest != EXPECTED_CKPT_SHA256:
+        raise SystemExit(
+            f"REFUSING to load {ckpt_path}: sha256 {digest} != pinned "
+            f"{EXPECTED_CKPT_SHA256}. If this is a deliberate checkpoint "
+            "change, update EXPECTED_CKPT_SHA256 AND bump MODEL_VERSION "
+            "(it namespaces the app's result cache)."
+        )
     model = adaface_net.build_model("ir_50")
     # Lightning checkpoint: tensors live under 'state_dict' with 'model.'
-    # prefixes. weights_only=False because the ckpt pickles trainer state;
-    # provenance/sha256 of the file is pinned in the module docstring.
+    # prefixes. weights_only=False is safe only because of the hash gate above.
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     state = {k[len("model."):]: v for k, v in ckpt["state_dict"].items()
              if k.startswith("model.")}
