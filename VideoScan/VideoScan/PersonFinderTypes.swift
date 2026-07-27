@@ -209,7 +209,16 @@ struct PersonFinderSettings: Equatable {
     var rejectedReferenceFiles: [String] = []  // filenames removed by user, excluded on reload
 
     // ArcFace engine
-    var arcfaceThreshold: Float = 0.40    // cosine similarity threshold (higher = stricter)
+    /// Cosine similarity threshold (higher = stricter). CHOKE POINT for
+    /// poisoned values (codex adversarial #42): the didSet clamps EVERY
+    /// assignment — plist restore, POI profile apply, bundle import, eval
+    /// CLI, UI — to the legal band. Struct didSet is safe here (the
+    /// @Observable-kills-didSet gotcha applies to classes) and doesn't
+    /// recurse on self-assignment. It does NOT fire for the default value,
+    /// which is valid by construction.
+    var arcfaceThreshold: Float = 0.40 {
+        didSet { arcfaceThreshold = Self.clampCosineThreshold(arcfaceThreshold) }
+    }
 
     /// EXPERIMENTAL: when true, warp each face to ArcFace's canonical 112x112
     /// via a 5-landmark similarity transform (norm_crop) before embedding,
@@ -232,7 +241,10 @@ struct PersonFinderSettings: Equatable {
     /// 0.30 is the literature-derived starting point (IR-50-class operating
     /// points sit around 0.25–0.40). Tune on the Donna eval before any
     /// default-engine promotion. See docs/design/adaface-plugin.md §4.
-    var adafaceThreshold: Float = 0.30
+    /// Same didSet choke-point clamp as arcfaceThreshold above.
+    var adafaceThreshold: Float = 0.30 {
+        didSet { adafaceThreshold = Self.clampCosineThreshold(adafaceThreshold) }
+    }
 
     var recognitionEngine: RecognitionEngine = .vision
 
@@ -304,15 +316,15 @@ struct PersonFinderSettings: Equatable {
         if d.object(forKey: "\(p)minPresenceSecs") != nil { s.minPresenceSecs = d.double(forKey: "\(p)minPresenceSecs") }
         if d.object(forKey: "\(p)concurrency") != nil { s.concurrency = d.integer(forKey: "\(p)concurrency") }
         if d.object(forKey: "\(p)previewRate") != nil { s.previewRate = max(1, d.integer(forKey: "\(p)previewRate")) }
-        // Clamp poisoned cosine thresholds (non-numeric decodes to 0.0, which
-        // would make EVERY face a match; negatives/1.0+ are equally broken).
-        // Same defensive posture as matchConfidenceFloor below. Applied to
-        // both CoreML engines — the arcface flaw was identical & pre-existing.
+        // Poisoned cosine thresholds (non-numeric decodes to 0.0 → every
+        // face matches) are normalized by the properties' own didSet clamp
+        // — the single choke point all assignment paths share (plist
+        // restore here, POI applyProfile, bundle import, eval CLI, UI).
         if d.object(forKey: "\(p)arcfaceThreshold") != nil {
-            s.arcfaceThreshold = Self.clampCosineThreshold(d.float(forKey: "\(p)arcfaceThreshold"))
+            s.arcfaceThreshold = d.float(forKey: "\(p)arcfaceThreshold")
         }
         if d.object(forKey: "\(p)adafaceThreshold") != nil {
-            s.adafaceThreshold = Self.clampCosineThreshold(d.float(forKey: "\(p)adafaceThreshold"))
+            s.adafaceThreshold = d.float(forKey: "\(p)adafaceThreshold")
         }
         if d.object(forKey: "\(p)arcfaceInferenceConcurrency") != nil { s.arcfaceInferenceConcurrency = max(1, d.integer(forKey: "\(p)arcfaceInferenceConcurrency")) }
         // Clamp poisoned values (0, negatives, non-numeric → 0) back to the
@@ -669,11 +681,15 @@ struct POIProfile: Codable, Identifiable, Equatable {
     }
 
     /// Same engine→threshold mapping as PersonFinderSettings.thresholdForEngine,
-    /// for profile-driven cache restores (#144).
+    /// for profile-driven cache restores (#144). Cosine thresholds are
+    /// clamped HERE because this is the one path that reads the profile's
+    /// raw stored values directly (a hand-edited/poisoned profile.json
+    /// bypasses the PersonFinderSettings didSet choke point until
+    /// applyProfile runs — codex adversarial #42).
     func thresholdForEngine(_ engine: RecognitionEngine) -> Float {
         switch engine {
-        case .arcface:         return arcfaceThreshold
-        case .adaface:         return adafaceThreshold
+        case .arcface:         return PersonFinderSettings.clampCosineThreshold(arcfaceThreshold)
+        case .adaface:         return PersonFinderSettings.clampCosineThreshold(adafaceThreshold)
         case .vision, .hybrid: return visionThreshold
         }
     }

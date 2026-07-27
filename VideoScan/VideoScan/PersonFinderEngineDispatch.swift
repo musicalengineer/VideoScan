@@ -68,6 +68,12 @@ func pfRunArcFaceEngine(
     distFn: @Sendable @escaping (Float) async -> Void,
     distFnFinal: (@Sendable (Float) async -> Void)? = nil
 ) async -> pfVideoResult? {
+    // Pre-start cancel guard (GH #142 class, codex adversarial #42): a job
+    // cancelled before this arm runs must do NO engine work — no model
+    // resolution, no log lines. The shared processOneVideo guard covers the
+    // production path; this covers the arm itself (and hybrid's fallback
+    // hop, which reaches the AdaFace arm below after the Vision pass).
+    if Task.isCancelled { return nil }
     let (mlModel, err) = await ArcFaceModelLoader.shared.getModel()
     guard let mlModel else {
         await logFn("[arcface] Model load failed: \(err ?? "unknown")")
@@ -144,6 +150,8 @@ func pfRunAdaFaceEngine(
     distFn: @Sendable @escaping (Float) async -> Void,
     distFnFinal: (@Sendable (Float) async -> Void)? = nil
 ) async -> pfVideoResult? {
+    // Pre-start cancel guard — same contract as the ArcFace arm above.
+    if Task.isCancelled { return nil }
     let (mlModel, err) = await AdaFaceModelLoader.shared.getModel()
     guard let mlModel else {
         await logFn("[adaface] Model load failed: \(err ?? "unknown")")

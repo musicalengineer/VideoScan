@@ -105,6 +105,63 @@ struct AdaFaceMigrationTests {
         }
     }
 
+    // MARK: Poisoned thresholds through EVERY assignment path (codex adversarial #42)
+    //
+    // The clamp choke point is the PersonFinderSettings property didSet —
+    // plist restore, POI profile apply, bundle import, eval CLI, and UI all
+    // assign through it. The one direct-read bypass (restoreFromCache reads
+    // POIProfile.thresholdForEngine before any settings overlay) clamps in
+    // that accessor.
+
+    @Test func poisonedProfileApplyClampsThresholds() {
+        let profile = POIProfile(
+            name: "T", referencePath: "/tmp/refs",
+            engine: RecognitionEngine.adaface.rawValue,
+            arcfaceThreshold: 7.7,     // absurd high
+            adafaceThreshold: -9.0     // codex's adversarial value
+        )
+        var s = PersonFinderSettings()
+        s.applyProfile(profile)
+        #expect(s.adafaceThreshold == 0.05,
+                "adafaceThreshold=-9 through applyProfile must clamp to the floor, not match every face")
+        #expect(s.arcfaceThreshold == 0.95,
+                "arcfaceThreshold=7.7 through applyProfile must clamp to the ceiling")
+    }
+
+    @Test func poisonedProfileDirectReadClampsThresholds() {
+        // restoreFromCache reads the profile's thresholds directly (no
+        // settings overlay) when rebuilding cache keys — the accessor must
+        // clamp too or a hand-edited profile.json poisons the key namespace.
+        let profile = POIProfile(
+            name: "T", referencePath: "/tmp/refs",
+            arcfaceThreshold: -3.0, adafaceThreshold: -9.0
+        )
+        #expect(profile.thresholdForEngine(.adaface) == 0.05)
+        #expect(profile.thresholdForEngine(.arcface) == 0.05)
+        // Vision threshold is NOT a cosine and keeps its own semantics.
+        #expect(profile.thresholdForEngine(.vision) == profile.visionThreshold)
+    }
+
+    @Test func poisonedBundleImportClampsThresholds() throws {
+        // Imported settings snapshot with hostile values — decode succeeds,
+        // apply() lands them on the didSet choke point.
+        let json = """
+        {"version":1,"savedAt":700000000,"personName":"Donna","threshold":0.5,
+         "minFaceConfidence":0.55,"frameStep":5,"pad":2,"minDuration":1,
+         "minPresenceSecs":5,"requirePrimary":false,"concurrency":8,
+         "skipBundles":false,"skipCatalogBadFiles":true,"largestFaceOnly":false,
+         "previewRate":5,"arcfaceThreshold":-42.0,"adafaceThreshold":9000.0,
+         "recognitionEngine":"AdaFace (CoreML)"}
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        let snapshot = try decoder.decode(SettingsSnapshot.self, from: Data(json.utf8))
+        var target = PersonFinderSettings()
+        snapshot.apply(to: &target)
+        #expect(target.arcfaceThreshold == 0.05, "Bundle import must clamp the floor side")
+        #expect(target.adafaceThreshold == 0.95, "Bundle import must clamp the ceiling side")
+    }
+
     // MARK: POIProfile JSON compatibility (additive field)
 
     @Test func profileJSONWithoutAdafaceThresholdDecodesWithDefault() throws {
