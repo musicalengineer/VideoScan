@@ -75,6 +75,18 @@ Conversion + parity scripts: `tools/adaface/convert_adaface_coreml.py` and
 `tools/adaface/parity_check.py`. Parity gate: cosine(CoreML, PyTorch) ≥ 0.999
 per test image.
 
+**Parity results (2026-07-27, 30 images from `tests/fixtures/photos`,
+CPU_ONLY compute for determinism):**
+- fp32 conversion: **30/30 pass, cosine = 1.000000** on every image — the
+  preprocessing/channel-order/normalization pipeline is exact.
+- fp16 conversion (the deployed artifact, same precision as the ArcFace
+  `w600k_r50` package, 83 MB): **29/30 ≥ 0.999**, min 0.998992, typical
+  0.9994–0.9997. The single sub-gate image is weight-quantization noise
+  (proven by the fp32 run), not a conversion bug.
+- Toolchain: Python 3.12 venv, torch 2.7.0, coremltools 8.3.0. (The shared
+  project venv is Python 3.14, where coremltools' native BlobWriter fails
+  to load — do not use it for conversion.)
+
 ## 4. Score interpretation & threshold
 
 - Match score = cosine similarity of L2-normalized 512-d embeddings,
