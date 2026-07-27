@@ -205,6 +205,16 @@ struct ConfirmPersonSheet: View {
     /// One background reachability sweep per open (and per "Continue
     /// Reviewing" click). No polling.
     @State private var offlineSweepTask: Task<Void, Never>?
+    /// Backstop insertions made AFTER the current sweep launched. The
+    /// sweep completion REPLACES the offline set (so a reconnected
+    /// volume's rows come back) — but a wholesale replace would drop a
+    /// row the backstop excluded mid-sweep (sweep statted X present →
+    /// X vanished → backstop caught it → sweep lands without X), letting
+    /// navigation return to it once (QA 2026-07-26 minor 1). The
+    /// completion therefore merges: sweep result ∪ THIS set. Reset at
+    /// each sweep launch — never unioned across sweeps, or a
+    /// reconnected volume could never come back.
+    @State private var backstopInsertsSinceSweep: Set<String> = []
 
     private var isHoldout: Bool { holdoutQueue != nil }
 
@@ -861,18 +871,22 @@ struct ConfirmPersonSheet: View {
     private func startOfflineSweep() {
         guard let q = holdout else { return }
         offlineSweepTask?.cancel()
+        backstopInsertsSinceSweep = []
         let pendingRows = q.rows.filter(\.isPending).map(\.fullPath)
         offlineSweepTask = Task { @MainActor in
             let offline = await Self.sweepOfflinePaths(paths: pendingRows)
             guard !Task.isCancelled else { return }
-            offlineExcludedPaths = offline
+            // Sweep result ∪ backstop-inserts-since-launch — NOT the old
+            // set (a reconnected volume must come back), and NOT sweep
+            // result alone (a mid-sweep vanish must stay excluded).
+            offlineExcludedPaths = offline.union(backstopInsertsSinceSweep)
             recomputeHiddenCounts()
             // If the row on screen just turned out to be offline, honor
             // "never present an offline video" — move along (or to the
             // done pane if nothing actionable remains).
             if phase == .labeling, let qq = holdout,
                qq.rows.indices.contains(holdoutIndex),
-               offline.contains(qq.rows[holdoutIndex].fullPath),
+               offlineExcludedPaths.contains(qq.rows[holdoutIndex].fullPath),
                qq.rows[holdoutIndex].isPending {
                 holdoutAdvance()
             }
@@ -923,6 +937,7 @@ struct ConfirmPersonSheet: View {
         }
         let counts = HoldoutNavigation.hiddenPendingCounts(
             rows: q.rows,
+            inFlight: inFlightAnswerIds,
             offlineExcluded: offlineExcludedPaths,
             unplayableExcluded: unplayableExcludedPaths)
         offlineHiddenPending = counts.offline
@@ -960,7 +975,10 @@ struct ConfirmPersonSheet: View {
                 // Backstop feeds the prefilter: a file can vanish AFTER
                 // the open-time sweep — exclude it so navigation never
                 // returns here (the sweep is once-per-open, no polling).
+                // Also recorded per-sweep so an in-flight sweep's
+                // completion can't wholesale-replace it away (QA minor 1).
                 offlineExcludedPaths.insert(path)
+                backstopInsertsSinceSweep.insert(path)
                 recomputeHiddenCounts()
             }
         }
@@ -994,7 +1012,12 @@ struct ConfirmPersonSheet: View {
         let wasPending = row.isPending
         let filename = row.filename
 
-        if wasPending { inFlightAnswerIds.insert(row.reviewId) }
+        if wasPending {
+            inFlightAnswerIds.insert(row.reviewId)
+            // In-flight rows count toward neither hidden bucket
+            // (QA minor 2) — refresh so the counts flip immediately.
+            recomputeHiddenCounts()
+        }
         holdoutSaveError = nil
 
         // Captured HERE (view installed, wrapper resolved) so the escaped
@@ -1013,8 +1036,6 @@ struct ConfirmPersonSheet: View {
             case .success(let updated):
                 holdout = updated
                 if wasPending { holdoutAnsweredThisSession += 1 }
-                // Pending flags changed — keep the hidden counts honest.
-                recomputeHiddenCounts()
             case .failure(let error):
                 // Three surfaces, because the sheet may already be gone
                 // (QA 2026-07-26 🟠): the in-sheet banner, the log trail,
@@ -1027,6 +1048,11 @@ struct ConfirmPersonSheet: View {
                     "The answer for \(filename) was not saved (\(error.localizedDescription)). Its row is still pending \u{2014} reopen the review to answer it again.")
             }
             if wasPending { inFlightAnswerIds.remove(row.reviewId) }
+            // AFTER the in-flight removal, whatever the outcome: on
+            // success the pending flags changed; on failure the row is
+            // pending-and-visible again — either way the hidden counts
+            // must reflect the post-commit truth (QA minor 2).
+            recomputeHiddenCounts()
         }
         holdoutAdvance()
     }

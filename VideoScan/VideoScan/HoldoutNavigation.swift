@@ -85,7 +85,14 @@ enum HoldoutNavigation {
     /// permanent fact (reconnecting its volume won't make it reviewable),
     /// so the "reconnect and reopen to finish" guidance only claims rows
     /// reconnecting would actually recover.
+    ///
+    /// IN-FLIGHT rows count toward NEITHER bucket (QA 2026-07-26
+    /// minor 2): holdoutEffectivePending already subtracts them, so a
+    /// just-answered row whose path lands in an excluded set mid-commit
+    /// would otherwise be double-subtracted — transiently overstating
+    /// the done pane's all-hidden count.
     static func hiddenPendingCounts(rows: [HoldoutReviewRow],
+                                    inFlight: Set<String>,
                                     offlineExcluded: Set<String>,
                                     unplayableExcluded: Set<String>)
         -> (offline: Int, unplayable: Int) {
@@ -94,7 +101,7 @@ enum HoldoutNavigation {
         }
         var offline = 0
         var unplayable = 0
-        for row in rows where row.isPending {
+        for row in rows where row.isPending && !inFlight.contains(row.reviewId) {
             if unplayableExcluded.contains(row.fullPath) {
                 unplayable += 1
             } else if offlineExcluded.contains(row.fullPath) {

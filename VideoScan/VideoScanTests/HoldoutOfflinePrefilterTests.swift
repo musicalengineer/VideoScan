@@ -102,7 +102,7 @@ struct HoldoutOfflinePrefilterTests {
             offlineExcluded: offline, unplayableExcluded: unplayable) == nil)
         // ...and the honest counts the done pane renders from:
         let counts = HoldoutNavigation.hiddenPendingCounts(
-            rows: rows, offlineExcluded: offline, unplayableExcluded: unplayable)
+            rows: rows, inFlight: [], offlineExcluded: offline, unplayableExcluded: unplayable)
         #expect(counts.offline == 2)
         #expect(counts.unplayable == 2)
     }
@@ -132,16 +132,42 @@ struct HoldoutOfflinePrefilterTests {
     @Test func hiddenCounts_ignoreAnsweredAndPreferUnplayable() {
         // Answered row B offline → not counted (needs nothing from Rick).
         let counts1 = HoldoutNavigation.hiddenPendingCounts(
-            rows: rows, offlineExcluded: ["/Volumes/LaCie/b.mov"], unplayableExcluded: [])
+            rows: rows, inFlight: [],
+            offlineExcluded: ["/Volumes/LaCie/b.mov"], unplayableExcluded: [])
         #expect(counts1 == (0, 0))
         // A row in BOTH sets counts as unplayable — the permanent fact;
         // "reconnect to finish" must only claim recoverable rows.
         let counts2 = HoldoutNavigation.hiddenPendingCounts(
-            rows: rows,
+            rows: rows, inFlight: [],
             offlineExcluded: ["/Volumes/T/d.mkv", "/Volumes/LaCie/a.mov"],
             unplayableExcluded: ["/Volumes/T/d.mkv"])
         #expect(counts2.offline == 1)
         #expect(counts2.unplayable == 1)
+    }
+
+    // regression pin (QA 2026-07-26 minor 2): an excluded row whose
+    // answer is IN FLIGHT counts toward NEITHER hidden bucket —
+    // holdoutEffectivePending already subtracts in-flight rows, so
+    // counting it here would double-subtract and transiently overstate
+    // the done pane's all-hidden state.
+    @Test func hiddenCounts_skipInFlightRows_noDoubleSubtraction() {
+        // A offline AND its answer mid-commit; D unplayable, untouched.
+        let counts = HoldoutNavigation.hiddenPendingCounts(
+            rows: rows, inFlight: ["A"],
+            offlineExcluded: ["/Volumes/LaCie/a.mov"],
+            unplayableExcluded: ["/Volumes/T/d.mkv"])
+        #expect(counts.offline == 0)     // A is in flight — not "hidden"
+        #expect(counts.unplayable == 1)  // D unaffected
+        // Once the write commits (in-flight cleared, row answered), the
+        // recompute sees it as answered → still zero.
+        var committed = rows
+        committed[0].rickConfirm = "yes"
+        let after = HoldoutNavigation.hiddenPendingCounts(
+            rows: committed, inFlight: [],
+            offlineExcluded: ["/Volumes/LaCie/a.mov"],
+            unplayableExcluded: ["/Volumes/T/d.mkv"])
+        #expect(after.offline == 0)
+        #expect(after.unplayable == 1)
     }
 
     // MARK: Volume grouping for the sweep
@@ -172,7 +198,7 @@ struct HoldoutOfflinePrefilterTests {
                 after: 99_999, rows: bigRows, inFlight: [],
                 offlineExcluded: offline, unplayableExcluded: [])
             _ = HoldoutNavigation.hiddenPendingCounts(
-                rows: bigRows, offlineExcluded: offline, unplayableExcluded: [])
+                rows: bigRows, inFlight: [], offlineExcluded: offline, unplayableExcluded: [])
         }
         #expect(elapsed < .seconds(2))
     }
