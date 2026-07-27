@@ -25,6 +25,17 @@
 // "best" entry with a "fast" one (best never downgrades); lookup
 // prefers best over fast when both exist.
 //
+// Filmstrip payloads (filmstrip preview, 2026-07-27): multi-frame
+// strips for AVPlayer-unplayable formats live in the SAME directory as
+// "<keyhash>-strip-<index>-of-<count>-<offsetMillis>.jpg". The offset
+// rides in the filename so lookup can rebuild timestamps without a
+// sidecar; the count field makes completeness checkable. lookupFilmstrip
+// returns non-nil ONLY for a complete, consistent set (all indices
+// 0..<count present, one count value) — partial/mismatched leftovers
+// (crashed store, prune took some frames) are a miss and remain
+// prune-eligible garbage. The size-cap prune enumerates by directory
+// contents, not name shape, so strip files are covered automatically.
+//
 // Thread-safety: lock-guarded `@unchecked Sendable` per the repo's
 // "tiny box" convention (see ProcessRunner.DeadlineFlag,
 // ThumbnailFailureStore). The lock serializes writers (store/prune);
@@ -34,12 +45,14 @@
 // rename(2)'s atomicity doing the reader-side synchronization.
 //
 // Memory contract: no in-RAM index — the filesystem IS the index (one
-// stat per lookup tier probe). Worst case per call: one encoded JPEG
-// (≤ ~200 KB) + one decoded 480-wide bitmap (~0.5 MB), released on
-// return. The prune holds one [URL + two attrs] array over the cache
-// dir (~20k entries ≈ a few MB) at background QoS, then drops it.
-// Disk is capped at `sizeCapBytes` (2 GB), enforced by the init-time
-// prune — never on the hot path.
+// stat per lookup tier probe; one directory listing per filmstrip
+// probe, ~20k names ≈ a few ms + a few MB transient, off-main callers
+// only). Worst case per call: one encoded JPEG (≤ ~200 KB) + one
+// decoded 480-wide bitmap (~0.5 MB) for tier payloads, or ≤16 of each
+// (~10 MB) for a filmstrip, released on return. The prune holds one
+// [URL + two attrs] array over the cache dir (~20k entries ≈ a few MB)
+// at background QoS, then drops it. Disk is capped at `sizeCapBytes`
+// (2 GB), enforced by the init-time prune — never on the hot path.
 
 import Foundation
 import CryptoKit
@@ -296,6 +309,165 @@ final class PreviewDiskCache: @unchecked Sendable {
         return data as Data
     }
 
+    // MARK: - Filmstrip payloads (filmstrip preview, 2026-07-27)
+
+    /// Strip payload filename:
+    /// "<key>-strip-<index>-of-<count>-<offsetMillis>.jpg".
+    /// Pure and static for tests.
+    static func stripFilename(key: String, index: Int, count: Int,
+                              offsetMillis: Int) -> String {
+        "\(key)-strip-\(index)-of-\(count)-\(offsetMillis).jpg"
+    }
+
+    /// Parse a strip filename back into its fields. Returns nil for
+    /// anything else (tier payloads, tmp files, malformed/negative
+    /// fields, index out of range for its count). Pure and static so
+    /// tests can pin the round-trip without touching disk.
+    static func parseStripFilename(_ filename: String)
+        -> (key: String, index: Int, count: Int, offsetMillis: Int)? {
+        guard filename.hasSuffix(".jpg") else { return nil }
+        let stem = String(filename.dropLast(4))
+        guard let marker = stem.range(of: "-strip-") else { return nil }
+        let key = String(stem[..<marker.lowerBound])
+        guard !key.isEmpty else { return nil }
+        // Tail is "<index>-of-<count>-<offsetMillis>". A negative field
+        // would add a "-" and break the 4-part shape — rejected.
+        let parts = stem[marker.upperBound...].components(separatedBy: "-")
+        guard parts.count == 4, parts[1] == "of",
+              let index = Int(parts[0]),
+              let count = Int(parts[2]),
+              let offsetMillis = Int(parts[3]),
+              count > 0, index >= 0, index < count, offsetMillis >= 0 else {
+            return nil
+        }
+        return (key, index, count, offsetMillis)
+    }
+
+    /// Store a complete filmstrip for this exact (path, mtime, size).
+    /// JPEGs are encoded OUTSIDE the lock (16 encodes are the expensive
+    /// part — store() already documents that even ONE encode under the
+    /// lock can stall the first interactive preview behind the launch
+    /// prune), then written temp+rename per frame under it. Any encode
+    /// failure aborts the whole store (never publish a set we know is
+    /// short); a write failure mid-set leaves a PARTIAL set on disk,
+    /// which lookup treats as a miss and the prune eventually reaps.
+    /// Frames with a non-finite offset are refused outright — the
+    /// millisecond conversion below would trap (same SIGTRAP class as
+    /// PreviewBestFramePlan's duration guard). Disk I/O — off the main
+    /// actor.
+    func storeFilmstrip(_ frames: [(offsetSeconds: Double, image: CGImage)],
+                        path: String,
+                        mtime: TimeInterval,
+                        size: Int64) {
+        guard !frames.isEmpty,
+              frames.allSatisfy({ $0.offsetSeconds.isFinite && $0.offsetSeconds >= 0 }) else {
+            return
+        }
+        let key = Self.cacheKey(path: path, mtime: mtime, size: size)
+        let fm = FileManager.default
+
+        var payloads: [(filename: String, data: Data)] = []
+        payloads.reserveCapacity(frames.count)
+        for (index, frame) in frames.enumerated() {
+            // autoreleasepool per encode — media-loop memory rule; the
+            // CG/ImageIO temporaries must not pile up across 16 frames.
+            guard let jpeg = autoreleasepool(invoking: { Self.encodeJPEG(frame.image) }) else {
+                diskCacheLog.notice("Filmstrip JPEG encode failed (frame \(index)) for \((path as NSString).lastPathComponent, privacy: .public) — strip not cached")
+                return
+            }
+            let offsetMillis = Int((frame.offsetSeconds * 1000).rounded())
+            payloads.append((Self.stripFilename(key: key, index: index,
+                                                count: frames.count,
+                                                offsetMillis: offsetMillis), jpeg))
+        }
+
+        lock.lock()
+        defer { lock.unlock() }
+
+        // Remove any previous strip set for this key first — two
+        // generations' files mixed under one key would make the
+        // completeness check ambiguous forever.
+        if let existing = try? fm.contentsOfDirectory(atPath: rootURL.path) {
+            for name in existing where name.hasPrefix("\(key)-strip-") {
+                try? fm.removeItem(at: rootURL.appendingPathComponent(name))
+            }
+        }
+
+        for payload in payloads {
+            let tmp = rootURL.appendingPathComponent("tmp-\(UUID().uuidString)")
+            do {
+                try payload.data.write(to: tmp)
+                _ = try fm.replaceItemAt(rootURL.appendingPathComponent(payload.filename),
+                                         withItemAt: tmp)
+            } catch {
+                diskCacheLog.notice("Filmstrip cache write failed (\(error.localizedDescription, privacy: .public)) — partial set left for prune")
+                try? fm.removeItem(at: tmp)
+                return
+            }
+        }
+    }
+
+    /// The cached filmstrip for this exact (path, mtime, size), ordered
+    /// by index, or nil unless a COMPLETE consistent set exists (see
+    /// completeStripSet). Decodes every frame — a corrupt/missing
+    /// payload fails the whole lookup so the caller regenerates.
+    /// Disk I/O (one directory listing + ≤count JPEG decodes) — off the
+    /// main actor.
+    func lookupFilmstrip(path: String, mtime: TimeInterval, size: Int64)
+        -> [(offsetSeconds: Double, image: CGImage)]? {
+        let key = Self.cacheKey(path: path, mtime: mtime, size: size)
+        guard let set = completeStripSet(forKey: key) else { return nil }
+        var frames: [(offsetSeconds: Double, image: CGImage)] = []
+        frames.reserveCapacity(set.count)
+        for entry in set {
+            guard let source = CGImageSourceCreateWithURL(entry.url as CFURL, nil),
+                  let cg = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+                return nil
+            }
+            frames.append((Double(entry.offsetMillis) / 1000.0, cg))
+        }
+        return frames
+    }
+
+    /// True when a complete strip set exists for this signature —
+    /// directory listing only, no decoding. Lets the prewarm skip
+    /// already-cached records cheaply.
+    func hasCompleteFilmstrip(path: String, mtime: TimeInterval, size: Int64) -> Bool {
+        completeStripSet(forKey: Self.cacheKey(path: path, mtime: mtime, size: size)) != nil
+    }
+
+    /// The complete, consistent strip file set for `key`, ordered by
+    /// index — or nil for none/partial/inconsistent (mixed count
+    /// fields, duplicate indices, unparseable names under our prefix).
+    /// Strict by design: anything ambiguous is a miss, and the garbage
+    /// stays prune-eligible without eager deletion here (readers are
+    /// lock-free — see file header).
+    private func completeStripSet(forKey key: String)
+        -> [(offsetMillis: Int, url: URL)]? {
+        let fm = FileManager.default
+        guard let names = try? fm.contentsOfDirectory(atPath: rootURL.path) else {
+            return nil
+        }
+        let prefix = "\(key)-strip-"
+        var byIndex: [Int: (offsetMillis: Int, url: URL)] = [:]
+        var expectedCount: Int?
+        for name in names where name.hasPrefix(prefix) {
+            guard let parsed = Self.parseStripFilename(name), parsed.key == key else {
+                return nil
+            }
+            if let expected = expectedCount, expected != parsed.count { return nil }
+            expectedCount = parsed.count
+            guard byIndex.updateValue((parsed.offsetMillis,
+                                       rootURL.appendingPathComponent(name)),
+                                      forKey: parsed.index) == nil else {
+                return nil
+            }
+        }
+        guard let count = expectedCount, byIndex.count == count else { return nil }
+        // count distinct in-range indices ⇒ exactly 0..<count.
+        return (0..<count).compactMap { byIndex[$0] }
+    }
+
     // MARK: - Size-cap prune
 
     /// Schedule the over-cap prune exactly once, at background QoS —
@@ -318,6 +490,12 @@ final class PreviewDiskCache: @unchecked Sendable {
     /// `sizeCapBytes`. Also sweeps orphaned temp files from crashed
     /// writes. Synchronous; internal so tests can invoke it directly
     /// instead of racing the init-scheduled task.
+    ///
+    /// Name-shape agnostic BY DESIGN: everything that isn't a tmp- file
+    /// is a payload (tier JPEGs and filmstrip frames alike), so new
+    /// payload families are covered without touching this code. A strip
+    /// that loses SOME frames to the reap becomes a partial set —
+    /// lookupFilmstrip already treats that as a miss.
     func pruneNow() {
         let fm = FileManager.default
         let keys: [URLResourceKey] = [.fileSizeKey, .contentModificationDateKey]
