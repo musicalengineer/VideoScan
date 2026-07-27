@@ -25,6 +25,7 @@
 import Testing
 import Foundation
 import CoreGraphics
+import AppKit
 @testable import VideoScan
 
 // MARK: - Pure sensors and state machine (no media, no model I/O)
@@ -166,11 +167,14 @@ struct FilmstripGenerationIsolationTests {
 
         let model = VideoScanModel()
         // The fast thumbnail "already succeeded" for this row — put its
-        // payload in the L2 so we can prove it survives the failure.
+        // payload in the L2 AND publish it to the pane so we can prove
+        // both survive the failure.
         let sig = try #require(PreviewDiskCache.fileSignature(atPath: path))
         model.previewDiskCache.store(PreviewTestImages.twoTone(),
                                      path: path, mtime: sig.mtime, size: sig.size,
                                      tier: .fast)
+        model.previewImage = NSImage(cgImage: PreviewTestImages.twoTone(),
+                                     size: NSSize(width: 64, height: 64))
 
         model.previewRequestPath = path
         model.requestFilmstrip(for: makeRecord(path: path, durationSeconds: 8.0))
@@ -186,12 +190,87 @@ struct FilmstripGenerationIsolationTests {
         // …the fast-tier payload is still served…
         #expect(model.previewDiskCache.lookup(path: path, mtime: sig.mtime, size: sig.size) != nil,
                 "fast thumbnail payload vanished after a filmstrip failure")
-        // …and the pane fell through to the interactive NO PREVIEW state.
-        #expect(model.previewUnavailable)
+        // …and the pane keeps the TRUTHFUL thumbnail (QA 🟡 2026-07-27
+        // behavior change, updated by feature-dev with QA approval: a
+        // strip failure used to blank previewImage into NO PREVIEW,
+        // lying about a file whose thumbnail decoded fine — now
+        // previewImage/previewUnavailable are untouched and only the
+        // filmstrip state returns to idle).
+        #expect(model.previewImage != nil,
+                "strip failure blanked the truthful fast thumbnail")
+        #expect(!model.previewUnavailable,
+                "strip failure republished NO PREVIEW over a decodable file's thumbnail")
         guard case .idle = model.filmstripState else {
             Issue.record("failed interactive generation left state \(model.filmstripState)")
             return
         }
+    }
+
+    // MARK: 1b. Prewarm early-out is listing-only (QA 🟠 2026-07-27)
+
+    @Test("prewarm on an already-cached strip early-outs via listing only — no decode, no regeneration, bookkeeping cleared")
+    func prewarmEarlyOutIsListingOnly() async throws {
+        // A file that would FAIL generation if the prewarm ever tried
+        // (garbage bytes), plus a COMPLETE-but-corrupt strip set: the
+        // listing-only completeness check passes, a decoding lookup
+        // would fail. The distinguisher: the fixed prewarm early-outs
+        // (nothing recorded, nothing ripped); the old lookup-based path
+        // would decode-fail, fall to generation on the garbage file,
+        // and blacklist the path.
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("test_gen_filmstrip_prewarm_\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = dir.appendingPathComponent("garbage.mkv").path
+        try Data((0..<8192).map { UInt8(truncatingIfNeeded: $0 &* 73) }).write(
+            to: URL(fileURLWithPath: path))
+
+        let model = VideoScanModel()
+        let sig = try #require(PreviewDiskCache.fileSignature(atPath: path))
+        let key = PreviewDiskCache.cacheKey(path: path, mtime: sig.mtime, size: sig.size)
+        let root = model.previewDiskCache.rootURL
+        for i in 0..<3 {
+            let name = PreviewDiskCache.stripFilename(key: key, index: i, count: 3,
+                                                      offsetMillis: i * 500)
+            try Data("not a jpeg \(i)".utf8).write(to: root.appendingPathComponent(name))
+        }
+        // The redirected root is shared per-process — sweep this key's
+        // payloads on exit so the e2e test's whole-root strip count
+        // isn't polluted.
+        defer {
+            for name in (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []
+            where name.hasPrefix("\(key)-strip-") {
+                try? FileManager.default.removeItem(at: root.appendingPathComponent(name))
+            }
+        }
+        try #require(model.previewDiskCache.hasCompleteFilmstrip(path: path,
+                                                                 mtime: sig.mtime,
+                                                                 size: sig.size))
+
+        model.prewarmFilmstripIfNeeded(item: .init(path: path,
+                                                   container: "Matroska / WebM",
+                                                   videoCodec: "ffv1",
+                                                   likelyUnanalyzable: false,
+                                                   durationSeconds: 8.0))
+
+        // Early-out completion must CLEAR the bookkeeping (a phantom
+        // "in flight" task would block every later prewarm and click).
+        let cleared = try await poll { model.filmstripTask == nil }
+        #expect(cleared, "prewarm early-out never cleared its bookkeeping")
+
+        // No generation was attempted on the garbage file…
+        #expect(model.filmstripFailedPaths.isEmpty,
+                "prewarm decoded/regenerated instead of early-outing on the listing")
+        // …no UI publish for a pure prewarm…
+        guard case .idle = model.filmstripState else {
+            Issue.record("pure prewarm published state \(model.filmstripState)")
+            return
+        }
+        // …and the on-disk set is untouched (not replaced by a regen).
+        let stripFiles = try FileManager.default
+            .contentsOfDirectory(atPath: root.path)
+            .filter { $0.hasPrefix("\(key)-strip-") }
+        #expect(stripFiles.count == 3, "strip set changed under a listing-only early-out")
     }
 
     // MARK: 2 + strip cache redirect, end to end
