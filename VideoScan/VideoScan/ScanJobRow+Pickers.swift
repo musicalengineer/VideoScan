@@ -22,7 +22,7 @@ extension ScanJobRow {
                 Button {
                     job.assignedProfile = profile
                     if job.assignedEngine == nil,
-                       let eng = RecognitionEngine(rawValue: profile.engine) {
+                       let eng = RecognitionEngine.migratePersisted(profile.engine) {
                         job.assignedEngine = eng
                     }
                 } label: {
@@ -195,26 +195,19 @@ extension ScanJobRow {
 
             Divider()
 
-            // Engine-specific settings
-            if engine == .dlib || engine == .hybrid {
-                LabeledControl("Python Path") {
-                    TextField("", text: model.settingsBinding.pythonPath)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 200)
+            // Engine-specific settings — AdaFace's own cosine threshold
+            // (the generic Match Threshold above is Vision's; the CoreML
+            // engines each carry their own knob). Hybrid shows it too since
+            // its fallback pass consumes it (#144).
+            if engine == .adaface || engine == .hybrid {
+                LabeledControl("AdaFace Cosine Threshold") {
+                    Slider(value: model.settingsBinding.adafaceThreshold.asDouble, in: 0.1...0.7, step: 0.05)
+                        .frame(width: 140)
+                    Text(String(format: "%.2f", model.settings.adafaceThreshold))
+                        .font(.system(.body, design: .monospaced))
+                        .frame(width: 38)
                 }
-                LabeledControl("Recognition Script") {
-                    TextField("", text: model.settingsBinding.recognitionScript)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 200)
-                }
-                if engine == .dlib {
-                    HStack(spacing: 4) {
-                        Image(systemName: model.settings.dlibReady ? "checkmark.circle.fill" : "xmark.circle.fill")
-                            .foregroundColor(model.settings.dlibReady ? .green : .red)
-                        Text(model.settings.dlibReady ? "dlib ready" : "dlib not configured")
-                            .font(.callout)
-                    }
-                }
+                .help("Cosine similarity an AdaFace face embedding needs to count as a match (higher = stricter). Default 0.30 — see docs/design/adaface-plugin.md.")
             }
 
             Divider()

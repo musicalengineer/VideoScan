@@ -145,7 +145,7 @@ struct SettingsSnapshot: Codable {
         settings.largestFaceOnly = largestFaceOnly
         settings.previewRate = previewRate
         settings.arcfaceThreshold = arcfaceThreshold
-        if let eng = RecognitionEngine(rawValue: recognitionEngine) {
+        if let eng = RecognitionEngine.migratePersisted(recognitionEngine) {
             settings.recognitionEngine = eng
         }
     }

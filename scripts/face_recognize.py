@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """
-face_recognize.py — production face recognition engine for VideoScan.
+face_recognize.py — DEPRECATED dlib face recognition engine (was the Search
+"dlib/Python" seat).
 
-Called per-video by the Swift app. Outputs structured JSON to stdout,
-human-readable progress to stderr. Swift handles parallelism by running
-multiple instances concurrently.
+DEPRECATED 2026-07-27 (GH #144): the VideoScan app no longer invokes this
+script — the dlib Search seat was replaced by the AdaFace CoreML plugin.
+Kept on disk because it still works standalone and other diagnostic tooling
+(fd_diagnostic.py etc.) shares its dlib environment. Do not wire it back
+into the app.
+
+Original role: called per-video by the Swift app. Outputs structured JSON to
+stdout, human-readable progress to stderr. Swift handled parallelism by
+running multiple instances concurrently.
 
 Usage:
     /path/to/venv/bin/python face_recognize.py \\

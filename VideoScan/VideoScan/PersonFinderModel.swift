@@ -60,14 +60,18 @@ final class ScanJob: ObservableObject, Identifiable {
     var identityAnnotationEpoch: UInt64 = 0
 
     var assignedFaces: [ReferenceFace] = []
-    /// ArcFace reference embeddings, computed once per job and reused
-    /// across every video. Empty until the first scan video populates it.
+    /// CoreML reference embeddings, computed once per job and reused
+    /// across every video — KEYED BY BACKEND token (FaceEmbeddingBackend):
+    /// AdaFace and ArcFace vectors are both 512-d but not comparable, so
+    /// a job re-run under a different engine must never reuse the other
+    /// backend's vectors (GH #144). Empty until the first scan video
+    /// populates it.
     /// Why caching: `pfRunArcFaceEngine` previously called
     /// `arcfaceLoadReferenceEmbeddings` per VIDEO — wasted work AND
     /// multiplied concurrent MLModel.prediction() calls by N-references
     /// per video, which hit the MLE5BindEmptyMemoryObjectToPort race
     /// even with per-call MLModel instances.
-    var assignedArcFaceEmbeddings: [[Float]] = []
+    var assignedRefEmbeddings: [String: [[Float]]] = [:]
     var personLabel: String { assignedProfile?.name ?? "" }
 
     /// Per-job engine override — nil means use profile's engine or global default.
@@ -75,7 +79,8 @@ final class ScanJob: ObservableObject, Identifiable {
     /// Resolved engine: job override > profile > global default
     var effectiveEngine: RecognitionEngine {
         if let e = assignedEngine { return e }
-        if let p = assignedProfile, let e = RecognitionEngine(rawValue: p.engine) { return e }
+        // migratePersisted: profile.json may carry a pre-#144 dlib/hybrid token.
+        if let p = assignedProfile, let e = RecognitionEngine.migratePersisted(p.engine) { return e }
         return .vision
     }
 
@@ -780,11 +785,12 @@ final class PersonFinderModel: ObservableObject {
 // PFVisionFrameMatch, pfVisionMatchCandidates, pfVisionClusterSegments,
 // pfLogMilestones, pfProcessVideo. Dead helper pfDetectFaces(in:) removed.
 
-// MARK: - dlib/Python video processing
-// Moved to PersonFinderEngineDispatch.swift (step 4 of 6 PersonFinderModel split).
-// Symbols relocated: DlibSegmentJSON, DlibResultJSON, pfDecodeDlibResult,
-// pfProcessVideoWithDlib. pfProcessVideoWithDlib widened private → internal
-// because its caller PersonFinderModel.runDlib() remains here until step 6.
+// MARK: - CoreML engine dispatch
+// Lives in PersonFinderEngineDispatch.swift (step 4 of 6 PersonFinderModel
+// split). The dlib/Python bridge that used to live there (DlibSegmentJSON,
+// DlibResultJSON, pfDecodeDlibResult, pfProcessVideoWithDlib) was removed
+// with the dlib Search seat — GH #144; AdaFace replaced it
+// (pfRunAdaFaceEngine, AdaFaceEngine.swift).
 
 // MARK: - Clip extraction / compatibility bucketing / compilation
 // Moved to PersonFinderCompilation.swift (step 5 of 6 PersonFinderModel

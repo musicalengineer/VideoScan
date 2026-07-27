@@ -127,7 +127,10 @@ final class PersonFinderCache {
         // Aligned vs unaligned ArcFace embeddings are not comparable, so they
         // must not share cached per-video results. arcfaceEmbedVariant is set
         // per scan from the alignment toggle; "" keeps the legacy namespace.
-        if engine == .arcface, !arcfaceEmbedVariant.isEmpty {
+        // AdaFace (#144) uses the same slot for its backend/model-version
+        // token — rows are already engine-separated by the `engine` column,
+        // the variant additionally busts the cache on a checkpoint bump.
+        if engine == .arcface || engine == .adaface, !arcfaceEmbedVariant.isEmpty {
             refHash += "|" + arcfaceEmbedVariant
         }
         cacheLog.debug("makeKey: refHash=\(refHash, privacy: .public) refs=\(refFilenames.count) person=\(personName, privacy: .public) engine=\(engine.rawValue, privacy: .public)")
