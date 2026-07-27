@@ -27,6 +27,14 @@
 // walk mirrors HoldoutReviewQueue.nextPendingIndex; with all sets empty
 // these reduce exactly to that behavior.)
 //
+// UNIFIED-REVIEW (2026-07-27, docs/design/unified-review.md D5): the
+// wrap-walk is now a GENERIC core (`nextIndex`) shared by both phases of
+// the unified Review session. The holdout phase keeps the wrap policy
+// over actionable rows (unchanged semantics — the delegating wrappers
+// below are pinned against the original behavior); the candidate phase
+// uses the LINEAR policy (skipped candidates do not come back around —
+// the existing Confirm semantic).
+//
 // Blindness contract: reachability is a filesystem fact and
 // container/codec are media facts (same carve-out as the thumbnail
 // routing) — nothing here reads or adds model/detection fields.
@@ -34,6 +42,34 @@
 import Foundation
 
 enum HoldoutNavigation {
+
+    // MARK: - Generic walk core (unified-review D5)
+
+    /// The one walk implementation. `wraps: true` visits every index except
+    /// `idx` itself exactly once, in wrap order (a row is never its own
+    /// successor — same contract as HoldoutReviewQueue.nextPendingIndex);
+    /// `wraps: false` walks strictly forward. Pass `idx: -1` with
+    /// `wraps: false` to search from the front.
+    static func nextIndex(after idx: Int, count: Int, wraps: Bool,
+                          isActionable: (Int) -> Bool) -> Int? {
+        guard count > 0 else { return nil }
+        if wraps {
+            guard count > 1 else { return nil }
+            for step in 1..<count {
+                let i = (idx + step) % count
+                if isActionable(i) { return i }
+            }
+            return nil
+        }
+        var i = max(idx + 1, 0)
+        while i < count {
+            if isActionable(i) { return i }
+            i += 1
+        }
+        return nil
+    }
+
+    // MARK: - Holdout-phase actionability
 
     /// Can this row be presented for answering right now?
     static func isActionable(_ row: HoldoutReviewRow,
@@ -52,8 +88,8 @@ enum HoldoutNavigation {
                                      inFlight: Set<String>,
                                      offlineExcluded: Set<String>,
                                      unplayableExcluded: Set<String>) -> Int? {
-        rows.firstIndex {
-            isActionable($0, inFlight: inFlight,
+        nextIndex(after: -1, count: rows.count, wraps: false) { i in
+            isActionable(rows[i], inFlight: inFlight,
                          offlineExcluded: offlineExcluded,
                          unplayableExcluded: unplayableExcluded)
         }
@@ -67,18 +103,14 @@ enum HoldoutNavigation {
                                     inFlight: Set<String>,
                                     offlineExcluded: Set<String>,
                                     unplayableExcluded: Set<String>) -> Int? {
-        let n = rows.count
-        guard n > 1 else { return nil }
-        for step in 1..<n {
-            let i = (idx + step) % n
-            if isActionable(rows[i], inFlight: inFlight,
-                            offlineExcluded: offlineExcluded,
-                            unplayableExcluded: unplayableExcluded) {
-                return i
-            }
+        nextIndex(after: idx, count: rows.count, wraps: true) { i in
+            isActionable(rows[i], inFlight: inFlight,
+                         offlineExcluded: offlineExcluded,
+                         unplayableExcluded: unplayableExcluded)
         }
-        return nil
     }
+
+    // MARK: - Honest hidden counts
 
     /// How many pending rows each filter is hiding, for the honest
     /// counts. A row in BOTH sets counts as UNPLAYABLE — that's the
@@ -111,6 +143,8 @@ enum HoldoutNavigation {
         return (offline, unplayable)
     }
 
+    // MARK: - Playability classification
+
     /// ZERO-I/O playability classification from catalog media metadata.
     /// nil meta (row not in catalog) → playable: unknown ≠ unplayable.
     static func isUnplayable(meta: HoldoutMediaMeta?) -> Bool {
@@ -131,6 +165,8 @@ enum HoldoutNavigation {
         }
         return excluded
     }
+
+    // MARK: - Volume grouping
 
     /// The volume key a path's reachability is judged by, or nil for
     /// internal (non-/Volumes) paths — those have no separable volume to
