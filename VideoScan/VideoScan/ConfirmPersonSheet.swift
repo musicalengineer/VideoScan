@@ -178,6 +178,34 @@ struct ConfirmPersonSheet: View {
     /// Keeps the LaCie spindle from head-parking between answers.
     @State private var keepalive = HoldoutSpindleKeepalive()
 
+    // MARK: Prefilter state (fix/review-offline-prefilter)
+    //
+    // Rick 2026-07-26: "if a video is offline, don't present it" and
+    // "the prefilter should check that these are even playable." Two
+    // SEPARATE exclusion sets — different facts, different remedies —
+    // both keyed by fullPath. Excluded rows stay pending in the CSV
+    // (hidden ≠ answered); navigation just never lands on them and the
+    // counts call the hiding out explicitly.
+
+    /// Rows whose file is unreachable: volume unmounted (sweep stage 1),
+    /// file missing on a mounted volume (sweep stage 2), or vanished
+    /// after the sweep (per-row backstop). Rebuilt by each sweep.
+    @State private var offlineExcludedPaths: Set<String> = []
+    /// Rows QuickTime can't play, decided ZERO-I/O from catalog facts
+    /// (PreviewFrameRouter .ffmpegDirect — QT's boundary IS AVF's).
+    /// Rows with no catalog record are presented: unknown ≠ unplayable.
+    /// Computed once per open; catalog facts don't change mid-session.
+    @State private var unplayableExcludedPaths: Set<String> = []
+    /// Derived hidden-pending counts, stored (not computed per render —
+    /// the 100k-row scale test says no O(rows) work in view bodies).
+    /// Recomputed via recomputeHiddenCounts() whenever the sets or the
+    /// queue's pending flags change.
+    @State private var offlineHiddenPending: Int = 0
+    @State private var unplayableHiddenPending: Int = 0
+    /// One background reachability sweep per open (and per "Continue
+    /// Reviewing" click). No polling.
+    @State private var offlineSweepTask: Task<Void, Never>?
+
     private var isHoldout: Bool { holdoutQueue != nil }
 
     /// Pending/answered counts adjusted for in-flight background writes,
@@ -189,6 +217,18 @@ struct ConfirmPersonSheet: View {
     private var holdoutEffectiveAnswered: Int {
         guard let q = holdout else { return 0 }
         return q.rows.count - holdoutEffectivePending
+    }
+    /// Pending rows the user can actually be shown right now.
+    private var holdoutActionablePending: Int {
+        max(0, holdoutEffectivePending - offlineHiddenPending - unplayableHiddenPending)
+    }
+    /// " · 3 offline, 2 unplayable hidden" — empty when nothing is hidden.
+    private var holdoutHiddenSuffix: String {
+        var parts: [String] = []
+        if offlineHiddenPending > 0 { parts.append("\(offlineHiddenPending) offline") }
+        if unplayableHiddenPending > 0 { parts.append("\(unplayableHiddenPending) unplayable") }
+        guard !parts.isEmpty else { return "" }
+        return " \u{00B7} " + parts.joined(separator: ", ") + " hidden"
     }
 
     /// Seeds holdout-mode display state at construction so the FIRST
@@ -235,6 +275,7 @@ struct ConfirmPersonSheet: View {
         .onDisappear {
             thumbnailLoadTask?.cancel()
             reachabilityTask?.cancel()
+            offlineSweepTask?.cancel()
             prefetcher?.cancelAll()
             keepalive.stop()
             // holdoutWriteChain is NOT cancelled: any queued answers
@@ -264,8 +305,10 @@ struct ConfirmPersonSheet: View {
             if isHoldout, let q = holdout {
                 // Effective counts: an optimistically advanced answer
                 // ticks the header immediately even while its serialized
-                // background write is still in flight.
-                Text("\(holdoutEffectiveAnswered) of \(q.rows.count) answered")
+                // background write is still in flight. Hidden rows are
+                // called out, never silently swallowed — e.g.
+                // "12 of 36 answered · 3 offline, 2 unplayable hidden".
+                Text("\(holdoutEffectiveAnswered) of \(q.rows.count) answered\(holdoutHiddenSuffix)")
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(.secondary)
             } else if phase == .labeling && !candidates.isEmpty {
@@ -633,10 +676,14 @@ struct ConfirmPersonSheet: View {
         // still committing in the background. But the COMPLETION claim
         // ("the CSV is complete") is only made once every in-flight
         // write has actually committed — until then the honest state is
-        // "still saving" (QA 2026-07-26 🟠 c).
+        // "still saving" (QA 2026-07-26 🟠 c). Hidden (offline/
+        // unplayable) rows get their own honest branch: they are still
+        // pending in the CSV, so "complete" would be a lie.
         let fullyCommitted = holdoutEffectivePending == 0 && inFlightAnswerIds.isEmpty
+        let allRemainingHidden = holdoutEffectivePending > 0 && holdoutActionablePending == 0
         return VStack(spacing: 10) {
-            Image(systemName: fullyCommitted ? "checkmark.seal.fill" : "hourglass")
+            Image(systemName: fullyCommitted ? "checkmark.seal.fill"
+                  : (allRemainingHidden ? "externaldrive.badge.exclamationmark" : "hourglass"))
                 .font(.system(size: 36))
                 .foregroundColor(fullyCommitted ? .green : .orange)
             if let q = holdout {
@@ -656,8 +703,18 @@ struct ConfirmPersonSheet: View {
                         .foregroundColor(.secondary)
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 440)
+                } else if allRemainingHidden {
+                    // All-hidden edge: every reachable, playable video is
+                    // answered — what's left can't be presented.
+                    Text("All reviewable videos answered")
+                        .font(.headline)
+                    Text(allHiddenExplanation)
+                        .font(.callout)
+                        .foregroundColor(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 440)
                 } else {
-                    Text("\(holdoutEffectivePending) still pending")
+                    Text("\(holdoutActionablePending) still pending\(holdoutHiddenSuffix)")
                         .font(.headline)
                     Text("You skipped some \u{2014} the Review badge stays up until every row has an answer. Reopen anytime; you'll land on the first unanswered video.")
                         .font(.callout)
@@ -665,7 +722,10 @@ struct ConfirmPersonSheet: View {
                         .multilineTextAlignment(.center)
                         .frame(maxWidth: 440)
                     Button("Continue Reviewing") {
-                        if let idx = firstPendingIndexSkippingInFlight() {
+                        // Fresh sweep per Continue click (a drive may have
+                        // been reconnected while the pane sat open).
+                        startOfflineSweep()
+                        if let idx = firstActionableIndex() {
                             holdoutGo(to: idx)
                             phase = .labeling
                         }
@@ -679,6 +739,21 @@ struct ConfirmPersonSheet: View {
         }
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// Body copy for the all-hidden done pane, naming BOTH reasons with
+    /// their remedies — offline is recoverable by reconnecting; unplayable
+    /// needs conversion first.
+    private var allHiddenExplanation: String {
+        var parts: [String] = []
+        if offlineHiddenPending > 0 {
+            parts.append("\(offlineHiddenPending) pending row\(offlineHiddenPending == 1 ? " is" : "s are") on offline volumes \u{2014} reconnect those drives and reopen the review to finish them.")
+        }
+        if unplayableHiddenPending > 0 {
+            parts.append("\(unplayableHiddenPending) pending row\(unplayableHiddenPending == 1 ? "" : "s") can't be played by QuickTime (legacy/archival formats) \u{2014} they need conversion before they can be reviewed.")
+        }
+        parts.append("The Review badge stays up until every row has an answer.")
+        return parts.joined(separator: " ")
     }
 
     // MARK: - Holdout lifecycle
@@ -724,7 +799,21 @@ struct ConfirmPersonSheet: View {
                     guard !failureStore.isKnownFailure(atPath: path) else { return nil }
                     return await ReviewThumbnailRenderer.renderOrNil(path: path, meta: meta)
                 })
-            if let idx = fresh.firstPendingIndex {
+            // Prefilter (Rick 2026-07-26: never present offline or
+            // unplayable videos). Unplayable: pure catalog facts, zero
+            // I/O. Offline: a synchronous VOLUME-level precheck here —
+            // VolumeReachability.isReachable is documented to never touch
+            // the disk on the caller's thread (SWR cache + kernel mount
+            // table) — so the very first landing already skips rows on
+            // disconnected drives; the honest per-file sweep then runs in
+            // the background and refines the set.
+            unplayableExcludedPaths = HoldoutNavigation.unplayablePaths(
+                rows: fresh.rows, meta: mediaMetaByPath)
+            offlineExcludedPaths = Self.volumeLevelOfflinePaths(
+                rows: fresh.rows.filter(\.isPending))
+            recomputeHiddenCounts()
+            startOfflineSweep()
+            if let idx = firstActionableIndex() {
                 phase = .labeling
                 // Spindle keepalive for the whole labeling session — see
                 // HoldoutSpindleKeepalive for the head-park rationale.
@@ -738,6 +827,106 @@ struct ConfirmPersonSheet: View {
             holdoutSaveError = "Could not reload review queue: \(error.localizedDescription)"
             phase = .summary
         }
+    }
+
+    // MARK: - Offline / unplayable prefilter
+
+    /// VOLUME-level offline check, main-safe by construction: only
+    /// consults VolumeReachability.isReachable (SWR cache / kernel mount
+    /// table — never disk I/O on the caller's thread), one lookup per
+    /// distinct volume. Internal (non-/Volumes) paths pass — the per-file
+    /// sweep and the per-row backstop cover those.
+    private nonisolated static func volumeLevelOfflinePaths(rows: [HoldoutReviewRow]) -> Set<String> {
+        var verdictByVolume: [String: Bool] = [:]
+        var offline = Set<String>()
+        for row in rows {
+            guard let key = HoldoutNavigation.volumeKey(forPath: row.fullPath) else { continue }
+            let reachable = verdictByVolume[key] ?? {
+                let v = VolumeReachability.isReachable(path: key)
+                verdictByVolume[key] = v
+                return v
+            }()
+            if !reachable { offline.insert(row.fullPath) }
+        }
+        return offline
+    }
+
+    /// ONE background reachability sweep over the pending rows — run per
+    /// open and per "Continue Reviewing" click, no polling. Cheap ladder:
+    /// volume reachability once per distinct volume (mount table — no
+    /// disk touch for unmounted drives), then fileExists per row only on
+    /// reachable volumes, strictly serialized at O(rows). Result REPLACES
+    /// the offline set (a reconnected volume's rows come back); the
+    /// per-row backstop re-inserts anything that vanishes afterwards.
+    private func startOfflineSweep() {
+        guard let q = holdout else { return }
+        offlineSweepTask?.cancel()
+        let pendingRows = q.rows.filter(\.isPending).map(\.fullPath)
+        offlineSweepTask = Task { @MainActor in
+            let offline = await Self.sweepOfflinePaths(paths: pendingRows)
+            guard !Task.isCancelled else { return }
+            offlineExcludedPaths = offline
+            recomputeHiddenCounts()
+            // If the row on screen just turned out to be offline, honor
+            // "never present an offline video" — move along (or to the
+            // done pane if nothing actionable remains).
+            if phase == .labeling, let qq = holdout,
+               qq.rows.indices.contains(holdoutIndex),
+               offline.contains(qq.rows[holdoutIndex].fullPath),
+               qq.rows[holdoutIndex].isPending {
+                holdoutAdvance()
+            }
+        }
+    }
+
+    /// The blocking half of the sweep, off the main actor. Serialized —
+    /// one stat at a time — so a spun-down HDD sees a polite sequential
+    /// scan, not a seek storm.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    private nonisolated static func sweepOfflinePaths(paths: [String]) async -> Set<String> {
+        var offline = Set<String>()
+        var volumeReachable: [String: Bool] = [:]
+        for path in paths {
+            if Task.isCancelled { return offline }
+            if let key = HoldoutNavigation.volumeKey(forPath: path) {
+                let reachable = volumeReachable[key] ?? {
+                    // Honest one-shot answer: the kernel mount table
+                    // (getmntinfo MNT_NOWAIT — in-kernel state, never
+                    // spins up a disk), not the SWR cache, so a just-
+                    // yanked drive can't answer stale-true.
+                    let v = VolumeReachability.currentMountedRoots().contains(key)
+                    volumeReachable[key] = v
+                    return v
+                }()
+                if !reachable {
+                    offline.insert(path)
+                    continue
+                }
+            }
+            // Mounted volume or internal path → the file itself decides.
+            if !FileManager.default.fileExists(atPath: path) {
+                offline.insert(path)
+            }
+        }
+        return offline
+    }
+
+    /// Refresh the stored hidden-pending counts (never computed in view
+    /// bodies — the queue can be arbitrarily large per the scale test).
+    private func recomputeHiddenCounts() {
+        guard let q = holdout else {
+            offlineHiddenPending = 0
+            unplayableHiddenPending = 0
+            return
+        }
+        let counts = HoldoutNavigation.hiddenPendingCounts(
+            rows: q.rows,
+            offlineExcluded: offlineExcludedPaths,
+            unplayableExcluded: unplayableExcludedPaths)
+        offlineHiddenPending = counts.offline
+        unplayableHiddenPending = counts.unplayable
     }
 
     /// Navigate to a row: reset the thumbnail, prefill the notes draft,
@@ -768,6 +957,11 @@ struct ConfirmPersonSheet: View {
             if !exists {
                 thumbnailLoadTask?.cancel()
                 thumbnail = nil
+                // Backstop feeds the prefilter: a file can vanish AFTER
+                // the open-time sweep — exclude it so navigation never
+                // returns here (the sweep is once-per-open, no polling).
+                offlineExcludedPaths.insert(path)
+                recomputeHiddenCounts()
             }
         }
         loadThumbnail(path: path)
@@ -819,6 +1013,8 @@ struct ConfirmPersonSheet: View {
             case .success(let updated):
                 holdout = updated
                 if wasPending { holdoutAnsweredThisSession += 1 }
+                // Pending flags changed — keep the hidden counts honest.
+                recomputeHiddenCounts()
             case .failure(let error):
                 // Three surfaces, because the sheet may already be gone
                 // (QA 2026-07-26 🟠): the in-sheet banner, the log trail,
@@ -856,27 +1052,24 @@ struct ConfirmPersonSheet: View {
         }
     }
 
-    /// Next/first pending row EXCLUDING rows whose answer write is still
-    /// in flight — the in-memory queue marks those pending until the
-    /// durable write commits, but navigation must not bounce the user
-    /// back onto a row they just answered.
-    private func nextPendingIndexSkippingInFlight(after idx: Int,
-                                                  in q: HoldoutReviewQueue) -> Int? {
-        let n = q.rows.count
-        guard n > 1 else { return nil }
-        for step in 1..<n {
-            let i = (idx + step) % n
-            let r = q.rows[i]
-            if r.isPending && !inFlightAnswerIds.contains(r.reviewId) { return i }
-        }
-        return nil
+    /// Navigation goes through the PURE decision in HoldoutNavigation:
+    /// pending, minus in-flight answers, minus offline-excluded, minus
+    /// unplayable-excluded. The user is simply never shown a hidden row.
+    private func nextActionableIndex(after idx: Int, in q: HoldoutReviewQueue) -> Int? {
+        HoldoutNavigation.nextActionableIndex(
+            after: idx, rows: q.rows,
+            inFlight: inFlightAnswerIds,
+            offlineExcluded: offlineExcludedPaths,
+            unplayableExcluded: unplayableExcludedPaths)
     }
 
-    private func firstPendingIndexSkippingInFlight() -> Int? {
+    private func firstActionableIndex() -> Int? {
         guard let q = holdout else { return nil }
-        return q.rows.firstIndex {
-            $0.isPending && !inFlightAnswerIds.contains($0.reviewId)
-        }
+        return HoldoutNavigation.firstActionableIndex(
+            rows: q.rows,
+            inFlight: inFlightAnswerIds,
+            offlineExcluded: offlineExcludedPaths,
+            unplayableExcluded: unplayableExcludedPaths)
     }
 
     /// Called right after an answer is enqueued (or a Skip) — the current
@@ -884,7 +1077,7 @@ struct ConfirmPersonSheet: View {
     /// next actionable one.
     private func holdoutAdvance() {
         guard let q = holdout else { return }
-        if let next = nextPendingIndexSkippingInFlight(after: holdoutIndex, in: q) {
+        if let next = nextActionableIndex(after: holdoutIndex, in: q) {
             holdoutGo(to: next)
         } else {
             phase = .summary
@@ -893,7 +1086,7 @@ struct ConfirmPersonSheet: View {
 
     private func holdoutSkip() {
         guard let q = holdout else { return }
-        if let next = nextPendingIndexSkippingInFlight(after: holdoutIndex, in: q) {
+        if let next = nextActionableIndex(after: holdoutIndex, in: q) {
             holdoutGo(to: next)
         } else {
             // Nothing else pending — show the "still pending" done pane
@@ -937,7 +1130,12 @@ struct ConfirmPersonSheet: View {
         for _ in 0..<max(n - 1, 0) {
             i = (i + 1) % n
             let r = q.rows[i]
-            guard r.isPending, !inFlightAnswerIds.contains(r.reviewId) else { continue }
+            // Only warm rows the user can actually be shown — hidden
+            // (offline/unplayable) rows would waste the HDD's time.
+            guard HoldoutNavigation.isActionable(
+                r, inFlight: inFlightAnswerIds,
+                offlineExcluded: offlineExcludedPaths,
+                unplayableExcluded: unplayableExcludedPaths) else { continue }
             entries.append(HoldoutReviewPrefetcher.Entry(
                 path: r.fullPath,
                 meta: mediaMetaByPath[r.fullPath],
