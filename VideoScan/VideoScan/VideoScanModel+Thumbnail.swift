@@ -66,6 +66,16 @@ import os
 //     files reuse the single-frame rip per offset with cancellation
 //     checks between candidates.
 //
+// Filmstrip preview (2026-07-27):
+//   - renderPreviewFilmstrip — multi-frame strip for the preview pane's
+//     filmstrip mode (AVPlayer-unplayable formats: MKV/FFV1 etc.).
+//     Offsets planned by PreviewFilmstripPlan from the catalog duration,
+//     ripped via the same routed tiers as above (bounded-concurrency
+//     ffmpeg for ffmpegDirect, one-asset batch for avFoundation),
+//     near-solid frames dropped by PreviewFrameScorer. Orchestration
+//     lives in VideoScanModel+Filmstrip.swift; persistent strips in
+//     PreviewDiskCache's -strip- payloads.
+//
 // runFFProbe is a thin convenience that any extension may want — kept
 // nearby because both generateThumbnail and ffprobe live in the "preview /
 // quick peek at one file" mental bucket.
@@ -84,6 +94,19 @@ enum PreviewFrameError: Error {
     case ffmpegUnavailable
     /// ffmpeg ran (both seek attempts) but produced no decodable frame.
     case noFrameProduced
+}
+
+/// Result of a filmstrip render (filmstrip preview, 2026-07-27): the
+/// POST-selection frames — near-solid leaders already dropped by
+/// PreviewFilmstripPlan.selectFrames — ordered by offset. CGImage is
+/// Sendable (immutable), so whole strips can cross out of the
+/// `@concurrent` renderer.
+struct PreviewFilmstrip: Sendable {
+    struct Frame: Sendable {
+        let offsetSeconds: Double
+        let image: CGImage
+    }
+    let frames: [Frame]
 }
 
 /// Shares the AVAssetImageGenerator between the generation await and its
@@ -510,6 +533,180 @@ extension VideoScanModel {
         return collector.collected
     }
 
+    // MARK: - Filmstrip core (filmstrip preview, 2026-07-27)
+
+    /// Bounded ffmpeg concurrency for filmstrip rips: 4 single-frame
+    /// children in flight at once (matches the caption ripper's and the
+    /// planner's SSD default — an FFV1 master decode is CPU-bound, and
+    /// 4 keeps the strip fast without starving an active scan).
+    nonisolated static let filmstripFFmpegConcurrency = 4
+
+    /// Multi-frame filmstrip render for the catalog preview pane's
+    /// filmstrip mode (the play-button path for AVPlayer-unplayable
+    /// formats). Rips ≤`frameCount` frames at
+    /// PreviewFilmstripPlan.offsets (planned from the CATALOG duration —
+    /// never ffprobe at preview time), scores each
+    /// (PreviewFrameScorer), and drops near-solid leaders via
+    /// PreviewFilmstripPlan.selectFrames.
+    ///
+    /// Route-agnostic by design even though today's only caller is
+    /// ffmpegDirect-routed: `.avFoundation` records reuse the
+    /// best-frame pass's one-asset batch generator, `.ffmpegDirect`
+    /// records rip per-offset with bounded concurrency
+    /// (`filmstripFFmpegConcurrency`). Per-frame failures are tolerated
+    /// (a dry offset just drops out of the strip); the call throws only
+    /// when ALL frames fail (noFrameProduced), ffmpeg is missing
+    /// entirely (ffmpegUnavailable), or the task is cancelled.
+    ///
+    /// Cancellation discipline matches the single-frame path:
+    /// CancellationError propagates untouched so callers can never
+    /// record a cancelled run as a file failure (the cache-poison class
+    /// PreviewCachePoisonSensorTests pins).
+    ///
+    /// `onFrameProgress(done, total)` fires after each rip attempt
+    /// lands (kept or dropped) — honest progress for the pane's
+    /// "Extracting frame N of M…". Called from the rendering executor;
+    /// callers hop to the main actor themselves.
+    ///
+    /// Memory: worst case `frameCount` (16) candidate CGImages at ≤480
+    /// wide (~8 MB) + one 64×64 scoring buffer per frame
+    /// (autoreleasepool'd) + `filmstripFFmpegConcurrency` transient
+    /// ffmpeg children, all released on return.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func renderPreviewFilmstrip(path: String,
+                                                   container: String,
+                                                   videoCodec: String,
+                                                   likelyUnanalyzable: Bool,
+                                                   durationSeconds: Double,
+                                                   frameCount: Int = PreviewFilmstripPlan.defaultFrameCount,
+                                                   onFrameProgress: (@Sendable (Int, Int) -> Void)? = nil) async throws -> PreviewFilmstrip {
+        let offsets = PreviewFilmstripPlan.offsets(durationSeconds: durationSeconds,
+                                                   frameCount: frameCount)
+        guard !offsets.isEmpty else {
+            // Unknown/garbage duration — a one-frame "strip" from the
+            // plain single-frame ladder beats nothing (same degeneration
+            // rule as renderBestPreviewCGImage's short-file path).
+            // 0.5 s is the ladder's primary seek, so that's the honest
+            // timestamp label.
+            let image = try await renderThumbnailCGImage(path: path,
+                                                         container: container,
+                                                         videoCodec: videoCodec,
+                                                         likelyUnanalyzable: likelyUnanalyzable)
+            onFrameProgress?(1, 1)
+            return PreviewFilmstrip(frames: [.init(offsetSeconds: 0.5, image: image)])
+        }
+
+        let route = PreviewFrameRouter.previewRoute(container: container,
+                                                    videoCodec: videoCodec,
+                                                    likelyUnanalyzable: likelyUnanalyzable)
+        var candidates: [(offset: Double, image: CGImage)] = []
+
+        if route == .avFoundation {
+            // One asset open, all offsets in one batch — same swallow-
+            // then-arbitrate shape as renderBestPreviewCGImage: an AVF
+            // batch failure falls through to the ffmpeg loop below.
+            candidates = (try? await renderCandidateFramesViaAVFoundation(path: path,
+                                                                          offsets: offsets)) ?? []
+            try Task.checkCancellation()
+            if !candidates.isEmpty {
+                onFrameProgress?(offsets.count, offsets.count)
+            }
+        }
+
+        if candidates.isEmpty {
+            candidates = try await ripFilmstripFramesViaFFmpeg(path: path,
+                                                               offsets: offsets,
+                                                               onFrameProgress: onFrameProgress)
+        }
+
+        guard !candidates.isEmpty else {
+            previewLog.notice("filmstrip: no frame decoded at any offset — \((path as NSString).lastPathComponent, privacy: .public)")
+            throw PreviewFrameError.noFrameProduced
+        }
+
+        // TaskGroup children land out of order — restore timeline order
+        // before scoring so selectFrames' index math and the UI's
+        // scrubber both see a monotonic strip.
+        candidates.sort { $0.offset < $1.offset }
+        try Task.checkCancellation()
+
+        var scores: [PreviewFrameScorer.FrameScore?] = []
+        scores.reserveCapacity(candidates.count)
+        for candidate in candidates {
+            // autoreleasepool per scored frame — media-loop memory rule.
+            autoreleasepool {
+                scores.append(PreviewFrameScorer.score(candidate.image))
+            }
+        }
+        let kept = PreviewFilmstripPlan.selectFrames(scores: scores)
+        let frames = kept.map {
+            PreviewFilmstrip.Frame(offsetSeconds: candidates[$0].offset,
+                                   image: candidates[$0].image)
+        }
+        previewLog.debug("filmstrip: \(frames.count)/\(candidates.count) frames kept (\(offsets.count) planned) — \((path as NSString).lastPathComponent, privacy: .public)")
+        return PreviewFilmstrip(frames: frames)
+    }
+
+    /// ffmpeg filmstrip rips: one single-frame child per offset, at
+    /// most `filmstripFFmpegConcurrency` in flight (sliding-window task
+    /// group — same shape as ThumbnailPrecacher's window; no 16
+    /// suspended children up front, and cancellation drains within one
+    /// window). Per-frame decode failures return nil and drop out;
+    /// CancellationError and ffmpegUnavailable abort the group (the
+    /// throwing group cancels the remaining children for us).
+    private nonisolated static func ripFilmstripFramesViaFFmpeg(
+        path: String,
+        offsets: [Double],
+        onFrameProgress: (@Sendable (Int, Int) -> Void)?) async throws -> [(offset: Double, image: CGImage)] {
+        let total = offsets.count
+        var collected: [(offset: Double, image: CGImage)] = []
+        collected.reserveCapacity(total)
+        var attempted = 0
+
+        @Sendable func ripOne(_ offset: Double) async throws -> (Double, CGImage)? {
+            do {
+                let image = try await renderPreviewFrameViaFFmpeg(
+                    path: path,
+                    seeks: [String(format: "%.3f", offset)])
+                return (offset, image)
+            } catch {
+                // Tolerated per-frame failure (seek past EOF, decoder
+                // hiccup) — the frame just drops out of the lineup.
+                // Cancellation and a missing ffmpeg binary are about
+                // the RUN, not the frame: rethrow.
+                if error is CancellationError
+                    || (error as? PreviewFrameError) == .ffmpegUnavailable {
+                    throw error
+                }
+                return nil
+            }
+        }
+
+        try await withThrowingTaskGroup(of: (Double, CGImage)?.self) { group in
+            var iterator = offsets.makeIterator()
+            // Prime the window; after that, one-in-one-out in the drain
+            // loop keeps at most `filmstripFFmpegConcurrency` children
+            // in flight — no counter needed (QA nit 2026-07-27: the
+            // post-fill inFlight bookkeeping was dead).
+            for _ in 0..<filmstripFFmpegConcurrency {
+                guard let next = iterator.next() else { break }
+                group.addTask { try await ripOne(next) }
+            }
+            while let landed = try await group.next() {
+                attempted += 1
+                if let landed { collected.append((landed.0, landed.1)) }
+                onFrameProgress?(attempted, total)
+                try Task.checkCancellation()
+                if let next = iterator.next() {
+                    group.addTask { try await ripOne(next) }
+                }
+            }
+        }
+        return collected
+    }
+
     /// Store a prewarmed/generated CGImage into the cache with its byte
     /// cost. Main-actor because the NSCache + NSImage types live there in
     /// this codebase's threading model (matches the pre-existing
@@ -541,6 +738,11 @@ extension VideoScanModel {
 
         previewFilename = record.filename
 
+        // Selection moved: filmstrip state for another row is stale
+        // (frames must never outlive their row); a same-row prewarm
+        // survives inside resetFilmstrip (filmstrip preview, 2026-07-27).
+        resetFilmstrip(forNewPath: record.fullPath)
+
         // Cache hit → immediate, no debounce, no file I/O.
         let cacheKey = record.fullPath as NSString
         if let cached = thumbnailCache.object(forKey: cacheKey) {
@@ -548,6 +750,9 @@ extension VideoScanModel {
             previewImage = cached
             previewOfflineVolumeName = nil
             previewUnavailable = false
+            // Fast thumbnail is up — background-prewarm the strip for
+            // ffmpegDirect rows (all guards inside; no-op otherwise).
+            prewarmFilmstripIfNeeded(item: FilmstripWorkItem(record: record))
             return
         }
 
@@ -582,6 +787,7 @@ extension VideoScanModel {
         previewFilename = ""
         previewOfflineVolumeName = nil
         previewUnavailable = false
+        resetFilmstrip(forNewPath: nil)
     }
 
     /// Immediate (non-debounced) generation — used by deliberate one-shot
@@ -598,12 +804,19 @@ extension VideoScanModel {
         previewFilename = record.filename
         previewRequestPath = record.fullPath
 
+        // Same selection-change reset as requestThumbnailDebounced
+        // (this is also a direct entry point for deep links).
+        resetFilmstrip(forNewPath: record.fullPath)
+
         // Check cache first — works even when the source volume is offline.
         let cacheKey = record.fullPath as NSString
         if let cached = thumbnailCache.object(forKey: cacheKey) {
             previewImage = cached
             previewOfflineVolumeName = nil
             previewUnavailable = false
+            // Prewarm the strip for ffmpegDirect rows (guards inside —
+            // including reachability, since an L1 hit works offline).
+            prewarmFilmstripIfNeeded(item: FilmstripWorkItem(record: record))
             return
         }
 
@@ -639,6 +852,9 @@ extension VideoScanModel {
         let container = record.container
         let videoCodec = record.videoCodec
         let likelyUnanalyzable = record.isLikelyUnanalyzable
+        // Rides along for the filmstrip prewarm kick below — the strip
+        // plan is built from the CATALOG duration, never ffprobe.
+        let durationSeconds = record.durationSeconds
         let failureStore = thumbnailFailureStore
         let diskCache = previewDiskCache
         Task.detached { [weak self] in
@@ -660,6 +876,13 @@ extension VideoScanModel {
                         self.previewImage = self.thumbnailCache.object(forKey: cacheKeyString as NSString)
                         self.previewUnavailable = false
                     }
+                    // Fast thumbnail is up — kick the filmstrip prewarm
+                    // for ffmpegDirect rows (all guards inside).
+                    self.prewarmFilmstripIfNeeded(item: FilmstripWorkItem(
+                        path: cacheKeyString, container: container,
+                        videoCodec: videoCodec,
+                        likelyUnanalyzable: likelyUnanalyzable,
+                        durationSeconds: durationSeconds))
                 }
                 return
             }
@@ -690,6 +913,13 @@ extension VideoScanModel {
                         self.previewImage = self.thumbnailCache.object(forKey: cacheKeyString as NSString)
                         self.previewUnavailable = false
                     }
+                    // Fast thumbnail landed — kick the filmstrip prewarm
+                    // for ffmpegDirect rows (all guards inside).
+                    self.prewarmFilmstripIfNeeded(item: FilmstripWorkItem(
+                        path: cacheKeyString, container: container,
+                        videoCodec: videoCodec,
+                        likelyUnanalyzable: likelyUnanalyzable,
+                        durationSeconds: durationSeconds))
                 }
                 // Write-through L2 (still off-main here). Tier "fast":
                 // this is the interactive single 0.5 s frame — the

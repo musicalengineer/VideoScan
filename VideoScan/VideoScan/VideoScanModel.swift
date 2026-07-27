@@ -137,6 +137,13 @@ final class VideoScanModel: ObservableObject {
     /// by clearPreview and on every new selection request.
     @Published var previewUnavailable: Bool = false
 
+    /// Filmstrip mode for AVPlayer-unplayable formats (filmstrip preview,
+    /// 2026-07-27): what the preview pane's filmstrip branch renders.
+    /// Carries its record's fullPath so a stale publish can never show
+    /// another row's frames. Driven by requestFilmstrip / stopFilmstrip /
+    /// resetFilmstrip in VideoScanModel+Filmstrip.swift.
+    @Published var filmstripState: PreviewFilmstripState = .idle
+
     /// Set by an operation that can't proceed because an external tool
     /// is missing (e.g. ffmpeg not installed). The view binds an alert to
     /// this; clearing it dismisses the dialog. Prevents the silent-no-op
@@ -461,6 +468,39 @@ final class VideoScanModel: ObservableObject {
     /// stale generation completing AFTER a newer selection and clobbering
     /// its preview. Set by requestThumbnailDebounced/generateThumbnail.
     var previewRequestPath: String?
+
+    // MARK: Filmstrip bookkeeping (filmstrip preview, 2026-07-27)
+    // Stored here because extensions can't add stored properties; all
+    // logic lives in VideoScanModel+Filmstrip.swift. Main-actor only
+    // (the model is @MainActor) — no locks needed. For Rick: these five
+    // are the members a C++ class would guard with "only touch on the
+    // UI thread" comments; @MainActor makes the compiler enforce it.
+
+    /// The single in-flight filmstrip generation (interactive OR
+    /// prewarm) — at most ONE per model instance by design, so an
+    /// interactive play click and a background prewarm can never rip
+    /// the same 20 GB master twice concurrently.
+    var filmstripTask: Task<Void, Never>?
+    /// fullPath the in-flight task is generating for (coalescing key).
+    var filmstripTaskPath: String?
+    /// True when the in-flight task's result should publish to the UI.
+    /// A prewarm flips to true ("promoted") if the user clicks play on
+    /// the same row mid-generation.
+    var filmstripTaskIsInteractive = false
+    /// Latest (done, total) the in-flight task reported — lets a
+    /// promoted prewarm publish honest progress immediately.
+    var filmstripLatestProgress: (done: Int, total: Int) = (0, 0)
+    /// Identifies the latest filmstrip task so a superseded run's
+    /// completion can't clear a newer run's bookkeeping (same pattern
+    /// as ThumbnailPrecacher.currentRunID).
+    var filmstripRunID = UUID()
+    /// Paths whose filmstrip generation genuinely failed this session —
+    /// keeps the prewarm from re-ripping hopeless files on every
+    /// selection. Deliberately NOT ThumbnailFailureStore: the fast
+    /// thumbnail SUCCEEDED for these files, and poisoning the shared
+    /// negative cache would blank their previews entirely. Capped at
+    /// 10k inserts (~2 MB worst case) per the memory discipline rule.
+    var filmstripFailedPaths: Set<String> = []
 
     /// Volume-click thumbnail prewarmer (Part 3 of the 2026-06-10 perf
     /// batch). Owned here so the catalog view and scan lifecycle share one
@@ -1032,6 +1072,7 @@ final class VideoScanModel: ObservableObject {
         previewFilename = ""
         previewOfflineVolumeName = nil
         previewUnavailable = false
+        resetFilmstrip(forNewPath: nil)
         saveCatalogNow()
     }
 
