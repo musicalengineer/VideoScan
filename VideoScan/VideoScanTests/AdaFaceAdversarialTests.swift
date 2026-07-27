@@ -95,28 +95,48 @@ struct AdaFaceAdversarialTests {
         let descriptor = PersonFinderModel.makeDescriptor(from: job, settings: settings)
         let json = try jsonObject(descriptor)
 
-        #expect(json["cacheVariant"] as? String == PersonFinderCache.embedVariant(for: settings),
+        #expect(json["embedVariant"] as? String == PersonFinderCache.embedVariant(for: settings),
                 "restart rehydration must not depend on whichever job last mutated process-global cache state")
     }
 
-    // regression sensor: there is currently no executable explicit-variant
-    // seam to stress — makeKey reads process-global state internally. The
-    // source contract is therefore the narrowest test that can demand the
-    // prerequisite for safe concurrent construction. Once the seam exists,
-    // replace this with a 100k concurrent behavioral key test.
-    @Test func cacheKeyConstructionRequiresAnExplicitVariant() throws {
-        let sourceURL = repoRoot
-            .appendingPathComponent("VideoScan/VideoScan/PersonFinderCache.swift")
-        let source = try String(contentsOf: sourceURL, encoding: .utf8)
-        let makeKeyStart = try #require(source.range(of: "static func makeKey("))
-        let tail = source[makeKeyStart.lowerBound...]
-        let makeKeyEnd = try #require(tail.range(of: "\n    }")?.upperBound)
-        let makeKeySource = String(tail[..<makeKeyEnd])
+    // SENSOR: stress the pure, explicit provenance seam rather than scanning
+    // source text. Alternating two live job configurations 100k times catches
+    // accidental ambient/global state and also bounds the cost of cache-key
+    // namespace construction.
+    @Test(.timeLimit(.minutes(1)))
+    func cacheVariantsRemainIndependentAcross100kInterleavedJobs() {
+        var ada = PersonFinderSettings()
+        ada.recognitionEngine = .adaface
+        ada.adafaceThreshold = 0.42
+        var hybrid = PersonFinderSettings()
+        hybrid.recognitionEngine = .hybrid
+        hybrid.adafaceThreshold = 0.25
 
-        #expect(makeKeySource.contains("variant:"),
-                "makeKey must accept per-job provenance explicitly so concurrent jobs cannot overwrite each other")
-        #expect(!makeKeySource.contains("arcfaceEmbedVariant"),
-                "makeKey must not read ambient process-global variant state")
+        let adaVariant = PersonFinderCache.embedVariant(for: ada)
+        let hybridVariant = PersonFinderCache.embedVariant(for: hybrid)
+        let expectedAda = PersonFinderCache.composedRefHash(
+            ["/nonexistent/reference.jpg"], embedVariant: adaVariant)
+        let expectedHybrid = PersonFinderCache.composedRefHash(
+            ["/nonexistent/reference.jpg"], embedVariant: hybridVariant)
+        var mismatchCount = 0
+
+        let clock = ContinuousClock()
+        let elapsed = clock.measure {
+            for index in 0..<100_000 {
+                let expected = index.isMultiple(of: 2) ? expectedAda : expectedHybrid
+                let variant = index.isMultiple(of: 2) ? adaVariant : hybridVariant
+                if PersonFinderCache.composedRefHash(
+                    ["/nonexistent/reference.jpg"], embedVariant: variant) != expected {
+                    mismatchCount += 1
+                }
+            }
+        }
+
+        #expect(expectedAda != expectedHybrid)
+        #expect(mismatchCount == 0,
+                "interleaved jobs contaminated one another's cache namespace")
+        #expect(elapsed < .seconds(5),
+                "100k cache namespaces took \(elapsed)")
     }
 
     // MARK: Portable settings migration
@@ -170,6 +190,13 @@ struct AdaFaceAdversarialTests {
 
         #expect(restored.adafaceThreshold == 0.05,
                 "portable settings must clamp the same poisoned values as UserDefaults restore")
+
+        object["adafaceThreshold"] = 7.5
+        let upperData = try JSONSerialization.data(withJSONObject: object)
+        let upperSnapshot = try JSONDecoder().decode(SettingsSnapshot.self, from: upperData)
+        upperSnapshot.apply(to: &restored)
+        #expect(restored.adafaceThreshold == 0.95,
+                "portable settings must clamp oversized cosine thresholds")
     }
 
     @Test func legacyProfileDefaultsAndPoisonedProfileClamps() throws {
@@ -192,6 +219,15 @@ struct AdaFaceAdversarialTests {
         settings.applyProfile(poisonedProfile)
         #expect(settings.adafaceThreshold == 0.05,
                 "profile decode/apply must not install a match-everything cosine threshold")
+
+        let oversized = Data("""
+            {"name":"Donna","referencePath":"/tmp/refs",
+             "engine":"AdaFace (CoreML)","visionThreshold":0.52,
+             "arcfaceThreshold":0.40,"adafaceThreshold":7.5}
+            """.utf8)
+        settings.applyProfile(try JSONDecoder().decode(POIProfile.self, from: oversized))
+        #expect(settings.adafaceThreshold == 0.95,
+                "profile apply must clamp oversized cosine thresholds")
     }
 
     // MARK: Legacy evaluator isolation
