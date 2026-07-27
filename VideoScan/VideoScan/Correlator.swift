@@ -106,10 +106,25 @@ enum Correlator {
     }
 
     private static func scoreCandidate(video v: VideoRecord, audio a: VideoRecord) -> Candidate? {
+        let filenameKeyMatches =
+            filenameCorrelationKey(v.filename) == filenameCorrelationKey(a.filename)
+
+        // GH #125 duration gate at pair formation: files that cannot be
+        // the same program are never offered as a candidate, regardless
+        // of how the other signals coincide. Unknown durations pass only
+        // on an exact filename-key identity match (MAJOR 1); known-
+        // incompatible durations are always refused. Shared rule with the
+        // production snap pipeline — CorrelationScorer.durationGatePermitsFuzzyPair.
+        guard CorrelationScorer.durationGatePermitsFuzzyPair(
+            videoDuration: v.durationSeconds,
+            audioDuration: a.durationSeconds,
+            filenameKeyMatches: filenameKeyMatches
+        ) else { return nil }
+
         var score = 0
         var reasons: [String] = []
 
-        if filenameCorrelationKey(v.filename) == filenameCorrelationKey(a.filename) {
+        if filenameKeyMatches {
             score += 4; reasons.append("filename")
         }
         if v.durationSeconds > 0 && a.durationSeconds > 0 &&
