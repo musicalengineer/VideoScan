@@ -107,12 +107,24 @@ extension VideoScanModel {
         // Coalesce: a prewarm already ripping THIS file is promoted to
         // interactive instead of ripping twice — its progress callbacks
         // start publishing from the next frame on.
-        if filmstripTask != nil, filmstripTaskPath == item.path {
+        if let task = filmstripTask, filmstripTaskPath == item.path {
             filmstripTaskIsInteractive = true
+            // Seed the loading total from the prewarm's own report when
+            // it has one, else from the plan (QA nit 2026-07-27 — the
+            // old (0, 1) seed showed "1 of 1" until the next frame).
             let progress = filmstripLatestProgress
+            let plannedTotal = max(1, PreviewFilmstripPlan.offsets(durationSeconds: item.durationSeconds).count)
             filmstripState = .loading(path: item.path,
                                       done: progress.done,
-                                      total: max(progress.total, 1))
+                                      total: progress.total > 0 ? progress.total : plannedTotal)
+            // Priority donation (QA 🟡 2026-07-27): the running task was
+            // launched at .background and NOTHING awaits it, so flipping
+            // the flag alone gives the click background-speed frames.
+            // Awaiting its value from a .userInitiated task escalates the
+            // running task via Swift's priority donation — ≈ priority
+            // inheritance on a held mutex: the waiter lends its priority
+            // to the holder.
+            Task(priority: .userInitiated) { _ = await task.value }
             filmstripLog.debug("filmstrip prewarm promoted to interactive — \((item.path as NSString).lastPathComponent, privacy: .public)")
             return
         }
@@ -183,6 +195,10 @@ extension VideoScanModel {
         filmstripTaskPath = nil
         filmstripTaskIsInteractive = false
         filmstripLatestProgress = (0, 0)
+        // Rotate the run ID so the cancelled task's still-queued
+        // completion hops fail the guard even before any new run starts
+        // (QA nit 2026-07-27).
+        filmstripRunID = UUID()
     }
 
     /// Launch the single generation task. Flow: L2 disk lookup →
@@ -199,10 +215,43 @@ extension VideoScanModel {
         let diskCache = previewDiskCache
 
         filmstripTask = Task.detached(priority: interactive ? .userInitiated : .background) { [weak self] in
-            // L2 first: a complete cached strip costs ≤16 JPEG decodes,
+            // Cancellation guard BEFORE any disk I/O (QA 🟠 2026-07-27:
+            // this task was cancellation-blind — a per-keystroke prewarm
+            // replaced by the next row's still paid the stat + listing).
+            // A cancelled run needs no bookkeeping hop: every cancel goes
+            // through cancelFilmstripTask, which already cleared it.
+            guard !Task.isCancelled else { return }
+
+            let signature = PreviewDiskCache.fileSignature(atPath: item.path)
+
+            // Prewarm early-out (QA 🟠 2026-07-27): if a complete strip
+            // is already on disk, a prewarm's job is DONE — the listing-
+            // only completeness check replaces decoding ~16 JPEGs just
+            // to discard them (this branch fires per keystroke via the
+            // thumbnail cache-hit sites). One main hop decides: if a
+            // play click promoted this run mid-check, fall THROUGH to
+            // the decoding lookup below instead of returning — an early
+            // return would leave the click spinning on .loading forever.
+            if !interactive, let signature,
+               diskCache.hasCompleteFilmstrip(path: item.path,
+                                              mtime: signature.mtime,
+                                              size: signature.size) {
+                let promoted = await MainActor.run { [weak self] () -> Bool in
+                    guard let self, self.filmstripRunID == runID else { return false }
+                    if self.filmstripTaskIsInteractive { return true }
+                    // Still a pure prewarm: complete early — clear the
+                    // bookkeeping so the next prewarm/click isn't blocked
+                    // by a phantom "in flight" task.
+                    self.clearFilmstripBookkeeping()
+                    return false
+                }
+                if !promoted { return }
+            }
+
+            // L2 decode: a complete cached strip costs ≤16 JPEG decodes,
             // no media I/O. Signature nil (file vanished / dead volume)
             // skips the cache both ways; generation reports the truth.
-            let signature = PreviewDiskCache.fileSignature(atPath: item.path)
+            guard !Task.isCancelled else { return }
             if let signature,
                let cached = diskCache.lookupFilmstrip(path: item.path,
                                                       mtime: signature.mtime,
@@ -210,6 +259,7 @@ extension VideoScanModel {
                 let frames = cached.map {
                     PreviewFilmstrip.Frame(offsetSeconds: $0.offsetSeconds, image: $0.image)
                 }
+                guard !Task.isCancelled else { return }
                 await MainActor.run { [weak self] in
                     self?.finishFilmstrip(runID: runID, path: item.path, frames: frames)
                 }
@@ -255,6 +305,14 @@ extension VideoScanModel {
 
     private func noteFilmstripProgress(runID: UUID, path: String, done: Int, total: Int) {
         guard filmstripRunID == runID else { return }
+        // Per-frame reports arrive via unordered unstructured tasks —
+        // "5 of 16" must never regress to "3 of 16" (QA 🟡 2026-07-27).
+        // Monotonic gate per total; a total change (single-frame
+        // degeneration path) resets the baseline.
+        if total == filmstripLatestProgress.total,
+           done <= filmstripLatestProgress.done {
+            return
+        }
         filmstripLatestProgress = (done, total)
         // Publish only when the run is (or has been promoted to)
         // interactive AND this row is still the current selection.
@@ -292,22 +350,27 @@ extension VideoScanModel {
             return
         }
 
-        // ffmpegUnavailable is an environment failure, not a fact about
-        // this file — don't blacklist the path over it.
+        // Environmental failures are not facts about the file — don't
+        // blacklist the path over them (QA 🟡 2026-07-27):
+        //   - ffmpegUnavailable: no ffmpeg binary at all;
+        //   - unreachable volume: the drive died/unmounted mid-rip (one
+        //     statfs, same pattern as generateThumbnail's offline gate).
         if (error as? PreviewFrameError) != .ffmpegUnavailable,
+           VolumeReachability.isReachable(path: path),
            filmstripFailedPaths.count < Self.filmstripFailedPathsCap {
             filmstripFailedPaths.insert(path)
         }
         filmstripLog.notice("filmstrip generation failed for \((path as NSString).lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
 
         guard wasInteractive else { return }
-        filmstripState = .idle
-        // Full failure falls through to the existing NO PREVIEW state
-        // (stale-completion guarded — an old failure must not stamp a
-        // newer selection).
-        if previewRequestPath == path {
-            previewImage = nil
-            previewUnavailable = true
+        // Return the pane to the thumbnail + play overlay (QA 🟡
+        // 2026-07-27): previewImage/previewUnavailable are left ALONE —
+        // the fast thumbnail is truthful, and blanking it into NO
+        // PREVIEW lied about the file (and self-contradicted: reselect
+        // brought the thumbnail back). The notice above is the failure
+        // record; a re-click retries honestly.
+        if filmstripState.isActive(forPath: path) {
+            filmstripState = .idle
         }
     }
 

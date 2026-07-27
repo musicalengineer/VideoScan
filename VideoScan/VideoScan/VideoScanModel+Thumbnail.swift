@@ -686,20 +686,21 @@ extension VideoScanModel {
 
         try await withThrowingTaskGroup(of: (Double, CGImage)?.self) { group in
             var iterator = offsets.makeIterator()
-            var inFlight = 0
-            while inFlight < filmstripFFmpegConcurrency, let next = iterator.next() {
+            // Prime the window; after that, one-in-one-out in the drain
+            // loop keeps at most `filmstripFFmpegConcurrency` children
+            // in flight — no counter needed (QA nit 2026-07-27: the
+            // post-fill inFlight bookkeeping was dead).
+            for _ in 0..<filmstripFFmpegConcurrency {
+                guard let next = iterator.next() else { break }
                 group.addTask { try await ripOne(next) }
-                inFlight += 1
             }
             while let landed = try await group.next() {
-                inFlight -= 1
                 attempted += 1
                 if let landed { collected.append((landed.0, landed.1)) }
                 onFrameProgress?(attempted, total)
                 try Task.checkCancellation()
                 if let next = iterator.next() {
                     group.addTask { try await ripOne(next) }
-                    inFlight += 1
                 }
             }
         }
