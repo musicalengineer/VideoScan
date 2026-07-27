@@ -21,7 +21,7 @@
 // FRESH MLModel per getModel() call — one per worker, never shared — and
 // every prediction is serialized under the global prediction lock.
 //
-// Memory (worst case per worker): model weights ~85 MB fp16 + one 112x112
+// Memory (worst case per worker): model weights 83 MB fp16 + one 112x112
 // RGBA crop + one 512-float embedding per in-flight face. Budgeted at
 // 768 MB/worker in MemoryPressureMonitor, same as ArcFace.
 
@@ -81,19 +81,38 @@ actor AdaFaceModelLoader {
         return NSHomeDirectory() + "/dev/VideoScan/models"
     }
 
+    /// Synchronous existence probe for the job-level pre-flight in runJob:
+    /// true when a model asset exists in any of the loader's search
+    /// locations. Deliberately does NOT construct an MLModel (that's async
+    /// actor work) — a present-but-corrupt asset still fails per-video with
+    /// the loader's "found but failed to load" error below.
+    static func modelAssetsPresent() -> Bool {
+        let base = modelsDir + "/" + modelBaseName
+        let fm = FileManager.default
+        if fm.fileExists(atPath: base + ".mlmodelc") { return true }
+        if fm.fileExists(atPath: base + ".mlpackage") { return true }
+        return Bundle.main.path(forResource: modelBaseName, ofType: "mlmodelc") != nil
+    }
+
     /// Returns a freshly-constructed MLModel, or nil with an ACTIONABLE
     /// error message (names the exact expected path — GH #144 acceptance).
+    /// "Found but failed to load/compile" is reported distinctly from
+    /// "not found" so a corrupt .mlmodelc isn't misdiagnosed as a missing
+    /// install (QA #144).
     func getModel() -> (MLModel?, String?) {
         let config = MLModelConfiguration()
         config.computeUnits = .all
 
         if let url = compiledURL {
             // Fast path: URL already resolved — just rebuild the MLModel.
-            if let loaded = try? MLModel(contentsOf: url, configuration: config) {
-                return (loaded, nil)
+            do {
+                return (try MLModel(contentsOf: url, configuration: config), nil)
+            } catch {
+                // Cached URL no longer valid (file moved/deleted/corrupted)
+                // — log and re-resolve from scratch below.
+                adafaceLogger.error("AdaFace cached model URL failed to load, re-resolving: \(error.localizedDescription, privacy: .public)")
+                compiledURL = nil
             }
-            // Cached URL no longer valid (file moved/deleted) — re-resolve.
-            compiledURL = nil
         }
 
         let base = Self.modelsDir + "/" + Self.modelBaseName
@@ -101,14 +120,24 @@ actor AdaFaceModelLoader {
         let packagePath = base + ".mlpackage"
         let fm = FileManager.default
 
+        // Collects "asset exists but is unusable" details so the final error
+        // distinguishes a corrupt install from a missing one.
+        var loadFailures: [String] = []
+
         // 1. Pre-compiled .mlmodelc (fastest)
         if fm.fileExists(atPath: compiledPath) {
-            let url = URL(fileURLWithPath: compiledPath)
-            if let loaded = try? MLModel(contentsOf: url, configuration: config) {
+            do {
+                let url = URL(fileURLWithPath: compiledPath)
+                let loaded = try MLModel(contentsOf: url, configuration: config)
                 compiledURL = url
                 return (loaded, nil)
+            } catch {
+                // Corrupt/incompatible compile — record, then try rebuilding
+                // from the package below.
+                let detail = "compiled model at \(compiledPath) failed to load: \(error.localizedDescription)"
+                adafaceLogger.error("AdaFace \(detail, privacy: .public)")
+                loadFailures.append(detail)
             }
-            // Corrupt/incompatible compile — fall through and rebuild from package.
         }
 
         // 2. Compile .mlpackage → .mlmodelc at runtime, cache beside it
@@ -124,9 +153,9 @@ actor AdaFaceModelLoader {
                 compiledURL = destURL
                 return (loaded, nil)
             } catch {
-                let msg = "Failed to compile AdaFace model at \(packagePath): \(error.localizedDescription)"
-                adafaceLogger.error("\(msg, privacy: .public)")
-                return (nil, msg)
+                let detail = "package at \(packagePath) failed to compile/load: \(error.localizedDescription)"
+                adafaceLogger.error("AdaFace \(detail, privacy: .public)")
+                loadFailures.append(detail)
             }
         }
 
@@ -138,10 +167,20 @@ actor AdaFaceModelLoader {
                 compiledURL = url
                 return (loaded, nil)
             } catch {
-                return (nil, "Failed to load bundled AdaFace model: \(error.localizedDescription)")
+                let detail = "bundled model failed to load: \(error.localizedDescription)"
+                adafaceLogger.error("AdaFace \(detail, privacy: .public)")
+                loadFailures.append(detail)
             }
         }
 
+        if !loadFailures.isEmpty {
+            // Assets exist but none loaded — a corrupt install, not a
+            // missing one. Suggest the recovery path (recompile from the
+            // package / rebuild it with the converter).
+            return (nil, "AdaFace model found but failed to load — "
+                + loadFailures.joined(separator: "; ")
+                + ". Delete the .mlmodelc to force a recompile, or rebuild the package with tools/adaface/convert_adaface_coreml.py.")
+        }
         return (nil, "AdaFace model not found. Place \(Self.modelBaseName).mlpackage in \(Self.modelsDir)/ and restart. (Build it with tools/adaface/convert_adaface_coreml.py — see docs/design/adaface-plugin.md.)")
     }
 

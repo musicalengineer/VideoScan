@@ -477,21 +477,14 @@ extension PersonFinderModel {
             jobSettings.recognitionEngine = engineOverride
         }
 
-        // Bust the per-video result cache between aligned and unaligned ArcFace
-        // embeddings (they are not comparable). Set before any cache lookup so a
-        // toggle never serves stale results; "" preserves the legacy namespace.
-        // AdaFace rows additionally carry a backend/model-version token so a
-        // future checkpoint swap invalidates them deterministically (#144).
-        switch jobSettings.recognitionEngine {
-        case .arcface:
-            PersonFinderCache.arcfaceEmbedVariant =
-                jobSettings.arcfaceLandmarkAlignment ? "lm-v1" : ""
-        case .adaface:
-            PersonFinderCache.arcfaceEmbedVariant = FaceEmbeddingBackend.adafaceCacheVariant
-                + (jobSettings.arcfaceLandmarkAlignment ? "+lm-v1" : "")
-        default:
-            PersonFinderCache.arcfaceEmbedVariant = ""
-        }
+        // Bust the per-video result cache when embedding-shaping knobs change
+        // (alignment toggle, AdaFace model version, and — for hybrid — the
+        // AdaFace fallback threshold). Set before any cache lookup so a
+        // toggle never serves stale results; "" preserves the legacy Vision/
+        // ArcFace namespaces. Logic lives in PersonFinderCache.embedVariant
+        // (pure, test-pinned — #144 QA merge condition).
+        PersonFinderCache.arcfaceEmbedVariant =
+            PersonFinderCache.embedVariant(for: jobSettings)
 
         // High-level narration to videoscan.log — emitted once volume + engine
         // are known. Per-job verbose detail continues to go to the job's
@@ -523,10 +516,25 @@ extension PersonFinderModel {
             return
         }
 
+        // AdaFace job-level pre-flight (#144 QA): a missing model must bail
+        // the job ONCE with a clear error — not emit a per-video error for
+        // thousands of files that all end "0 hits" (the removed dlib
+        // pre-flight's UX). Synchronous existence probe only; an asset
+        // that exists but is corrupt still surfaces via the dispatcher's
+        // "found but failed to load" error on first video.
+        // Hybrid is deliberately NOT gated: it degrades to Vision-only.
+        if jobSettings.recognitionEngine == .adaface,
+           !AdaFaceModelLoader.modelAssetsPresent() {
+            let msg = "⚠ AdaFace model not installed — place \(AdaFaceModelLoader.modelBaseName).mlpackage in \(AdaFaceModelLoader.modelsDir)/ (see docs/design/adaface-plugin.md)."
+            job.appendLog(msg)
+            osLog.error("runJob bailed: AdaFace model missing (person=\(jobSettings.personName, privacy: .public))")
+            job.status = .failed("AdaFace model missing")
+            return
+        }
+
         // All engines (Vision, ArcFace, AdaFace, Hybrid) need loaded reference
         // faces — the dlib-specific Python-config pre-flight went with the
-        // dlib seat (#144). A missing AdaFace/ArcFace model surfaces as an
-        // actionable per-video error from the engine dispatcher instead.
+        // dlib seat (#144).
         guard !faces.isEmpty else {
             let msg = "⚠ Load reference photos first. Select a person with \"Find Person\" or load photos globally."
             job.appendLog(msg)

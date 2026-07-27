@@ -17,6 +17,11 @@ import Foundation
 //    media behavior rides the existing fixture stress suite, which now
 //    accepts "adaface" in VIDEOSCAN_FIXTURE_STRESS_ENGINES.
 
+// .serialized: hybridCacheKeyRefHashChangesWithAdafaceThreshold mutates the
+// process-global PersonFinderCache.arcfaceEmbedVariant (restored via defer);
+// don't let sibling tests interleave with it. (The global itself is a
+// pre-existing design — QA follow-up filed.)
+@Suite(.serialized)
 struct AdaFaceMigrationTests {
 
     /// Fresh throwaway suite per test; removed on exit. Tests NEVER touch
@@ -79,6 +84,29 @@ struct AdaFaceMigrationTests {
         }
     }
 
+    @Test func poisonedCosineThresholdsClampOnRestore() throws {
+        // A non-numeric plist value decodes as 0.0 via UserDefaults.float —
+        // an unclamped 0.0 cosine threshold makes EVERY face a match.
+        try withSuite { defaults in
+            defaults.set("garbage", forKey: "pf_adafaceThreshold")
+            defaults.set(-3.0, forKey: "pf_arcfaceThreshold")
+            let s = PersonFinderSettings.restored(from: defaults)
+            #expect(s.adafaceThreshold >= 0.05,
+                    "Poisoned adafaceThreshold must clamp above the match-everything floor")
+            #expect(s.arcfaceThreshold >= 0.05,
+                    "Poisoned arcfaceThreshold must clamp too (same pre-existing flaw, fixed together)")
+        }
+        try withSuite { defaults in
+            defaults.set(7.5, forKey: "pf_adafaceThreshold")
+            #expect(PersonFinderSettings.restored(from: defaults).adafaceThreshold <= 0.95)
+        }
+        // In-band values pass through untouched.
+        try withSuite { defaults in
+            defaults.set(Float(0.42), forKey: "pf_adafaceThreshold")
+            #expect(PersonFinderSettings.restored(from: defaults).adafaceThreshold == 0.42)
+        }
+    }
+
     // MARK: POIProfile JSON compatibility (additive field)
 
     @Test func profileJSONWithoutAdafaceThresholdDecodesWithDefault() throws {
@@ -133,5 +161,74 @@ struct AdaFaceMigrationTests {
         let adaKey = try #require(ada)
         #expect(arcKey.engine != adaKey.engine,
                 "Engine column must separate backend rows in the per-video cache")
+    }
+
+    // MARK: Hybrid cache keying (QA #144 merge condition)
+    //
+    // Hybrid rows carry only the VISION threshold in the key's threshold
+    // column, but the AdaFace fallback consumes adafaceThreshold and the
+    // model checkpoint. embedVariant must fold both in, or moving the
+    // AdaFace slider re-serves stale hybrid rows and a checkpoint bump
+    // never busts them.
+
+    @Test func hybridEmbedVariantChangesWithAdafaceThreshold() {
+        var s = PersonFinderSettings()
+        s.recognitionEngine = .hybrid
+        s.adafaceThreshold = 0.30
+        let v30 = PersonFinderCache.embedVariant(for: s)
+        s.adafaceThreshold = 0.35
+        let v35 = PersonFinderCache.embedVariant(for: s)
+        #expect(v30 != v35,
+                "Hybrid variant must change when the AdaFace fallback threshold changes")
+        #expect(v30.contains(FaceEmbeddingBackend.adafaceCacheVariant),
+                "Hybrid variant must carry the AdaFace model-version token so a checkpoint bump busts hybrid rows")
+        // Alignment toggle is part of the embedding shape too.
+        s.arcfaceLandmarkAlignment = true
+        #expect(PersonFinderCache.embedVariant(for: s) != v35)
+    }
+
+    @Test func embedVariantPreservesLegacyNamespaces() {
+        var s = PersonFinderSettings()
+        // Vision: always "" (legacy rows stay valid).
+        s.recognitionEngine = .vision
+        #expect(PersonFinderCache.embedVariant(for: s).isEmpty)
+        // ArcFace unaligned: "" (legacy); aligned: the historical lm-v1 token.
+        s.recognitionEngine = .arcface
+        #expect(PersonFinderCache.embedVariant(for: s).isEmpty)
+        s.arcfaceLandmarkAlignment = true
+        #expect(PersonFinderCache.embedVariant(for: s) == "lm-v1")
+    }
+
+    @Test func hybridCacheKeyRefHashChangesWithAdafaceThreshold() throws {
+        // Full-path proof through makeKey: same video/person/refs/threshold
+        // column, hybrid engine — different adafaceThreshold must yield a
+        // different refHash. Mutates the process-global variant slot exactly
+        // the way runJob does, restoring it afterwards.
+        let tmp = NSTemporaryDirectory() + "hybrid_key_\(UUID().uuidString).mov"
+        FileManager.default.createFile(atPath: tmp, contents: Data("x".utf8))
+        let savedVariant = PersonFinderCache.arcfaceEmbedVariant
+        defer {
+            PersonFinderCache.arcfaceEmbedVariant = savedVariant
+            try? FileManager.default.removeItem(atPath: tmp)
+        }
+
+        var s = PersonFinderSettings()
+        s.recognitionEngine = .hybrid
+        s.adafaceThreshold = 0.30
+        PersonFinderCache.arcfaceEmbedVariant = PersonFinderCache.embedVariant(for: s)
+        let key30 = try #require(PersonFinderCache.makeKey(
+            videoPath: tmp, personName: "Donna", engine: .hybrid,
+            threshold: s.thresholdForEngine(.hybrid), refFilenames: ["a.jpg"]))
+
+        s.adafaceThreshold = 0.35
+        PersonFinderCache.arcfaceEmbedVariant = PersonFinderCache.embedVariant(for: s)
+        let key35 = try #require(PersonFinderCache.makeKey(
+            videoPath: tmp, personName: "Donna", engine: .hybrid,
+            threshold: s.thresholdForEngine(.hybrid), refFilenames: ["a.jpg"]))
+
+        #expect(key30.threshold == key35.threshold,
+                "Precondition: hybrid's key threshold column is Vision's, unchanged")
+        #expect(key30.refHash != key35.refHash,
+                "Hybrid refHash must change with adafaceThreshold or stale rows get served")
     }
 }

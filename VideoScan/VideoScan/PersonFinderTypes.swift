@@ -273,6 +273,14 @@ struct PersonFinderSettings: Equatable {
         return s
     }
 
+    /// Legal band for a cosine-similarity threshold restored from a plist.
+    /// 0.05 floor: 0.0 (the poisoned-decode value) would match every face;
+    /// 0.95 ceiling: nothing real ever matches above it. In-band values
+    /// pass through untouched.
+    static func clampCosineThreshold(_ v: Float) -> Float {
+        min(max(v, 0.05), 0.95)
+    }
+
     private static func restoreStrings(_ s: inout PersonFinderSettings, from defaults: UserDefaults) {
         let d = defaults; let p = prefix
         if let v = d.string(forKey: "\(p)personName") { s.personName = v }
@@ -296,8 +304,16 @@ struct PersonFinderSettings: Equatable {
         if d.object(forKey: "\(p)minPresenceSecs") != nil { s.minPresenceSecs = d.double(forKey: "\(p)minPresenceSecs") }
         if d.object(forKey: "\(p)concurrency") != nil { s.concurrency = d.integer(forKey: "\(p)concurrency") }
         if d.object(forKey: "\(p)previewRate") != nil { s.previewRate = max(1, d.integer(forKey: "\(p)previewRate")) }
-        if d.object(forKey: "\(p)arcfaceThreshold") != nil { s.arcfaceThreshold = d.float(forKey: "\(p)arcfaceThreshold") }
-        if d.object(forKey: "\(p)adafaceThreshold") != nil { s.adafaceThreshold = d.float(forKey: "\(p)adafaceThreshold") }
+        // Clamp poisoned cosine thresholds (non-numeric decodes to 0.0, which
+        // would make EVERY face a match; negatives/1.0+ are equally broken).
+        // Same defensive posture as matchConfidenceFloor below. Applied to
+        // both CoreML engines — the arcface flaw was identical & pre-existing.
+        if d.object(forKey: "\(p)arcfaceThreshold") != nil {
+            s.arcfaceThreshold = Self.clampCosineThreshold(d.float(forKey: "\(p)arcfaceThreshold"))
+        }
+        if d.object(forKey: "\(p)adafaceThreshold") != nil {
+            s.adafaceThreshold = Self.clampCosineThreshold(d.float(forKey: "\(p)adafaceThreshold"))
+        }
         if d.object(forKey: "\(p)arcfaceInferenceConcurrency") != nil { s.arcfaceInferenceConcurrency = max(1, d.integer(forKey: "\(p)arcfaceInferenceConcurrency")) }
         // Clamp poisoned values (0, negatives, non-numeric → 0) back to the
         // legal minimum: 1 = any-hit. A bad plist must never disable matching.

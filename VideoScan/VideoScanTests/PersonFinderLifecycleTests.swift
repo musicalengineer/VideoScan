@@ -216,6 +216,10 @@ struct PersonFinderLifecycleTests {
         #expect(job.status == .idle)
     }
 
+    // (#144 QA job-level model pre-flight test lives in
+    // PersonFinderEngineDispatchTests — the single .serialized suite allowed
+    // to mutate AdaFaceModelLoader.modelsDirOverride.)
+
     // regression: #144 — a POI profile persisted with the legacy dlib token
     // must land on AdaFace (deterministically, no crash, no silent no-op),
     // and a poisoned engine string must degrade to .vision. effectiveEngine

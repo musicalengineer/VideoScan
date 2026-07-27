@@ -35,6 +35,11 @@ actor DispatchLogActor {
     func joined() -> String { lines.joined(separator: "\n") }
 }
 
+// .serialized: several tests mutate the process-global
+// AdaFaceModelLoader.modelsDirOverride test seam. Interleaved siblings
+// could nil the override mid-flight and resolve the REAL
+// ~/dev/VideoScan/models (settings-pollution class).
+@Suite(.serialized)
 @MainActor
 struct PersonFinderEngineDispatchTests {
 
@@ -122,6 +127,43 @@ struct PersonFinderEngineDispatchTests {
         let result = await task.value
         #expect(result == nil, "Cancelled task should return nil from AdaFace dispatch")
         await AdaFaceModelLoader.shared.reset()
+    }
+
+    // MARK: - Job-level model pre-flight (#144 QA)
+
+    // An AdaFace job with no model installed must bail ONCE at job level
+    // with a visible failed status, not start a scan that emits per-video
+    // errors across thousands of files (the removed dlib pre-flight's UX).
+    // Synchronous direct path (nil profile → startJobAfterLoad immediately),
+    // same shape as the lifecycle empty-faces bail test. The model check
+    // runs BEFORE the faces guard, so no reference faces are needed here.
+    // Lives in this suite because it mutates modelsDirOverride — only this
+    // .serialized suite may touch that seam.
+    @Test func startJobBailsOnceWhenAdaFaceModelMissing() {
+        let emptyDir = NSTemporaryDirectory() + "adaface_lifecycle_\(UUID().uuidString)"
+        try? FileManager.default.createDirectory(
+            atPath: emptyDir, withIntermediateDirectories: true)
+        defer {
+            AdaFaceModelLoader.modelsDirOverride = nil
+            try? FileManager.default.removeItem(atPath: emptyDir)
+        }
+        AdaFaceModelLoader.modelsDirOverride = emptyDir
+
+        let model = PersonFinderModel()
+        model.settings.recognitionEngine = .adaface
+        let job = ScanJob(searchPath: "/tmp")   // reachable
+        model.jobs.append(job)
+
+        model.startJob(job)
+
+        job.flushConsoleLines()  // bypass 200ms appendLog batch for sync test read
+        let log = job.consoleLines.joined(separator: "\n")
+        #expect(log.contains("AdaFace model not installed"),
+                "Should log the one-shot model pre-flight bail; got: \(log)")
+        #expect(log.contains("adaface_ir50_webface4m.mlpackage"),
+                "Bail message must name the expected model file (actionable)")
+        #expect(job.status == .failed("AdaFace model missing"),
+                "Missing model is a visible job failure, not a silent idle; got \(job.status.label)")
     }
 
     // MARK: - Reference embedding cache, backend-keyed (#144)

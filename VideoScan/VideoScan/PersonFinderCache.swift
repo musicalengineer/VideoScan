@@ -106,6 +106,34 @@ final class PersonFinderCache {
     /// read on worker threads during it.
     nonisolated(unsafe) static var arcfaceEmbedVariant = ""
 
+    /// Compute the embed-variant token runJob installs before a scan starts.
+    /// Pure function so tests can pin the keying contract (#144 QA merge
+    /// condition):
+    ///  - arcface: alignment-only namespace (legacy behavior, unchanged)
+    ///  - adaface: backend/model-version token (+alignment) — its threshold
+    ///    already rides the key's `threshold` column via thresholdForEngine
+    ///  - hybrid: the key's threshold column carries only the VISION
+    ///    threshold, but the AdaFace fallback consumes adafaceThreshold and
+    ///    the model checkpoint — fold BOTH into the variant, or moving the
+    ///    AdaFace slider serves stale hybrid rows and a checkpoint bump
+    ///    never busts them
+    ///  - vision: "" (legacy namespace)
+    static func embedVariant(for settings: PersonFinderSettings) -> String {
+        switch settings.recognitionEngine {
+        case .arcface:
+            return settings.arcfaceLandmarkAlignment ? "lm-v1" : ""
+        case .adaface:
+            return FaceEmbeddingBackend.adafaceCacheVariant
+                + (settings.arcfaceLandmarkAlignment ? "+lm-v1" : "")
+        case .hybrid:
+            return FaceEmbeddingBackend.adafaceCacheVariant
+                + String(format: "+ath%.4f", settings.adafaceThreshold)
+                + (settings.arcfaceLandmarkAlignment ? "+lm-v1" : "")
+        case .vision:
+            return ""
+        }
+    }
+
     static func makeKey(
         videoPath: String,
         personName: String,
@@ -130,7 +158,11 @@ final class PersonFinderCache {
         // AdaFace (#144) uses the same slot for its backend/model-version
         // token — rows are already engine-separated by the `engine` column,
         // the variant additionally busts the cache on a checkpoint bump.
-        if engine == .arcface || engine == .adaface, !arcfaceEmbedVariant.isEmpty {
+        // Hybrid rows fold the AdaFace fallback's knobs in too (QA #144
+        // merge condition): their `threshold` column is Vision's, so the
+        // adaface threshold + model version must ride the variant.
+        if engine == .arcface || engine == .adaface || engine == .hybrid,
+           !arcfaceEmbedVariant.isEmpty {
             refHash += "|" + arcfaceEmbedVariant
         }
         cacheLog.debug("makeKey: refHash=\(refHash, privacy: .public) refs=\(refFilenames.count) person=\(personName, privacy: .public) engine=\(engine.rawValue, privacy: .public)")
