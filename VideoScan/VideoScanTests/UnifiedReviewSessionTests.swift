@@ -399,12 +399,15 @@ struct UnifiedReviewSessionTests {
         #expect(occurrences(of: "validationLabels.record(", in: source) == 1,
                 "ConfirmPersonSheet must have exactly one ValidationLabelStore write site (in apply)")
 
-        // (f) Blocker fix 2026-07-27: the full-queue exclusion set is
-        // built and passed into the pfConfirmRound call site.
-        #expect(prepareBody.contains("ReviewSessionPolicy.heldOutExclusionPaths("),
-                "prepareSetup no longer builds the full-queue holdout exclusion set")
-        #expect(prepareBody.contains("heldOutPaths: heldOut"),
-                "prepareSetup no longer passes the holdout exclusion into pfConfirmRound — eval paths would surface with scores")
+        // (f) Blocker fixes 2026-07-27 (codex #35 + #39): the full-queue
+        // CONTENT-IDENTITY matcher is built (with catalog records, so
+        // duplicate identities resolve) and passed into pfConfirmRound.
+        #expect(prepareBody.contains("ReviewSessionPolicy.heldOutIdentityMatcher("),
+                "prepareSetup no longer builds the held-out content-identity matcher")
+        #expect(prepareBody.contains("records: catalogModel.records)"),
+                "the matcher must be built WITH catalog records — path-only exclusion misses byte-identical aliases (codex #39)")
+        #expect(prepareBody.contains("heldOut: heldOut"),
+                "prepareSetup no longer passes the holdout exclusion into pfConfirmRound — eval content would surface with scores")
 
         // (g) Blocker fix 2026-07-27: queue load failure FAILS CLOSED —
         // startHoldout's catch lands on the fail-closed phase, never the
@@ -416,15 +419,20 @@ struct UnifiedReviewSessionTests {
 
     // MARK: - 10. Blocker regressions (codex #35, 2026-07-27 — full-queue exclusion)
 
-    /// Synthetic catalog record with (optional) filename signal for Donna.
+    /// Synthetic catalog record with (optional) filename signal for Donna
+    /// and (optional) duplicate-identity evidence.
     @MainActor
-    private func makeRecord(_ path: String) -> VideoRecord {
+    private func makeRecord(_ path: String, md5: String = "",
+                            dgid: UUID? = nil, size: Int64 = 0) -> VideoRecord {
         let r = VideoRecord()
         r.fullPath = path
         r.filename = (path as NSString).lastPathComponent
         r.directory = (path as NSString).deletingLastPathComponent
         r.streamTypeRaw = StreamType.videoAndAudio.rawValue
         r.durationSeconds = 60
+        r.partialMD5 = md5
+        r.duplicateGroupID = dgid
+        r.sizeBytes = size
         return r
     }
 
@@ -438,7 +446,7 @@ struct UnifiedReviewSessionTests {
             "BBBB00000002,/v/eval/donna_skipped.mov,,",
         ]), in: dir)
         let q = try HoldoutReviewQueue.load(csvURL: url)
-        let heldOut = ReviewSessionPolicy.heldOutExclusionPaths(
+        let heldOutPaths = ReviewSessionPolicy.heldOutExclusionPaths(
             sessionQueue: q, diskQueue: nil, discoveredQueue: nil)
 
         // Both eval files carry a STRONG filename signal — absent the
@@ -450,14 +458,16 @@ struct UnifiedReviewSessionTests {
             makeRecord("/v/other/plain_1.mov"),
             makeRecord("/v/other/plain_2.mov"),
         ]
+        let heldOut = ReviewSessionPolicy.heldOutIdentityMatcher(
+            sessionQueue: q, diskQueue: nil, discoveredQueue: nil, records: records)
         var rng = SystemRandomNumberGenerator()
         let result = pfConfirmRound(name: "Donna", records: records,
                                     topN: 10, controlK: 2,
-                                    alreadyLabeled: [], heldOutPaths: heldOut,
+                                    alreadyLabeled: [], heldOut: heldOut,
                                     rng: &rng)
         let outPaths = Set(result.candidates.map(\.recordPath))
-        #expect(outPaths.isDisjoint(with: heldOut),
-                "holdout-queue paths leaked into the candidate round: \(outPaths.intersection(heldOut))")
+        #expect(outPaths.isDisjoint(with: heldOutPaths),
+                "holdout-queue paths leaked into the candidate round: \(outPaths.intersection(heldOutPaths))")
         #expect(outPaths.contains("/v/other/donna_free.mov"),
                 "non-eval positives must still surface")
         #expect(result.stats.heldOutExcluded == 2)
@@ -482,20 +492,23 @@ struct UnifiedReviewSessionTests {
         ]), in: dirDisk)
         let diskQ = try HoldoutReviewQueue.load(csvURL: diskURL)
 
-        let heldOut = ReviewSessionPolicy.heldOutExclusionPaths(
+        let heldOutPaths = ReviewSessionPolicy.heldOutExclusionPaths(
             sessionQueue: memoryQ, diskQueue: diskQ, discoveredQueue: nil)
-        #expect(heldOut == ["/v/eval/only_in_memory.mov",
-                            "/v/eval/in_both.mov",
-                            "/v/eval/only_on_disk.mov"])
+        #expect(heldOutPaths == ["/v/eval/only_in_memory.mov",
+                                 "/v/eval/in_both.mov",
+                                 "/v/eval/only_on_disk.mov"])
 
-        let records = heldOut.map { makeRecord($0.replacingOccurrences(of: ".mov", with: "_donna.mov")) }
-            + heldOut.map { makeRecord($0) }
+        let records = heldOutPaths.map { makeRecord($0.replacingOccurrences(of: ".mov", with: "_donna.mov")) }
+            + heldOutPaths.map { makeRecord($0) }
+        let heldOut = ReviewSessionPolicy.heldOutIdentityMatcher(
+            sessionQueue: memoryQ, diskQueue: diskQ, discoveredQueue: nil,
+            records: records)
         var rng = SystemRandomNumberGenerator()
         let result = pfConfirmRound(name: "Donna", records: records,
                                     topN: 10, controlK: 5,
-                                    alreadyLabeled: [], heldOutPaths: heldOut,
+                                    alreadyLabeled: [], heldOut: heldOut,
                                     rng: &rng)
-        #expect(Set(result.candidates.map(\.recordPath)).isDisjoint(with: heldOut))
+        #expect(Set(result.candidates.map(\.recordPath)).isDisjoint(with: heldOutPaths))
     }
 
     // (c) A queue load/reload failure FAILS CLOSED: the landing phase
@@ -519,7 +532,7 @@ struct UnifiedReviewSessionTests {
         ]), in: dir)
         let q = try HoldoutReviewQueue.load(csvURL: url)
         #expect(q.pendingCount == 0, "fixture drift — this test is about a FULLY ANSWERED queue")
-        let heldOut = ReviewSessionPolicy.heldOutExclusionPaths(
+        let heldOutPaths = ReviewSessionPolicy.heldOutExclusionPaths(
             sessionQueue: nil, diskQueue: nil, discoveredQueue: q)
 
         // donna_done → would be a top positive; plain_eval → zero signal,
@@ -530,19 +543,154 @@ struct UnifiedReviewSessionTests {
             makeRecord("/v/other/donna_free.mov"),
             makeRecord("/v/other/plain_free.mov"),
         ]
+        let heldOut = ReviewSessionPolicy.heldOutIdentityMatcher(
+            sessionQueue: nil, diskQueue: nil, discoveredQueue: q, records: records)
         var rng = SystemRandomNumberGenerator()
         let result = pfConfirmRound(name: "Donna", records: records,
                                     topN: 10, controlK: 5,
-                                    alreadyLabeled: [], heldOutPaths: heldOut,
+                                    alreadyLabeled: [], heldOut: heldOut,
                                     rng: &rng)
         let outPaths = Set(result.candidates.map(\.recordPath))
-        #expect(outPaths.isDisjoint(with: heldOut),
-                "durably-answered eval paths leaked into the round: \(outPaths.intersection(heldOut))")
+        #expect(outPaths.isDisjoint(with: heldOutPaths),
+                "durably-answered eval paths leaked into the round: \(outPaths.intersection(heldOutPaths))")
         #expect(outPaths.contains("/v/other/donna_free.mov"))
         // The free zero-signal record is the only legal control.
         let controls = result.candidates.filter { $0.signals == ["control"] }
         #expect(controls.map(\.recordPath) == ["/v/other/plain_free.mov"],
                 "the control pool must exclude eval paths too")
+    }
+
+    // MARK: - 11. Content-identity exclusion (codex #39 — blindness is
+    // about the MEDIA, not the pathname)
+
+    /// One-row eval queue at /v/eval/…; helper for the alias tests.
+    private func evalQueue(path: String) throws -> HoldoutReviewQueue {
+        let dir = try makeTempDir()
+        let url = try writeQueueCSV(csvText(["AAAA00000001,\(path),,"]), in: dir)
+        return try HoldoutReviewQueue.load(csvURL: url)
+    }
+
+    // (39a) A byte-identical duplicate at a DIFFERENT path is excluded
+    // from positives AND controls. This is ALSO the dedup-order-
+    // independence pin: the eval path itself never enters the pool, so
+    // the alias has no twin to collapse against — under path-only
+    // exclusion it would have SURVIVED dedup and surfaced with a score.
+    @Test @MainActor func codex39_byteIdenticalAliasAtDifferentPathIsExcluded() throws {
+        let q = try evalQueue(path: "/Volumes/LaCie/eval/donna_park.mov")
+        let records = [
+            // The eval row's catalog record (carries the hash evidence).
+            makeRecord("/Volumes/LaCie/eval/donna_park.mov", md5: "beefcafe01", size: 900),
+            // Byte-identical copy on another volume, different pathname —
+            // strong filename signal, would top the round if it leaked.
+            makeRecord("/Volumes/X9/backup/donna_park_copy.mov", md5: "beefcafe01", size: 900),
+            // Byte-identical ZERO-signal copy — would be a control pick.
+            makeRecord("/Volumes/X9/backup/mvi_0042.mov", md5: "beefcafe01", size: 900),
+            // Unrelated legitimate candidates.
+            makeRecord("/v/other/donna_free.mov", md5: "0ddba11", size: 500),
+            makeRecord("/v/other/plain_free.mov", md5: "f00dface", size: 400),
+        ]
+        let heldOut = ReviewSessionPolicy.heldOutIdentityMatcher(
+            sessionQueue: q, diskQueue: nil, discoveredQueue: nil, records: records)
+        var rng = SystemRandomNumberGenerator()
+        let result = pfConfirmRound(name: "Donna", records: records,
+                                    topN: 10, controlK: 5,
+                                    alreadyLabeled: [], heldOut: heldOut,
+                                    rng: &rng)
+        let outPaths = Set(result.candidates.map(\.recordPath))
+        #expect(!outPaths.contains("/Volumes/X9/backup/donna_park_copy.mov"),
+                "byte-identical alias leaked into positives — blindness must follow content, not pathname")
+        #expect(!outPaths.contains("/Volumes/X9/backup/mvi_0042.mov"),
+                "byte-identical zero-signal alias leaked into the control pool")
+        #expect(outPaths.contains("/v/other/donna_free.mov"))
+        #expect(outPaths.contains("/v/other/plain_free.mov"))
+    }
+
+    // (39b) A duplicate-group sibling (DuplicateDetector verdict, e.g. a
+    // transcode with a different hash) is excluded too.
+    @Test @MainActor func codex39_duplicateGroupSiblingIsExcluded() throws {
+        let group = UUID()
+        let q = try evalQueue(path: "/Volumes/LaCie/eval/donna_lake.mov")
+        let records = [
+            makeRecord("/Volumes/LaCie/eval/donna_lake.mov", md5: "aaaa01", dgid: group, size: 700),
+            // Same duplicate group, different bytes/size (transcoded copy).
+            makeRecord("/Volumes/X10/transcodes/donna_lake_h264.mp4", md5: "bbbb02", dgid: group, size: 300),
+            makeRecord("/v/other/donna_free.mov", size: 500),
+        ]
+        let heldOut = ReviewSessionPolicy.heldOutIdentityMatcher(
+            sessionQueue: q, diskQueue: nil, discoveredQueue: nil, records: records)
+        #expect(heldOut.matches(path: "/Volumes/X10/transcodes/donna_lake_h264.mp4",
+                                record: records[1]))
+        var rng = SystemRandomNumberGenerator()
+        let result = pfConfirmRound(name: "Donna", records: records,
+                                    topN: 10, controlK: 0,
+                                    alreadyLabeled: [], heldOut: heldOut,
+                                    rng: &rng)
+        let outPaths = Set(result.candidates.map(\.recordPath))
+        #expect(!outPaths.contains("/Volumes/X10/transcodes/donna_lake_h264.mp4"))
+        #expect(outPaths.contains("/v/other/donna_free.mov"))
+    }
+
+    // (39c) Conservative fallback: no hash, no dup group — a same-stem,
+    // same-size sibling (mirrors codex's sampler collapse rule) is still
+    // excluded. Zero sizes are NOT identity evidence: two unhashed
+    // size-0 records sharing a stem must NOT blanket-exclude each other.
+    @Test @MainActor func codex39_stemSizeFallbackExcludes_butUnknownSizeDoesNot() throws {
+        let q = try evalQueue(path: "/Volumes/LaCie/eval/donna_xmas.mov")
+        let records = [
+            makeRecord("/Volumes/LaCie/eval/donna_xmas.mov", size: 12_345),
+            // Same stem + same size, different directory and extension case.
+            makeRecord("/Volumes/X9/mirror/donna_xmas.MOV", size: 12_345),
+            // Same stem, DIFFERENT size → legitimately different media.
+            makeRecord("/v/other/donna_xmas.mov", size: 999),
+        ]
+        let heldOut = ReviewSessionPolicy.heldOutIdentityMatcher(
+            sessionQueue: q, diskQueue: nil, discoveredQueue: nil, records: records)
+        #expect(heldOut.matches(path: records[1].fullPath, record: records[1]))
+        #expect(!heldOut.matches(path: records[2].fullPath, record: records[2]))
+
+        // Unknown-size guard: eval record with size 0 keys NOTHING on
+        // stem+size — an unrelated size-0 record with the same stem stays.
+        let q0 = try evalQueue(path: "/Volumes/LaCie/eval0/donna_beach.mov")
+        let recs0 = [
+            makeRecord("/Volumes/LaCie/eval0/donna_beach.mov", size: 0),
+            makeRecord("/v/other/donna_beach.mov", size: 0),
+        ]
+        let held0 = ReviewSessionPolicy.heldOutIdentityMatcher(
+            sessionQueue: q0, diskQueue: nil, discoveredQueue: nil, records: recs0)
+        #expect(!held0.matches(path: recs0[1].fullPath, record: recs0[1]),
+                "size-0 records must not blanket-match by stem — over-exclusion here is unbounded")
+        #expect(held0.matches(path: recs0[0].fullPath, record: recs0[0]),
+                "the eval row itself is still excluded by exact path")
+    }
+
+    // (39d) RESIDUAL GAP, documented honestly: a held-out path with NO
+    // catalog record contributes only its exact path — no identity can
+    // be derived, so an un-cataloged-identity copy at another path is
+    // NOT recognized. Exact-path exclusion must still hold.
+    @Test @MainActor func codex39_catalogMissKeepsExactPathExclusion_residualGapDocumented() throws {
+        let q = try evalQueue(path: "/Volumes/Unplugged/eval/donna_attic.mov")
+        // The catalog has NO record for the eval path (catalog-miss) —
+        // only an alias with no shared evidence, plus a free positive.
+        let records = [
+            makeRecord("/v/other/donna_attic_copy.mov", md5: "cccc03", size: 800),
+            makeRecord("/v/other/donna_free.mov", size: 500),
+        ]
+        let heldOut = ReviewSessionPolicy.heldOutIdentityMatcher(
+            sessionQueue: q, diskQueue: nil, discoveredQueue: nil, records: records)
+        // Exact path still held (fed straight to the matcher)…
+        #expect(heldOut.matches(path: "/Volumes/Unplugged/eval/donna_attic.mov", record: nil))
+        // …and the RESIDUAL GAP is real: the alias is not recognizable
+        // without catalog evidence for the eval path. This assertion is
+        // the honest documentation — if identity derivation for
+        // catalog-miss rows is ever added (e.g. hash-on-demand), flip it.
+        #expect(!heldOut.matches(path: records[0].fullPath, record: records[0]),
+                "catalog-miss alias unexpectedly matched — if hash-on-demand was added, update this documented gap")
+        var rng = SystemRandomNumberGenerator()
+        let result = pfConfirmRound(name: "Donna", records: records,
+                                    topN: 10, controlK: 0,
+                                    alreadyLabeled: [], heldOut: heldOut,
+                                    rng: &rng)
+        #expect(!result.candidates.map(\.recordPath).contains("/Volumes/Unplugged/eval/donna_attic.mov"))
     }
 
     // MARK: Source-scan helpers

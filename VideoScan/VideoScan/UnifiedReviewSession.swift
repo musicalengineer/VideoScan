@@ -191,4 +191,119 @@ enum ReviewSessionPolicy {
     /// The sheet lands here, shows the load error, and offers retry or
     /// dismiss only. Pinned: this phase forbids candidate loading.
     static var phaseAfterQueueLoadFailure: ReviewSessionPhase { .holdout }
+
+    /// Resolve the full-queue path set to a CONTENT-IDENTITY matcher
+    /// (codex #39, 2026-07-27): blindness is about the media, not the
+    /// pathname — a byte-identical or duplicate-group catalog record at a
+    /// DIFFERENT path is the same held-out video and must be excluded too.
+    /// One pass over `records` to derive identity keys for every held-out
+    /// path that has a catalog record; catalog-miss paths keep exact-path
+    /// exclusion only (see HeldOutIdentityMatcher's residual-gap note).
+    static func heldOutIdentityMatcher(sessionQueue: HoldoutReviewQueue?,
+                                       diskQueue: HoldoutReviewQueue?,
+                                       discoveredQueue: HoldoutReviewQueue?,
+                                       records: [VideoRecord]) -> HeldOutIdentityMatcher {
+        HeldOutIdentityMatcher(
+            heldOutPaths: heldOutExclusionPaths(sessionQueue: sessionQueue,
+                                                diskQueue: diskQueue,
+                                                discoveredQueue: discoveredQueue),
+            records: records)
+    }
+}
+
+// MARK: - Held-out content-identity matcher (codex #39)
+
+/// Content-identity exclusion for the active holdout queue. Carries the
+/// eval rows' identity KEYS — exact paths plus, for every held-out path
+/// the catalog knows, the same duplicate-identity evidence the catalog's
+/// own dedup uses (mirroring codex's sampler, which collapses same-bytes
+/// and same-stem+size duplicates):
+///
+///   1. partialMD5        — byte-identical copies across volumes;
+///   2. duplicateGroupID  — the DuplicateDetector's same-content verdict;
+///   3. stem+size         — conservative fallback (lowercased filename
+///                          minus extension, plus exact byte size). Only
+///                          built/consulted for sizes > 0, so unknown-size
+///                          records can't blanket-match each other.
+///
+/// RESIDUAL GAP (documented honestly, not pretended closed): a held-out
+/// path with NO catalog record contributes only its exact path — we have
+/// no evidence from which to derive its content identity, so an
+/// un-cataloged copy of that video at another path cannot be recognized.
+/// Closing that would require hashing at exclusion time (disk I/O in the
+/// scoring path) — out of scope; the gap shrinks as cataloging coverage
+/// grows.
+///
+/// Blindness contract: these are file-identity facts (path/hash/size),
+/// the same carve-out as media metadata — no model/detection data.
+/// Over-exclusion is safe (a wrongly excluded candidate just waits for
+/// the queue to retire); under-exclusion is the breach.
+struct HeldOutIdentityMatcher: Sendable, Equatable {
+    let paths: Set<String>
+    let md5s: Set<String>
+    let dupGroupIDs: Set<UUID>
+    /// "stem|sizeBytes" keys, lowercased stem, sizes > 0 only.
+    let stemSizeKeys: Set<String>
+
+    static let empty = HeldOutIdentityMatcher(paths: [], md5s: [],
+                                              dupGroupIDs: [], stemSizeKeys: [])
+
+    init(paths: Set<String>, md5s: Set<String>,
+         dupGroupIDs: Set<UUID>, stemSizeKeys: Set<String>) {
+        self.paths = paths
+        self.md5s = md5s
+        self.dupGroupIDs = dupGroupIDs
+        self.stemSizeKeys = stemSizeKeys
+    }
+
+    /// Derive identity keys from the catalog records of the held-out
+    /// paths. One O(records) pass; catalog-miss paths stay path-only.
+    init(heldOutPaths: Set<String>, records: [VideoRecord]) {
+        var md5s = Set<String>()
+        var dgids = Set<UUID>()
+        var stemSizes = Set<String>()
+        if !heldOutPaths.isEmpty {
+            for rec in records where heldOutPaths.contains(rec.fullPath) {
+                if !rec.partialMD5.isEmpty { md5s.insert(rec.partialMD5) }
+                if let dgid = rec.duplicateGroupID { dgids.insert(dgid) }
+                if let key = Self.stemSizeKey(filename: rec.filename,
+                                              sizeBytes: rec.sizeBytes) {
+                    stemSizes.insert(key)
+                }
+            }
+        }
+        self.paths = heldOutPaths
+        self.md5s = md5s
+        self.dupGroupIDs = dgids
+        self.stemSizeKeys = stemSizes
+    }
+
+    var isEmpty: Bool {
+        paths.isEmpty && md5s.isEmpty && dupGroupIDs.isEmpty && stemSizeKeys.isEmpty
+    }
+
+    /// Is this candidate the same MEDIA as a held-out row? Path match
+    /// always; identity evidence when the candidate has a catalog record.
+    /// Deliberately independent of dedup ordering — every candidate is
+    /// checked individually, so a surviving alias can't slip through.
+    func matches(path: String, record: VideoRecord?) -> Bool {
+        if paths.contains(path) { return true }
+        guard let record else { return false }
+        if !record.partialMD5.isEmpty, md5s.contains(record.partialMD5) { return true }
+        if let dgid = record.duplicateGroupID, dupGroupIDs.contains(dgid) { return true }
+        if let key = Self.stemSizeKey(filename: record.filename,
+                                      sizeBytes: record.sizeBytes),
+           stemSizeKeys.contains(key) { return true }
+        return false
+    }
+
+    /// nil when size is unknown (≤ 0) — an unknown size is not identity
+    /// evidence, and keying on it would let all size-0 records with a
+    /// shared stem blanket-exclude each other.
+    static func stemSizeKey(filename: String, sizeBytes: Int64) -> String? {
+        guard sizeBytes > 0 else { return nil }
+        let stem = (filename as NSString).deletingPathExtension.lowercased()
+        guard !stem.isEmpty else { return nil }
+        return "\(stem)|\(sizeBytes)"
+    }
 }
