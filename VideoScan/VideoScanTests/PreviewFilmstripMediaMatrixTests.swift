@@ -16,6 +16,7 @@
 //       (-g 12 dense keyframes, same rationale as
 //       PreviewBestFrameMediaMatrixTests' fixture note).
 //   mov/prores            — second .avFoundation container.
+//   mxf/mpeg2video        — project-policy archival interchange fixture.
 //   avi/dv                — routes .avFoundation but AVF can't open
 //       AVI: pins the batch-failure → ffmpeg-loop fallback arm.
 //
@@ -247,6 +248,35 @@ struct PreviewFilmstripMediaMatrixTests {
             durationSeconds: 6.0)
         #expect(strip.frames.count >= 12)
         expectMonotonic(strip.frames, "prores")
+    }
+
+    @Test("mxf/mpeg2video yields a monotonic archival strip")
+    func mxfMPEG2Video() async throws {
+        let repoRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let path = repoRoot
+            .appendingPathComponent("tests/fixtures/videos/test_video_only.mxf")
+            .path
+        try #require(FileManager.default.fileExists(atPath: path),
+                     "tracked synthetic MXF fixture is missing")
+
+        try #require(PreviewFrameRouter.previewRoute(
+            container: "MXF (Material eXchange Format)",
+            videoCodec: "mpeg2video",
+            likelyUnanalyzable: false) == .avFoundation)
+
+        let strip = try await VideoScanModel.renderPreviewFilmstrip(
+            path: path,
+            container: "MXF (Material eXchange Format)",
+            videoCodec: "mpeg2video",
+            likelyUnanalyzable: false,
+            durationSeconds: 5.005)
+
+        #expect(strip.frames.count >= 8,
+                "MXF filmstrip retained only \(strip.frames.count) frames")
+        expectMonotonic(strip.frames, "mxf-mpeg2video")
     }
 
     @Test("avi/dv yields a monotonic strip (batch arm or its ffmpeg fallback)")
