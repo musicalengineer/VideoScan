@@ -1326,8 +1326,8 @@ extension CatalogContent {
 
                 …but its duration could not be verified or is incompatible \
                 with the video, so it was not offered automatically (this \
-                can indicate a truncated or mislabeled file). Use \
-                "Find A/V Pair…" to review candidates and pair manually.
+                can indicate a truncated or mislabeled file). Verify the \
+                source media or add a compatible full-length audio file.
                 """
                 : """
                 No matching audio-only file scored highly enough against:
@@ -1378,8 +1378,8 @@ extension CatalogContent {
 
                 …but its duration could not be verified or is incompatible \
                 with the audio, so it was not offered automatically (this \
-                can indicate a truncated or mislabeled file). Use \
-                "Find A/V Pair…" to review candidates and pair manually.
+                can indicate a truncated or mislabeled file). Verify the \
+                source media or add a compatible full-length video file.
                 """
                 : """
                 No matching video-only file scored highly enough against:
