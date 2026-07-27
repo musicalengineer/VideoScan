@@ -1,7 +1,8 @@
 # adaface_net.py — VENDORED from https://github.com/mk-minchul/AdaFace (net.py)
 # Commit: shallow clone 2026-07-27. License: MIT (Copyright (c) 2022 Minchul Kim).
 # Vendored so tools/adaface/convert_adaface_coreml.py can rebuild the IR-50
-# backbone without a network clone. Do not edit; re-vendor upstream instead.
+# backbone without a network clone. Do not edit (whitespace-only cleanup
+# applied: trailing whitespace + EOF blank line); re-vendor upstream instead.
 
 from collections import namedtuple
 import torch
@@ -322,7 +323,7 @@ class Backbone(Module):
 
 
     def forward(self, x):
-        
+
         # current code only supports one extra image
         # it comes with a extra dimension for number of extra image. We will just squeeze it out for now
         x = self.input_layer(x)
@@ -416,4 +417,3 @@ def IR_SE_200(input_size):
     model = Backbone(input_size, 200, 'ir_se')
 
     return model
-

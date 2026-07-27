@@ -197,6 +197,55 @@ struct ScanConfigurationTests {
         model.stopJob(job)
     }
 
+    // regression: #144 codex post-merge — HYBRID's first pass is Vision, so
+    // runJob must hand it real feature prints. The old `== .vision` gate gave
+    // hybrid an empty array: Vision could never match and every video fell
+    // straight through to the fallback engine. PRODUCTION-PATH test: real
+    // Vision face load + the real startJob → runJob pipeline; asserts on the
+    // console line runJob writes from the prints it actually computed.
+    @Test(.disabled(if: isCI, "Vision face detection too slow on CI runners"), .timeLimit(visionTimeLimit))
+    func startJobBuildsVisionPrintsForHybrid() async {
+        let photosDir = Self.photosDir
+        guard FileManager.default.fileExists(atPath: photosDir) else { return }
+
+        let model = PersonFinderModel()
+        let job = ScanJob(searchPath: "/tmp")   // reachable; stopped below
+        model.jobs.append(job)
+
+        let profile = POIProfile(name: "TestPerson", referencePath: photosDir,
+                                 engine: RecognitionEngine.hybrid.rawValue)
+        job.assignedProfile = profile
+        await model.loadFacesForJob(job)
+        let loadedFaces = job.assignedFaces.count
+        #expect(loadedFaces > 0, "Precondition: fixture photos must yield reference faces")
+
+        model.startJob(job)
+        try? await Task.sleep(for: .milliseconds(200))
+        job.flushConsoleLines()  // bypass 200ms appendLog batch
+
+        let log = job.consoleLines.joined(separator: "\n")
+        #expect(log.contains("Engine: HYBRID"), "Console should log the hybrid engine; got: \(log)")
+        #expect(log.contains("Feature prints for matching: \(loadedFaces)"),
+                "Hybrid must carry one Vision print per loaded face — zero prints means its Vision pass can never match; got: \(log)")
+        #expect(!log.contains("Feature prints for matching: 0"),
+                "Regression: empty print array for hybrid (the pre-fix bug)")
+
+        model.stopJob(job)
+    }
+
+    // Cheap always-on companion (runs on CI too): pins the exact helper
+    // runJob calls, across all engines, without needing Vision.
+    @Test func visionFeaturePrintsGateCoversHybrid() {
+        // No real faces needed for the empty-input contract: the CoreML
+        // engines must get [], and vision/hybrid must get one print per face
+        // (trivially [] here — the per-face mapping is pinned by the
+        // production-path test above).
+        for engine in RecognitionEngine.allCases {
+            let prints = PersonFinderModel.visionFeaturePrints(for: engine, faces: [])
+            #expect(prints.isEmpty)
+        }
+    }
+
     @Test(.disabled(if: isCI, "Vision face detection too slow on CI runners"), .timeLimit(visionTimeLimit))
     func startJobWithEngineOverride() async {
         let photosDir = Self.photosDir
