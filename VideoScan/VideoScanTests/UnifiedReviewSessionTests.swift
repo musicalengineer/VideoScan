@@ -398,6 +398,151 @@ struct UnifiedReviewSessionTests {
         // to prevent.
         #expect(occurrences(of: "validationLabels.record(", in: source) == 1,
                 "ConfirmPersonSheet must have exactly one ValidationLabelStore write site (in apply)")
+
+        // (f) Blocker fix 2026-07-27: the full-queue exclusion set is
+        // built and passed into the pfConfirmRound call site.
+        #expect(prepareBody.contains("ReviewSessionPolicy.heldOutExclusionPaths("),
+                "prepareSetup no longer builds the full-queue holdout exclusion set")
+        #expect(prepareBody.contains("heldOutPaths: heldOut"),
+                "prepareSetup no longer passes the holdout exclusion into pfConfirmRound — eval paths would surface with scores")
+
+        // (g) Blocker fix 2026-07-27: queue load failure FAILS CLOSED —
+        // startHoldout's catch lands on the fail-closed phase, never the
+        // candidate transition.
+        let startHoldoutBody = memberBody(of: source, from: "private func startHoldout(")
+        #expect(startHoldoutBody.contains("phase = sheetPhase(ReviewSessionPolicy.phaseAfterQueueLoadFailure)"),
+                "startHoldout's load-failure path no longer fails closed — a broken queue would leak the session into candidate scoring")
+    }
+
+    // MARK: - 10. Blocker regressions (codex #35, 2026-07-27 — full-queue exclusion)
+
+    /// Synthetic catalog record with (optional) filename signal for Donna.
+    @MainActor
+    private func makeRecord(_ path: String) -> VideoRecord {
+        let r = VideoRecord()
+        r.fullPath = path
+        r.filename = (path as NSString).lastPathComponent
+        r.directory = (path as NSString).deletingLastPathComponent
+        r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        r.durationSeconds = 60
+        return r
+    }
+
+    // (a) A skipped (still-pending) holdout row must never surface as a
+    // candidate — the exact breach codex found: skip the last row →
+    // transitionToCandidates → the skipped file appears with signals.
+    @Test @MainActor func blocker_skippedPendingHoldoutPathNeverSurfacesAsCandidate() throws {
+        let dir = try makeTempDir()
+        let url = try writeQueueCSV(csvText([
+            "AAAA00000001,/v/eval/donna_answered.mov,yes,",
+            "BBBB00000002,/v/eval/donna_skipped.mov,,",
+        ]), in: dir)
+        let q = try HoldoutReviewQueue.load(csvURL: url)
+        let heldOut = ReviewSessionPolicy.heldOutExclusionPaths(
+            sessionQueue: q, diskQueue: nil, discoveredQueue: nil)
+
+        // Both eval files carry a STRONG filename signal — absent the
+        // exclusion they would rank at the top of the round.
+        let records = [
+            makeRecord("/v/eval/donna_answered.mov"),
+            makeRecord("/v/eval/donna_skipped.mov"),
+            makeRecord("/v/other/donna_free.mov"),
+            makeRecord("/v/other/plain_1.mov"),
+            makeRecord("/v/other/plain_2.mov"),
+        ]
+        var rng = SystemRandomNumberGenerator()
+        let result = pfConfirmRound(name: "Donna", records: records,
+                                    topN: 10, controlK: 2,
+                                    alreadyLabeled: [], heldOutPaths: heldOut,
+                                    rng: &rng)
+        let outPaths = Set(result.candidates.map(\.recordPath))
+        #expect(outPaths.isDisjoint(with: heldOut),
+                "holdout-queue paths leaked into the candidate round: \(outPaths.intersection(heldOut))")
+        #expect(outPaths.contains("/v/other/donna_free.mov"),
+                "non-eval positives must still surface")
+        #expect(result.stats.heldOutExcluded == 2)
+    }
+
+    // (b) Union across in-memory and on-disk views: a row present in only
+    // ONE of them (external regeneration/truncation, or an optimistic
+    // in-flight answer the disk hasn't committed) is still excluded —
+    // answer state is entirely irrelevant to the full-queue rule.
+    @Test @MainActor func blocker_exclusionUnionsMemoryAndDiskViews() throws {
+        let dirMem = try makeTempDir()
+        let memURL = try writeQueueCSV(csvText([
+            "AAAA00000001,/v/eval/only_in_memory.mov,yes,",   // answered (e.g. optimistic)
+            "BBBB00000002,/v/eval/in_both.mov,,",
+        ]), in: dirMem)
+        let memoryQ = try HoldoutReviewQueue.load(csvURL: memURL)
+
+        let dirDisk = try makeTempDir()
+        let diskURL = try writeQueueCSV(csvText([
+            "BBBB00000002,/v/eval/in_both.mov,,",
+            "CCCC00000003,/v/eval/only_on_disk.mov,,",        // external edit added it
+        ]), in: dirDisk)
+        let diskQ = try HoldoutReviewQueue.load(csvURL: diskURL)
+
+        let heldOut = ReviewSessionPolicy.heldOutExclusionPaths(
+            sessionQueue: memoryQ, diskQueue: diskQ, discoveredQueue: nil)
+        #expect(heldOut == ["/v/eval/only_in_memory.mov",
+                            "/v/eval/in_both.mov",
+                            "/v/eval/only_on_disk.mov"])
+
+        let records = heldOut.map { makeRecord($0.replacingOccurrences(of: ".mov", with: "_donna.mov")) }
+            + heldOut.map { makeRecord($0) }
+        var rng = SystemRandomNumberGenerator()
+        let result = pfConfirmRound(name: "Donna", records: records,
+                                    topN: 10, controlK: 5,
+                                    alreadyLabeled: [], heldOutPaths: heldOut,
+                                    rng: &rng)
+        #expect(Set(result.candidates.map(\.recordPath)).isDisjoint(with: heldOut))
+    }
+
+    // (c) A queue load/reload failure FAILS CLOSED: the landing phase
+    // forbids candidate loading entirely.
+    @Test func blocker_queueLoadFailureFailsClosed() {
+        let landing = ReviewSessionPolicy.phaseAfterQueueLoadFailure
+        #expect(landing == .holdout)
+        #expect(!ReviewSessionPolicy.mayLoadCandidates(in: landing),
+                "the load-failure landing phase must forbid candidate scoring — fail closed, not open")
+    }
+
+    // (d) STRICTER-THAN-CODEX rule: even DURABLY-ANSWERED rows stay
+    // excluded — positives AND zero-signal controls — because the sealed
+    // eval set's paths must never enter validation labels (QA item-8:
+    // sampler-seed contamination).
+    @Test @MainActor func blocker_durablyAnsweredEvalRowsExcludedFromPositivesAndControls() throws {
+        let dir = try makeTempDir()
+        let url = try writeQueueCSV(csvText([
+            "AAAA00000001,/v/eval/donna_done.mov,yes,clearly her",
+            "BBBB00000002,/v/eval/plain_eval.mov,no,",
+        ]), in: dir)
+        let q = try HoldoutReviewQueue.load(csvURL: url)
+        #expect(q.pendingCount == 0, "fixture drift — this test is about a FULLY ANSWERED queue")
+        let heldOut = ReviewSessionPolicy.heldOutExclusionPaths(
+            sessionQueue: nil, diskQueue: nil, discoveredQueue: q)
+
+        // donna_done → would be a top positive; plain_eval → zero signal,
+        // would be a near-certain control pick from this tiny pool.
+        let records = [
+            makeRecord("/v/eval/donna_done.mov"),
+            makeRecord("/v/eval/plain_eval.mov"),
+            makeRecord("/v/other/donna_free.mov"),
+            makeRecord("/v/other/plain_free.mov"),
+        ]
+        var rng = SystemRandomNumberGenerator()
+        let result = pfConfirmRound(name: "Donna", records: records,
+                                    topN: 10, controlK: 5,
+                                    alreadyLabeled: [], heldOutPaths: heldOut,
+                                    rng: &rng)
+        let outPaths = Set(result.candidates.map(\.recordPath))
+        #expect(outPaths.isDisjoint(with: heldOut),
+                "durably-answered eval paths leaked into the round: \(outPaths.intersection(heldOut))")
+        #expect(outPaths.contains("/v/other/donna_free.mov"))
+        // The free zero-signal record is the only legal control.
+        let controls = result.candidates.filter { $0.signals == ["control"] }
+        #expect(controls.map(\.recordPath) == ["/v/other/plain_free.mov"],
+                "the control pool must exclude eval paths too")
     }
 
     // MARK: Source-scan helpers

@@ -182,6 +182,12 @@ struct ConfirmRoundStats {
     /// Records skipped because the user already labeled them in a
     /// prior round (idempotency).
     let alreadyLabeled: Int
+    /// Scored records excluded because their path belongs to the ACTIVE
+    /// blind holdout queue (any answer state — see pfConfirmRound's
+    /// heldOutPaths). Blocker fix 2026-07-27: eval-set paths must never
+    /// surface with signals/scores, and their ratings must never seed
+    /// the sampler.
+    let heldOutExcluded: Int
 }
 
 /// Wraps `pfCandidatesForPerson` with the round-assembly policy:
@@ -197,6 +203,14 @@ struct ConfirmRoundStats {
 ///   - Drop offline candidates so the user only rates what they can
 ///     watch.
 ///   - Drop already-labeled candidates (idempotency).
+///   - Drop EVERY path in `heldOutPaths` — positives AND controls —
+///     regardless of catalog state. These are the ACTIVE blind holdout
+///     queue's rows (any answer state: pending, skipped, in-flight,
+///     write-failed, or durably answered). Surfacing them would show
+///     Rick signals/scores for the sealed eval set before/after blind
+///     grading, and rating them would land eval paths in validation
+///     labels, contaminating the sampler's seed. Blocker fix
+///     2026-07-27 (codex #35, applied strictly full-queue).
 ///   - Cap to `topN` highest-score positives + `controlK` random
 ///     controls with no signal.
 ///
@@ -209,6 +223,7 @@ nonisolated func pfConfirmRound(
     topN: Int,
     controlK: Int,
     alreadyLabeled: Set<String>,
+    heldOutPaths: Set<String> = [],
     durationCapSec: Double = 3600,   // 60 min default
     skipAudioOnly: Bool = true,
     rng: inout SystemRandomNumberGenerator
@@ -216,8 +231,11 @@ nonisolated func pfConfirmRound(
     let scoredAll = pfCandidatesForPerson(name: name, records: records)
     let candidatesSurfaced = scoredAll.count
     let alreadyLabeledMatches = scoredAll.filter { alreadyLabeled.contains($0.recordPath) }.count
+    let heldOutMatches = scoredAll.filter { heldOutPaths.contains($0.recordPath) }.count
 
-    let fresh = scoredAll.filter { !alreadyLabeled.contains($0.recordPath) }
+    let fresh = scoredAll.filter {
+        !alreadyLabeled.contains($0.recordPath) && !heldOutPaths.contains($0.recordPath)
+    }
 
     // Build path → rec lookup; reused by every filter / dedup pass.
     var byPath: [String: VideoRecord] = [:]
@@ -314,7 +332,11 @@ nonisolated func pfConfirmRound(
     var controlPool: [VideoRecord] = []
     controlPool.reserveCapacity(min(records.count, 1024))
     for rec in records where !scoredPaths.contains(rec.fullPath)
-        && !alreadyLabeled.contains(rec.fullPath) {
+        && !alreadyLabeled.contains(rec.fullPath)
+        // Held-out paths are barred from the CONTROL pool too — a
+        // zero-signal eval row shown as a control is still the sealed
+        // set leaking into a rated round (blocker fix 2026-07-27).
+        && !heldOutPaths.contains(rec.fullPath) {
         if rec.filename.lowercased().contains(n) { continue }
         if rec.directory.lowercased().contains(n) { continue }
         let st = rec.streamType
@@ -346,7 +368,8 @@ nonisolated func pfConfirmRound(
         durationCapMinutes: Int(durationCapSec / 60),
         offlineSkipped: offlineCandidates.count,
         offlineVolumes: offlineVolumes,
-        alreadyLabeled: alreadyLabeledMatches
+        alreadyLabeled: alreadyLabeledMatches,
+        heldOutExcluded: heldOutMatches
     )
     return (positives + controlScores, stats)
 }

@@ -144,6 +144,18 @@ struct ConfirmPersonSheet: View {
         }
     }
 
+    /// Inverse mapping — lets the sheet land on a phase the POLICY layer
+    /// chose (e.g. the fail-closed load-failure landing), keeping the
+    /// decision in the testable pure layer.
+    private func sheetPhase(_ p: ReviewSessionPhase) -> Phase {
+        switch p {
+        case .holdout:           return .holdout
+        case .candidateSetup:    return .setup
+        case .candidateLabeling: return .labeling
+        case .summary:           return .summary
+        }
+    }
+
     /// Stats from round assembly — shown in the setup pane.
     @State private var stats: ConfirmRoundStats?
 
@@ -804,6 +816,8 @@ struct ConfirmPersonSheet: View {
                                 .padding(.top, 2)
                         }
                     } else {
+                        // FAIL-CLOSED landing (load failure): candidates
+                        // are NOT offered — retry or close only.
                         Text("No review queue could be loaded.")
                             .font(.system(size: 12).weight(.medium))
                         if let err = holdoutSaveError {
@@ -811,6 +825,10 @@ struct ConfirmPersonSheet: View {
                                 .font(.system(size: 11))
                                 .foregroundColor(.secondary)
                         }
+                        Button("Try Again") { startHoldout() }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .padding(.top, 2)
                     }
                 }
                 Spacer()
@@ -898,9 +916,14 @@ struct ConfirmPersonSheet: View {
                 transitionToCandidates()
             }
         } catch {
+            // FAIL CLOSED (blocker fix 2026-07-27): a load failure must
+            // NEVER hand the session to the candidate phase — with the
+            // queue unreadable we cannot know which paths are sealed for
+            // blind review, so candidate scoring cannot be allowed to
+            // run. Land on the error pane; Try Again / Close only.
             holdout = nil
             holdoutSaveError = "Could not reload review queue: \(error.localizedDescription)"
-            transitionToCandidates()
+            phase = sheetPhase(ReviewSessionPolicy.phaseAfterQueueLoadFailure)
         }
     }
 
@@ -1351,6 +1374,19 @@ struct ConfirmPersonSheet: View {
             }
             let already = Set(personFinderModel.validationLabels
                 .labeledByPath(for: profile.name).keys)
+            // FULL-QUEUE blindness exclusion (blocker fix 2026-07-27,
+            // codex #35 applied strictly): every path of the ACTIVE
+            // holdout queue — any answer state — is barred from the
+            // round, positives and controls. Union of the in-memory
+            // session copy (optimistic in-flight answers), a fresh
+            // disk load (external edits; the read is a tiny local CSV,
+            // same as startHoldout), and the badge center's discovered
+            // queue (candidates-only sessions where the queue is fully
+            // answered and pendingQueue returned nil).
+            let heldOut = ReviewSessionPolicy.heldOutExclusionPaths(
+                sessionQueue: holdout,
+                diskQueue: holdoutQueue.flatMap { try? $0.freshCopyFromDisk() },
+                discoveredQueue: holdoutCenter.queue)
             var rng = SystemRandomNumberGenerator()
             let result = pfConfirmRound(
                 name: profile.name,
@@ -1358,6 +1394,7 @@ struct ConfirmPersonSheet: View {
                 topN: 100,   // upper bound; the roundSize picker trims
                 controlK: controlK,
                 alreadyLabeled: already,
+                heldOutPaths: heldOut,
                 rng: &rng
             )
             // The user may have clicked "Continue Reviewing" while the

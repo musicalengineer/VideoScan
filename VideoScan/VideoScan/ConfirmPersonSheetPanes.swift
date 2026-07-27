@@ -67,6 +67,12 @@ struct ConfirmSetupPane: View {
                 statRow(symbol: "checkmark.seal", color: .green,
                         text: "\(s.alreadyLabeled) already labeled in prior rounds \u{2014} skipped")
             }
+            if s.heldOutExcluded > 0 {
+                // Blocker fix 2026-07-27: eval-set rows never appear in
+                // rated rounds; honest count, friendly wording.
+                statRow(symbol: "eye.slash", color: .purple,
+                        text: "\(s.heldOutExcluded) reserved for the blind review set \u{2014} excluded until that set retires")
+            }
             if s.offlineSkipped > 0 {
                 statRow(
                     symbol: "externaldrive.badge.exclamationmark", color: .orange,
