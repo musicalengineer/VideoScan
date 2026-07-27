@@ -419,6 +419,19 @@ struct UnifiedReviewSessionTests {
 
     // MARK: - 10. Blocker regressions (codex #35, 2026-07-27 — full-queue exclusion)
 
+    /// Per-test-unique path root. VolumeReachability keeps a PROCESS-WIDE
+    /// SWR cache keyed by full path for non-/Volumes entries: reusing a
+    /// fixture path across tests lets an earlier test's background probe
+    /// land `false` (the path doesn't exist) and silently drop a later
+    /// test's candidates through the offline filter — a poisoned-shared-
+    /// state flake, caught live 2026-07-27. Unique roots mean each path's
+    /// first-ever touch happens inside its own round, where the miss
+    /// default (optimistic true) is deterministic. Never use real volume
+    /// names (/Volumes/X9 etc.) — mount state would decide the test.
+    private func uniqueBase() -> String {
+        "/v/t-\(UUID().uuidString.prefix(8))"
+    }
+
     /// Synthetic catalog record with (optional) filename signal for Donna
     /// and (optional) duplicate-identity evidence.
     @MainActor
@@ -440,10 +453,11 @@ struct UnifiedReviewSessionTests {
     // candidate — the exact breach codex found: skip the last row →
     // transitionToCandidates → the skipped file appears with signals.
     @Test @MainActor func blocker_skippedPendingHoldoutPathNeverSurfacesAsCandidate() throws {
+        let base = uniqueBase()
         let dir = try makeTempDir()
         let url = try writeQueueCSV(csvText([
-            "AAAA00000001,/v/eval/donna_answered.mov,yes,",
-            "BBBB00000002,/v/eval/donna_skipped.mov,,",
+            "AAAA00000001,\(base)/eval/donna_answered.mov,yes,",
+            "BBBB00000002,\(base)/eval/donna_skipped.mov,,",
         ]), in: dir)
         let q = try HoldoutReviewQueue.load(csvURL: url)
         let heldOutPaths = ReviewSessionPolicy.heldOutExclusionPaths(
@@ -452,11 +466,11 @@ struct UnifiedReviewSessionTests {
         // Both eval files carry a STRONG filename signal — absent the
         // exclusion they would rank at the top of the round.
         let records = [
-            makeRecord("/v/eval/donna_answered.mov"),
-            makeRecord("/v/eval/donna_skipped.mov"),
-            makeRecord("/v/other/donna_free.mov"),
-            makeRecord("/v/other/plain_1.mov"),
-            makeRecord("/v/other/plain_2.mov"),
+            makeRecord("\(base)/eval/donna_answered.mov"),
+            makeRecord("\(base)/eval/donna_skipped.mov"),
+            makeRecord("\(base)/other/donna_free.mov"),
+            makeRecord("\(base)/other/plain_1.mov"),
+            makeRecord("\(base)/other/plain_2.mov"),
         ]
         let heldOut = ReviewSessionPolicy.heldOutIdentityMatcher(
             sessionQueue: q, diskQueue: nil, discoveredQueue: nil, records: records)
@@ -468,7 +482,7 @@ struct UnifiedReviewSessionTests {
         let outPaths = Set(result.candidates.map(\.recordPath))
         #expect(outPaths.isDisjoint(with: heldOutPaths),
                 "holdout-queue paths leaked into the candidate round: \(outPaths.intersection(heldOutPaths))")
-        #expect(outPaths.contains("/v/other/donna_free.mov"),
+        #expect(outPaths.contains("\(base)/other/donna_free.mov"),
                 "non-eval positives must still surface")
         #expect(result.stats.heldOutExcluded == 2)
     }
@@ -478,25 +492,26 @@ struct UnifiedReviewSessionTests {
     // in-flight answer the disk hasn't committed) is still excluded —
     // answer state is entirely irrelevant to the full-queue rule.
     @Test @MainActor func blocker_exclusionUnionsMemoryAndDiskViews() throws {
+        let base = uniqueBase()
         let dirMem = try makeTempDir()
         let memURL = try writeQueueCSV(csvText([
-            "AAAA00000001,/v/eval/only_in_memory.mov,yes,",   // answered (e.g. optimistic)
-            "BBBB00000002,/v/eval/in_both.mov,,",
+            "AAAA00000001,\(base)/eval/only_in_memory.mov,yes,",   // answered (e.g. optimistic)
+            "BBBB00000002,\(base)/eval/in_both.mov,,",
         ]), in: dirMem)
         let memoryQ = try HoldoutReviewQueue.load(csvURL: memURL)
 
         let dirDisk = try makeTempDir()
         let diskURL = try writeQueueCSV(csvText([
-            "BBBB00000002,/v/eval/in_both.mov,,",
-            "CCCC00000003,/v/eval/only_on_disk.mov,,",        // external edit added it
+            "BBBB00000002,\(base)/eval/in_both.mov,,",
+            "CCCC00000003,\(base)/eval/only_on_disk.mov,,",        // external edit added it
         ]), in: dirDisk)
         let diskQ = try HoldoutReviewQueue.load(csvURL: diskURL)
 
         let heldOutPaths = ReviewSessionPolicy.heldOutExclusionPaths(
             sessionQueue: memoryQ, diskQueue: diskQ, discoveredQueue: nil)
-        #expect(heldOutPaths == ["/v/eval/only_in_memory.mov",
-                                 "/v/eval/in_both.mov",
-                                 "/v/eval/only_on_disk.mov"])
+        #expect(heldOutPaths == ["\(base)/eval/only_in_memory.mov",
+                                 "\(base)/eval/in_both.mov",
+                                 "\(base)/eval/only_on_disk.mov"])
 
         let records = heldOutPaths.map { makeRecord($0.replacingOccurrences(of: ".mov", with: "_donna.mov")) }
             + heldOutPaths.map { makeRecord($0) }
@@ -525,10 +540,11 @@ struct UnifiedReviewSessionTests {
     // eval set's paths must never enter validation labels (QA item-8:
     // sampler-seed contamination).
     @Test @MainActor func blocker_durablyAnsweredEvalRowsExcludedFromPositivesAndControls() throws {
+        let base = uniqueBase()
         let dir = try makeTempDir()
         let url = try writeQueueCSV(csvText([
-            "AAAA00000001,/v/eval/donna_done.mov,yes,clearly her",
-            "BBBB00000002,/v/eval/plain_eval.mov,no,",
+            "AAAA00000001,\(base)/eval/donna_done.mov,yes,clearly her",
+            "BBBB00000002,\(base)/eval/plain_eval.mov,no,",
         ]), in: dir)
         let q = try HoldoutReviewQueue.load(csvURL: url)
         #expect(q.pendingCount == 0, "fixture drift — this test is about a FULLY ANSWERED queue")
@@ -538,10 +554,10 @@ struct UnifiedReviewSessionTests {
         // donna_done → would be a top positive; plain_eval → zero signal,
         // would be a near-certain control pick from this tiny pool.
         let records = [
-            makeRecord("/v/eval/donna_done.mov"),
-            makeRecord("/v/eval/plain_eval.mov"),
-            makeRecord("/v/other/donna_free.mov"),
-            makeRecord("/v/other/plain_free.mov"),
+            makeRecord("\(base)/eval/donna_done.mov"),
+            makeRecord("\(base)/eval/plain_eval.mov"),
+            makeRecord("\(base)/other/donna_free.mov"),
+            makeRecord("\(base)/other/plain_free.mov"),
         ]
         let heldOut = ReviewSessionPolicy.heldOutIdentityMatcher(
             sessionQueue: nil, diskQueue: nil, discoveredQueue: q, records: records)
@@ -553,10 +569,10 @@ struct UnifiedReviewSessionTests {
         let outPaths = Set(result.candidates.map(\.recordPath))
         #expect(outPaths.isDisjoint(with: heldOutPaths),
                 "durably-answered eval paths leaked into the round: \(outPaths.intersection(heldOutPaths))")
-        #expect(outPaths.contains("/v/other/donna_free.mov"))
+        #expect(outPaths.contains("\(base)/other/donna_free.mov"))
         // The free zero-signal record is the only legal control.
         let controls = result.candidates.filter { $0.signals == ["control"] }
-        #expect(controls.map(\.recordPath) == ["/v/other/plain_free.mov"],
+        #expect(controls.map(\.recordPath) == ["\(base)/other/plain_free.mov"],
                 "the control pool must exclude eval paths too")
     }
 
@@ -576,18 +592,23 @@ struct UnifiedReviewSessionTests {
     // the alias has no twin to collapse against — under path-only
     // exclusion it would have SURVIVED dedup and surfaced with a score.
     @Test @MainActor func codex39_byteIdenticalAliasAtDifferentPathIsExcluded() throws {
-        let q = try evalQueue(path: "/Volumes/LaCie/eval/donna_park.mov")
+        // Fixture paths: unique per test (see uniqueBase) and NEVER on
+        // /Volumes — a fake unmounted volume would make the offline
+        // filter drop the aliases and the test would pass without the
+        // matcher proving anything.
+        let base = uniqueBase()
+        let q = try evalQueue(path: "\(base)/eval/donna_park.mov")
         let records = [
             // The eval row's catalog record (carries the hash evidence).
-            makeRecord("/Volumes/LaCie/eval/donna_park.mov", md5: "beefcafe01", size: 900),
-            // Byte-identical copy on another volume, different pathname —
+            makeRecord("\(base)/eval/donna_park.mov", md5: "beefcafe01", size: 900),
+            // Byte-identical copy in another tree, different pathname —
             // strong filename signal, would top the round if it leaked.
-            makeRecord("/Volumes/X9/backup/donna_park_copy.mov", md5: "beefcafe01", size: 900),
+            makeRecord("\(base)/backup/donna_park_copy.mov", md5: "beefcafe01", size: 900),
             // Byte-identical ZERO-signal copy — would be a control pick.
-            makeRecord("/Volumes/X9/backup/mvi_0042.mov", md5: "beefcafe01", size: 900),
+            makeRecord("\(base)/backup/mvi_0042.mov", md5: "beefcafe01", size: 900),
             // Unrelated legitimate candidates.
-            makeRecord("/v/other/donna_free.mov", md5: "0ddba11", size: 500),
-            makeRecord("/v/other/plain_free.mov", md5: "f00dface", size: 400),
+            makeRecord("\(base)/other/donna_free.mov", md5: "0ddba11", size: 500),
+            makeRecord("\(base)/other/plain_free.mov", md5: "f00dface", size: 400),
         ]
         let heldOut = ReviewSessionPolicy.heldOutIdentityMatcher(
             sessionQueue: q, diskQueue: nil, discoveredQueue: nil, records: records)
@@ -597,28 +618,29 @@ struct UnifiedReviewSessionTests {
                                     alreadyLabeled: [], heldOut: heldOut,
                                     rng: &rng)
         let outPaths = Set(result.candidates.map(\.recordPath))
-        #expect(!outPaths.contains("/Volumes/X9/backup/donna_park_copy.mov"),
+        #expect(!outPaths.contains("\(base)/backup/donna_park_copy.mov"),
                 "byte-identical alias leaked into positives — blindness must follow content, not pathname")
-        #expect(!outPaths.contains("/Volumes/X9/backup/mvi_0042.mov"),
+        #expect(!outPaths.contains("\(base)/backup/mvi_0042.mov"),
                 "byte-identical zero-signal alias leaked into the control pool")
-        #expect(outPaths.contains("/v/other/donna_free.mov"))
-        #expect(outPaths.contains("/v/other/plain_free.mov"))
+        #expect(outPaths.contains("\(base)/other/donna_free.mov"))
+        #expect(outPaths.contains("\(base)/other/plain_free.mov"))
     }
 
     // (39b) A duplicate-group sibling (DuplicateDetector verdict, e.g. a
     // transcode with a different hash) is excluded too.
     @Test @MainActor func codex39_duplicateGroupSiblingIsExcluded() throws {
+        let base = uniqueBase()
         let group = UUID()
-        let q = try evalQueue(path: "/Volumes/LaCie/eval/donna_lake.mov")
+        let q = try evalQueue(path: "\(base)/eval/donna_lake.mov")
         let records = [
-            makeRecord("/Volumes/LaCie/eval/donna_lake.mov", md5: "aaaa01", dgid: group, size: 700),
+            makeRecord("\(base)/eval/donna_lake.mov", md5: "aaaa01", dgid: group, size: 700),
             // Same duplicate group, different bytes/size (transcoded copy).
-            makeRecord("/Volumes/X10/transcodes/donna_lake_h264.mp4", md5: "bbbb02", dgid: group, size: 300),
-            makeRecord("/v/other/donna_free.mov", size: 500),
+            makeRecord("\(base)/transcodes/donna_lake_h264.mp4", md5: "bbbb02", dgid: group, size: 300),
+            makeRecord("\(base)/other/donna_free.mov", size: 500),
         ]
         let heldOut = ReviewSessionPolicy.heldOutIdentityMatcher(
             sessionQueue: q, diskQueue: nil, discoveredQueue: nil, records: records)
-        #expect(heldOut.matches(path: "/Volumes/X10/transcodes/donna_lake_h264.mp4",
+        #expect(heldOut.matches(path: "\(base)/transcodes/donna_lake_h264.mp4",
                                 record: records[1]))
         var rng = SystemRandomNumberGenerator()
         let result = pfConfirmRound(name: "Donna", records: records,
@@ -626,8 +648,8 @@ struct UnifiedReviewSessionTests {
                                     alreadyLabeled: [], heldOut: heldOut,
                                     rng: &rng)
         let outPaths = Set(result.candidates.map(\.recordPath))
-        #expect(!outPaths.contains("/Volumes/X10/transcodes/donna_lake_h264.mp4"))
-        #expect(outPaths.contains("/v/other/donna_free.mov"))
+        #expect(!outPaths.contains("\(base)/transcodes/donna_lake_h264.mp4"))
+        #expect(outPaths.contains("\(base)/other/donna_free.mov"))
     }
 
     // (39c) Conservative fallback: no hash, no dup group — a same-stem,
@@ -635,13 +657,14 @@ struct UnifiedReviewSessionTests {
     // excluded. Zero sizes are NOT identity evidence: two unhashed
     // size-0 records sharing a stem must NOT blanket-exclude each other.
     @Test @MainActor func codex39_stemSizeFallbackExcludes_butUnknownSizeDoesNot() throws {
-        let q = try evalQueue(path: "/Volumes/LaCie/eval/donna_xmas.mov")
+        let base = uniqueBase()
+        let q = try evalQueue(path: "\(base)/eval/donna_xmas.mov")
         let records = [
-            makeRecord("/Volumes/LaCie/eval/donna_xmas.mov", size: 12_345),
+            makeRecord("\(base)/eval/donna_xmas.mov", size: 12_345),
             // Same stem + same size, different directory and extension case.
-            makeRecord("/Volumes/X9/mirror/donna_xmas.MOV", size: 12_345),
+            makeRecord("\(base)/mirror/donna_xmas.MOV", size: 12_345),
             // Same stem, DIFFERENT size → legitimately different media.
-            makeRecord("/v/other/donna_xmas.mov", size: 999),
+            makeRecord("\(base)/other/donna_xmas.mov", size: 999),
         ]
         let heldOut = ReviewSessionPolicy.heldOutIdentityMatcher(
             sessionQueue: q, diskQueue: nil, discoveredQueue: nil, records: records)
@@ -650,10 +673,10 @@ struct UnifiedReviewSessionTests {
 
         // Unknown-size guard: eval record with size 0 keys NOTHING on
         // stem+size — an unrelated size-0 record with the same stem stays.
-        let q0 = try evalQueue(path: "/Volumes/LaCie/eval0/donna_beach.mov")
+        let q0 = try evalQueue(path: "\(base)/eval0/donna_beach.mov")
         let recs0 = [
-            makeRecord("/Volumes/LaCie/eval0/donna_beach.mov", size: 0),
-            makeRecord("/v/other/donna_beach.mov", size: 0),
+            makeRecord("\(base)/eval0/donna_beach.mov", size: 0),
+            makeRecord("\(base)/other/donna_beach.mov", size: 0),
         ]
         let held0 = ReviewSessionPolicy.heldOutIdentityMatcher(
             sessionQueue: q0, diskQueue: nil, discoveredQueue: nil, records: recs0)
@@ -668,17 +691,18 @@ struct UnifiedReviewSessionTests {
     // be derived, so an un-cataloged-identity copy at another path is
     // NOT recognized. Exact-path exclusion must still hold.
     @Test @MainActor func codex39_catalogMissKeepsExactPathExclusion_residualGapDocumented() throws {
-        let q = try evalQueue(path: "/Volumes/Unplugged/eval/donna_attic.mov")
+        let base = uniqueBase()
+        let q = try evalQueue(path: "\(base)/uncataloged/donna_attic.mov")
         // The catalog has NO record for the eval path (catalog-miss) —
         // only an alias with no shared evidence, plus a free positive.
         let records = [
-            makeRecord("/v/other/donna_attic_copy.mov", md5: "cccc03", size: 800),
-            makeRecord("/v/other/donna_free.mov", size: 500),
+            makeRecord("\(base)/other/donna_attic_copy.mov", md5: "cccc03", size: 800),
+            makeRecord("\(base)/other/donna_free.mov", size: 500),
         ]
         let heldOut = ReviewSessionPolicy.heldOutIdentityMatcher(
             sessionQueue: q, diskQueue: nil, discoveredQueue: nil, records: records)
         // Exact path still held (fed straight to the matcher)…
-        #expect(heldOut.matches(path: "/Volumes/Unplugged/eval/donna_attic.mov", record: nil))
+        #expect(heldOut.matches(path: "\(base)/uncataloged/donna_attic.mov", record: nil))
         // …and the RESIDUAL GAP is real: the alias is not recognizable
         // without catalog evidence for the eval path. This assertion is
         // the honest documentation — if identity derivation for
@@ -690,7 +714,7 @@ struct UnifiedReviewSessionTests {
                                     topN: 10, controlK: 0,
                                     alreadyLabeled: [], heldOut: heldOut,
                                     rng: &rng)
-        #expect(!result.candidates.map(\.recordPath).contains("/Volumes/Unplugged/eval/donna_attic.mov"))
+        #expect(!result.candidates.map(\.recordPath).contains("\(base)/uncataloged/donna_attic.mov"))
     }
 
     // MARK: Source-scan helpers
