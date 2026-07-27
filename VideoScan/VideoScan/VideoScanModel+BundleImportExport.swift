@@ -301,7 +301,10 @@ extension VideoScanModel {
             if let key = Self.identityKey(for: rec) { seen.insert(key) }
             added += 1
         }
-        CorrelationScorer.revalidateExistingPairs(in: records)
+        let invalidPairEndpoints = CorrelationScorer.revalidateExistingPairs(in: records)
+        if invalidPairEndpoints > 0 {
+            log("Bundle import released \(invalidPairEndpoints) invalid persisted A/V pair endpoint(s).")
+        }
 
         // Volumes — overwrite metadata on path match; add as offline target
         // when the path isn't present locally so the volume shows up in the

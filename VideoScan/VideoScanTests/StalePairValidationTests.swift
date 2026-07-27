@@ -180,4 +180,39 @@ struct StalePairValidationTests {
         #expect(elapsed < .seconds(2),
                 "100k-record validation exceeded its O(n) budget: \(elapsed)")
     }
+
+    @Test func revalidationRejectsOutOfCatalogPartnerWithDuplicateUUID() {
+        let sharedID = UUID()
+        let inCatalogAudio = VideoRecord(id: sharedID)
+        inCatalogAudio.streamTypeRaw = StreamType.audioOnly.rawValue
+        let phantomAudio = VideoRecord(id: sharedID)
+        phantomAudio.streamTypeRaw = StreamType.audioOnly.rawValue
+        let video = makeRecord("phantom.V.mxf", streamType: .videoOnly, duration: 0)
+        link(video, phantomAudio)
+
+        let cleared = CorrelationScorer.revalidateExistingPairs(
+            in: [video, inCatalogAudio])
+
+        #expect(cleared == 1)
+        #expect(video.pairedWith == nil)
+        #expect(video.pairGroupID == nil && video.pairConfidence == nil)
+    }
+
+    @Test func purgedPairIsPreservedButBatchRestoreRevalidatesIt() {
+        let model = VideoScanModel()
+        let video = makeRecord("old.V.mxf", streamType: .videoOnly,
+                               duration: 3808.271)
+        let audio = makeRecord("old.A.mxf", streamType: .audioOnly,
+                               duration: 125.6255)
+        link(video, audio)
+        model.records = [video, audio]
+        #expect(model.purgeRecords(ids: [video.id, audio.id]) == 2)
+
+        #expect(CorrelationScorer.revalidateExistingPairs(in: model.records) == 0)
+        #expect(video.pairedWith === audio && audio.pairedWith === video)
+
+        #expect(model.undoLastPurge())
+        #expect(video.pairedWith == nil && audio.pairedWith == nil)
+        #expect(video.pairGroupID == nil && audio.pairGroupID == nil)
+    }
 }

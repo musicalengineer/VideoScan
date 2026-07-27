@@ -87,6 +87,7 @@ extension VideoScanModel {
         guard let rec = records.first(where: { $0.id == id }),
               rec.purgedAt != nil else { return false }
         rec.purgedAt = nil
+        CorrelationScorer.revalidateExistingPairs(in: records)
         saveCatalogDebounced()
         // If the user manually restores a record from the most recent
         // purge batch, drop it from the undo set so the banner's "Undo"
@@ -129,6 +130,7 @@ extension VideoScanModel {
             lastPurgeUndoError = nil
             return false
         }
+        CorrelationScorer.revalidateExistingPairs(in: records)
         saveCatalogDebounced()
         lastPurgedBatch = nil
         lastPurgeUndoError = nil

@@ -121,12 +121,13 @@ enum CorrelationScorer {
     /// Purged pairs retain their historical relation for restore workflows.
     @discardableResult
     static func revalidateExistingPairs(in records: [VideoRecord]) -> Int {
-        let catalogIDs = Set(records.map(\.id))
+        let catalogInstances = Set(records.map(ObjectIdentifier.init))
         var invalidIDs = Set<UUID>()
 
         for record in records {
             guard let partner = record.pairedWith else { continue }
-            guard catalogIDs.contains(partner.id), partner.pairedWith === record else {
+            guard catalogInstances.contains(ObjectIdentifier(partner)),
+                  partner.pairedWith === record else {
                 invalidIDs.insert(record.id)
                 continue
             }

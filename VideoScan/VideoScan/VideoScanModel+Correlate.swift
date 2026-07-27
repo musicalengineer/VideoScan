@@ -34,7 +34,10 @@ extension VideoScanModel {
         correlateStatus = ""
         defer { isCorrelating = false }
 
-        CorrelationScorer.revalidateExistingPairs(in: records)
+        let invalidPairEndpoints = CorrelationScorer.revalidateExistingPairs(in: records)
+        if invalidPairEndpoints > 0 {
+            log("  Released \(invalidPairEndpoints) stale A/V pair endpoint(s) before cross-volume correlation.")
+        }
         let snaps = records.map(CorrelationScorer.avidSnap)
         let result = await CorrelationScorer.assignAvidPairs(snaps)
 
@@ -121,7 +124,10 @@ extension VideoScanModel {
         correlateStatus = ""
         defer { isCorrelating = false }
 
-        CorrelationScorer.revalidateExistingPairs(in: records)
+        let invalidPairEndpoints = CorrelationScorer.revalidateExistingPairs(in: records)
+        if invalidPairEndpoints > 0 {
+            log("  Released \(invalidPairEndpoints) stale A/V pair endpoint(s) before correlation.")
+        }
         let needsPairing: [VideoRecord]
         if let ids = selectedIDs, !ids.isEmpty {
             // Explicit selection: clear + re-derive that subset.

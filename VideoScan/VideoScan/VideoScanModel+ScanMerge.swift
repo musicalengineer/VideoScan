@@ -366,6 +366,10 @@ extension VideoScanModel {
         if pairsCarried > 0 {
             log("  ↪ \(pairsCarried) A/V pairing(s) carried across the rescan (pair identity preserved).")
         }
+        let invalidPairEndpoints = CorrelationScorer.revalidateExistingPairs(in: records)
+        if invalidPairEndpoints > 0 {
+            log("  ⚠ Released \(invalidPairEndpoints) stale A/V pair endpoint(s) after refreshed durations proved them incompatible.")
+        }
         scanMergeLog.info("Scan merge for \(volName, privacy: .public): +\(targetRecords.count) upserted (\(outcome.refreshed) refreshed), \(genuinelyGone.count) pruned, \(adoptions.count) moved, \(retainedInvisible.count) retained-invisible under \(root, privacy: .public)")
         appLog.write("Catalog merge (\(volName)): \(targetRecords.count) upserted (\(outcome.refreshed) refreshed), \(genuinelyGone.count) pruned, \(adoptions.count) moved (followed their files), \(retainedInvisible.count) retained (files on disk, invisible to scan options)")
         return outcome
@@ -471,6 +475,10 @@ extension VideoScanModel {
         let pairsCarried = rewirePairCarryover(pairCarry, targetRecords: targetRecords)
         if pairsCarried > 0 {
             log("  ↪ \(pairsCarried) A/V pairing(s) carried across the partial rescan.")
+        }
+        let invalidPairEndpoints = CorrelationScorer.revalidateExistingPairs(in: records)
+        if invalidPairEndpoints > 0 {
+            log("  ⚠ Released \(invalidPairEndpoints) stale A/V pair endpoint(s) after refreshed durations proved them incompatible.")
         }
         if !vanished.isEmpty {
             log("  ⚠ Scan of \(volName) did not complete — kept \(vanished.count) existing record(s) under \(root) that were not re-verified (no pruning on partial scans).")
