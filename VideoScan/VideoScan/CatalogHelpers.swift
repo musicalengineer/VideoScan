@@ -1054,11 +1054,18 @@ struct CatalogContent: View {
                                     .font(.system(size: 13, design: .monospaced))
                                     .foregroundColor(.secondary)
                             }
-                            if isPlaying {
+                            if isPlaying || model.filmstripState.isActive(forPath: rec.fullPath) {
                                 Button {
+                                    // Symmetric teardown for BOTH preview
+                                    // modes: the AVPlayer path and the
+                                    // filmstrip path (stopFilmstrip also
+                                    // cancels an in-flight interactive
+                                    // generation; a background prewarm
+                                    // keeps running for the disk cache).
                                     player?.pause()
                                     player = nil
                                     isPlaying = false
+                                    model.stopFilmstrip()
                                 } label: {
                                     Label("Stop", systemImage: "stop.fill")
                                         .font(.system(size: 11))
@@ -1085,6 +1092,38 @@ struct CatalogContent: View {
                             }
                             .frame(maxWidth: 480, maxHeight: 180)
                             .aspectRatio(16.0/9.0, contentMode: .fit)
+                        } else if case .ready(let stripPath, let stripFrames) = model.filmstripState,
+                                  stripPath == selectedRecord?.fullPath {
+                            // Filmstrip mode (filmstrip preview, 2026-07-27):
+                            // the play-button path for records AVKit can't
+                            // decode (MKV/FFV1 — PreviewFrameRouter said
+                            // .ffmpegDirect). Sits exactly where VideoPlayer
+                            // renders for playable files. `.id` ties the
+                            // view's playback state (frame index) to the
+                            // row — a row switch rebuilds from frame 0.
+                            FilmstripPreviewView(frames: stripFrames,
+                                                 videoCodec: selectedRecord?.videoCodec ?? "",
+                                                 container: selectedRecord?.container ?? "")
+                                .id(stripPath)
+                        } else if case .loading(let stripPath, let done, let total) = model.filmstripState,
+                                  stripPath == selectedRecord?.fullPath {
+                            // Interactive strip generation in flight —
+                            // honest progress, same placeholder family as
+                            // MEDIA OFFLINE / NO PREVIEW.
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(Color.black)
+                                VStack(spacing: 8) {
+                                    ProgressView()
+                                        .controlSize(.small)
+                                    Text("Extracting frame \(min(done + 1, max(total, 1))) of \(max(total, 1))…")
+                                        .font(.system(size: 12, design: .monospaced))
+                                        .foregroundColor(.secondary)
+                                        .monospacedDigit()
+                                }
+                            }
+                            .frame(maxWidth: 480, maxHeight: 180)
+                            .aspectRatio(16.0/9.0, contentMode: .fit)
                         } else if isPlaying, let player = player {
                             VideoPlayer(player: player)
                                 .cornerRadius(6)
@@ -1100,10 +1139,27 @@ struct CatalogContent: View {
                                 if let rec = selectedRecord,
                                    rec.streamType == .videoAndAudio || rec.streamType == .videoOnly {
                                     Button {
-                                        let url = URL(fileURLWithPath: rec.fullPath)
-                                        player = AVPlayer(url: url)
-                                        isPlaying = true
-                                        player?.play()
+                                        // ROUTED (filmstrip preview,
+                                        // 2026-07-27): consult the same pure
+                                        // route decision every other preview
+                                        // path uses BEFORE constructing any
+                                        // AVFoundation object. An MKV/FFV1
+                                        // record must never instantiate
+                                        // AVPlayer — AVKit just shows the
+                                        // crossed-out play glyph. O(1) per
+                                        // click, no I/O.
+                                        let route = PreviewFrameRouter.previewRoute(
+                                            container: rec.container,
+                                            videoCodec: rec.videoCodec,
+                                            likelyUnanalyzable: rec.isLikelyUnanalyzable)
+                                        if route == .ffmpegDirect {
+                                            model.requestFilmstrip(for: rec)
+                                        } else {
+                                            let url = URL(fileURLWithPath: rec.fullPath)
+                                            player = AVPlayer(url: url)
+                                            isPlaying = true
+                                            player?.play()
+                                        }
                                     } label: {
                                         Image(systemName: "play.circle.fill")
                                             .font(.system(size: 48))
