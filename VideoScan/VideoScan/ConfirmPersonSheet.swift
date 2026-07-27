@@ -1374,19 +1374,23 @@ struct ConfirmPersonSheet: View {
             }
             let already = Set(personFinderModel.validationLabels
                 .labeledByPath(for: profile.name).keys)
-            // FULL-QUEUE blindness exclusion (blocker fix 2026-07-27,
-            // codex #35 applied strictly): every path of the ACTIVE
-            // holdout queue — any answer state — is barred from the
-            // round, positives and controls. Union of the in-memory
-            // session copy (optimistic in-flight answers), a fresh
-            // disk load (external edits; the read is a tiny local CSV,
-            // same as startHoldout), and the badge center's discovered
-            // queue (candidates-only sessions where the queue is fully
-            // answered and pendingQueue returned nil).
-            let heldOut = ReviewSessionPolicy.heldOutExclusionPaths(
+            // FULL-QUEUE blindness exclusion by CONTENT IDENTITY
+            // (blocker fixes 2026-07-27 — codex #35 applied strictly,
+            // codex #39): every row of the ACTIVE holdout queue — any
+            // answer state — is barred from the round, positives and
+            // controls, along with every catalog record that is the
+            // SAME MEDIA at a different path (partialMD5 / dup group /
+            // stem+size). Queue-path union covers the in-memory session
+            // copy (optimistic in-flight answers), a fresh disk load
+            // (external edits; tiny local CSV, same as startHoldout),
+            // and the badge center's discovered queue (candidates-only
+            // sessions where the queue is fully answered and
+            // pendingQueue returned nil).
+            let heldOut = ReviewSessionPolicy.heldOutIdentityMatcher(
                 sessionQueue: holdout,
                 diskQueue: holdoutQueue.flatMap { try? $0.freshCopyFromDisk() },
-                discoveredQueue: holdoutCenter.queue)
+                discoveredQueue: holdoutCenter.queue,
+                records: catalogModel.records)
             var rng = SystemRandomNumberGenerator()
             let result = pfConfirmRound(
                 name: profile.name,
@@ -1394,7 +1398,7 @@ struct ConfirmPersonSheet: View {
                 topN: 100,   // upper bound; the roundSize picker trims
                 controlK: controlK,
                 alreadyLabeled: already,
-                heldOutPaths: heldOut,
+                heldOut: heldOut,
                 rng: &rng
             )
             // The user may have clicked "Continue Reviewing" while the

@@ -185,11 +185,12 @@ struct ConfirmRoundStats {
     /// Records skipped because the user already labeled them in a
     /// prior round (idempotency).
     let alreadyLabeled: Int
-    /// Scored records excluded because their path belongs to the ACTIVE
-    /// blind holdout queue (any answer state — see pfConfirmRound's
-    /// heldOutPaths). Blocker fix 2026-07-27: eval-set paths must never
-    /// surface with signals/scores, and their ratings must never seed
-    /// the sampler.
+    /// Scored records excluded because they ARE active-holdout-queue
+    /// media — by exact path or content identity (same partialMD5 /
+    /// duplicate group / stem+size at a different path; see
+    /// HeldOutIdentityMatcher). Any answer state. Blocker fixes
+    /// 2026-07-27 (codex #35 + #39): eval-set content must never surface
+    /// with signals/scores, and its ratings must never seed the sampler.
     let heldOutExcluded: Int
 }
 
@@ -206,14 +207,18 @@ struct ConfirmRoundStats {
 ///   - Drop offline candidates so the user only rates what they can
 ///     watch.
 ///   - Drop already-labeled candidates (idempotency).
-///   - Drop EVERY path in `heldOutPaths` — positives AND controls —
-///     regardless of catalog state. These are the ACTIVE blind holdout
-///     queue's rows (any answer state: pending, skipped, in-flight,
-///     write-failed, or durably answered). Surfacing them would show
-///     Rick signals/scores for the sealed eval set before/after blind
-///     grading, and rating them would land eval paths in validation
-///     labels, contaminating the sampler's seed. Blocker fix
-///     2026-07-27 (codex #35, applied strictly full-queue).
+///   - Drop everything `heldOut` matches — positives AND controls —
+///     by CONTENT IDENTITY, not just pathname (codex #39): the ACTIVE
+///     blind holdout queue's rows in any answer state (pending, skipped,
+///     in-flight, write-failed, or durably answered), plus any catalog
+///     record that is the same media at a different path (partialMD5 /
+///     duplicateGroupID / stem+size — see HeldOutIdentityMatcher).
+///     Surfacing any alias would show Rick signals/scores for the sealed
+///     eval set before/after blind grading, and rating one would land
+///     eval content in validation labels, contaminating the sampler's
+///     seed. Applied per-candidate, independent of dedup ordering — a
+///     surviving alias cannot slip through. Blocker fixes 2026-07-27
+///     (codex #35 full-queue; codex #39 content identity).
 ///   - Cap to `topN` highest-score positives + `controlK` random
 ///     controls with no signal.
 ///
@@ -226,7 +231,7 @@ nonisolated func pfConfirmRound(
     topN: Int,
     controlK: Int,
     alreadyLabeled: Set<String>,
-    heldOutPaths: Set<String> = [],
+    heldOut: HeldOutIdentityMatcher = .empty,
     durationCapSec: Double = 3600,   // 60 min default
     skipAudioOnly: Bool = true,
     isReachable: @Sendable (String) -> Bool = {
@@ -238,16 +243,21 @@ nonisolated func pfConfirmRound(
         name: name, records: records, isReachable: isReachable)
     let candidatesSurfaced = scoredAll.count
     let alreadyLabeledMatches = scoredAll.filter { alreadyLabeled.contains($0.recordPath) }.count
-    let heldOutMatches = scoredAll.filter { heldOutPaths.contains($0.recordPath) }.count
 
-    let fresh = scoredAll.filter {
-        !alreadyLabeled.contains($0.recordPath) && !heldOutPaths.contains($0.recordPath)
-    }
-
-    // Build path → rec lookup; reused by every filter / dedup pass.
+    // Build path → rec lookup FIRST — the held-out identity check needs
+    // each candidate's record; also reused by every filter / dedup pass.
     var byPath: [String: VideoRecord] = [:]
     byPath.reserveCapacity(records.count)
     for rec in records { byPath[rec.fullPath] = rec }
+
+    let heldOutMatches = scoredAll.filter {
+        heldOut.matches(path: $0.recordPath, record: byPath[$0.recordPath])
+    }.count
+
+    let fresh = scoredAll.filter {
+        !alreadyLabeled.contains($0.recordPath)
+            && !heldOut.matches(path: $0.recordPath, record: byPath[$0.recordPath])
+    }
 
     // --- Audio-only / no-stream filter ---
     // Records without a video track can't have a visible person, so
@@ -340,10 +350,11 @@ nonisolated func pfConfirmRound(
     controlPool.reserveCapacity(min(records.count, 1024))
     for rec in records where !scoredPaths.contains(rec.fullPath)
         && !alreadyLabeled.contains(rec.fullPath)
-        // Held-out paths are barred from the CONTROL pool too — a
-        // zero-signal eval row shown as a control is still the sealed
-        // set leaking into a rated round (blocker fix 2026-07-27).
-        && !heldOutPaths.contains(rec.fullPath) {
+        // Held-out CONTENT is barred from the CONTROL pool too — a
+        // zero-signal eval row (or a same-media alias of one) shown as
+        // a control is still the sealed set leaking into a rated round
+        // (blocker fixes 2026-07-27: codex #35 + #39).
+        && !heldOut.matches(path: rec.fullPath, record: rec) {
         if rec.filename.lowercased().contains(n) { continue }
         if rec.directory.lowercased().contains(n) { continue }
         let st = rec.streamType

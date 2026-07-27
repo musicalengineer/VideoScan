@@ -89,12 +89,14 @@ struct PersonFinderEngineDispatchTests {
         await AdaFaceModelLoader.shared.reset()
     }
 
-    // MARK: - AdaFace respects pre-cancellation
+    // MARK: - Pre-start cancellation does NO engine work (codex adversarial #42)
 
-    /// A pre-cancelled Task must come back nil without doing engine work —
-    /// same contract the dlib seat honored. (With no model installed the
-    /// bail also returns nil, so additionally require that no per-video
-    /// processing lines were logged.)
+    /// A pre-cancelled Task must come back nil WITHOUT any engine work at
+    /// all: no model resolution, no log lines (GH #142 pre-start-cancel
+    /// class — codex's RED asserted on the model-load log; this is the
+    /// equivalent). The empty models dir is belt-and-suspenders: if the
+    /// guard regressed, the arm would emit "[adaface] Model load failed"
+    /// and the empty-sink assert below catches it deterministically.
     @Test func adafaceReturnsNilWhenTaskAlreadyCancelled() async {
         let emptyDir = NSTemporaryDirectory() + "adaface_cancel_\(UUID().uuidString)"
         try? FileManager.default.createDirectory(
@@ -112,8 +114,13 @@ struct PersonFinderEngineDispatchTests {
         settings.recognitionEngine = .adaface
         settings.referencePath = "/tmp"
 
-        let task = Task {
-            await pfRunAdaFaceEngine(
+        let task = Task { () -> pfVideoResult? in
+            // Deterministically PRE-cancelled: park until the cancel() below
+            // has landed, so the arm is guaranteed to be entered with
+            // Task.isCancelled == true (plain create-then-cancel races the
+            // task's first instructions).
+            while !Task.isCancelled { await Task.yield() }
+            return await pfRunAdaFaceEngine(
                 filePath: "/tmp/x.mov",
                 idx1: 1, total: 1,
                 settings: settings, job: job, dash: nil,
@@ -126,7 +133,43 @@ struct PersonFinderEngineDispatchTests {
         task.cancel()
         let result = await task.value
         #expect(result == nil, "Cancelled task should return nil from AdaFace dispatch")
+        let lines = await sink.joined()
+        #expect(lines.isEmpty,
+                "Pre-cancelled dispatch must not log or resolve the model; got: \(lines)")
+        #expect(job.assignedRefEmbeddings.isEmpty,
+                "Pre-cancelled dispatch must not compute reference embeddings")
         await AdaFaceModelLoader.shared.reset()
+    }
+
+    /// Same contract for the ArcFace arm — it was equally missing the
+    /// pre-start guard (only the shared processOneVideo seam checked);
+    /// fixed at both CoreML dispatch arms together.
+    @Test func arcfaceReturnsNilWhenTaskAlreadyCancelled() async {
+        let sink = DispatchLogActor()
+        let job = ScanJob(searchPath: "/tmp")
+        var settings = PersonFinderSettings()
+        settings.recognitionEngine = .arcface
+        settings.referencePath = "/tmp"
+
+        let task = Task { () -> pfVideoResult? in
+            // Same deterministic pre-cancel parking as the AdaFace test.
+            while !Task.isCancelled { await Task.yield() }
+            return await pfRunArcFaceEngine(
+                filePath: "/tmp/x.mov",
+                idx1: 1, total: 1,
+                settings: settings, job: job, dash: nil,
+                progressState: ThrottledMainActorUpdate(intervalSecs: 0.25),
+                logFn: { line in await sink.append(line) },
+                progressFn: { _ in },
+                distFn: { _ in }
+            )
+        }
+        task.cancel()
+        let result = await task.value
+        #expect(result == nil, "Cancelled task should return nil from ArcFace dispatch")
+        let lines = await sink.joined()
+        #expect(lines.isEmpty,
+                "Pre-cancelled ArcFace dispatch must not log or resolve the model; got: \(lines)")
     }
 
     // MARK: - Job-level model pre-flight (#144 QA)
