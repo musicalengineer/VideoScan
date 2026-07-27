@@ -1309,9 +1309,27 @@ extension CatalogContent {
             durationTolerance: durationTolerance,
             timestampTolerance: timestampTolerance
         ) else {
+            // GH #125 MINOR 2: distinguish "nothing structurally related"
+            // from "a related file exists but its duration is unverifiable
+            // or incompatible" — the latter must not blame the score.
+            let durationRefused = CorrelationScorer.hasDurationRefusedStructuralCandidate(
+                for: rec, in: model.records,
+                durationTolerance: durationTolerance,
+                timestampTolerance: timestampTolerance)
             let alert = NSAlert()
             alert.messageText = "No Audio Match Found"
-            alert.informativeText = """
+            alert.informativeText = durationRefused
+                ? """
+                A related audio-only file was found for:
+
+                \(rec.filename)
+
+                …but its duration could not be verified or is incompatible \
+                with the video, so it was not offered automatically (this \
+                can indicate a truncated or mislabeled file). Use \
+                "Find A/V Pair…" to review candidates and pair manually.
+                """
+                : """
                 No matching audio-only file scored highly enough against:
 
                 \(rec.filename)
@@ -1344,9 +1362,26 @@ extension CatalogContent {
             durationTolerance: durationTolerance,
             timestampTolerance: timestampTolerance
         ) else {
+            // GH #125 MINOR 2: mirror of repairAudio — a related video may
+            // exist but be duration-unverifiable/incompatible.
+            let durationRefused = CorrelationScorer.hasDurationRefusedStructuralCandidate(
+                for: rec, in: model.records,
+                durationTolerance: durationTolerance,
+                timestampTolerance: timestampTolerance)
             let alert = NSAlert()
             alert.messageText = "No Video Match Found"
-            alert.informativeText = """
+            alert.informativeText = durationRefused
+                ? """
+                A related video-only file was found for:
+
+                \(rec.filename)
+
+                …but its duration could not be verified or is incompatible \
+                with the audio, so it was not offered automatically (this \
+                can indicate a truncated or mislabeled file). Use \
+                "Find A/V Pair…" to review candidates and pair manually.
+                """
+                : """
                 No matching video-only file scored highly enough against:
 
                 \(rec.filename)

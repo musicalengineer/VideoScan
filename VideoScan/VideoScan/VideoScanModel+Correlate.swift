@@ -66,12 +66,29 @@ extension VideoScanModel {
             crossReferenceAvidBins()
         }
 
-        correlateStatus = "\(paired) new pairs · \(result.videoOrphans)V + \(result.audioOrphans)A orphans"
+        // MAJOR 2 (GH #125): duration-refused clips are a distinct,
+        // actionable signal (clip-ID match but truncated/corrupt essence)
+        // — surface them separately so the "manual review" the refusal
+        // depends on can actually happen. Each detail line names both
+        // files and their durations; they go to catalog.log via log().
+        if result.durationRefusedClips > 0 {
+            log("""
+
+            Cross-volume Avid correlation — \(result.durationRefusedClips) clip(s) refused on duration mismatch (GH #125):
+            \(result.durationRefusedDetails.joined(separator: "\n"))
+            """)
+        }
+
+        let refusedSuffix = result.durationRefusedClips > 0
+            ? " · \(result.durationRefusedClips) duration-refused"
+            : ""
+        correlateStatus = "\(paired) new pairs · \(result.videoOrphans)V + \(result.audioOrphans)A orphans\(refusedSuffix)"
         log("""
 
         Cross-volume Avid correlation complete (incremental):
           \(result.clipIDCount) unique clip IDs (\(result.alreadyPairedClips) already paired — untouched)
           \(paired) new pairs matched
+          \(result.durationRefusedClips) clips refused on duration mismatch (clip-ID match, incompatible durations — manual review)
           \(result.videoOrphans) video-only orphans (no audio found)
           \(result.audioOrphans) audio-only orphans (no video found)
         """)

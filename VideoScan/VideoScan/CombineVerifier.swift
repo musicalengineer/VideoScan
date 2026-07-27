@@ -71,16 +71,13 @@ enum CombineVerifier {
                 summary: ""
             )
         }
-        let audioCoverageTolerance = max(videoDuration * 0.02, 2.0)
-        if videoDuration > 0 && audioDuration + audioCoverageTolerance < videoDuration {
+        if let reason = audioCoverageMismatchReason(
+            videoDuration: videoDuration,
+            audioDuration: audioDuration
+        ) {
             return VerifyResult(
                 ok: false,
-                reason: String(
-                    format: "audio duration mismatch: %.3fs covers %.1f%% of %.3fs video",
-                    audioDuration,
-                    audioDuration / videoDuration * 100,
-                    videoDuration
-                ),
+                reason: reason,
                 summary: ""
             )
         }
@@ -129,6 +126,26 @@ enum CombineVerifier {
               duration.isFinite,
               duration > 0 else { return nil }
         return duration
+    }
+
+    /// Return the same full-program audio-coverage failure used by both
+    /// source-pair preflight and post-mux verification. Unknown source
+    /// durations are not refused here: ffprobe may fill them in later, and
+    /// the output verifier remains the final safety net.
+    static func audioCoverageMismatchReason(
+        videoDuration: Double,
+        audioDuration: Double
+    ) -> String? {
+        guard videoDuration.isFinite, videoDuration > 0,
+              audioDuration.isFinite, audioDuration > 0 else { return nil }
+        let tolerance = max(videoDuration * 0.02, 2.0)
+        guard audioDuration + tolerance < videoDuration else { return nil }
+        return String(
+            format: "audio duration mismatch: %.3fs covers %.1f%% of %.3fs video",
+            audioDuration,
+            audioDuration / videoDuration * 100,
+            videoDuration
+        )
     }
 
     // MARK: - Audio Level Detection

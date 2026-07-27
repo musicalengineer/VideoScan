@@ -60,7 +60,17 @@ extension VideoScanModel {
                 source: pair.audio, sideLabel: "audio", isReachable: isReachable
             )
 
-            let reasons = [videoBlock, audioBlock].compactMap { $0 }
+            // GH #125 regression: persisted pairs and manual selections can
+            // bypass correlation's duration gate. Refuse known-short audio
+            // here, before RAM-disk staging or ffmpeg can create a huge file.
+            // Use the verifier's exact rule so preflight and postflight cannot
+            // drift. Unknown durations remain runnable and are verified after
+            // muxing once ffprobe can inspect the actual output streams.
+            let durationBlock = CombineVerifier.audioCoverageMismatchReason(
+                videoDuration: resolvedVideo.durationSeconds,
+                audioDuration: resolvedAudio.durationSeconds
+            )
+            let reasons = [videoBlock, audioBlock, durationBlock].compactMap { $0 }
             items.append(.init(
                 originalVideo: pair.video,
                 originalAudio: pair.audio,
