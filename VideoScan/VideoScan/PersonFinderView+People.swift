@@ -285,10 +285,18 @@ extension PersonFinderView {
                                         editingProfile = profile
                                     }
                                     Divider()
-                                    Button("Confirm \(profile.name)\u{2026}") {
-                                        confirmTarget = ConfirmSheetTarget(profile: profile)
+                                    // ONE review entry point (unified-review
+                                    // 2026-07-27): replaces the old
+                                    // "Confirm <name>…" item. Holdout-first
+                                    // when a blind queue is pending for this
+                                    // person, straight to candidates
+                                    // otherwise — same verb as the badge.
+                                    Button("Review \(profile.name)\u{2026}") {
+                                        confirmTarget = ConfirmSheetTarget(
+                                            profile: profile,
+                                            holdoutQueue: holdoutReview.pendingQueue(for: profile.name))
                                     }
-                                    .help("Rate catalog-flagged candidates Definitely / Likely / No. Builds the labeled set the classifier trains on.")
+                                    .help("Blind holdout review first (when one is pending), then rate catalog-flagged candidates Definitely / Likely / No. Builds the labeled set the classifier trains on.")
                                     Button("View Confirmations\u{2026}") {
                                         confirmationsTarget = ConfirmationsTarget(profile: profile)
                                     }
@@ -427,7 +435,15 @@ extension PersonFinderView {
             // answers land and the badge disappears when the queue is done.
             Task { await holdoutReview.refresh() }
         }) { target in
-            ConfirmPersonSheet(profile: target.profile, holdoutQueue: target.holdoutQueue)
+            ConfirmPersonSheet(profile: target.profile,
+                               holdoutQueue: target.holdoutQueue,
+                               onViewConfirmations: {
+                // Summary-pane jump to the cumulative dashboard. The
+                // review sheet dismisses itself first; setting the item
+                // here presents the next sheet (both are .sheet(item:) —
+                // chained-sheet antipattern avoided).
+                confirmationsTarget = ConfirmationsTarget(profile: target.profile)
+            })
                 .environmentObject(model)
                 .environmentObject(catalogModel)
                 // Badge center rides along so post-dismissal write

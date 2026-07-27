@@ -318,4 +318,32 @@ struct UnifiedReviewSessionTests {
         // poisoned CSV (custody holds even in the degraded state).
         #expect(try Data(contentsOf: csvURL) == Data([0xFF, 0xFE, 0x00, 0x01, 0x02, 0x9C]))
     }
+
+    // MARK: - 8. Entry-point sensor (dlib-removal style source scan)
+
+    /// The old "Confirm <name>…" context-menu item was REMOVED in favor of
+    /// the single "Review <name>…" entry (design note D7). This sensor
+    /// keeps it from quietly coming back — and keeps both surviving entry
+    /// points (menu item + badge) wired. Fails loudly if the People file
+    /// moves; update the path deliberately, not by deleting the test.
+    @Test func sensor_confirmMenuItemStaysRemoved_reviewEntryStaysWired() throws {
+        let peopleFile = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()            // VideoScanTests/
+            .deletingLastPathComponent()            // VideoScan/ (project dir)
+            .appendingPathComponent("VideoScan/PersonFinderView+People.swift")
+        let source = try String(contentsOf: peopleFile, encoding: .utf8)
+
+        // The removed item must not come back…
+        #expect(!source.contains("Button(\"Confirm \\(profile.name)"),
+                "the redundant 'Confirm <name>…' menu item was removed 2026-07-27 — route through 'Review <name>…' instead")
+        // …its replacement must exist…
+        #expect(source.contains("Button(\"Review \\(profile.name)"),
+                "the unified 'Review <name>…' menu entry is missing — people would have no path to the labeling flow")
+        // …and the nag-button badge entry point stays wired.
+        #expect(source.contains("holdoutReviewBadge(for: profile)"),
+                "the holdout Review badge overlay is no longer applied to person cards")
+        // The dashboard remains reachable from the gallery too.
+        #expect(source.contains("Button(\"View Confirmations\\u{2026}\")"),
+                "the View Confirmations dashboard entry is missing from the context menu")
+    }
 }
