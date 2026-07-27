@@ -346,4 +346,83 @@ struct UnifiedReviewSessionTests {
         #expect(source.contains("Button(\"View Confirmations\\u{2026}\")"),
                 "the View Confirmations dashboard entry is missing from the context menu")
     }
+
+    // MARK: - 9. Sheet-wiring sensor (QA 2026-07-27 🟠 B)
+
+    /// The pure-layer sensors above prove the ROUTER is correct — but
+    /// deleting the sheet's guards and writing validation labels straight
+    /// from holdoutAnswer would still pass all of them. This source scan
+    /// pins the WIRING: both answer handlers consult the custody router,
+    /// prepareSetup carries the blindness gate (twice — entry + inside
+    /// the scoring task), resumeHoldout purges candidate state, and the
+    /// validation store has exactly ONE call site in the sheet.
+    @Test func sensor_sheetWiringRoutesThroughCustodyAndBlindnessGates() throws {
+        let sheetFile = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()            // VideoScanTests/
+            .deletingLastPathComponent()            // VideoScan/ (project dir)
+            .appendingPathComponent("VideoScan/ConfirmPersonSheet.swift")
+        let source = try String(contentsOf: sheetFile, encoding: .utf8)
+
+        // (a) Holdout answers consult the custody router before writing.
+        let holdoutAnswerBody = memberBody(of: source, from: "private func holdoutAnswer(")
+        #expect(holdoutAnswerBody.contains("ReviewWriteRouting.sink(for: .holdout"),
+                "holdoutAnswer no longer routes through ReviewWriteRouting — the custody sensors can't see this wiring, do not remove it")
+        #expect(holdoutAnswerBody.contains("== .sealedHoldoutCSV"),
+                "holdoutAnswer must require the sealed-CSV sink verdict")
+
+        // (b) Candidate ratings consult the custody router before writing.
+        let applyBody = memberBody(of: source, from: "private func apply(rating: ConfirmRating")
+        #expect(applyBody.contains("ReviewWriteRouting.sink(for: .candidate"),
+                "apply(rating:to:) no longer routes through ReviewWriteRouting")
+        #expect(applyBody.contains("== .validationStoreAndCatalog"),
+                "apply(rating:to:) must require the validation-store sink verdict")
+
+        // (c) The blindness gate guards prepareSetup at entry AND inside
+        // the scoring task (the schedule-vs-run window, QA 🟡 C).
+        let prepareBody = memberBody(of: source, from: "private func prepareSetup(")
+        #expect(occurrences(
+            of: "guard ReviewSessionPolicy.mayLoadCandidates(in: policyPhase) else",
+            in: String(prepareBody)) >= 2,
+                "prepareSetup must gate candidate scoring at entry and inside the Task body")
+
+        // (d) Re-entering the blind phase purges candidate state and
+        // rebuilds media metadata from queue rows only (QA 🟠 A).
+        let resumeBody = memberBody(of: source, from: "private func resumeHoldout(")
+        #expect(resumeBody.contains("ReviewSessionPolicy.mustPurgeCandidates(entering: .holdout)"),
+                "resumeHoldout no longer consults the purge policy")
+        #expect(resumeBody.contains("buildMediaMeta(for: Set(q.rows.map(\\.fullPath)))"),
+                "resumeHoldout must rebuild mediaMetaByPath from holdout rows — retained candidate KEYS are model-derived state")
+
+        // (e) Exactly ONE validation-store write site in the whole sheet —
+        // a second one is the naive-merge contamination this file exists
+        // to prevent.
+        #expect(occurrences(of: "validationLabels.record(", in: source) == 1,
+                "ConfirmPersonSheet must have exactly one ValidationLabelStore write site (in apply)")
+    }
+
+    // MARK: Source-scan helpers
+
+    /// Slice a member's body: from the declaration marker to the next
+    /// top-level member/MARK at 4-space indent. Deliberately rough — this
+    /// is a sensor, not a parser; if the file's layout changes enough to
+    /// break the slice, the sensor fails and forces a look.
+    private func memberBody(of source: String, from startMarker: String) -> Substring {
+        guard let start = source.range(of: startMarker) else { return "" }
+        let tail = source[start.upperBound...]
+        let endMarkers = ["\n    private func ", "\n    private nonisolated",
+                          "\n    private var ", "\n    func ", "\n    // MARK:"]
+        let end = endMarkers.compactMap { tail.range(of: $0)?.lowerBound }.min()
+            ?? tail.endIndex
+        return tail[..<end]
+    }
+
+    private func occurrences(of needle: String, in haystack: String) -> Int {
+        var count = 0
+        var search = haystack[...]
+        while let r = search.range(of: needle) {
+            count += 1
+            search = search[r.upperBound...]
+        }
+        return count
+    }
 }

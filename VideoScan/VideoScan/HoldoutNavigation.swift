@@ -52,6 +52,11 @@ enum HoldoutNavigation {
     /// `wraps: false` to search from the front.
     static func nextIndex(after idx: Int, count: Int, wraps: Bool,
                           isActionable: (Int) -> Bool) -> Int? {
+        // The wrap walk is defined relative to a REAL current index —
+        // a negative idx with wraps would mis-modulo. Linear mode
+        // accepts -1 as "search from the front". (QA 2026-07-27 nit.)
+        precondition(idx >= 0 || !wraps,
+                     "wrap walk requires a valid current index (got \(idx))")
         guard count > 0 else { return nil }
         if wraps {
             guard count > 1 else { return nil }

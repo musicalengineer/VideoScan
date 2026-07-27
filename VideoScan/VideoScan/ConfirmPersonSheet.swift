@@ -267,6 +267,13 @@ struct ConfirmPersonSheet: View {
     private var holdoutActionablePending: Int {
         max(0, holdoutEffectivePending - offlineHiddenPending - unplayableHiddenPending)
     }
+    /// Banner completion state — true only when a queue actually LOADED
+    /// and every answer has durably committed. A load FAILURE has zero
+    /// effective pending too, and must not paint the banner green
+    /// (QA 2026-07-27 nit; also dedupes the expression).
+    private var holdoutFullyCommitted: Bool {
+        holdout != nil && holdoutEffectivePending == 0 && inFlightAnswerIds.isEmpty
+    }
     /// " · 3 offline, 2 unplayable hidden" — empty when nothing is hidden.
     private var holdoutHiddenSuffix: String {
         var parts: [String] = []
@@ -571,13 +578,18 @@ struct ConfirmPersonSheet: View {
 
     private var footer: some View {
         HStack {
-            if phase == .holdout || (isHoldout && phase == .setup) {
-                if let err = holdoutSaveError {
-                    Label(err, systemImage: "exclamationmark.triangle.fill")
-                        .font(.system(size: 11))
-                        .foregroundColor(.red)
-                        .lineLimit(2)
-                } else if holdoutAnsweredThisSession > 0 {
+            // Errors show in EVERY phase (QA 2026-07-27 🟡 E): a
+            // serialized CSV write can fail after the user has already
+            // moved into the candidate phase — the failure must not be
+            // silenced by the phase switch. (The badge center still gets
+            // the durable copy for post-dismissal failures.)
+            if let err = holdoutSaveError ?? loadError {
+                Label(err, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundColor(.red)
+                    .lineLimit(2)
+            } else if phase == .holdout || (isHoldout && phase == .setup) {
+                if holdoutAnsweredThisSession > 0 {
                     Text("\(holdoutAnsweredThisSession) answered this session \u{00B7} saved to CSV")
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
@@ -753,7 +765,7 @@ struct ConfirmPersonSheet: View {
     @ViewBuilder
     private var holdoutStatusBanner: some View {
         if isHoldout {
-            let fullyCommitted = holdoutEffectivePending == 0 && inFlightAnswerIds.isEmpty
+            let fullyCommitted = holdoutFullyCommitted
             let allRemainingHidden = holdoutEffectivePending > 0 && holdoutActionablePending == 0
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: fullyCommitted ? "checkmark.seal.fill"
@@ -806,8 +818,7 @@ struct ConfirmPersonSheet: View {
             .padding(10)
             .background(
                 RoundedRectangle(cornerRadius: 8)
-                    .fill((holdoutEffectivePending == 0 && inFlightAnswerIds.isEmpty
-                           ? Color.green : Color.orange).opacity(0.10))
+                    .fill((holdoutFullyCommitted ? Color.green : Color.orange).opacity(0.10))
             )
             .padding(.horizontal, 20)
             .padding(.top, 12)
@@ -920,6 +931,15 @@ struct ConfirmPersonSheet: View {
             stats = nil
             candidates = []
             currentIndex = 0
+            // REBUILD the media-metadata map from the queue rows alone
+            // (QA 2026-07-27 🟠 A): the candidate-phase entries' KEYS —
+            // which files the scorer surfaced — are themselves
+            // model-derived state, and retaining them into the blind
+            // phase would violate the never-LOADED bar. merge:false
+            // resets the map before refilling from holdout rows only.
+            if let q = holdout {
+                buildMediaMeta(for: Set(q.rows.map(\.fullPath)))
+            }
         }
         phase = .holdout
         keepalive.start()
@@ -1101,6 +1121,9 @@ struct ConfirmPersonSheet: View {
         guard ReviewWriteRouting.sink(for: .holdout(row),
                                       answer: .holdoutConfirm(confirm)) == .sealedHoldoutCSV else {
             holdoutSheetLog.fault("custody: holdout answer refused a non-CSV sink — dropped")
+            // Visible to Rick, not just Console (QA 2026-07-27 🟡 D) —
+            // a future wiring bug must not present as a dead button.
+            holdoutSaveError = "Internal safety check refused to save this answer (nothing was written). Please tell Claude — this is a wiring bug."
             return
         }
         let notes = holdoutNotes
@@ -1317,6 +1340,15 @@ struct ConfirmPersonSheet: View {
         // Score in the background — for 16k records this is ~1-2 sec.
         // Keep the @MainActor scope clean by hopping out and back.
         Task { @MainActor in
+            // Second gate INSIDE the task (QA 2026-07-27 🟡 C): between
+            // scheduling and execution the user can click "Continue
+            // Reviewing" — without this, the scorer would still RUN
+            // during the blind phase (its result discarded below, but
+            // the work itself is forbidden, not just the storage).
+            guard ReviewSessionPolicy.mayLoadCandidates(in: policyPhase) else {
+                holdoutSheetLog.info("blindness gate: candidate scoring skipped — session re-entered the holdout phase before the scorer started")
+                return
+            }
             let already = Set(personFinderModel.validationLabels
                 .labeledByPath(for: profile.name).keys)
             var rng = SystemRandomNumberGenerator()
@@ -1370,6 +1402,8 @@ struct ConfirmPersonSheet: View {
         guard ReviewWriteRouting.sink(for: .candidate(candidate),
                                       answer: .rating(rating)) == .validationStoreAndCatalog else {
             holdoutSheetLog.fault("custody: candidate rating refused a non-validation sink — dropped")
+            // Visible to Rick, not just Console (QA 2026-07-27 🟡 D).
+            loadError = "Internal safety check refused to save this rating (nothing was written). Please tell Claude — this is a wiring bug."
             return
         }
         // Persist label
