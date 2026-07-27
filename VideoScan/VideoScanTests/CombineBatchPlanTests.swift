@@ -18,11 +18,17 @@ struct CombineBatchPlanTests {
     private let macProUMID = "0x060A2B340101010101010F00130000004B9428AB29070371060E2B347F7F2A80"
     private let backupUMID = "0x060A2B340101010101010F00130000004B9428AB29080371060E2B347F7F2A80"
 
-    private func rec(_ name: String, _ path: String, umid: String = "") -> VideoRecord {
+    private func rec(
+        _ name: String,
+        _ path: String,
+        umid: String = "",
+        duration: Double = 0
+    ) -> VideoRecord {
         let r = VideoRecord()
         r.filename = name
         r.fullPath = path
         r.materialPackageUMID = umid
+        r.durationSeconds = duration
         return r
     }
 
@@ -52,6 +58,39 @@ struct CombineBatchPlanTests {
         #expect(item.resolvedVideo.fullPath == v.fullPath)
         #expect(item.resolvedAudio.fullPath == a.fullPath)
         #expect(!item.isSubstituted)
+    }
+
+    // regression: GH #125 escaped a persisted 3,808-second video paired
+    // with 125 seconds of audio. The output verifier caught it only after
+    // ffmpeg had spent ten minutes producing a ~96 GiB ProRes file. Batch
+    // planning is the last cheap gate shared by correlated and manually
+    // selected pairs, so it must refuse the mismatch before any job starts.
+    @Test
+    func knownShortAudioIsBlockedBeforeCombineStarts() {
+        let model = VideoScanModel()
+        let video = rec(
+            "Untitled Sequence.04D1C4907.mxf",
+            "/V1/Untitled Sequence.04D1C4907.mxf",
+            duration: 3_808.271
+        )
+        let audio = rec(
+            "00047.PHYSA01.1_4D14D1C5284.mxf",
+            "/V1/00047.PHYSA01.1_4D14D1C5284.mxf",
+            duration: 125.6255
+        )
+        model.records = [video, audio]
+
+        let plan = model.prepareCombineBatch(
+            pairs: [(video, audio)],
+            isReachable: online("/V1/")
+        )
+
+        #expect(plan.runnable.isEmpty,
+                "a persisted or manually selected gross duration mismatch must never reach ffmpeg")
+        #expect(plan.blocked.count == 1)
+        let reason = plan.blocked.first?.blockReason ?? ""
+        #expect(reason.contains("audio duration mismatch"))
+        #expect(reason.contains("3.3%"))
     }
 
     // MARK: - Substitution paths
