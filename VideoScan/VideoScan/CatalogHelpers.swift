@@ -1148,13 +1148,18 @@ struct CatalogContent: View {
                                         // AVPlayer — AVKit just shows the
                                         // crossed-out play glyph. O(1) per
                                         // click, no I/O.
+                                        // The route→surface mapping is the
+                                        // pure PreviewPlayAction seam so the
+                                        // FilmstripRouteGateSensor can pin it
+                                        // (testing agent, 2026-07-27).
                                         let route = PreviewFrameRouter.previewRoute(
                                             container: rec.container,
                                             videoCodec: rec.videoCodec,
                                             likelyUnanalyzable: rec.isLikelyUnanalyzable)
-                                        if route == .ffmpegDirect {
+                                        switch PreviewPlayAction.forRoute(route) {
+                                        case .filmstrip:
                                             model.requestFilmstrip(for: rec)
-                                        } else {
+                                        case .avPlayer:
                                             let url = URL(fileURLWithPath: rec.fullPath)
                                             player = AVPlayer(url: url)
                                             isPlaying = true

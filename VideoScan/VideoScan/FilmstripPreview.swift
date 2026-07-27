@@ -17,6 +17,26 @@
 
 import SwiftUI
 
+/// Pure play-button decision for the catalog preview pane: which
+/// playback surface a record's preview route gets. Extracted from the
+/// CatalogHelpers click site (testing agent, 2026-07-27) so the
+/// route→surface mapping has a unit-testable seam — the regression this
+/// sensor guards is an ffmpegDirect record ever reaching AVPlayer again
+/// (AVKit just shows the crossed-out glyph for MKV/FFV1).
+/// For Rick: a two-case `enum` + a pure classifier ≈ a C++ `enum class`
+/// with a free constexpr function — no state, no I/O.
+enum PreviewPlayAction: Equatable {
+    /// Enter filmstrip mode via VideoScanModel.requestFilmstrip — must
+    /// NEVER construct an AVPlayer.
+    case filmstrip
+    /// The existing AVPlayer path, unchanged.
+    case avPlayer
+
+    static func forRoute(_ route: PreviewRoute) -> PreviewPlayAction {
+        route == .ffmpegDirect ? .filmstrip : .avPlayer
+    }
+}
+
 struct FilmstripPreviewView: View {
 
     /// Post-selection frames, ordered by offset (never empty — the
