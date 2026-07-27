@@ -41,11 +41,12 @@ struct FixtureMediaStressTests {
                 job.assignedEngine = engine
                 model.jobs.append(job)
 
-                if engine != .dlib {
-                    await model.loadFacesForJob(job)
-                    guard !job.assignedFaces.isEmpty else {
-                        throw StressFailure("profile \(profile.name) loaded no reference faces from \(profile.referencePath)")
-                    }
+                // Every remaining engine consumes loaded reference faces
+                // (the dlib subprocess seat that read photos itself was
+                // removed in #144).
+                await model.loadFacesForJob(job)
+                guard !job.assignedFaces.isEmpty else {
+                    throw StressFailure("profile \(profile.name) loaded no reference faces from \(profile.referencePath)")
                 }
                 jobs.append(job)
             }
@@ -165,13 +166,13 @@ struct FixtureMediaStressTests {
             switch name {
             case "vision": return .vision
             case "arcface": return .arcface
-            case "dlib": return .dlib
+            case "adaface": return .adaface
             case "hybrid": return .hybrid
             default: return nil
             }
         }
         guard engines.count == names.count, !engines.isEmpty else {
-            throw StressFailure("fixture stress engines must be vision, arcface, dlib, or hybrid")
+            throw StressFailure("fixture stress engines must be vision, arcface, adaface, or hybrid")
         }
         return engines
     }

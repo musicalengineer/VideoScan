@@ -332,14 +332,49 @@ struct CombinePairItemTests {
 
 struct RecognitionEngineTests {
 
-    // regression: #9 — Pluggable FD architecture: all four engines (Vision, ArcFace, dlib, Hybrid) remain registered
+    // regression: #9 — Pluggable FD architecture: all four engines (Vision, ArcFace, AdaFace, Hybrid) remain registered
+    // regression: #144 — dlib removed from Search; AdaFace occupies its seat
     @Test func allCasesExist() {
         let engines = RecognitionEngine.allCases
         #expect(engines.count == 4)
         #expect(engines.contains(.vision))
         #expect(engines.contains(.arcface))
-        #expect(engines.contains(.dlib))
+        #expect(engines.contains(.adaface))
         #expect(engines.contains(.hybrid))
+    }
+
+    // SENSOR: #144 — dlib must NEVER reappear in Search. The picker and
+    // every UI surface are registry-driven (ForEach(allCases) + the metadata
+    // strings below), so proving no registry string mentions dlib proves
+    // dlib is not visible, selectable, or dispatchable from Search.
+    @Test func dlibCannotReappearInSearchRegistry() {
+        for engine in RecognitionEngine.allCases {
+            let surfaces = [
+                engine.rawValue, engine.title, engine.displayName,
+                engine.shortLabel, engine.subtitle,
+                engine.capabilitySummary, engine.requirementsSummary
+            ]
+            for s in surfaces {
+                #expect(!s.lowercased().contains("dlib"),
+                        "dlib leaked back into the Search registry via \(engine): \"\(s)\"")
+            }
+        }
+    }
+
+    // regression: #144 — deterministic migration of persisted engine tokens.
+    @Test func migratePersistedMapsLegacyAndPoisonedTokens() {
+        // dlib's seat → AdaFace (least surprise: the "accurate second engine").
+        #expect(RecognitionEngine.migratePersisted("dlib/Python (accurate)") == .adaface)
+        // Old hybrid token (renamed because the fallback engine is in the string).
+        #expect(RecognitionEngine.migratePersisted("Hybrid (Vision + dlib fallback)") == .hybrid)
+        // Current tokens map to themselves.
+        for engine in RecognitionEngine.allCases {
+            #expect(RecognitionEngine.migratePersisted(engine.rawValue) == engine)
+        }
+        // Poisoned/unknown tokens → nil (callers fall back to .vision).
+        #expect(RecognitionEngine.migratePersisted("") == nil)
+        #expect(RecognitionEngine.migratePersisted("Skynet v9") == nil)
+        #expect(RecognitionEngine.migratePersisted(nil) == nil)
     }
 
     // regression: #9 — Every engine must surface a UI title and short label (catches broken UI registry)

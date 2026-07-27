@@ -28,9 +28,9 @@ struct ScanConfigurationTests {
         var settings = PersonFinderSettings()
         settings.recognitionEngine = .vision
         let profile = POIProfile(name: "Test", referencePath: "/tmp",
-                                 engine: RecognitionEngine.dlib.rawValue)
+                                 engine: RecognitionEngine.adaface.rawValue)
         settings.applyProfile(profile)
-        #expect(settings.recognitionEngine == .dlib)
+        #expect(settings.recognitionEngine == .adaface)
     }
 
     @Test func applyProfileSetsThresholds() {
@@ -83,8 +83,8 @@ struct ScanConfigurationTests {
         let job = ScanJob(searchPath: "/tmp")
         job.assignedProfile = POIProfile(name: "Test", referencePath: "/tmp",
                                          engine: RecognitionEngine.vision.rawValue)
-        job.assignedEngine = .dlib
-        #expect(job.effectiveEngine == .dlib)
+        job.assignedEngine = .adaface
+        #expect(job.effectiveEngine == .adaface)
     }
 
     // MARK: Face loading with rejection filtering
@@ -191,7 +191,7 @@ struct ScanConfigurationTests {
         #expect(log.contains("Confidence: 0.60"), "Console should log confidence from profile")
         #expect(log.contains("Feature prints for matching:"), "Console should log print count")
 
-        #expect(!log.contains("Engine: DLIB"), "Should not log dlib engine")
+        #expect(!log.contains("Engine: ADAFACE"), "Should not log adaface engine")
         #expect(!log.contains("Engine: ARCFACE"), "Should not log arcface engine")
 
         model.stopJob(job)

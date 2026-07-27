@@ -64,10 +64,16 @@ actor AdaFaceModelLoader {
     /// load and reused across all subsequent getModel() calls.
     private var compiledURL: URL?
 
+    /// Test seam: checked before the env var. Foundation snapshots the
+    /// process environment, so tests can't reliably setenv() mid-run —
+    /// they set this instead (and call `reset()` between cases).
+    nonisolated(unsafe) static var modelsDirOverride: String?
+
     /// Models directory. Same convention as ArcFace (~/dev/VideoScan/models),
     /// overridable via VIDEOSCAN_MODELS_DIR for tests/worktrees so a test
     /// host never depends on (or pollutes) the real checkout's models dir.
     static var modelsDir: String {
+        if let dir = modelsDirOverride, !dir.isEmpty { return dir }
         if let dir = ProcessInfo.processInfo.environment["VIDEOSCAN_MODELS_DIR"],
            !dir.isEmpty {
             return dir
