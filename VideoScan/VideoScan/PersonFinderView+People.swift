@@ -452,7 +452,12 @@ extension PersonFinderView {
         }
         .sheet(item: $confirmationsTarget) { target in
             ConfirmationsView(profile: target.profile, onConfirmMore: {
-                confirmTarget = ConfirmSheetTarget(profile: target.profile)
+                // Same unified session as the menu/badge — holdout rows
+                // first when a blind queue is pending (one verb, one
+                // meaning; the dashboard is not a bypass).
+                confirmTarget = ConfirmSheetTarget(
+                    profile: target.profile,
+                    holdoutQueue: holdoutReview.pendingQueue(for: target.profile.name))
             })
             .environmentObject(model)
             .environmentObject(catalogModel)
