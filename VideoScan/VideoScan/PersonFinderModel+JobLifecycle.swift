@@ -340,6 +340,14 @@ extension PersonFinderModel {
 
         let searchPath = job.searchPath
         let jobSettings = self.settings
+        // Reconstruct the embed variant EXACTLY as a live run of this job
+        // would: global settings overlaid with the profile, engine resolved
+        // (mirrors runJob's jobSettings construction). Codex post-merge #2:
+        // this path used to read the (never-set-here) process global.
+        var overlaySettings = self.settings
+        overlaySettings.applyProfile(profile)
+        overlaySettings.recognitionEngine = engine
+        let embedVariant = PersonFinderCache.embedVariant(for: overlaySettings)
         // Capture the catalog writeback closure on MainActor so the
         // detached Task below can invoke it inside its own MainActor.run.
         // The closure's `@MainActor` annotation makes its type Sendable
@@ -363,7 +371,8 @@ extension PersonFinderModel {
                 guard let key = PersonFinderCache.makeKey(
                     videoPath: path, personName: personName,
                     engine: engine, threshold: threshold,
-                    refFilenames: refIdentifiers
+                    refFilenames: refIdentifiers,
+                    embedVariant: embedVariant
                 ), let result = PersonFinderCache.shared.lookup(key: key) else { continue }
                 hits += 1
                 if !result.segments.isEmpty {
@@ -477,14 +486,11 @@ extension PersonFinderModel {
             jobSettings.recognitionEngine = engineOverride
         }
 
-        // Bust the per-video result cache when embedding-shaping knobs change
-        // (alignment toggle, AdaFace model version, and — for hybrid — the
-        // AdaFace fallback threshold). Set before any cache lookup so a
-        // toggle never serves stale results; "" preserves the legacy Vision/
-        // ArcFace namespaces. Logic lives in PersonFinderCache.embedVariant
-        // (pure, test-pinned — #144 QA merge condition).
-        PersonFinderCache.arcfaceEmbedVariant =
-            PersonFinderCache.embedVariant(for: jobSettings)
+        // Embed-variant cache namespace (alignment toggle, AdaFace model
+        // version, hybrid's fallback threshold) is computed per-job from
+        // jobSettings and passed explicitly through every makeKey call —
+        // the old process-global slot let concurrent jobs overwrite each
+        // other and left restore paths unnamespaced (codex post-merge #2).
 
         // High-level narration to videoscan.log — emitted once volume + engine
         // are known. Per-job verbose detail continues to go to the job's
@@ -787,12 +793,13 @@ extension PersonFinderModel {
 
         // Cache summary — so the user can see how many will be fast (cached) vs slow (new)
         let cacheThreshold = settings.thresholdForEngine(settings.recognitionEngine)
+        let embedVariant = PersonFinderCache.embedVariant(for: settings)
         var cachedCount = 0
         for path in videoFiles {
             if let key = PersonFinderCache.makeKey(
                 videoPath: path, personName: settings.personName,
                 engine: settings.recognitionEngine, threshold: cacheThreshold,
-                refFilenames: refFilenames
+                refFilenames: refFilenames, embedVariant: embedVariant
             ), PersonFinderCache.shared.lookup(key: key) != nil {
                 cachedCount += 1
             }
@@ -813,7 +820,10 @@ extension PersonFinderModel {
                 let rows = PersonFinderCache.shared.cachedRowsForVideo(
                     videoPath: samplePath, fileSize: size, modDate: mod
                 )
-                let currentRefHash = PersonFinderCache.cachedRefHash(refFilenames)
+                // Compose the SAME refHash makeKey stores (incl. variant),
+                // or the diagnostic disagrees with the keys it explains.
+                let currentRefHash = PersonFinderCache.composedRefHash(
+                    refFilenames, embedVariant: embedVariant)
                 let why = PersonFinderCache.cacheMissDiagnostic(
                     currentPersonName: settings.personName,
                     currentEngine: settings.recognitionEngine.rawValue,
@@ -834,7 +844,7 @@ extension PersonFinderModel {
                 guard let key = PersonFinderCache.makeKey(
                     videoPath: path, personName: settings.personName,
                     engine: settings.recognitionEngine, threshold: cacheThreshold,
-                    refFilenames: refFilenames
+                    refFilenames: refFilenames, embedVariant: embedVariant
                 ) else { return false }
                 return PersonFinderCache.shared.lookup(key: key) != nil
             }
@@ -976,12 +986,14 @@ extension PersonFinderModel {
 
         let filePath = videoFiles[idx]
         let threshold = settings.thresholdForEngine(settings.recognitionEngine)
+        let embedVariant = PersonFinderCache.embedVariant(for: settings)
 
         // Cache check BEFORE waiting for disk warm — cache hits skip I/O entirely
         if let cacheKey = PersonFinderCache.makeKey(
             videoPath: filePath, personName: settings.personName,
             engine: settings.recognitionEngine,
-            threshold: threshold, refFilenames: refFilenames
+            threshold: threshold, refFilenames: refFilenames,
+            embedVariant: embedVariant
         ), let cached = PersonFinderCache.shared.lookup(key: cacheKey) {
             let tag = cached.segments.isEmpty ? "no hits" : "\(cached.segments.count) segment(s)"
             await job.appendLog("[\(idx + 1)/\(total)] \((filePath as NSString).lastPathComponent) — cache hit (\(tag))")
@@ -1078,7 +1090,8 @@ extension PersonFinderModel {
         if let cacheKey = PersonFinderCache.makeKey(
             videoPath: filePath, personName: settings.personName,
             engine: settings.recognitionEngine,
-            threshold: threshold, refFilenames: refFilenames
+            threshold: threshold, refFilenames: refFilenames,
+            embedVariant: embedVariant
         ) {
             if let r {
                 PersonFinderCache.shared.store(key: cacheKey, result: r)
@@ -1368,6 +1381,14 @@ extension PersonFinderModel {
         let folderName = job.assignedProfile.map { POIStorage.sanitize($0.name) }
         let engine = job.effectiveEngine
         let threshold = settings.thresholdForEngine(engine)
+        // Persist the cache namespace this scan's keys were built with, so
+        // rehydration reproduces identical keys without reconstruction
+        // logic that could drift (codex post-merge #2). Belt-and-suspenders
+        // engine pin: settings.recognitionEngine should already equal the
+        // effective engine here.
+        var variantSettings = settings
+        variantSettings.recognitionEngine = engine
+        let embedVariant = PersonFinderCache.embedVariant(for: variantSettings)
         let referencePath = job.assignedProfile?.referencePath ?? settings.referencePath
         let referenceFilenames = job.assignedFaces.map(\.sourceFilename)
         // Record the job's current status so a paused scan can come back as
@@ -1398,7 +1419,8 @@ extension PersonFinderModel {
             clipsFound: job.clipsFound,
             presenceSecs: job.presenceSecs,
             elapsedSecs: job.elapsedSecs,
-            statusRaw: statusRaw
+            statusRaw: statusRaw,
+            embedVariant: embedVariant
         )
     }
 
@@ -1572,7 +1594,10 @@ extension PersonFinderModel {
             guard let key = PersonFinderCache.makeKey(
                 videoPath: path, personName: descriptor.personName,
                 engine: engine, threshold: descriptor.threshold,
-                refFilenames: refIdentifiers
+                refFilenames: refIdentifiers,
+                // nil = pre-#144 descriptor → legacy "" namespace, correct
+                // for the vision/arcface-unaligned rows those scans wrote.
+                embedVariant: descriptor.embedVariant ?? ""
             ), let result = PersonFinderCache.shared.lookup(key: key),
                   !result.segments.isEmpty else { continue }
             // Same floor decision as a live scan — restored rows and fresh

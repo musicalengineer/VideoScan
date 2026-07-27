@@ -242,12 +242,12 @@ struct PersonFinderCacheTests {
 
             let hashA = PersonFinderCache.makeKey(
                 videoPath: tmpPath, personName: "donna", engine: .arcface,
-                threshold: 0.4, refFilenames: refsA
+                threshold: 0.4, refFilenames: refsA, embedVariant: ""
             )?.refHash
 
             let hashB = PersonFinderCache.makeKey(
                 videoPath: tmpPath, personName: "donna", engine: .arcface,
-                threshold: 0.4, refFilenames: refsB
+                threshold: 0.4, refFilenames: refsB, embedVariant: ""
             )?.refHash
 
             #expect(hashA != nil)
@@ -263,12 +263,12 @@ struct PersonFinderCacheTests {
 
             let hashSmall = PersonFinderCache.makeKey(
                 videoPath: tmpPath, personName: "donna", engine: .arcface,
-                threshold: 0.4, refFilenames: refsSmall
+                threshold: 0.4, refFilenames: refsSmall, embedVariant: ""
             )?.refHash
 
             let hashBig = PersonFinderCache.makeKey(
                 videoPath: tmpPath, personName: "donna", engine: .arcface,
-                threshold: 0.4, refFilenames: refsBig
+                threshold: 0.4, refFilenames: refsBig, embedVariant: ""
             )?.refHash
 
             #expect(hashSmall != hashBig, "Different ref photo set must produce different hash")
@@ -476,7 +476,8 @@ struct PersonFinderCacheTests {
 
                 let firstKey = PersonFinderCache.makeKey(
                     videoPath: videoPath, personName: "donna", engine: .arcface,
-                    threshold: 0.4, refFilenames: [refURL.path]
+                    threshold: 0.4, refFilenames: [refURL.path],
+                    embedVariant: ""
                 )
                 #expect(firstKey != nil)
                 guard let firstKey else { return }
@@ -491,7 +492,8 @@ struct PersonFinderCacheTests {
                 )
                 let secondKey = PersonFinderCache.makeKey(
                     videoPath: videoPath, personName: "donna", engine: .arcface,
-                    threshold: 0.4, refFilenames: [refURL.path]
+                    threshold: 0.4, refFilenames: [refURL.path],
+                    embedVariant: ""
                 )
                 #expect(secondKey != nil)
                 guard let secondKey else { return }

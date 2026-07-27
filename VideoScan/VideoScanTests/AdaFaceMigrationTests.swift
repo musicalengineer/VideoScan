@@ -17,11 +17,9 @@ import Foundation
 //    media behavior rides the existing fixture stress suite, which now
 //    accepts "adaface" in VIDEOSCAN_FIXTURE_STRESS_ENGINES.
 
-// .serialized: hybridCacheKeyRefHashChangesWithAdafaceThreshold mutates the
-// process-global PersonFinderCache.arcfaceEmbedVariant (restored via defer);
-// don't let sibling tests interleave with it. (The global itself is a
-// pre-existing design — QA follow-up filed.)
-@Suite(.serialized)
+// (No .serialized needed: the process-global embed-variant slot these tests
+// once had to guard was removed — the variant is now passed explicitly
+// through makeKey per-job; codex post-merge #2.)
 struct AdaFaceMigrationTests {
 
     /// Fresh throwaway suite per test; removed on exit. Tests NEVER touch
@@ -151,12 +149,16 @@ struct AdaFaceMigrationTests {
         FileManager.default.createFile(atPath: tmp, contents: Data("x".utf8))
         defer { try? FileManager.default.removeItem(atPath: tmp) }
 
+        var arcSettings = PersonFinderSettings(); arcSettings.recognitionEngine = .arcface
+        var adaSettings = PersonFinderSettings(); adaSettings.recognitionEngine = .adaface
         let arc = PersonFinderCache.makeKey(
             videoPath: tmp, personName: "Donna", engine: .arcface,
-            threshold: 0.40, refFilenames: ["a.jpg"])
+            threshold: 0.40, refFilenames: ["a.jpg"],
+            embedVariant: PersonFinderCache.embedVariant(for: arcSettings))
         let ada = PersonFinderCache.makeKey(
             videoPath: tmp, personName: "Donna", engine: .adaface,
-            threshold: 0.40, refFilenames: ["a.jpg"])
+            threshold: 0.40, refFilenames: ["a.jpg"],
+            embedVariant: PersonFinderCache.embedVariant(for: adaSettings))
         let arcKey = try #require(arc)
         let adaKey = try #require(ada)
         #expect(arcKey.engine != adaKey.engine,
@@ -246,33 +248,116 @@ struct AdaFaceMigrationTests {
     @Test func hybridCacheKeyRefHashChangesWithAdafaceThreshold() throws {
         // Full-path proof through makeKey: same video/person/refs/threshold
         // column, hybrid engine — different adafaceThreshold must yield a
-        // different refHash. Mutates the process-global variant slot exactly
-        // the way runJob does, restoring it afterwards.
+        // different refHash. Variant passed explicitly (no global anymore).
         let tmp = NSTemporaryDirectory() + "hybrid_key_\(UUID().uuidString).mov"
         FileManager.default.createFile(atPath: tmp, contents: Data("x".utf8))
-        let savedVariant = PersonFinderCache.arcfaceEmbedVariant
-        defer {
-            PersonFinderCache.arcfaceEmbedVariant = savedVariant
-            try? FileManager.default.removeItem(atPath: tmp)
-        }
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
 
         var s = PersonFinderSettings()
         s.recognitionEngine = .hybrid
         s.adafaceThreshold = 0.30
-        PersonFinderCache.arcfaceEmbedVariant = PersonFinderCache.embedVariant(for: s)
         let key30 = try #require(PersonFinderCache.makeKey(
             videoPath: tmp, personName: "Donna", engine: .hybrid,
-            threshold: s.thresholdForEngine(.hybrid), refFilenames: ["a.jpg"]))
+            threshold: s.thresholdForEngine(.hybrid), refFilenames: ["a.jpg"],
+            embedVariant: PersonFinderCache.embedVariant(for: s)))
 
         s.adafaceThreshold = 0.35
-        PersonFinderCache.arcfaceEmbedVariant = PersonFinderCache.embedVariant(for: s)
         let key35 = try #require(PersonFinderCache.makeKey(
             videoPath: tmp, personName: "Donna", engine: .hybrid,
-            threshold: s.thresholdForEngine(.hybrid), refFilenames: ["a.jpg"]))
+            threshold: s.thresholdForEngine(.hybrid), refFilenames: ["a.jpg"],
+            embedVariant: PersonFinderCache.embedVariant(for: s)))
 
         #expect(key30.threshold == key35.threshold,
                 "Precondition: hybrid's key threshold column is Vision's, unchanged")
         #expect(key30.refHash != key35.refHash,
                 "Hybrid refHash must change with adafaceThreshold or stale rows get served")
+    }
+
+    // MARK: Per-job variant through makeKey (codex post-merge blocker 2)
+
+    /// A restored/rehydrated job must produce IDENTICAL cache keys to the
+    /// live scan that wrote the rows. The descriptor persists the variant
+    /// verbatim (no reconstruction logic to drift); pre-#144 descriptors
+    /// decode with nil → the legacy "" namespace.
+    @Test @MainActor func restoredDescriptorReproducesLiveCacheKeys() throws {
+        let tmp = NSTemporaryDirectory() + "restore_key_\(UUID().uuidString).mov"
+        FileManager.default.createFile(atPath: tmp, contents: Data("x".utf8))
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        // Live hybrid job with a tuned AdaFace fallback threshold.
+        var s = PersonFinderSettings()
+        s.personName = "Donna"
+        s.recognitionEngine = .hybrid
+        s.adafaceThreshold = 0.35
+        let liveKey = try #require(PersonFinderCache.makeKey(
+            videoPath: tmp, personName: s.personName, engine: .hybrid,
+            threshold: s.thresholdForEngine(.hybrid), refFilenames: ["a.jpg"],
+            embedVariant: PersonFinderCache.embedVariant(for: s)))
+
+        // Persist via the production descriptor builder, JSON round-trip it
+        // (what ScanJobsStorage does), then rebuild the key the way
+        // rehydrateResultsFromCache does.
+        let job = ScanJob(searchPath: "/tmp")
+        job.assignedEngine = .hybrid
+        let descriptor = PersonFinderModel.makeDescriptor(from: job, settings: s)
+        let data = try JSONEncoder().encode(descriptor)
+        let decoded = try JSONDecoder().decode(PersistedJobDescriptor.self, from: data)
+
+        let restoredKey = try #require(PersonFinderCache.makeKey(
+            videoPath: tmp, personName: s.personName,
+            engine: RecognitionEngine.migratePersisted(decoded.engine) ?? .vision,
+            threshold: decoded.threshold, refFilenames: ["a.jpg"],
+            embedVariant: decoded.embedVariant ?? ""))
+
+        #expect(restoredKey == liveKey,
+                "Restored job must reproduce the live scan's cache keys exactly")
+
+        // Pre-#144 descriptor (no embedVariant key) → legacy "" namespace.
+        var legacyJSON = try #require(String(data: data, encoding: .utf8))
+        legacyJSON = legacyJSON.replacingOccurrences(
+            of: "\"embedVariant\":\"\(descriptor.embedVariant ?? "")\",", with: "")
+        legacyJSON = legacyJSON.replacingOccurrences(
+            of: ",\"embedVariant\":\"\(descriptor.embedVariant ?? "")\"", with: "")
+        let legacy = try JSONDecoder().decode(
+            PersistedJobDescriptor.self, from: Data(legacyJSON.utf8))
+        #expect(legacy.embedVariant == nil,
+                "Old descriptors decode with nil variant (callers fall back to \"\")")
+    }
+
+    /// Two concurrent jobs with different engines/thresholds can never
+    /// cross-pollute keys: with the variant passed explicitly, interleaved
+    /// key construction is pure — each key equals its isolated recompute.
+    @Test func interleavedJobsProduceIndependentCacheKeys() throws {
+        let tmp = NSTemporaryDirectory() + "interleave_key_\(UUID().uuidString).mov"
+        FileManager.default.createFile(atPath: tmp, contents: Data("x".utf8))
+        defer { try? FileManager.default.removeItem(atPath: tmp) }
+
+        var jobA = PersonFinderSettings()   // AdaFace, tuned threshold
+        jobA.recognitionEngine = .adaface
+        jobA.adafaceThreshold = 0.42
+        var jobB = PersonFinderSettings()   // Hybrid, different tuning
+        jobB.recognitionEngine = .hybrid
+        jobB.adafaceThreshold = 0.25
+
+        func keyFor(_ s: PersonFinderSettings) -> PersonFinderCache.CacheKey? {
+            PersonFinderCache.makeKey(
+                videoPath: tmp, personName: "Donna",
+                engine: s.recognitionEngine,
+                threshold: s.thresholdForEngine(s.recognitionEngine),
+                refFilenames: ["a.jpg"],
+                embedVariant: PersonFinderCache.embedVariant(for: s))
+        }
+
+        // Interleave: A, B, A, B — the old global slot would have left the
+        // second A keyed with B's variant (last-writer-wins).
+        let a1 = try #require(keyFor(jobA))
+        let b1 = try #require(keyFor(jobB))
+        let a2 = try #require(keyFor(jobA))
+        let b2 = try #require(keyFor(jobB))
+
+        #expect(a1 == a2, "Job A's keys must be identical regardless of B's interleaving")
+        #expect(b1 == b2, "Job B's keys must be identical regardless of A's interleaving")
+        #expect(a1.refHash != b1.refHash,
+                "Different engine/threshold configs must land in different namespaces")
     }
 }

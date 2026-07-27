@@ -90,7 +90,9 @@ final class PersonFinderCache {
 
     // MARK: - Cache Key
 
-    struct CacheKey {
+    /// Equatable so tests can assert restored/rehydrated keys are IDENTICAL
+    /// to the live scan's keys (codex post-merge #2).
+    struct CacheKey: Equatable {
         let videoPath: String
         let fileSize: Int64
         let modDate: Date
@@ -100,13 +102,14 @@ final class PersonFinderCache {
         let refHash: String
     }
 
-    /// Per-scan ArcFace embedding-variant discriminator folded into the cache
-    /// key (see makeKey). Set once at scan launch from the alignment toggle;
-    /// "" = legacy unaligned namespace. Written on the main actor before a scan,
-    /// read on worker threads during it.
-    nonisolated(unsafe) static var arcfaceEmbedVariant = ""
+    // The mutable process-global `arcfaceEmbedVariant` that used to live here
+    // was removed (codex post-merge review, #144): restore/rehydration paths
+    // never set it, and concurrent jobs overwrote each other's value. The
+    // variant is now PASSED EXPLICITLY through makeKey — every caller
+    // computes it per-job via embedVariant(for:) or restores it from the
+    // persisted job descriptor.
 
-    /// Compute the embed-variant token runJob installs before a scan starts.
+    /// Compute the embed-variant token for a job's settings.
     /// Pure function so tests can pin the keying contract (#144 QA merge
     /// condition):
     ///  - arcface: alignment-only namespace (legacy behavior, unchanged)
@@ -134,12 +137,32 @@ final class PersonFinderCache {
         }
     }
 
+    /// The refHash actually stored in cache rows: the order-insensitive
+    /// reference-photo hash plus the embed-variant namespace suffix.
+    /// Aligned vs unaligned ArcFace embeddings are not comparable, AdaFace
+    /// rows carry a backend/model-version token, and hybrid rows fold the
+    /// fallback's knobs in — "" keeps the legacy namespace. Shared by
+    /// makeKey and the cache-miss diagnostic so they can never disagree.
+    static func composedRefHash(_ refFilenames: [String], embedVariant: String) -> String {
+        var refHash = cachedRefHash(refFilenames)
+        if !embedVariant.isEmpty {
+            refHash += "|" + embedVariant
+        }
+        return refHash
+    }
+
+    /// `embedVariant` is REQUIRED (no default) so a new call site can't
+    /// silently fall into an unnamespaced key: pass
+    /// `PersonFinderCache.embedVariant(for: settings)` for live jobs, the
+    /// persisted `descriptor.embedVariant` for rehydration, or "" only when
+    /// the key deliberately targets the legacy Vision/ArcFace namespace.
     static func makeKey(
         videoPath: String,
         personName: String,
         engine: RecognitionEngine,
         threshold: Float,
-        refFilenames: [String]
+        refFilenames: [String],
+        embedVariant: String
     ) -> CacheKey? {
         let fm = FileManager.default
         var isDir: ObjCBool = false
@@ -151,20 +174,7 @@ final class PersonFinderCache {
               let modDate = attrs[.modificationDate] as? Date else {
             return nil
         }
-        var refHash = cachedRefHash(refFilenames)
-        // Aligned vs unaligned ArcFace embeddings are not comparable, so they
-        // must not share cached per-video results. arcfaceEmbedVariant is set
-        // per scan from the alignment toggle; "" keeps the legacy namespace.
-        // AdaFace (#144) uses the same slot for its backend/model-version
-        // token — rows are already engine-separated by the `engine` column,
-        // the variant additionally busts the cache on a checkpoint bump.
-        // Hybrid rows fold the AdaFace fallback's knobs in too (QA #144
-        // merge condition): their `threshold` column is Vision's, so the
-        // adaface threshold + model version must ride the variant.
-        if engine == .arcface || engine == .adaface || engine == .hybrid,
-           !arcfaceEmbedVariant.isEmpty {
-            refHash += "|" + arcfaceEmbedVariant
-        }
+        let refHash = composedRefHash(refFilenames, embedVariant: embedVariant)
         cacheLog.debug("makeKey: refHash=\(refHash, privacy: .public) refs=\(refFilenames.count) person=\(personName, privacy: .public) engine=\(engine.rawValue, privacy: .public)")
         return CacheKey(
             videoPath: videoPath,
