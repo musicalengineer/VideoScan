@@ -34,6 +34,7 @@ extension VideoScanModel {
         correlateStatus = ""
         defer { isCorrelating = false }
 
+        CorrelationScorer.revalidateExistingPairs(in: records)
         let snaps = records.map(CorrelationScorer.avidSnap)
         let result = await CorrelationScorer.assignAvidPairs(snaps)
 
@@ -120,6 +121,7 @@ extension VideoScanModel {
         correlateStatus = ""
         defer { isCorrelating = false }
 
+        CorrelationScorer.revalidateExistingPairs(in: records)
         let needsPairing: [VideoRecord]
         if let ids = selectedIDs, !ids.isEmpty {
             // Explicit selection: clear + re-derive that subset.

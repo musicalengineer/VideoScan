@@ -290,6 +290,7 @@ final class CatalogStore {
                     rec.pendingPairedWithID = nil
                 }
             }
+            CorrelationScorer.revalidateExistingPairs(in: snapshot.records)
             return (snapshot.records, snapshot.version)
         } catch {
             NSLog("VideoScan: failed to decode catalog at %@: %@", url.path, String(describing: error))

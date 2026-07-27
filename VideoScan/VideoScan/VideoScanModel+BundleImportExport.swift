@@ -301,6 +301,7 @@ extension VideoScanModel {
             if let key = Self.identityKey(for: rec) { seen.insert(key) }
             added += 1
         }
+        CorrelationScorer.revalidateExistingPairs(in: records)
 
         // Volumes — overwrite metadata on path match; add as offline target
         // when the path isn't present locally so the volume shows up in the

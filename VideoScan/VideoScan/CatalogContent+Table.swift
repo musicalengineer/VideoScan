@@ -1303,7 +1303,7 @@ extension CatalogContent {
     private func repairAudio(for rec: VideoRecord) {
         let durationTolerance: Double = 1.0
         let timestampTolerance: TimeInterval = 5.0
-        guard let cand = CorrelationScorer.findBestPair(
+        guard let pair = CorrelationScorer.preferredPair(
             for: rec,
             in: model.records,
             durationTolerance: durationTolerance,
@@ -1344,7 +1344,7 @@ extension CatalogContent {
         }
         // Pair found — open the existing Combine sheet pre-filled
         // with the high-confidence match.
-        onCombinePair?(cand.video, cand.audio)
+        onCombinePair?(pair.video, pair.audio)
     }
 
     /// "Find Matching Video…" handler for audio-only records — mirror
@@ -1356,7 +1356,7 @@ extension CatalogContent {
     private func repairVideo(for rec: VideoRecord) {
         let durationTolerance: Double = 1.0
         let timestampTolerance: TimeInterval = 5.0
-        guard let cand = CorrelationScorer.findBestPair(
+        guard let pair = CorrelationScorer.preferredPair(
             for: rec,
             in: model.records,
             durationTolerance: durationTolerance,
@@ -1394,7 +1394,7 @@ extension CatalogContent {
             alert.runModal()
             return
         }
-        onCombinePair?(cand.video, cand.audio)
+        onCombinePair?(pair.video, pair.audio)
     }
 
     @ViewBuilder

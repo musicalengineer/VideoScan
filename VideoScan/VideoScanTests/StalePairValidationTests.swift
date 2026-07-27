@@ -98,4 +98,63 @@ struct StalePairValidationTests {
         #expect(staleAudio.pairedWith == nil)
         #expect(staleAudio.pairGroupID == nil && staleAudio.pairConfidence == nil)
     }
+
+    @Test func catalogImportClearsKnownIncompatiblePair() throws {
+        let directory = scratchDir()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sourceStore = CatalogStore(directory: directory)
+        let video = makeRecord("00001.V14D1BBD3F.mxf", streamType: .videoOnly,
+                               duration: 3808.271)
+        let audio = makeRecord("00047.PHYSA01.8D8520.mxf", streamType: .audioOnly,
+                               duration: 125.6255)
+        link(video, audio)
+        sourceStore.saveNow(records: [video, audio])
+
+        let model = VideoScanModel()
+        let result = try model.importCatalog(
+            from: URL(fileURLWithPath: sourceStore.fileLocation))
+
+        #expect(result.added == 2)
+        #expect(model.records.allSatisfy { $0.pairedWith == nil })
+        #expect(model.records.allSatisfy {
+            $0.pairGroupID == nil && $0.pairConfidence == nil
+        })
+    }
+
+    @Test func preferredPairRejectsStaleLinkAndReturnsCompatibleAlternative() throws {
+        let video = makeRecord("00001.V14D1BBD3F.mxf", streamType: .videoOnly,
+                               duration: 3808.271)
+        let staleAudio = makeRecord("00047.PHYSA01.8D8520.mxf", streamType: .audioOnly,
+                                    duration: 125.6255)
+        let compatibleAudio = makeRecord("00001.A14D1BBD3F.mxf", streamType: .audioOnly,
+                                         duration: 3798.261)
+        link(video, staleAudio)
+
+        let selection = try #require(CorrelationScorer.preferredPair(
+            for: video,
+            in: [video, staleAudio, compatibleAudio],
+            durationTolerance: 1.0,
+            timestampTolerance: 5.0
+        ))
+
+        #expect(selection.video === video)
+        #expect(selection.audio === compatibleAudio)
+    }
+
+    @Test func preferredPairPreservesUnknownDurationRelationFromEitherSide() throws {
+        let video = makeRecord("manual-video.mov", streamType: .videoOnly, duration: 0)
+        let audio = makeRecord("manual-audio.wav", streamType: .audioOnly, duration: 0)
+        link(video, audio)
+        let records = [video, audio]
+
+        let fromVideo = try #require(CorrelationScorer.preferredPair(
+            for: video, in: records,
+            durationTolerance: 1.0, timestampTolerance: 5.0))
+        let fromAudio = try #require(CorrelationScorer.preferredPair(
+            for: audio, in: records,
+            durationTolerance: 1.0, timestampTolerance: 5.0))
+
+        #expect(fromVideo.video === video && fromVideo.audio === audio)
+        #expect(fromAudio.video === video && fromAudio.audio === audio)
+    }
 }

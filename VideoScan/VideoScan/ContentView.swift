@@ -803,27 +803,16 @@ struct CatalogView: View {
         let durationTolerance: Double = 1.0
         let timestampTolerance: TimeInterval = 5.0
 
-        var partner: VideoRecord?
-        var score: Int?
-
-        if let existing = rec.pairedWith {
-            partner = existing
-            score = rec.pairConfidence.map { conf in
-                switch conf {
-                case .high: return 8
-                case .medium: return 5
-                case .low: return 3
-                }
-            }
-        } else if let cand = CorrelationScorer.findBestPair(
+        let selection = CorrelationScorer.preferredPair(
             for: rec,
             in: model.records,
             durationTolerance: durationTolerance,
             timestampTolerance: timestampTolerance
-        ) {
-            partner = (rec.streamType == .videoOnly) ? cand.audio : cand.video
-            score = cand.score
+        )
+        let partner = selection.map {
+            rec.streamType == .videoOnly ? $0.audio : $0.video
         }
+        let score = selection?.score
 
         guard let pair = partner else {
             let alert = NSAlert()
@@ -1198,4 +1187,3 @@ struct CatalogView: View {
         return lines
     }
 }
-

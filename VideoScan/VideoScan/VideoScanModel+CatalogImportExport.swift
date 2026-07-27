@@ -113,6 +113,7 @@ extension VideoScanModel {
             added += 1
         }
 
+        CorrelationScorer.revalidateExistingPairs(in: records)
         saveCatalogNow()
         return CatalogImportResult(added: added, skipped: skipped, sourceHost: effectiveHost)
     }
