@@ -371,6 +371,56 @@ struct PreviewDiskCacheFilmstripTests {
                 "120 filmstrip probes over 20k files took \(elapsed) — directory probe cost regressed")
     }
 
+    /// SCALE pin #2 — STRIP-SHAPED population (codex test-gap d,
+    /// 2026-07-27): the sensor above models 20k single-tier payloads,
+    /// but a filmstrip-heavy cache is 16-files-per-record — and every
+    /// one of those names carries the "-strip-" marker, so a probe's
+    /// per-name work (prefix filter, and parseStripFilename for its own
+    /// key's matches) is exercised at realistic fan-out. 1250 records ×
+    /// 16 frames = 20k valid strip names from OTHER keys + one needle.
+    /// Same 120-probe / 5 s budget: a regression that parses or stats
+    /// every name in the directory (instead of prefix-filtering first)
+    /// shows up here, not in the tier-shaped sensor.
+    @Test("filmstrip probes stay within budget when the 20k population is strip-shaped (16 files/record)",
+          .timeLimit(.minutes(2)))
+    func probeCostAtStripShapedTwentyThousandFiles() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fm = FileManager.default
+
+        // 1250 foreign records' complete 16-frame strips (1 byte each —
+        // probes for OTHER keys must never open them). Keys are real
+        // cacheKey hashes so name shape and length match production.
+        let byte = Data([0xAB])
+        for rec in 0..<1250 {
+            let key = PreviewDiskCache.cacheKey(path: "/v/other\(rec).mkv", mtime: 7, size: 7)
+            for i in 0..<16 {
+                let name = PreviewDiskCache.stripFilename(key: key, index: i, count: 16,
+                                                          offsetMillis: i * 500)
+                fm.createFile(atPath: root.appendingPathComponent(name).path, contents: byte)
+            }
+        }
+
+        let cache = PreviewDiskCache(rootURL: root)
+        // One real 16-frame strip buried among them — production shape.
+        cache.storeFilmstrip((0..<16).map { (Double($0) + 0.5, PreviewTestImages.twoTone()) },
+                             path: "/v/needle.mkv", mtime: 42, size: 42)
+
+        let clock = ContinuousClock()
+        var hits = 0
+        let elapsed = clock.measure {
+            for _ in 0..<60 {
+                if cache.lookupFilmstrip(path: "/v/needle.mkv", mtime: 42, size: 42) != nil {
+                    hits += 1
+                }
+                _ = cache.hasCompleteFilmstrip(path: "/v/absent.mkv", mtime: 1, size: 1)
+            }
+        }
+        #expect(hits == 60, "the buried 16-frame strip must hit every probe")
+        #expect(elapsed < .seconds(5),
+                "120 probes over a strip-shaped 20k directory took \(elapsed) — probe cost regressed at realistic fan-out")
+    }
+
     // MARK: - Isolation (ISOLATION)
 
     @Test("filmstrip stores/lookups confine all writes to the injected root — real App Support untouched")
