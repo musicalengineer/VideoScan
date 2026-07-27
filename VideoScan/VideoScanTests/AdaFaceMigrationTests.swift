@@ -273,6 +273,55 @@ struct AdaFaceMigrationTests {
                 "Hybrid refHash must change with adafaceThreshold or stale rows get served")
     }
 
+    // MARK: Legacy dlib replay arm (codex post-merge blocker 3)
+
+    /// `--engine dlib` must keep replaying historical manifests through the
+    /// ISOLATED CLI arm — while staying impossible to reach from Search
+    /// (not a RecognitionEngine case; the registry sensor covers the UI).
+    @Test func engineDlibParsesAsIsolatedLegacyArm() throws {
+        let opts = try PersonEvaluationCLI.parse([
+            "--person-eval", "--engine", "dlib", "--person", "Donna",
+            "--references", "/tmp", "--video", "/tmp/x.mov"
+        ])
+        #expect(opts.legacyDlib, "Historical dlib manifests must stay replayable")
+        #expect(opts.engine == .vision,
+                "The registry engine stays at its default — dlib is CLI-only")
+        #expect(!RecognitionEngine.allCases.contains {
+            $0.displayName.lowercased() == "dlib"
+        }, "The legacy token must NOT resurrect a registry seat")
+    }
+
+    @Test func legacyDlibToolingFlagsParse() throws {
+        let opts = try PersonEvaluationCLI.parse([
+            "--person-eval", "--engine", "dlib", "--person", "Donna",
+            "--references", "/tmp", "--video", "/tmp/x.mov",
+            "--python-path", "/opt/venv/bin/python",
+            "--recognition-script", "/repo/scripts/face_recognize.py"
+        ])
+        #expect(opts.pythonPath == "/opt/venv/bin/python")
+        #expect(opts.recognitionScript == "/repo/scripts/face_recognize.py")
+    }
+
+    @Test func unknownEngineTokenStillRejected() {
+        // The legacy carve-out is for exactly "dlib" — everything else
+        // unknown keeps failing loudly, same as before.
+        #expect(throws: (any Error).self) {
+            _ = try PersonEvaluationCLI.parse([
+                "--person-eval", "--engine", "skynet", "--person", "D",
+                "--references", "/tmp", "--video", "/tmp/x.mov"
+            ])
+        }
+    }
+
+    @Test func adafaceEngineTokenStillParses() throws {
+        let opts = try PersonEvaluationCLI.parse([
+            "--person-eval", "--engine", "adaface", "--person", "Donna",
+            "--references", "/tmp", "--video", "/tmp/x.mov"
+        ])
+        #expect(opts.engine == .adaface)
+        #expect(!opts.legacyDlib)
+    }
+
     // MARK: Per-job variant through makeKey (codex post-merge blocker 2)
 
     /// A restored/rehydrated job must produce IDENTICAL cache keys to the
