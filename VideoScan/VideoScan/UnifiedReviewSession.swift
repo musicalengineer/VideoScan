@@ -153,4 +153,42 @@ enum ReviewSessionPolicy {
             return false
         }
     }
+
+    /// FULL-QUEUE candidate exclusion (blocker fix 2026-07-27; codex #35
+    /// applied strictly). EVERY path in the active holdout queue — pending,
+    /// skipped, in-flight, write-failed, or durably answered — is barred
+    /// from pfConfirmRound output, positives and controls:
+    ///   • pending/skipped/in-flight/write-failed rows must never surface
+    ///     with signals/scores before durable blind grading, and
+    ///   • even durably-answered rows are the SEALED EVAL SET — rating
+    ///     them would land eval paths in validation labels and contaminate
+    ///     the sampler's seed (QA item-8).
+    /// The union of three views closes every window:
+    ///   sessionQueue    — this sheet's in-memory copy (covers optimistic
+    ///                     in-flight answers that disk hasn't committed);
+    ///   diskQueue       — a fresh-from-disk load (covers external edits
+    ///                     and rows a truncated memory copy lost);
+    ///   discoveredQueue — the badge center's newest queue (covers
+    ///                     candidates-only sessions where the queue is
+    ///                     fully answered and pendingQueue returned nil).
+    /// Paths release only when the active queue itself retires (a newer
+    /// dated queue supersedes it, or it has no rows) — then all three
+    /// sources stop carrying them.
+    static func heldOutExclusionPaths(sessionQueue: HoldoutReviewQueue?,
+                                      diskQueue: HoldoutReviewQueue?,
+                                      discoveredQueue: HoldoutReviewQueue?) -> Set<String> {
+        var paths = Set<String>()
+        for q in [sessionQueue, diskQueue, discoveredQueue] {
+            guard let q else { continue }
+            paths.formUnion(q.rows.map(\.fullPath))
+        }
+        return paths
+    }
+
+    /// FAIL CLOSED (blocker fix 2026-07-27): when the holdout queue fails
+    /// to load/reload, the session must NOT proceed to the candidate phase
+    /// — with the queue unreadable we cannot know which paths are sealed.
+    /// The sheet lands here, shows the load error, and offers retry or
+    /// dismiss only. Pinned: this phase forbids candidate loading.
+    static var phaseAfterQueueLoadFailure: ReviewSessionPhase { .holdout }
 }
