@@ -6,6 +6,10 @@
 
 import Testing
 import Foundation
+// AVFoundation (not just CoreMedia): the NSValue(time:)/.timeValue
+// bridging used by the dedupe pin lives in AVFoundation's NSValue
+// additions.
+import AVFoundation
 @testable import VideoScan
 
 @Suite("PreviewBestFramePlan")
@@ -150,6 +154,28 @@ struct PreviewBestFramePlanTests {
             fallbackOffset: 25.0,
             threshold: 0.01)
         #expect(index == 1)
+    }
+
+    // MARK: - dedupedCandidateTimes (AVF batch liveness)
+
+    @Test("colliding offsets collapse to one CMTime request, order preserved")
+    func candidateTimesDedupeOnTickValue() {
+        // The AVF candidate collector counts down one callback per
+        // REQUESTED time; a duplicate CMTimeValue that AVF coalesced
+        // would leave the countdown short and hang the awaiting
+        // continuation forever (QA 🟡, 2026-07-26). The times array is
+        // therefore deduped on the quantized tick value and the
+        // collector sized from it — pin that here with offsets that
+        // are distinct as Doubles but identical at timescale 600.
+        let times = VideoScanModel.dedupedCandidateTimes(
+            offsets: [0.5, 0.5000001, 2.0, 0.5])
+        #expect(times.count == 2)
+        #expect(times.map(\.timeValue.value) == [300, 1200],
+                "expected 0.5s (300 ticks) then 2.0s (1200 ticks), got \(times.map(\.timeValue.value))")
+
+        // Distinct offsets pass through untouched.
+        let distinct = VideoScanModel.dedupedCandidateTimes(offsets: [0.5, 6.0, 15.0, 30.0])
+        #expect(distinct.count == 4)
     }
 
     @Test("zero candidates → nil")

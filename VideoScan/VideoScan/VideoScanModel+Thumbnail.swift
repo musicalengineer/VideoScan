@@ -443,6 +443,23 @@ extension VideoScanModel {
         return candidates[chosen].image
     }
 
+    /// Candidate offsets → unique CMTime batch requests (timescale
+    /// 600), order preserved. Two planned offsets that quantize to the
+    /// same tick value collapse to ONE request — see the callsite
+    /// comment for why the collector's liveness depends on this.
+    /// Internal (not private) so tests can pin the dedupe.
+    nonisolated static func dedupedCandidateTimes(offsets: [Double]) -> [NSValue] {
+        var seen = Set<CMTimeValue>()
+        var times: [NSValue] = []
+        for offset in offsets {
+            let time = CMTime(seconds: offset, preferredTimescale: 600)
+            if seen.insert(time.value).inserted {
+                times.append(NSValue(time: time))
+            }
+        }
+        return times
+    }
+
     /// AVF candidate rips for the best-frame pass: all offsets from ONE
     /// AVURLAsset via generateCGImagesAsynchronously(forTimes:) — the
     /// asset open (the expensive part) is paid once, and per-time
@@ -467,7 +484,15 @@ extension VideoScanModel {
         }
         defer { watchdog.cancel() }
 
-        let times = offsets.map { NSValue(time: CMTime(seconds: $0, preferredTimescale: 600)) }
+        // Dedupe on the CMTimeValue actually requested (QA 🟡,
+        // 2026-07-26): the collector's countdown assumes one callback
+        // per requested time. Today's planner can't emit offsets that
+        // collide at timescale-600 resolution, but if a future tweak
+        // did and AVF coalesced the duplicate request, `remaining`
+        // would never reach zero and the checked continuation would
+        // hang the prewarm worker forever. Sizing the collector from
+        // the DEDUPED times makes that impossible structurally.
+        let times = Self.dedupedCandidateTimes(offsets: offsets)
         let collector = AVFCandidateCollector(expecting: times.count)
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             box.generator.generateCGImagesAsynchronously(forTimes: times) { requestedTime, image, _, _, _ in
@@ -644,18 +669,14 @@ extension VideoScanModel {
                     container: container,
                     videoCodec: videoCodec,
                     likelyUnanalyzable: likelyUnanalyzable)
-                // Write-through L2 first (already off-main here). Tier
-                // "fast": this is the interactive single 0.5 s frame —
-                // the background pass may later upgrade it to "best".
-                // Signature from BEFORE generation is correct: the key
-                // must describe the file we just decoded.
-                if let signature {
-                    diskCache.store(cgImage,
-                                    path: cacheKeyString,
-                                    mtime: signature.mtime,
-                                    size: signature.size,
-                                    tier: .fast)
-                }
+                // Publish to L1/UI FIRST, L2 after (QA 🟡, 2026-07-26):
+                // diskCache.store blocks on the cache lock (and JPEG-
+                // encodes under it), and the init-scheduled background
+                // prune can hold that lock mid-reap right at launch —
+                // the user's first preview must not wait behind a reap
+                // loop. (The prewarm path keeps store-then-L1: it's
+                // background work whose per-file order gates nothing
+                // visible.)
                 // CGImage is Sendable; NSImage and NSString aren't. Build
                 // both on the main actor so we never cross actor boundaries
                 // with them.
@@ -669,6 +690,18 @@ extension VideoScanModel {
                         self.previewImage = self.thumbnailCache.object(forKey: cacheKeyString as NSString)
                         self.previewUnavailable = false
                     }
+                }
+                // Write-through L2 (still off-main here). Tier "fast":
+                // this is the interactive single 0.5 s frame — the
+                // background pass may later upgrade it to "best".
+                // Signature from BEFORE generation is correct: the key
+                // must describe the file we just decoded.
+                if let signature {
+                    diskCache.store(cgImage,
+                                    path: cacheKeyString,
+                                    mtime: signature.mtime,
+                                    size: signature.size,
+                                    tier: .fast)
                 }
             } catch {
                 // Remember the failure (stat happens here, off-main) so

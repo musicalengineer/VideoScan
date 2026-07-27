@@ -81,6 +81,12 @@ final class PreviewDiskCache: @unchecked Sendable {
     /// Enforced by the init-scheduled background prune, oldest first.
     static let sizeCapBytes: Int64 = 2 * 1024 * 1024 * 1024
 
+    /// Minimum age before the prune treats a tmp- file as a crashed-
+    /// write orphan. A live store holds its temp file for milliseconds;
+    /// 10 minutes is orders of magnitude past any legitimate lifetime
+    /// while still sweeping real crash leftovers on the next launch.
+    static let tmpSweepMinAgeSeconds: TimeInterval = 600
+
     // MARK: - Roots
 
     /// Production cache directory:
@@ -324,9 +330,21 @@ final class PreviewDiskCache: @unchecked Sendable {
         var payloads: [(url: URL, size: Int64, mtime: Date)] = []
         var total: Int64 = 0
         for url in entries {
-            // Crashed-write leftovers: any age-old tmp file is garbage.
+            // Crashed-write leftovers — AGE-GATED (QA 🟡, 2026-07-26):
+            // this sweep runs in the enumeration phase, before the lock,
+            // so it could otherwise race an in-flight store and delete
+            // the temp file that store wrote milliseconds ago (failing
+            // its replaceItemAt). Only tmp files past
+            // tmpSweepMinAgeSeconds are provably orphans; a fresh one
+            // is left for a future prune. Chose the age gate over
+            // moving the sweep inside the lock so enumeration stays
+            // lock-free and a big sweep can't stall stores.
             if url.lastPathComponent.hasPrefix("tmp-") {
-                try? fm.removeItem(at: url)
+                if let vals = try? url.resourceValues(forKeys: [.contentModificationDateKey]),
+                   let mtime = vals.contentModificationDate,
+                   Date().timeIntervalSince(mtime) > Self.tmpSweepMinAgeSeconds {
+                    try? fm.removeItem(at: url)
+                }
                 continue
             }
             guard let vals = try? url.resourceValues(forKeys: Set(keys)),

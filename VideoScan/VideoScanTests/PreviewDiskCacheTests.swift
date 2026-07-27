@@ -230,22 +230,31 @@ struct PreviewDiskCacheTests {
 
     // MARK: - Prune (SCALE)
 
-    @Test("pruneNow under cap removes no payloads but sweeps tmp- orphans")
+    @Test("pruneNow under cap removes no payloads; sweeps only AGED tmp- orphans")
     func pruneUnderCapSweepsOrphansOnly() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let fm = FileManager.default
         // ~200 small dummy payloads (prune counts bytes; it never
         // decodes, so plain data files are honest stand-ins) + a
-        // handful of crashed-write orphans.
+        // handful of crashed-write orphans. The orphans get an mtime
+        // past tmpSweepMinAgeSeconds — the sweep is AGE-GATED (QA 🟡,
+        // 2026-07-26) so an in-flight store's fresh temp can't be
+        // deleted out from under its rename.
         for i in 0..<200 {
             try Data(repeating: 0xAB, count: 100)
                 .write(to: root.appendingPathComponent("payload\(i)-fast.jpg"))
         }
+        let staleDate = Date(timeIntervalSinceNow: -(PreviewDiskCache.tmpSweepMinAgeSeconds + 60))
         for i in 0..<5 {
-            try Data(repeating: 0xCD, count: 100)
-                .write(to: root.appendingPathComponent("tmp-orphan\(i)"))
+            let orphan = root.appendingPathComponent("tmp-orphan\(i)")
+            try Data(repeating: 0xCD, count: 100).write(to: orphan)
+            try fm.setAttributes([.modificationDate: staleDate], ofItemAtPath: orphan.path)
         }
+        // A FRESH tmp file — stand-in for a store that is mid-write
+        // right now. The sweep must leave it alone.
+        let inFlight = root.appendingPathComponent("tmp-inflight")
+        try Data(repeating: 0xEF, count: 100).write(to: inFlight)
 
         let cache = PreviewDiskCache(rootURL: root)
         cache.pruneNow()
@@ -253,8 +262,10 @@ struct PreviewDiskCacheTests {
         let remaining = try fm.contentsOfDirectory(atPath: root.path)
         #expect(remaining.filter { $0.hasSuffix(".jpg") }.count == 200,
                 "under-cap prune reaped live payloads")
-        #expect(remaining.allSatisfy { !$0.hasPrefix("tmp-") },
-                "crashed-write tmp orphans not swept")
+        #expect(remaining.allSatisfy { !$0.hasPrefix("tmp-orphan") },
+                "aged crashed-write tmp orphans not swept")
+        #expect(remaining.contains("tmp-inflight"),
+                "fresh tmp file reaped — an in-flight store's rename would have failed")
     }
 
     @Test("pruneNow over cap reaps oldest-first until back under sizeCapBytes")
