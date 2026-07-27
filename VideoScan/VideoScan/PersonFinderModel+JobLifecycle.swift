@@ -563,7 +563,7 @@ extension PersonFinderModel {
         job.appendLog("Log file: ~/Library/Logs/VideoScan/facedetect_\(safePerson).log")
         job.startElapsedTimer()
 
-        let prints = jobSettings.recognitionEngine == .vision ? faces.map(\.featurePrint) : []
+        let prints = Self.visionFeaturePrints(for: jobSettings.recognitionEngine, faces: faces)
         let refFilenames = faces.map(\.sourceFilename)
         let refCacheIdentifiers = Self.referenceCacheIdentifiers(
             referencePath: jobSettings.referencePath,
@@ -1338,6 +1338,23 @@ extension PersonFinderModel {
     }
 
     // MARK: - Session restore (issue #89, part 2)
+
+    /// Vision feature prints for the engines whose primary OR fallback pass
+    /// consumes them: `.vision` and `.hybrid`. Hybrid's FIRST pass is Vision
+    /// — the old `== .vision` gate handed hybrid an empty print array, so
+    /// its Vision pass could never match and every video fell straight
+    /// through to the fallback engine (codex post-merge review, #144).
+    /// The CoreML engines embed references through their own pipelines and
+    /// take no prints. Extracted so tests pin the exact function runJob uses.
+    nonisolated static func visionFeaturePrints(
+        for engine: RecognitionEngine,
+        faces: [ReferenceFace]
+    ) -> [VNFeaturePrintObservation] {
+        switch engine {
+        case .vision, .hybrid:   return faces.map(\.featurePrint)
+        case .arcface, .adaface: return []
+        }
+    }
 
     /// Build the on-disk descriptor for a finished job. Called from runScan
     /// at the .done transition and from any future "force re-save" path.
