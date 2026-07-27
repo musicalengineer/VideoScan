@@ -1,44 +1,59 @@
 // ConfirmPersonSheet.swift
-// Interactive UI for the Confirm-Person workflow. The user is shown
-// one candidate at a time — a thumbnail, the catalog signals that
-// surfaced it, and four rating buttons (Definitely / Likely / Unsure /
-// Unlikely). Each rating persists to ValidationLabelStore, and the
-// "positive" ratings (Definitely → confirmedByUserPeople, Likely →
-// suspectedPeople) also write back to the catalog so search lights up
-// immediately.
+// The UNIFIED Review session (feature/unified-review, Rick-approved
+// 2026-07-27 — docs/design/unified-review.md). One "Review <name>" entry
+// point walks a single session in two phases:
+//
+//   PHASE 1 — HOLDOUT (blind): the sealed holdout rows, presented with
+//   NO prediction machinery — no candidate scoring (prepareSetup does
+//   not run), no signalsView, no scores, no detected-person data. The
+//   pane renders ONLY from HoldoutReviewRow, a struct that structurally
+//   cannot carry a model opinion (pinned by HoldoutReviewQueueTests'
+//   blindness sensor). Yes/no answers write ONLY to the queue CSV
+//   (write-through per answer, atomic). Rick's eyes are the
+//   uncontaminated ground truth — POI-leakage contract, team-channel
+//   2026-07-25-1115. Resume: opening lands on the first unanswered
+//   actionable row; answered rows are revisitable via Back WITHIN the
+//   phase only.
+//
+//   TRANSITION — when no actionable holdout row remains (all answered,
+//   or the rest skipped/hidden), the session moves to the candidate
+//   setup pane: an understated holdout-status banner (same honest
+//   states the old done pane had) above the existing round-size picker.
+//   Candidate scoring runs HERE, lazily — never earlier (blindness
+//   gate, ReviewSessionPolicy.mayLoadCandidates; design note D1).
+//   "Continue Reviewing" back into skipped holdout rows PURGES all
+//   candidate state first (loaded-but-hidden is not allowed near blind
+//   rows).
+//
+//   PHASE 2 — CANDIDATES: pfConfirmRound output with signals + Score
+//   and the 4-tier Definitely/Likely/Cameo/No ratings. Each rating
+//   persists to ValidationLabelStore and the positive tiers write back
+//   to the catalog (Definitely → confirmedByUserPeople, Likely →
+//   suspectedPeople) so search lights up immediately. Back never
+//   crosses from here into the holdout rows (design note D2).
+//
+// WRITE-SINK CUSTODY: both answer handlers route through
+// ReviewWriteRouting.sink(item:answer:) — holdout yes/no may only reach
+// the sealed CSV, candidate ratings may only reach the validation
+// store + catalog, and a mismatched pairing is dropped with a fault
+// log, never coerced (UnifiedReviewSessionTests pins both directions).
+//
+// Sessions opened with no pending holdout queue (e.g. from
+// ConfirmationsView's "Confirm more") start directly at the setup pane
+// — the pre-unification Confirm flow, unchanged.
 //
 // Layout reference: CombineSheet / DeleteConfirmedJunkConfirmSheet —
 // modal sheet, fixed width, primary content on the left, action
-// affordances on the right.
-//
-// Rick 2026-06-16.
-//
-// HOLDOUT MODE (Rick 2026-07-25): the same sheet also hosts the blind
-// holdout review — the Review badge on a PersonCard opens it with a
-// non-nil holdoutQueue. In holdout mode the sheet is a different animal
-// under the same roof:
-//   • BLIND — none of the prediction machinery runs or renders. No
-//     candidate scoring (prepareSetup is never called), no signalsView,
-//     no scores, no detected-person data. The pane renders ONLY from
-//     HoldoutReviewRow, a struct that structurally cannot carry a model
-//     opinion (pinned by HoldoutReviewQueueTests' blindness sensor).
-//     Rick's eyes are the uncontaminated ground truth — POI-leakage
-//     contract, team-channel 2026-07-25-1115.
-//   • Output goes ONLY to the queue CSV (write-through per answer,
-//     atomic). ValidationLabelStore and catalogWriteback are skipped
-//     entirely — holdout answers must never touch model/candidate state.
-//   • Resume — opening lands on the first unanswered row; answered rows
-//     are skipped (Back can revisit/edit them).
+// affordances on the right. Rick 2026-06-16.
 //
 // HDD PERFORMANCE (fix/review-sheet-performance, 2026-07-26): review
 // media lives on the LaCie USB HDD. Three changes keep the pane usable
-// there:
+// there (now serving BOTH phases — one thumbnail + read-ahead path):
 //   • Thumbnails go through the ROUTED renderer (ReviewThumbnailRenderer
 //     → shared PreviewFrameRouter decision + AVF watchdog + ffmpeg
-//     fallback, midpoint framing when the catalog knows the duration)
-//     instead of the old private AVF-only generator. Catalog media
-//     metadata (container/codec/duration) is allowed under the blind
-//     contract — it is not detection/scoring data.
+//     fallback, midpoint framing when the catalog knows the duration).
+//     Catalog media metadata (container/codec/duration) is allowed under
+//     the blind contract — it is not detection/scoring data.
 //   • NO blocking I/O on the main actor: the per-navigation fileExists
 //     stat and the per-answer CSV reload+rewrite both run in background
 //     tasks; answers are optimistic (advance immediately) with writes
@@ -46,8 +61,9 @@
 //     write still merges onto fresh disk state inside
 //     HoldoutReviewQueue.recordAnswer (QA-gated semantic, unchanged).
 //   • Read-ahead + spindle keepalive (HoldoutReadAhead.swift) warm the
-//     next pending files and keep the LaCie from parking its heads
-//     between answers.
+//     next items and keep the LaCie from parking its heads between
+//     answers — in the candidate phase too (same prefetcher, same
+//     one-reader-at-a-time discipline).
 
 import AVKit
 import AppKit
@@ -66,7 +82,9 @@ private let holdoutSheetLog = Logger(subsystem: "Rick-Breen.VideoScan",
 struct ConfirmSheetTarget: Identifiable {
     let id = UUID()
     let profile: POIProfile
-    /// Non-nil → open in blind holdout-review mode on this queue.
+    /// Non-nil → the session begins with the blind holdout phase on
+    /// this queue (falls straight through to candidates if nothing is
+    /// actionable).
     let holdoutQueue: HoldoutReviewQueue?
 
     init(profile: POIProfile, holdoutQueue: HoldoutReviewQueue? = nil) {
@@ -78,11 +96,15 @@ struct ConfirmSheetTarget: Identifiable {
 struct ConfirmPersonSheet: View {
 
     let profile: POIProfile
-    /// Present ⇒ holdout mode. Used for mode detection, initial display
-    /// state, and the CSV location — the mutable working copy in
-    /// `holdout` is reloaded FRESH from disk in startHoldout(), never
-    /// seeded from this snapshot (stale-snapshot clobber, QA 2026-07-25).
+    /// Present ⇒ the session has a holdout portion. Used for mode
+    /// detection, initial display state, and the CSV location — the
+    /// mutable working copy in `holdout` is reloaded FRESH from disk in
+    /// startHoldout(), never seeded from this snapshot (stale-snapshot
+    /// clobber, QA 2026-07-25).
     var holdoutQueue: HoldoutReviewQueue? = nil
+    /// Summary-pane affordance: dismisses this sheet and opens the View
+    /// Confirmations dashboard (wired by PersonFinderView+People).
+    var onViewConfirmations: (() -> Void)? = nil
 
     @EnvironmentObject var personFinderModel: PersonFinderModel
     @EnvironmentObject var catalogModel: VideoScanModel
@@ -104,13 +126,23 @@ struct ConfirmPersonSheet: View {
     @State private var showSummary: Bool = false
     @State private var loadError: String?
 
-    /// Sheet phase. .setup shows the round-size picker and availability
-    /// stats; .labeling is the existing per-candidate review; .summary
-    /// is the end-of-round report. Rick 2026-06-16. Holdout mode never
-    /// enters .setup — it starts straight in .labeling (or .summary if
-    /// nothing is pending) since there is no scoring to configure.
+    /// Unified session phase. `.holdout` is the blind pane; `.setup` is
+    /// the transition/setup pane (holdout status banner + round-size
+    /// picker — candidate scoring runs on ENTRY here, never earlier);
+    /// `.labeling` is the per-candidate review; `.summary` is the
+    /// end-of-session report. Maps 1:1 onto ReviewSessionPhase (the
+    /// pure policy layer the sensors test) via `policyPhase`.
     @State private var phase: Phase = .setup
-    enum Phase { case setup, labeling, summary }
+    enum Phase { case holdout, setup, labeling, summary }
+
+    private var policyPhase: ReviewSessionPhase {
+        switch phase {
+        case .holdout:  return .holdout
+        case .setup:    return .candidateSetup
+        case .labeling: return .candidateLabeling
+        case .summary:  return .summary
+        }
+    }
 
     /// Stats from round assembly — shown in the setup pane.
     @State private var stats: ConfirmRoundStats?
@@ -120,8 +152,9 @@ struct ConfirmPersonSheet: View {
     @State private var roundSize: Int = 25
 
     /// Held during setup so we don't re-score the catalog on every
-    /// roundSize tick. Recomputed when the sheet appears; the picker
-    /// just slices off the front.
+    /// roundSize tick. Recomputed when the setup phase is entered; the
+    /// picker just slices off the front. PURGED whenever the session
+    /// re-enters the holdout phase (blindness gate, design note D1).
     @State private var fullCandidatePool: [PersonCandidateScore] = []
 
     private let controlK: Int = 5
@@ -145,7 +178,7 @@ struct ConfirmPersonSheet: View {
 
     // MARK: HDD-performance state (fix/review-sheet-performance)
 
-    /// True when thumbnail generation FAILED for the current row — shows
+    /// True when thumbnail generation FAILED for the current item — shows
     /// the placeholder instead of an eternal spinner.
     @State private var thumbnailFailed: Bool = false
     /// Background stat() for the current row (cancelled on navigation).
@@ -164,18 +197,18 @@ struct ConfirmPersonSheet: View {
     @State private var inFlightAnswerIds: Set<String> = []
     /// Catalog MEDIA metadata (container/codec/duration) by fullPath for
     /// the rows/candidates of this session — routing input for the
-    /// thumbnail renderer. Built once per session (one pass over
+    /// thumbnail renderer. Built once per phase entry (one pass over
     /// records), never in the view body. Media facts only — no
     /// detection/scoring data crosses into the blind pane.
     @State private var mediaMetaByPath: [String: HoldoutMediaMeta] = [:]
-    /// Read-ahead: warms the next pending files (head+tail bytes) and
-    /// pre-generates the next thumbnail, one file at a time. Created in
-    /// startHoldout (not at property init) so its render closure can
-    /// consult the model's shared negative cache — a known-bad NEXT row
-    /// must not re-attempt a full render on every navigation
-    /// (QA 2026-07-26 🟡 2).
+    /// Read-ahead: warms the next files (head+tail bytes) and
+    /// pre-generates the next thumbnail, one file at a time. Serves BOTH
+    /// phases. Created lazily (not at property init) so its render
+    /// closure can consult the model's shared negative cache — a
+    /// known-bad NEXT item must not re-attempt a full render on every
+    /// navigation (QA 2026-07-26 🟡 2).
     @State private var prefetcher: HoldoutReviewPrefetcher?
-    /// Keeps the LaCie spindle from head-parking between answers.
+    /// Keeps the LaCie spindle from head-parking between answers/ratings.
     @State private var keepalive = HoldoutSpindleKeepalive()
 
     // MARK: Prefilter state (fix/review-offline-prefilter)
@@ -216,10 +249,12 @@ struct ConfirmPersonSheet: View {
     /// reconnected volume could never come back.
     @State private var backstopInsertsSinceSweep: Set<String> = []
 
+    /// The session includes a holdout portion (regardless of the phase
+    /// currently showing).
     private var isHoldout: Bool { holdoutQueue != nil }
 
     /// Pending/answered counts adjusted for in-flight background writes,
-    /// so the header and done pane tick immediately on an answer (the
+    /// so the header and status banner tick immediately on an answer (the
     /// authoritative queue state follows when the write commits).
     private var holdoutEffectivePending: Int {
         max(0, (holdout?.pendingCount ?? 0) - inFlightAnswerIds.count)
@@ -232,6 +267,13 @@ struct ConfirmPersonSheet: View {
     private var holdoutActionablePending: Int {
         max(0, holdoutEffectivePending - offlineHiddenPending - unplayableHiddenPending)
     }
+    /// Banner completion state — true only when a queue actually LOADED
+    /// and every answer has durably committed. A load FAILURE has zero
+    /// effective pending too, and must not paint the banner green
+    /// (QA 2026-07-27 nit; also dedupes the expression).
+    private var holdoutFullyCommitted: Bool {
+        holdout != nil && holdoutEffectivePending == 0 && inFlightAnswerIds.isEmpty
+    }
     /// " · 3 offline, 2 unplayable hidden" — empty when nothing is hidden.
     private var holdoutHiddenSuffix: String {
         var parts: [String] = []
@@ -241,11 +283,10 @@ struct ConfirmPersonSheet: View {
         return " \u{00B7} " + parts.joined(separator: ", ") + " hidden"
     }
 
-    /// Seeds holdout-mode display state at construction so the FIRST
-    /// body evaluation already renders the right pane — with the old
-    /// onAppear-only initialization, phase started at .setup and the
-    /// first holdout render fell through to the done pane ("No review
-    /// queue found" flash). QA 2026-07-25 minor 3.
+    /// Seeds display state at construction so the FIRST body evaluation
+    /// already renders the right pane — with onAppear-only
+    /// initialization, phase started at .setup and the first holdout
+    /// render flashed the wrong pane (QA 2026-07-25 minor 3).
     ///
     /// The snapshot here is display-only; the authoritative working copy
     /// is reloaded from disk in startHoldout() (onAppear fires before
@@ -253,21 +294,23 @@ struct ConfirmPersonSheet: View {
     /// snapshot). The reload is NOT done in init because SwiftUI may
     /// re-run a view's init on every parent render — file I/O belongs in
     /// onAppear, which runs once per presentation.
-    init(profile: POIProfile, holdoutQueue: HoldoutReviewQueue? = nil) {
+    init(profile: POIProfile, holdoutQueue: HoldoutReviewQueue? = nil,
+         onViewConfirmations: (() -> Void)? = nil) {
         self.profile = profile
         self.holdoutQueue = holdoutQueue
+        self.onViewConfirmations = onViewConfirmations
         guard let snapshot = holdoutQueue else { return }
         // `_holdout` is the property wrapper's backing storage — writing
         // `State(initialValue:)` here ≈ a C++ member-initializer list;
         // after init you go through the wrapped property instead.
         _holdout = State(initialValue: snapshot)
         if let idx = snapshot.firstPendingIndex {
-            _phase = State(initialValue: .labeling)
+            _phase = State(initialValue: .holdout)
             _holdoutIndex = State(initialValue: idx)
             _holdoutNotes = State(initialValue: snapshot.rows[idx].notes)
-        } else {
-            _phase = State(initialValue: .summary)
         }
+        // No pending rows in the snapshot → stay at .setup; the status
+        // banner explains and the candidate phase begins immediately.
     }
 
     var body: some View {
@@ -299,30 +342,30 @@ struct ConfirmPersonSheet: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Image(systemName: isHoldout ? "eye.circle" : "person.crop.circle.badge.checkmark")
+            Image(systemName: phase == .holdout ? "eye.circle" : "person.crop.circle.badge.checkmark")
                 .font(.title2)
                 .foregroundStyle(.tint)
             VStack(alignment: .leading, spacing: 2) {
-                Text(isHoldout ? "Review \(profile.name) — holdout" : "Confirm \(profile.name)")
+                Text("Review \(profile.name)")
                     .font(.headline)
-                Text(isHoldout
-                     ? "Blind review — watch each video and answer. No hints or scores are shown; your eyes are the ground truth."
-                     : "Rate each candidate — your labels train the model and update the catalog.")
+                Text(headerSubtitle)
                     .font(.system(size: 11))
                     .foregroundColor(.secondary)
             }
             Spacer()
-            if isHoldout, let q = holdout {
+            if phase == .holdout, let q = holdout {
                 // Effective counts: an optimistically advanced answer
                 // ticks the header immediately even while its serialized
                 // background write is still in flight. Hidden rows are
-                // called out, never silently swallowed — e.g.
-                // "12 of 36 answered · 3 offline, 2 unplayable hidden".
-                Text("\(holdoutEffectiveAnswered) of \(q.rows.count) answered\(holdoutHiddenSuffix)")
+                // called out, never silently swallowed. The candidate
+                // COUNT is deliberately absent — knowing it would require
+                // running the scorer during the blind phase (design note
+                // D3), so the header only promises "candidates next".
+                Text("Holdout: \(holdoutEffectiveAnswered) of \(q.rows.count) answered\(holdoutHiddenSuffix)\(candidatePhaseFollows ? " \u{00B7} candidates next" : "")")
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(.secondary)
             } else if phase == .labeling && !candidates.isEmpty {
-                Text("\(currentIndex + 1) of \(candidates.count)")
+                Text("Candidate \(currentIndex + 1) of \(candidates.count)")
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(.secondary)
             }
@@ -331,48 +374,58 @@ struct ConfirmPersonSheet: View {
         .padding(.vertical, 14)
     }
 
+    private var headerSubtitle: String {
+        switch phase {
+        case .holdout:
+            return "Blind review — watch each video and answer. No hints or scores are shown; your eyes are the ground truth."
+        case .setup, .labeling, .summary:
+            return "Rate each candidate — your labels train the model and update the catalog."
+        }
+    }
+
+    /// Whether a candidate phase is still ahead of the blind phase —
+    /// true unless the catalog can't offer candidates at all (it always
+    /// can; kept as a seam for future gating).
+    private var candidatePhaseFollows: Bool { true }
+
     // MARK: - Content
 
     @ViewBuilder
     private var content: some View {
-        if isHoldout {
-            // Holdout content deliberately bypasses the setup/scoring
-            // panes and signalsView — see BLIND contract in the file
+        switch phase {
+        case .holdout:
+            // Blind pane — deliberately bypasses the setup/scoring panes
+            // and signalsView; see the phase-1 contract in the file
             // header comment.
-            switch phase {
-            case .labeling:
-                holdoutPane
-            default:
-                holdoutDonePane
-            }
-        } else {
-            switch phase {
-            case .setup:
+            holdoutPane
+        case .setup:
+            VStack(alignment: .leading, spacing: 0) {
+                holdoutStatusBanner
                 ConfirmSetupPane(
                     personName: profile.name,
                     stats: stats,
                     availOnline: fullCandidatePool.filter { $0.reachable }.count,
                     roundSize: $roundSize
                 )
-            case .labeling:
-                if candidates.isEmpty {
-                    emptyState
-                } else {
-                    let candidate = candidates[currentIndex]
-                    HStack(alignment: .top, spacing: 16) {
-                        thumbnailView(path: candidate.recordPath, filename: candidate.filename)
-                            .frame(width: 320)
-                        signalsView(for: candidate)
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.vertical, 12)
-                }
-            case .summary:
-                let summary = personFinderModel.validationLabels.roundSummary(
-                    for: profile.name, since: roundStart
-                )
-                ConfirmSummaryPane(personName: profile.name, summary: summary)
             }
+        case .labeling:
+            if candidates.isEmpty {
+                emptyState
+            } else {
+                let candidate = candidates[currentIndex]
+                HStack(alignment: .top, spacing: 16) {
+                    thumbnailView(path: candidate.recordPath, filename: candidate.filename)
+                        .frame(width: 320)
+                    signalsView(for: candidate)
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+            }
+        case .summary:
+            let summary = personFinderModel.validationLabels.roundSummary(
+                for: profile.name, since: roundStart
+            )
+            ConfirmSummaryPane(personName: profile.name, summary: summary)
         }
     }
 
@@ -483,9 +536,13 @@ struct ConfirmPersonSheet: View {
                 .help(rating.hint)
             }
             HStack {
+                // BACK-ACROSS-PHASES rule (design note D2): the policy
+                // layer says candidate index 0 has no Back — it must NOT
+                // cross into the answered holdout rows.
                 Button("Back") { goBack() }
                     .buttonStyle(.borderless)
-                    .disabled(currentIndex == 0)
+                    .disabled(!ReviewSessionPolicy.canGoBack(in: .candidateLabeling,
+                                                             index: currentIndex))
                     .help("Return to the previous candidate (after an accidental skip or to re-rate)")
                 Spacer()
                 Button("Skip") { advance() }
@@ -521,13 +578,18 @@ struct ConfirmPersonSheet: View {
 
     private var footer: some View {
         HStack {
-            if isHoldout {
-                if let err = holdoutSaveError {
-                    Label(err, systemImage: "exclamationmark.triangle.fill")
-                        .font(.system(size: 11))
-                        .foregroundColor(.red)
-                        .lineLimit(2)
-                } else if holdoutAnsweredThisSession > 0 {
+            // Errors show in EVERY phase (QA 2026-07-27 🟡 E): a
+            // serialized CSV write can fail after the user has already
+            // moved into the candidate phase — the failure must not be
+            // silenced by the phase switch. (The badge center still gets
+            // the durable copy for post-dismissal failures.)
+            if let err = holdoutSaveError ?? loadError {
+                Label(err, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 11))
+                    .foregroundColor(.red)
+                    .lineLimit(2)
+            } else if phase == .holdout || (isHoldout && phase == .setup) {
+                if holdoutAnsweredThisSession > 0 {
                     Text("\(holdoutAnsweredThisSession) answered this session \u{00B7} saved to CSV")
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
@@ -541,39 +603,48 @@ struct ConfirmPersonSheet: View {
                     .foregroundColor(.secondary)
             }
             Spacer()
-            if isHoldout {
-                // Every answer is already on disk — Close never loses work.
-                Button(phase == .summary ? "Done" : "Close") { dismiss() }
+            switch phase {
+            case .holdout:
+                // Every answer is already on disk — Close never loses
+                // work; reopening resumes at the first unanswered row.
+                Button("Close") { dismiss() }
+                    .buttonStyle(.bordered)
+                    .keyboardShortcut(.cancelAction)
+            case .setup:
+                Button("Cancel") { dismiss() }
+                    .buttonStyle(.bordered)
+                    .keyboardShortcut(.cancelAction)
+                Button("Begin \u{2192}") { startRound() }
                     .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(phase == .summary ? .defaultAction : .cancelAction)
-            } else {
-                switch phase {
-                case .setup:
-                    Button("Cancel") { dismiss() }
-                        .buttonStyle(.bordered)
-                        .keyboardShortcut(.cancelAction)
-                    Button("Begin \u{2192}") { startRound() }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(stats == nil || (stats?.candidatesSurfaced ?? 0) == 0)
-                        .keyboardShortcut(.return, modifiers: [])
-                case .labeling:
-                    Button("Finish & Show Summary") { phase = .summary }
-                        .disabled(roundLabels.isEmpty)
-                    Button(roundLabels.isEmpty ? "Cancel" : "Save & Close") { dismiss() }
-                        .buttonStyle(.bordered)
-                        .keyboardShortcut(.cancelAction)
-                case .summary:
-                    Button("Done") { dismiss() }
-                        .buttonStyle(.borderedProminent)
-                        .keyboardShortcut(.return, modifiers: [])
+                    .disabled(stats == nil || (stats?.candidatesSurfaced ?? 0) == 0)
+                    .keyboardShortcut(.return, modifiers: [])
+            case .labeling:
+                Button("Finish & Show Summary") { phase = .summary }
+                    .disabled(roundLabels.isEmpty)
+                Button(roundLabels.isEmpty ? "Cancel" : "Save & Close") { dismiss() }
+                    .buttonStyle(.bordered)
+                    .keyboardShortcut(.cancelAction)
+            case .summary:
+                if onViewConfirmations != nil {
+                    // Completion-screen path to the cumulative dashboard
+                    // (design note D7) — "N confirmed this session" is
+                    // the summary pane above; this jumps to the totals.
+                    Button("View Confirmations\u{2026}") {
+                        dismiss()
+                        onViewConfirmations?()
+                    }
+                    .buttonStyle(.bordered)
                 }
+                Button("Done") { dismiss() }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.return, modifiers: [])
             }
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)
     }
 
-    // MARK: - Holdout panes
+    // MARK: - Holdout pane (phase 1)
 
     /// The blind review pane. Renders ONLY from HoldoutReviewRow —
     /// thumbnail/open/reveal, a yes/no question, and notes. Nothing else.
@@ -604,7 +675,10 @@ struct ConfirmPersonSheet: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 12)
         } else {
-            holdoutDonePane
+            // Defensive only — navigation always lands on a valid index
+            // or transitions to the setup pane. Render the status banner
+            // so a broken queue still explains itself.
+            VStack { holdoutStatusBanner; Spacer() }
         }
     }
 
@@ -669,7 +743,7 @@ struct ConfirmPersonSheet: View {
             HStack {
                 Button("Back") { holdoutGo(to: holdoutIndex - 1) }
                     .buttonStyle(.borderless)
-                    .disabled(holdoutIndex == 0)
+                    .disabled(!ReviewSessionPolicy.canGoBack(in: .holdout, index: holdoutIndex))
                     .help("Revisit the previous video (answered ones can be re-answered)")
                 Spacer()
                 Button("Skip") { holdoutSkip() }
@@ -680,78 +754,78 @@ struct ConfirmPersonSheet: View {
         }
     }
 
-    private var holdoutDonePane: some View {
-        // Effective counts throughout: a just-answered last row shows
-        // "all answered" immediately, even while its serialized write is
-        // still committing in the background. But the COMPLETION claim
-        // ("the CSV is complete") is only made once every in-flight
-        // write has actually committed — until then the honest state is
-        // "still saving" (QA 2026-07-26 🟠 c). Hidden (offline/
-        // unplayable) rows get their own honest branch: they are still
-        // pending in the CSV, so "complete" would be a lie.
-        let fullyCommitted = holdoutEffectivePending == 0 && inFlightAnswerIds.isEmpty
-        let allRemainingHidden = holdoutEffectivePending > 0 && holdoutActionablePending == 0
-        return VStack(spacing: 10) {
-            Image(systemName: fullyCommitted ? "checkmark.seal.fill"
-                  : (allRemainingHidden ? "externaldrive.badge.exclamationmark" : "hourglass"))
-                .font(.system(size: 36))
-                .foregroundColor(fullyCommitted ? .green : .orange)
-            if let q = holdout {
-                if fullyCommitted {
-                    Text("All \(q.rows.count) videos answered")
-                        .font(.headline)
-                    Text("The review CSV is complete \u{2014} nothing further to do here. The grading side takes it from the file; your answers never touch the model from this app.")
-                        .font(.callout)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 440)
-                } else if holdoutEffectivePending == 0 {
-                    Text("All \(q.rows.count) videos answered")
-                        .font(.headline)
-                    Text("Finishing saving \(inFlightAnswerIds.count) answer\(inFlightAnswerIds.count == 1 ? "" : "s")\u{2026} This view updates when the CSV write completes.")
-                        .font(.callout)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 440)
-                } else if allRemainingHidden {
-                    // All-hidden edge: every reachable, playable video is
-                    // answered — what's left can't be presented.
-                    Text("All reviewable videos answered")
-                        .font(.headline)
-                    Text(allHiddenExplanation)
-                        .font(.callout)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 440)
-                } else {
-                    Text("\(holdoutActionablePending) still pending\(holdoutHiddenSuffix)")
-                        .font(.headline)
-                    Text("You skipped some \u{2014} the Review badge stays up until every row has an answer. Reopen anytime; you'll land on the first unanswered video.")
-                        .font(.callout)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 440)
-                    Button("Continue Reviewing") {
-                        // Fresh sweep per Continue click (a drive may have
-                        // been reconnected while the pane sat open).
-                        startOfflineSweep()
-                        if let idx = firstActionableIndex() {
-                            holdoutGo(to: idx)
-                            phase = .labeling
+    // MARK: - Holdout status banner (transition pane, design note D6)
+
+    /// Understated banner shown above the candidate setup pane when the
+    /// session had a holdout portion. Reuses the honest states the old
+    /// done pane had — a just-answered last row shows "done" immediately,
+    /// but the COMPLETION claim ("saved to the review file") is only made
+    /// once every in-flight write has committed (QA 2026-07-26 🟠 c);
+    /// hidden (offline/unplayable) rows get their own honest branch.
+    @ViewBuilder
+    private var holdoutStatusBanner: some View {
+        if isHoldout {
+            let fullyCommitted = holdoutFullyCommitted
+            let allRemainingHidden = holdoutEffectivePending > 0 && holdoutActionablePending == 0
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: fullyCommitted ? "checkmark.seal.fill"
+                      : (allRemainingHidden ? "externaldrive.badge.exclamationmark" : "hourglass"))
+                    .font(.system(size: 18))
+                    .foregroundColor(fullyCommitted ? .green : .orange)
+                VStack(alignment: .leading, spacing: 3) {
+                    if let q = holdout {
+                        if fullyCommitted {
+                            Text("Holdout review done \u{2014} all \(q.rows.count) answered and saved to the review file.")
+                                .font(.system(size: 12).weight(.medium))
+                            Text("Continuing with new candidates below. Your blind answers never touch the model from this app.")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                        } else if holdoutEffectivePending == 0 {
+                            Text("Holdout review done \u{2014} finishing saving \(inFlightAnswerIds.count) answer\(inFlightAnswerIds.count == 1 ? "" : "s")\u{2026}")
+                                .font(.system(size: 12).weight(.medium))
+                            Text("Continuing with new candidates below; this note updates when the save completes.")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                        } else if allRemainingHidden {
+                            Text("All reviewable holdout videos answered\(holdoutHiddenSuffix).")
+                                .font(.system(size: 12).weight(.medium))
+                            Text(allHiddenExplanation)
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                        } else {
+                            Text("\(holdoutActionablePending) holdout video\(holdoutActionablePending == 1 ? "" : "s") still pending\(holdoutHiddenSuffix).")
+                                .font(.system(size: 12).weight(.medium))
+                            Text("The Review badge stays up until every row has an answer \u{2014} finish now, or continue with new candidates below and come back anytime.")
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
+                            Button("Continue Reviewing") { resumeHoldout() }
+                                .buttonStyle(.bordered)
+                                .controlSize(.small)
+                                .padding(.top, 2)
+                        }
+                    } else {
+                        Text("No review queue could be loaded.")
+                            .font(.system(size: 12).weight(.medium))
+                        if let err = holdoutSaveError {
+                            Text(err)
+                                .font(.system(size: 11))
+                                .foregroundColor(.secondary)
                         }
                     }
-                    .buttonStyle(.bordered)
                 }
-            } else {
-                Text("No review queue found")
-                    .font(.headline)
+                Spacer()
             }
+            .padding(10)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill((holdoutFullyCommitted ? Color.green : Color.orange).opacity(0.10))
+            )
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
         }
-        .padding(40)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// Body copy for the all-hidden done pane, naming BOTH reasons with
+    /// Banner copy for the all-hidden state, naming BOTH reasons with
     /// their remedies — offline is recoverable by reconnecting; unplayable
     /// needs conversion first.
     private var allHiddenExplanation: String {
@@ -768,10 +842,10 @@ struct ConfirmPersonSheet: View {
 
     // MARK: - Holdout lifecycle
 
-    /// Entry point in holdout mode (replaces prepareSetup). No scoring,
-    /// no ValidationLabelStore, no catalog reads beyond nothing at all —
-    /// reload the queue fresh from disk and position onto the first
-    /// unanswered row.
+    /// Entry point when the session has a holdout portion. No scoring,
+    /// no ValidationLabelStore — reload the queue fresh from disk and
+    /// position onto the first unanswered actionable row. If nothing is
+    /// actionable, fall straight through to the candidate transition.
     ///
     /// The working copy still comes from disk, not from the
     /// discovery-time snapshot in `holdoutQueue`, so the sheet shows the
@@ -780,13 +854,13 @@ struct ConfirmPersonSheet: View {
     /// reload: recordAnswer merges each answer onto a fresh disk load
     /// (QA 2026-07-25 gate finding 1), so even a stale working copy
     /// cannot clobber external edits. On load failure we surface the
-    /// error and show the done pane — never fall back to the snapshot.
-    /// QA 2026-07-25 blocker; regression tests:
+    /// error and move to the transition pane — never fall back to the
+    /// snapshot. QA 2026-07-25 blocker; regression tests:
     /// regression_staleSnapshotOpenPreservesExternalAnswer,
     /// regression_externalEditDuringOpenSessionSurvivesRecordAnswer.
     private func startHoldout() {
         guard let snapshot = holdoutQueue else {
-            phase = .summary
+            transitionToCandidates()
             return
         }
         do {
@@ -799,16 +873,7 @@ struct ConfirmPersonSheet: View {
             // records (media facts only — the blind pane never sees
             // detection/scoring data).
             buildMediaMeta(for: Set(fresh.rows.map(\.fullPath)))
-            // Prefetch render closure guards on the shared negative
-            // cache — same gate as the interactive path — but does NOT
-            // record failures (best-effort; nil is not a fact about the
-            // file). QA 2026-07-26 🟡 2.
-            let failureStore = catalogModel.thumbnailFailureStore
-            prefetcher = HoldoutReviewPrefetcher(
-                renderThumbnail: { path, meta in
-                    guard !failureStore.isKnownFailure(atPath: path) else { return nil }
-                    return await ReviewThumbnailRenderer.renderOrNil(path: path, meta: meta)
-                })
+            ensurePrefetcher()
             // Prefilter (Rick 2026-07-26: never present offline or
             // unplayable videos). Unplayable: pure catalog facts, zero
             // I/O. Offline: a synchronous VOLUME-level precheck here —
@@ -824,19 +889,61 @@ struct ConfirmPersonSheet: View {
             recomputeHiddenCounts()
             startOfflineSweep()
             if let idx = firstActionableIndex() {
-                phase = .labeling
-                // Spindle keepalive for the whole labeling session — see
+                phase = .holdout
+                // Spindle keepalive for the whole session — see
                 // HoldoutSpindleKeepalive for the head-park rationale.
                 keepalive.start()
                 holdoutGo(to: idx)
             } else {
-                phase = .summary
+                transitionToCandidates()
             }
         } catch {
             holdout = nil
             holdoutSaveError = "Could not reload review queue: \(error.localizedDescription)"
-            phase = .summary
+            transitionToCandidates()
         }
+    }
+
+    // MARK: - Phase transitions (unified session)
+
+    /// The holdout → candidates handoff: enters the setup pane and runs
+    /// the candidate scorer THERE, lazily — the blindness gate's one
+    /// legal loading point (design note D1). Also the entry path for
+    /// sessions with no holdout portion at all (startHoldout falls
+    /// through here on empty/failed queues).
+    private func transitionToCandidates() {
+        phase = .setup
+        prepareSetup()
+    }
+
+    /// "Continue Reviewing" — back into the skipped holdout rows. PURGES
+    /// candidate state first (ReviewSessionPolicy.mustPurgeCandidates):
+    /// loaded-but-hidden prediction data is not allowed to coexist with
+    /// presentable blind rows; the ~1–2 s re-score on the next
+    /// transition is the price of the hard guarantee.
+    private func resumeHoldout() {
+        // Fresh sweep per Continue click (a drive may have been
+        // reconnected while the pane sat open).
+        startOfflineSweep()
+        guard let idx = firstActionableIndex() else { return }
+        if ReviewSessionPolicy.mustPurgeCandidates(entering: .holdout) {
+            fullCandidatePool = []
+            stats = nil
+            candidates = []
+            currentIndex = 0
+            // REBUILD the media-metadata map from the queue rows alone
+            // (QA 2026-07-27 🟠 A): the candidate-phase entries' KEYS —
+            // which files the scorer surfaced — are themselves
+            // model-derived state, and retaining them into the blind
+            // phase would violate the never-LOADED bar. merge:false
+            // resets the map before refilling from holdout rows only.
+            if let q = holdout {
+                buildMediaMeta(for: Set(q.rows.map(\.fullPath)))
+            }
+        }
+        phase = .holdout
+        keepalive.start()
+        holdoutGo(to: idx)
     }
 
     // MARK: - Offline / unplayable prefilter
@@ -883,8 +990,8 @@ struct ConfirmPersonSheet: View {
             recomputeHiddenCounts()
             // If the row on screen just turned out to be offline, honor
             // "never present an offline video" — move along (or to the
-            // done pane if nothing actionable remains).
-            if phase == .labeling, let qq = holdout,
+            // candidate transition if nothing actionable remains).
+            if phase == .holdout, let qq = holdout,
                qq.rows.indices.contains(holdoutIndex),
                offlineExcludedPaths.contains(qq.rows[holdoutIndex].fullPath),
                qq.rows[holdoutIndex].isPending {
@@ -944,11 +1051,11 @@ struct ConfirmPersonSheet: View {
         unplayableHiddenPending = counts.unplayable
     }
 
-    /// Navigate to a row: reset the thumbnail, prefill the notes draft,
-    /// and kick off the background stat + thumbnail load. NO synchronous
-    /// file I/O here — a fileExists against a spun-down USB HDD can
-    /// stall the main thread for seconds, which was navigation bug #2 of
-    /// the LaCie review slowness (2026-07-26).
+    /// Navigate to a holdout row: reset the thumbnail, prefill the notes
+    /// draft, and kick off the background stat + thumbnail load. NO
+    /// synchronous file I/O here — a fileExists against a spun-down USB
+    /// HDD can stall the main thread for seconds, which was navigation
+    /// bug #2 of the LaCie review slowness (2026-07-26).
     private func holdoutGo(to idx: Int) {
         guard let q = holdout, q.rows.indices.contains(idx) else { return }
         thumbnailLoadTask?.cancel()
@@ -996,7 +1103,7 @@ struct ConfirmPersonSheet: View {
 
     /// Record yes/no + notes for the current row. Still write-through —
     /// every answer is durably in the CSV moments after the click — but
-    /// the CSV reload+rewrite now runs OFF the main actor (bug #2:
+    /// the CSV reload+rewrite runs OFF the main actor (bug #2:
     /// synchronous Data(contentsOf:) + atomic rewrite per answer stalled
     /// the UI on slow disks). The UI advances optimistically; writes are
     /// chained so they execute strictly one at a time in click order
@@ -1007,6 +1114,18 @@ struct ConfirmPersonSheet: View {
     private func holdoutAnswer(_ confirm: String) {
         guard let q = holdout, q.rows.indices.contains(holdoutIndex) else { return }
         let row = q.rows[holdoutIndex]
+        // WRITE-SINK CUSTODY: a blind answer may only route to the
+        // sealed CSV. The router returning anything else means a wiring
+        // bug — drop the write loudly, never coerce
+        // (UnifiedReviewSessionTests custody sensors).
+        guard ReviewWriteRouting.sink(for: .holdout(row),
+                                      answer: .holdoutConfirm(confirm)) == .sealedHoldoutCSV else {
+            holdoutSheetLog.fault("custody: holdout answer refused a non-CSV sink — dropped")
+            // Visible to Rick, not just Console (QA 2026-07-27 🟡 D) —
+            // a future wiring bug must not present as a dead button.
+            holdoutSaveError = "Internal safety check refused to save this answer (nothing was written). Please tell Claude — this is a wiring bug."
+            return
+        }
         let notes = holdoutNotes
         let snapshot = q          // Sendable value copy for the writer
         let wasPending = row.isPending
@@ -1100,13 +1219,14 @@ struct ConfirmPersonSheet: View {
 
     /// Called right after an answer is enqueued (or a Skip) — the current
     /// row is either in flight or deliberately left pending; move to the
-    /// next actionable one.
+    /// next actionable one, or hand the session over to the candidate
+    /// phase when the blind portion is done.
     private func holdoutAdvance() {
         guard let q = holdout else { return }
         if let next = nextActionableIndex(after: holdoutIndex, in: q) {
             holdoutGo(to: next)
         } else {
-            phase = .summary
+            transitionToCandidates()
         }
     }
 
@@ -1115,24 +1235,23 @@ struct ConfirmPersonSheet: View {
         if let next = nextActionableIndex(after: holdoutIndex, in: q) {
             holdoutGo(to: next)
         } else {
-            // Nothing else pending — show the "still pending" done pane
-            // (this row remains unanswered by choice).
-            phase = .summary
+            // Nothing else actionable — this row remains unanswered by
+            // choice (resume lands here next open); on to candidates.
+            transitionToCandidates()
         }
     }
 
-    /// Build the fullPath → media-metadata map for this session's files
-    /// in ONE pass over the catalog (never per navigation, never in a
-    /// view body). Files not in the catalog simply have no entry — the
+    /// Build the fullPath → media-metadata map for the given files in
+    /// ONE pass over the catalog (never per navigation, never in a view
+    /// body). Files not in the catalog simply have no entry — the
     /// renderer then takes the shared default (AVF watchdog + ffmpeg
-    /// fallback) path.
-    private func buildMediaMeta(for paths: Set<String>) {
-        guard !paths.isEmpty else {
-            mediaMetaByPath = [:]
-            return
-        }
-        var map: [String: HoldoutMediaMeta] = [:]
-        map.reserveCapacity(paths.count)
+    /// fallback) path. `merge:` keeps the holdout rows' entries alive
+    /// when the candidate phase adds its own.
+    private func buildMediaMeta(for paths: Set<String>, merge: Bool = false) {
+        if !merge { mediaMetaByPath = [:] }
+        guard !paths.isEmpty else { return }
+        var map: [String: HoldoutMediaMeta] = mediaMetaByPath
+        map.reserveCapacity(map.count + paths.count)
         for rec in catalogModel.records where paths.contains(rec.fullPath) {
             map[rec.fullPath] = HoldoutMediaMeta(
                 container: rec.container,
@@ -1143,43 +1262,93 @@ struct ConfirmPersonSheet: View {
         mediaMetaByPath = map
     }
 
-    /// Queue read-ahead for the next few pending rows (holdout mode
-    /// only). Called from the thumbnail-load completion so the disk sees
-    /// strictly one reader at a time — the prefetcher additionally
-    /// serializes its own batches internally.
-    private func scheduleHoldoutPrefetch() {
-        guard isHoldout, let q = holdout, phase == .labeling else { return }
-        var entries: [HoldoutReviewPrefetcher.Entry] = []
-        let n = q.rows.count
-        guard n > 0 else { return }
-        var i = holdoutIndex
-        for _ in 0..<max(n - 1, 0) {
-            i = (i + 1) % n
-            let r = q.rows[i]
-            // Only warm rows the user can actually be shown — hidden
-            // (offline/unplayable) rows would waste the HDD's time.
-            guard HoldoutNavigation.isActionable(
-                r, inFlight: inFlightAnswerIds,
-                offlineExcluded: offlineExcludedPaths,
-                unplayableExcluded: unplayableExcludedPaths) else { continue }
-            entries.append(HoldoutReviewPrefetcher.Entry(
-                path: r.fullPath,
-                meta: mediaMetaByPath[r.fullPath],
-                // Pre-decode a thumbnail only for the NEXT item; bytes
-                // warming covers the rest of the window.
-                wantsThumbnail: entries.isEmpty))
-            if entries.count >= HoldoutReviewPrefetcher.lookahead { break }
-        }
-        if !entries.isEmpty { prefetcher?.schedule(entries: entries) }
+    /// Create the shared read-ahead worker (both phases) if it doesn't
+    /// exist yet. The render closure guards on the model's shared
+    /// negative cache — same gate as the interactive path — but does NOT
+    /// record failures (best-effort; nil is not a fact about the file).
+    /// QA 2026-07-26 🟡 2.
+    private func ensurePrefetcher() {
+        guard prefetcher == nil else { return }
+        let failureStore = catalogModel.thumbnailFailureStore
+        prefetcher = HoldoutReviewPrefetcher(
+            renderThumbnail: { path, meta in
+                guard !failureStore.isKnownFailure(atPath: path) else { return nil }
+                return await ReviewThumbnailRenderer.renderOrNil(path: path, meta: meta)
+            })
     }
 
-    // MARK: - Round lifecycle
+    /// Queue read-ahead for the next few items of the CURRENT phase —
+    /// ONE path for both (design note: one thumbnail + read-ahead
+    /// pipeline). Called from the thumbnail-load completion so the disk
+    /// sees strictly one reader at a time — the prefetcher additionally
+    /// serializes its own batches internally.
+    private func schedulePrefetch() {
+        guard let prefetcher else { return }
+        var entries: [HoldoutReviewPrefetcher.Entry] = []
+        switch phase {
+        case .holdout:
+            guard let q = holdout else { return }
+            let n = q.rows.count
+            guard n > 0 else { return }
+            var i = holdoutIndex
+            for _ in 0..<max(n - 1, 0) {
+                i = (i + 1) % n
+                let r = q.rows[i]
+                // Only warm rows the user can actually be shown — hidden
+                // (offline/unplayable) rows would waste the HDD's time.
+                guard HoldoutNavigation.isActionable(
+                    r, inFlight: inFlightAnswerIds,
+                    offlineExcluded: offlineExcludedPaths,
+                    unplayableExcluded: unplayableExcludedPaths) else { continue }
+                entries.append(HoldoutReviewPrefetcher.Entry(
+                    path: r.fullPath,
+                    meta: mediaMetaByPath[r.fullPath],
+                    // Pre-decode a thumbnail only for the NEXT item; bytes
+                    // warming covers the rest of the window.
+                    wantsThumbnail: entries.isEmpty))
+                if entries.count >= HoldoutReviewPrefetcher.lookahead { break }
+            }
+        case .labeling:
+            // Candidate walk is LINEAR (no wrap — matches navigation).
+            var i = currentIndex + 1
+            while i < candidates.count && entries.count < HoldoutReviewPrefetcher.lookahead {
+                let c = candidates[i]
+                entries.append(HoldoutReviewPrefetcher.Entry(
+                    path: c.recordPath,
+                    meta: mediaMetaByPath[c.recordPath],
+                    wantsThumbnail: entries.isEmpty))
+                i += 1
+            }
+        case .setup, .summary:
+            return
+        }
+        if !entries.isEmpty { prefetcher.schedule(entries: entries) }
+    }
+
+    // MARK: - Candidate round lifecycle (phase 2)
 
     private func prepareSetup() {
+        // BLINDNESS GATE (design note D1): candidate scoring may not run
+        // while any blind row can still be presented. This guard bites in
+        // production — a future caller wiring prepareSetup into the
+        // holdout phase gets a refusal + fault log, not a quiet leak.
+        guard ReviewSessionPolicy.mayLoadCandidates(in: policyPhase) else {
+            holdoutSheetLog.fault("blindness gate: prepareSetup refused during the holdout phase")
+            return
+        }
         roundStart = Date()
         // Score in the background — for 16k records this is ~1-2 sec.
         // Keep the @MainActor scope clean by hopping out and back.
         Task { @MainActor in
+            // Second gate INSIDE the task (QA 2026-07-27 🟡 C): between
+            // scheduling and execution the user can click "Continue
+            // Reviewing" — without this, the scorer would still RUN
+            // during the blind phase (its result discarded below, but
+            // the work itself is forbidden, not just the storage).
+            guard ReviewSessionPolicy.mayLoadCandidates(in: policyPhase) else {
+                holdoutSheetLog.info("blindness gate: candidate scoring skipped — session re-entered the holdout phase before the scorer started")
+                return
+            }
             let already = Set(personFinderModel.validationLabels
                 .labeledByPath(for: profile.name).keys)
             var rng = SystemRandomNumberGenerator()
@@ -1191,6 +1360,13 @@ struct ConfirmPersonSheet: View {
                 alreadyLabeled: already,
                 rng: &rng
             )
+            // The user may have clicked "Continue Reviewing" while the
+            // scorer ran — candidate state is forbidden near blind rows,
+            // so a late-landing result is discarded, not stored.
+            guard ReviewSessionPolicy.mayLoadCandidates(in: policyPhase) else {
+                holdoutSheetLog.info("blindness gate: discarded candidate scores that landed after re-entering the holdout phase")
+                return
+            }
             self.fullCandidatePool = result.candidates
             self.stats = result.stats
             // Default to a sensible round size if 25 isn't reachable.
@@ -1208,14 +1384,28 @@ struct ConfirmPersonSheet: View {
         currentIndex = 0
         phase = .labeling
         // Media metadata for thumbnail routing (confirm mode reads the
-        // catalog anyway, so this leaks nothing new).
-        buildMediaMeta(for: Set(candidates.map(\.recordPath)))
+        // catalog anyway, so this leaks nothing new). Merged so the
+        // holdout rows' entries survive for a later "Continue Reviewing".
+        buildMediaMeta(for: Set(candidates.map(\.recordPath)), merge: true)
+        ensurePrefetcher()
+        keepalive.start()
         if !candidates.isEmpty {
+            keepalive.setCurrentPath(candidates[0].recordPath)
             loadThumbnail(path: candidates[0].recordPath)
         }
     }
 
     private func apply(rating: ConfirmRating, to candidate: PersonCandidateScore) {
+        // WRITE-SINK CUSTODY: a candidate rating may only route to the
+        // validation store + catalog — never the sealed CSV. Same drop-
+        // loudly contract as the holdout side.
+        guard ReviewWriteRouting.sink(for: .candidate(candidate),
+                                      answer: .rating(rating)) == .validationStoreAndCatalog else {
+            holdoutSheetLog.fault("custody: candidate rating refused a non-validation sink — dropped")
+            // Visible to Rick, not just Console (QA 2026-07-27 🟡 D).
+            loadError = "Internal safety check refused to save this rating (nothing was written). Please tell Claude — this is a wiring bug."
+            return
+        }
         // Persist label
         personFinderModel.validationLabels.record(
             recordPath: candidate.recordPath,
@@ -1274,8 +1464,8 @@ struct ConfirmPersonSheet: View {
             }
             catalogModel.saveCatalogDebounced()
         case .none:
-            // Legacy Unsure/Unlikely — no catalog mutation. Label is
-            // still in the sidecar for training-data purposes.
+            // Cameo / legacy Unsure/Unlikely — no catalog mutation.
+            // Label is still in the sidecar for training-data purposes.
             break
         }
     }
@@ -1291,9 +1481,15 @@ struct ConfirmPersonSheet: View {
     private func advance() {
         thumbnailLoadTask?.cancel()
         thumbnail = nil
-        if currentIndex + 1 < candidates.count {
-            currentIndex += 1
-            loadThumbnail(path: candidates[currentIndex].recordPath)
+        // Same LINEAR walk the prefetcher and the pure core use — a
+        // skipped candidate does not come back around (pre-unification
+        // semantic, pinned by nav_linearPolicyNeverWraps).
+        if let next = HoldoutNavigation.nextIndex(
+            after: currentIndex, count: candidates.count, wraps: false,
+            isActionable: { _ in true }) {
+            currentIndex = next
+            keepalive.setCurrentPath(candidates[next].recordPath)
+            loadThumbnail(path: candidates[next].recordPath)
         } else {
             // Out of candidates — show the summary automatically
             phase = .summary
@@ -1309,14 +1505,19 @@ struct ConfirmPersonSheet: View {
         // double-counting in the summary. The label sidecar's most-
         // recent-wins semantics handles the duplicate-label case
         // cleanly on the next .apply call.
-        guard currentIndex > 0 else { return }
+        //
+        // NEVER crosses into the holdout rows — canGoBack is false at
+        // index 0 regardless of holdout history (design note D2).
+        guard ReviewSessionPolicy.canGoBack(in: .candidateLabeling,
+                                            index: currentIndex) else { return }
         let prevPath = candidates[currentIndex - 1].recordPath
         if let last = roundLabels.last, last.path == prevPath {
             roundLabels.removeLast()
         }
         thumbnailLoadTask?.cancel()
         currentIndex -= 1
-        loadThumbnail(path: candidates[currentIndex].recordPath)
+        keepalive.setCurrentPath(prevPath)
+        loadThumbnail(path: prevPath)
     }
 
     // MARK: - Thumbnail loading
@@ -1335,7 +1536,7 @@ struct ConfirmPersonSheet: View {
         // Read-ahead may have pre-decoded this exact frame — instant.
         if let cg = prefetcher?.cachedThumbnail(for: path) {
             thumbnail = NSImage(cgImage: cg, size: .zero)
-            scheduleHoldoutPrefetch()
+            schedulePrefetch()
             return
         }
         let meta = mediaMetaByPath[path]
@@ -1355,7 +1556,7 @@ struct ConfirmPersonSheet: View {
             }
             // Start read-ahead only once the current item's disk work is
             // done — one reader at a time keeps the HDD sequential.
-            scheduleHoldoutPrefetch()
+            schedulePrefetch()
         }
     }
 
