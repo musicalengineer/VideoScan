@@ -159,6 +159,72 @@ struct PreviewDiskCacheFilmstripTests {
         #expect(contents.isEmpty, "hostile stores must write nothing, found: \(contents)")
     }
 
+    /// Codex adversarial finding #40 (2026-07-27), our equivalent of
+    /// their RED oversizedOffsetDoesNotTrapOrPublishCacheFiles: a HUGE
+    /// but FINITE offset passed the old isFinite guard and the
+    /// `Int((offset * 1000).rounded())` conversion SIGTRAPs past
+    /// ~9.2e18. Store must bound offsets to the plan's sane-duration
+    /// ceiling — no trap, no cache files published — and the parser
+    /// must reject the same range on READ so a hand-crafted filename
+    /// can't push an insane timestamp downstream either.
+    @Test("oversized finite offsets: store aborts without trap or files; parse rejects hand-crafted huge offsetMillis")
+    func oversizedOffsetDoesNotTrapOrPublishCacheFiles() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cache = PreviewDiskCache(rootURL: root)
+        let img = PreviewTestImages.twoTone()
+        let ceiling = PreviewBestFramePlan.maxSaneDurationSeconds
+
+        // WRITE side — the trap inputs. Reaching the #expect at all is
+        // the no-SIGTRAP proof.
+        cache.storeFilmstrip([(Double.greatestFiniteMagnitude, img)],
+                             path: "/v/huge.mkv", mtime: 1, size: 1)
+        cache.storeFilmstrip([(1e18, img)],
+                             path: "/v/huge.mkv", mtime: 1, size: 1)
+        // One insane frame poisons the WHOLE store (consistent with the
+        // non-finite behavior above — corrupt strip, not shorter strip).
+        cache.storeFilmstrip([(0.5, img), (ceiling + 1, img)],
+                             path: "/v/huge.mkv", mtime: 1, size: 1)
+        var contents = try FileManager.default.contentsOfDirectory(atPath: root.path)
+        #expect(contents.isEmpty, "oversized-offset stores must publish nothing, found: \(contents)")
+
+        // Boundary: exactly the ceiling is sane — plan and cache agree.
+        cache.storeFilmstrip([(0.5, img), (ceiling, img)],
+                             path: "/v/edge.mkv", mtime: 1, size: 1)
+        #expect(cache.lookupFilmstrip(path: "/v/edge.mkv", mtime: 1, size: 1)?.count == 2,
+                "an offset exactly at maxSaneDurationSeconds must store and serve")
+        contents = try FileManager.default.contentsOfDirectory(atPath: root.path)
+        #expect(contents.count == 2)
+
+        // READ side — hand-crafted filenames. Int.init(String) already
+        // nils on overflow; the ceiling closes the in-range-but-insane
+        // window (Int.max millis is within one ulp of overflowing
+        // TrimTimecode.format's Int64 math downstream).
+        #expect(PreviewDiskCache.parseStripFilename(
+            "k-strip-0-of-1-\(Int.max).jpg") == nil)
+        #expect(PreviewDiskCache.parseStripFilename(
+            "k-strip-0-of-1-\(PreviewDiskCache.maxStripOffsetMillis + 1).jpg") == nil)
+        #expect(PreviewDiskCache.parseStripFilename(
+            "k-strip-0-of-1-99999999999999999999999999.jpg") == nil,
+            "overflowing offsetMillis literal must be unparseable")
+        // Boundary accepts.
+        #expect(PreviewDiskCache.parseStripFilename(
+            "k-strip-0-of-1-\(PreviewDiskCache.maxStripOffsetMillis).jpg")?
+            .offsetMillis == PreviewDiskCache.maxStripOffsetMillis)
+
+        // And end to end: an otherwise-complete set whose one filename
+        // carries an insane offset is a MISS, not a trap (the
+        // unparseable name makes the set inconsistent).
+        let key = PreviewDiskCache.cacheKey(path: "/v/crafted.mkv", mtime: 1, size: 1)
+        for i in 0..<2 {
+            let millis = i == 0 ? 500 : Int.max
+            try Data("x".utf8).write(to: root.appendingPathComponent(
+                "\(key)-strip-\(i)-of-2-\(millis).jpg"))
+        }
+        #expect(cache.lookupFilmstrip(path: "/v/crafted.mkv", mtime: 1, size: 1) == nil)
+        #expect(!cache.hasCompleteFilmstrip(path: "/v/crafted.mkv", mtime: 1, size: 1))
+    }
+
     // MARK: - Completeness matrix (LOGIC — the load-bearing contract)
 
     @Test("incomplete/inconsistent strip sets are a miss",
