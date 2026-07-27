@@ -53,7 +53,10 @@ struct PersonCandidateScore: Equatable, Identifiable {
 /// for big catalogs without an actor hop.
 nonisolated func pfCandidatesForPerson(
     name: String,
-    records: [VideoRecord]
+    records: [VideoRecord],
+    isReachable: @Sendable (String) -> Bool = {
+        VolumeReachability.isReachable(path: $0)
+    }
 ) -> [PersonCandidateScore] {
     let n = name.lowercased()
     guard !n.isEmpty else { return [] }
@@ -128,7 +131,7 @@ nonisolated func pfCandidatesForPerson(
             filename: rec.filename,
             score: score,
             signals: signals,
-            reachable: VolumeReachability.isReachable(path: rec.fullPath)
+            reachable: isReachable(rec.fullPath)
         ))
     }
 
@@ -231,9 +234,13 @@ nonisolated func pfConfirmRound(
     heldOut: HeldOutIdentityMatcher = .empty,
     durationCapSec: Double = 3600,   // 60 min default
     skipAudioOnly: Bool = true,
+    isReachable: @Sendable (String) -> Bool = {
+        VolumeReachability.isReachable(path: $0)
+    },
     rng: inout SystemRandomNumberGenerator
 ) -> (candidates: [PersonCandidateScore], stats: ConfirmRoundStats) {
-    let scoredAll = pfCandidatesForPerson(name: name, records: records)
+    let scoredAll = pfCandidatesForPerson(
+        name: name, records: records, isReachable: isReachable)
     let candidatesSurfaced = scoredAll.count
     let alreadyLabeledMatches = scoredAll.filter { alreadyLabeled.contains($0.recordPath) }.count
 
@@ -352,7 +359,7 @@ nonisolated func pfConfirmRound(
         if rec.directory.lowercased().contains(n) { continue }
         let st = rec.streamType
         guard st == .videoAndAudio || st == .videoOnly else { continue }
-        guard VolumeReachability.isReachable(path: rec.fullPath) else { continue }
+        guard isReachable(rec.fullPath) else { continue }
         controlPool.append(rec)
     }
     var controls: [VideoRecord] = []
