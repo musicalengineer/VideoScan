@@ -130,6 +130,20 @@ Checkpoint SHA-256 (`adaface_ir50_webface4m.ckpt`, 596,517,267 bytes):
 Converted mlpackage produced by `tools/adaface/convert_adaface_coreml.py`
 (records coremltools + torch versions in the model metadata).
 
+**Install step (one-time)**: the converted artifact currently lives in the
+feature worktree at `VideoScan-wt-adaface/models/adaface_ir50_webface4m.mlpackage`
+(83 MB, gitignored). Copy it to `~/dev/VideoScan/models/` alongside
+`w600k_r50.mlpackage` before running AdaFace from the production checkout.
+The loader also honors a `VIDEOSCAN_MODELS_DIR` env override (used by tests
+and the worktree smoke run).
+
+**End-to-end smoke (2026-07-27, Debug build, worktree)**:
+`VideoScan --person-eval --engine adaface --person Donna
+--references tests/fixtures/photos --video tests/fixtures/videos/test_face_3s.mp4`
+→ model compiled + loaded, 15 faces detected, 8 hits, 1 segment / 3 s
+presence, best cosine 0.807, `"engine":"AdaFace"` in the JSON report,
+peak RSS 301 MB (within the 768 MB/worker budget).
+
 ## 7. Concurrency model (ArcFace MLE5 lessons applied)
 
 - Per-worker `MLModel` instances from day one: `AdaFaceModelLoader` (actor)
