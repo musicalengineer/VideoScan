@@ -157,4 +157,27 @@ struct StalePairValidationTests {
         #expect(fromVideo.video === video && fromVideo.audio === audio)
         #expect(fromAudio.video === video && fromAudio.audio === audio)
     }
+
+    @Test func revalidationStaysLinearAt100kRecords() {
+        var records: [VideoRecord] = []
+        records.reserveCapacity(100_000)
+        for index in 0..<50_000 {
+            let video = makeRecord("\(index).V.mxf", streamType: .videoOnly,
+                                   duration: 0)
+            let audio = makeRecord("\(index).A.mxf", streamType: .audioOnly,
+                                   duration: 0)
+            link(video, audio)
+            records.append(video)
+            records.append(audio)
+        }
+
+        let clock = ContinuousClock()
+        let started = clock.now
+        let cleared = CorrelationScorer.revalidateExistingPairs(in: records)
+        let elapsed = started.duration(to: clock.now)
+
+        #expect(cleared == 0)
+        #expect(elapsed < .seconds(2),
+                "100k-record validation exceeded its O(n) budget: \(elapsed)")
+    }
 }
