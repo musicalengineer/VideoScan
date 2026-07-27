@@ -83,7 +83,7 @@ struct CatalogScopeMoveIdentityTests {
                                md5: "feedbeef", duration: 45)
         oldAudio.notes = "Donna singing — keep forever"
         let partner = moveRec(path: "/Volumes/Elsewhere/ceremony_video.mxf",
-                              stream: .videoOnly, md5: "0ther", duration: 300)
+                              stream: .videoOnly, md5: "0ther", duration: 45)
         let gid = UUID()
         oldAudio.pairedWith = partner
         oldAudio.pairGroupID = gid
