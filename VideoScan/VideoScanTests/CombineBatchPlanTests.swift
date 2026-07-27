@@ -93,6 +93,38 @@ struct CombineBatchPlanTests {
         #expect(reason.contains("3.3%"))
     }
 
+    @Test
+    func nearEqualKnownDurationsRemainRunnable() {
+        let model = VideoScanModel()
+        let video = rec("V.mxf", "/V1/V.mxf", duration: 100)
+        let audio = rec("A.mxf", "/V1/A.mxf", duration: 98)
+
+        let plan = model.prepareCombineBatch(
+            pairs: [(video, audio)],
+            isReachable: online("/V1/")
+        )
+
+        #expect(plan.runnable.count == 1,
+                "the established max(2s, 2%) coverage tolerance must remain accepted")
+        #expect(plan.blocked.isEmpty)
+    }
+
+    @Test
+    func unknownSourceDurationRemainsRunnableForPostMuxVerification() {
+        let model = VideoScanModel()
+        let video = rec("V.mxf", "/V1/V.mxf", duration: 0)
+        let audio = rec("A.mxf", "/V1/A.mxf", duration: 125)
+
+        let plan = model.prepareCombineBatch(
+            pairs: [(video, audio)],
+            isReachable: online("/V1/")
+        )
+
+        #expect(plan.runnable.count == 1,
+                "unknown source metadata must defer to the existing output verifier")
+        #expect(plan.blocked.isEmpty)
+    }
+
     // MARK: - Substitution paths
 
     @Test
