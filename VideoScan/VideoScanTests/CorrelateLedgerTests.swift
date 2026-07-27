@@ -43,13 +43,13 @@ struct CorrelateLedgerTests {
         v.filename = "christmas_master_video.mov"
         v.fullPath = "/volX/masters/christmas_master_video.mov"
         v.streamTypeRaw = StreamType.videoOnly.rawValue
-        v.durationSeconds = 500
+        v.durationSeconds = 0
         v.directory = "/volX/masters"
         let a = VideoRecord()
         a.filename = "totally_unrelated_name.wav"
         a.fullPath = "/volY/audio/totally_unrelated_name.wav"
         a.streamTypeRaw = StreamType.audioOnly.rawValue
-        a.durationSeconds = 90
+        a.durationSeconds = 0
         a.directory = "/volY/audio"
         let gid = UUID()
         v.pairedWith = a; v.pairGroupID = gid; v.pairConfidence = .high

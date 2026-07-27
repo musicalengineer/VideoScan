@@ -113,6 +113,10 @@ extension VideoScanModel {
             added += 1
         }
 
+        let invalidPairEndpoints = CorrelationScorer.revalidateExistingPairs(in: records)
+        if invalidPairEndpoints > 0 {
+            log("Import released \(invalidPairEndpoints) invalid persisted A/V pair endpoint(s).")
+        }
         saveCatalogNow()
         return CatalogImportResult(added: added, skipped: skipped, sourceHost: effectiveHost)
     }

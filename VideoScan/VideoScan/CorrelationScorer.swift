@@ -16,6 +16,14 @@ enum CorrelationScorer {
         let reasons: [String]
     }
 
+    /// A pair selected for a user-facing action. Unlike `Candidate`, this
+    /// may represent a previously persisted pair that has no current score.
+    struct PairSelection {
+        let video: VideoRecord
+        let audio: VideoRecord
+        let score: Int?
+    }
+
     // MARK: - Duration-Compatibility Gate (GH #125)
 
     /// Hard gate: can this video-only + audio-only pair plausibly be the
@@ -79,6 +87,68 @@ enum CorrelationScorer {
         // At least one duration unknown — only exact filename-key
         // identity may carry the pair through.
         return filenameKeyMatches
+    }
+
+    // MARK: - Persisted-Pair Validation
+
+    /// Validate historical/manual pair evidence without requiring it to
+    /// score again. Known durations must satisfy today's hard safety gate;
+    /// unknown durations remain valid because old Avid essence often lacks
+    /// usable container duration and the explicit user relation is the only
+    /// surviving evidence.
+    static func persistedPairIsValid(_ first: VideoRecord, _ second: VideoRecord) -> Bool {
+        let video: VideoRecord
+        let audio: VideoRecord
+        if first.streamType == .videoOnly && second.streamType == .audioOnly {
+            video = first
+            audio = second
+        } else if first.streamType == .audioOnly && second.streamType == .videoOnly {
+            video = second
+            audio = first
+        } else {
+            return false
+        }
+
+        let videoKnown = video.durationSeconds > 0 && video.durationSeconds.isFinite
+        let audioKnown = audio.durationSeconds > 0 && audio.durationSeconds.isFinite
+        guard videoKnown && audioKnown else { return true }
+        return durationCompatible(videoDuration: video.durationSeconds,
+                                  audioDuration: audio.durationSeconds)
+    }
+
+    /// Remove invalid direct links from a live catalog graph. This is O(n)
+    /// and runs only at load/import/correlation boundaries, never in a view.
+    /// Purged pairs retain their historical relation for restore workflows.
+    @discardableResult
+    static func revalidateExistingPairs(in records: [VideoRecord]) -> Int {
+        let catalogInstances = Set(records.map(ObjectIdentifier.init))
+        var invalidIDs = Set<UUID>()
+
+        for record in records {
+            guard let partner = record.pairedWith else { continue }
+            guard catalogInstances.contains(ObjectIdentifier(partner)),
+                  partner.pairedWith === record else {
+                invalidIDs.insert(record.id)
+                continue
+            }
+            guard record.purgedAt == nil, partner.purgedAt == nil else { continue }
+            guard persistedPairIsValid(record, partner) else {
+                invalidIDs.insert(record.id)
+                invalidIDs.insert(partner.id)
+                continue
+            }
+        }
+
+        var cleared = 0
+        for record in records where invalidIDs.contains(record.id) {
+            if record.pairedWith != nil || record.pairGroupID != nil || record.pairConfidence != nil {
+                cleared += 1
+            }
+            record.pairedWith = nil
+            record.pairGroupID = nil
+            record.pairConfidence = nil
+        }
+        return cleared
     }
 
     // MARK: - Filename Key
@@ -280,6 +350,44 @@ enum CorrelationScorer {
             }
         }
         return best
+    }
+
+    /// One source of truth for the three user-facing pair actions. A valid,
+    /// reciprocal persisted relation wins; stale, dangling, purged, or
+    /// known-incompatible relations are ignored and the current scorer gets
+    /// a chance to find a safe replacement.
+    static func preferredPair(
+        for record: VideoRecord,
+        in allRecords: [VideoRecord],
+        durationTolerance: Double,
+        timestampTolerance: TimeInterval
+    ) -> PairSelection? {
+        if let partner = record.pairedWith,
+           record.purgedAt == nil,
+           partner.purgedAt == nil,
+           allRecords.contains(where: { $0 === partner }),
+           partner.pairedWith === record,
+           persistedPairIsValid(record, partner) {
+            let video = record.streamType == .videoOnly ? record : partner
+            let audio = record.streamType == .audioOnly ? record : partner
+            let score = record.pairConfidence.map { confidence in
+                switch confidence {
+                case .high: return 8
+                case .medium: return 5
+                case .low: return 3
+                }
+            }
+            return PairSelection(video: video, audio: audio, score: score)
+        }
+
+        guard let candidate = findBestPair(
+            for: record,
+            in: allRecords,
+            durationTolerance: durationTolerance,
+            timestampTolerance: timestampTolerance
+        ) else { return nil }
+        return PairSelection(video: candidate.video, audio: candidate.audio,
+                             score: candidate.score)
     }
 
     /// Diagnostic for the "No Match Found" alerts (GH #125, MINOR 2):

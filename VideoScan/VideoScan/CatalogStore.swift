@@ -288,7 +288,16 @@ final class CatalogStore {
                 if let pid = rec.pendingPairedWithID {
                     rec.pairedWith = byID[pid]
                     rec.pendingPairedWithID = nil
+                    if rec.pairedWith == nil {
+                        rec.pairGroupID = nil
+                        rec.pairConfidence = nil
+                    }
                 }
+            }
+            let cleared = CorrelationScorer.revalidateExistingPairs(in: snapshot.records)
+            if cleared > 0 {
+                NSLog("VideoScan: cleared %d invalid persisted A/V pair endpoint(s) while loading %@",
+                      cleared, url.lastPathComponent)
             }
             return (snapshot.records, snapshot.version)
         } catch {

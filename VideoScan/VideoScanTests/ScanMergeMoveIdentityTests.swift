@@ -208,11 +208,15 @@ struct ScanMergeMoveIdentityTests {
         let r2 = makeRecord(path: oldVol.appendingPathComponent("audio-essence.mxf").path,
                             md5: "fp-pair", sizeBytes: 5000)
         let r1 = makeRecord(path: oldVol.appendingPathComponent("video-essence.mxf").path)
+        r2.streamTypeRaw = StreamType.audioOnly.rawValue
+        r1.streamTypeRaw = StreamType.videoOnly.rawValue
         r1.pairedWith = r2
+        r2.pairedWith = r1
         model.records = [r1, r2]
 
         let fresh = makeRecord(path: vids.appendingPathComponent("audio-essence.mxf").path,
                                md5: "fp-pair", sizeBytes: 5000)
+        fresh.streamTypeRaw = StreamType.audioOnly.rawValue
         let outcome = await model.commitScanResults(
             root: vids.path, volName: "Y",
             targetRecords: [fresh], scanWasComplete: true)

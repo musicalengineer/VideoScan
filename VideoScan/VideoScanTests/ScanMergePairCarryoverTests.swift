@@ -163,4 +163,31 @@ struct ScanMergePairCarryoverTests {
                 "Partial-scan upserts replace re-seen records and must carry pairs identically")
         #expect(vFresh.pairGroupID == gid)
     }
+
+    @Test func rescanDropsPairWhenFreshDurationsProveItIncompatible() async throws {
+        let dir = try makeTempDir("duration")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let vPath = dir.appendingPathComponent("clip.V05.mxf").path
+        let aPath = dir.appendingPathComponent("clip.A05.mxf").path
+        try Data([7]).write(to: URL(fileURLWithPath: vPath))
+        try Data([8]).write(to: URL(fileURLWithPath: aPath))
+
+        let model = VideoScanModel()
+        let video = makeRecord(path: vPath, video: true)
+        let audio = makeRecord(path: aPath, video: false)
+        _ = pairUp(video, audio) // unknown durations were valid historical evidence
+        model.records = [video, audio]
+
+        let freshVideo = makeRecord(path: vPath, video: true)
+        freshVideo.durationSeconds = 3808.271
+        let freshAudio = makeRecord(path: aPath, video: false)
+        freshAudio.durationSeconds = 125.6255
+        _ = await model.commitScanResults(root: dir.path, volName: "X",
+                                          targetRecords: [freshVideo, freshAudio],
+                                          scanWasComplete: true)
+
+        #expect(freshVideo.pairedWith == nil && freshAudio.pairedWith == nil)
+        #expect(freshVideo.pairGroupID == nil && freshAudio.pairGroupID == nil)
+        #expect(freshVideo.pairConfidence == nil && freshAudio.pairConfidence == nil)
+    }
 }
