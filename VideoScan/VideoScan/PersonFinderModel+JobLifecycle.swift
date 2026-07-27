@@ -302,9 +302,10 @@ extension PersonFinderModel {
         let rejected = Set(profile.rejectedFiles)
         job.assignedFaces = rejected.isEmpty ? faces : faces.filter { !rejected.contains($0.sourceFilename) }
         // Loading a fresh reference set invalidates any previously-cached
-        // ArcFace embeddings — they were computed from the prior photos.
-        // pfRunArcFaceEngine will rebuild the cache on the next scan.
-        job.assignedArcFaceEmbeddings = []
+        // CoreML reference embeddings (all backends) — they were computed
+        // from the prior photos. The engine dispatchers rebuild the cache
+        // on the next scan.
+        job.assignedRefEmbeddings = [:]
         job.status = .idle
 
         if !job.searchPath.isEmpty && !job.assignedFaces.isEmpty {
@@ -330,7 +331,7 @@ extension PersonFinderModel {
 
         let personName = profile.name
         let engine = job.effectiveEngine
-        let threshold = engine == .arcface ? profile.arcfaceThreshold : profile.visionThreshold
+        let threshold = profile.thresholdForEngine(engine)
         let refIdentifiers = Self.referenceCacheIdentifiers(
             referencePath: profile.referencePath,
             filenames: job.assignedFaces.map(\.sourceFilename)
@@ -476,11 +477,14 @@ extension PersonFinderModel {
             jobSettings.recognitionEngine = engineOverride
         }
 
-        // Bust the per-video result cache between aligned and unaligned ArcFace
-        // embeddings (they are not comparable). Set before any cache lookup so a
-        // toggle never serves stale results; "" preserves the legacy namespace.
+        // Bust the per-video result cache when embedding-shaping knobs change
+        // (alignment toggle, AdaFace model version, and — for hybrid — the
+        // AdaFace fallback threshold). Set before any cache lookup so a
+        // toggle never serves stale results; "" preserves the legacy Vision/
+        // ArcFace namespaces. Logic lives in PersonFinderCache.embedVariant
+        // (pure, test-pinned — #144 QA merge condition).
         PersonFinderCache.arcfaceEmbedVariant =
-            (jobSettings.recognitionEngine == .arcface && jobSettings.arcfaceLandmarkAlignment) ? "lm-v1" : ""
+            PersonFinderCache.embedVariant(for: jobSettings)
 
         // High-level narration to videoscan.log — emitted once volume + engine
         // are known. Per-job verbose detail continues to go to the job's
@@ -512,26 +516,30 @@ extension PersonFinderModel {
             return
         }
 
-        if jobSettings.recognitionEngine == .dlib {
-            guard jobSettings.dlibReady else {
-                let msg = "⚠ Set Python path and script path in Settings before scanning with dlib."
-                job.appendLog(msg)
-                osLog.error("runJob bailed: dlib not configured (person=\(jobSettings.personName, privacy: .public))")
-                return
-            }
-            guard !jobSettings.referencePath.isEmpty else {
-                let msg = "⚠ Set reference photos path first."
-                job.appendLog(msg)
-                osLog.error("runJob bailed: empty referencePath (person=\(jobSettings.personName, privacy: .public))")
-                return
-            }
-        } else {
-            guard !faces.isEmpty else {
-                let msg = "⚠ Load reference photos first. Select a person with \"Find Person\" or load photos globally."
-                job.appendLog(msg)
-                osLog.error("runJob bailed: faces.isEmpty (person=\(jobSettings.personName, privacy: .public), engine=\(jobSettings.recognitionEngine.rawValue, privacy: .public))")
-                return
-            }
+        // AdaFace job-level pre-flight (#144 QA): a missing model must bail
+        // the job ONCE with a clear error — not emit a per-video error for
+        // thousands of files that all end "0 hits" (the removed dlib
+        // pre-flight's UX). Synchronous existence probe only; an asset
+        // that exists but is corrupt still surfaces via the dispatcher's
+        // "found but failed to load" error on first video.
+        // Hybrid is deliberately NOT gated: it degrades to Vision-only.
+        if jobSettings.recognitionEngine == .adaface,
+           !AdaFaceModelLoader.modelAssetsPresent() {
+            let msg = "⚠ AdaFace model not installed — place \(AdaFaceModelLoader.modelBaseName).mlpackage in \(AdaFaceModelLoader.modelsDir)/ (see docs/design/adaface-plugin.md)."
+            job.appendLog(msg)
+            osLog.error("runJob bailed: AdaFace model missing (person=\(jobSettings.personName, privacy: .public))")
+            job.status = .failed("AdaFace model missing")
+            return
+        }
+
+        // All engines (Vision, ArcFace, AdaFace, Hybrid) need loaded reference
+        // faces — the dlib-specific Python-config pre-flight went with the
+        // dlib seat (#144).
+        guard !faces.isEmpty else {
+            let msg = "⚠ Load reference photos first. Select a person with \"Find Person\" or load photos globally."
+            job.appendLog(msg)
+            osLog.error("runJob bailed: faces.isEmpty (person=\(jobSettings.personName, privacy: .public), engine=\(jobSettings.recognitionEngine.rawValue, privacy: .public))")
+            return
         }
 
         job.reset()
@@ -577,17 +585,18 @@ extension PersonFinderModel {
             job.appendLog("  ArcFace: landmark alignment \(jobSettings.arcfaceLandmarkAlignment ? "ON (norm_crop lm-v1)" : "OFF (bbox crop)")")
             job.appendLog("  ArcFace: cosine threshold \(String(format: "%.2f", jobSettings.arcfaceThreshold)), inference concurrency \(jobSettings.arcfaceInferenceConcurrency)")
         }
+        if jobSettings.recognitionEngine == .adaface {
+            // Same self-documenting rule for AdaFace (#144). Serialized
+            // inference only — AdaFace never joins the ArcFace K>1 pool.
+            job.appendLog("  AdaFace: landmark alignment \(jobSettings.arcfaceLandmarkAlignment ? "ON (norm_crop lm-v1)" : "OFF (bbox crop)")")
+            job.appendLog("  AdaFace: cosine threshold \(String(format: "%.2f", jobSettings.adafaceThreshold)) (model \(FaceEmbeddingBackend.adaface))")
+        }
         if let profile = job.assignedProfile {
             job.appendLog("  Profile rejected: \(profile.rejectedFiles.count) files")
         }
         job.appendLog("  References loaded: \(faces.count)")
         osLog.info("References ready: \(faces.count) face(s) for \(jobSettings.personName, privacy: .public)")
         job.appendLog("  Feature prints for matching: \(prints.count)")
-        if jobSettings.recognitionEngine == .dlib {
-            job.appendLog("  Python: \(jobSettings.pythonPath.isEmpty ? "(empty)" : jobSettings.pythonPath)")
-            job.appendLog("  Script: \(jobSettings.recognitionScript.isEmpty ? "(empty)" : jobSettings.recognitionScript)")
-            job.appendLog("  Ref path: \(jobSettings.referencePath.isEmpty ? "(empty)" : jobSettings.referencePath)")
-        }
         let settings = jobSettings
         let dash = self.dashboard
         // Capture writeback on MainActor so the static nonisolated runScan
@@ -601,8 +610,14 @@ extension PersonFinderModel {
         job.scanTask = Task { [weak self, weak job] in
             guard let job else { return }
             await MainActor.run {
-                dash?.visionActive = settings.recognitionEngine == .vision || settings.recognitionEngine == .arcface
-                dash?.activeEngineLabel = settings.recognitionEngine == .arcface ? "ArcFace / CoreML + ANE" : "Vision / ANE"
+                dash?.visionActive = settings.recognitionEngine == .vision
+                    || settings.recognitionEngine == .arcface
+                    || settings.recognitionEngine == .adaface
+                switch settings.recognitionEngine {
+                case .arcface: dash?.activeEngineLabel = "ArcFace / CoreML + ANE"
+                case .adaface: dash?.activeEngineLabel = "AdaFace / CoreML + ANE"
+                default:       dash?.activeEngineLabel = "Vision / ANE"
+                }
             }
             await PersonFinderModel.runScan(job: job, prints: prints, settings: settings, refFilenames: refCacheIdentifiers, dashboard: dash, onComplete: onComplete, onAnnotate: onAnnotate)
             await MainActor.run {
@@ -771,8 +786,7 @@ extension PersonFinderModel {
         var orderedResults = [pfVideoResult?](repeating: nil, count: total)
 
         // Cache summary — so the user can see how many will be fast (cached) vs slow (new)
-        let cacheThreshold = settings.recognitionEngine == .arcface
-            ? settings.arcfaceThreshold : settings.threshold
+        let cacheThreshold = settings.thresholdForEngine(settings.recognitionEngine)
         var cachedCount = 0
         for path in videoFiles {
             if let key = PersonFinderCache.makeKey(
@@ -961,8 +975,7 @@ extension PersonFinderModel {
         if Task.isCancelled { return (idx, nil) }
 
         let filePath = videoFiles[idx]
-        let threshold = settings.recognitionEngine == .arcface
-            ? settings.arcfaceThreshold : settings.threshold
+        let threshold = settings.thresholdForEngine(settings.recognitionEngine)
 
         // Cache check BEFORE waiting for disk warm — cache hits skip I/O entirely
         if let cacheKey = PersonFinderCache.makeKey(
@@ -1033,12 +1046,13 @@ extension PersonFinderModel {
             )
         }
 
-        @Sendable func runDlib() async -> pfVideoResult? {
-            await pfProcessVideoWithDlib(
-                filePath: videoFiles[idx], settings: settings,
-                index: idx + 1, total: total,
-                pauseGate: job.pauseGate,
-                logFn: logFn, progressFn: progressFn, distFn: distFn
+        @Sendable func runAdaFace() async -> pfVideoResult? {
+            await pfRunAdaFaceEngine(
+                filePath: videoFiles[idx], idx1: idx + 1, total: total,
+                settings: settings, job: job, dash: dash,
+                progressState: progressState,
+                logFn: logFn, progressFn: progressFn, distFn: distFn,
+                distFnFinal: distFnFinal
             )
         }
 
@@ -1046,17 +1060,18 @@ extension PersonFinderModel {
         switch settings.recognitionEngine {
         case .vision:  r = await runVision()
         case .arcface: r = await runArcFace()
-        case .dlib:    r = await runDlib()
+        case .adaface: r = await runAdaFace()
         case .hybrid:
+            // Vision first; AdaFace second look on misses (#144 — the
+            // fallback seat dlib used to hold). A missing AdaFace model
+            // logs its actionable error inside pfRunAdaFaceEngine and
+            // returns nil, so the Vision result (0 hits) still stands.
             let v = await runVision()
             if let v, !v.segments.isEmpty {
                 r = v
-            } else if !settings.dlibReadyForHybrid {
-                await job.appendLog("[hybrid] Vision: 0 hits — dlib not configured, skipping fallback")
-                r = v
             } else {
-                await job.appendLog("[hybrid] Vision: 0 hits — falling back to dlib")
-                r = await runDlib()
+                await job.appendLog("[hybrid] Vision: 0 hits — falling back to AdaFace")
+                r = await runAdaFace() ?? v
             }
         }
 
@@ -1168,8 +1183,7 @@ extension PersonFinderModel {
         onAnnotate: (@MainActor (ScanJob) -> Void)? = nil
     ) async {
         let path = await job.searchPath
-        let scanThreshold = settings.recognitionEngine == .arcface
-            ? settings.arcfaceThreshold : settings.threshold
+        let scanThreshold = settings.thresholdForEngine(settings.recognitionEngine)
         let scanRefHash = PersonFinderCache.cachedRefHash(refFilenames)
         let personLabel = settings.personName.isEmpty ? "(global)" : settings.personName
         // Main app log: the headline the user wants to skim — who, where, on what.
@@ -1278,7 +1292,7 @@ extension PersonFinderModel {
                 let volumeName = VolumeReachability.displayLabel(forPath: job.searchPath)
                 let onVol = volumeName.isEmpty ? "" : " on \(volumeName)"
                 // displayName drops the parenthetical descriptor — just
-                // "Vision" / "ArcFace" / "dlib" / "Hybrid". Matches the UI
+                // "Vision" / "ArcFace" / "AdaFace" / "Hybrid". Matches the UI
                 // summary in ScanJobRow.summaryText so log and screen agree.
                 let engineName = job.effectiveEngine.displayName
                 let usingEngine = " using algorithm: \(engineName)"
@@ -1336,7 +1350,7 @@ extension PersonFinderModel {
             ?? (settings.personName.isEmpty ? "(global)" : settings.personName)
         let folderName = job.assignedProfile.map { POIStorage.sanitize($0.name) }
         let engine = job.effectiveEngine
-        let threshold = engine == .arcface ? settings.arcfaceThreshold : settings.threshold
+        let threshold = settings.thresholdForEngine(engine)
         let referencePath = job.assignedProfile?.referencePath ?? settings.referencePath
         let referenceFilenames = job.assignedFaces.map(\.sourceFilename)
         // Record the job's current status so a paused scan can come back as
@@ -1503,7 +1517,7 @@ extension PersonFinderModel {
         // default may differ from the engine the user picked for that
         // specific search. Without this, restored rows show the wrong
         // algorithm in the summary.
-        if let engine = RecognitionEngine(rawValue: descriptor.engine) {
+        if let engine = RecognitionEngine.migratePersisted(descriptor.engine) {
             job.assignedEngine = engine
         }
         return job
@@ -1531,7 +1545,7 @@ extension PersonFinderModel {
         )
         guard !refIdentifiers.isEmpty else { return }
 
-        let engine = RecognitionEngine(rawValue: descriptor.engine) ?? .vision
+        let engine = RecognitionEngine.migratePersisted(descriptor.engine) ?? .vision
         let videoFiles = pfFindVideoFiles(at: descriptor.searchPath, skipBundles: false)
         guard !videoFiles.isEmpty else { return }
 

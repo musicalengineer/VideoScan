@@ -120,8 +120,11 @@ enum PersonEvaluationCLI {
         settings.referencePath = options.references
         settings.recognitionEngine = options.engine
         if let value = options.threshold {
-            if options.engine == .arcface { settings.arcfaceThreshold = value }
-            else { settings.threshold = value }
+            switch options.engine {
+            case .arcface: settings.arcfaceThreshold = value
+            case .adaface: settings.adafaceThreshold = value
+            default:       settings.threshold = value
+            }
         }
         if let value = options.frameStep { settings.frameStep = value }
         if let value = options.minFaceConfidence { settings.minFaceConfidence = value }
@@ -186,10 +189,27 @@ enum PersonEvaluationCLI {
             )
         }
 
-        @Sendable func dlib() async -> pfVideoResult? {
-            await pfProcessVideoWithDlib(
-                filePath: options.video, settings: configuredSettings, index: 1, total: 1,
-                pauseGate: pauseGate, logFn: log, progressFn: noopString, distFn: recordDistance
+        @Sendable func adaface() async -> pfVideoResult? {
+            let (model, modelError) = await AdaFaceModelLoader.shared.getModel()
+            guard let model else { await log("AdaFace model load failed: \(modelError ?? "unknown")"); return nil }
+            let (embeddings, embeddingError) = arcfaceLoadReferenceEmbeddings(
+                from: options.references, largestFaceOnly: options.largestFaceOnly,
+                useLandmarkAlignment: configuredSettings.arcfaceLandmarkAlignment, model: model,
+                useSharedPool: false
+            )
+            guard embeddingError == nil, !embeddings.isEmpty else {
+                await log("AdaFace reference embedding failed: \(embeddingError ?? "no embeddings")")
+                return nil
+            }
+            return await pfProcessVideoWithArcFace(
+                filePath: options.video, referenceEmbeddings: embeddings, settings: configuredSettings,
+                model: model, index: 1, total: 1, pauseGate: pauseGate,
+                logFn: log, progressFn: noopString, frameFn: { _, _, _ in },
+                distFn: recordDistance, distFnFinal: recordDistance,
+                visionStatsFn: { _, _ in }, previewRateFn: { Int.max },
+                engineTag: "AdaFace",
+                cosineThresholdOverride: configuredSettings.adafaceThreshold,
+                useSharedPool: false
             )
         }
 
@@ -202,10 +222,10 @@ enum PersonEvaluationCLI {
         } else { switch options.engine {
         case .vision: result = await vision()
         case .arcface: result = await arcface()
-        case .dlib: result = await dlib()
+        case .adaface: result = await adaface()
         case .hybrid:
             let first = await vision()
-            result = (first?.segments.isEmpty == false) ? first : await dlib()
+            result = (first?.segments.isEmpty == false) ? first : await adaface()
         } }
         guard let result else { throw CLIError("recognition engine returned no result") }
 

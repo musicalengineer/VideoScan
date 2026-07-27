@@ -4,16 +4,17 @@ import Foundation
 
 // MARK: - PersonFinderEngineDispatch coverage tests
 //
-// PersonFinderEngineDispatch.swift had 0% coverage before this file
-// (xccov: 0/153 executable lines). The dispatch entry points are
-// nonisolated free functions reachable via @testable import.
+// The dispatch entry points are nonisolated free functions reachable via
+// @testable import. The dlib bail-path tests that used to live here were
+// removed with the dlib Search seat (GH #144); their AdaFace equivalents
+// below pin the same class of contract: bail paths return nil AND write
+// the user-visible diagnostic line — those log lines are the first thing
+// Rick sees when a scan misbehaves, so a silent rename would mislead him.
 //
-// Strategy: exercise the bail paths that don't require launching real
-// Python subprocesses or loading CoreML models. Each test pins a single
-// guard and asserts (a) the function returns nil and (b) the log line
-// the production code wrote matches the expected diagnostic — those
-// log lines are user-visible, so a silent rename would mislead Rick
-// when a scan misbehaves.
+// None of these tests load a real CoreML model (expensive and unreliable
+// in unit tests, by design — same rule as the original ArcFace cache
+// tests). The missing-model path is exercised through the
+// AdaFaceModelLoader.modelsDirOverride test seam.
 
 /// Sendable log sink — actor-isolated array so the @Sendable closures
 /// we hand to dispatch can append without data races. Mirrors the way
@@ -34,40 +35,42 @@ actor DispatchLogActor {
     func joined() -> String { lines.joined(separator: "\n") }
 }
 
+// .serialized: several tests mutate the process-global
+// AdaFaceModelLoader.modelsDirOverride test seam. Interleaved siblings
+// could nil the override mid-flight and resolve the REAL
+// ~/dev/VideoScan/models (settings-pollution class).
+@Suite(.serialized)
 @MainActor
 struct PersonFinderEngineDispatchTests {
 
-    // dlib bail-path tests hang on the 7 GB virtualized-M1 GitHub runner:
-    // pfProcessVideoWithDlib enters a memory-pressure pauseGate that waits
-    // for >4 GB free, which never happens on the constrained VM, so the
-    // test sits forever instead of reaching the path-validation guard
-    // it's trying to cover. Tests still run locally where they finish
-    // in ~1 ms each. Re-enable when we move CI to a self-hosted runner
-    // (M1 MBP planned) or refactor pfProcessVideoWithDlib to short-circuit
-    // input validation before the memory check.
-    // VS_VIRT_M1 is injected by VideoScan-CI.xctestplan's environmentVariableEntries.
-    // ProcessInfo's view of CI=true (set by GitHub Actions) doesn't survive
-    // the hop into xcodebuild's xctest child process, so we use a plan-scoped
-    // env var that we control directly.
-    private static let dlibTestsHangOnCI: Bool =
-        ProcessInfo.processInfo.environment["VS_VIRT_M1"] != nil
+    // MARK: - AdaFace bail: model assets missing (actionable error, #144)
 
-    // MARK: - dlib bail: Python path empty / non-executable
+    /// Point the loader at an empty temp dir and prove the dispatcher
+    /// (a) returns nil and (b) logs an ACTIONABLE error naming the exact
+    /// expected model path + the conversion tool. GH #144 acceptance:
+    /// "Missing or invalid model assets produce a clear actionable error."
+    @Test func adafaceBailsWithActionableErrorWhenModelMissing() async {
+        let emptyDir = NSTemporaryDirectory() + "adaface_missing_\(UUID().uuidString)"
+        try? FileManager.default.createDirectory(
+            atPath: emptyDir, withIntermediateDirectories: true)
+        defer {
+            AdaFaceModelLoader.modelsDirOverride = nil
+            try? FileManager.default.removeItem(atPath: emptyDir)
+        }
+        AdaFaceModelLoader.modelsDirOverride = emptyDir
+        await AdaFaceModelLoader.shared.reset()
 
-    @Test(.disabled(if: Self.dlibTestsHangOnCI, "Hangs on GH virt-M1 (see comment above)"))
-    func dlibBailsWhenPythonPathEmpty() async {
         let sink = DispatchLogActor()
+        let job = ScanJob(searchPath: "/tmp")
         var settings = PersonFinderSettings()
-        settings.pythonPath = ""
-        settings.recognitionScript = ""
+        settings.recognitionEngine = .adaface
         settings.referencePath = "/tmp"
 
-        let result = await pfProcessVideoWithDlib(
+        let result = await pfRunAdaFaceEngine(
             filePath: "/tmp/never_opened.mov",
-            settings: settings,
-            index: 1,
-            total: 1,
-            pauseGate: PauseGate(),
+            idx1: 1, total: 1,
+            settings: settings, job: job, dash: nil,
+            progressState: ThrottledMainActorUpdate(intervalSecs: 0.25),
             logFn: { line in await sink.append(line) },
             progressFn: { _ in },
             distFn: { _ in }
@@ -75,116 +78,46 @@ struct PersonFinderEngineDispatchTests {
 
         #expect(result == nil)
         let log = await sink.joined()
-        #expect(await sink.contains("Python executable not found"),
-                "Should log Python not-found bail; got: \(log)")
+        #expect(await sink.contains("[adaface] Model load failed"),
+                "Should log the model-load bail; got: \(log)")
+        #expect(await sink.contains("adaface_ir50_webface4m.mlpackage"),
+                "Error must name the expected model file (actionable); got: \(log)")
+        #expect(await sink.contains(emptyDir),
+                "Error must name the directory searched (actionable); got: \(log)")
+        // Reset again so a subsequent test never inherits a cached URL
+        // resolved against the temp override.
+        await AdaFaceModelLoader.shared.reset()
     }
 
-    @Test(.disabled(if: Self.dlibTestsHangOnCI, "Hangs on GH virt-M1 (see comment above)"))
-    func dlibBailsWhenPythonPathNonExecutable() async {
-        // Point pythonPath at a real-but-not-executable file (this source
-        // file itself), so isExecutableFile returns false.
+    // MARK: - AdaFace respects pre-cancellation
+
+    /// A pre-cancelled Task must come back nil without doing engine work —
+    /// same contract the dlib seat honored. (With no model installed the
+    /// bail also returns nil, so additionally require that no per-video
+    /// processing lines were logged.)
+    @Test func adafaceReturnsNilWhenTaskAlreadyCancelled() async {
+        let emptyDir = NSTemporaryDirectory() + "adaface_cancel_\(UUID().uuidString)"
+        try? FileManager.default.createDirectory(
+            atPath: emptyDir, withIntermediateDirectories: true)
+        defer {
+            AdaFaceModelLoader.modelsDirOverride = nil
+            try? FileManager.default.removeItem(atPath: emptyDir)
+        }
+        AdaFaceModelLoader.modelsDirOverride = emptyDir
+        await AdaFaceModelLoader.shared.reset()
+
         let sink = DispatchLogActor()
+        let job = ScanJob(searchPath: "/tmp")
         var settings = PersonFinderSettings()
-        settings.pythonPath = #filePath  // exists, not executable
-        settings.recognitionScript = #filePath
-        settings.referencePath = "/tmp"
-
-        let result = await pfProcessVideoWithDlib(
-            filePath: "/tmp/never_opened.mov",
-            settings: settings,
-            index: 1,
-            total: 1,
-            pauseGate: PauseGate(),
-            logFn: { line in await sink.append(line) },
-            progressFn: { _ in },
-            distFn: { _ in }
-        )
-
-        #expect(result == nil)
-        #expect(await sink.contains("Python executable not found"),
-                "Non-executable pythonPath should hit the same bail")
-    }
-
-    @Test(.disabled(if: Self.dlibTestsHangOnCI, "Hangs on GH virt-M1 (see comment above)"))
-    func dlibBailsWhenRecognitionScriptMissing() async {
-        // Use the system /bin/sh as a real executable, then point
-        // recognitionScript at a path that doesn't exist. This passes
-        // the python guard and falls through to the script-existence guard.
-        let sink = DispatchLogActor()
-        var settings = PersonFinderSettings()
-        settings.pythonPath = "/bin/sh"  // exists, executable on every macOS
-        settings.recognitionScript = "/tmp/nonexistent_script_\(UUID().uuidString).py"
-        settings.referencePath = "/tmp"
-
-        let result = await pfProcessVideoWithDlib(
-            filePath: "/tmp/never_opened.mov",
-            settings: settings,
-            index: 1,
-            total: 1,
-            pauseGate: PauseGate(),
-            logFn: { line in await sink.append(line) },
-            progressFn: { _ in },
-            distFn: { _ in }
-        )
-
-        #expect(result == nil)
-        let log = await sink.joined()
-        #expect(await sink.contains("recognition script not found"),
-                "Missing script should hit the script-existence bail; got: \(log)")
-    }
-
-    // MARK: - dlib pre-flight log lines (diagnostics surface)
-
-    @Test(.disabled(if: Self.dlibTestsHangOnCI, "Hangs on GH virt-M1 (see comment above)"))
-    func dlibLogsPythonAndScriptPathsBeforeBailing() async {
-        // The production code writes "  dlib: python=..." and
-        // "  dlib: script=..." before the existence checks. These lines
-        // are the first thing Rick sees when a scan misbehaves; they
-        // need to keep being emitted even when the bail fires.
-        let sink = DispatchLogActor()
-        var settings = PersonFinderSettings()
-        settings.pythonPath = "/usr/bin/false"  // exists + executable
-        settings.recognitionScript = "/tmp/missing_\(UUID().uuidString).py"
-        settings.referencePath = "/tmp"
-
-        _ = await pfProcessVideoWithDlib(
-            filePath: "/tmp/whatever.mov",
-            settings: settings,
-            index: 7,
-            total: 42,
-            pauseGate: PauseGate(),
-            logFn: { line in await sink.append(line) },
-            progressFn: { _ in },
-            distFn: { _ in }
-        )
-
-        #expect(await sink.contains("dlib: python="),
-                "Pre-bail diagnostics should include python path line")
-        #expect(await sink.contains("dlib: script="),
-                "Pre-bail diagnostics should include script path line")
-        #expect(await sink.contains("[7/42]"),
-                "Index/total formatting should reach the log")
-    }
-
-    // MARK: - dlib respects pre-cancellation
-
-    @Test(.disabled(if: Self.dlibTestsHangOnCI, "Hangs on GH virt-M1 (see comment above)"))
-    func dlibReturnsEarlyWhenTaskAlreadyCancelled() async {
-        // pfProcessVideoWithDlib calls Task.isCancelled right after
-        // pauseGate.waitIfPaused(). A pre-cancelled Task should return
-        // nil before any subprocess work or even the path-check guards.
-        let sink = DispatchLogActor()
-        var settings = PersonFinderSettings()
-        settings.pythonPath = "/bin/sh"
-        settings.recognitionScript = "/tmp/whatever.py"
+        settings.recognitionEngine = .adaface
         settings.referencePath = "/tmp"
 
         let task = Task {
-            await pfProcessVideoWithDlib(
+            await pfRunAdaFaceEngine(
                 filePath: "/tmp/x.mov",
-                settings: settings,
-                index: 1, total: 1,
-                pauseGate: PauseGate(),
+                idx1: 1, total: 1,
+                settings: settings, job: job, dash: nil,
+                progressState: ThrottledMainActorUpdate(intervalSecs: 0.25),
                 logFn: { line in await sink.append(line) },
                 progressFn: { _ in },
                 distFn: { _ in }
@@ -192,37 +125,89 @@ struct PersonFinderEngineDispatchTests {
         }
         task.cancel()
         let result = await task.value
-        #expect(result == nil, "Cancelled task should return nil from dlib dispatch")
+        #expect(result == nil, "Cancelled task should return nil from AdaFace dispatch")
+        await AdaFaceModelLoader.shared.reset()
     }
 
-    // MARK: - ArcFace reference embedding cache (crash 2026-05-12 19:16)
-    //
-    // Stack: arcfaceLoadReferenceEmbeddings → arcfaceEmbedding →
-    // MLE5BindEmptyMemoryObjectToPort → SIGABRT, hit during multi-job
-    // scan with concurrency=32, frameStep=1. Root cause: references
-    // were re-embedded for every video, multiplying concurrent MLE5
-    // load enough to trip the engine race even with per-call MLModel
-    // instances. Fix: cache embeddings on ScanJob, populated lazily by
-    // pfRunArcFaceEngine, invalidated by loadFacesForJob on a fresh
-    // reference-photo load.
-    //
-    // These tests pin the cache shape and the invalidation contract.
-    // They don't exercise the prediction call itself (CoreML state is
-    // expensive and unreliable in unit tests) — that's by design. The
-    // invalidation rule is the part most likely to drift in a refactor.
+    // MARK: - Job-level model pre-flight (#144 QA)
 
-    @Test func newScanJobHasEmptyArcFaceEmbeddingCache() {
+    // An AdaFace job with no model installed must bail ONCE at job level
+    // with a visible failed status, not start a scan that emits per-video
+    // errors across thousands of files (the removed dlib pre-flight's UX).
+    // Synchronous direct path (nil profile → startJobAfterLoad immediately),
+    // same shape as the lifecycle empty-faces bail test. The model check
+    // runs BEFORE the faces guard, so no reference faces are needed here.
+    // Lives in this suite because it mutates modelsDirOverride — only this
+    // .serialized suite may touch that seam.
+    @Test func startJobBailsOnceWhenAdaFaceModelMissing() {
+        let emptyDir = NSTemporaryDirectory() + "adaface_lifecycle_\(UUID().uuidString)"
+        try? FileManager.default.createDirectory(
+            atPath: emptyDir, withIntermediateDirectories: true)
+        defer {
+            AdaFaceModelLoader.modelsDirOverride = nil
+            try? FileManager.default.removeItem(atPath: emptyDir)
+        }
+        AdaFaceModelLoader.modelsDirOverride = emptyDir
+
+        let model = PersonFinderModel()
+        model.settings.recognitionEngine = .adaface
+        let job = ScanJob(searchPath: "/tmp")   // reachable
+        model.jobs.append(job)
+
+        model.startJob(job)
+
+        job.flushConsoleLines()  // bypass 200ms appendLog batch for sync test read
+        let log = job.consoleLines.joined(separator: "\n")
+        #expect(log.contains("AdaFace model not installed"),
+                "Should log the one-shot model pre-flight bail; got: \(log)")
+        #expect(log.contains("adaface_ir50_webface4m.mlpackage"),
+                "Bail message must name the expected model file (actionable)")
+        #expect(job.status == .failed("AdaFace model missing"),
+                "Missing model is a visible job failure, not a silent idle; got \(job.status.label)")
+    }
+
+    // MARK: - Reference embedding cache, backend-keyed (#144)
+    //
+    // Original crash context (2026-05-12 19:16): references were re-embedded
+    // for every video, multiplying concurrent MLE5 load enough to trip
+    // MLE5BindEmptyMemoryObjectToPort even with per-call MLModel instances.
+    // Fix: cache embeddings on ScanJob, populated lazily by the engine
+    // dispatchers, invalidated by loadFacesForJob on a fresh photo load.
+    //
+    // #144 extends the cache to a BACKEND-KEYED dictionary: AdaFace and
+    // ArcFace vectors are both 512-d but not comparable, so a job re-run
+    // under a different engine must never see the other backend's vectors.
+    //
+    // These tests pin the cache shape and the invalidation contract. They
+    // don't exercise the prediction call itself (CoreML state is expensive
+    // and unreliable in unit tests) — that's by design. The invalidation
+    // rule is the part most likely to drift in a refactor.
+
+    @Test func newScanJobHasEmptyEmbeddingCache() {
         let job = ScanJob(searchPath: "/tmp")
-        #expect(job.assignedArcFaceEmbeddings.isEmpty,
-                "Default cache must be empty so pfRunArcFaceEngine takes the compute path on first video")
+        #expect(job.assignedRefEmbeddings.isEmpty,
+                "Default cache must be empty so the dispatchers take the compute path on first video")
     }
 
-    @Test func loadFacesForJobInvalidatesArcFaceEmbeddingCache() async {
+    @Test func embeddingCacheKeysAreBackendSeparated() {
+        // The two backends must be able to coexist without colliding —
+        // and their tokens must differ (a shared token would silently
+        // compare AdaFace vectors against ArcFace references).
+        #expect(FaceEmbeddingBackend.arcface != FaceEmbeddingBackend.adaface)
+
+        let job = ScanJob(searchPath: "/tmp")
+        job.assignedRefEmbeddings[FaceEmbeddingBackend.arcface] = [[1.0, 2.0]]
+        job.assignedRefEmbeddings[FaceEmbeddingBackend.adaface] = [[3.0, 4.0]]
+        #expect(job.assignedRefEmbeddings[FaceEmbeddingBackend.arcface] == [[1.0, 2.0]])
+        #expect(job.assignedRefEmbeddings[FaceEmbeddingBackend.adaface] == [[3.0, 4.0]])
+    }
+
+    @Test func loadFacesForJobInvalidatesEmbeddingCacheForAllBackends() async {
         // Reproduces the worst case: a job has cached embeddings from
         // a previous profile, then the user assigns a different person
         // and starts a new scan. loadFacesForJob is the choke point —
-        // it must clear the cache or the new scan reuses stale embeddings
-        // and matches the wrong person.
+        // it must clear ALL backends' caches or the new scan reuses stale
+        // embeddings and matches the wrong person.
         let model = PersonFinderModel()
         let job = ScanJob(searchPath: "/tmp")
         job.assignedProfile = POIProfile(
@@ -230,12 +215,13 @@ struct PersonFinderEngineDispatchTests {
             referencePath: "/tmp/nonexistent_refs_\(UUID().uuidString)",
             engine: RecognitionEngine.arcface.rawValue
         )
-        job.assignedArcFaceEmbeddings = [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]
-        #expect(!job.assignedArcFaceEmbeddings.isEmpty, "precondition: cache populated")
+        job.assignedRefEmbeddings[FaceEmbeddingBackend.arcface] = [[1.0, 2.0, 3.0]]
+        job.assignedRefEmbeddings[FaceEmbeddingBackend.adaface] = [[4.0, 5.0, 6.0]]
+        #expect(!job.assignedRefEmbeddings.isEmpty, "precondition: cache populated")
 
         await model.loadFacesForJob(job)
 
-        #expect(job.assignedArcFaceEmbeddings.isEmpty,
-                "loadFacesForJob must invalidate the cache; otherwise a person-swap reuses prior embeddings")
+        #expect(job.assignedRefEmbeddings.isEmpty,
+                "loadFacesForJob must invalidate every backend's cache; otherwise a person-swap reuses prior embeddings")
     }
 }

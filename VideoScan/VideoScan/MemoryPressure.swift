@@ -82,10 +82,12 @@ actor MemoryPressureMonitor {
             // transient memory. The previous 2 GB estimate collapsed scans to
             // one worker on high-reserve systems despite tens of GB free.
             return 768
-        case .dlib:
-            return 1024
+        case .adaface:
+            // Same CoreML profile as ArcFace: ~85 MB fp16 weights per worker
+            // plus transient ANE scheduling (#144).
+            return 768
         case .hybrid:
-            // Hybrid does a Vision pass and may then do a dlib fallback;
+            // Hybrid does a Vision pass and may then do an AdaFace fallback;
             // size to the larger of the two so a fallback never OOMs.
             return 3072
         }
@@ -95,15 +97,14 @@ actor MemoryPressureMonitor {
         switch engine {
         case .vision:
             return min(requested, max(1, ProcessInfo.processInfo.processorCount))
-        case .arcface:
+        case .arcface, .adaface:
             // CoreML handles its own ANE scheduling; allow moderate parallelism
             return min(requested, max(1, ProcessInfo.processInfo.processorCount))
-        case .dlib:
-            return min(requested, 4)
         case .hybrid:
-            // Cap at the dlib limit so the fallback pass cannot blow the budget
-            // when several videos miss on Vision and converge on dlib at once.
-            return min(requested, 4)
+            // Both passes (Vision, AdaFace fallback) tolerate full-width
+            // parallelism; the old min(4) cap existed only for the dlib
+            // Python subprocesses that no longer run here (#144).
+            return min(requested, max(1, ProcessInfo.processInfo.processorCount))
         }
     }
 

@@ -80,28 +80,48 @@ struct FramePerfAccumulator {
 enum RecognitionEngine: String, CaseIterable, Identifiable {
     case vision  = "Vision (fast)"
     case arcface = "ArcFace (CoreML)"
-    case dlib    = "dlib/Python (accurate)"
-    case hybrid  = "Hybrid (Vision + dlib fallback)"
+    case adaface = "AdaFace (CoreML)"
+    case hybrid  = "Hybrid (Vision + AdaFace fallback)"
     var id: String { rawValue }
+
+    /// Deterministic migration for PERSISTED engine tokens (GH #144).
+    /// dlib's registry seat was replaced by AdaFace on 2026-07-27, and
+    /// hybrid's rawValue changed because the fallback engine is named in
+    /// the token. Every decode-from-storage site must go through here
+    /// instead of `RecognitionEngine(rawValue:)` so old plists/JSON land
+    /// on a supported engine instead of silently vanishing.
+    /// Returns nil for unknown/poisoned tokens — callers keep their
+    /// existing fallback (`.vision`), exactly as before.
+    static func migratePersisted(_ raw: String?) -> RecognitionEngine? {
+        guard let raw else { return nil }
+        if let current = RecognitionEngine(rawValue: raw) { return current }
+        switch raw {
+        // dlib was the "accurate second opinion" seat; AdaFace inherits it.
+        case "dlib/Python (accurate)":          return .adaface
+        // Same engine, renamed persistence token (fallback is now AdaFace).
+        case "Hybrid (Vision + dlib fallback)": return .hybrid
+        default:                                return nil
+        }
+    }
 
     var title: String {
         switch self {
         case .vision:  return "VISION"
         case .arcface: return "ARCFACE"
-        case .dlib:    return "DLIB"
+        case .adaface: return "ADAFACE"
         case .hybrid:  return "HYBRID"
         }
     }
 
     /// Prose-friendly mixed-case name without the parenthetical descriptor —
-    /// "Vision" / "ArcFace" / "dlib" / "Hybrid". Used inline in summary
+    /// "Vision" / "ArcFace" / "AdaFace" / "Hybrid". Used inline in summary
     /// sentences ("using algorithm: ArcFace") where the parenthetical from
     /// rawValue would create double-paren awkwardness or just noise.
     var displayName: String {
         switch self {
         case .vision:  return "Vision"
         case .arcface: return "ArcFace"
-        case .dlib:    return "dlib"
+        case .adaface: return "AdaFace"
         case .hybrid:  return "Hybrid"
         }
     }
@@ -111,7 +131,7 @@ enum RecognitionEngine: String, CaseIterable, Identifiable {
         switch self {
         case .vision:  return "VISION"
         case .arcface: return "ARCFACE"
-        case .dlib:    return "DLIB"
+        case .adaface: return "ADAFACE"
         case .hybrid:  return "HYBRID"
         }
     }
@@ -122,10 +142,10 @@ enum RecognitionEngine: String, CaseIterable, Identifiable {
             return "Built-in macOS detector for quick whole-library scans."
         case .arcface:
             return "ArcFace face identity model via CoreML — accurate, runs on ANE, fully local."
-        case .dlib:
-            return "DLIB recognizer (Python subprocess) — slower but more accurate on hard faces."
+        case .adaface:
+            return "AdaFace identity model via CoreML — quality-adaptive margin, strong on low-quality VHS-era faces, fully local."
         case .hybrid:
-            return "VISION first; DLIB second look on videos VISION misses."
+            return "VISION first; ADAFACE second look on videos VISION misses."
         }
     }
 
@@ -133,7 +153,7 @@ enum RecognitionEngine: String, CaseIterable, Identifiable {
         switch self {
         case .vision:  return "Fastest — Apple Neural Engine"
         case .arcface: return "Accurate — ArcFace on ANE (local CoreML)"
-        case .dlib:    return "Most accurate — DLIB / Python"
+        case .adaface: return "Accurate on degraded footage — AdaFace on ANE (local CoreML)"
         case .hybrid:  return "Balanced — multi-engine fallback"
         }
     }
@@ -142,8 +162,8 @@ enum RecognitionEngine: String, CaseIterable, Identifiable {
         switch self {
         case .vision:  return "No extra dependencies"
         case .arcface: return "Requires w600k_r50.mlpackage in models/ directory"
-        case .dlib:    return "Requires Python executable and recognition script"
-        case .hybrid:  return "Uses DLIB when configured, otherwise VISION-only"
+        case .adaface: return "Requires adaface_ir50_webface4m.mlpackage in models/ directory"
+        case .hybrid:  return "Uses AdaFace when its model is installed, otherwise VISION-only"
         }
     }
 
@@ -151,7 +171,7 @@ enum RecognitionEngine: String, CaseIterable, Identifiable {
         switch self {
         case .vision:  return "video"
         case .arcface: return "brain"
-        case .dlib:    return "cpu"
+        case .adaface: return "brain.head.profile"
         case .hybrid:  return "square.stack.3d.forward.dottedline"
         }
     }
@@ -206,52 +226,32 @@ struct PersonFinderSettings: Equatable {
     /// stress scripts before raising in production. See ArcFacePredictor.
     var arcfaceInferenceConcurrency: Int = 1
 
-    // dlib/Python engine
+    // AdaFace engine (GH #144 — replaced dlib's seat)
+    /// Cosine similarity threshold for AdaFace matches (higher = stricter).
+    /// AdaFace same-identity cosines run lower than ArcFace's on hard pairs;
+    /// 0.30 is the literature-derived starting point (IR-50-class operating
+    /// points sit around 0.25–0.40). Tune on the Donna eval before any
+    /// default-engine promotion. See docs/design/adaface-plugin.md §4.
+    var adafaceThreshold: Float = 0.30
+
     var recognitionEngine: RecognitionEngine = .vision
-    var pythonPath: String = Self.defaultPythonPath
-    var recognitionScript: String = Self.defaultScriptPath
 
-    /// Auto-detect Python venv and script from project layout.
-    private static var defaultPythonPath: String {
-        ToolLocator.pythonPath
-    }
-
-    private static var defaultScriptPath: String {
-        let candidates = [
-            NSHomeDirectory() + "/dev/VideoScan/scripts/face_recognize.py"
-        ]
-        return candidates.first { FileManager.default.fileExists(atPath: $0) } ?? ""
-    }
-
-    var dlibReady: Bool {
-        recognitionEngine == .dlib && !pythonPath.isEmpty && !recognitionScript.isEmpty
-    }
-
-    /// True when dlib is invokable, regardless of which engine is currently selected.
-    /// Used by `.hybrid` to decide whether the dlib fallback pass can run.
-    var dlibReadyForHybrid: Bool {
-        !pythonPath.isEmpty && !recognitionScript.isEmpty
+    /// Threshold consumed by a given engine — the CoreML engines each use
+    /// their own cosine threshold; Vision (and Hybrid's primary pass) uses
+    /// the feature-print distance `threshold`. Cache keys and scan logs use
+    /// this so rows are keyed by the knob that actually shaped them (#144).
+    func thresholdForEngine(_ engine: RecognitionEngine) -> Float {
+        switch engine {
+        case .arcface:         return arcfaceThreshold
+        case .adaface:         return adafaceThreshold
+        case .vision, .hybrid: return threshold
+        }
     }
 
     // MARK: - Persistence
 
     private static let defaults = UserDefaults.standard
     private static let prefix = "pf_"
-
-    private static func firstExistingFile(_ candidates: [String]) -> String {
-        candidates.first { FileManager.default.fileExists(atPath: $0) } ?? ""
-    }
-
-    private static func detectedPythonPath() -> String {
-        ToolLocator.pythonPath
-    }
-
-    private static func detectedRecognitionScript() -> String {
-        let cwd = FileManager.default.currentDirectoryPath
-        return firstExistingFile([
-            (cwd as NSString).appendingPathComponent("scripts/face_recognize.py")
-        ])
-    }
 
     /// Restore settings from UserDefaults. Missing keys use struct defaults.
     /// The suite is injectable (defaulting to .standard) so persistence tests
@@ -270,8 +270,15 @@ struct PersonFinderSettings: Equatable {
         restoreStrings(&s, from: defaults)
         restoreNumericValues(&s, from: defaults)
         restoreBoolValues(&s, from: defaults)
-        validatePaths(&s)
         return s
+    }
+
+    /// Legal band for a cosine-similarity threshold restored from a plist.
+    /// 0.05 floor: 0.0 (the poisoned-decode value) would match every face;
+    /// 0.95 ceiling: nothing real ever matches above it. In-band values
+    /// pass through untouched.
+    static func clampCosineThreshold(_ v: Float) -> Float {
+        min(max(v, 0.05), 0.95)
     }
 
     private static func restoreStrings(_ s: inout PersonFinderSettings, from defaults: UserDefaults) {
@@ -279,10 +286,10 @@ struct PersonFinderSettings: Equatable {
         if let v = d.string(forKey: "\(p)personName") { s.personName = v }
         if let v = d.string(forKey: "\(p)referencePath") { s.referencePath = v }
         if let v = d.string(forKey: "\(p)outputDir") { s.outputDir = v }
-        if let v = d.string(forKey: "\(p)pythonPath") { s.pythonPath = v }
-        if let v = d.string(forKey: "\(p)recognitionScript") { s.recognitionScript = v }
         if let v = d.string(forKey: "\(p)recognitionEngine") {
-            s.recognitionEngine = RecognitionEngine(rawValue: v) ?? .vision
+            // migratePersisted maps legacy dlib/hybrid tokens onto their
+            // replacement seats; garbage still degrades to .vision (#144).
+            s.recognitionEngine = RecognitionEngine.migratePersisted(v) ?? .vision
         }
         if let rejected = d.stringArray(forKey: "\(p)rejectedReferenceFiles") { s.rejectedReferenceFiles = rejected }
     }
@@ -297,7 +304,16 @@ struct PersonFinderSettings: Equatable {
         if d.object(forKey: "\(p)minPresenceSecs") != nil { s.minPresenceSecs = d.double(forKey: "\(p)minPresenceSecs") }
         if d.object(forKey: "\(p)concurrency") != nil { s.concurrency = d.integer(forKey: "\(p)concurrency") }
         if d.object(forKey: "\(p)previewRate") != nil { s.previewRate = max(1, d.integer(forKey: "\(p)previewRate")) }
-        if d.object(forKey: "\(p)arcfaceThreshold") != nil { s.arcfaceThreshold = d.float(forKey: "\(p)arcfaceThreshold") }
+        // Clamp poisoned cosine thresholds (non-numeric decodes to 0.0, which
+        // would make EVERY face a match; negatives/1.0+ are equally broken).
+        // Same defensive posture as matchConfidenceFloor below. Applied to
+        // both CoreML engines — the arcface flaw was identical & pre-existing.
+        if d.object(forKey: "\(p)arcfaceThreshold") != nil {
+            s.arcfaceThreshold = Self.clampCosineThreshold(d.float(forKey: "\(p)arcfaceThreshold"))
+        }
+        if d.object(forKey: "\(p)adafaceThreshold") != nil {
+            s.adafaceThreshold = Self.clampCosineThreshold(d.float(forKey: "\(p)adafaceThreshold"))
+        }
         if d.object(forKey: "\(p)arcfaceInferenceConcurrency") != nil { s.arcfaceInferenceConcurrency = max(1, d.integer(forKey: "\(p)arcfaceInferenceConcurrency")) }
         // Clamp poisoned values (0, negatives, non-numeric → 0) back to the
         // legal minimum: 1 = any-hit. A bad plist must never disable matching.
@@ -313,15 +329,6 @@ struct PersonFinderSettings: Equatable {
         if d.object(forKey: "\(p)arcfaceLandmarkAlignment") != nil { s.arcfaceLandmarkAlignment = d.bool(forKey: "\(p)arcfaceLandmarkAlignment") }
     }
 
-    private static func validatePaths(_ s: inout PersonFinderSettings) {
-        if s.pythonPath.isEmpty || !FileManager.default.isExecutableFile(atPath: s.pythonPath) {
-            s.pythonPath = detectedPythonPath()
-        }
-        if s.recognitionScript.isEmpty || !FileManager.default.fileExists(atPath: s.recognitionScript) {
-            s.recognitionScript = detectedRecognitionScript()
-        }
-    }
-
     /// Extract a POI profile from the current settings.
     func toProfile(coverImageFilename: String? = nil, notes: String = "", aliases: [String] = []) -> POIProfile {
         POIProfile(
@@ -331,6 +338,7 @@ struct PersonFinderSettings: Equatable {
             engine: recognitionEngine.rawValue,
             visionThreshold: threshold,
             arcfaceThreshold: arcfaceThreshold,
+            adafaceThreshold: adafaceThreshold,
             minFaceConfidence: minFaceConfidence,
             largestFaceOnly: largestFaceOnly,
             coverImageFilename: coverImageFilename,
@@ -344,11 +352,15 @@ struct PersonFinderSettings: Equatable {
         personName = profile.name
         referencePath = profile.referencePath
         rejectedReferenceFiles = profile.rejectedFiles
-        if let eng = RecognitionEngine(rawValue: profile.engine) {
+        // migratePersisted: profile.json written before #144 may carry the
+        // dlib or old-hybrid token — land on the replacement seat, never
+        // silently keep the previous engine for a known-legacy token.
+        if let eng = RecognitionEngine.migratePersisted(profile.engine) {
             recognitionEngine = eng
         }
         threshold = profile.visionThreshold
         arcfaceThreshold = profile.arcfaceThreshold
+        adafaceThreshold = profile.adafaceThreshold
         minFaceConfidence = profile.minFaceConfidence
         largestFaceOnly = profile.largestFaceOnly
     }
@@ -366,8 +378,6 @@ struct PersonFinderSettings: Equatable {
         d.set(personName, forKey: "\(p)personName")
         d.set(referencePath, forKey: "\(p)referencePath")
         d.set(outputDir, forKey: "\(p)outputDir")
-        d.set(pythonPath, forKey: "\(p)pythonPath")
-        d.set(recognitionScript, forKey: "\(p)recognitionScript")
         d.set(recognitionEngine.rawValue, forKey: "\(p)recognitionEngine")
         d.set(threshold, forKey: "\(p)threshold")
         d.set(minFaceConfidence, forKey: "\(p)minFaceConfidence")
@@ -383,6 +393,7 @@ struct PersonFinderSettings: Equatable {
         d.set(arcfaceLandmarkAlignment, forKey: "\(p)arcfaceLandmarkAlignment")
         d.set(previewRate, forKey: "\(p)previewRate")
         d.set(arcfaceThreshold, forKey: "\(p)arcfaceThreshold")
+        d.set(adafaceThreshold, forKey: "\(p)adafaceThreshold")
         d.set(arcfaceInferenceConcurrency, forKey: "\(p)arcfaceInferenceConcurrency")
         d.set(rejectedReferenceFiles, forKey: "\(p)rejectedReferenceFiles")
         d.set(matchConfidenceFloor, forKey: "\(p)matchConfidenceFloor")
@@ -456,6 +467,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
     var engine: String = RecognitionEngine.vision.rawValue
     var visionThreshold: Float = 0.52
     var arcfaceThreshold: Float = 0.40
+    var adafaceThreshold: Float = 0.30
     var minFaceConfidence: Float = 0.55
     var largestFaceOnly: Bool = false
     /// Filename of the best reference photo — used as the avatar in the People gallery.
@@ -502,6 +514,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
     init(name: String, referencePath: String, rejectedFiles: [String] = [],
          engine: String = RecognitionEngine.vision.rawValue,
          visionThreshold: Float = 0.52, arcfaceThreshold: Float = 0.40,
+         adafaceThreshold: Float = 0.30,
          minFaceConfidence: Float = 0.55, largestFaceOnly: Bool = false,
          coverImageFilename: String? = nil, notes: String = "", aliases: [String] = [],
          coverCropOffsetX: Double = 0, coverCropOffsetY: Double = 0, coverCropScale: Double = 1.0,
@@ -514,6 +527,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
         self.engine = engine
         self.visionThreshold = visionThreshold
         self.arcfaceThreshold = arcfaceThreshold
+        self.adafaceThreshold = adafaceThreshold
         self.minFaceConfidence = minFaceConfidence
         self.largestFaceOnly = largestFaceOnly
         self.coverImageFilename = coverImageFilename
@@ -539,6 +553,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
         engine            = try c.decodeIfPresent(String.self, forKey: .engine) ?? RecognitionEngine.vision.rawValue
         visionThreshold   = try c.decodeIfPresent(Float.self, forKey: .visionThreshold) ?? 0.52
         arcfaceThreshold  = try c.decodeIfPresent(Float.self, forKey: .arcfaceThreshold) ?? 0.40
+        adafaceThreshold  = try c.decodeIfPresent(Float.self, forKey: .adafaceThreshold) ?? 0.30
         minFaceConfidence = try c.decodeIfPresent(Float.self, forKey: .minFaceConfidence) ?? 0.55
         largestFaceOnly   = try c.decodeIfPresent(Bool.self, forKey: .largestFaceOnly) ?? false
         coverImageFilename = try c.decodeIfPresent(String.self, forKey: .coverImageFilename)
@@ -651,6 +666,16 @@ struct POIProfile: Codable, Identifiable, Equatable {
         guard let filename = coverImageFilename else { return nil }
         let url = URL(fileURLWithPath: referencePath).appendingPathComponent(filename)
         return NSImage(contentsOf: url)
+    }
+
+    /// Same engine→threshold mapping as PersonFinderSettings.thresholdForEngine,
+    /// for profile-driven cache restores (#144).
+    func thresholdForEngine(_ engine: RecognitionEngine) -> Float {
+        switch engine {
+        case .arcface:         return arcfaceThreshold
+        case .adaface:         return adafaceThreshold
+        case .vision, .hybrid: return visionThreshold
+        }
     }
 
     /// Whether custom crop parameters have been set.

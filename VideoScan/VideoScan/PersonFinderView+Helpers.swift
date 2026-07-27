@@ -99,36 +99,8 @@ extension PersonFinderView {
         }
     }
 
-    func browsePython() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.message = "Select the Python executable (e.g. venv/bin/python)"
-        panel.prompt = "Select"
-        panel.begin { [model] response in
-            if response == .OK, let url = panel.url {
-                model.settings.pythonPath = url.path
-                model.settings.save()
-            }
-        }
-    }
-
-    func browseScript() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.plainText]
-        panel.message = "Select the face_recognize.py script"
-        panel.prompt = "Select"
-        panel.begin { [model] response in
-            if response == .OK, let url = panel.url {
-                model.settings.recognitionScript = url.path
-                model.settings.save()
-            }
-        }
-    }
+    // browsePython()/browseScript() removed with the dlib Search seat
+    // (GH #144) — they were already uncalled dead code.
 
     func revealClips(for result: ClipResult) {
         let dir = result.outputDir

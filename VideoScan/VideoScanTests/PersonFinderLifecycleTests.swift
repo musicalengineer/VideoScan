@@ -198,7 +198,7 @@ struct PersonFinderLifecycleTests {
     @Test func startJobBailsOnEmptyFacesForVision() {
         let model = PersonFinderModel()
         // Force engine to vision so we hit the vision branch (UserDefaults
-        // from a previous run could have set this to dlib).
+        // from a previous run could have set this to another engine).
         model.settings.recognitionEngine = .vision
         let job = ScanJob(searchPath: "/tmp")   // reachable
         model.jobs.append(job)
@@ -216,68 +216,62 @@ struct PersonFinderLifecycleTests {
         #expect(job.status == .idle)
     }
 
-    // Refactor risk: dlib pre-flight is a distinct branch from vision.
-    // If the dispatcher moves, this guard must move with it (or be
-    // preserved at the controller layer).
-    @Test func startJobBailsWhenDlibNotConfigured() async {
-        let model = PersonFinderModel()
+    // (#144 QA job-level model pre-flight test lives in
+    // PersonFinderEngineDispatchTests — the single .serialized suite allowed
+    // to mutate AdaFaceModelLoader.modelsDirOverride.)
+
+    // regression: #144 — a POI profile persisted with the legacy dlib token
+    // must land on AdaFace (deterministically, no crash, no silent no-op),
+    // and a poisoned engine string must degrade to .vision. effectiveEngine
+    // is the resolution choke point every scan start goes through.
+    @Test func legacyDlibProfileTokenResolvesToAdaFace() {
         let job = ScanJob(searchPath: "/tmp")
-        model.jobs.append(job)
-        // Profile with dlib engine but no python/script paths → bail.
-        // Pre-seed an "already loaded" empty assignedFaces sentinel by
-        // setting status to non-idle then back — but actually, the simpler
-        // route is to call startJobAfterLoad's equivalent path: leave
-        // assignedProfile nil and instead set settings directly. That hits
-        // the no-profile branch which uses global referenceFaces.
-        //
-        // Easier: assign a profile but ALSO pre-populate assignedFaces with
-        // an empty array (already the default) — startJob's gate is
-        // `assignedFaces.isEmpty` AND a non-nil profile → load via Task.
-        // We can't easily skip the Task hop, so we accept the async path.
-        let profile = POIProfile(name: "T", referencePath: "/tmp/refs",
-                                 engine: RecognitionEngine.dlib.rawValue)
-        job.assignedProfile = profile
-        // Force settings into the dlib-unconfigured state. applyProfile
-        // inside startJobAfterLoad copies recognitionEngine from the profile
-        // but does not touch pythonPath/recognitionScript.
-        model.settings.pythonPath = ""
-        model.settings.recognitionScript = ""
+        job.assignedProfile = POIProfile(
+            name: "T", referencePath: "/tmp/refs",
+            engine: "dlib/Python (accurate)"   // pre-#144 persisted token
+        )
+        #expect(job.effectiveEngine == .adaface,
+                "Persisted dlib selections migrate to AdaFace (its registry seat)")
 
-        model.startJob(job)
-        // Poll for the bail to land — loadFacesForJob + startJobAfterLoad are
-        // both async hops, and loadFacesForJob transitions through .loading.
-        // Fixed-sleep raced under contention (failed in full suite, passed
-        // solo). Poll only on the same conditions the assertions check, so we
-        // never short-circuit on a transient (.loading) state with empty log.
-        let bailLogged: () -> Bool = {
-            job.flushConsoleLines()  // bypass 200ms appendLog batch for sync test read
-            let log = job.consoleLines.joined(separator: "\n")
-            return log.contains("Set Python path") ||
-                   log.contains("Set reference photos path") ||
-                   log.contains("offline")
-        }
-        // 30s deadline — full suite running in parallel with codex stress
-        // worktree on the same machine pushed the previous 5s deadline past
-        // its budget (16s observed). Bail conditions are deterministic; this
-        // poll completes in ms when the system is unloaded, and only wears
-        // the long deadline in the rare contention case.
-        let deadline = Date().addingTimeInterval(30.0)
-        while !bailLogged() && Date() < deadline {
-            try? await Task.sleep(for: .milliseconds(50))
-        }
+        job.assignedProfile = POIProfile(
+            name: "T", referencePath: "/tmp/refs",
+            engine: "Hybrid (Vision + dlib fallback)"   // pre-#144 hybrid token
+        )
+        #expect(job.effectiveEngine == .hybrid,
+                "Old hybrid token maps to the renamed hybrid seat")
 
-        // Status should NOT be .scanning. It can be .idle (loadFacesForJob
-        // restored idle then dlib-bail returned without setting status) or
-        // .failed if reachability fired first — both prove no scan started.
-        #expect(job.status != .scanning,
-                "Dlib not configured should prevent scanning; got \(job.status.label)")
-        job.flushConsoleLines()  // bypass 200ms appendLog batch for sync test read
-        let log = job.consoleLines.joined(separator: "\n")
-        let bailedOnConfig = log.contains("Set Python path")
-        let bailedOnRefs   = log.contains("Set reference photos path")
-        let bailedOnOffline = log.contains("offline")
-        #expect(bailedOnConfig || bailedOnRefs || bailedOnOffline,
-                "Should log one of the dlib pre-flight messages; got: \(log)")
+        job.assignedProfile = POIProfile(
+            name: "T", referencePath: "/tmp/refs",
+            engine: "garbage engine value"   // poisoned state
+        )
+        #expect(job.effectiveEngine == .vision,
+                "Poisoned engine string degrades to .vision, never crashes")
+
+        // Explicit per-job override still wins over any profile token.
+        job.assignedEngine = .arcface
+        #expect(job.effectiveEngine == .arcface)
+    }
+
+    // regression: #144 — same migration applied through applyProfile
+    // (the settings-overlay path runJob uses).
+    @Test func applyProfileMigratesLegacyDlibToken() {
+        var s = PersonFinderSettings()
+        s.recognitionEngine = .vision
+        s.applyProfile(POIProfile(
+            name: "T", referencePath: "/tmp/refs",
+            engine: "dlib/Python (accurate)"
+        ))
+        #expect(s.recognitionEngine == .adaface)
+
+        // Poisoned token: keep the previous engine (migratePersisted nil).
+        var s2 = PersonFinderSettings()
+        s2.recognitionEngine = .arcface
+        s2.applyProfile(POIProfile(
+            name: "T", referencePath: "/tmp/refs",
+            engine: "not-an-engine"
+        ))
+        #expect(s2.recognitionEngine == .arcface,
+                "Unknown token must not clobber the current engine")
     }
 
     // MARK: - startJob: no-op when already active
@@ -626,33 +620,21 @@ struct PersonFinderLifecycleTests {
         }
     }
 
-    // MARK: - PersonFinderSettings.dlibReadyForHybrid
+    // MARK: - PersonFinderSettings.thresholdForEngine (#144)
 
-    // Refactor risk: hybrid mode uses dlibReadyForHybrid (engine-independent)
-    // while dlibReady is gated on engine == .dlib. The naming is subtle and
-    // easy to swap during refactor. Pin the contract.
-    @Test func dlibReadyForHybridIgnoresEngine() {
+    // Refactor risk: each CoreML engine carries its own cosine threshold
+    // while Vision/Hybrid use the feature-print distance. Cache keys and
+    // scan logs key off this mapping — a swap silently mis-namespaces the
+    // per-video result cache.
+    @Test func thresholdForEngineSelectsPerEngineKnob() {
         var s = PersonFinderSettings()
-        s.pythonPath = "/usr/bin/python3"
-        s.recognitionScript = "/tmp/face_recognize.py"
-        s.recognitionEngine = .vision   // not dlib
-        #expect(s.dlibReadyForHybrid,
-                "dlibReadyForHybrid should ignore the current engine")
-        #expect(!s.dlibReady,
-                "dlibReady is gated on engine == .dlib")
-
-        s.recognitionEngine = .dlib
-        #expect(s.dlibReady)
-    }
-
-    @Test func dlibReadyForHybridFalseWhenPathsMissing() {
-        var s = PersonFinderSettings()
-        s.pythonPath = ""
-        s.recognitionScript = "/tmp/face_recognize.py"
-        #expect(!s.dlibReadyForHybrid)
-        s.pythonPath = "/usr/bin/python3"
-        s.recognitionScript = ""
-        #expect(!s.dlibReadyForHybrid)
+        s.threshold = 0.52
+        s.arcfaceThreshold = 0.40
+        s.adafaceThreshold = 0.30
+        #expect(s.thresholdForEngine(.vision) == 0.52)
+        #expect(s.thresholdForEngine(.hybrid) == 0.52)
+        #expect(s.thresholdForEngine(.arcface) == 0.40)
+        #expect(s.thresholdForEngine(.adaface) == 0.30)
     }
 
     // MARK: - FramePerfAccumulator

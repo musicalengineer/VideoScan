@@ -201,7 +201,14 @@ private func arcfacePredictAttempt(
 /// attempt (the "silent drop" failure mode) — callers use it to surface a
 /// degraded run instead of under-detecting silently (P0-2). Setup failures and
 /// Swift throws return `instabilityDrop == false`.
-nonisolated func arcfaceEmbedding(from faceImage: CGImage, model: MLModel) -> (embedding: [Float]?, instabilityDrop: Bool) {
+/// `useSharedPool: false` (AdaFace, GH #144) skips `ArcFacePredictor.borrow`
+/// entirely and always predicts against the caller's own per-worker `model`
+/// under the global serialization lock. The pool's K>1 slots hold ARCFACE
+/// MLModel instances — borrowing one from the AdaFace path would silently
+/// infer against the wrong network. Default `true` preserves the ArcFace
+/// behavior byte-for-byte.
+nonisolated func arcfaceEmbedding(from faceImage: CGImage, model: MLModel,
+                                  useSharedPool: Bool = true) -> (embedding: [Float]?, instabilityDrop: Bool) {
     // Resize to 112x112 RGB
     let size = 112
     guard let context = CGContext(
@@ -258,8 +265,11 @@ nonisolated func arcfaceEmbedding(from faceImage: CGImage, model: MLModel) -> (e
         for attempt in 1...maxAttempts {
             // Borrow a (model, lock) for this attempt: serialized mode returns
             // the per-video `model` + the global lock (unchanged); pooled mode
-            // (K>1) returns one of K individually-locked instances.
-            let (predModel, lock) = ArcFacePredictor.shared.borrow(fallback: model)
+            // (K>1) returns one of K individually-locked instances. Non-pool
+            // callers (AdaFace) always use their own model + the global lock.
+            let (predModel, lock) = useSharedPool
+                ? ArcFacePredictor.shared.borrow(fallback: model)
+                : (model, arcfacePredictionLock)
             let r = arcfacePredictAttempt(
                 input: input, model: predModel, lock: lock,
                 attempt: attempt, maxAttempts: maxAttempts
@@ -333,7 +343,8 @@ nonisolated func arcfaceLoadReferenceEmbeddings(
     from path: String,
     largestFaceOnly: Bool,
     useLandmarkAlignment: Bool,
-    model: MLModel
+    model: MLModel,
+    useSharedPool: Bool = true
 ) -> ([[Float]], String?) {
     let fm = FileManager.default
     let imageExts: Set<String> = ["jpg", "jpeg", "png", "heic", "heif", "tiff", "tif", "bmp", "gif"]
@@ -381,7 +392,8 @@ nonisolated func arcfaceLoadReferenceEmbeddings(
             // are aligned the same way and stay comparable by cosine.
             guard let cropped = arcfaceFaceCrop(from: img, observation: obs,
                                                 useLandmarkAlignment: useLandmarkAlignment) else { continue }
-            guard let emb = arcfaceEmbedding(from: cropped, model: model).embedding else { continue }
+            guard let emb = arcfaceEmbedding(from: cropped, model: model,
+                                             useSharedPool: useSharedPool).embedding else { continue }
             embeddings.append(emb)
         }
     }
@@ -493,14 +505,15 @@ private func arcFaceMatchCandidates(
     referenceEmbeddings: [[Float]],
     settings: PersonFinderSettings,
     model: MLModel,
-    cosineThreshold: Float
+    cosineThreshold: Float,
+    useSharedPool: Bool = true
 ) -> ArcFaceFrameMatch {
     var m = ArcFaceFrameMatch()
     for obs in candidates {
         guard obs.confidence >= settings.minFaceConfidence,
               let cropped = arcfaceFaceCrop(from: orientedImage, observation: obs,
                                             useLandmarkAlignment: settings.arcfaceLandmarkAlignment) else { continue }
-        let embedResult = arcfaceEmbedding(from: cropped, model: model)
+        let embedResult = arcfaceEmbedding(from: cropped, model: model, useSharedPool: useSharedPool)
         guard let embedding = embedResult.embedding else {
             if embedResult.instabilityDrop { m.embedDrops += 1 }
             continue
@@ -590,6 +603,11 @@ private nonisolated func arcFaceLogMilestones(
     }
 }
 
+/// `engineTag` / `cosineThresholdOverride` / `useSharedPool` generalize this
+/// pipeline for AdaFace (GH #144), which shares ArcFace's entire contract
+/// (112x112 crop in, 512-d cosine-compared embedding out) but must use its
+/// own threshold, its own log label, and NEVER the ArcFace K>1 pool. The
+/// defaults reproduce the original ArcFace behavior exactly.
 nonisolated func pfProcessVideoWithArcFace(
     filePath: String,
     referenceEmbeddings: [[Float]],
@@ -604,7 +622,10 @@ nonisolated func pfProcessVideoWithArcFace(
     distFn: @escaping @Sendable (Float) async -> Void,
     distFnFinal: (@Sendable (Float) async -> Void)? = nil,
     visionStatsFn: @escaping @Sendable (Double, Double) async -> Void = { _, _ in },
-    previewRateFn: @escaping @Sendable () -> Int = { 5 }
+    previewRateFn: @escaping @Sendable () -> Int = { 5 },
+    engineTag: String = "ArcFace",
+    cosineThresholdOverride: Float? = nil,
+    useSharedPool: Bool = true
 ) async -> pfVideoResult? {
     let filename = (filePath as NSString).lastPathComponent
     var perf = FramePerfAccumulator()
@@ -620,9 +641,9 @@ nonisolated func pfProcessVideoWithArcFace(
     let wallStart = CFAbsoluteTimeGetCurrent()
 
     await progressFn(filename)
-    await logFn("[\(index)/\(total)] \(filename)  (\(pfFormatDuration(ctx.duration)), \(String(format: "%.1f", ctx.fps)) fps)  [ArcFace]")
+    await logFn("[\(index)/\(total)] \(filename)  (\(pfFormatDuration(ctx.duration)), \(String(format: "%.1f", ctx.fps)) fps)  [\(engineTag)]")
 
-    let cosineThreshold = settings.arcfaceThreshold
+    let cosineThreshold = cosineThresholdOverride ?? settings.arcfaceThreshold
 
     var hits: [(timeSecs: Double, distance: Float)] = []
     var totalFacesDetected = 0
@@ -695,7 +716,8 @@ nonisolated func pfProcessVideoWithArcFace(
                     referenceEmbeddings: referenceEmbeddings,
                     settings: settings,
                     model: model,
-                    cosineThreshold: cosineThreshold
+                    cosineThreshold: cosineThreshold,
+                    useSharedPool: useSharedPool
                 )
                 matchTime = CFAbsoluteTimeGetCurrent() - t3
                 if frameMatch.bestCosineInFrame > bestCosineEver {
@@ -744,7 +766,7 @@ nonisolated func pfProcessVideoWithArcFace(
     perfLog.notice("\(summary, privacy: .public)")
     let wallSecs = wallMs / 1000.0
     if wallSecs > max(120.0, ctx.duration * 2.0) {
-        await logFn("[perf] slow ArcFace file: \(filename) media=\(pfFormatDuration(ctx.duration)) wall=\(pfFormatDuration(wallSecs)) sampled=\(sampledSoFar) faces=\(totalFacesDetected)")
+        await logFn("[perf] slow \(engineTag) file: \(filename) media=\(pfFormatDuration(ctx.duration)) wall=\(pfFormatDuration(wallSecs)) sampled=\(sampledSoFar) faces=\(totalFacesDetected)")
     }
     signpostLog.endInterval("video", spVideo)
 
@@ -763,7 +785,7 @@ nonisolated func pfProcessVideoWithArcFace(
     let cosStr = bestCosineEver > -1 ? String(format: "%.3f", bestCosineEver) : "—"
 
     guard !hits.isEmpty else {
-        await logFn("  [\(index)/\(total)] \(filename) → no match  (faces: \(totalFacesDetected), best cosine: \(cosStr), threshold: \(String(format: "%.2f", cosineThreshold)))  [ArcFace]")
+        await logFn("  [\(index)/\(total)] \(filename) → no match  (faces: \(totalFacesDetected), best cosine: \(cosStr), threshold: \(String(format: "%.2f", cosineThreshold)))  [\(engineTag)]")
         return pfVideoResult(filename: filename, filePath: filePath,
                              durationSeconds: ctx.duration, fps: ctx.fps, totalHits: 0,
                              segments: [], facesDetected: totalFacesDetected)
@@ -771,7 +793,7 @@ nonisolated func pfProcessVideoWithArcFace(
 
     let segs = arcFaceClusterSegments(hits: hits, settings: settings, fps: ctx.fps, duration: ctx.duration)
     let presence = segs.reduce(0) { $0 + ($1.endSecs - $1.startSecs) }
-    await logFn("  [\(index)/\(total)] \(filename) → \(hits.count) hits, \(segs.count) seg(s), \(pfFormatDuration(presence)) presence  (faces: \(totalFacesDetected), best cosine: \(cosStr))  [ArcFace]")
+    await logFn("  [\(index)/\(total)] \(filename) → \(hits.count) hits, \(segs.count) seg(s), \(pfFormatDuration(presence)) presence  (faces: \(totalFacesDetected), best cosine: \(cosStr))  [\(engineTag)]")
 
     return pfVideoResult(filename: filename, filePath: filePath,
                          durationSeconds: ctx.duration, fps: ctx.fps,
