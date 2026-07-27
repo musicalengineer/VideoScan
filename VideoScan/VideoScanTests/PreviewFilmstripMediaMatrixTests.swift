@@ -16,7 +16,6 @@
 //       (-g 12 dense keyframes, same rationale as
 //       PreviewBestFrameMediaMatrixTests' fixture note).
 //   mov/prores            — second .avFoundation container.
-//   mxf/mpeg2video        — project-policy archival interchange fixture.
 //   avi/dv                — routes .avFoundation but AVF can't open
 //       AVI: pins the batch-failure → ffmpeg-loop fallback arm.
 //   mxf/mpeg2video        — the checklist's mxf column and the app's

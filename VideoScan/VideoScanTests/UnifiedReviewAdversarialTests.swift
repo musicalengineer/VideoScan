@@ -52,13 +52,15 @@ struct UnifiedReviewAdversarialTests {
         controlK: Int = 100
     ) -> (all: Set<String>, positives: Set<String>, controls: Set<String>, stats: ConfirmRoundStats) {
         var rng = SystemRandomNumberGenerator()
+        let matcher = HeldOutIdentityMatcher(
+            heldOutPaths: heldOut, records: records)
         let result = pfConfirmRound(
             name: "Donna",
             records: records,
             topN: topN,
             controlK: controlK,
             alreadyLabeled: [],
-            heldOutPaths: heldOut,
+            heldOut: matcher,
             isReachable: { _ in true },
             rng: &rng
         )
@@ -168,7 +170,7 @@ struct UnifiedReviewAdversarialTests {
         #expect(output.positives == ["/v/free/free_positive.mov"])
     }
 
-    /// Intentional RED regression on 31f27bb.
+    /// Regression: RED on 31f27bb, GREEN with content-identity matching.
     ///
     /// A different path carrying the same stable content identity as a sealed
     /// eval row is still the same video. Showing that copy as either a scored
@@ -177,7 +179,7 @@ struct UnifiedReviewAdversarialTests {
     /// sufficient; the production seam must also communicate held-out content
     /// identities into round assembly.
     @Test @MainActor
-    func red_contentIdenticalAliasesCannotEnterPositivesOrControls() throws {
+    func contentIdenticalAliasesCannotEnterPositivesOrControls() throws {
         let q = try queue([
             "AAAA00000001,/v/eval/donna_original.mov,,",
             "BBBB00000002,/v/eval/plain_original.mov,,",
