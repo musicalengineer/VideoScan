@@ -202,18 +202,18 @@ struct PreviewSweepPlannerTests {
     // MARK: - Persisted setting (injected defaults — settings-pollution class)
 
     @Test("settings: OFF by default, from init and from empty defaults")
-    func settingsDefaultOff() {
+    func settingsDefaultOff() throws {
         #expect(PreviewSweepSettings().enabled == false)
         let suite = "PreviewSweepPlannerTests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         #expect(PreviewSweepSettings.restored(from: defaults).enabled == false)
     }
 
     @Test("settings: save/restore round trip through injected defaults")
-    func settingsRoundTrip() {
+    func settingsRoundTrip() throws {
         let suite = "PreviewSweepPlannerTests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
 
         var s = PreviewSweepSettings()
@@ -227,9 +227,9 @@ struct PreviewSweepPlannerTests {
     }
 
     @Test("settings: poisoned stored value (wrong type) falls back to OFF")
-    func settingsPoisonedValue() {
+    func settingsPoisonedValue() throws {
         let suite = "PreviewSweepPlannerTests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suite)!
+        let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set("garbage", forKey: PreviewSweepSettings.enabledKey)
         // bool(forKey:) on a non-boolean string reads false — fail-safe off.

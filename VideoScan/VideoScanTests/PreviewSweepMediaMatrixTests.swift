@@ -108,6 +108,10 @@ struct PreviewSweepMediaMatrixTests {
         try #require(finished, "sweep did not finish: \(service.status)")
         #expect(service.status == .done(ready: 2, unpreviewable: 0),
                 "unexpected final status: \(service.status)")
+        // `count` is ThumbnailFailureStore's entry counter, not a
+        // collection — empty_count is a false positive here (same
+        // exemption as AsyncSemaphore's counter).
+        // swiftlint:disable:next empty_count
         #expect(failureStore.count == 0, "sweep recorded failures for good fixtures")
 
         // ---- Cache truth ----------------------------------------------
