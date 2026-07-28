@@ -89,6 +89,31 @@ struct PersonFinderEngineDispatchTests {
         await AdaFaceModelLoader.shared.reset()
     }
 
+    /// A compiled-model directory can exist yet still be unusable. Keep this
+    /// beside every other modelsDirOverride test so the process-global seam is
+    /// serialized across suspension points and never races another suite.
+    @Test func corruptCompiledAdaFaceAssetReturnsActionableFailure() async throws {
+        let modelsDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("adaface-corrupt-\(UUID().uuidString)", isDirectory: true)
+        let corrupt = modelsDir
+            .appendingPathComponent(AdaFaceModelLoader.modelBaseName + ".mlmodelc", isDirectory: true)
+        try FileManager.default.createDirectory(at: corrupt, withIntermediateDirectories: true)
+        defer {
+            AdaFaceModelLoader.modelsDirOverride = nil
+            try? FileManager.default.removeItem(at: modelsDir)
+        }
+
+        AdaFaceModelLoader.modelsDirOverride = modelsDir.path
+        await AdaFaceModelLoader.shared.reset()
+        let (model, error) = await AdaFaceModelLoader.shared.getModel()
+
+        #expect(model == nil)
+        let message = try #require(error)
+        #expect(message.contains("found but failed to load"))
+        #expect(message.contains(corrupt.path))
+        await AdaFaceModelLoader.shared.reset()
+    }
+
     // MARK: - Pre-start cancellation does NO engine work (codex adversarial #42)
 
     /// A pre-cancelled Task must come back nil WITHOUT any engine work at
