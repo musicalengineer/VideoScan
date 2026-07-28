@@ -204,7 +204,10 @@ enum PreviewBestFramePlan {
     /// TRAPS on non-finite doubles and on finite values past ~1.8e18 —
     /// a poisoned record would crash the whole prewarm (testing agent
     /// 🔴, 2026-07-26, SIGTRAP verified). Out-of-range → plain [0.5].
-    static let maxSaneDurationSeconds: Double = 10_000_000
+    /// Value lives in VideoScanCore (`previewMaxSaneDurationSeconds`) so
+    /// the app plan and the disk cache's strip-offset ceiling share ONE
+    /// source of truth.
+    static let maxSaneDurationSeconds: Double = previewMaxSaneDurationSeconds
 
     /// True when the catalog duration is usable for candidate planning:
     /// finite and within [min, max]. NaN fails every comparison by IEEE

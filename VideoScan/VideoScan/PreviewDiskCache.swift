@@ -55,7 +55,6 @@
 // (2 GB), enforced by the init-time prune — never on the hot path.
 
 import Foundation
-import CryptoKit
 import ImageIO
 import UniformTypeIdentifiers
 import os
@@ -70,15 +69,11 @@ final class PreviewDiskCache: @unchecked Sendable {
     // MARK: - Tiers
 
     /// Payload quality tier — see the filename-suffix note in the file
-    /// header. Raw value is the literal filename suffix.
-    enum Tier: String, CaseIterable {
-        /// Interactive path's single frame at t=0.5s — cheap, may be a
-        /// blank VHS lead-in. Upgradeable.
-        case fast
-        /// Background best-frame pick (content-scored across candidate
-        /// offsets, commit 2). Terminal — never overwritten by `fast`.
-        case best
-    }
+    /// header. The type + its filename grammar now live in VideoScanCore
+    /// (`PreviewCacheTier`, PreviewCacheFormat.swift) as the shared
+    /// app/CLI format contract; this alias keeps every existing
+    /// `PreviewDiskCache.Tier` / `.best` / `.fast` reference unchanged.
+    typealias Tier = PreviewCacheTier
 
     // MARK: - Policy constants
 
@@ -168,50 +163,29 @@ final class PreviewDiskCache: @unchecked Sendable {
     // MARK: - Keying (pure)
 
     /// Cache key: SHA256 hex of "path|mtimeEpochSeconds|sizeBytes".
-    /// mtime truncates to whole seconds — sub-second precision differs
-    /// across filesystems (SMB vs APFS) and a 1 s window can't matter
-    /// for "did this media file change". Pure and static for tests.
+    /// The derivation now lives in VideoScanCore (`previewCacheKey`) as
+    /// the shared app/CLI contract, golden-pinned; this forwarder keeps
+    /// every existing `PreviewDiskCache.cacheKey` call site unchanged.
     static func cacheKey(path: String, mtime: TimeInterval, size: Int64) -> String {
-        let material = "\(path)|\(Int64(mtime))|\(size)"
-        let digest = SHA256.hash(data: Data(material.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
+        previewCacheKey(path: path, mtime: mtime, size: size)
     }
 
     /// (mtime, size) of the file at `path`, or nil when it can't be
-    /// statted (vanished / dead volume). Callers skip the disk cache
-    /// entirely on nil rather than keying on garbage. File I/O — call
-    /// off the main actor (both wire-in sites run in detached tasks).
+    /// statted (vanished / dead volume). Forwards to VideoScanCore's
+    /// `previewFileSignature`. File I/O — call off the main actor.
     static func fileSignature(atPath path: String) -> (mtime: TimeInterval, size: Int64)? {
-        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
-              let mtime = (attrs[.modificationDate] as? Date)?.timeIntervalSince1970,
-              let size = (attrs[.size] as? NSNumber)?.int64Value else {
-            return nil
-        }
-        return (mtime, size)
+        previewFileSignature(atPath: path)
     }
 
     private func payloadURL(key: String, tier: Tier) -> URL {
-        rootURL.appendingPathComponent("\(key)-\(tier.rawValue).jpg")
+        rootURL.appendingPathComponent(previewTierFilename(key: key, tier: tier))
     }
 
     /// Parse a tier payload filename ("<key>-fast.jpg" / "<key>-best.jpg")
-    /// back into its fields, or nil for anything else (strip payloads,
-    /// tmp files, junk). Pure and static — the preview sweep's one-listing
-    /// cache index is built from THIS parser + parseStripFilename so the
-    /// sweep never stats the cache per record (17k probes = disaster;
-    /// see PreviewSweepPlanner).
+    /// back into its fields, or nil for anything else. Forwards to the
+    /// shared `previewParseTierFilename`.
     static func parseTierFilename(_ filename: String) -> (key: String, tier: Tier)? {
-        guard filename.hasSuffix(".jpg") else { return nil }
-        let stem = filename.dropLast(4)
-        for tier in Tier.allCases {
-            let suffix = "-\(tier.rawValue)"
-            if stem.hasSuffix(suffix) {
-                let key = String(stem.dropLast(suffix.count))
-                guard !key.isEmpty else { return nil }
-                return (key, tier)
-            }
-        }
-        return nil
+        previewParseTierFilename(filename)
     }
 
     // MARK: - Lookup
@@ -339,56 +313,26 @@ final class PreviewDiskCache: @unchecked Sendable {
 
     // MARK: - Filmstrip payloads (filmstrip preview, 2026-07-27)
 
-    /// Ceiling for a strip frame's offset, in milliseconds — aligned
-    /// with PreviewBestFramePlan.maxSaneDurationSeconds so the plan and
-    /// the cache agree on what a "sane" media timestamp is (~115 days).
-    /// This is the write-side twin of the plan's SIGTRAP guard: a huge
-    /// FINITE Double passes an isFinite check but `Int(x.rounded())`
-    /// still traps past ~9.2e18 (codex adversarial finding #40,
-    /// 2026-07-27) — so the seconds value is bounded BEFORE the
-    /// millisecond conversion, and the parser below rejects the same
-    /// range on read (a hand-crafted filename must not trap either).
-    static let maxStripOffsetMillis = Int(PreviewBestFramePlan.maxSaneDurationSeconds * 1000)
+    /// Ceiling for a strip frame's offset, in milliseconds. The value +
+    /// the SIGTRAP rationale now live in VideoScanCore
+    /// (`previewMaxStripOffsetMillis`); this alias keeps existing call
+    /// sites unchanged.
+    static let maxStripOffsetMillis = previewMaxStripOffsetMillis
 
     /// Strip payload filename:
-    /// "<key>-strip-<index>-of-<count>-<offsetMillis>.jpg".
-    /// Pure and static for tests.
+    /// "<key>-strip-<index>-of-<count>-<offsetMillis>.jpg". Forwards to
+    /// the shared `previewStripFilename`.
     static func stripFilename(key: String, index: Int, count: Int,
                               offsetMillis: Int) -> String {
-        "\(key)-strip-\(index)-of-\(count)-\(offsetMillis).jpg"
+        previewStripFilename(key: key, index: index, count: count,
+                             offsetMillis: offsetMillis)
     }
 
-    /// Parse a strip filename back into its fields. Returns nil for
-    /// anything else (tier payloads, tmp files, malformed/negative
-    /// fields, index out of range for its count). Pure and static so
-    /// tests can pin the round-trip without touching disk.
+    /// Parse a strip filename back into its fields, or nil. Forwards to
+    /// the shared `previewParseStripFilename`.
     static func parseStripFilename(_ filename: String)
         -> (key: String, index: Int, count: Int, offsetMillis: Int)? {
-        guard filename.hasSuffix(".jpg") else { return nil }
-        let stem = String(filename.dropLast(4))
-        guard let marker = stem.range(of: "-strip-") else { return nil }
-        let key = String(stem[..<marker.lowerBound])
-        guard !key.isEmpty else { return nil }
-        // Tail is "<index>-of-<count>-<offsetMillis>". A negative field
-        // would add a "-" and break the 4-part shape — rejected.
-        let parts = stem[marker.upperBound...].components(separatedBy: "-")
-        guard parts.count == 4, parts[1] == "of",
-              let index = Int(parts[0]),
-              let count = Int(parts[2]),
-              let offsetMillis = Int(parts[3]),
-              count > 0, index >= 0, index < count,
-              // Same sane-offset ceiling as storeFilmstrip (see
-              // maxStripOffsetMillis): a hand-crafted filename with a
-              // huge-but-parseable offset must be a MISS, not a value
-              // that flows downstream into second→millisecond math that
-              // traps (TrimTimecode.format's Int64 conversion is within
-              // one ulp of overflow at Int.max millis). Int.init(String)
-              // already returns nil on overflow — this closes the
-              // in-range-but-insane window.
-              offsetMillis >= 0, offsetMillis <= maxStripOffsetMillis else {
-            return nil
-        }
-        return (key, index, count, offsetMillis)
+        previewParseStripFilename(filename)
     }
 
     /// Store a complete filmstrip for this exact (path, mtime, size).
