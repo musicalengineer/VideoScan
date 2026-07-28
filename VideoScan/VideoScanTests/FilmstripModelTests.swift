@@ -506,6 +506,7 @@ struct FilmstripGenerationIsolationTests {
         // Write-through lands (after publish — poll for it), inside the
         // redirected root.
         let sig = try #require(PreviewDiskCache.fileSignature(atPath: path))
+        let key = PreviewDiskCache.cacheKey(path: path, mtime: sig.mtime, size: sig.size)
         let stored = try await poll(timeoutSeconds: 30) {
             model.previewDiskCache.hasCompleteFilmstrip(path: path,
                                                         mtime: sig.mtime, size: sig.size)
@@ -513,7 +514,7 @@ struct FilmstripGenerationIsolationTests {
         #expect(stored, "strip write-through never landed in the disk cache")
         let stripFiles = try FileManager.default
             .contentsOfDirectory(atPath: model.previewDiskCache.rootURL.path)
-            .filter { $0.contains("-strip-") }
+            .filter { $0.hasPrefix("\(key)-strip-") }
         #expect(stripFiles.count == readyFrames.count,
                 "expected \(readyFrames.count) strip payloads under the redirected root, found \(stripFiles.count)")
 
