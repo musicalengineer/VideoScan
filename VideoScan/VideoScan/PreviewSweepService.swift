@@ -45,60 +45,16 @@
 import Foundation
 import SwiftUI
 import Combine
-import os
 
-/// File-scope so the detached sweep task can log without touching
-/// main-actor state — same fix class as previewLog/precacheLog.
-private let sweepLog = Logger(subsystem: "Rick-Breen.VideoScan",
-                              category: "preview-sweep")
+// The detached run loop (and its logger) moved to VideoScanCore's
+// PreviewSweepEngine; this file is now the thin @MainActor adapter that
+// owns the @Published status, the interaction gate, and the run lifecycle.
 
 // MARK: - Status
-
-/// What the sweep is doing right now — drives the settings pane line and
-/// the catalog's unobtrusive progress line. Counts are WORK ITEMS this
-/// run (records that actually needed something), not the whole catalog —
-/// honest numbers: a warm cache sweeps "3 of 12", not "17,398 of 17,401".
-enum PreviewSweepStatus: Equatable {
-    case idle
-    case planning
-    case sweeping(done: Int, total: Int)
-    case pausedForInteraction(done: Int, total: Int)
-    case pausedForThermal(done: Int, total: Int)
-    /// Stopped honestly: cache bytes (existing + written) reached the
-    /// 2 GB cap — continuing would just thrash the prune.
-    case cacheFull(done: Int, total: Int)
-    /// ready = eligible records with a best still on disk when the run
-    /// ended; unpreviewable = known + fresh genuine failures; deferred =
-    /// records this run didn't finish (volume vanished mid-run, ffmpeg
-    /// missing, or a path an interactive rip owned). A `deferred` count
-    /// keeps the tally honest — ready + unpreviewable no longer has to
-    /// equal the eligible total (QA MINOR-5, 2026-07-27); deferred
-    /// records are picked up by the next replan.
-    case done(ready: Int, unpreviewable: Int, deferred: Int)
-
-    /// Friendly-family language (no surveillance terms), one line.
-    var displayText: String {
-        switch self {
-        case .idle:
-            return ""
-        case .planning:
-            return "Preview sweep: checking what's needed…"
-        case .sweeping(let done, let total):
-            return "Preview sweep: \(done.formatted()) of \(total.formatted())"
-        case .pausedForInteraction(let done, let total):
-            return "Preview sweep: \(done.formatted()) of \(total.formatted()) · paused while you browse"
-        case .pausedForThermal(let done, let total):
-            return "Preview sweep: \(done.formatted()) of \(total.formatted()) · paused to keep the Mac cool"
-        case .cacheFull(let done, let total):
-            return "Preview sweep stopped at \(done.formatted()) of \(total.formatted()) — preview storage is full (2 GB limit)"
-        case .done(let ready, let unpreviewable, let deferred):
-            var line = "Previews are fresh — \(ready.formatted()) ready"
-            if unpreviewable > 0 { line += ", \(unpreviewable.formatted()) unpreviewable" }
-            if deferred > 0 { line += ", \(deferred.formatted()) deferred" }
-            return line
-        }
-    }
-}
+//
+// PreviewSweepStatus moved to VideoScanCore (PreviewSweepStatus.swift) so
+// the extracted engine constructs/publishes it. Referenced here via the
+// app's @_exported import VideoScanCore.
 
 // MARK: - Interaction gate
 
@@ -280,314 +236,55 @@ final class PreviewSweepService: ObservableObject {
         runID = id
         status = .planning
 
-        // Sendable captures only — the model-facing @MainActor closures
-        // are reached through `self` hops inside the run.
-        sweepTask = Task.detached(priority: .background) { [weak self] in
+        // Build the Core engine (PreviewSweepEngine) with THIS run's
+        // dependencies injected. The model-facing @MainActor state
+        // (candidates, isExternallyBusy, shouldSkipPathNow) and the status
+        // sinks are reached only through these guarded closures — the
+        // engine itself holds no reference to the service. The runID guard
+        // inside each closure is what makes a superseded run's publishes
+        // and cleanup no-ops (the old service.publish(id)/clearTask(id)
+        // guard, now inlined into the sinks).
+        let gate = self.gate
+        let engine = PreviewSweepEngine(
+            plan: { [weak self] in
+                await MainActor.run {
+                    guard let self, self.runID == id, self.isEnabled else { return [] }
+                    return self.config?.candidates() ?? []
+                }
+            },
+            cache: config.diskCache,
+            failureStore: config.failureStore,
+            thermalState: config.thermalState,
+            lastInteraction: { gate.lastInteraction },
+            isExternallyBusy: { [weak self] in
+                await MainActor.run {
+                    guard let self, self.runID == id else { return false }
+                    return self.config?.isExternallyBusy() ?? false
+                }
+            },
+            shouldSkipPathNow: { [weak self] path in
+                await MainActor.run {
+                    guard let self, self.runID == id else { return false }
+                    return self.config?.shouldSkipPathNow(path) ?? false
+                }
+            },
+            executeItem: config.executeItem,
+            publishOnMain: { [weak self] newStatus in
+                guard let self, self.runID == id else { return }
+                self.status = newStatus
+            },
+            finishOnMain: { [weak self] in
+                guard let self, self.runID == id else { return }
+                self.sweepTask = nil
+            },
+            workerCount: config.workerCount,
+            quietSeconds: config.quietSeconds,
+            pausePollMilliseconds: config.pausePollMilliseconds,
+            cacheCapBytes: config.cacheCapBytes)
+
+        sweepTask = Task.detached(priority: .background) {
             await previous?.value
-            await Self.run(service: self,
-                           runID: id,
-                           diskCache: config.diskCache,
-                           failureStore: config.failureStore,
-                           isReachable: config.isReachable,
-                           thermalState: config.thermalState,
-                           executeItem: config.executeItem,
-                           workerCount: config.workerCount,
-                           quietSeconds: config.quietSeconds,
-                           pausePollMilliseconds: config.pausePollMilliseconds,
-                           cacheCapBytes: config.cacheCapBytes)
-        }
-    }
-
-    /// Publish a status for `runID` — silently dropped when a newer run
-    /// (or a cancel) rotated the id.
-    private nonisolated func publish(_ id: UUID, _ newStatus: PreviewSweepStatus) async {
-        await MainActor.run { [weak self] in
-            guard let self, self.runID == id else { return }
-            self.status = newStatus
-        }
-    }
-
-    /// Clear the finished run's task handle (natural completion only —
-    /// cancelSweep is the preemption path).
-    private nonisolated func clearTask(_ id: UUID) async {
-        await MainActor.run { [weak self] in
-            guard let self, self.runID == id else { return }
-            self.sweepTask = nil
-        }
-    }
-
-    // MARK: The sweep run (detached)
-
-    // Static so the compiler proves the run touches the main-actor
-    // service ONLY through the explicit await hops below. `service` is
-    // weak — the model (and its service) outliving the run is the normal
-    // case, but a torn-down window must not be pinned by a sweep.
-    private static func run(service: PreviewSweepService?,
-                            runID: UUID,
-                            diskCache: PreviewDiskCache,
-                            failureStore: ThumbnailFailureStore,
-                            isReachable: @escaping @Sendable (String) -> Bool,
-                            thermalState: @escaping @Sendable () -> ProcessInfo.ThermalState,
-                            executeItem: @escaping PreviewSweepExecutor,
-                            workerCount: Int,
-                            quietSeconds: Double,
-                            pausePollMilliseconds: Int,
-                            cacheCapBytes: Int64) async {
-        // Preemption granularity is per WORK ITEM, not sub-item (QA
-        // MINOR-3, documented tradeoff, 2026-07-27): an interaction (or
-        // the precacher starting) that arrives mid-rip is honored only
-        // when the CURRENT ≤2 in-flight items finish. Worst case is one
-        // multi-second ffmpeg rip of yield latency per busy worker —
-        // acceptable because the interactive preview runs at
-        // .userInitiated and outranks these .background rips on the CPU
-        // regardless, so the user's frame isn't actually waiting on the
-        // sweep to notice. Finer cancellation would mean abandoning
-        // half-done rips (wasted work) for no user-visible gain.
-        guard let service else { return }
-        let gate = service.gate
-
-        do {
-            // ---- Plan: snapshot candidates (main hop) ----------------
-            let snapshot: [PreviewSweepCandidate] = await MainActor.run {
-                guard service.runID == runID, service.isEnabled else { return [] }
-                return service.config?.candidates() ?? []
-            }
-            guard !snapshot.isEmpty else {
-                await service.publish(runID, .idle)
-                await service.clearTask(runID)
-                return
-            }
-
-            // ---- Plan: ONE cache-directory listing -------------------
-            // (See the scale invariant in PreviewSweepPlan.swift — this
-            // is the only cache probe in the whole run.)
-            let files: [(name: String, size: Int64)] = (try? FileManager.default
-                .contentsOfDirectory(at: diskCache.rootURL,
-                                     includingPropertiesForKeys: [.fileSizeKey],
-                                     options: .skipsHiddenFiles).map { url in
-                    (url.lastPathComponent,
-                     Int64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0))
-                }) ?? []
-            let index = PreviewSweepPlanner.buildCacheIndex(files: files)
-
-            // ---- Plan: key candidates (one stat each, off-main) ------
-            var keyed: [PreviewSweepKeyedCandidate] = []
-            keyed.reserveCapacity(snapshot.count)
-            var knownFailures = 0
-            var vanished = 0
-            for (i, candidate) in snapshot.enumerated() {
-                if i % 256 == 0 { try Task.checkCancellation() }
-                // autoreleasepool per chunk of stats — attributesOfItem
-                // returns autoreleased Foundation objects and the plan
-                // pass may cover 100k files (media-loop memory rule).
-                autoreleasepool {
-                    guard let sig = PreviewDiskCache.fileSignature(atPath: candidate.path) else {
-                        vanished += 1
-                        return
-                    }
-                    if failureStore.isKnownFailure(atPath: candidate.path) {
-                        knownFailures += 1
-                        return
-                    }
-                    keyed.append(PreviewSweepKeyedCandidate(
-                        candidate: candidate,
-                        key: PreviewDiskCache.cacheKey(path: candidate.path,
-                                                       mtime: sig.mtime,
-                                                       size: sig.size)))
-                }
-            }
-
-            let items = PreviewSweepPlanner.workItems(candidates: keyed, index: index)
-            // Records already fully covered on the still side.
-            let readyBase = keyed.count - items.filter(\.needsBestStill).count
-            let total = items.count
-            sweepLog.info("Sweep plan: \(snapshot.count) eligible, \(keyed.count) keyed, \(total) need work (\(files.count) cache files, \(index.totalBytes / (1024 * 1024)) MB), \(knownFailures) known-unpreviewable, \(vanished) unreadable")
-
-            guard total > 0 else {
-                await service.publish(runID, .done(ready: readyBase,
-                                                   unpreviewable: knownFailures,
-                                                   deferred: 0))
-                await service.clearTask(runID)
-                return
-            }
-
-            if index.totalBytes >= cacheCapBytes {
-                // Already at cap before doing anything — report, don't spin.
-                await service.publish(runID, .cacheFull(done: 0, total: total))
-                await service.clearTask(runID)
-                return
-            }
-            // MINOR-4 (QA, 2026-07-27) — cross-launch cap thrash: for a
-            // catalog whose full preview set exceeds cacheCapBytes (2 GB
-            // ≈ 20k+ records today, so not reachable at Rick's 17k), each
-            // launch's sweep would fill to the cap, PreviewDiskCache's
-            // init prune would reap oldest-by-INSERTION (not access), and
-            // the next launch would regenerate the reaped tail — a
-            // perpetual-motion rip cycle that never converges. Not fixed
-            // here (today's catalog is comfortably under cap and the
-            // .cacheFull stop already bounds a single run); the real fix
-            // is access-ordered prune + a "don't regenerate what we just
-            // reaped this session" guard, tracked for Phase 2. Sensor:
-            // PreviewSweepServiceTests.cacheCapStops pins the single-run
-            // stop; a cross-launch thrash sensor is a Phase-2 item.
-
-            // ---- Execute: bounded workers, per-volume serialization --
-            var volumeGates: [String: AsyncSemaphore] = [:]
-            for item in items where volumeGates[item.volumeRoot] == nil {
-                // Limit 1: a sweep must never run two rips against one
-                // spindle regardless of media tech — workerCount only
-                // buys parallelism ACROSS volumes.
-                volumeGates[item.volumeRoot] = AsyncSemaphore(limit: 1)
-            }
-
-            var done = 0
-            var newlyReady = 0
-            var newFailures = 0
-            var deferred = 0
-            var bytesWritten: Int64 = 0
-            var cacheFull = false
-            var ffmpegMissing = false
-            let throttle = ThrottledMainActorUpdate(intervalSecs: 0.3)
-
-            await service.publish(runID, .sweeping(done: 0, total: total))
-
-            try await withThrowingTaskGroup(of: (PreviewSweepWorkItem, PreviewSweepItemOutcome).self) { group in
-                var iterator = items.makeIterator()
-
-                // Park until the pacing decision says proceed. Publishes
-                // the pause state once per transition, polls at
-                // pausePollMilliseconds, and stays cancellation-prompt.
-                // Samples `isExternallyBusy` (precacher running) via one
-                // cheap main-actor bool read per evaluation — folded into
-                // the pause so the sweep DEFERS to the precacher rather
-                // than consuming its plan (QA MAJOR-1).
-                func waitUntilClear() async throws {
-                    var published: PreviewSweepStatus?
-                    while true {
-                        try Task.checkCancellation()
-                        let externallyBusy: Bool = await MainActor.run {
-                            guard service.runID == runID else { return false }
-                            return service.config?.isExternallyBusy() ?? false
-                        }
-                        let action = PreviewSweepPacing.action(
-                            lastInteraction: gate.lastInteraction,
-                            now: CFAbsoluteTimeGetCurrent(),
-                            quietSeconds: quietSeconds,
-                            thermalState: thermalState(),
-                            externallyBusy: externallyBusy)
-                        if action == .proceed {
-                            if published != nil {
-                                // Leaving a pause — restore live progress.
-                                await service.publish(runID, .sweeping(done: done, total: total))
-                            }
-                            return
-                        }
-                        let pause: PreviewSweepStatus = action == .pauseForInteraction
-                            ? .pausedForInteraction(done: done, total: total)
-                            : .pausedForThermal(done: done, total: total)
-                        if pause != published {
-                            await service.publish(runID, pause)
-                            published = pause
-                        }
-                        try await Task.sleep(for: .milliseconds(pausePollMilliseconds))
-                    }
-                }
-
-                // Dispatch the next dispatchable item; false = plan
-                // exhausted or cap reached (cacheFull set).
-                func dispatchNext() async throws -> Bool {
-                    while let item = iterator.next() {
-                        try await waitUntilClear()
-                        if index.totalBytes + bytesWritten >= cacheCapBytes {
-                            cacheFull = true
-                            return false
-                        }
-                        if ffmpegMissing, item.needsFilmstrip || PreviewFrameRouter.previewRoute(
-                            container: item.candidate.container,
-                            videoCodec: item.candidate.videoCodec,
-                            likelyUnanalyzable: item.candidate.likelyUnanalyzable) == .ffmpegDirect {
-                            // No ffmpeg on this machine — every ffmpeg-
-                            // routed item is doomed; defer without verdicts
-                            // (installing ffmpeg + a replan covers them).
-                            done += 1
-                            deferred += 1
-                            continue
-                        }
-                        let skipNow: Bool = await MainActor.run {
-                            guard service.runID == runID else { return false }
-                            return service.config?.shouldSkipPathNow(item.candidate.path) ?? false
-                        }
-                        if skipNow {
-                            // An interactive filmstrip rip owns this path
-                            // right now — DEFER it; the next replan covers
-                            // it if still missing (NOT a terminal skip).
-                            done += 1
-                            deferred += 1
-                            continue
-                        }
-                        guard let volumeGate = volumeGates[item.volumeRoot] else { continue }
-                        group.addTask {
-                            try await volumeGate.withPermit {
-                                (item, try await executeItem(item))
-                            }
-                        }
-                        return true
-                    }
-                    return false
-                }
-
-                var inFlight = 0
-                while inFlight < max(1, workerCount), try await dispatchNext() {
-                    inFlight += 1
-                }
-                while inFlight > 0, let (item, outcome) = try await group.next() {
-                    inFlight -= 1
-                    done += 1
-                    bytesWritten += outcome.bytesWritten
-                    if outcome.environmentFailure { ffmpegMissing = true }
-                    if outcome.stillFailedGenuinely {
-                        newFailures += 1
-                        // Same negative-cache rule as the interactive path;
-                        // the executor already excluded cancel/unreachable/
-                        // ffmpegUnavailable classes.
-                        failureStore.recordFailure(forPath: item.candidate.path)
-                    } else if outcome.skippedUnreachable || outcome.environmentFailure {
-                        // Volume vanished mid-run / no ffmpeg — no verdict;
-                        // the next replan (or a remount) covers it.
-                        deferred += 1
-                    } else if item.needsBestStill, outcome.stillReady {
-                        newlyReady += 1
-                    }
-                    if outcome.stripFailed {
-                        sweepLog.notice("Sweep strip failed (still OK) — \((item.candidate.path as NSString).lastPathComponent, privacy: .public)")
-                    }
-                    // Throttled progress — per-item main hops must not
-                    // spam the UI (ThrottledMainActorUpdate pattern).
-                    let progress = PreviewSweepStatus.sweeping(done: done, total: total)
-                    await throttle.update { [weak service] in
-                        guard let service, service.runID == runID else { return }
-                        service.status = progress
-                    }
-                    if !cacheFull, try await dispatchNext() {
-                        inFlight += 1
-                    }
-                }
-            }
-
-            if cacheFull {
-                sweepLog.notice("Sweep stopped at cache cap: \(done)/\(total) done, wrote \(bytesWritten / (1024 * 1024)) MB on top of \(index.totalBytes / (1024 * 1024)) MB")
-                await service.publish(runID, .cacheFull(done: done, total: total))
-            } else {
-                sweepLog.info("Sweep done: \(newlyReady) generated, \(newFailures) failed, \(deferred) deferred of \(total) planned")
-                await service.publish(runID, .done(ready: readyBase + newlyReady,
-                                                   unpreviewable: knownFailures + newFailures,
-                                                   deferred: deferred))
-            }
-            await service.clearTask(runID)
-        } catch {
-            // Cancellation (the only throw that escapes the loop): the
-            // canceller owns the status — nothing to publish here.
-            sweepLog.debug("Sweep run cancelled")
+            await engine.run()
         }
     }
 

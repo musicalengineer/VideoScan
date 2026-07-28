@@ -301,27 +301,11 @@ actor PauseGate {
 }
 
 // MARK: - Throttled MainActor Update
-
-/// Coalesces frequent MainActor dispatches to a maximum rate.
-/// Used to prevent UI beachball when many concurrent tasks all want
-/// to update progress/frames on the main thread.
-actor ThrottledMainActorUpdate {
-    private let interval: TimeInterval
-    private var lastUpdate: CFAbsoluteTime = 0
-
-    init(intervalSecs: TimeInterval = 0.25) {
-        self.interval = intervalSecs
-    }
-
-    /// Execute `block` on MainActor only if enough time has passed since the last update.
-    /// Skipped updates are silently dropped — the next one that fires will have current data.
-    func update(_ block: @MainActor @Sendable () -> Void) async {
-        let now = CFAbsoluteTimeGetCurrent()
-        guard now - lastUpdate >= interval else { return }
-        lastUpdate = now
-        await MainActor.run { block() }
-    }
-}
+//
+// ThrottledMainActorUpdate moved to VideoScanCore (2026-07-28) so the
+// extracted preview-sweep engine can use it — logic verbatim, visibility
+// widened to public. Referenced here (and by PersonFinder) via the app's
+// @_exported import VideoScanCore.
 
 // MARK: - Notification
 
