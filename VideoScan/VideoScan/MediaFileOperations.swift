@@ -301,13 +301,11 @@ enum MediaVolumeGatePolicy {
     }
 
     /// "/Volumes/MyBook/sub/file.mov" → "/Volumes/MyBook";
-    /// anything not under /Volumes (internal disk) → "/".
+    /// anything not under /Volumes (internal disk) → "/". Forwards to
+    /// VideoScanCore's `previewVolumeRoot` — the preview sweep planner
+    /// (Core) needs the same rule, so it lives there as the single source.
     static func volumeRoot(forPath path: String) -> String {
-        if path.hasPrefix("/Volumes/") {
-            let parts = path.split(separator: "/", maxSplits: 3)
-            if parts.count >= 2 { return "/Volumes/" + String(parts[1]) }
-        }
-        return "/"
+        previewVolumeRoot(forPath: path)
     }
 }
 
