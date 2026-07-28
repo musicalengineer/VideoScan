@@ -84,6 +84,7 @@ struct PreviewSweepMediaMatrixTests {
             failureStore: failureStore,
             candidates: { candidates },
             shouldSkipPathNow: { _ in false },
+            isExternallyBusy: { false },   // no precacher in this matrix
             isReachable: alwaysReachable,
             thermalState: { .nominal },   // deterministic — a warm CI box must not park the test
             executeItem: PreviewSweepService.defaultExecutor(diskCache: diskCache,
@@ -106,7 +107,7 @@ struct PreviewSweepMediaMatrixTests {
             try await Task.sleep(for: .milliseconds(50))
         }
         try #require(finished, "sweep did not finish: \(service.status)")
-        #expect(service.status == .done(ready: 2, unpreviewable: 0),
+        #expect(service.status == .done(ready: 2, unpreviewable: 0, deferred: 0),
                 "unexpected final status: \(service.status)")
         // `count` is ThumbnailFailureStore's entry counter, not a
         // collection — empty_count is a false positive here (same
@@ -143,7 +144,7 @@ struct PreviewSweepMediaMatrixTests {
         let deadline2 = Date().addingTimeInterval(30)
         var finished2 = false
         while Date() < deadline2 {
-            if case .done(let ready, _) = service.status, ready == 2 {
+            if case .done(let ready, _, _) = service.status, ready == 2 {
                 finished2 = true; break
             }
             try await Task.sleep(for: .milliseconds(50))
