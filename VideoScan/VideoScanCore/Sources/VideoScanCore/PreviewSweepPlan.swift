@@ -70,7 +70,7 @@ public struct PreviewSweepSettings: Equatable {
 /// Sendable value snapshot of the record fields a sweep item needs —
 /// VideoRecord instances never cross into the sweep task (same
 /// convention as ThumbnailPrecache's PrecacheItem / FilmstripWorkItem).
-public struct PreviewSweepCandidate: Sendable, Equatable {
+public struct PreviewSweepCandidate: Sendable, Equatable, Hashable {
     public let path: String
     public let container: String
     public let videoCodec: String

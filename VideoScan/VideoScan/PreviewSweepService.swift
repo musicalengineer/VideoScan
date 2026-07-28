@@ -126,31 +126,11 @@ final class PreviewSweepGate: @unchecked Sendable {
 }
 
 // MARK: - Per-item outcome
-
-/// What one work item's execution produced. The executor CLASSIFIES;
-/// the service applies the failure-store rule and the counters — that
-/// split is what lets the sensor tests inject a scripted executor.
-struct PreviewSweepItemOutcome: Sendable, Equatable {
-    var bytesWritten: Int64 = 0
-    /// A best-tier still is on disk for this record after this item.
-    var stillReady = false
-    /// The still generation failed for reasons that ARE facts about the
-    /// file (decode failure on a reachable volume). The ONLY flag that
-    /// reaches ThumbnailFailureStore.
-    var stillFailedGenuinely = false
-    /// Volume went away / file vanished mid-run — no verdict, no record.
-    var skippedUnreachable = false
-    /// ffmpeg missing — an environment fact, never a file verdict. Also
-    /// makes the sweep stop attempting further ffmpeg-routed items.
-    var environmentFailure = false
-    /// Strip generation failed but the still is fine. Never poisons the
-    /// failure store (same rule as the filmstrip prewarm).
-    var stripFailed = false
-}
-
-/// The per-item work function. Throws ONLY CancellationError; everything
-/// else is classified into the outcome.
-typealias PreviewSweepExecutor = @Sendable (PreviewSweepWorkItem) async throws -> PreviewSweepItemOutcome
+//
+// PreviewSweepItemOutcome + the PreviewSweepExecutor function type moved
+// to VideoScanCore (PreviewSweepOutcome.swift) so the Core executor
+// factory and the Stage-1 CLI share them. Referenced here unchanged via
+// the app's @_exported import VideoScanCore.
 
 // MARK: - Service
 
@@ -613,95 +593,18 @@ final class PreviewSweepService: ObservableObject {
 
     // MARK: - Default executor (real renderers)
 
-    /// The production per-item work: render via the same routed cores the
-    /// interactive paths use, write through to the disk cache, classify
-    /// failures under the interactive paths' exact rules.
-    ///
-    /// Memory: one best-frame pass (≤4 candidates ≈ 2 MB) or one strip
-    /// (≤16 frames ≈ 8 MB) alive per worker at a time, released on store.
+    /// The production per-item work. The classification logic (the
+    /// negative-cache poison contract) now lives in VideoScanCore's
+    /// `makePreviewSweepExecutor`, composed from the injected seams: the
+    /// app's PreviewDiskCache (as `PreviewCache`) and `VideoScanMediaRenderer`
+    /// (as `PreviewMediaRenderer`, wrapping the same routed cores the
+    /// interactive paths use). Signature unchanged so existing wire-in and
+    /// media-matrix test call sites are untouched.
     static func defaultExecutor(diskCache: PreviewDiskCache,
                                 isReachable: @escaping @Sendable (String) -> Bool) -> PreviewSweepExecutor {
-        { item in
-            var outcome = PreviewSweepItemOutcome()
-            let c = item.candidate
-
-            // Volume may have unmounted since planning — no verdict.
-            guard isReachable(c.path) else {
-                outcome.skippedUnreachable = true
-                return outcome
-            }
-            // Signature from BEFORE generation — the key must describe
-            // the file we decode (same rule as the interactive paths).
-            guard let sig = PreviewDiskCache.fileSignature(atPath: c.path) else {
-                outcome.skippedUnreachable = true
-                return outcome
-            }
-
-            if item.needsBestStill {
-                do {
-                    let cg = try await VideoScanModel.renderBestPreviewCGImage(
-                        path: c.path,
-                        container: c.container,
-                        videoCodec: c.videoCodec,
-                        likelyUnanalyzable: c.likelyUnanalyzable,
-                        durationSeconds: c.durationSeconds)
-                    try Task.checkCancellation()
-                    outcome.bytesWritten += diskCache.store(cg,
-                                                            path: c.path,
-                                                            mtime: sig.mtime,
-                                                            size: sig.size,
-                                                            tier: .best)
-                    outcome.stillReady = true
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch {
-                    if Task.isCancelled { throw CancellationError() }
-                    if (error as? PreviewFrameError) == .ffmpegUnavailable {
-                        outcome.environmentFailure = true
-                        return outcome
-                    }
-                    // Genuine only while the volume is still there — a
-                    // drive dying mid-rip is not a fact about the file.
-                    if isReachable(c.path) {
-                        outcome.stillFailedGenuinely = true
-                    } else {
-                        outcome.skippedUnreachable = true
-                    }
-                    return outcome
-                }
-            } else {
-                outcome.stillReady = true
-            }
-
-            if item.needsFilmstrip {
-                do {
-                    let strip = try await VideoScanModel.renderPreviewFilmstrip(
-                        path: c.path,
-                        container: c.container,
-                        videoCodec: c.videoCodec,
-                        likelyUnanalyzable: c.likelyUnanalyzable,
-                        durationSeconds: c.durationSeconds)
-                    try Task.checkCancellation()
-                    outcome.bytesWritten += diskCache.storeFilmstrip(
-                        strip.frames.map { ($0.offsetSeconds, $0.image) },
-                        path: c.path,
-                        mtime: sig.mtime,
-                        size: sig.size)
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch {
-                    if Task.isCancelled { throw CancellationError() }
-                    if (error as? PreviewFrameError) == .ffmpegUnavailable {
-                        outcome.environmentFailure = true
-                    } else {
-                        // Still succeeded, strip didn't — never a
-                        // ThumbnailFailureStore entry (poison class).
-                        outcome.stripFailed = true
-                    }
-                }
-            }
-            return outcome
-        }
+        makePreviewSweepExecutor(cache: diskCache,
+                                 renderer: VideoScanMediaRenderer(),
+                                 isReachable: isReachable)
     }
 }
 
