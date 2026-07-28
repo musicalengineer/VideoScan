@@ -9,6 +9,12 @@ import IOKit
 struct SettingsTabView: View {
     @Binding var settings: ScanPerformanceSettings
     let totalRAMGB: Int
+    /// Background preview sweep (2026-07-27): checkbox binding routes
+    /// through VideoScanModel.setPreviewSweepEnabled (explicit save +
+    /// service start/stop); the observed service supplies the live
+    /// status line under the toggle.
+    @Binding var sweepEnabled: Bool
+    @ObservedObject var sweep: PreviewSweepService
 
     private func ramDiskColor(_ gb: Int) -> Color {
         let pct = Double(gb) / Double(totalRAMGB)
@@ -112,6 +118,27 @@ struct SettingsTabView: View {
                         ), in: 1...16, step: 1),
                         accentColor: .orange
                     )
+                }
+
+                Divider()
+
+                // Previews section (background sweep, 2026-07-27)
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Previews", systemImage: "photo.on.rectangle.angled")
+                        .font(.headline)
+                        .foregroundColor(.purple)
+
+                    Toggle("Keep previews fresh in the background", isOn: $sweepEnabled)
+                        .toggleStyle(.checkbox)
+                        .accessibilityIdentifier("settings.previewSweep.enabled")
+                    Text("While VideoScan is open, quietly prepare a preview for every video in the catalog (and filmstrips for formats the player can't show) so browsing never waits. Pauses whenever you're browsing; resumes on the next launch if left on.")
+                        .font(.footnote).foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    // PreviewSweepStatusLine self-guards on empty text
+                    // (renders nothing when idle) — no outer if needed.
+                    PreviewSweepStatusLine(sweep: sweep)
+                        .padding(.top, 2)
                 }
 
                 Divider()

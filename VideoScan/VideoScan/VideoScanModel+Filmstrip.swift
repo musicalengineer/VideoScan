@@ -118,6 +118,11 @@ extension VideoScanModel {
             return
         }
 
+        // Interactive filmstrip request — pause the background sweep
+        // (PreviewSweepService, 2026-07-27). The sweep also skips paths
+        // the model's filmstrip task currently owns.
+        previewSweep.noteUserInteraction()
+
         let item = FilmstripWorkItem(record: record)
 
         // Coalesce: a prewarm already ripping THIS file is promoted to

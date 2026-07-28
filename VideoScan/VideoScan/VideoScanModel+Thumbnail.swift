@@ -746,6 +746,11 @@ extension VideoScanModel {
         thumbnailDebounceTask?.cancel()
         thumbnailDebounceTask = nil
 
+        // Background sweep yields to the user: one timestamp write —
+        // the sweep pauses dispatch until ~10 s of interactive quiet
+        // (PreviewSweepService, 2026-07-27).
+        previewSweep.noteUserInteraction()
+
         previewFilename = record.filename
 
         // Selection moved: filmstrip state for another row is stale
@@ -810,6 +815,10 @@ extension VideoScanModel {
         // debounce that fires 200 ms later for a different row.
         thumbnailDebounceTask?.cancel()
         thumbnailDebounceTask = nil
+
+        // Interactive request — pause the background sweep (also pinged
+        // by the debounced entry point; double pings are harmless).
+        previewSweep.noteUserInteraction()
 
         previewFilename = record.filename
         previewRequestPath = record.fullPath

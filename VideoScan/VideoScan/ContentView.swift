@@ -456,6 +456,11 @@ struct CatalogView: View {
 
             Divider()
 
+            // Background preview sweep (2026-07-27): unobtrusive one-line
+            // status while the sweep works/pauses. Self-observing subview
+            // — progress re-renders ONLY this line, never the table.
+            PreviewSweepStatusLine(sweep: model.previewSweep)
+
             // MARK: Split — Table + Player left, Inspector right
             CatalogContent(
                 records: model.records,

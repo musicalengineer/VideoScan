@@ -644,7 +644,15 @@ struct VideoScanApp: App {
                     get: { catalogModel.perfSettings },
                     set: { catalogModel.perfSettings = $0 }
                 ),
-                totalRAMGB: Int(ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024))
+                totalRAMGB: Int(ProcessInfo.processInfo.physicalMemory / (1024 * 1024 * 1024)),
+                // Background preview sweep (2026-07-27): setter routes
+                // through the model so the persisted setting and the
+                // service start/stop stay in lockstep.
+                sweepEnabled: Binding(
+                    get: { catalogModel.previewSweepSettings.enabled },
+                    set: { catalogModel.setPreviewSweepEnabled($0) }
+                ),
+                sweep: catalogModel.previewSweep
             )
             .frame(minWidth: 500, idealWidth: 620, minHeight: 400, idealHeight: 620)
         }
