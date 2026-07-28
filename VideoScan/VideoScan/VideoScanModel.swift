@@ -25,6 +25,10 @@ final class VideoScanModel: ObservableObject {
             // — a dossier writeback to it would be silently lost. O(1)
             // un-latch; cheap enough for per-file live-reload appends.
             recordPathIndex.invalidate()
+            // Background preview sweep (2026-07-27): re-diff against the
+            // disk cache once records settle. Debounced inside the
+            // service; no-op while the checkbox is off.
+            previewSweep.noteCatalogChanged()
         }
     }
     /// True when the app is running on a non-master Mac (viewer mode).
@@ -611,6 +615,29 @@ final class VideoScanModel: ObservableObject {
         kindFacetSetting.save(to: .standard)
     }
 
+    /// Background preview sweep opt-in ("Keep previews fresh in the
+    /// background", 2026-07-27). DEFAULT OFF — sensor-pinned. Same
+    /// explicit-save + test-host-pristine discipline as the settings
+    /// above. Wiring lives in VideoScanModel+PreviewSweep.swift.
+    @Published var previewSweepSettings: PreviewSweepSettings =
+        TestEnvironment.isTestHost
+            ? PreviewSweepSettings()
+            : PreviewSweepSettings.restored(from: .standard)
+
+    /// Explicit save for the sweep setting — @Published kills didSet,
+    /// so every UI mutation of `previewSweepSettings` must call this.
+    func savePreviewSweepSettings() {
+        guard !TestEnvironment.isTestHost else { return }
+        previewSweepSettings.save(to: .standard)
+    }
+
+    /// The background preview sweep service (2026-07-27). Stored here
+    /// because extensions can't add stored properties; configured at the
+    /// end of init (configurePreviewSweep), catalog-change signal comes
+    /// from records.didSet, interaction pings from the thumbnail /
+    /// filmstrip request sites.
+    let previewSweep = PreviewSweepService()
+
     /// Snapshot the current skip-directory set from scanOptions.
     /// Must be called on the main actor (returns a Sendable Set<String>
     /// that nonisolated walkers can then capture safely). The derivation
@@ -895,6 +922,12 @@ final class VideoScanModel: ObservableObject {
         // Seed the memoized probe-cache count so the toolbar's first
         // render doesn't show 0 for 10 seconds.
         refreshCacheCountSoon()
+        // Background preview sweep (2026-07-27): wire the service and —
+        // when the persisted checkbox is ON — hand it the restored
+        // catalog as its first change signal (records.didSet doesn't
+        // fire inside init). Test hosts get the pristine OFF default,
+        // so the ~200 model-constructing tests never start a sweep.
+        configurePreviewSweep()
     }
 
     /// The two NotificationCenter observers installed at init. Extracted

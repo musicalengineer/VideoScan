@@ -194,6 +194,26 @@ final class PreviewDiskCache: @unchecked Sendable {
         rootURL.appendingPathComponent("\(key)-\(tier.rawValue).jpg")
     }
 
+    /// Parse a tier payload filename ("<key>-fast.jpg" / "<key>-best.jpg")
+    /// back into its fields, or nil for anything else (strip payloads,
+    /// tmp files, junk). Pure and static — the preview sweep's one-listing
+    /// cache index is built from THIS parser + parseStripFilename so the
+    /// sweep never stats the cache per record (17k probes = disaster;
+    /// see PreviewSweepPlanner).
+    static func parseTierFilename(_ filename: String) -> (key: String, tier: Tier)? {
+        guard filename.hasSuffix(".jpg") else { return nil }
+        let stem = filename.dropLast(4)
+        for tier in Tier.allCases {
+            let suffix = "-\(tier.rawValue)"
+            if stem.hasSuffix(suffix) {
+                let key = String(stem.dropLast(suffix.count))
+                guard !key.isEmpty else { return nil }
+                return (key, tier)
+            }
+        }
+        return nil
+    }
+
     // MARK: - Lookup
 
     /// Best available payload for this exact (path, mtime, size), or nil
@@ -234,11 +254,18 @@ final class PreviewDiskCache: @unchecked Sendable {
     /// already exists for the same key (best never downgrades); when a
     /// `best` store lands, the now-superseded `fast` payload is removed.
     /// Disk I/O — off the main actor.
+    ///
+    /// Returns the bytes actually written to disk (0 on skip/failure) —
+    /// the preview sweep accumulates this against `sizeCapBytes` so it
+    /// can stop honestly at the cap instead of thrash-feeding the prune
+    /// (background sweep, 2026-07-27). Additive: existing callers ignore
+    /// the result via @discardableResult.
+    @discardableResult
     func store(_ image: CGImage,
                path: String,
                mtime: TimeInterval,
                size: Int64,
-               tier: Tier) {
+               tier: Tier) -> Int64 {
         let key = Self.cacheKey(path: path, mtime: mtime, size: size)
         let dest = payloadURL(key: key, tier: tier)
         let fm = FileManager.default
@@ -250,12 +277,12 @@ final class PreviewDiskCache: @unchecked Sendable {
         // after the background pass upgraded this file is a no-op.
         if tier == .fast,
            fm.fileExists(atPath: payloadURL(key: key, tier: .best).path) {
-            return
+            return 0
         }
 
         guard let jpeg = Self.encodeJPEG(image) else {
             diskCacheLog.notice("JPEG encode failed for \((path as NSString).lastPathComponent, privacy: .public) — not cached")
-            return
+            return 0
         }
 
         // Temp-in-same-dir + rename = atomic publish (rename(2) within
@@ -268,7 +295,7 @@ final class PreviewDiskCache: @unchecked Sendable {
         } catch {
             diskCacheLog.notice("Disk-cache write failed (\(error.localizedDescription, privacy: .public)) — preview still served from L1")
             try? fm.removeItem(at: tmp)
-            return
+            return 0
         }
 
         if tier == .best {
@@ -276,6 +303,7 @@ final class PreviewDiskCache: @unchecked Sendable {
             // stored twice (and lookup's best-preference stays moot).
             try? fm.removeItem(at: payloadURL(key: key, tier: .fast))
         }
+        return Int64(jpeg.count)
     }
 
     /// Encode to JPEG at `jpegQuality`, downscaling to
@@ -380,17 +408,23 @@ final class PreviewDiskCache: @unchecked Sendable {
     /// store abort, consistent with the non-finite behavior: a strip
     /// with one insane timestamp is a corrupt strip, not a shorter
     /// one. Disk I/O — off the main actor.
+    ///
+    /// Returns the total bytes written (0 on refusal/abort; a mid-set
+    /// write failure returns the bytes that DID land — the partial set
+    /// is a lookup miss but its bytes are real disk usage). Same cap-
+    /// accounting consumer as `store` (background sweep, 2026-07-27).
+    @discardableResult
     func storeFilmstrip(_ frames: [(offsetSeconds: Double, image: CGImage)],
                         path: String,
                         mtime: TimeInterval,
-                        size: Int64) {
+                        size: Int64) -> Int64 {
         guard !frames.isEmpty,
               frames.allSatisfy({
                   $0.offsetSeconds.isFinite
                       && $0.offsetSeconds >= 0
                       && $0.offsetSeconds <= PreviewBestFramePlan.maxSaneDurationSeconds
               }) else {
-            return
+            return 0
         }
         let key = Self.cacheKey(path: path, mtime: mtime, size: size)
         let fm = FileManager.default
@@ -402,7 +436,7 @@ final class PreviewDiskCache: @unchecked Sendable {
             // CG/ImageIO temporaries must not pile up across 16 frames.
             guard let jpeg = autoreleasepool(invoking: { Self.encodeJPEG(frame.image) }) else {
                 diskCacheLog.notice("Filmstrip JPEG encode failed (frame \(index)) for \((path as NSString).lastPathComponent, privacy: .public) — strip not cached")
-                return
+                return 0
             }
             let offsetMillis = Int((frame.offsetSeconds * 1000).rounded())
             payloads.append((Self.stripFilename(key: key, index: index,
@@ -422,18 +456,21 @@ final class PreviewDiskCache: @unchecked Sendable {
             }
         }
 
+        var written: Int64 = 0
         for payload in payloads {
             let tmp = rootURL.appendingPathComponent("tmp-\(UUID().uuidString)")
             do {
                 try payload.data.write(to: tmp)
                 _ = try fm.replaceItemAt(rootURL.appendingPathComponent(payload.filename),
                                          withItemAt: tmp)
+                written += Int64(payload.data.count)
             } catch {
                 diskCacheLog.notice("Filmstrip cache write failed (\(error.localizedDescription, privacy: .public)) — partial set left for prune")
                 try? fm.removeItem(at: tmp)
-                return
+                return written
             }
         }
+        return written
     }
 
     /// The cached filmstrip for this exact (path, mtime, size), ordered
