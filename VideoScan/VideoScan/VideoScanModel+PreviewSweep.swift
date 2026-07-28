@@ -22,13 +22,23 @@ extension VideoScanModel {
             failureStore: thumbnailFailureStore,
             candidates: { [weak self] in self?.previewSweepCandidates() ?? [] },
             shouldSkipPathNow: { [weak self] path in
-                guard let self else { return false }
-                // Coexist, don't fight: leave a path alone while the
-                // model's single filmstrip task rips it, and stand down
-                // wholesale while the volume-click precacher runs (it is
-                // filling the very same caches at .utility priority).
-                return self.filmstripTaskPath == path
-                    || self.thumbnailPrecacher.isRunning
+                // NARROW per-path skip ONLY: leave a path alone while the
+                // model's single filmstrip task is actively ripping it
+                // (never rip the same master twice). Deferred, not lost.
+                // The precacher-running stand-down is `isExternallyBusy`
+                // below — a PARK, not a per-path skip — because a
+                // predicate true for every path would make the sweep
+                // consume its whole plan as skips and report done with
+                // the catalog uncovered (QA MAJOR-1, 2026-07-27).
+                self?.filmstripTaskPath == path
+            },
+            isExternallyBusy: { [weak self] in
+                // The volume-click precacher is filling the very same
+                // caches at .utility priority (it runs BECAUSE the user
+                // clicked a volume). Defer the whole sweep while it runs;
+                // when it stops, the next pacing poll proceeds and covers
+                // ALL remaining records.
+                self?.thumbnailPrecacher.isRunning ?? false
             },
             isReachable: { VolumeReachability.isReachable(path: $0) },
             thermalState: { ProcessInfo.processInfo.thermalState },

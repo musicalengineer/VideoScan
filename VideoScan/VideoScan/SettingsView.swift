@@ -135,10 +135,10 @@ struct SettingsTabView: View {
                         .font(.footnote).foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
-                    if !sweep.status.displayText.isEmpty {
-                        PreviewSweepStatusLine(sweep: sweep)
-                            .padding(.top, 2)
-                    }
+                    // PreviewSweepStatusLine self-guards on empty text
+                    // (renders nothing when idle) — no outer if needed.
+                    PreviewSweepStatusLine(sweep: sweep)
+                        .padding(.top, 2)
                 }
 
                 Divider()

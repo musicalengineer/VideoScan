@@ -230,10 +230,24 @@ enum PreviewSweepPacing {
     /// thermal in the reported reason (the user-facing text should say
     /// "while you browse" when both are true — browsing is the state
     /// Rick can see).
+    ///
+    /// `externallyBusy` (QA MAJOR-1 fix, 2026-07-27) is the "the
+    /// volume-click precacher is running" signal — it must DEFER the
+    /// sweep (park + re-poll), NOT make the sweep consume the whole plan
+    /// as per-item skips (which discarded coverage until relaunch AND
+    /// burst ~17k main-actor hops). It maps to `.pauseForInteraction`
+    /// because the precacher only runs in response to a user click, so
+    /// "paused while you browse" is the honest reported reason. Highest
+    /// priority so the sweep truly stands down while the precacher owns
+    /// the same caches.
     static func action(lastInteraction: CFAbsoluteTime?,
                        now: CFAbsoluteTime,
                        quietSeconds: Double,
-                       thermalState: ProcessInfo.ThermalState) -> Action {
+                       thermalState: ProcessInfo.ThermalState,
+                       externallyBusy: Bool = false) -> Action {
+        if externallyBusy {
+            return .pauseForInteraction
+        }
         if let last = lastInteraction, now - last < quietSeconds {
             return .pauseForInteraction
         }

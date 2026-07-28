@@ -68,8 +68,13 @@ enum PreviewSweepStatus: Equatable {
     /// 2 GB cap — continuing would just thrash the prune.
     case cacheFull(done: Int, total: Int)
     /// ready = eligible records with a best still on disk when the run
-    /// ended; unpreviewable = known + fresh genuine failures.
-    case done(ready: Int, unpreviewable: Int)
+    /// ended; unpreviewable = known + fresh genuine failures; deferred =
+    /// records this run didn't finish (volume vanished mid-run, ffmpeg
+    /// missing, or a path an interactive rip owned). A `deferred` count
+    /// keeps the tally honest — ready + unpreviewable no longer has to
+    /// equal the eligible total (QA MINOR-5, 2026-07-27); deferred
+    /// records are picked up by the next replan.
+    case done(ready: Int, unpreviewable: Int, deferred: Int)
 
     /// Friendly-family language (no surveillance terms), one line.
     var displayText: String {
@@ -86,10 +91,11 @@ enum PreviewSweepStatus: Equatable {
             return "Preview sweep: \(done.formatted()) of \(total.formatted()) · paused to keep the Mac cool"
         case .cacheFull(let done, let total):
             return "Preview sweep stopped at \(done.formatted()) of \(total.formatted()) — preview storage is full (2 GB limit)"
-        case .done(let ready, let unpreviewable):
-            return unpreviewable == 0
-                ? "Previews are fresh — \(ready.formatted()) ready"
-                : "Previews are fresh — \(ready.formatted()) ready, \(unpreviewable.formatted()) unpreviewable"
+        case .done(let ready, let unpreviewable, let deferred):
+            var line = "Previews are fresh — \(ready.formatted()) ready"
+            if unpreviewable > 0 { line += ", \(unpreviewable.formatted()) unpreviewable" }
+            if deferred > 0 { line += ", \(deferred.formatted()) deferred" }
+            return line
         }
     }
 }
@@ -159,11 +165,25 @@ final class PreviewSweepService: ObservableObject {
         /// Snapshot of eligible records (video-bearing, reachable) as
         /// Sendable values — called on the main actor at plan time.
         let candidates: @MainActor () -> [PreviewSweepCandidate]
-        /// True when the sweep should NOT touch this path right now
-        /// (interactive filmstrip in flight for it, or the volume-click
-        /// precacher is running) — coexist, don't fight. Skipped items
-        /// are picked up by the next replan.
+        /// NARROW per-item skip: true only for a path an interactive
+        /// filmstrip rip currently owns (never rip the same master
+        /// twice). Deferred, not lost — the next replan covers it if
+        /// still missing. This must NOT be a wholesale "stand down"
+        /// signal: a predicate that returns true for every path would
+        /// make dispatchNext consume the entire plan as skips and
+        /// report .done with the catalog uncovered (QA MAJOR-1). The
+        /// "precacher is running" stand-down lives in `isExternallyBusy`
+        /// below, which PARKS the sweep instead.
         let shouldSkipPathNow: @MainActor (String) -> Bool
+        /// The volume-click thumbnail precacher (or any other bulk
+        /// cache-filler) is running right now — DEFER the whole sweep
+        /// (park + re-poll) rather than fight it for the same caches
+        /// and the same spindle. Folded into the pacing pause (QA
+        /// MAJOR-1 fix): when it clears, the sweep resumes and covers
+        /// ALL remaining records — nothing is dropped. Sampled once per
+        /// pacing evaluation (one cheap main-actor bool read per item,
+        /// never a plan-walk burst).
+        let isExternallyBusy: @MainActor () -> Bool
         /// Injected reachability (codex's isReachable seam pattern —
         /// tests must never poison the VolumeReachability SWR cache).
         let isReachable: @Sendable (String) -> Bool
@@ -267,6 +287,14 @@ final class PreviewSweepService: ObservableObject {
 
     private func startSweep() {
         guard isEnabled, let config else { return }
+        // Per-volume "one rip per spindle" is preserved ACROSS replans by
+        // making the new run drain the old one before it dispatches (QA
+        // MINOR-2, 2026-07-27): volumeGates are per-run, so without this
+        // an old run still parked at a cancellation point could rip the
+        // same volume as the new run under a separate gate dict. The old
+        // task is already cancelled here, so its next checkCancellation
+        // unwinds it promptly; awaiting `.value` costs one park cycle.
+        let previous = sweepTask
         cancelSweep()
         let id = UUID()
         runID = id
@@ -275,6 +303,7 @@ final class PreviewSweepService: ObservableObject {
         // Sendable captures only — the model-facing @MainActor closures
         // are reached through `self` hops inside the run.
         sweepTask = Task.detached(priority: .background) { [weak self] in
+            await previous?.value
             await Self.run(service: self,
                            runID: id,
                            diskCache: config.diskCache,
@@ -324,6 +353,16 @@ final class PreviewSweepService: ObservableObject {
                             quietSeconds: Double,
                             pausePollMilliseconds: Int,
                             cacheCapBytes: Int64) async {
+        // Preemption granularity is per WORK ITEM, not sub-item (QA
+        // MINOR-3, documented tradeoff, 2026-07-27): an interaction (or
+        // the precacher starting) that arrives mid-rip is honored only
+        // when the CURRENT ≤2 in-flight items finish. Worst case is one
+        // multi-second ffmpeg rip of yield latency per busy worker —
+        // acceptable because the interactive preview runs at
+        // .userInitiated and outranks these .background rips on the CPU
+        // regardless, so the user's frame isn't actually waiting on the
+        // sweep to notice. Finer cancellation would mean abandoning
+        // half-done rips (wasted work) for no user-visible gain.
         guard let service else { return }
         let gate = service.gate
 
@@ -386,7 +425,8 @@ final class PreviewSweepService: ObservableObject {
 
             guard total > 0 else {
                 await service.publish(runID, .done(ready: readyBase,
-                                                   unpreviewable: knownFailures))
+                                                   unpreviewable: knownFailures,
+                                                   deferred: 0))
                 await service.clearTask(runID)
                 return
             }
@@ -397,6 +437,19 @@ final class PreviewSweepService: ObservableObject {
                 await service.clearTask(runID)
                 return
             }
+            // MINOR-4 (QA, 2026-07-27) — cross-launch cap thrash: for a
+            // catalog whose full preview set exceeds cacheCapBytes (2 GB
+            // ≈ 20k+ records today, so not reachable at Rick's 17k), each
+            // launch's sweep would fill to the cap, PreviewDiskCache's
+            // init prune would reap oldest-by-INSERTION (not access), and
+            // the next launch would regenerate the reaped tail — a
+            // perpetual-motion rip cycle that never converges. Not fixed
+            // here (today's catalog is comfortably under cap and the
+            // .cacheFull stop already bounds a single run); the real fix
+            // is access-ordered prune + a "don't regenerate what we just
+            // reaped this session" guard, tracked for Phase 2. Sensor:
+            // PreviewSweepServiceTests.cacheCapStops pins the single-run
+            // stop; a cross-launch thrash sensor is a Phase-2 item.
 
             // ---- Execute: bounded workers, per-volume serialization --
             var volumeGates: [String: AsyncSemaphore] = [:]
@@ -410,7 +463,7 @@ final class PreviewSweepService: ObservableObject {
             var done = 0
             var newlyReady = 0
             var newFailures = 0
-            var skipped = 0
+            var deferred = 0
             var bytesWritten: Int64 = 0
             var cacheFull = false
             var ffmpegMissing = false
@@ -424,15 +477,24 @@ final class PreviewSweepService: ObservableObject {
                 // Park until the pacing decision says proceed. Publishes
                 // the pause state once per transition, polls at
                 // pausePollMilliseconds, and stays cancellation-prompt.
+                // Samples `isExternallyBusy` (precacher running) via one
+                // cheap main-actor bool read per evaluation — folded into
+                // the pause so the sweep DEFERS to the precacher rather
+                // than consuming its plan (QA MAJOR-1).
                 func waitUntilClear() async throws {
                     var published: PreviewSweepStatus?
                     while true {
                         try Task.checkCancellation()
+                        let externallyBusy: Bool = await MainActor.run {
+                            guard service.runID == runID else { return false }
+                            return service.config?.isExternallyBusy() ?? false
+                        }
                         let action = PreviewSweepPacing.action(
                             lastInteraction: gate.lastInteraction,
                             now: CFAbsoluteTimeGetCurrent(),
                             quietSeconds: quietSeconds,
-                            thermalState: thermalState())
+                            thermalState: thermalState(),
+                            externallyBusy: externallyBusy)
                         if action == .proceed {
                             if published != nil {
                                 // Leaving a pause — restore live progress.
@@ -465,9 +527,10 @@ final class PreviewSweepService: ObservableObject {
                             videoCodec: item.candidate.videoCodec,
                             likelyUnanalyzable: item.candidate.likelyUnanalyzable) == .ffmpegDirect {
                             // No ffmpeg on this machine — every ffmpeg-
-                            // routed item is doomed; skip without verdicts.
+                            // routed item is doomed; defer without verdicts
+                            // (installing ffmpeg + a replan covers them).
                             done += 1
-                            skipped += 1
+                            deferred += 1
                             continue
                         }
                         let skipNow: Bool = await MainActor.run {
@@ -475,10 +538,11 @@ final class PreviewSweepService: ObservableObject {
                             return service.config?.shouldSkipPathNow(item.candidate.path) ?? false
                         }
                         if skipNow {
-                            // Someone interactive owns this path right now —
-                            // the next replan will catch it if still missing.
+                            // An interactive filmstrip rip owns this path
+                            // right now — DEFER it; the next replan covers
+                            // it if still missing (NOT a terminal skip).
                             done += 1
-                            skipped += 1
+                            deferred += 1
                             continue
                         }
                         guard let volumeGate = volumeGates[item.volumeRoot] else { continue }
@@ -508,7 +572,9 @@ final class PreviewSweepService: ObservableObject {
                         // ffmpegUnavailable classes.
                         failureStore.recordFailure(forPath: item.candidate.path)
                     } else if outcome.skippedUnreachable || outcome.environmentFailure {
-                        skipped += 1
+                        // Volume vanished mid-run / no ffmpeg — no verdict;
+                        // the next replan (or a remount) covers it.
+                        deferred += 1
                     } else if item.needsBestStill, outcome.stillReady {
                         newlyReady += 1
                     }
@@ -532,9 +598,10 @@ final class PreviewSweepService: ObservableObject {
                 sweepLog.notice("Sweep stopped at cache cap: \(done)/\(total) done, wrote \(bytesWritten / (1024 * 1024)) MB on top of \(index.totalBytes / (1024 * 1024)) MB")
                 await service.publish(runID, .cacheFull(done: done, total: total))
             } else {
-                sweepLog.info("Sweep done: \(newlyReady) generated, \(newFailures) failed, \(skipped) skipped of \(total) planned")
+                sweepLog.info("Sweep done: \(newlyReady) generated, \(newFailures) failed, \(deferred) deferred of \(total) planned")
                 await service.publish(runID, .done(ready: readyBase + newlyReady,
-                                                   unpreviewable: knownFailures + newFailures))
+                                                   unpreviewable: knownFailures + newFailures,
+                                                   deferred: deferred))
             }
             await service.clearTask(runID)
         } catch {

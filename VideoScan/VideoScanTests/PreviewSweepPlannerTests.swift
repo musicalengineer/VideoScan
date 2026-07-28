@@ -199,6 +199,26 @@ struct PreviewSweepPlannerTests {
                 == .proceed)
     }
 
+    @Test("pacing: externallyBusy (precacher running) parks with HIGHEST priority — reported as browse-pause")
+    func pacingExternallyBusy() {
+        let now: CFAbsoluteTime = 1000
+        // No interaction, cool thermals — but the precacher is running.
+        #expect(PreviewSweepPacing.action(lastInteraction: nil, now: now,
+                                          quietSeconds: 10, thermalState: .nominal,
+                                          externallyBusy: true)
+                == .pauseForInteraction)
+        // Outranks even thermal in the reported reason.
+        #expect(PreviewSweepPacing.action(lastInteraction: nil, now: now,
+                                          quietSeconds: 10, thermalState: .critical,
+                                          externallyBusy: true)
+                == .pauseForInteraction)
+        // Cleared → falls through to the normal ladder.
+        #expect(PreviewSweepPacing.action(lastInteraction: nil, now: now,
+                                          quietSeconds: 10, thermalState: .nominal,
+                                          externallyBusy: false)
+                == .proceed)
+    }
+
     // MARK: - Persisted setting (injected defaults — settings-pollution class)
 
     @Test("settings: OFF by default, from init and from empty defaults")
