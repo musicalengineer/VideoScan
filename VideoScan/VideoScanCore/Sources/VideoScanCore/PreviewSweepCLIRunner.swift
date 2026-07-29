@@ -173,32 +173,51 @@ public struct PreviewSweepCLIRunner {
         }
     }
 
-    /// The `.watch` loop: sweep, then sleep and re-sweep only when the
-    /// catalog changed or the last pass deferred work.
+    /// The `.watch` loop: sweep, sleep, re-sweep only when the catalog
+    /// changed or the last pass deferred work — and, per Stage 2, SELF-EXIT
+    /// once the cache has been warm and the catalog unchanged for
+    /// `options.idleExitSeconds` (so a detached helper doesn't linger
+    /// forever). Any catalog change or deferred work resets the idle clock.
     private func watchLoop(cache: PreviewDiskCache,
                            catalogSource: any PreviewCatalogSource) async {
         var freshness = CatalogFreshness()
         _ = freshness.hasChanged(catalogURL: options.catalogURL)  // seed
+        let idlePolicy = HelperIdleExitPolicy(idleGraceSeconds: options.idleExitSeconds)
+        var idleElapsed: Double = 0
+
         while !Task.isCancelled {
             let status = await runPass(cache: cache, catalogSource: catalogSource)
+            // "Warm" = the pass finished with nothing deferred: every work
+            // item this run could touch was written (or there was none).
             let deferredWork: Bool
             if case .done(_, _, let deferred) = status { deferredWork = deferred > 0 } else { deferredWork = false }
-            // Sleep, then decide whether another pass is warranted.
+            let cacheWarm = !deferredWork
+
             do {
                 try await Task.sleep(for: .seconds(options.intervalSeconds))
             } catch {
                 return  // cancelled
             }
-            let changed = freshness.hasChanged(catalogURL: options.catalogURL)
-            if !changed && !deferredWork {
-                out("preview sweep helper: idle (catalog unchanged, nothing deferred) — waiting")
-                // Poll for a change without re-planning the whole catalog.
-                while !Task.isCancelled {
-                    do { try await Task.sleep(for: .seconds(options.intervalSeconds)) }
-                    catch { return }
-                    if freshness.hasChanged(catalogURL: options.catalogURL) { break }
-                }
+
+            if freshness.hasChanged(catalogURL: options.catalogURL) {
+                idleElapsed = 0          // fresh work — reset the idle clock
+                continue                 // re-sweep immediately
             }
+            if !cacheWarm {
+                idleElapsed = 0          // still had deferred work — keep going
+                continue
+            }
+            // Warm + unchanged: accrue idle time, self-exit at the grace mark.
+            idleElapsed += options.intervalSeconds
+            if idlePolicy.shouldExit(cacheWarm: true,
+                                     catalogUnchanged: true,
+                                     idleElapsedSeconds: idleElapsed) {
+                out("preview sweep helper: cache warm + catalog unchanged for "
+                    + "\(Int(idleElapsed))s — exiting")
+                return
+            }
+            out("preview sweep helper: idle (cache warm, catalog unchanged) — "
+                + "\(Int(idleElapsed))s")
         }
     }
 }

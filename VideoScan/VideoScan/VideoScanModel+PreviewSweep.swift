@@ -7,6 +7,7 @@
 // The sweep machinery proper is PreviewSweepService/PreviewSweepPlan.
 
 import Foundation
+import VideoScanCore
 
 extension VideoScanModel {
 
@@ -17,6 +18,12 @@ extension VideoScanModel {
     /// service, so a strong closure capture would be a retain cycle
     /// (for Rick: shared_ptr cycle through the callback).
     func configurePreviewSweep() {
+        // Stage 2: build the detached-helper coordinator (unless under a
+        // test host — it must never spawn a real process). Do this BEFORE
+        // configuring the in-process service so the coexistence gate below
+        // can consult it.
+        buildPreviewHelperCoordinator()
+
         previewSweep.configure(PreviewSweepService.Configuration(
             diskCache: previewDiskCache,
             failureStore: thumbnailFailureStore,
@@ -33,12 +40,20 @@ extension VideoScanModel {
                 self?.filmstripTaskPath == path
             },
             isExternallyBusy: { [weak self] in
+                guard let self else { return false }
+                // COEXISTENCE RULE (Stage 2): the DETACHED external helper
+                // is the primary prewarmer whenever it's alive — the app's
+                // in-process sweep stands down (parks + re-polls) so the two
+                // never fight for the same caches or the same spindle. When
+                // the helper self-exits (cache warm), this clears and the
+                // in-process sweep resumes as the fallback.
+                if self.isPreviewHelperRunning { return true }
                 // The volume-click precacher is filling the very same
                 // caches at .utility priority (it runs BECAUSE the user
                 // clicked a volume). Defer the whole sweep while it runs;
                 // when it stops, the next pacing poll proceeds and covers
                 // ALL remaining records.
-                self?.thumbnailPrecacher.isRunning ?? false
+                return self.thumbnailPrecacher.isRunning
             },
             isReachable: { VolumeReachability.isReachable(path: $0) },
             thermalState: { ProcessInfo.processInfo.thermalState },
@@ -51,15 +66,71 @@ extension VideoScanModel {
         // doesn't fire inside init), so hand the service its first
         // catalog signal explicitly. No-op while disabled.
         previewSweep.noteCatalogChanged()
+
+        // Stage 2 launch hook: if the flag is ON and no live helper already
+        // owns the pidfile, spawn a detached one now (survives quit;
+        // respawned on the next launch after a reboot).
+        previewHelperCoordinator?.handle(
+            event: .launch, enabled: previewSweepSettings.enabled)
     }
 
-    /// Settings checkbox handler: persist + start/stop the service.
+    /// Settings checkbox handler: persist + start/stop BOTH the detached
+    /// helper (primary) and the in-process service (fallback). The helper
+    /// is the one that survives quit; the in-process service parks while it
+    /// runs (see the coexistence rule above).
     /// (@Published kills didSet — explicit save, CatalogScopeSettings
     /// pattern.)
     func setPreviewSweepEnabled(_ on: Bool) {
         previewSweepSettings.enabled = on
         savePreviewSweepSettings()
+        // Detached helper first (spawn on / SIGTERM off).
+        previewHelperCoordinator?.handle(event: on ? .toggleOn : .toggleOff,
+                                         enabled: on)
+        // In-process service tracks the flag too; while the helper is
+        // running its sweep parks via isExternallyBusy, so this is the
+        // fallback path for when the helper can't run or has self-exited.
         previewSweep.setEnabled(on)
+    }
+
+    // MARK: - Detached helper (Stage 2)
+
+    /// Is a LIVE external helper currently holding the pidfile? Reads the
+    /// tiny pidfile + one kill(pid,0) — cheap enough for the coexistence
+    /// gate's per-poll sampling. False under a test host (no coordinator).
+    var isPreviewHelperRunning: Bool {
+        previewHelperCoordinator?.isHelperRunning ?? false
+    }
+
+    /// Construct the coordinator with production dependencies: the
+    /// posix_spawn launcher, the bundle/dev binary locator, the pidfile
+    /// running-probe, and the helper's watch/idle-exit arguments. Skipped
+    /// under a test host so the ~200 model-constructing unit tests never
+    /// spawn a process or touch the real pidfile.
+    private func buildPreviewHelperCoordinator() {
+        guard !TestEnvironment.isTestHost else {
+            previewHelperCoordinator = nil
+            return
+        }
+        let launcher = PosixSpawnHelperLauncher()
+        let pidfileURL = PreviewHelperPaths.pidfileURL()
+        let logURL = PreviewHelperPaths.logURL()
+        let catalogPath = PreviewSweepCLIOptions.defaultCatalogURL().path
+        previewHelperCoordinator = PreviewHelperCoordinator(
+            spawner: launcher,
+            stopper: launcher,
+            runningPID: { PreviewHelperInstance.runningPID(pidfileURL: pidfileURL) },
+            executableProvider: { try PreviewHelperLocator.resolve() },
+            arguments: {
+                // --watch with a per-file re-check interval; --idle-exit
+                // lets the detached helper retire once the cache is warm
+                // and the catalog is quiet (see HelperIdleExitPolicy).
+                ["--watch",
+                 "--catalog", catalogPath,
+                 "--interval", "30",
+                 "--idle-exit", "300"]
+            },
+            logFileURL: logURL,
+            log: { appLog.write($0) })
     }
 
     /// Sendable snapshot of the records the sweep should cover:

@@ -20,6 +20,21 @@ final class PreviewSweepCLIOptionsTests: XCTestCase {
         XCTAssertEqual(opts.catalogURL, defaultCatalog)
         XCTAssertEqual(opts.workerCount, 2)
         XCTAssertNil(opts.cacheDirOverride)
+        XCTAssertEqual(opts.idleExitSeconds, 300, "Stage 2 default: self-exit after 5 min warm+idle")
+    }
+
+    func testIdleExitFlagParsesAndZeroDisables() throws {
+        let opts = try PreviewSweepCLIOptions.parse(["--idle-exit", "60"],
+                                                    defaultCatalog: defaultCatalog).get()
+        XCTAssertEqual(opts.idleExitSeconds, 60)
+        let never = try PreviewSweepCLIOptions.parse(["--idle-exit", "0"],
+                                                     defaultCatalog: defaultCatalog).get()
+        XCTAssertEqual(never.idleExitSeconds, 0)
+    }
+
+    func testIdleExitBadNumberFails() {
+        XCTAssertEqual(PreviewSweepCLIOptions.parse(["--idle-exit", "-5"], defaultCatalog: defaultCatalog),
+                       .failure(.badNumber(forFlag: "--idle-exit", value: "-5")))
     }
 
     func testOnceAndDryRunFlags() throws {
