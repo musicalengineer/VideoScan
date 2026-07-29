@@ -19,10 +19,10 @@ import Foundation
 
 enum PreviewFilmstripPlan {
 
-    /// How many frames a full-length strip rips. 16 at ~0.65 s/frame
-    /// gives a ~10 s looping preview — enough to tell a birthday party
-    /// from a blank tape without approaching real playback cost.
-    static let defaultFrameCount = 16
+    /// How many frames a full-length strip rips. Now a forwarder to the
+    /// shared VideoScanCore constant so the app and the CLI helper agree
+    /// (2026-07-28, Stage 1).
+    static let defaultFrameCount = previewFilmstripDefaultFrameCount
 
     /// If near-solid dropping would leave fewer than this many frames,
     /// selectFrames keeps EVERYTHING instead — a strip of blue leader
@@ -45,24 +45,9 @@ enum PreviewFilmstripPlan {
     /// increasing with no near-identical rips.
     static func offsets(durationSeconds: Double,
                         frameCount: Int = defaultFrameCount) -> [Double] {
-        guard durationSeconds.isFinite,
-              durationSeconds > 0,
-              durationSeconds <= PreviewBestFramePlan.maxSaneDurationSeconds,
-              frameCount > 0 else {
-            return []
-        }
-        var seen = Set<Int>()
-        var offsets: [Double] = []
-        for i in 0..<frameCount {
-            let offset = durationSeconds * (Double(i) + 0.5) / Double(frameCount)
-            // Dedupe key: offset in deciseconds (PreviewBestFramePlan's
-            // granularity). Monotonic generation + dedupe ⇒ strictly
-            // increasing result; offset ≥ 0 follows from duration > 0.
-            if seen.insert(Int((offset * 10).rounded())).inserted {
-                offsets.append(offset)
-            }
-        }
-        return offsets
+        // Forwards to VideoScanCore's shared planner (2026-07-28, Stage 1)
+        // so the app and the CLI helper compute identical offsets.
+        previewFilmstripOffsets(durationSeconds: durationSeconds, frameCount: frameCount)
     }
 
     /// Which ripped frames survive into the strip: indices whose score

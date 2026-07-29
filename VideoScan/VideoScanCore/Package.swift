@@ -16,9 +16,20 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [
         .library(name: "VideoScanCore", targets: ["VideoScanCore"]),
+        // Out-of-process preview (filmstrip/still) prewarmer (Stage 1,
+        // 2026-07-28). Depends on VideoScanCore so it drives the SAME
+        // PreviewSweepEngine + PreviewDiskCache the app uses in-process.
+        // Kept in THIS package (not a separate one) because it links the
+        // shared engine directly with no app-only entanglement — the app
+        // simply doesn't build this product.
+        .executable(name: "videoscan-preview-sweep", targets: ["videoscan-preview-sweep"]),
     ],
     targets: [
         .target(name: "VideoScanCore"),
+        .executableTarget(
+            name: "videoscan-preview-sweep",
+            dependencies: ["VideoScanCore"]
+        ),
         .testTarget(
             name: "VideoScanCoreTests",
             dependencies: ["VideoScanCore"]
