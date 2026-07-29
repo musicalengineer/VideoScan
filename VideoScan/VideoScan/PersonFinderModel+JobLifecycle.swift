@@ -330,7 +330,10 @@ extension PersonFinderModel {
         guard let profile = job.assignedProfile, !job.searchPath.isEmpty else { return }
 
         let personName = profile.name
-        let engine = job.effectiveEngine
+        // Same global-aware resolution as makeDescriptor / the live scan, so
+        // this face-load rehydration path keys identically to the rows the
+        // live AdaFace scan wrote (GH #148 residual).
+        let engine = job.effectiveEngine(globalDefault: settings.recognitionEngine)
         let threshold = profile.thresholdForEngine(engine)
         let refIdentifiers = Self.referenceCacheIdentifiers(
             referencePath: profile.referencePath,
@@ -1307,7 +1310,7 @@ extension PersonFinderModel {
                 // displayName drops the parenthetical descriptor — just
                 // "Vision" / "ArcFace" / "AdaFace" / "Hybrid". Matches the UI
                 // summary in ScanJobRow.summaryText so log and screen agree.
-                let engineName = job.effectiveEngine.displayName
+                let engineName = job.effectiveEngine(globalDefault: settings.recognitionEngine).displayName
                 let usingEngine = " using algorithm: \(engineName)"
                 let stats = "(Searched \(total) total file\(total == 1 ? "" : "s"). Elapsed time \(elapsed))"
                 let person = job.personLabel
@@ -1379,7 +1382,13 @@ extension PersonFinderModel {
         let personName = job.assignedProfile?.name
             ?? (settings.personName.isEmpty ? "(global)" : settings.personName)
         let folderName = job.assignedProfile.map { POIStorage.sanitize($0.name) }
-        let engine = job.effectiveEngine
+        // Resolve against the GLOBAL engine, not the hard-coded `.vision`
+        // fallback: a job whose engine came from the app-wide setting (no
+        // per-job override, profile token unset/legacy) ran that engine live,
+        // so the descriptor must record it too — otherwise threshold and
+        // embedVariant below are computed for Vision and the AdaFace cache rows
+        // never rehydrate (empty restored results; "thresh 0.52" on the card).
+        let engine = job.effectiveEngine(globalDefault: settings.recognitionEngine)
         let threshold = settings.thresholdForEngine(engine)
         // Persist the cache namespace this scan's keys were built with, so
         // rehydration reproduces identical keys without reconstruction
@@ -1625,8 +1634,15 @@ extension PersonFinderModel {
             ))
         }
         guard !cachedRows.isEmpty || hiddenBelowFloor > 0 else { return }
+        // Restore the best (smallest) distance across all rehydrated rows so
+        // the ring chart's "BEST DIST" reads the real value instead of the
+        // never-set live-scan sentinel (greatestFiniteMagnitude → blank "—").
+        let restoredBest = cachedRows.map(\.bestDistance).min()
         await MainActor.run {
             job.results = cachedRows
+            if let restoredBest, restoredBest < job.bestDist {
+                job.bestDist = restoredBest
+            }
             if hiddenBelowFloor > 0 {
                 job.appendLog(belowFloorSummaryLine(count: hiddenBelowFloor, floor: matchFloor))
             }
