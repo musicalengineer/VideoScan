@@ -6,6 +6,7 @@
 
 import SwiftUI
 import AVKit
+import AppKit
 import os.log
 
 // MARK: - Table + Preview + Inspector
@@ -106,6 +107,21 @@ struct CatalogContent: View {
 
     @State private var player: AVPlayer?
     @State private var isPlaying = false
+
+    /// "Preview follows selection" mode (live-preview, 2026-07-28).
+    /// Spacebar (when the table owns focus) toggles it; while armed, an
+    /// arrow-key selection change restarts the filmstrip for the newly
+    /// highlighted row. The state machine itself is pure/testable
+    /// (CatalogLivePreview.swift) — this @State just holds it and the
+    /// event-monitor handle. A `struct` in @State ≈ a value member the
+    /// framework owns; mutating it through a `mutating func` re-renders.
+    @State private var livePreviewMode = LivePreviewMode()
+    /// Local NSEvent keyDown monitor for the Space toggle. Installed when
+    /// the catalog pane appears, removed on disappear (tab switch tears
+    /// CatalogContent down). `Any?` because addLocalMonitor returns an
+    /// opaque token. macOS 13-safe — `.onKeyPress` is 14+.
+    @State private var spaceKeyMonitor: Any?
+
     @State var showRenameSheet = false
     @State var renameTarget: VideoRecord?
     @State var renameText: String = ""
@@ -243,6 +259,107 @@ struct CatalogContent: View {
         // O(1) via the model's id index — this is evaluated several times
         // per body, and the old linear scan was ~27K iterations each.
         return model.record(forID: id)
+    }
+
+    // MARK: - Live preview (follows selection)
+
+    /// The previewable media path for the current selection, or nil when
+    /// nothing previewable is selected. Delegates the decision to the pure
+    /// resolver (CatalogLivePreview); the `.lazy` map means reachability is
+    /// only probed up to the first selected row — NOT O(records). Called
+    /// only from event handlers (Space / selection change), never `body`.
+    private func livePreviewCandidatePath() -> String? {
+        CatalogLivePreview.previewPath(
+            orderedCandidates: tableData.lazy.map { rec in
+                CatalogLivePreview.Candidate(
+                    id: rec.id,
+                    path: rec.fullPath,
+                    isPreviewable: CatalogLivePreview.isPreviewable(
+                        streamType: rec.streamType,
+                        reachable: VolumeReachability.isReachable(path: rec.fullPath)))
+            },
+            selectedIDs: selectedIDs)
+    }
+
+    /// Perform the side effect the mode state machine asked for. Reuses the
+    /// EXISTING filmstrip machinery — start always routes through the
+    /// filmstrip surface (requestFilmstrip rips off-main and hits the disk
+    /// cache first), so arrowing through already-swept rows is near-instant
+    /// and never spins up a per-row AVPlayer.
+    private func applyLivePreview(_ action: LivePreviewAction) {
+        switch action {
+        case .none:
+            break
+        case .stop:
+            player?.pause()
+            player = nil
+            isPlaying = false
+            model.stopFilmstrip()
+        case .start(let path):
+            // Tear down any AVPlayer, then hand the row to the filmstrip.
+            player?.pause()
+            player = nil
+            isPlaying = false
+            if let rec = tableData.first(where: { $0.fullPath == path }) {
+                model.requestFilmstrip(for: rec)
+            }
+        }
+    }
+
+    /// Space pressed while the catalog table owns focus — toggle the mode.
+    private func toggleLivePreview() {
+        let action = livePreviewMode.toggle(candidatePath: livePreviewCandidatePath())
+        applyLivePreview(action)
+    }
+
+    /// Whether a Space keyDown should drive the toggle. TRUE only when an
+    /// NSTableView owns first-responder in the key window — so Space passes
+    /// straight through to the search field, rename/inline-edit fields (any
+    /// field editor is an NSText), and to buttons (which handle Space
+    /// themselves). This is the text-field guard the feature promises.
+    private func spaceShouldToggleLivePreview() -> Bool {
+        guard let responder = NSApp.keyWindow?.firstResponder else { return false }
+        // Field editors (search box, rename sheet, notes) are NSText —
+        // never hijack Space from text entry.
+        if responder is NSText { return false }
+        guard let view = responder as? NSView else { return false }
+        // Fire only when the catalog table (an NSTableView under the
+        // SwiftUI Table) is focused. Walk the ancestor chain so a focused
+        // cell subview still counts as "the table has focus".
+        var node: NSView? = view
+        while let current = node {
+            if current is NSTableView { return true }
+            node = current.superview
+        }
+        return false
+    }
+
+    /// Install the Space key monitor for the catalog pane's lifetime.
+    /// Idempotent (guards on the existing handle). Local monitors run
+    /// in-process for the key window only; returning nil consumes the
+    /// event, returning it passes through untouched.
+    private func installSpaceKeyMonitor() {
+        guard spaceKeyMonitor == nil else { return }
+        spaceKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // 49 = kVK_Space. Bare Space only — let ⌘/⌥/⌃-Space through to
+            // their owners (menu shortcuts, input sources, etc.).
+            let bareSpace = event.keyCode == 49
+                && event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                    .isSubset(of: [.function, .numericPad])
+            guard bareSpace, spaceShouldToggleLivePreview() else { return event }
+            toggleLivePreview()
+            return nil
+        }
+    }
+
+    /// Remove the Space key monitor (tab switch / pane teardown). Also
+    /// exits the mode so a re-entry starts clean.
+    private func removeSpaceKeyMonitor() {
+        if let monitor = spaceKeyMonitor {
+            NSEvent.removeMonitor(monitor)
+            spaceKeyMonitor = nil
+        }
+        _ = livePreviewMode.stop()
     }
 
     /// All records sharing the selected record's duplicate group (excluding the selected record itself).
@@ -575,7 +692,20 @@ struct CatalogContent: View {
             } else {
                 onClearPreview()
             }
+            // Live-preview follow (2026-07-28): when the mode is armed,
+            // drive the filmstrip to the newly highlighted row. When it's
+            // OFF this is a pure no-op, so ordinary arrow navigation is
+            // unchanged. Runs AFTER onSelect so the model's per-row
+            // resetFilmstrip has already keyed to this path — requestFilmstrip
+            // for the same path is then kept, not cancelled.
+            let action = livePreviewMode.selectionChanged(candidatePath: livePreviewCandidatePath())
+            applyLivePreview(action)
         }
+        // Space-toggle monitor lives for the catalog pane's on-screen
+        // lifetime — installed here, torn down (and the mode reset) on
+        // disappear so it can't fire from another tab.
+        .onAppear { installSpaceKeyMonitor() }
+        .onDisappear { removeSpaceKeyMonitor() }
         .sheet(isPresented: $showRenameSheet) {
             RenameSheet(
                 filename: $renameText,
@@ -1066,6 +1196,10 @@ struct CatalogContent: View {
                                     player = nil
                                     isPlaying = false
                                     model.stopFilmstrip()
+                                    // Stop also EXITS preview-follows-selection
+                                    // mode (live-preview, 2026-07-28) — Space
+                                    // and Stop are the two symmetric off-switches.
+                                    _ = livePreviewMode.stop()
                                 } label: {
                                     Label("Stop", systemImage: "stop.fill")
                                         .font(.system(size: 11))
