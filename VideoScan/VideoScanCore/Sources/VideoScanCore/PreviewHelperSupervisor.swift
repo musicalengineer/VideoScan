@@ -217,11 +217,67 @@ public struct PosixSpawnHelperLauncher: PreviewHelperSpawning, PreviewHelperStop
         return pid
     }
 
+    /// Stop a running helper with SIGTERM → grace-poll → SIGKILL escalation.
+    ///
+    /// SIGTERM is the clean path: the helper's watch loop is cooperative and
+    /// terminates on SIGTERM's default disposition. But a TRULY hung helper
+    /// (the rare case NOT already covered by ProcessRunner's deadline-bounded
+    /// ffmpeg wedge) can ignore SIGTERM, so we poll for a grace window and
+    /// escalate to SIGKILL — mirroring ProcessRunner's own SIGTERM → SIGKILL
+    /// policy so both paths reap a wedged child the same way.
+    ///
+    /// The helper is DETACHED (reparented to launchd via POSIX_SPAWN_SETSID),
+    /// so the app is NOT its parent: there's no zombie to reap, and
+    /// `kill(pid, 0)` correctly reports ESRCH (aliveness = false) once it's
+    /// gone.
+    ///
+    /// Non-blocking: the grace poll runs on a utility background queue so the
+    /// (main-actor) settings toggle-off that triggers this never stalls the
+    /// UI thread. Worst-case footprint: one detached work item holding a
+    /// single `pid_t` for up to `graceSeconds`; no buffers.
     public func stop(pid: pid_t) {
-        // SIGTERM: the helper's watch loop is cooperative (Task.isCancelled
-        // / the process just exits). SIGTERM's default disposition is
-        // terminate, which is what we want — a clean-ish stop.
-        kill(pid, SIGTERM)
+        // `DispatchQueue.global(...).async` ≈ std::thread([]{...}).detach()
+        // onto a shared pool — fire-and-forget off the caller's thread.
+        DispatchQueue.global(qos: .utility).async {
+            PosixSpawnHelperLauncher.escalateStop(
+                pid: pid,
+                isAlive: { kill($0, 0) == 0 },
+                term: { kill($0, SIGTERM) },
+                kill9: { kill($0, SIGKILL) },
+                sleep: { Thread.sleep(forTimeInterval: $0) }
+            )
+        }
+    }
+
+    /// PURE, injectable stop escalation — the testable core of `stop(pid:)`.
+    /// No real processes or wall-clock sleeps: every side effect is a seam,
+    /// so tests drive clean/wedged/already-dead outcomes with counting fakes.
+    ///
+    /// Logic: send SIGTERM once, then poll `isAlive` every `pollInterval` for
+    /// up to `graceSeconds`, returning as soon as the process is gone. If it
+    /// is still alive when the grace window lapses, send SIGKILL once.
+    ///
+    /// - Note: the poll count is a fixed integer derived from
+    ///   `graceSeconds / pollInterval` rather than a floating `elapsed <
+    ///   grace` accumulator, so iteration count is deterministic (no 0.1
+    ///   float-drift) — which the wedged-case test pins.
+    static func escalateStop(
+        pid: pid_t,
+        graceSeconds: Double = 3.0,
+        pollInterval: Double = 0.1,
+        isAlive: (pid_t) -> Bool,
+        term: (pid_t) -> Void,
+        kill9: (pid_t) -> Void,
+        sleep: (Double) -> Void
+    ) {
+        term(pid)
+        let steps = max(1, Int((graceSeconds / pollInterval).rounded()))
+        for _ in 0..<steps {
+            if !isAlive(pid) { return }   // exited cleanly on SIGTERM
+            sleep(pollInterval)
+        }
+        // Still alive after the grace window — force it.
+        if isAlive(pid) { kill9(pid) }
     }
 }
 

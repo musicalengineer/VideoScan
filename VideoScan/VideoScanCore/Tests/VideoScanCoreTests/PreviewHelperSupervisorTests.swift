@@ -226,3 +226,72 @@ final class HelperIdleExitPolicyTests: XCTestCase {
         XCTAssertFalse(policy.shouldExit(cacheWarm: true, catalogUnchanged: true, idleElapsedSeconds: 1_000_000))
     }
 }
+
+// MARK: - Stop escalation (SIGTERM → grace → SIGKILL)
+
+/// Unit-tests the PURE `PosixSpawnHelperLauncher.escalateStop`. No real
+/// processes and no real sleep: an injected sleep just advances a counter,
+/// so every case is deterministic with zero wall-clock waits.
+final class PreviewHelperStopEscalationTests: XCTestCase {
+
+    /// Records every seam call for assertions.
+    private final class Seams {
+        var termCalls: [pid_t] = []
+        var kill9Calls: [pid_t] = []
+        var sleepCount = 0
+        /// Feeds `isAlive` a scripted sequence; the last value repeats once
+        /// the script is exhausted.
+        var aliveScript: [Bool]
+        private var aliveIndex = 0
+
+        init(alive: [Bool]) { self.aliveScript = alive }
+
+        func isAlive(_ pid: pid_t) -> Bool {
+            let v = aliveIndex < aliveScript.count ? aliveScript[aliveIndex] : (aliveScript.last ?? false)
+            aliveIndex += 1
+            return v
+        }
+    }
+
+    private func run(_ seams: Seams, grace: Double = 3.0, poll: Double = 0.1) {
+        PosixSpawnHelperLauncher.escalateStop(
+            pid: 4242,
+            graceSeconds: grace,
+            pollInterval: poll,
+            isAlive: { seams.isAlive($0) },
+            term: { seams.termCalls.append($0) },
+            kill9: { seams.kill9Calls.append($0) },
+            sleep: { _ in seams.sleepCount += 1 }
+        )
+    }
+
+    /// Clean stop: alive once (still winding down), then gone → SIGTERM only.
+    func testCleanStopSigtermOnlyNoKill9() {
+        let seams = Seams(alive: [true, false])
+        run(seams)
+        XCTAssertEqual(seams.termCalls, [4242], "SIGTERM sent exactly once")
+        XCTAssertTrue(seams.kill9Calls.isEmpty, "clean exit must not escalate to SIGKILL")
+        XCTAssertEqual(seams.sleepCount, 1, "polled once, saw it exit, stopped")
+    }
+
+    /// Wedged: never dies → SIGTERM, full grace window, then one SIGKILL.
+    /// Poll iterations are bounded by graceSeconds / pollInterval.
+    func testWedgedEscalatesToKill9AfterGrace() {
+        let seams = Seams(alive: [true])   // always alive
+        run(seams, grace: 3.0, poll: 0.1)
+        XCTAssertEqual(seams.termCalls, [4242], "SIGTERM sent first")
+        XCTAssertEqual(seams.kill9Calls, [4242], "SIGKILL sent once after grace")
+        // 3.0 / 0.1 = 30 polls; the sleep runs once per poll iteration.
+        XCTAssertEqual(seams.sleepCount, 30, "poll count bounded by grace/pollInterval")
+    }
+
+    /// Already dead before we ever poll: SIGTERM is harmless, no SIGKILL,
+    /// no sleeping.
+    func testAlreadyDeadNoKill9() {
+        let seams = Seams(alive: [false])   // dead from the start
+        run(seams)
+        XCTAssertEqual(seams.termCalls, [4242], "SIGTERM still sent (harmless)")
+        XCTAssertTrue(seams.kill9Calls.isEmpty, "nothing alive to SIGKILL")
+        XCTAssertEqual(seams.sleepCount, 0, "returned before the first sleep")
+    }
+}
