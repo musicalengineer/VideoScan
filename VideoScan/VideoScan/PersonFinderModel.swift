@@ -78,10 +78,25 @@ final class ScanJob: ObservableObject, Identifiable {
     @Published var assignedEngine: RecognitionEngine?
     /// Resolved engine: job override > profile > global default
     var effectiveEngine: RecognitionEngine {
+        // Legacy fallback for callers with no global setting in hand (e.g. the
+        // card's engineName, where a restored job already carries assignedEngine).
+        effectiveEngine(globalDefault: .vision)
+    }
+
+    /// Resolve the engine this job runs, mirroring startJobAfterLoad's
+    /// jobSettings construction: per-job override > profile token > the GLOBAL
+    /// app engine. Any path that must reproduce the LIVE-scan engine (descriptor
+    /// persistence, cache-key rehydration, the completion summary) MUST pass the
+    /// real global default. The parameterless `effectiveEngine` hard-codes
+    /// `.vision`, which is wrong for a job whose engine came from the global
+    /// setting: the live scan runs (say) AdaFace but the descriptor then records
+    /// Vision, poisoning the persisted threshold + embed-variant so the AdaFace
+    /// cache rows never rehydrate on restart (GH #148 residual).
+    func effectiveEngine(globalDefault: RecognitionEngine) -> RecognitionEngine {
         if let e = assignedEngine { return e }
         // migratePersisted: profile.json may carry a pre-#144 dlib/hybrid token.
         if let p = assignedProfile, let e = RecognitionEngine.migratePersisted(p.engine) { return e }
-        return .vision
+        return globalDefault
     }
 
     @Published var status: ScanJobStatus = .idle

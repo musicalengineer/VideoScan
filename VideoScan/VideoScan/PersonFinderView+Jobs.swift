@@ -105,7 +105,12 @@ extension PersonFinderView {
             model: model,
             isSelected: selectedJobID == job.id,
             isExpanded: expandedJobIDs.contains(job.id),
-            threshold: model.settings.threshold,
+            // Engine-effective threshold, not the global Vision slider: an
+            // AdaFace/ArcFace row must show its own cosine threshold (0.30 /
+            // 0.40), not a stale "thresh 0.52". A restored row carries its
+            // real engine via assignedEngine (makeJob), so effectiveEngine is
+            // correct here without a global default.
+            threshold: model.settings.thresholdForEngine(job.effectiveEngine),
             savedProfiles: model.savedProfiles,
             onToggleExpand: {
                 withAnimation(.easeInOut(duration: 0.2)) {
