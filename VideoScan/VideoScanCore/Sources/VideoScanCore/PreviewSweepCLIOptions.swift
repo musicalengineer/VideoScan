@@ -32,19 +32,27 @@ public struct PreviewSweepCLIOptions: Equatable {
     /// preview-cache under Application Support. Overriding is for testing /
     /// by-hand proofs so a run never has to touch the real cache.
     public var cacheDirOverride: URL?
+    /// Seconds of "cache warm + catalog unchanged" before the helper exits
+    /// on its own in `.watch` mode (`--idle-exit`). 0 ⇒ never self-exit
+    /// (classic forever-watch). Default 300 (5 min): Stage 2 wants a
+    /// detached helper that persists across app restarts but doesn't linger
+    /// forever once there's nothing left to warm.
+    public var idleExitSeconds: Double
 
     public init(catalogURL: URL,
                 mode: Mode = .watch,
                 dryRun: Bool = false,
                 workerCount: Int = 2,
                 intervalSeconds: Double = 30,
-                cacheDirOverride: URL? = nil) {
+                cacheDirOverride: URL? = nil,
+                idleExitSeconds: Double = 300) {
         self.catalogURL = catalogURL
         self.mode = mode
         self.dryRun = dryRun
         self.workerCount = workerCount
         self.intervalSeconds = intervalSeconds
         self.cacheDirOverride = cacheDirOverride
+        self.idleExitSeconds = idleExitSeconds
     }
 
     // MARK: Defaults
@@ -109,7 +117,7 @@ public struct PreviewSweepCLIOptions: Equatable {
         return .success(opts)
     }
 
-    private static let valueFlags: Set<String> = ["--catalog", "--cache-dir", "--workers", "--interval"]
+    private static let valueFlags: Set<String> = ["--catalog", "--cache-dir", "--workers", "--interval", "--idle-exit"]
     private static func isValueFlag(_ flag: String) -> Bool { valueFlags.contains(flag) }
 
     /// Apply one value-carrying flag; returns a ParseError on a bad value or
@@ -127,6 +135,9 @@ public struct PreviewSweepCLIOptions: Equatable {
         case "--interval":
             guard let s = Double(value), s >= 0, s.isFinite else { return .badNumber(forFlag: flag, value: value) }
             opts.intervalSeconds = s
+        case "--idle-exit":
+            guard let s = Double(value), s >= 0, s.isFinite else { return .badNumber(forFlag: flag, value: value) }
+            opts.idleExitSeconds = s
         default:
             return .unknownFlag(flag)
         }
@@ -150,6 +161,8 @@ public struct PreviewSweepCLIOptions: Equatable {
                         ~/Library/Application Support/VideoScan/preview-cache
       --workers <n>     Sweep workers across volumes (per-volume is always 1). Default: 2.
       --interval <s>    Seconds to sleep between passes in --watch mode. Default: 30.
+      --idle-exit <s>   In --watch mode, exit after this many seconds of a warm
+                        cache with an unchanged catalog. 0 = never. Default: 300.
       -h, --help        Show this help.
 
     The app owns catalog.json and metadata_cache.sqlite; this helper never writes them.
