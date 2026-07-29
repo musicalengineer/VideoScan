@@ -11,24 +11,11 @@ import CoreGraphics
 
 // MARK: - Cache + failure store conformances
 
-/// The persistent disk cache IS the engine's `PreviewCache`. store /
-/// storeFilmstrip already match the protocol; only the one-listing read
-/// is added here.
-extension PreviewDiskCache: PreviewCache {
-    /// ONE directory listing of the cache root as (filename, sizeBytes) —
-    /// the scale invariant's single cache probe. Moved verbatim from the
-    /// sweep run loop's inline listing so the engine gets it through the
-    /// protocol.
-    public func currentListing() -> [(name: String, size: Int64)] {
-        (try? FileManager.default.contentsOfDirectory(
-            at: rootURL,
-            includingPropertiesForKeys: [.fileSizeKey],
-            options: .skipsHiddenFiles).map { url in
-                (url.lastPathComponent,
-                 Int64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0))
-            }) ?? []
-    }
-}
+// `PreviewDiskCache: PreviewCache` moved to VideoScanCore alongside the type
+// itself (2026-07-28, Stage 1) — the cache is now the ONE implementation
+// shared by the app and the CLI helper, so the conformance (and the
+// currentListing one-listing probe) live in Core. See
+// VideoScanCore/PreviewDiskCache.swift.
 
 /// The negative cache IS the engine's `PreviewSweepFailureStore` — the
 /// methods already match; this is a pure conformance declaration.

@@ -317,61 +317,28 @@ extension VideoScanModel {
     private nonisolated static func renderPreviewFrameViaFFmpeg(path: String,
                                                                 seeks: [String] = ["0.5", "0"],
                                                                 ffmpegPath: String = ToolLocator.ffmpegPath) async throws -> CGImage {
-        // `ffmpegPath` is injectable (defaults to the real ToolLocator
-        // resolution) so the filmstrip media-matrix tests can prove the
-        // AVFoundation arm produced the frames — with a bogus path here,
-        // any silent fall-through to the ffmpeg loop throws
-        // ffmpegUnavailable instead of quietly passing (codex 2026-07-27).
-        let ffmpeg = ffmpegPath
-        guard FileManager.default.isExecutableFile(atPath: ffmpeg) else {
-            previewLog.notice("ffmpeg preview tier unavailable (no executable at \(ffmpeg, privacy: .public))")
-            throw PreviewFrameError.ffmpegUnavailable
-        }
-        let tmpPNG = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("vs_preview_\(UUID().uuidString).png")
-        defer { try? FileManager.default.removeItem(at: tmpPNG) }
-
-        for seek in seeks {
-            try Task.checkCancellation()
-            let rip = await ProcessRunner.runProcess(
-                executable: ffmpeg,
-                arguments: ["-v", "error",
-                            // Input seeking (-ss BEFORE -i): keyframe
-                            // seek then decode forward — fast, and
-                            // frame-exactness doesn't matter for a
-                            // preview thumbnail.
-                            "-ss", seek,
-                            "-i", path,
-                            "-frames:v", "1",
-                            // The quotes are ffmpeg filtergraph quoting
-                            // (the comma in min() would otherwise split
-                            // the graph) — no shell involved here.
-                            "-vf", "scale='min(480,iw)':-2",
-                            "-y", tmpPNG.path],
+        // The ffmpeg-subprocess-to-CGImage core now lives in VideoScanCore
+        // (`ffmpegRipPreviewFrame`, 2026-07-28 Stage 1) so the app and the
+        // out-of-process CLI helper share ONE ffmpeg invocation. This
+        // forwarder maps the Core error type back onto the app's
+        // PreviewFrameError so every existing caller and media-matrix test
+        // sees the identical contract. `ffmpegPath` stays injectable so the
+        // filmstrip tests can prove the AVFoundation arm produced the frames
+        // (a bogus path here throws ffmpegUnavailable rather than quietly
+        // passing, codex 2026-07-27).
+        do {
+            return try await ffmpegRipPreviewFrame(
+                path: path,
+                seeks: seeks,
+                ffmpegPath: ffmpegPath,
+                maxDimension: PreviewDiskCache.maxPayloadDimension,
                 deadlineSeconds: ffmpegPreviewDeadlineSeconds)
-            // CANCELLATION, not failure (QA 🔴, 2026-07-26): when the
-            // awaiting task is cancelled mid-rip, ProcessRunner's
-            // cancellation handler SIGTERMs the child and returns
-            // exitCode -1 — indistinguishable from a genuine decode
-            // failure by exit code alone. Surface it as CancellationError
-            // HERE so a cancelled prewarm can never fall through to
-            // noFrameProduced and poison the negative cache against a
-            // perfectly good file.
-            try Task.checkCancellation()
-            // ffmpeg can exit 0 with no frame written (seek past EOF on
-            // a very short clip) — the PNG actually decoding is the real
-            // success test, hence the load inside the condition.
-            if rip.exitCode == 0,
-               let data = try? Data(contentsOf: tmpPNG),
-               let source = CGImageSourceCreateWithData(data as CFData, nil),
-               let cg = CGImageSourceCreateImageAtIndex(source, 0, nil) {
-                return cg
-            }
-            if rip.exitCode != 0 {
-                previewLog.notice("ffmpeg preview rip failed (-ss \(seek, privacy: .public)) for \((path as NSString).lastPathComponent, privacy: .public): \(rip.stderr, privacy: .public)")
+        } catch let error as FFmpegPreviewError {
+            switch error {
+            case .ffmpegUnavailable: throw PreviewFrameError.ffmpegUnavailable
+            case .noFrameProduced: throw PreviewFrameError.noFrameProduced
             }
         }
-        throw PreviewFrameError.noFrameProduced
     }
 
     // MARK: - Best-frame core (background path only)
