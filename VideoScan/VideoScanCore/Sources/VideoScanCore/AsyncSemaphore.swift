@@ -2,7 +2,9 @@ import Foundation
 
 /// Cooperative concurrency limiter for structured concurrency.
 /// Controls the maximum number of concurrent tasks in a task group.
-actor AsyncSemaphore {
+/// Moved to VideoScanCore (2026-07-28) so the extracted preview-sweep
+/// engine can use it — logic verbatim, visibility widened to public.
+public actor AsyncSemaphore {
     private struct Waiter {
         let id: UUID
         let continuation: CheckedContinuation<Void, Error>
@@ -30,13 +32,13 @@ actor AsyncSemaphore {
     /// Treat ≤0 as a programmer error and clamp to 1. A single-permit
     /// semaphore is still slow but progresses; a zero-permit one is
     /// indistinguishable from a deadlock. Never deadlock silently.
-    init(limit: Int) {
+    public init(limit: Int) {
         let safeLimit = max(1, limit)
         self.limit = safeLimit
         self.count = safeLimit
     }
 
-    func wait() async throws {
+    public func wait() async throws {
         if Task.isCancelled { throw CancellationError() }
         let id = UUID()
         try await withTaskCancellationHandler {
@@ -67,7 +69,7 @@ actor AsyncSemaphore {
         waiter.continuation.resume(throwing: CancellationError())
     }
 
-    func signal() {
+    public func signal() {
         if waiters.isEmpty {
             count = min(count + 1, limit)
         } else {
@@ -79,7 +81,7 @@ actor AsyncSemaphore {
     /// even on cancellation OR if the body throws. The defer is the
     /// contract. Body is throwing so callers don't have to wrap work in
     /// do/catch + Result just to release the permit on error.
-    func withPermit<T: Sendable>(_ body: @Sendable () async throws -> T) async throws -> T {
+    public func withPermit<T: Sendable>(_ body: @Sendable () async throws -> T) async throws -> T {
         try await wait()
         defer { signal() }
         return try await body()
