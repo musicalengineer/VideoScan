@@ -116,10 +116,14 @@ public final class PreviewDiskCache: @unchecked Sendable {
     /// while still sweeping real crash leftovers on the next launch.
     public static let tmpSweepMinAgeSeconds: TimeInterval = 600
 
-    /// Filename of the advisory cross-process write lock (hidden dotfile so
-    /// contentsOfDirectory(.skipsHiddenFiles) in currentListing/pruneNow
-    /// never sees it).
-    private static let writeLockName = ".write.lock"
+    // The advisory cross-process write lock lives in the OS per-user temp
+    // dir (NOT inside the cache root) so it never appears in a directory
+    // listing of the payload area — several isolation tests assert the EXACT
+    // contents of an injected cache root, and a lockfile there would fail
+    // them. Its path is derived deterministically from the cache root path
+    // (below), so the app and the CLI pointed at the same cache agree on the
+    // same lock. NSTemporaryDirectory() is per-UID and identical across both
+    // processes of the same user.
 
     // MARK: - Roots
 
@@ -187,7 +191,15 @@ public final class PreviewDiskCache: @unchecked Sendable {
 
     // MARK: - Cross-process write lock
 
-    private var writeLockURL: URL { rootURL.appendingPathComponent(Self.writeLockName) }
+    /// Deterministic per-root lock path in the OS temp dir. Reuses
+    /// `previewCacheKey` purely as a stable digest of the root path (the
+    /// mtime/size args are fixed placeholders) — same root ⇒ same lockfile
+    /// for every process, without polluting the cache directory.
+    private var writeLockURL: URL {
+        let token = previewCacheKey(path: rootURL.standardizedFileURL.path, mtime: 0, size: 0)
+        return URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("videoscan-preview-cache-\(token).lock")
+    }
 
     /// Run `body` while holding the advisory cross-process write lock (and
     /// nothing else). Best-effort: if the lockfile can't be opened the body

@@ -83,37 +83,54 @@ public struct PreviewSweepCLIOptions: Equatable {
             i += 1
             return args[i]
         }
+        // Boolean flags handled first (no value); value flags below consume
+        // the next argv token. Split this way to keep the branch count (and
+        // the linter's cyclomatic-complexity metric) modest.
         while i < args.count {
             let arg = args[i]
             switch arg {
-            case "--once":
-                opts.mode = .once
-            case "--watch":
-                opts.mode = .watch
-            case "--dry-run":
-                opts.dryRun = true
-            case "--help", "-h":
-                return .failure(.helpRequested)
-            case "--catalog":
-                guard let v = nextValue(for: arg) else { return .failure(.missingValue(forFlag: arg)) }
-                opts.catalogURL = URL(fileURLWithPath: (v as NSString).expandingTildeInPath)
-            case "--cache-dir":
-                guard let v = nextValue(for: arg) else { return .failure(.missingValue(forFlag: arg)) }
-                opts.cacheDirOverride = URL(fileURLWithPath: (v as NSString).expandingTildeInPath, isDirectory: true)
-            case "--workers":
-                guard let v = nextValue(for: arg) else { return .failure(.missingValue(forFlag: arg)) }
-                guard let n = Int(v), n >= 1 else { return .failure(.badNumber(forFlag: arg, value: v)) }
-                opts.workerCount = n
-            case "--interval":
-                guard let v = nextValue(for: arg) else { return .failure(.missingValue(forFlag: arg)) }
-                guard let s = Double(v), s >= 0, s.isFinite else { return .failure(.badNumber(forFlag: arg, value: v)) }
-                opts.intervalSeconds = s
+            case "--once":    opts.mode = .once
+            case "--watch":   opts.mode = .watch
+            case "--dry-run": opts.dryRun = true
+            case "--help", "-h": return .failure(.helpRequested)
             default:
-                return .failure(.unknownFlag(arg))
+                guard let value = nextValue(for: arg) else {
+                    // A recognized value flag with no value, or an unknown flag.
+                    return .failure(Self.isValueFlag(arg)
+                                    ? .missingValue(forFlag: arg)
+                                    : .unknownFlag(arg))
+                }
+                if let error = Self.applyValueFlag(arg, value, into: &opts) {
+                    return .failure(error)
+                }
             }
             i += 1
         }
         return .success(opts)
+    }
+
+    private static let valueFlags: Set<String> = ["--catalog", "--cache-dir", "--workers", "--interval"]
+    private static func isValueFlag(_ flag: String) -> Bool { valueFlags.contains(flag) }
+
+    /// Apply one value-carrying flag; returns a ParseError on a bad value or
+    /// an unknown flag, nil on success.
+    private static func applyValueFlag(_ flag: String, _ value: String,
+                                       into opts: inout PreviewSweepCLIOptions) -> ParseError? {
+        switch flag {
+        case "--catalog":
+            opts.catalogURL = URL(fileURLWithPath: (value as NSString).expandingTildeInPath)
+        case "--cache-dir":
+            opts.cacheDirOverride = URL(fileURLWithPath: (value as NSString).expandingTildeInPath, isDirectory: true)
+        case "--workers":
+            guard let n = Int(value), n >= 1 else { return .badNumber(forFlag: flag, value: value) }
+            opts.workerCount = n
+        case "--interval":
+            guard let s = Double(value), s >= 0, s.isFinite else { return .badNumber(forFlag: flag, value: value) }
+            opts.intervalSeconds = s
+        default:
+            return .unknownFlag(flag)
+        }
+        return nil
     }
 
     public static let usage = """
