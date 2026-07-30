@@ -261,6 +261,31 @@ struct ConfirmPersonSheet: View {
     /// reconnected volume could never come back.
     @State private var backstopInsertsSinceSweep: Set<String> = []
 
+    // MARK: Offline-copy preview resolution (Rick 2026-07-30)
+    //
+    // When a pending row's ORIGINAL file is offline (its volume unmounted /
+    // file gone) but a BYTE-IDENTICAL copy is live on a mounted volume,
+    // the sweep resolves the copy and records it here: original fullPath →
+    // live copy path. Preview surfaces (thumbnail, Open in QuickTime,
+    // Reveal, reachability) then use the copy via previewPath(for:), while
+    // the row's sealed identity (fullPath / reviewId) and the yes/no
+    // write-back stay keyed on the ORIGINAL — the copy is preview-only, and
+    // the review stays blind because the content is byte-identical (no
+    // scores/predictions involved). A resolved original is REMOVED from the
+    // offline set so navigation lands on it. Replaced wholesale by each
+    // sweep, exactly like offlineExcludedPaths — so a reconnected original
+    // stops showing the copy note.
+    @State private var resolvedPreviewPath: [String: String] = [:]
+    /// Originals whose volume is offline BUT which have strong-identity
+    /// copy candidates — so their offline/reviewable verdict is DEFERRED to
+    /// the background sweep (which checks copy liveness) rather than the
+    /// synchronous volume-level precheck or the per-row backstop. While an
+    /// original sits here, holdoutGo shows its transient offline pane
+    /// WITHOUT backstop-excluding it, so a live copy the sweep is about to
+    /// resolve isn't pre-emptively hidden (Rick 2026-07-30). Populated at
+    /// each sweep launch (keys of the candidate map), cleared at completion.
+    @State private var awaitingCopyResolution: Set<String> = []
+
     /// The session includes a holdout portion (regardless of the phase
     /// currently showing).
     private var isHoldout: Bool { holdoutQueue != nil }
@@ -666,8 +691,16 @@ struct ConfirmPersonSheet: View {
             let row = q.rows[holdoutIndex]
             HStack(alignment: .top, spacing: 16) {
                 if holdoutReachable {
-                    thumbnailView(path: row.fullPath, filename: row.filename)
-                        .frame(width: 320)
+                    VStack(spacing: 6) {
+                        // Preview surfaces (thumbnail/open/reveal) use the
+                        // resolved live copy when the original is offline;
+                        // the answer write-back still keys on row.fullPath
+                        // (Rick 2026-07-30).
+                        thumbnailView(path: previewPath(for: row.fullPath),
+                                      filename: row.filename)
+                        holdoutCopyNote(for: row.fullPath)
+                    }
+                    .frame(width: 320)
                 } else {
                     VStack(spacing: 10) {
                         Image(systemName: "externaldrive.badge.exclamationmark")
@@ -691,6 +724,26 @@ struct ConfirmPersonSheet: View {
             // or transitions to the setup pane. Render the status banner
             // so a broken queue still explains itself.
             VStack { holdoutStatusBanner; Spacer() }
+        }
+    }
+
+    /// Subtle two-line transparency note shown when the previewed media is
+    /// a live byte-identical copy standing in for an offline original
+    /// (Rick 2026-07-30). Neutral by design — byte-identical content, no
+    /// scores/predictions — so it does not break the blind contract.
+    @ViewBuilder
+    private func holdoutCopyNote(for original: String) -> some View {
+        if let copy = resolvedPreviewPath[original] {
+            VStack(alignment: .leading, spacing: 1) {
+                Label("Previewing verified copy on \(VolumeReachability.volumeName(forPath: copy))",
+                      systemImage: "doc.on.doc")
+                    .font(.caption2)
+                Text("original offline on \(VolumeReachability.volumeName(forPath: original))")
+                    .font(.caption2)
+                    .padding(.leading, 18)
+            }
+            .foregroundColor(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -902,10 +955,24 @@ struct ConfirmPersonSheet: View {
             // the background and refines the set.
             unplayableExcludedPaths = HoldoutNavigation.unplayablePaths(
                 rows: fresh.rows, meta: mediaMetaByPath)
-            offlineExcludedPaths = Self.volumeLevelOfflinePaths(
-                rows: fresh.rows.filter(\.isPending))
+            // Offline-copy preview resolution (Rick 2026-07-30): DEFER the
+            // synchronous volume-level offline verdict for any pending row
+            // that has strong-identity copy candidates. Otherwise Rick's
+            // 5 rows — all on the unmounted RicksBackups — would be marked
+            // offline here, firstActionableIndex() would be nil, and the
+            // session would transition to candidates BEFORE the background
+            // sweep could resolve their live LaCieWorkspace copies. Deferred
+            // rows stay actionable (shown optimistically); the sweep then
+            // either resolves a live copy (→ preview) or confirms offline.
+            let pending = fresh.rows.filter(\.isPending)
+            // Build the strong-identity copy-candidate map ONCE (one O(records)
+            // OnlineCopyFinder index pass) and reuse it for both the deferral
+            // set here and the sweep launched below — no double build.
+            let candidateMap = buildCopyCandidateMap(forPending: pending.map(\.fullPath))
+            offlineExcludedPaths = Self.volumeLevelOfflinePaths(rows: pending)
+                .subtracting(candidateMap.keys)
             recomputeHiddenCounts()
-            startOfflineSweep()
+            startOfflineSweep(precomputedCandidates: candidateMap)
             if let idx = firstActionableIndex() {
                 phase = .holdout
                 // Spindle keepalive for the whole session — see
@@ -971,6 +1038,14 @@ struct ConfirmPersonSheet: View {
 
     // MARK: - Offline / unplayable prefilter
 
+    /// The path preview surfaces should use for `original`: the resolved
+    /// live byte-identical copy when the sweep found one, else the original
+    /// itself. Preview-only — callers that write the answer or key the
+    /// sealed identity keep using `row.fullPath` directly (Rick 2026-07-30).
+    private func previewPath(for original: String) -> String {
+        resolvedPreviewPath[original] ?? original
+    }
+
     /// VOLUME-level offline check, main-safe by construction: only
     /// consults VolumeReachability.isReachable (SWR cache / kernel mount
     /// table — never disk I/O on the caller's thread), one lookup per
@@ -991,6 +1066,21 @@ struct ConfirmPersonSheet: View {
         return offline
     }
 
+    /// Build the strong-identity copy-candidate map for a set of pending
+    /// originals: original fullPath → ordered live-copy CANDIDATE paths
+    /// (liveness unchecked — the sweep stats those). One O(records)
+    /// OnlineCopyFinder index build; call on the main actor, off the view
+    /// body (Rick 2026-07-30). Originals with no candidate are omitted.
+    private func buildCopyCandidateMap(forPending pendingPaths: [String]) -> [String: [String]] {
+        let resolver = HoldoutCopyResolver(records: catalogModel.records)
+        var map: [String: [String]] = [:]
+        for path in pendingPaths {
+            let candidates = resolver.copyCandidates(for: path)
+            if !candidates.isEmpty { map[path] = candidates }
+        }
+        return map
+    }
+
     /// ONE background reachability sweep over the pending rows — run per
     /// open and per "Continue Reviewing" click, no polling. Cheap ladder:
     /// volume reachability once per distinct volume (mount table — no
@@ -998,27 +1088,63 @@ struct ConfirmPersonSheet: View {
     /// reachable volumes, strictly serialized at O(rows). Result REPLACES
     /// the offline set (a reconnected volume's rows come back); the
     /// per-row backstop re-inserts anything that vanishes afterwards.
-    private func startOfflineSweep() {
+    ///
+    /// `precomputedCandidates` lets the caller (startHoldout) hand in the
+    /// copy-candidate map it already built for its deferral set, so the open
+    /// path pays ONE O(records) OnlineCopyFinder index pass, not two
+    /// (Rick 2026-07-30). resumeHoldout passes nil — its pending set changed,
+    /// so the map is rebuilt for the current rows.
+    private func startOfflineSweep(precomputedCandidates: [String: [String]]? = nil) {
         guard let q = holdout else { return }
         offlineSweepTask?.cancel()
         backstopInsertsSinceSweep = []
         let pendingRows = q.rows.filter(\.isPending).map(\.fullPath)
+        // Offline-copy preview resolution (Rick 2026-07-30): the strong-
+        // identity copy candidates are precomputed on the main actor, where
+        // the catalog lives — one O(records) index build off the view body.
+        // The sweep's @concurrent half does the per-candidate liveness stats
+        // in its existing serialized context, so we never touch `records`
+        // from the background and never do O(records) work in a body.
+        let copyCandidates = precomputedCandidates
+            ?? buildCopyCandidateMap(forPending: pendingRows)
+        // Gate the per-row backstop for these originals until the sweep
+        // returns a verdict (a live copy resolution must not be pre-empted
+        // by holdoutGo's optimistic stat of the offline original).
+        awaitingCopyResolution = Set(copyCandidates.keys)
         offlineSweepTask = Task { @MainActor in
-            let offline = await Self.sweepOfflinePaths(paths: pendingRows)
+            let result = await Self.sweepOfflinePaths(
+                paths: pendingRows, copyCandidates: copyCandidates)
             guard !Task.isCancelled else { return }
-            // Sweep result ∪ backstop-inserts-since-launch — NOT the old
-            // set (a reconnected volume must come back), and NOT sweep
-            // result alone (a mid-sweep vanish must stay excluded).
-            offlineExcludedPaths = offline.union(backstopInsertsSinceSweep)
+            // Pure set-algebra merge (extracted + unit-testable — QA flagged
+            // this as the likeliest regression site, 2026-07-30). Sweep
+            // result ∪ backstop-inserts-since-launch, MINUS anything the
+            // sweep resolved to a live copy (resolution is authoritative — a
+            // live byte-identical copy was just statted). `resolvedPreviewPath`
+            // is replaced wholesale each sweep so a reconnected original drops
+            // its copy note; never merged across sweeps.
+            let merged = Self.mergeSweepResult(
+                offline: result.offline,
+                backstop: backstopInsertsSinceSweep,
+                resolved: result.resolved)
+            offlineExcludedPaths = merged.excluded
+            resolvedPreviewPath = merged.resolved
+            awaitingCopyResolution = []
             recomputeHiddenCounts()
             // If the row on screen just turned out to be offline, honor
             // "never present an offline video" — move along (or to the
-            // candidate transition if nothing actionable remains).
+            // candidate transition if nothing actionable remains). The
+            // INVERSE case (a row that was showing its transient offline
+            // pane while awaiting resolution, now resolved to a live copy)
+            // re-lands so the copy's reachability + thumbnail get picked up.
             if phase == .holdout, let qq = holdout,
                qq.rows.indices.contains(holdoutIndex),
-               offlineExcludedPaths.contains(qq.rows[holdoutIndex].fullPath),
                qq.rows[holdoutIndex].isPending {
-                holdoutAdvance()
+                let cur = qq.rows[holdoutIndex].fullPath
+                if offlineExcludedPaths.contains(cur) {
+                    holdoutAdvance()
+                } else if resolvedPreviewPath[cur] != nil, !holdoutReachable {
+                    holdoutGo(to: holdoutIndex)
+                }
             }
         }
     }
@@ -1026,14 +1152,31 @@ struct ConfirmPersonSheet: View {
     /// The blocking half of the sweep, off the main actor. Serialized —
     /// one stat at a time — so a spun-down HDD sees a polite sequential
     /// scan, not a seek storm.
+    ///
+    /// Offline-copy preview resolution (Rick 2026-07-30): when a path is
+    /// found offline, walk its precomputed strong-identity `copyCandidates`
+    /// (ordered by HoldoutCopyResolver / OnlineCopyFinder) and take the
+    /// first one that is on a mounted volume AND exists on disk. That
+    /// original is NOT added to the offline set — it is reviewable via the
+    /// live copy — and is recorded in the returned `resolved` map
+    /// (original → live copy). The candidate liveness stats reuse the same
+    /// serialized, memoized-per-volume ladder, so the polite-sequential
+    /// property holds for the copies too.
     #if compiler(>=6.2)
     @concurrent
     #endif
-    private nonisolated static func sweepOfflinePaths(paths: [String]) async -> Set<String> {
+    private nonisolated static func sweepOfflinePaths(
+        paths: [String],
+        copyCandidates: [String: [String]]
+    ) async -> (offline: Set<String>, resolved: [String: String]) {
         var offline = Set<String>()
+        var resolved: [String: String] = [:]
         var volumeReachable: [String: Bool] = [:]
-        for path in paths {
-            if Task.isCancelled { return offline }
+
+        // Shared liveness test: mounted volume (memoized, kernel mount table
+        // — no disk spin-up for unmounted drives) + file present. Used for
+        // both the primary paths and the copy candidates.
+        func isLive(_ path: String) -> Bool {
             if let key = HoldoutNavigation.volumeKey(forPath: path) {
                 let reachable = volumeReachable[key] ?? {
                     // Honest one-shot answer: the kernel mount table
@@ -1044,17 +1187,43 @@ struct ConfirmPersonSheet: View {
                     volumeReachable[key] = v
                     return v
                 }()
-                if !reachable {
-                    offline.insert(path)
-                    continue
-                }
+                if !reachable { return false }
             }
             // Mounted volume or internal path → the file itself decides.
-            if !FileManager.default.fileExists(atPath: path) {
+            return FileManager.default.fileExists(atPath: path)
+        }
+
+        for path in paths {
+            if Task.isCancelled { return (offline, resolved) }
+            if isLive(path) { continue }
+            // Original is offline — try a live byte-identical copy before
+            // giving up and hiding the row.
+            if let candidates = copyCandidates[path],
+               let live = candidates.first(where: { isLive($0) }) {
+                resolved[path] = live
+            } else {
                 offline.insert(path)
             }
         }
-        return offline
+        return (offline, resolved)
+    }
+
+    /// Pure set-algebra for the sweep completion, extracted so it is
+    /// unit-testable without a sheet (Rick 2026-07-30 — QA flagged the merge
+    /// as the likeliest future regression site). The excluded set is the
+    /// sweep's offline verdict UNIONED with anything the per-row backstop
+    /// flagged since this sweep launched, MINUS every original the sweep
+    /// resolved to a live copy — resolution wins over an optimistic backstop
+    /// flag because it statted a live byte-identical copy. `resolved` passes
+    /// through unchanged (it is replaced wholesale each sweep upstream); it
+    /// rides along so the single call site gets both values from one tested
+    /// surface.
+    nonisolated static func mergeSweepResult(
+        offline: Set<String>,
+        backstop: Set<String>,
+        resolved: [String: String]
+    ) -> (excluded: Set<String>, resolved: [String: String]) {
+        (offline.union(backstop).subtracting(resolved.keys), resolved)
     }
 
     /// Refresh the stored hidden-pending counts (never computed in view
@@ -1087,7 +1256,10 @@ struct ConfirmPersonSheet: View {
         thumbnailFailed = false
         holdoutIndex = idx
         holdoutNotes = q.rows[idx].notes
-        let path = q.rows[idx].fullPath
+        // Sealed identity stays the ORIGINAL; preview surfaces follow the
+        // resolved live copy when the sweep found one (Rick 2026-07-30).
+        let original = q.rows[idx].fullPath
+        let path = previewPath(for: original)
         keepalive.setCurrentPath(path)
 
         // Optimistic: render as reachable immediately; the background
@@ -1102,14 +1274,23 @@ struct ConfirmPersonSheet: View {
             if !exists {
                 thumbnailLoadTask?.cancel()
                 thumbnail = nil
-                // Backstop feeds the prefilter: a file can vanish AFTER
-                // the open-time sweep — exclude it so navigation never
-                // returns here (the sweep is once-per-open, no polling).
-                // Also recorded per-sweep so an in-flight sweep's
-                // completion can't wholesale-replace it away (QA minor 1).
-                offlineExcludedPaths.insert(path)
-                backstopInsertsSinceSweep.insert(path)
-                recomputeHiddenCounts()
+                // While the sweep is still deciding whether this offline
+                // original has a LIVE copy, don't backstop-exclude it — the
+                // transient offline pane is expected, and the sweep's
+                // resolution (or offline verdict) is authoritative
+                // (Rick 2026-07-30). Otherwise: backstop feeds the
+                // prefilter — a file can vanish AFTER the open-time sweep,
+                // so exclude it (navigation is once-per-open, no polling).
+                // Recorded per-sweep so an in-flight sweep's completion
+                // can't wholesale-replace it away (QA minor 1). Keyed on the
+                // ORIGINAL: offlineExcludedPaths and navigation key by
+                // row.fullPath, and if the previewed copy ALSO vanished the
+                // row is once again unreviewable.
+                if !awaitingCopyResolution.contains(original) {
+                    offlineExcludedPaths.insert(original)
+                    backstopInsertsSinceSweep.insert(original)
+                    recomputeHiddenCounts()
+                }
             }
         }
         loadThumbnail(path: path)
@@ -1324,7 +1505,12 @@ struct ConfirmPersonSheet: View {
                     offlineExcluded: offlineExcludedPaths,
                     unplayableExcluded: unplayableExcludedPaths) else { continue }
                 entries.append(HoldoutReviewPrefetcher.Entry(
-                    path: r.fullPath,
+                    // Warm the PREVIEW path — a resolved offline-with-copy
+                    // row must prefetch the live copy, not the offline
+                    // original it's standing in for (Rick 2026-07-30). Meta
+                    // stays keyed on the original: the copy is byte-identical
+                    // content, so the catalog's routing metadata still fits.
+                    path: previewPath(for: r.fullPath),
                     meta: mediaMetaByPath[r.fullPath],
                     // Pre-decode a thumbnail only for the NEXT item; bytes
                     // warming covers the rest of the window.
