@@ -14,9 +14,6 @@
 // predicate (CatalogScanTarget.isScratchVolumePath) and, more
 // importantly, screens every INGESTION point so a scratch target can't
 // even ENTER model.scanTargets:
-//   * discoverVolumes / addDiscoveredVolumes  (the likely original leak —
-//     the RAM disk is mounted during network scans, so it appeared in the
-//     discovery sheet)
 //   * addScanTarget (NSOpenPanel)
 //   * restoreTargetsFromCatalog (volume roots derived from records)
 //   * ScanTargetPersistence.restore (persisted state — heals pollution)
@@ -95,26 +92,6 @@ struct ScratchVolumeScreeningTests {
         let b = CatalogScanTarget(searchPath: "/Volumes/B")
         let out = CatalogScanTarget.excludingScratch([a, s, b])
         #expect(out.map(\.searchPath) == ["/Volumes/A", "/Volumes/B"])
-    }
-
-    // MARK: - Ingestion sensor: discovered-volume add
-
-    @Test func addDiscoveredVolumesRefusesScratchMount() {
-        let model = VideoScanModel()
-        model.scanTargets = []
-        let scratch = DiscoveredVolume(name: "VideoScan_Temp",
-                                       path: "/Volumes/VideoScan_Temp",
-                                       isNetwork: false,
-                                       totalBytes: 4_000_000_000,
-                                       freeBytes: 4_000_000_000,
-                                       alreadyAdded: false)
-        let real = DiscoveredVolume(name: "TestDrive",
-                                    path: "/Volumes/TestDrive",
-                                    isNetwork: false,
-                                    totalBytes: 1, freeBytes: 1,
-                                    alreadyAdded: false)
-        model.addDiscoveredVolumes([scratch, real])
-        #expect(model.scanTargets.map(\.searchPath) == ["/Volumes/TestDrive"])
     }
 
     // MARK: - Ingestion sensor: restore-from-catalog-history

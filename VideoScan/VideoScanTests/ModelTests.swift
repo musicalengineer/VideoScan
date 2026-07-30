@@ -276,39 +276,6 @@ struct ScanPerformanceSettingsTests {
     }
 }
 
-// MARK: - Discovered Volume Tests
-
-struct DiscoveredVolumeTests {
-
-    @Test func formattedSizes() {
-        let vol = DiscoveredVolume(
-            name: "TestDrive",
-            path: "/Volumes/TestDrive",
-            isNetwork: false,
-            totalBytes: 1_000_000_000_000,
-            freeBytes: 500_000_000_000,
-            alreadyAdded: false
-        )
-        #expect(!vol.totalFormatted.isEmpty)
-        #expect(!vol.usedFormatted.isEmpty)
-        #expect(vol.isNetwork == false)
-        #expect(vol.alreadyAdded == false)
-    }
-
-    @Test func networkVolumeFlag() {
-        let vol = DiscoveredVolume(
-            name: "NAS",
-            path: "/Volumes/NAS",
-            isNetwork: true,
-            totalBytes: 4_000_000_000_000,
-            freeBytes: 1_000_000_000_000,
-            alreadyAdded: true
-        )
-        #expect(vol.isNetwork == true)
-        #expect(vol.alreadyAdded == true)
-    }
-}
-
 // MARK: - CombinePairItem Tests
 
 struct CombinePairItemTests {

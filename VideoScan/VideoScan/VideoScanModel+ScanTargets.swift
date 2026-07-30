@@ -1,11 +1,10 @@
 import Foundation
 import AppKit
-import Darwin
 
 // MARK: - Scan Target Management (the list, not the per-scan run)
 //
-// CRUD on the scanTargets array: add a folder, discover mounted volumes,
-// remove a target, restore lost targets from catalog history. The actual
+// CRUD on the scanTargets array: add a folder, remove a target, and restore
+// lost targets from catalog history. The actual
 // scan lifecycle (start/stop/pause) lives in VideoScanModel+ScanLifecycle.
 // The big runScanForTarget probe loop lives in
 // VideoScanModel+ScanExecution.
@@ -71,69 +70,6 @@ extension VideoScanModel {
         return toRemove.count
     }
 
-    /// Discover all mounted volumes (local + network) and return them grouped by type.
-    /// Excludes system volumes (Data, Preboot, Recovery, VM, etc.) and already-added targets.
-    func discoverVolumes() -> [DiscoveredVolume] {
-        let fm = FileManager.default
-        let systemExclusions: Set<String> = [
-            "Macintosh HD", "Macintosh HD - Data",
-            "Data", "Preboot", "Recovery", "VM", "Update",
-            "com.apple.TimeMachine.localsnapshots"
-        ]
-
-        guard let contents = try? fm.contentsOfDirectory(atPath: "/Volumes") else { return [] }
-
-        let existingPaths = Set(scanTargets.map { $0.searchPath })
-
-        return contents.compactMap { name in
-            guard !systemExclusions.contains(name) else { return nil }
-            let path = "/Volumes/\(name)"
-            // Never offer the app's own RAM-disk scratch volume
-            // (VideoScan_Temp*) — it's mounted during network scans and
-            // used to leak into the discovery sheet, which is how it got
-            // added as a scan target in the first place.
-            guard !CatalogScanTarget.isScratchVolumePath(path) else { return nil }
-
-            // Resolve symlinks — /Volumes/Macintosh HD is a symlink to /
-            let resolved = (path as NSString).resolvingSymlinksInPath
-            guard resolved != "/" else { return nil }
-            guard VolumeReachability.isReachable(path: path) else { return nil }
-
-            let alreadyAdded = existingPaths.contains(path)
-            let isNetwork = isNetworkVolume(path: path)
-
-            // Get volume size info
-            let attrs = try? fm.attributesOfFileSystem(forPath: path)
-            let totalBytes = attrs?[.systemSize] as? Int64 ?? 0
-            let freeBytes = attrs?[.systemFreeSize] as? Int64 ?? 0
-
-            return DiscoveredVolume(
-                name: name,
-                path: path,
-                isNetwork: isNetwork,
-                totalBytes: totalBytes,
-                freeBytes: freeBytes,
-                alreadyAdded: alreadyAdded
-            )
-        }
-        .sorted { a, b in
-            if a.isNetwork != b.isNetwork { return !a.isNetwork }
-            return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
-        }
-    }
-
-    /// Add discovered volumes as scan targets. Screens the RAM-disk
-    /// scratch volume again here (belt to discoverVolumes' suspenders) so
-    /// no caller can inject it.
-    func addDiscoveredVolumes(_ volumes: [DiscoveredVolume]) {
-        for vol in volumes where !CatalogScanTarget.isScratchVolumePath(vol.path) {
-            if !scanTargets.contains(where: { $0.searchPath == vol.path }) {
-                scanTargets.append(CatalogScanTarget(searchPath: vol.path))
-            }
-        }
-        persistScanTargets()
-    }
-
     /// Scan catalog records for volume roots that aren't in the current scan target
     /// list and re-add them. This recovers targets lost due to UserDefaults resets or
     /// key name changes. Returns the number of targets restored.
@@ -172,17 +108,6 @@ extension VideoScanModel {
             log("Restored \(restored) scan target(s) from catalog history.")
         }
         return restored
-    }
-
-    fileprivate func isNetworkVolume(path: String) -> Bool {
-        var statBuf = statfs()
-        guard statfs(path, &statBuf) == 0 else { return false }
-        let fsType = withUnsafePointer(to: &statBuf.f_fstypename) {
-            $0.withMemoryRebound(to: CChar.self, capacity: Int(MFSTYPENAMELEN)) {
-                String(cString: $0)
-            }
-        }
-        return ["smbfs", "nfs", "afpfs", "webdav"].contains(fsType)
     }
 
     /// "Remove from List" / "Remove Selected" (Catalog volume context menu).

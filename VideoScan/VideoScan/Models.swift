@@ -64,8 +64,7 @@
 //     ├── CatalogScanTarget.swift      — CatalogScanTarget + CatalogTargetStatus,
 //     │                                  ScanPhase, VolumeProgress, ThroughputSample
 //     └── VolumeViewModels.swift       — VolumeRow, VolumeAggregate,
-//                                        CombinePairItem, DiscoveredVolume,
-//                                        OptionalDateComparator
+//                                        CombinePairItem, OptionalDateComparator
 //
 // MAINTENANCE: adding a stored property to VideoRecord still means updating
 // FOUR places — CodingKeys, encode(to:) (both in VideoRecord+Codable.swift),

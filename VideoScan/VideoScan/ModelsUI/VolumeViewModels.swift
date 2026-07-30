@@ -1,7 +1,7 @@
 // VolumeViewModels.swift
-// Value types backing the volumes table and combine/discovery UI —
-// VolumeRow, VolumeAggregate, CombinePairItem, DiscoveredVolume, and the
-// OptionalDateComparator (with its private ComparisonResult helper) —
+// Value types backing the volumes table and combine UI — VolumeRow,
+// VolumeAggregate, CombinePairItem, and the OptionalDateComparator (with its
+// private ComparisonResult helper) —
 // moved verbatim from Models.swift (refactor 2026-06-26, model
 // decomposition step 1). In step 2 this file moved from Models/ into the
 // app-side ModelsUI/ group: these are view-model value types backing
@@ -94,19 +94,4 @@ struct CombinePairItem: Identifiable {
     let id = UUID()
     let video: VideoRecord
     let audio: VideoRecord
-}
-
-// MARK: - Discovered Volume
-
-struct DiscoveredVolume: Identifiable {
-    let id = UUID()
-    let name: String
-    let path: String
-    let isNetwork: Bool
-    let totalBytes: Int64
-    let freeBytes: Int64
-    let alreadyAdded: Bool
-
-    var totalFormatted: String { Formatting.humanSize(totalBytes) }
-    var usedFormatted: String { Formatting.humanSize(totalBytes - freeBytes) }
 }

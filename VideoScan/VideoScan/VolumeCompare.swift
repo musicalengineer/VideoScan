@@ -1074,7 +1074,7 @@ struct VolumeCompareSheet: View {
                 model.startTarget(destTarget)
             }
             .buttonStyle(.borderedProminent)
-            .help("Scan the destination volume so the freshly-copied files get cataloged. Status appears in the Scan Volumes table.")
+            .help("Scan the destination volume so the freshly-copied files get cataloged. Status appears in Volume Scanner.")
         }
         Button("Dismiss") {
             rescue.acknowledgeCompletion()
