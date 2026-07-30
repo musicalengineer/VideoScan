@@ -15,6 +15,9 @@ struct SettingsTabView: View {
     /// status line under the toggle.
     @Binding var sweepEnabled: Bool
     @ObservedObject var sweep: PreviewSweepService
+    /// Constant-time liveness seam for the detached helper. Sampled only
+    /// while Settings is visible.
+    let isPreviewHelperRunning: () -> Bool
 
     private func ramDiskColor(_ gb: Int) -> Color {
         let pct = Double(gb) / Double(totalRAMGB)
@@ -131,7 +134,7 @@ struct SettingsTabView: View {
                     Toggle("Keep previews fresh in the background", isOn: $sweepEnabled)
                         .toggleStyle(.checkbox)
                         .accessibilityIdentifier("settings.previewSweep.enabled")
-                    Text("While VideoScan is open, quietly prepare a preview for every video in the catalog (and filmstrips for formats the player can't show) so browsing never waits. Pauses whenever you're browsing; resumes on the next launch if left on.")
+                    Text("Quietly prepares a preview for every video in the catalog (and filmstrips for formats the player can't show) so browsing rarely waits. The background helper can continue after VideoScan closes and stops when the cache is fresh.")
                         .font(.footnote).foregroundColor(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
 
@@ -139,6 +142,8 @@ struct SettingsTabView: View {
                     // (renders nothing when idle) — no outer if needed.
                     PreviewSweepStatusLine(sweep: sweep)
                         .padding(.top, 2)
+                    PreviewHelperStatusLine(isRunning: isPreviewHelperRunning)
+                        .padding(.horizontal, 10)
                 }
 
                 Divider()

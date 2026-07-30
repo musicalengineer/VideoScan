@@ -175,24 +175,42 @@ final class PreviewHelperInstanceTests: XCTestCase {
     func testGarbagePidfileIsNotRunning() throws {
         let url = try tempPidfile("not-a-number\n")
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-        XCTAssertNil(PreviewHelperInstance.runningPID(pidfileURL: url, isAlive: { _ in true }))
+        XCTAssertNil(PreviewHelperInstance.runningPID(
+            pidfileURL: url, isAlive: { _ in true }, isLockHeld: { _ in true }))
     }
 
-    /// THE isolation case: a stale pidfile left by a crashed helper. The pid
-    /// parses fine, but the process is gone → treated as NOT running (so the
-    /// app respawns instead of assuming a phantom helper owns the cache).
     func testStalePidfileTreatedAsNotRunning() throws {
         let url = try tempPidfile("12345\n")
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-        XCTAssertNil(PreviewHelperInstance.runningPID(pidfileURL: url, isAlive: { _ in false }),
-                     "stale pid (process gone) must read as not running")
+        XCTAssertNil(PreviewHelperInstance.runningPID(
+            pidfileURL: url, isAlive: { _ in false }, isLockHeld: { _ in true }))
     }
 
-    func testLivePidfileTreatedAsRunning() throws {
+    /// A live unrelated process whose PID happens to match stale text must
+    /// not be reported or signaled when no helper owns the flock.
+    func testUnlockedPidfileRejectsReusedLivePID() throws {
+        let url = try tempPidfile("\(getpid())\n")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        XCTAssertNil(PreviewHelperInstance.runningPID(pidfileURL: url))
+    }
+
+    func testInjectedHeldLockAndLivePIDReportsRunning() throws {
         let url = try tempPidfile("2222\n")
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-        XCTAssertEqual(PreviewHelperInstance.runningPID(pidfileURL: url, isAlive: { $0 == 2222 }), 2222)
-        XCTAssertTrue(PreviewHelperInstance.isRunning(pidfileURL: url, isAlive: { _ in true }))
+        XCTAssertEqual(PreviewHelperInstance.runningPID(
+            pidfileURL: url, isAlive: { $0 == 2222 }, isLockHeld: { _ in true }), 2222)
+    }
+
+    func testRealHeldLockReportsRunning() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("held-pidfile-\(UUID().uuidString)", isDirectory: true)
+        let url = dir.appendingPathComponent(".previewsweepd.lock")
+        let lock = try XCTUnwrap(SingleInstanceLock.acquire(at: url))
+        defer {
+            lock.release()
+            try? FileManager.default.removeItem(at: dir)
+        }
+        XCTAssertEqual(PreviewHelperInstance.runningPID(pidfileURL: url), getpid())
     }
 
     /// The default aliveness probe: our OWN pid is unquestionably alive;
@@ -287,11 +305,11 @@ final class PreviewHelperStopEscalationTests: XCTestCase {
 
     /// Already dead before we ever poll: SIGTERM is harmless, no SIGKILL,
     /// no sleeping.
-    func testAlreadyDeadNoKill9() {
-        let seams = Seams(alive: [false])   // dead from the start
+    func testAlreadyDeadNoSignal() {
+        let seams = Seams(alive: [false])
         run(seams)
-        XCTAssertEqual(seams.termCalls, [4242], "SIGTERM still sent (harmless)")
-        XCTAssertTrue(seams.kill9Calls.isEmpty, "nothing alive to SIGKILL")
-        XCTAssertEqual(seams.sleepCount, 0, "returned before the first sleep")
+        XCTAssertTrue(seams.termCalls.isEmpty, "identity lost before TERM must not signal")
+        XCTAssertTrue(seams.kill9Calls.isEmpty)
+        XCTAssertEqual(seams.sleepCount, 0)
     }
 }

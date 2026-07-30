@@ -652,7 +652,8 @@ struct VideoScanApp: App {
                     get: { catalogModel.previewSweepSettings.enabled },
                     set: { catalogModel.setPreviewSweepEnabled($0) }
                 ),
-                sweep: catalogModel.previewSweep
+                sweep: catalogModel.previewSweep,
+                isPreviewHelperRunning: { catalogModel.isPreviewHelperRunning }
             )
             .frame(minWidth: 500, idealWidth: 620, minHeight: 400, idealHeight: 620)
         }

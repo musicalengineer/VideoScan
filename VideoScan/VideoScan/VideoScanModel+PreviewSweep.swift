@@ -111,8 +111,8 @@ extension VideoScanModel {
             previewHelperCoordinator = nil
             return
         }
-        let launcher = PosixSpawnHelperLauncher()
         let pidfileURL = PreviewHelperPaths.pidfileURL()
+        let launcher = PosixSpawnHelperLauncher(pidfileURL: pidfileURL)
         let logURL = PreviewHelperPaths.logURL()
         let catalogPath = PreviewSweepCLIOptions.defaultCatalogURL().path
         previewHelperCoordinator = PreviewHelperCoordinator(

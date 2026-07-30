@@ -95,10 +95,10 @@ public struct PreviewHelperSupervisor: Sendable {
 // MARK: - Running-state probe (isolation-safe)
 
 /// Reads the helper's pidfile to answer "is a LIVE helper running?" from
-/// ANOTHER process (the app) without acquiring the flock. The isolation
-/// hazard is a STALE pidfile (helper crashed, OS auto-released the flock,
-/// file left behind): we resolve it by verifying the recorded pid is still
-/// a live process. A stale/garbage/missing pidfile ⇒ "not running".
+/// ANOTHER process (the app). A valid instance must BOTH hold the pidfile's
+/// flock and have a live recorded pid. The lock check prevents a stale
+/// pidfile whose numeric pid was reused by an unrelated process from being
+/// mistaken for the helper.
 public enum PreviewHelperInstance {
 
     /// The live helper's pid, or nil when no live instance holds it.
@@ -106,9 +106,11 @@ public enum PreviewHelperInstance {
     /// but not alive) without spawning anything.
     public static func runningPID(
         pidfileURL: URL,
-        isAlive: (pid_t) -> Bool = PreviewHelperInstance.processIsAlive
+        isAlive: (pid_t) -> Bool = PreviewHelperInstance.processIsAlive,
+        isLockHeld: (URL) -> Bool = PreviewHelperInstance.pidfileLockIsHeld
     ) -> pid_t? {
-        guard let data = try? Data(contentsOf: pidfileURL),
+        guard isLockHeld(pidfileURL),
+              let data = try? Data(contentsOf: pidfileURL),
               let text = String(data: data, encoding: .utf8) else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let pid = pid_t(trimmed), pid > 0 else { return nil }
@@ -118,9 +120,23 @@ public enum PreviewHelperInstance {
     /// Convenience boolean form.
     public static func isRunning(
         pidfileURL: URL,
-        isAlive: (pid_t) -> Bool = PreviewHelperInstance.processIsAlive
+        isAlive: (pid_t) -> Bool = PreviewHelperInstance.processIsAlive,
+        isLockHeld: (URL) -> Bool = PreviewHelperInstance.pidfileLockIsHeld
     ) -> Bool {
-        runningPID(pidfileURL: pidfileURL, isAlive: isAlive) != nil
+        runningPID(pidfileURL: pidfileURL, isAlive: isAlive, isLockHeld: isLockHeld) != nil
+    }
+
+    /// Nonblocking `try_lock()` probe on the same inter-process mutex the
+    /// helper holds for its lifetime. Acquiring it ourselves means idle.
+    public static func pidfileLockIsHeld(_ pidfileURL: URL) -> Bool {
+        let fd = open(pidfileURL.path, O_RDWR)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        if flock(fd, LOCK_EX | LOCK_NB) == 0 {
+            flock(fd, LOCK_UN)
+            return false
+        }
+        return errno == EWOULDBLOCK || errno == EAGAIN
     }
 
     /// `kill(pid, 0)` probes existence without delivering a signal.
@@ -169,8 +185,11 @@ public enum PreviewHelperSpawnError: Error, Equatable {
 /// freed before return. No media buffering here (that's the helper's job,
 /// and it streams).
 public struct PosixSpawnHelperLauncher: PreviewHelperSpawning, PreviewHelperStopping {
+    private let pidfileURL: URL?
 
-    public init() {}
+    public init(pidfileURL: URL? = nil) {
+        self.pidfileURL = pidfileURL
+    }
 
     public func spawnDetached(executableURL: URL,
                               arguments: [String],
@@ -236,12 +255,16 @@ public struct PosixSpawnHelperLauncher: PreviewHelperSpawning, PreviewHelperStop
     /// UI thread. Worst-case footprint: one detached work item holding a
     /// single `pid_t` for up to `graceSeconds`; no buffers.
     public func stop(pid: pid_t) {
-        // `DispatchQueue.global(...).async` ≈ std::thread([]{...}).detach()
-        // onto a shared pool — fire-and-forget off the caller's thread.
+        let pidfileURL = self.pidfileURL
         DispatchQueue.global(qos: .utility).async {
             PosixSpawnHelperLauncher.escalateStop(
                 pid: pid,
-                isAlive: { kill($0, 0) == 0 },
+                isAlive: { candidate in
+                    guard let pidfileURL else {
+                        return PreviewHelperInstance.processIsAlive(candidate)
+                    }
+                    return PreviewHelperInstance.runningPID(pidfileURL: pidfileURL) == candidate
+                },
                 term: { kill($0, SIGTERM) },
                 kill9: { kill($0, SIGKILL) },
                 sleep: { Thread.sleep(forTimeInterval: $0) }
@@ -270,13 +293,15 @@ public struct PosixSpawnHelperLauncher: PreviewHelperSpawning, PreviewHelperStop
         kill9: (pid_t) -> Void,
         sleep: (Double) -> Void
     ) {
+        // Production's isAlive seam also validates the held flock and exact
+        // pidfile PID, before TERM, after every sleep, and before KILL.
+        guard isAlive(pid) else { return }
         term(pid)
         let steps = max(1, Int((graceSeconds / pollInterval).rounded()))
         for _ in 0..<steps {
-            if !isAlive(pid) { return }   // exited cleanly on SIGTERM
             sleep(pollInterval)
+            if !isAlive(pid) { return }
         }
-        // Still alive after the grace window — force it.
         if isAlive(pid) { kill9(pid) }
     }
 }
@@ -468,8 +493,12 @@ public final class PreviewHelperCoordinator {
     /// action taken (for tests / diagnostics).
     @discardableResult
     public func handle(event: PreviewHelperEvent, enabled: Bool) -> PreviewHelperAction {
-        let running = runningPID() != nil
-        let action = supervisor.decide(enabled: enabled, isRunning: running, event: event)
+        // Carry the single validated PID through the decision and stop path;
+        // do not reopen a race by performing a second initial probe.
+        let livePID = runningPID()
+        let action = supervisor.decide(enabled: enabled,
+                                       isRunning: livePID != nil,
+                                       event: event)
         switch action {
         case .spawn:
             do {
@@ -482,7 +511,7 @@ public final class PreviewHelperCoordinator {
                 log("preview helper: spawn failed — \(error)")
             }
         case .stop:
-            if let pid = runningPID() {
+            if let pid = livePID {
                 stopper.stop(pid: pid)
                 log("preview helper: sent SIGTERM to pid \(pid)")
             }
