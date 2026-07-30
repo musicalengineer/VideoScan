@@ -126,6 +126,19 @@ final class PreviewHelperCoordinatorTests: XCTestCase {
         XCTAssertTrue(spawner.calls.isEmpty)
     }
 
+    func testToggleOffProbesOnceAndStopsOriginallyValidatedPID() {
+        let spawner = FakeSpawner(), stopper = FakeStopper()
+        var probeCount = 0
+        let coord = makeCoordinator(spawner: spawner, stopper: stopper, running: {
+            probeCount += 1
+            return probeCount == 1 ? 777 : 888
+        })
+
+        XCTAssertEqual(coord.handle(event: .toggleOff, enabled: false), .stop)
+        XCTAssertEqual(probeCount, 1, "toggle-off must carry one validated PID")
+        XCTAssertEqual(stopper.stopped, [777])
+    }
+
     func testToggleOffNotRunningDoesNothing() {
         let spawner = FakeSpawner(), stopper = FakeStopper()
         let coord = makeCoordinator(spawner: spawner, stopper: stopper, running: { nil })
@@ -199,6 +212,40 @@ final class PreviewHelperInstanceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         XCTAssertEqual(PreviewHelperInstance.runningPID(
             pidfileURL: url, isAlive: { $0 == 2222 }, isLockHeld: { _ in true }), 2222)
+    }
+
+    func testStopIdentityPredicateRequiresHeldLockSameLivePID() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("stop-identity-\(UUID().uuidString)", isDirectory: true)
+        let url = dir.appendingPathComponent(".previewsweepd.lock")
+        let lock = try XCTUnwrap(SingleInstanceLock.acquire(at: url))
+        var released = false
+        defer {
+            if !released { lock.release() }
+            try? FileManager.default.removeItem(at: dir)
+        }
+
+        XCTAssertTrue(PosixSpawnHelperLauncher.isExpectedInstance(
+            pid: getpid(), pidfileURL: url))
+
+        let changedHandle = try FileHandle(forWritingTo: url)
+        try changedHandle.truncate(atOffset: 0)
+        try changedHandle.write(contentsOf: Data("\(getppid())\n".utf8))
+        try changedHandle.close()
+        XCTAssertFalse(PosixSpawnHelperLauncher.isExpectedInstance(
+            pid: getpid(), pidfileURL: url), "changed pidfile PID must fail identity")
+
+        let deadHandle = try FileHandle(forWritingTo: url)
+        try deadHandle.truncate(atOffset: 0)
+        try deadHandle.write(contentsOf: Data("999998\n".utf8))
+        try deadHandle.close()
+        XCTAssertFalse(PosixSpawnHelperLauncher.isExpectedInstance(
+            pid: 999_998, pidfileURL: url), "dead pid must fail even while lock is held")
+
+        lock.release()
+        released = true
+        XCTAssertFalse(PosixSpawnHelperLauncher.isExpectedInstance(
+            pid: getpid(), pidfileURL: url), "lost lock must fail identity")
     }
 
     func testRealHeldLockReportsRunning() throws {

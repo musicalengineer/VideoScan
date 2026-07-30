@@ -263,13 +263,27 @@ public struct PosixSpawnHelperLauncher: PreviewHelperSpawning, PreviewHelperStop
                     guard let pidfileURL else {
                         return PreviewHelperInstance.processIsAlive(candidate)
                     }
-                    return PreviewHelperInstance.runningPID(pidfileURL: pidfileURL) == candidate
+                    return PosixSpawnHelperLauncher.isExpectedInstance(
+                        pid: candidate, pidfileURL: pidfileURL)
                 },
                 term: { kill($0, SIGTERM) },
                 kill9: { kill($0, SIGKILL) },
                 sleep: { Thread.sleep(forTimeInterval: $0) }
             )
         }
+    }
+
+    /// Identity gate shared by TERM/KILL escalation and direct safety tests.
+    /// Production's default probe requires the pidfile flock, exact PID, and
+    /// live process; injection keeps the equality rule deterministic in tests.
+    static func isExpectedInstance(
+        pid: pid_t,
+        pidfileURL: URL,
+        runningPID: (URL) -> pid_t? = {
+            PreviewHelperInstance.runningPID(pidfileURL: $0)
+        }
+    ) -> Bool {
+        runningPID(pidfileURL) == pid
     }
 
     /// PURE, injectable stop escalation — the testable core of `stop(pid:)`.

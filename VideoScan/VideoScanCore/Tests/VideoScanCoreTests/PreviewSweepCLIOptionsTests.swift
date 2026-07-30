@@ -122,9 +122,14 @@ final class PreviewSweepCLIOptionsTests: XCTestCase {
         XCTAssertNil(SingleInstanceLock.acquire(at: lockURL),
                      "second acquire must refuse while the first holds the lock")
         first.release()
-
+        XCTAssertTrue(FileManager.default.fileExists(atPath: lockURL.path),
+                      "release leaves the stable lockfile inode in place")
+        XCTAssertNil(PreviewHelperInstance.runningPID(pidfileURL: lockURL),
+                     "an unlocked stale pidfile is not a running helper")
         let third = try XCTUnwrap(SingleInstanceLock.acquire(at: lockURL),
                                   "after release the lock is available again")
+        XCTAssertEqual(PreviewHelperInstance.runningPID(pidfileURL: lockURL), getpid(),
+                       "reacquire reuses the same path and stamps its live PID")
         third.release()
     }
 }

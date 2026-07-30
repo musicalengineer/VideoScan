@@ -209,11 +209,9 @@ public struct CatalogFreshness {
 /// lock. EWOULDBLOCK means someone else holds it, so we bow out.
 public final class SingleInstanceLock: @unchecked Sendable {
     private let fd: Int32
-    private let url: URL
 
-    private init(fd: Int32, url: URL) {
+    private init(fd: Int32) {
         self.fd = fd
-        self.url = url
     }
 
     /// Try to become the sole instance. Returns the held lock on success,
@@ -234,15 +232,17 @@ public final class SingleInstanceLock: @unchecked Sendable {
         ftruncate(fd, 0)
         let pidLine = "\(ProcessInfo.processInfo.processIdentifier)\n"
         _ = pidLine.withCString { write(fd, $0, strlen($0)) }
-        return SingleInstanceLock(fd: fd, url: url)
+        return SingleInstanceLock(fd: fd)
     }
 
-    /// Release the lock and remove the pidfile. Idempotent-ish (the fd is
-    /// closed once; a second call is harmless).
+    /// Release the flock and close our descriptor, deliberately leaving the
+    /// pidfile inode in place. Unlinking after unlock creates a race where a
+    /// new helper locks the old inode while another opener creates and locks
+    /// a replacement path. Stale unlocked contents are safe because flock is
+    /// the authority and the next acquire truncates/re-stamps the same path.
     public func release() {
         flock(fd, LOCK_UN)
         close(fd)
-        try? FileManager.default.removeItem(at: url)
     }
 
     /// Default lock location:
