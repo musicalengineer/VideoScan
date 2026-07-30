@@ -234,18 +234,12 @@ extension CatalogView {
             HStack(spacing: 10) {
                 Image(systemName: "externaldrive.connected.to.line.below")
                     .font(.title3).foregroundColor(.secondary)
-                Text("Scan Volumes")
+                Text("Volume Scanner")
                     .font(.title3.weight(.semibold))
                     .padding(.trailing, 12)
 
                 Button(action: { model.addScanTarget() }) {
-                    Label("Local Volumes…", systemImage: "internaldrive")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-
-                Button(action: { showDiscoverVolumes = true }) {
-                    Label("Network Volumes…", systemImage: "network")
+                    Label("Choose Volume…", systemImage: "externaldrive.badge.plus")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)

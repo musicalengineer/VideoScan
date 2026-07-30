@@ -238,7 +238,6 @@ struct CatalogView: View {
     @State private var showClearRecorrelateConfirm = false
     @State private var deleteTargetVolume: String = ""
     @State private var deleteTargetCount: Int = 0
-    @State var showDiscoverVolumes = false
     // showVolumeCompare retired 2026-06-07 — Compare moved from a
     // modal sheet to its own Window scene (id: "compare") to eliminate
     // beachballing during multi-hour rescue copies. Button now calls
@@ -717,9 +716,6 @@ struct CatalogView: View {
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("This wipes EVERY A/V pairing — including pairs you made by hand — and re-derives them all from file evidence.\n\nNormal \"Correlate All\" already handles new files and never touches existing pairs. Only use this if the pairings themselves are wrong.")
-        }
-        .sheet(isPresented: $showDiscoverVolumes) {
-            DiscoverVolumesSheet(model: model)
         }
         // Catalog maintenance: the unified "Purge Non-Video Media…" dialog
         // (replaces the former cover-art + unrelated-audio sheets). Opened
