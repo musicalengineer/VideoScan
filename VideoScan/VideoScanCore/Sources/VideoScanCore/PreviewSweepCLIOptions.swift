@@ -214,9 +214,10 @@ public final class SingleInstanceLock: @unchecked Sendable {
         self.fd = fd
     }
 
-    /// Try to become the sole instance. Identity is written only AFTER flock
-    /// succeeds; legacy/stale contents remain visible during that tiny window
-    /// but fail validation against the new holder's start token/path.
+    /// Try to become the sole instance. Immediately after flock succeeds the
+    /// old payload is truncated, so the publication window is empty/invalid
+    /// while identity capture and JSON encoding run. Identity is published
+    /// only after those fallible steps succeed.
     public static func acquire(
         at url: URL,
         identityProvider: (pid_t) -> PreviewHelperProcessIdentity? = PreviewHelperProcessIdentity.capture
@@ -230,6 +231,12 @@ public final class SingleInstanceLock: @unchecked Sendable {
             close(fd)
             return nil
         }
+        guard ftruncate(fd, 0) == 0,
+              lseek(fd, 0, SEEK_SET) >= 0 else {
+            flock(fd, LOCK_UN)
+            close(fd)
+            return nil
+        }
         let pid = getpid()
         guard let identity = identityProvider(pid),
               var payload = identity.encoded() else {
@@ -238,8 +245,6 @@ public final class SingleInstanceLock: @unchecked Sendable {
             return nil
         }
         payload.append(0x0A)
-        ftruncate(fd, 0)
-        lseek(fd, 0, SEEK_SET)
         let written = payload.withUnsafeBytes { bytes in
             write(fd, bytes.baseAddress, bytes.count)
         }

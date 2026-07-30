@@ -132,4 +132,36 @@ final class PreviewSweepCLIOptionsTests: XCTestCase {
                        "reacquire reuses the same path and stamps its live PID")
         third.release()
     }
+
+    func testAcquireInvalidatesStaleIdentityBeforeProviderAndFailsEmpty() throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("instlock-publish-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let lockURL = dir.appendingPathComponent(".previewsweepd.lock")
+        let stale = PreviewHelperProcessIdentity(
+            pid: getpid(), executablePath: "/old/helper",
+            startSeconds: 1, startMicroseconds: 2)
+        try XCTUnwrap(stale.encoded()).write(to: lockURL)
+
+        var providerSawEmptyFile = false
+        let failed = SingleInstanceLock.acquire(at: lockURL) { _ in
+            providerSawEmptyFile = (try? Data(contentsOf: lockURL).isEmpty) ?? false
+            return nil
+        }
+        XCTAssertNil(failed)
+        XCTAssertTrue(providerSawEmptyFile,
+                      "stale identity must be erased before identity capture")
+        XCTAssertEqual(try Data(contentsOf: lockURL), Data(),
+                       "capture failure leaves an empty fail-closed record")
+
+        let replacement = PreviewHelperProcessIdentity(
+            pid: getpid(), executablePath: "/new/helper",
+            startSeconds: 3, startMicroseconds: 4)
+        let reacquired = try XCTUnwrap(SingleInstanceLock.acquire(at: lockURL) { _ in replacement },
+                                      "provider failure must leave the flock reacquirable")
+        defer { reacquired.release() }
+        XCTAssertEqual(PreviewHelperProcessIdentity.decode(try Data(contentsOf: lockURL)),
+                       replacement)
+    }
 }
