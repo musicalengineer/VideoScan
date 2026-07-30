@@ -94,36 +94,85 @@ public struct PreviewHelperSupervisor: Sendable {
 
 // MARK: - Running-state probe (isolation-safe)
 
-/// Reads the helper's pidfile to answer "is a LIVE helper running?" from
-/// ANOTHER process (the app). A valid instance must BOTH hold the pidfile's
-/// flock and have a live recorded pid. The lock check prevents a stale
-/// pidfile whose numeric pid was reused by an unrelated process from being
-/// mistaken for the helper.
-public enum PreviewHelperInstance {
+/// Immutable process identity persisted under the helper's held flock.
+/// PID alone is insufficient because Darwin eventually reuses it; executable
+/// path plus kernel process-start time distinguish the original process.
+public struct PreviewHelperProcessIdentity: Codable, Equatable, Sendable {
+    public let pid: Int32
+    public let executablePath: String
+    public let startSeconds: UInt64
+    public let startMicroseconds: UInt64
 
-    /// The live helper's pid, or nil when no live instance holds it.
-    /// `isAlive` is injected so tests can poison the pidfile (pid present
-    /// but not alive) without spawning anything.
+    public init(pid: Int32,
+                executablePath: String,
+                startSeconds: UInt64,
+                startMicroseconds: UInt64) {
+        self.pid = pid
+        self.executablePath = executablePath
+        self.startSeconds = startSeconds
+        self.startMicroseconds = startMicroseconds
+    }
+
+    public static func capture(pid: pid_t) -> PreviewHelperProcessIdentity? {
+        var pathBuffer = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
+        let pathLength = pathBuffer.withUnsafeMutableBufferPointer { buffer in
+            proc_pidpath(pid, buffer.baseAddress, UInt32(buffer.count))
+        }
+        guard pathLength > 0 else { return nil }
+
+        var info = proc_bsdinfo()
+        let infoSize = Int32(MemoryLayout<proc_bsdinfo>.size)
+        let readSize = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, infoSize)
+        guard readSize == infoSize else { return nil }
+
+        return PreviewHelperProcessIdentity(
+            pid: pid,
+            executablePath: String(cString: pathBuffer),
+            startSeconds: UInt64(info.pbi_start_tvsec),
+            startMicroseconds: UInt64(info.pbi_start_tvusec))
+    }
+
+    public func encoded() -> Data? {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try? encoder.encode(self)
+    }
+
+    public static func decode(_ data: Data) -> PreviewHelperProcessIdentity? {
+        try? JSONDecoder().decode(Self.self, from: data)
+    }
+}
+
+/// Reads the helper identity record. A valid instance must hold the flock and
+/// match PID, executable path, and process-start token. Legacy PID-only and
+/// malformed records fail closed, so startup's pre-rewrite stale contents can
+/// never identify a reused unrelated process.
+public enum PreviewHelperInstance {
     public static func runningPID(
         pidfileURL: URL,
         isAlive: (pid_t) -> Bool = PreviewHelperInstance.processIsAlive,
-        isLockHeld: (URL) -> Bool = PreviewHelperInstance.pidfileLockIsHeld
+        isLockHeld: (URL) -> Bool = PreviewHelperInstance.pidfileLockIsHeld,
+        identityForPID: (pid_t) -> PreviewHelperProcessIdentity? = PreviewHelperProcessIdentity.capture
     ) -> pid_t? {
         guard isLockHeld(pidfileURL),
               let data = try? Data(contentsOf: pidfileURL),
-              let text = String(data: data, encoding: .utf8) else { return nil }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let pid = pid_t(trimmed), pid > 0 else { return nil }
-        return isAlive(pid) ? pid : nil
+              let recorded = PreviewHelperProcessIdentity.decode(data),
+              recorded.pid > 0,
+              isAlive(recorded.pid),
+              identityForPID(recorded.pid) == recorded else { return nil }
+        return recorded.pid
     }
 
-    /// Convenience boolean form.
     public static func isRunning(
         pidfileURL: URL,
         isAlive: (pid_t) -> Bool = PreviewHelperInstance.processIsAlive,
-        isLockHeld: (URL) -> Bool = PreviewHelperInstance.pidfileLockIsHeld
+        isLockHeld: (URL) -> Bool = PreviewHelperInstance.pidfileLockIsHeld,
+        identityForPID: (pid_t) -> PreviewHelperProcessIdentity? = PreviewHelperProcessIdentity.capture
     ) -> Bool {
-        runningPID(pidfileURL: pidfileURL, isAlive: isAlive, isLockHeld: isLockHeld) != nil
+        runningPID(pidfileURL: pidfileURL,
+                   isAlive: isAlive,
+                   isLockHeld: isLockHeld,
+                   identityForPID: identityForPID) != nil
     }
 
     /// Nonblocking `try_lock()` probe on the same inter-process mutex the
@@ -139,10 +188,6 @@ public enum PreviewHelperInstance {
         return errno == EWOULDBLOCK || errno == EAGAIN
     }
 
-    /// `kill(pid, 0)` probes existence without delivering a signal.
-    ///   0     → the process exists and we may signal it (alive).
-    ///   EPERM → it exists but is owned by someone else (still alive).
-    ///   ESRCH → no such process (dead / stale pid).
     public static func processIsAlive(_ pid: pid_t) -> Bool {
         if kill(pid, 0) == 0 { return true }
         return errno == EPERM

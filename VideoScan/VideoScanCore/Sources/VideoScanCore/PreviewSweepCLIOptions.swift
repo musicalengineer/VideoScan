@@ -214,10 +214,13 @@ public final class SingleInstanceLock: @unchecked Sendable {
         self.fd = fd
     }
 
-    /// Try to become the sole instance. Returns the held lock on success,
-    /// nil if another instance already holds it (or the lockfile can't be
-    /// opened). Writes our pid into the file for humans (`cat` the lockfile).
-    public static func acquire(at url: URL) -> SingleInstanceLock? {
+    /// Try to become the sole instance. Identity is written only AFTER flock
+    /// succeeds; legacy/stale contents remain visible during that tiny window
+    /// but fail validation against the new holder's start token/path.
+    public static func acquire(
+        at url: URL,
+        identityProvider: (pid_t) -> PreviewHelperProcessIdentity? = PreviewHelperProcessIdentity.capture
+    ) -> SingleInstanceLock? {
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(),
             withIntermediateDirectories: true)
@@ -227,11 +230,24 @@ public final class SingleInstanceLock: @unchecked Sendable {
             close(fd)
             return nil
         }
-        // Best-effort: stamp our pid (truncate first so a shorter pid can't
-        // leave stale trailing bytes).
+        let pid = getpid()
+        guard let identity = identityProvider(pid),
+              var payload = identity.encoded() else {
+            flock(fd, LOCK_UN)
+            close(fd)
+            return nil
+        }
+        payload.append(0x0A)
         ftruncate(fd, 0)
-        let pidLine = "\(ProcessInfo.processInfo.processIdentifier)\n"
-        _ = pidLine.withCString { write(fd, $0, strlen($0)) }
+        lseek(fd, 0, SEEK_SET)
+        let written = payload.withUnsafeBytes { bytes in
+            write(fd, bytes.baseAddress, bytes.count)
+        }
+        guard written == payload.count else {
+            flock(fd, LOCK_UN)
+            close(fd)
+            return nil
+        }
         return SingleInstanceLock(fd: fd)
     }
 

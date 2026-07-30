@@ -179,6 +179,21 @@ final class PreviewHelperInstanceTests: XCTestCase {
         return url
     }
 
+    private func identity(pid: Int32 = 2222,
+                          path: String = "/Helpers/videoscan-preview-sweep",
+                          seconds: UInt64 = 100,
+                          microseconds: UInt64 = 200) -> PreviewHelperProcessIdentity {
+        PreviewHelperProcessIdentity(pid: pid,
+                                     executablePath: path,
+                                     startSeconds: seconds,
+                                     startMicroseconds: microseconds)
+    }
+
+    private func tempIdentityFile(_ value: PreviewHelperProcessIdentity) throws -> URL {
+        let data = try XCTUnwrap(value.encoded())
+        return try tempPidfile(String(decoding: data, as: UTF8.self))
+    }
+
     func testMissingPidfileIsNotRunning() {
         let missing = URL(fileURLWithPath: "/no/such/\(UUID().uuidString)/.previewsweepd.lock")
         XCTAssertNil(PreviewHelperInstance.runningPID(pidfileURL: missing))
@@ -192,11 +207,49 @@ final class PreviewHelperInstanceTests: XCTestCase {
             pidfileURL: url, isAlive: { _ in true }, isLockHeld: { _ in true }))
     }
 
-    func testStalePidfileTreatedAsNotRunning() throws {
-        let url = try tempPidfile("12345\n")
+    func testValidHeldIdentityReportsRunning() throws {
+        let expected = identity()
+        let url = try tempIdentityFile(expected)
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        XCTAssertEqual(PreviewHelperInstance.runningPID(
+            pidfileURL: url,
+            isAlive: { $0 == expected.pid },
+            isLockHeld: { _ in true },
+            identityForPID: { _ in expected }), expected.pid)
+    }
+
+    func testSamePIDDifferentStartTokenFailsClosed() throws {
+        let recorded = identity(seconds: 100)
+        let reused = identity(seconds: 101)
+        let url = try tempIdentityFile(recorded)
         defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
         XCTAssertNil(PreviewHelperInstance.runningPID(
-            pidfileURL: url, isAlive: { _ in false }, isLockHeld: { _ in true }))
+            pidfileURL: url,
+            isAlive: { _ in true },
+            isLockHeld: { _ in true },
+            identityForPID: { _ in reused }))
+    }
+
+    func testWrongExecutableFailsClosed() throws {
+        let recorded = identity(path: "/Helpers/videoscan-preview-sweep")
+        let unrelated = identity(path: "/usr/bin/unrelated")
+        let url = try tempIdentityFile(recorded)
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        XCTAssertNil(PreviewHelperInstance.runningPID(
+            pidfileURL: url,
+            isAlive: { _ in true },
+            isLockHeld: { _ in true },
+            identityForPID: { _ in unrelated }))
+    }
+
+    func testLegacyPIDOnlyRecordFailsClosedEvenWhenPIDIsLiveAndLockHeld() throws {
+        let url = try tempPidfile("2222\n")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        XCTAssertNil(PreviewHelperInstance.runningPID(
+            pidfileURL: url,
+            isAlive: { _ in true },
+            isLockHeld: { _ in true },
+            identityForPID: { _ in self.identity() }))
     }
 
     /// A live unrelated process whose PID happens to match stale text must
@@ -207,12 +260,6 @@ final class PreviewHelperInstanceTests: XCTestCase {
         XCTAssertNil(PreviewHelperInstance.runningPID(pidfileURL: url))
     }
 
-    func testInjectedHeldLockAndLivePIDReportsRunning() throws {
-        let url = try tempPidfile("2222\n")
-        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
-        XCTAssertEqual(PreviewHelperInstance.runningPID(
-            pidfileURL: url, isAlive: { $0 == 2222 }, isLockHeld: { _ in true }), 2222)
-    }
 
     func testStopIdentityPredicateRequiresHeldLockSameLivePID() throws {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -346,8 +393,33 @@ final class PreviewHelperStopEscalationTests: XCTestCase {
         run(seams, grace: 3.0, poll: 0.1)
         XCTAssertEqual(seams.termCalls, [4242], "SIGTERM sent first")
         XCTAssertEqual(seams.kill9Calls, [4242], "SIGKILL sent once after grace")
-        // 3.0 / 0.1 = 30 polls; the sleep runs once per poll iteration.
         XCTAssertEqual(seams.sleepCount, 30, "poll count bounded by grace/pollInterval")
+    }
+
+    func testIdentityChangeDuringGracePreventsKillEscalation() {
+        let url = URL(fileURLWithPath: "/injected/helper.lock")
+        var validatedPIDs: [pid_t?] = [4242, 7777]
+        var termCalls: [pid_t] = []
+        var killCalls: [pid_t] = []
+        var sleepCount = 0
+
+        PosixSpawnHelperLauncher.escalateStop(
+            pid: 4242,
+            graceSeconds: 1,
+            pollInterval: 1,
+            isAlive: { expected in
+                PosixSpawnHelperLauncher.isExpectedInstance(
+                    pid: expected,
+                    pidfileURL: url,
+                    runningPID: { _ in validatedPIDs.removeFirst() })
+            },
+            term: { termCalls.append($0) },
+            kill9: { killCalls.append($0) },
+            sleep: { _ in sleepCount += 1 })
+
+        XCTAssertEqual(termCalls, [4242])
+        XCTAssertEqual(sleepCount, 1)
+        XCTAssertTrue(killCalls.isEmpty, "changed identity must cancel escalation")
     }
 
     /// Already dead before we ever poll: SIGTERM is harmless, no SIGKILL,
