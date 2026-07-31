@@ -187,7 +187,6 @@ struct CatalogContent: View {
     /// does not trigger a view update, which is exactly what a render-
     /// time memo needs. See CatalogPerfMemo.swift.
     @State private var duplicateGroupMemo = RenderMemo<DuplicateGroupMemoKey, [VideoRecord]>()
-    @State private var mediaOnVolumeMemo = RenderMemo<MediaOnVolumeMemoKey, Int64>()
     @State private var trimDerivativesMemo = RenderMemo<TrimDerivativesMemoKey, [VideoRecord]>()
     /// Music-triage candidate memo (GH #124 layer 2). The O(n) detection
     /// pass runs once per catalog change / purge / tidy event — NEVER per
@@ -240,11 +239,6 @@ struct CatalogContent: View {
 
     private struct TrimDerivativesMemoKey: Equatable {
         let selectedID: UUID
-        let version: RecordsVersion
-    }
-
-    private struct MediaOnVolumeMemoKey: Equatable {
-        let path: String
         let version: RecordsVersion
     }
 
@@ -416,53 +410,6 @@ struct CatalogContent: View {
         guard let rec = selectedRecord,
               let copyID = rec.supersededByID else { return nil }
         return model.record(forID: copyID)
-    }
-
-    private func volumeRoot(for path: String) -> String {
-        if path.hasPrefix("/Volumes/") {
-            let parts = path.split(separator: "/", maxSplits: 3)
-            if parts.count >= 2 { return "/Volumes/" + String(parts[1]) }
-        }
-        return "/"
-    }
-
-    private func volumeDiskSize(path: String) -> String {
-        // Was a statfs PER RENDER (blocking syscall — beachballs on
-        // sleeping HDDs). Now stale-while-revalidate via VolumeStatsCache,
-        // same engine as the VolumeReachability fix in 109cc36; mount/
-        // unmount events invalidate it. First-ever query renders "" for
-        // one frame while the background probe fills in.
-        guard let total = VolumeStatsCache.diskSizeBytes.value(forKey: path, missDefault: nil)
-        else { return "" }
-        return formatBytes(total)
-    }
-
-    private func mediaOnVolume(path: String) -> String {
-        // O(n) reduce memoized per (volume root, records version) — was
-        // re-walking the full catalog on every body re-eval.
-        let key = MediaOnVolumeMemoKey(path: path, version: recordsVersion)
-        let bytes = mediaOnVolumeMemo.value(for: key) {
-            records.filter { $0.fullPath.hasPrefix(path) }
-                .reduce(into: Int64(0)) { $0 += $1.sizeBytes }
-        }
-        guard bytes > 0 else { return "0 MB" }
-        return formatBytes(bytes)
-    }
-
-    private func formatBytes(_ bytes: Int64) -> String {
-        let kb: Int64 = 1_024
-        let mb: Int64 = 1_048_576
-        let gb: Int64 = 1_073_741_824
-        let tb: Int64 = 1_099_511_627_776
-        if bytes < mb {
-            return String(format: "%.0f KB", Double(bytes) / Double(kb))
-        } else if bytes < gb {
-            return String(format: "%.1f MB", Double(bytes) / Double(mb))
-        } else if bytes < tb {
-            return String(format: "%.1f GB", Double(bytes) / Double(gb))
-        } else {
-            return String(format: "%.2f TB", Double(bytes) / Double(tb))
-        }
     }
 
     /// Compute the table's row set — and, as a by-product of the SAME
@@ -1170,19 +1117,26 @@ struct CatalogContent: View {
                                         .background(Color.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 3))
                                 }
                             }
-                            // Volume size + media cataloged
+                            // Full path + codecs (replaced Volume Size /
+                            // Media Cataloged, Rick 2026-07-31: show what
+                            // the selected file IS, not where it lives).
                             VStack(alignment: .leading, spacing: 2) {
-                                let volPath = volumeRoot(for: rec.fullPath)
-                                let volSize = volumeDiskSize(path: volPath)
-                                if !volSize.isEmpty {
-                                    Text("Volume Size: \(volSize)")
+                                Text(rec.fullPath)
+                                    .font(.system(size: 12, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(3)
+                                    .truncationMode(.middle)
+                                    .textSelection(.enabled)
+                                if !rec.videoCodec.isEmpty {
+                                    Text("Video: \(rec.videoCodec)")
                                         .font(.system(size: 13, design: .monospaced))
                                         .foregroundColor(.secondary)
                                 }
-                                let mediaSize = mediaOnVolume(path: volPath)
-                                Text("Media Cataloged: \(mediaSize)")
-                                    .font(.system(size: 13, design: .monospaced))
-                                    .foregroundColor(.secondary)
+                                if !rec.audioCodec.isEmpty {
+                                    Text("Audio: \(rec.audioCodec)")
+                                        .font(.system(size: 13, design: .monospaced))
+                                        .foregroundColor(.secondary)
+                                }
                             }
                             if isPlaying || model.filmstripState.isActive(forPath: rec.fullPath) {
                                 Button {
