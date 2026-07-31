@@ -33,7 +33,7 @@ while IFS= read -r line; do
   expect="$(printf '%s' "$line" | jq -r '.expect')"
   n=$((n+1))
   printf '  [%2d] %-16s ... ' "$n" "$id"
-  answer="$("$ROOT/bin/$EMPLOYEE" "${ESC[@]}" "$prompt" 2>&1 || echo '(delegate error — see output file)')"
+  answer="$("$ROOT/bin/$EMPLOYEE" "${ESC[@]+"${ESC[@]}"}" "$prompt" 2>&1 || echo '(delegate error — see output file)')"
   {
     echo "### TASK $id"
     echo "$prompt"

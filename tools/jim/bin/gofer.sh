@@ -126,7 +126,7 @@ fi
 declare -a AUTH=()
 [ -n "${OLLAMA_API_KEY:-}" ] && AUTH=(-H "Authorization: Bearer $OLLAMA_API_KEY")
 
-RESP="$(curl -sS -m "$TIMEOUT" "${AUTH[@]}" \
+RESP="$(curl -sS -m "$TIMEOUT" "${AUTH[@]+"${AUTH[@]}"}" \
   -H 'Content-Type: application/json' \
   -d "$PAYLOAD" "$URL")" \
   || die "request to $URL failed — is Ollama serving there? (try: OLLAMA_HOST=0.0.0.0:$PORT ollama serve on $HOST)"
