@@ -76,6 +76,30 @@ struct MediaFileOperationsWindow: View {
                 }
             }
 
+            // Bulk controls for many-jobs-in-flight (Rick 2026-07-31).
+            // Pause All flips to Resume All once nothing unpaused
+            // remains; Cancel All also stops a running Combine batch,
+            // which runs through its own pipeline.
+            if center.hasPausableRunning {
+                Button("Pause All") {
+                    center.pauseAll()
+                }
+                .controlSize(.small)
+            } else if center.hasPausedJobs {
+                Button("Resume All") {
+                    center.resumeAll()
+                }
+                .controlSize(.small)
+            }
+
+            if center.runningCount > 0 || model.isCombining {
+                Button("Cancel All", role: .destructive) {
+                    center.cancelAll()
+                    if model.isCombining { model.stopCombine() }
+                }
+                .controlSize(.small)
+            }
+
             if center.jobs.contains(where: { !$0.state.isActive }) {
                 Button("Clear Finished") {
                     center.clearFinished()

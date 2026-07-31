@@ -469,12 +469,41 @@ final class MediaFileOperationsCenter: ObservableObject {
     }
 
     /// Ask every live job to stop. Used by the quit guard so ffmpeg
-    /// children die before the process exits.
+    /// children die before the process exits, and by the window
+    /// header's "Cancel All" (Rick 2026-07-31).
     func cancelAll() {
         let active = jobs.filter { $0.state.isActive }
         guard !active.isEmpty else { return }
         fileOpsLog.info("cancelAll: stopping \(active.count) running operation(s)")
         for job in active { job.cancel() }
+    }
+
+    /// Pause every live job that supports it (header "Pause All").
+    /// Jobs without pause capability keep running — pause is opt-in.
+    func pauseAll() {
+        let targets = jobs.filter { $0.state.isActive && $0.canPause && !$0.isPaused }
+        guard !targets.isEmpty else { return }
+        fileOpsLog.info("pauseAll: pausing \(targets.count) operation(s)")
+        for job in targets { job.pause() }
+    }
+
+    /// Resume every paused job (header "Resume All").
+    func resumeAll() {
+        let targets = jobs.filter { $0.state.isActive && $0.isPaused }
+        guard !targets.isEmpty else { return }
+        fileOpsLog.info("resumeAll: resuming \(targets.count) operation(s)")
+        for job in targets { job.resume() }
+    }
+
+    /// True when at least one live job could be paused right now —
+    /// drives the header's adaptive Pause All / Resume All button.
+    var hasPausableRunning: Bool {
+        jobs.contains { $0.state.isActive && $0.canPause && !$0.isPaused }
+    }
+
+    /// True when at least one live job is currently paused.
+    var hasPausedJobs: Bool {
+        jobs.contains { $0.state.isActive && $0.isPaused }
     }
 
     /// Enforce `finishedCap`: keep every active job, and the newest

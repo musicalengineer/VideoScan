@@ -39,18 +39,39 @@ private final class FakeOperationJob: MediaFileOperationJob {
     var state: MediaFileOperationState { settableState }
 
     var cancelCallCount = 0
+    var pauseCallCount = 0
+    var resumeCallCount = 0
+
+    /// Opt-in pause capability so bulk pauseAll/resumeAll tests can mix
+    /// pausable and non-pausable jobs (pause defaults off protocol-wide).
+    let canPause: Bool
+    var isPaused: Bool
 
     init(kind: MediaFileOperationKind = .compare,
          title: String = "fake",
-         state: MediaFileOperationState = .running) {
+         state: MediaFileOperationState = .running,
+         canPause: Bool = false,
+         isPaused: Bool = false) {
         self.kind = kind
         self.title = title
         self.settableState = state
+        self.canPause = canPause
+        self.isPaused = isPaused
     }
 
     func cancel() {
         cancelCallCount += 1
         settableState = .cancelled
+    }
+
+    func pause() {
+        pauseCallCount += 1
+        isPaused = true
+    }
+
+    func resume() {
+        resumeCallCount += 1
+        isPaused = false
     }
 }
 
@@ -137,6 +158,71 @@ struct MediaFileOperationsCenterTests {
         #expect(active.cancelCallCount == 1)
         #expect(done.cancelCallCount == 0)
         #expect(center.runningCount == 0)
+    }
+
+    // MARK: Bulk pause/resume (header Pause All / Resume All, 2026-07-31)
+
+    @Test func pauseAllReachesOnlyPausableUnpausedActiveJobs() {
+        let center = MediaFileOperationsCenter()
+        let pausable = FakeOperationJob(state: .running, canPause: true)
+        let alreadyPaused = FakeOperationJob(state: .running, canPause: true, isPaused: true)
+        let unpausable = FakeOperationJob(state: .running)
+        let finished = FakeOperationJob(state: .finished(summary: "ok"), canPause: true)
+        center.add(pausable)
+        center.add(alreadyPaused)
+        center.add(unpausable)
+        center.add(finished)
+        center.pauseAll()
+        #expect(pausable.pauseCallCount == 1)
+        #expect(alreadyPaused.pauseCallCount == 0)
+        #expect(unpausable.pauseCallCount == 0)
+        #expect(finished.pauseCallCount == 0)
+    }
+
+    // Negative: nothing pausable → no calls, no crash.
+    @Test func pauseAllIsNoOpWithoutPausableJobs() {
+        let center = MediaFileOperationsCenter()
+        let unpausable = FakeOperationJob(state: .running)
+        center.add(unpausable)
+        center.pauseAll()
+        #expect(unpausable.pauseCallCount == 0)
+        #expect(!center.hasPausableRunning)
+    }
+
+    @Test func resumeAllReachesOnlyPausedActiveJobs() {
+        let center = MediaFileOperationsCenter()
+        let paused = FakeOperationJob(state: .running, canPause: true, isPaused: true)
+        let runningUnpaused = FakeOperationJob(state: .running, canPause: true)
+        center.add(paused)
+        center.add(runningUnpaused)
+        center.resumeAll()
+        #expect(paused.resumeCallCount == 1)
+        #expect(runningUnpaused.resumeCallCount == 0)
+    }
+
+    // Negative: no paused jobs → no calls.
+    @Test func resumeAllIsNoOpWhenNothingPaused() {
+        let center = MediaFileOperationsCenter()
+        let running = FakeOperationJob(state: .running, canPause: true)
+        center.add(running)
+        center.resumeAll()
+        #expect(running.resumeCallCount == 0)
+        #expect(!center.hasPausedJobs)
+    }
+
+    /// The header's adaptive button: Pause All while anything unpaused
+    /// remains, Resume All once everything pausable is paused.
+    @Test func adaptiveButtonFlagsFlipAcrossPauseAll() {
+        let center = MediaFileOperationsCenter()
+        center.add(FakeOperationJob(state: .running, canPause: true))
+        #expect(center.hasPausableRunning)
+        #expect(!center.hasPausedJobs)
+        center.pauseAll()
+        #expect(!center.hasPausableRunning)
+        #expect(center.hasPausedJobs)
+        center.resumeAll()
+        #expect(center.hasPausableRunning)
+        #expect(!center.hasPausedJobs)
     }
 }
 
