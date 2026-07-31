@@ -31,6 +31,8 @@ show_help() {
 Flags:
   --employee NAME   Pick the employee explicitly (default: the invoked command name).
   --escalate        Use the employee's ESCALATION_MODEL (cloud) instead of the local brain.
+  --think           Let the model reason before answering (overrides employee THINK).
+  --no-think        Suppress reasoning — answer directly (overrides employee THINK).
   --dry-run         Print the resolved request and exit without calling anything.
   --raw             Print the full JSON response instead of just the message text.
   -h, --help        This help.
@@ -41,7 +43,7 @@ EOF
 INVOKED="$(basename "$0")"
 case "$INVOKED" in gofer|gofer.sh) INVOKED="" ;; esac
 
-DRY_RUN=0; RAW=0; ESCALATE=0
+DRY_RUN=0; RAW=0; ESCALATE=0; THINK_OVERRIDE=""
 EMPLOYEE_OVERRIDE="${GOFER_EMPLOYEE:-}"
 declare -a ARGS=()
 while [ $# -gt 0 ]; do
@@ -49,6 +51,8 @@ while [ $# -gt 0 ]; do
     --employee)   EMPLOYEE_OVERRIDE="${2:-}"; shift 2 ;;
     --employee=*) EMPLOYEE_OVERRIDE="${1#*=}"; shift ;;
     --escalate)   ESCALATE=1; shift ;;
+    --think)      THINK_OVERRIDE="true"; shift ;;
+    --no-think)   THINK_OVERRIDE="false"; shift ;;
     --dry-run)    DRY_RUN=1; shift ;;
     --raw)        RAW=1; shift ;;
     -h|--help)    show_help; exit 0 ;;
@@ -71,7 +75,7 @@ fi
 # Shared defaults first; the employee .conf may override any of these.
 HOST="$DEFAULT_HOST"; PORT="$DEFAULT_PORT"; SCHEME="$DEFAULT_SCHEME"
 TEMPERATURE="$DEFAULT_TEMPERATURE"; MAX_TOKENS="$DEFAULT_MAX_TOKENS"
-TIMEOUT="$DEFAULT_TIMEOUT"; STRIP_THINK="$DEFAULT_STRIP_THINK"
+TIMEOUT="$DEFAULT_TIMEOUT"; STRIP_THINK="$DEFAULT_STRIP_THINK"; THINK="$DEFAULT_THINK"
 MODEL=""; ESCALATION_MODEL=""; PERSONA=""; EMPLOYEE_NAME="$EMPLOYEE"; EMPLOYEE_ROLE=""
 # shellcheck source=/dev/null
 source "$CONF"
@@ -98,16 +102,26 @@ fi
 [ -n "${TASK//[[:space:]]/}" ] || die "empty task"
 
 # --- build request ----------------------------------------------------------
+# Native Ollama /api/chat (not the OpenAI-compat shim): it accepts the "think"
+# field, without which a qwen3-family brain can burn the whole num_predict
+# budget on reasoning and hand back empty content.
+[ -n "$THINK_OVERRIDE" ] && THINK="$THINK_OVERRIDE"
+THINK_JSON="null"
+case "$THINK" in true) THINK_JSON="true" ;; false) THINK_JSON="false" ;; esac
+
 PAYLOAD="$(jq -n \
   --arg model "$USE_MODEL" \
   --arg sys "$SYSTEM_PROMPT" \
   --arg user "$TASK" \
   --argjson temp "$TEMPERATURE" \
   --argjson maxtok "$MAX_TOKENS" \
-  '{model:$model, stream:false, temperature:$temp, max_tokens:$maxtok,
-    messages:[{role:"system",content:$sys},{role:"user",content:$user}]}')"
+  --argjson think "$THINK_JSON" \
+  '{model:$model, stream:false,
+    options:{temperature:$temp, num_predict:$maxtok},
+    messages:[{role:"system",content:$sys},{role:"user",content:$user}]}
+   + (if $think == null then {} else {think:$think} end)')"
 
-URL="$SCHEME://$HOST:$PORT/v1/chat/completions"
+URL="$SCHEME://$HOST:$PORT/api/chat"
 
 if [ "$DRY_RUN" -eq 1 ]; then
   cat <<EOF
@@ -115,7 +129,7 @@ employee : $EMPLOYEE ($EMPLOYEE_NAME — ${EMPLOYEE_ROLE:-unspecified role})
 model    : $USE_MODEL$( [ "$ESCALATE" -eq 1 ] && echo "  [ESCALATED / cloud]" )
 endpoint : $URL
 persona  : $PERSONA_FILE
-timeout  : ${TIMEOUT}s   strip_think=$STRIP_THINK
+timeout  : ${TIMEOUT}s   strip_think=$STRIP_THINK   think=${THINK:-model-default}
 --- payload ---
 EOF
   printf '%s\n' "$PAYLOAD" | jq .
@@ -139,8 +153,12 @@ if [ "$RAW" -eq 1 ]; then
   exit 0
 fi
 
-CONTENT="$(printf '%s' "$RESP" | jq -r '.choices[0].message.content // empty')"
-[ -n "$CONTENT" ] || die "no content in response (use --raw to inspect): $(printf '%s' "$RESP" | head -c 400)"
+CONTENT="$(printf '%s' "$RESP" | jq -r '.message.content // empty')"
+if [ -z "$CONTENT" ]; then
+  THOUGHT="$(printf '%s' "$RESP" | jq -r '.message.thinking // empty' | head -c 120)"
+  [ -n "$THOUGHT" ] && die "model spent its whole ${MAX_TOKENS}-token budget thinking and returned no answer — retry with --no-think or raise MAX_TOKENS. Thinking began: $THOUGHT"
+  die "no content in response (use --raw to inspect): $(printf '%s' "$RESP" | head -c 400)"
+fi
 
 # Qwen3 "thinking" models wrap reasoning in <think>...</think>; strip it for gofer output.
 if [ "$STRIP_THINK" -eq 1 ]; then

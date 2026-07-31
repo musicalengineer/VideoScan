@@ -18,3 +18,10 @@ DEFAULT_TIMEOUT="120"
 
 # Qwen3 thinking models emit <think>...</think>; strip it from gofer output by default.
 DEFAULT_STRIP_THINK="1"
+
+# Thinking control, sent as the native /api/chat "think" field.
+# "" = omit (model default) · "false" = suppress thinking · "true" = force it.
+# Gofer tasks are bounded grunt work; employees on qwen3-family brains should
+# set THINK="false" in their .conf or the model can spend its whole num_predict
+# budget reasoning and return empty content.
+DEFAULT_THINK=""
