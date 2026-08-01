@@ -27,6 +27,10 @@ struct InspectorFamilyTagsView: View {
     let record: VideoRecord
     @State private var editMode: Bool = false
     @State private var refreshTick: Int = 0
+    /// Free-text "New Person…" prompt (Rick 2026-08-01: tagging "Dan"
+    /// was impossible when Dan had no POI gallery profile).
+    @State private var showNewPersonPrompt = false
+    @State private var newPersonName = ""
 
     private var poiNames: [String] {
         POIProfile.listAll().map(\.name).sorted()
@@ -147,24 +151,33 @@ struct InspectorFamilyTagsView: View {
     private var editModeControls: some View {
         VStack(alignment: .leading, spacing: 6) {
             // Confirm-from-POI picker. Suggests existing POI gallery
-            // names so manual tags merge cleanly with auto-tags. Free-
-            // text fallback "Add new…" handles names that aren't in
-            // the gallery yet.
+            // names so manual tags merge cleanly with auto-tags, plus
+            // a free-text "New Person…" for names with no gallery
+            // profile yet (the tag still joins people: search
+            // immediately; a POI profile can adopt it later).
             Menu {
-                if poiNames.isEmpty {
-                    Text("No POIs in gallery yet")
-                        .font(.system(size: 11))
-                        .foregroundColor(.secondary)
-                } else {
-                    ForEach(poiNames, id: \.self) { name in
-                        Button(name) { confirmTag(name: name) }
-                    }
+                ForEach(poiNames, id: \.self) { name in
+                    Button(name) { confirmTag(name: name) }
+                }
+                if !poiNames.isEmpty { Divider() }
+                Button("New Person…") {
+                    newPersonName = ""
+                    showNewPersonPrompt = true
                 }
             } label: {
                 Label("Confirm Person…", systemImage: "checkmark.seal")
                     .font(.system(size: 11))
             }
             .controlSize(.small)
+            .alert("Tag a New Person", isPresented: $showNewPersonPrompt) {
+                TextField("Name", text: $newPersonName)
+                Button("Add") {
+                    confirmTag(name: newPersonName.trimmingCharacters(in: .whitespaces))
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Adds a confirmed person tag to this video — it matches people: searches right away.")
+            }
 
             // Reject auto-detected people: each chip becomes a button
             // that moves it to rejectedPeople. v1 limits this to the
@@ -249,8 +262,12 @@ struct InspectorFamilyTagsView: View {
     // MARK: - Mutations
 
     private func confirmTag(name: String) {
-        // Idempotent: don't double-add the same name.
-        guard !record.confirmedByUserPeople.contains(where: { $0.name == name }) else { return }
+        guard !name.isEmpty else { return }
+        // Idempotent, case-insensitively: free-text "dan" must not
+        // double-tag alongside a gallery "Dan".
+        guard !record.confirmedByUserPeople.contains(where: {
+            $0.name.compare(name, options: .caseInsensitive) == .orderedSame
+        }) else { return }
         record.confirmedByUserPeople.append(ConfirmedTag(name: name, confirmedAt: Date()))
         // Confirming a name un-rejects it implicitly — the user
         // changed their mind.
