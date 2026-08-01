@@ -956,9 +956,16 @@ final class VideoScanModel: ObservableObject {
             forName: .videoScanCatalogMutated,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
+        ) { [weak self] note in
             MainActor.assumeIsolated {
                 guard let self else { return }
+                // When the poster names the mutated record (Inspector
+                // family-tag edits), refresh its search-index entry so
+                // people:/tag: searches see the change immediately —
+                // the same single-record contract as dossier writeback.
+                if let rec = note.object as? VideoRecord {
+                    self.searchIndex.update(rec)
+                }
                 self.saveCatalogDebounced()
                 self.noteVolumeStatusesStale()
                 // QA P0-1 (2026-07-05): the correlate/duplicate ledger paths

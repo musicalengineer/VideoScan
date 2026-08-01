@@ -299,9 +299,13 @@ struct InspectorFamilyTagsView: View {
     private func save() {
         // Bump the redraw counter so the chip rows reflect the new
         // record state immediately. The notification below kicks the
-        // catalog save through VideoScanModel's listener.
+        // catalog save through VideoScanModel's listener; passing the
+        // record lets the listener refresh the search index entry so a
+        // fresh confirm is people:-searchable NOW (gap found during the
+        // 2026-08-01 archivist perf pass — tags used to stay unsearchable
+        // until the next full rebuild).
         refreshTick &+= 1
-        NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)
+        NotificationCenter.default.post(name: .videoScanCatalogMutated, object: record)
     }
 }
 

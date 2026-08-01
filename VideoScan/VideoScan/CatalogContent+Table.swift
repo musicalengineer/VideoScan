@@ -783,6 +783,30 @@ extension CatalogContent {
                             }
                         }
 
+                        // People (Rick 2026-08-01): confirmed person tags,
+                        // POI-database names ONLY — controlled vocabulary
+                        // keeps manual tags joined to the recognition
+                        // gallery. Multi-select toggles across the whole
+                        // selection, same semantics as the Tags menu.
+                        Menu("People") {
+                            let poiNames = POIProfile.listAll().map(\.name).sorted()
+                            if poiNames.isEmpty {
+                                Text("No people in the People database yet")
+                            } else {
+                                ForEach(poiNames, id: \.self) { name in
+                                    let allHave = selectedRecs.allSatisfy { rec in
+                                        rec.confirmedByUserPeople.contains {
+                                            $0.name.compare(name, options: .caseInsensitive) == .orderedSame
+                                        }
+                                    }
+                                    Toggle(name, isOn: Binding(
+                                        get: { allHave },
+                                        set: { model.setPerson(name, on: selectedRecs, present: $0) }
+                                    ))
+                                }
+                            }
+                        }
+
                         Button("Notes\u{2026}") {
                             notesTarget = rec
                             // userNotes split (2026-07-23): the sheet
