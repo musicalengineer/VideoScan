@@ -547,6 +547,14 @@ final class CatalogSearchIndex {
         }
         guard let hs = payload["haystacks"] as? [String: String] else { return false }
         guard let yearArrays = payload["years"] as? [String: [Int]] else { return false }
+        // Person index (v4). The key must EXIST in a v4 file (an empty
+        // dictionary is a legal value for a people-less catalog). A
+        // missing key means truncation/corruption — and under QueryPlan
+        // an empty person index is a PROVABLY-ZERO answer for every
+        // people: query, so accepting it would silently blank person
+        // search. Reject BEFORE mutating self → one rebuild
+        // (codex finding, channel #71).
+        guard let peopleArrays = payload["people"] as? [String: [String]] else { return false }
         // Record-count sanity (GH #123): measured against the ACTUAL
         // haystack dictionary, not the self-reported "recordCount"
         // field — never trust a possibly-corrupt file's claim about
@@ -563,17 +571,13 @@ final class CatalogSearchIndex {
         ys.reserveCapacity(yearArrays.count)
         for (path, arr) in yearArrays { ys[path] = Set(arr) }
         self.yearSets = ys
-        // Person index (v4). Missing key decodes as empty — a v4 file
-        // always carries it, and version gating rejects older files.
         var pbp: [String: Set<String>] = [:]
         var pi: [String: Set<String>] = [:]
-        if let peopleArrays = payload["people"] as? [String: [String]] {
-            pbp.reserveCapacity(peopleArrays.count)
-            for (path, names) in peopleArrays where !names.isEmpty {
-                let set = Set(names)
-                pbp[path] = set
-                for name in set { pi[name, default: []].insert(path) }
-            }
+        pbp.reserveCapacity(peopleArrays.count)
+        for (path, names) in peopleArrays where !names.isEmpty {
+            let set = Set(names)
+            pbp[path] = set
+            for name in set { pi[name, default: []].insert(path) }
         }
         self.personsByPath = pbp
         self.personIndex = pi

@@ -131,6 +131,52 @@ struct PersonIndexTests {
         #expect(vocab.map(\.name).contains("dan"))
     }
 
+    /// Malformed v4 (missing "people" key — truncation/corruption) must
+    /// REJECT, not load an empty person index: under QueryPlan an empty
+    /// index is a provably-zero answer for every people: query, so
+    /// acceptance would silently blank person search (codex #71).
+    @Test func malformedV4WithoutPeopleKeyIsRejected() throws {
+        let records = makePeopleRecords()
+        let index = CatalogSearchIndex()
+        index.rebuild(records: records)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("person-index-malformed-\(ProcessInfo.processInfo.processIdentifier).plist")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try index.saveToDisk(at: url)
+
+        var payload = try #require(PropertyListSerialization.propertyList(
+            from: Data(contentsOf: url), format: nil) as? [String: Any])
+        payload.removeValue(forKey: "people")
+        try PropertyListSerialization.data(fromPropertyList: payload, format: .binary, options: 0)
+            .write(to: url)
+
+        let reloaded = CatalogSearchIndex()
+        #expect(!reloaded.loadFromDisk(at: url, catalogModifiedAt: nil, expectedRecordCount: records.count))
+        // Rejection must leave the index untouched (parse-then-commit).
+        #expect(reloaded.recordCount() == 0)
+    }
+
+    /// A previous-version file (v3 — no person payload) must reject on
+    /// the version gate, forcing the one rebuild that populates people.
+    @Test func previousVersionFileIsRejected() throws {
+        let records = makePeopleRecords()
+        let index = CatalogSearchIndex()
+        index.rebuild(records: records)
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("person-index-v3-\(ProcessInfo.processInfo.processIdentifier).plist")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try index.saveToDisk(at: url)
+
+        var payload = try #require(PropertyListSerialization.propertyList(
+            from: Data(contentsOf: url), format: nil) as? [String: Any])
+        payload["version"] = CatalogSearchIndex.persistedVersion - 1
+        try PropertyListSerialization.data(fromPropertyList: payload, format: .binary, options: 0)
+            .write(to: url)
+
+        let reloaded = CatalogSearchIndex()
+        #expect(!reloaded.loadFromDisk(at: url, catalogModifiedAt: nil, expectedRecordCount: records.count))
+    }
+
     /// v4 persistence round-trip: the person index must survive
     /// relaunch (load) with identical query behavior and vocabulary.
     @Test func persistenceRoundTripKeepsPersonIndex() throws {
