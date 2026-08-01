@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Local shared engineering room for Rick, Codex, and Claude.",
+  "description": "Local shared engineering room for Rick, Codex, Claude, and Qwen.",
   "scripts": {
     "start": "node src/server.mjs",
     "lan": "ENGINEERING_ROOM_LAN=1 node src/server.mjs",

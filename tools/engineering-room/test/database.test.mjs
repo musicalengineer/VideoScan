@@ -11,6 +11,7 @@ test("topics and attributed messages survive a database restart", () => {
   const topic = db.createTopic("Recognition metrics");
   const message = db.createMessage({ topicId: topic.id, author: "rick", body: "Keep quality honest." });
   const claude = db.createMessage({ topicId: topic.id, author: "claude", body: "Measure the boundary cases.", providerResponseId: "msg-provider-42", deltaKind: "evidence", deltaDetail: "Boundary cases measured" });
+  const qwen = db.createMessage({ topicId: topic.id, author: "qwen", body: "Keep the local model attributable.", providerResponseId: "resp-qwen-42" });
   db.setSession("codex", "thread-42");
   db.setState("autopilot.enabled", true);
   db.setState("autopilot.run", { status: "intervention", completedTurns: 1 });
@@ -23,6 +24,9 @@ test("topics and attributed messages survive a database restart", () => {
   assert.equal(snapshot.messages.find(item => item.id === claude.id).author, "claude");
   assert.equal(snapshot.messages.find(item => item.id === claude.id).providerResponseId, "msg-provider-42");
   assert.equal(snapshot.messages.find(item => item.id === claude.id).deltaKind, "evidence");
+  assert.equal(snapshot.messages.find(item => item.id === qwen.id).author, "qwen");
+  assert.equal(snapshot.messages.find(item => item.id === qwen.id).body, "Keep the local model attributable.");
+  assert.equal(snapshot.messages.find(item => item.id === qwen.id).providerResponseId, "resp-qwen-42");
   assert.equal(db.getSession("codex").externalThreadId, "thread-42");
   assert.equal(db.getState("autopilot.enabled"), true);
   assert.equal(db.getState("autopilot.run").completedTurns, 1);

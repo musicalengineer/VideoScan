@@ -1,8 +1,8 @@
 # VideoScan Engineering Room
 
-A private discussion room for Rick, Codex, and Claude, hosted on the M4. The
+A private discussion room for Rick, Codex, Claude, and Qwen, hosted on the M4. The
 browser UI keeps a persistent, attributed transcript and can address either
-agent or ask both for independent answers.
+participant, the original Codex/Claude pair, or all three for independent answers.
 
 ## Start the room
 
@@ -21,6 +21,14 @@ Claude child process so an exported key cannot silently switch the room to API
 billing. Set `CODEX_BIN` or `CLAUDE_BIN` only when either executable is in an
 unusual location.
 
+Qwen is served by Ollama on the M5 over the trusted household LAN. By default
+the room uses `http://ricksm5.local:11434/v1` and model
+`qwen-videoscan:64k`. Override `QWEN_BASE_URL` or `QWEN_MODEL` when the existing
+M5 Qwen Codex profile uses a different Responses-compatible endpoint or model
+name. The URL is structurally restricted to HTTP loopback, `.local`, or RFC1918
+hosts; cloud endpoints are rejected. `QWEN_API_KEY` is optional for a locally
+authenticated proxy and is never sent to the browser or transcript.
+
 ### Share it with Macs and iPhones at home
 
 ```sh
@@ -35,8 +43,11 @@ Turn on **Read replies aloud** in each browser that should speak. To talk, click
 
 - Keeps an append-only SQLite transcript in `var/engineering-room.sqlite3`.
 - Creates, parks, and resumes discussion topics.
-- Preserves and resumes separate Codex and Claude discussions across restarts.
-- Routes messages to **Codex**, **Claude**, **Codex + Claude**, or room notes.
+- Preserves and resumes separate Codex, Claude, and Qwen discussion identities
+  across restarts. Qwen receives the broker's bounded attributed transcript on
+  each stateless local-model request.
+- Routes messages to **Codex**, **Claude**, **Qwen**, **Codex + Claude**, all
+  three, or room notes.
   **Codex + Claude** starts two independent responses to Rick's same message;
   neither agent's output triggers the other.
 - Runs **Autopilot** only after Rick enables its dedicated authenticated UI
@@ -73,11 +84,14 @@ Turn on **Read replies aloud** in each browser that should speak. To talk, click
   outbox. Failed channel writes remain pending and retry safely after restart;
   the stable delivery key prevents duplicate files and room messages. Routine
   assignments no longer require Rick to copy messages between manager sessions.
-- Streams both agents' responses and provides a Stop button.
+- Streams all three agents' responses and provides a Stop button that safely
+  interrupts every active seat.
 - Stores private room state outside Git.
 - Runs Codex with a read-only sandbox and denies every approval request.
 - Runs Claude in safe mode with no tools, slash commands, Chrome integration,
   shell, file writes, browsing, delegation, or external actions.
+- Calls Qwen through the M5 Responses API with an empty tool list. Qwen has no
+  shell, files, browser, delegation, publishing, or other action interface.
 - Includes recent attributed room discussion in each prompt. Peer statements
   are context, never instructions.
 
@@ -87,6 +101,8 @@ Turn on **Read replies aloud** in each browser that should speak. To talk, click
 - Discussion and inspection only; it cannot approve writes, privilege escalation, or other mutations. Read-only commands remain available to Codex.
 - One active turn per agent. Asking both is bounded to one independent turn
   from each agent.
+- The existing Autopilot remains a Codex/Claude discussion; adding Qwen does
+  not widen or enable automatic turns.
 - No unbounded or chat-triggered agent-to-agent loops. Autopilot is a
   broker-owned, explicitly enabled, deadline/turn/token-bounded state machine.
 - Exports, browser-controlled microphone capture, and
@@ -102,6 +118,9 @@ Turn on **Read replies aloud** in each browser that should speak. To talk, click
 | `ENGINEERING_ROOM_TOKEN_FILE` | `var/access-token` | Stable LAN token file |
 | `CODEX_BIN` | discovered locally | Absolute Codex executable path |
 | `CLAUDE_BIN` | discovered locally | Absolute Claude Code executable path |
+| `QWEN_BASE_URL` | `http://ricksm5.local:11434/v1` | Local M5 Responses-compatible API root; cloud hosts are rejected |
+| `QWEN_MODEL` | `qwen-videoscan:64k` | Ollama model name used by the M5 Qwen seat |
+| `QWEN_API_KEY` | unset | Optional credential for a local authenticated proxy |
 | `ENGINEERING_ROOM_STATUS_FEED` | `var/agent-status.jsonl` | Manager status JSONL ingestion source |
 | `ENGINEERING_ROOM_TEAM_CHANNEL` | `../../docs/team-channel` | Manager coordination channel directory |
 | `ENGINEERING_ROOM_RECONSTRUCTION_SEED` | `config/control-plane-reconstruction.json` | Evidence-backed one-time reconstruction seed |
@@ -148,8 +167,8 @@ node scripts/team-control.mjs complete --manager codex --agent testing/example \
 npm test
 ```
 
-The automated suite uses fake Codex and Claude processes. It requires no
-login, API key, or external network access.
+The automated suite uses fake providers and requires no login, API key, or
+external network access.
 
 ## Authentication and continuity
 

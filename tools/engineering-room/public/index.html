@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Engineering Room · VideoScan</title>
-  <meta name="description" content="A local engineering room for Rick, Codex, and Claude.">
+  <meta name="description" content="A local engineering room for Rick, Codex, Claude, and Qwen.">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -18,6 +18,7 @@
         <span class="participant present"><b>R</b>Rick</span>
         <span class="participant" id="codexParticipant"><b>C</b>Codex</span>
         <span class="participant" id="claudeParticipant"><b>A</b>Claude</span>
+        <span class="participant" id="qwenParticipant"><b>Q</b>Qwen</span>
         <button class="audio-toggle" id="speakReplies" type="button" aria-pressed="false">Read replies aloud: off</button>
       </div>
     </header>
@@ -124,7 +125,9 @@
               <select id="target">
                 <option value="codex">Codex</option>
                 <option value="claude">Claude</option>
+                <option value="qwen">Qwen (M5)</option>
                 <option value="both">Codex + Claude (independent)</option>
+                <option value="all">Codex + Claude + Qwen (independent)</option>
                 <option value="notes">Room notes only</option>
               </select>
             </label>

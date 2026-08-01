@@ -4,6 +4,7 @@
   --paper: #151716; --panel: #1b1e1c; --raised: #222622;
   --line: #343a34; --green: #82aa78; --green-bright: #a8d49a;
   --amber: #d3a963; --rick: #dca76c; --codex: #80ad9c;
+  --qwen: #b99be5;
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: var(--paper); color: var(--ink); }
@@ -92,6 +93,8 @@ h2 { font-size: 24px; }
 .rick .avatar { background: #4a3725; color: var(--rick); }
 .claude .avatar { background: #49372e; color: #e0a47e; }
 .claude .message-card { border-color: #60493c; background: #29231f; }
+.qwen .avatar { background: #403552; color: var(--qwen); }
+.qwen .message-card { border-color: #514468; background: #25212d; }
 .system .avatar { background: #353535; color: #aaa; }
 .message-card { min-width: 0; border: 1px solid var(--line); border-radius: 4px 13px 13px 13px; padding: 14px 17px; background: var(--raised); }
 .rick .message-card { border-radius: 13px 4px 13px 13px; }

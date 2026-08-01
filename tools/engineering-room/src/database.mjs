@@ -122,7 +122,10 @@ export class RoomDatabase {
   }
 
   createMessage({ topicId = null, author, body, kind = "message", replyTo = null, providerResponseId = null, deltaKind = null, deltaDetail = null }) {
-    const storedAuthor = author === "claude" ? "system" : author;
+    // The legacy CHECK constraint names the original seats. `speaker` keeps
+    // exact attribution for every additional participant without a destructive
+    // table rebuild.
+    const storedAuthor = ["rick", "codex", "system"].includes(author) ? author : "system";
     const message = { id: randomUUID(), topicId, author, body, kind, replyTo, providerResponseId, deltaKind, deltaDetail, createdAt: new Date().toISOString() };
     this.db.prepare("INSERT INTO messages(id,topic_id,author,speaker,kind,body,created_at,reply_to,provider_response_id,delta_kind,delta_detail) VALUES(?,?,?,?,?,?,?,?,?,?,?)")
       .run(message.id, topicId, storedAuthor, author, kind, body, message.createdAt, replyTo, providerResponseId, deltaKind, deltaDetail);

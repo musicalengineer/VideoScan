@@ -35,3 +35,16 @@ test("task dispatch requires and displays an explicit machine route", () => {
   assert.match(app, /machine: elements\.directiveMachine\.value|const machine = elements\.directiveMachine\.value/);
   assert.match(app, /taskRow\.machine \?\? "unrouted"/);
 });
+
+test("Qwen has a visible participant seat, local route, attribution, and three-agent status", () => {
+  assert.match(html, /id="qwenParticipant"[^>]*><b>Q<\/b>Qwen/);
+  assert.match(html, /<option value="qwen">Qwen \(M5\)<\/option>/);
+  assert.match(html, /<option value="both">Codex \+ Claude \(independent\)<\/option>/);
+  assert.match(html, /<option value="all">Codex \+ Claude \+ Qwen \(independent\)<\/option>/);
+  assert.match(app, /qwen: \{ connection: "connecting", busy: false \}/);
+  assert.match(app, /qwen: "Qwen"/);
+  assert.match(app, /qwen: "Q"/);
+  assert.match(app, /online === 3 \? "Room is ready" : `\$\{online\}\/3 agents available`/);
+  assert.match(css, /\.qwen \.avatar/);
+  assert.match(css, /\.qwen \.message-card/);
+});

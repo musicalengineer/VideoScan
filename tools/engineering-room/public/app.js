@@ -1,6 +1,10 @@
 const state = {
   topics: [], messages: [], activeTopicId: null,
-  agents: { codex: { connection: "connecting", busy: false }, claude: { connection: "connecting", busy: false } },
+  agents: {
+    codex: { connection: "connecting", busy: false },
+    claude: { connection: "connecting", busy: false },
+    qwen: { connection: "connecting", busy: false },
+  },
   drafts: {},
   autopilot: { enabled: false, status: "inactive" },
   controlPlane: { agents: [], tasks: [], decisions: [], events: [] },
@@ -10,7 +14,7 @@ const elements = {
   topics: $("#topics"), timeline: $("#timeline"), currentTopic: $("#currentTopic"), welcome: $("#welcome"),
   composer: $("#composer"), message: $("#message"), target: $("#target"), send: $("#send"), stop: $("#stop"),
   typing: $("#typing"), typingLabel: $("#typingLabel"), status: $("#roomStatus"), pulse: $("#statusPulse"),
-  codex: $("#codexParticipant"), claude: $("#claudeParticipant"), toast: $("#toast"),
+  codex: $("#codexParticipant"), claude: $("#claudeParticipant"), qwen: $("#qwenParticipant"), toast: $("#toast"),
   speak: $("#speakReplies"),
   autopilotStatus: $("#autopilotStatus"), autopilotHeadline: $("#autopilotHeadline"),
   autopilotDetail: $("#autopilotDetail"), autopilotCountdown: $("#autopilotCountdown"),
@@ -42,7 +46,7 @@ async function boot() {
   render();
   const events = new EventSource("/api/events");
   events.addEventListener("room", event => receive(JSON.parse(event.data)));
-  events.onerror = () => setAgents({ codex: { ...state.agents.codex, connection: "disconnected" }, claude: { ...state.agents.claude, connection: "disconnected" } });
+  events.onerror = () => setAgents(Object.fromEntries(Object.entries(state.agents).map(([provider, status]) => [provider, { ...status, connection: "disconnected" }])));
 }
 
 function receive(event) {
@@ -56,7 +60,7 @@ function receive(event) {
     const isNew = !state.messages.some(message => message.id === data.id);
     upsert(state.messages, data);
     renderMessages();
-    if (isNew && ["codex", "claude"].includes(data.author) && speakReplies) speak(`${displayName(data.author)} says. ${data.body}`);
+    if (isNew && ["codex", "claude", "qwen"].includes(data.author) && speakReplies) speak(`${displayName(data.author)} says. ${data.body}`);
   }
   if (type === "turn.started") {
     state.drafts[data.provider ?? "codex"] = { topicId: data.topicId, text: "" };
@@ -182,7 +186,7 @@ function renderMessages() {
 
 function messageNode(message) {
   const row = document.createElement("article"); row.className = `message-row ${message.author}`; row.dataset.id = message.id;
-  const avatar = document.createElement("div"); avatar.className = "avatar"; avatar.textContent = ({ rick: "R", codex: "C", claude: "A", system: "·" })[message.author] ?? "·";
+  const avatar = document.createElement("div"); avatar.className = "avatar"; avatar.textContent = ({ rick: "R", codex: "C", claude: "A", qwen: "Q", system: "·" })[message.author] ?? "·";
   const card = document.createElement("div"); card.className = "message-card";
   const meta = document.createElement("div"); meta.className = "message-meta";
   const author = document.createElement("strong"); author.textContent = displayName(message.author);
@@ -195,6 +199,7 @@ function setAgents(patch = {}) {
   for (const [provider, status] of Object.entries(patch)) state.agents[provider] = { ...state.agents[provider], ...status };
   elements.codex.classList.toggle("present", state.agents.codex.connection === "connected");
   elements.claude.classList.toggle("present", ["connected", "available"].includes(state.agents.claude.connection));
+  elements.qwen.classList.toggle("present", state.agents.qwen.connection === "connected");
   updateRoomStatus();
 }
 
@@ -211,14 +216,15 @@ function updateRoomStatus() {
   elements.typing.hidden = busy.length === 0;
   elements.stop.hidden = busy.length === 0 && !autopilotActive;
   elements.typingLabel.textContent = busy.length ? `${busy.join(" and ")} ${busy.length === 1 ? "is" : "are"} thinking` : "";
-  elements.status.textContent = autopilotActive ? `Autopilot ${state.autopilot.completedTurns}/${state.autopilot.totalTurns}` : busy.length ? `${busy.join(" and ")} in conversation` : unverified ? "Room ready · Claude login checks on first message" : online === 2 ? "Room is ready" : `${online}/2 agents available`;
-  elements.pulse.classList.toggle("connected", online === 2 && unverified === 0);
+  elements.status.textContent = autopilotActive ? `Autopilot ${state.autopilot.completedTurns}/${state.autopilot.totalTurns}` : busy.length ? `${busy.join(" and ")} in conversation` : unverified ? "Room ready · Claude login checks on first message" : online === 3 ? "Room is ready" : `${online}/3 agents available`;
+  elements.pulse.classList.toggle("connected", online === 3 && unverified === 0);
   elements.send.disabled = targetBusy();
 }
 
 function targetBusy() {
   const target = elements.target.value;
   if (target === "both") return state.agents.codex.busy || state.agents.claude.busy;
+  if (target === "all") return Object.values(state.agents).some(agent => agent.busy);
   return Boolean(state.agents[target]?.busy);
 }
 
@@ -351,7 +357,7 @@ async function api(url, options = {}) {
 }
 
 function upsert(list, value) { const index = list.findIndex(item => item.id === value.id); if (index === -1) list.push(value); else list[index] = value; }
-function displayName(author) { return ({ rick: "Rick", codex: "Codex", claude: "Claude", system: "Room" })[author] ?? author; }
+function displayName(author) { return ({ rick: "Rick", codex: "Codex", claude: "Claude", qwen: "Qwen", system: "Room" })[author] ?? author; }
 function updateSpeechButton() {
   elements.speak.disabled = !speechAvailable;
   elements.speak.setAttribute("aria-pressed", String(speakReplies));

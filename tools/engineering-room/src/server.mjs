@@ -8,6 +8,7 @@ import { hostname as machineHostname, networkInterfaces } from "node:os";
 import { RoomDatabase } from "./database.mjs";
 import { CodexAppServerClient } from "./codex-client.mjs";
 import { ClaudeCliClient } from "./claude-client.mjs";
+import { QwenResponsesClient } from "./qwen-client.mjs";
 import { RoomAgent } from "./room-agent.mjs";
 import { loadOrCreateAccessToken } from "./access-token.mjs";
 import { RoundtableController } from "./roundtable-controller.mjs";
@@ -30,9 +31,15 @@ const claudeBin = findClaude();
 const database = new RoomDatabase(process.env.ENGINEERING_ROOM_DB || join(toolRoot, "var", "engineering-room.sqlite3"));
 const codex = new CodexAppServerClient({ codexBin, cwd: repoRoot });
 const claude = new ClaudeCliClient({ claudeBin, cwd: repoRoot });
+const qwen = new QwenResponsesClient({
+  baseUrl: process.env.QWEN_BASE_URL || "http://ricksm5.local:11434/v1",
+  model: process.env.QWEN_MODEL || "qwen-videoscan:64k",
+  apiKey: process.env.QWEN_API_KEY || "",
+});
 const agents = {
   codex: new RoomAgent({ client: codex, database, provider: "codex", displayName: "Codex" }),
   claude: new RoomAgent({ client: claude, database, provider: "claude", displayName: "Claude" }),
+  qwen: new RoomAgent({ client: qwen, database, provider: "qwen", displayName: "Qwen" }),
 };
 const clients = new Set();
 let sequence = 0;
@@ -47,7 +54,9 @@ ensureDailyArtifacts();
 
 for (const agent of Object.values(agents)) agent.on("event", event => publish(event.type, event.data));
 const autopilot = new RoundtableController({
-  agents, database, publish,
+  // Autopilot remains the existing Codex/Claude exchange. Qwen is a direct,
+  // independently routed room participant and cannot widen an automatic run.
+  agents: { codex: agents.codex, claude: agents.claude }, database, publish,
   transcript: attributedTranscript,
   roomBrief: provider => controlPlane.seatBrief(provider),
   presence: () => clients.size > 0,
@@ -66,7 +75,12 @@ const server = createServer(async (request, response) => {
     }
 
     if (!authorized(request)) return text(response, 401, "Open the startup URL printed by Engineering Room.");
-    if (request.method === "GET" && url.pathname === "/healthz") return json(response, 200, { status: "ok", codex: agents.codex.status.connection, claude: agents.claude.status.connection });
+    if (request.method === "GET" && url.pathname === "/healthz") return json(response, 200, {
+      status: "ok",
+      codex: agents.codex.status.connection,
+      claude: agents.claude.status.connection,
+      qwen: agents.qwen.status.connection,
+    });
     if (request.method === "GET" && url.pathname === "/api/bootstrap") {
       return json(response, 200, roomSnapshot());
     }
@@ -176,13 +190,13 @@ const server = createServer(async (request, response) => {
       const body = await readJson(request);
       const messageText = validateText(body.text, 1, 32768, "Message");
       const target = body.target ?? "codex";
-      if (!["codex", "claude", "both", "notes"].includes(target)) throw httpError(400, "That participant is not available.");
+      if (!["codex", "claude", "qwen", "both", "all", "notes"].includes(target)) throw httpError(400, "That participant is not available.");
       const topics = database.snapshot().topics;
       const topicId = body.topicId ?? topics[0]?.id ?? null;
       if (topicId && !topics.some(topic => topic.id === topicId)) throw httpError(400, "Unknown topic.");
       const wasAutopilotActive = autopilot.active;
       if (wasAutopilotActive) await autopilot.interject();
-      const recipients = target === "both" ? ["codex", "claude"] : target === "notes" ? [] : [target];
+      const recipients = target === "both" ? ["codex", "claude"] : target === "all" ? ["codex", "claude", "qwen"] : target === "notes" ? [] : [target];
       const busy = recipients.filter(provider => agents[provider].status.busy);
       if (busy.length && !wasAutopilotActive) throw httpError(409, `${busy.map(titleCase).join(" and ")} ${busy.length === 1 ? "is" : "are"} still answering. Use Stop or wait.`);
       const message = database.createMessage({ topicId, author: "rick", body: messageText });
@@ -198,7 +212,9 @@ const server = createServer(async (request, response) => {
     }
     if (request.method === "POST" && url.pathname === "/api/turns/current/interrupt") {
       const stoppedAutopilot = await autopilot.stop("Stopped by Rick.");
-      const results = stoppedAutopilot ? [] : await Promise.all(Object.values(agents).map(agent => agent.interrupt().catch(() => false)));
+      // Stop is room-wide: an independently active Qwen turn must not survive
+      // merely because the Codex/Claude Autopilot was active too.
+      const results = await Promise.all(Object.values(agents).map(agent => agent.interrupt().catch(() => false)));
       const interrupted = stoppedAutopilot || results.some(Boolean);
       return json(response, interrupted ? 202 : 409, { interrupted });
     }
@@ -323,7 +339,12 @@ function roomSnapshot() {
     ...database.snapshot(),
     agents: Object.fromEntries(Object.entries(agents).map(([provider, agent]) => [provider, agent.status])),
     agent: agents.codex.status,
-    participants: { rick: "present", codex: agents.codex.status.connection, claude: agents.claude.status.connection },
+    participants: {
+      rick: "present",
+      codex: agents.codex.status.connection,
+      claude: agents.claude.status.connection,
+      qwen: agents.qwen.status.connection,
+    },
     autopilot: autopilot.snapshot,
     controlPlane: controlPlane.board(),
     roomBrief: artifactMetadata(controlPlane.latestBrief()),
@@ -346,7 +367,7 @@ function publishControlDigest(digest, requestedTopicId) {
 }
 
 function attributedTranscript(topicId, excludingMessageId) {
-  const labels = { rick: "Rick", codex: "Codex", claude: "Claude", system: "Room" };
+  const labels = { rick: "Rick", codex: "Codex", claude: "Claude", qwen: "Qwen", system: "Room" };
   const chunks = database.snapshot().messages
     .filter(message => message.topicId === topicId && message.id !== excludingMessageId)
     .slice(-24)
@@ -408,8 +429,7 @@ function text(response, status, body) { response.writeHead(status, { "Content-Ty
 function shutdown() {
   clearInterval(controlPlanePoll);
   clearInterval(dailyArtifactsPoll);
-  codex.close();
-  claude.close();
+  for (const agent of Object.values(agents)) agent.client.close();
   for (const client of clients) client.end();
   clients.clear();
   server.close(() => { database.close(); process.exit(0); });

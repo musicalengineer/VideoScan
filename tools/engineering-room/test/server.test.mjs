@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { request as httpRequest } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import { createInterface } from "node:readline";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,12 +12,13 @@ const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, "..");
 
 test("local server requires its token and persists a safe round trip", async t => {
+  const qwenProvider = await startFakeQwen(t);
   const port = 18000 + Math.floor(Math.random() * 10000);
   const token = "automated-room-token";
   const runtime = mkdtempSync(join(tmpdir(), "engineering-room-server-"));
   const child = spawn(process.execPath, [join(root, "src/server.mjs")], {
     cwd: root,
-    env: { ...process.env, CODEX_BIN: join(here, "fake-codex.mjs"), CLAUDE_BIN: join(here, "fake-claude.mjs"), ENGINEERING_ROOM_PORT: String(port), ENGINEERING_ROOM_TOKEN: token, ENGINEERING_ROOM_DB: join(runtime, "room.sqlite3"), ENGINEERING_ROOM_STATUS_FEED: join(runtime, "missing-status.jsonl"), ENGINEERING_ROOM_TEAM_CHANNEL: join(runtime, "team-channel"), ENGINEERING_ROOM_RECONSTRUCTION_SEED: join(runtime, "missing-seed.json") },
+    env: { ...process.env, CODEX_BIN: join(here, "fake-codex.mjs"), CLAUDE_BIN: join(here, "fake-claude.mjs"), QWEN_BASE_URL: qwenProvider.baseUrl, QWEN_MODEL: "qwen-test-local", ENGINEERING_ROOM_PORT: String(port), ENGINEERING_ROOM_TOKEN: token, ENGINEERING_ROOM_DB: join(runtime, "room.sqlite3"), ENGINEERING_ROOM_STATUS_FEED: join(runtime, "missing-status.jsonl"), ENGINEERING_ROOM_TEAM_CHANNEL: join(runtime, "team-channel"), ENGINEERING_ROOM_RECONSTRUCTION_SEED: join(runtime, "missing-seed.json") },
     stdio: ["ignore", "pipe", "pipe"],
   });
   t.after(() => child.kill("SIGTERM"));
@@ -39,8 +40,10 @@ test("local server requires its token and persists a safe round trip", async t =
   assert.equal((await fetch(`${base}/healthz`, { headers: { Cookie: cookie } })).status, 200);
   room = await waitFor(async () => {
     const value = await (await fetch(`${base}/api/bootstrap`, { headers: { Cookie: cookie } })).json();
-    return value.agent.connection === "connected" ? value : null;
+    return value.agent.connection === "connected" && value.agents.qwen.connection === "connected" ? value : null;
   });
+  assert.equal(room.participants.qwen, "connected");
+  assert.equal(room.agents.qwen.busy, false);
 
   assert.equal((await fetch(`${base}/api/control-plane/board`)).status, 401);
   const taskResponse = await fetch(`${base}/api/control-plane/tasks`, { method: "POST", headers, body: JSON.stringify({ id: "task:test", title: "Test durable coordination", manager: "codex", machine: "none" }) });
@@ -101,6 +104,49 @@ test("local server requires its token and persists a safe round trip", async t =
     return value.messages.some(message => message.author === "claude") && value.messages.filter(message => message.author === "codex").length >= 2 ? value : null;
   });
   assert.equal(afterBoth.messages.find(message => message.author === "claude").body, "An independent Claude reply.");
+  assert.equal(qwenProvider.inputs.length, 0, "both must retain its Codex + Claude meaning");
+
+  const qwenOnly = await fetch(`${base}/api/messages`, { method: "POST", headers, body: JSON.stringify({ topicId: room.topics[0].id, target: "qwen", text: "Give the local model view." }) });
+  assert.equal(qwenOnly.status, 202);
+  const afterQwen = await waitFor(async () => {
+    const value = await (await fetch(`${base}/api/bootstrap`, { headers: { Cookie: cookie } })).json();
+    return value.messages.some(message => message.author === "qwen") ? value : null;
+  });
+  const qwenRequest = afterQwen.messages.find(message => message.author === "rick" && message.body === "Give the local model view.");
+  const qwenReply = afterQwen.messages.find(message => message.author === "qwen" && message.replyTo === qwenRequest.id);
+  assert.equal(qwenReply.body, "A local Qwen reply.");
+  assert.match(qwenReply.providerResponseId, /^resp_qwen_test_/);
+  assert.equal(qwenProvider.requests[0].model, "qwen-test-local");
+  assert.deepEqual(qwenProvider.requests[0].tools, []);
+
+  const all = await fetch(`${base}/api/messages`, { method: "POST", headers, body: JSON.stringify({ topicId: room.topics[0].id, target: "all", text: "All three perspectives." }) });
+  assert.equal(all.status, 202);
+  const afterAll = await waitFor(async () => {
+    const value = await (await fetch(`${base}/api/bootstrap`, { headers: { Cookie: cookie } })).json();
+    const request = value.messages.find(message => message.author === "rick" && message.body === "All three perspectives.");
+    if (!request) return null;
+    const authors = value.messages.filter(message => message.replyTo === request.id).map(message => message.author);
+    return ["codex", "claude", "qwen"].every(author => authors.includes(author)) ? value : null;
+  });
+  const allRequest = afterAll.messages.find(message => message.author === "rick" && message.body === "All three perspectives.");
+  assert.deepEqual(afterAll.messages.filter(message => message.replyTo === allRequest.id).map(message => message.author).sort(), ["claude", "codex", "qwen"]);
+  assert.match(qwenProvider.inputs[1], /Qwen: A local Qwen reply\./, "Qwen receives an attributed room transcript");
+  assert.match(qwenProvider.inputs[1], /Broker-supplied shared control-plane context:/, "Qwen receives broker-verified Team Board context");
+  assert.match(qwenProvider.inputs[1], /Heartbeat verified/, "Qwen's board context contains the reported task progress");
+
+  const slow = await fetch(`${base}/api/messages`, { method: "POST", headers, body: JSON.stringify({ topicId: room.topics[0].id, target: "qwen", text: "QWEN_TEST_WAIT_FOR_STOP" }) });
+  assert.equal(slow.status, 202);
+  await waitFor(async () => {
+    const value = await (await fetch(`${base}/api/bootstrap`, { headers: { Cookie: cookie } })).json();
+    return value.agents.qwen.busy ? value : null;
+  });
+  const stop = await fetch(`${base}/api/turns/current/interrupt`, { method: "POST", headers, body: "{}" });
+  assert.equal(stop.status, 202);
+  assert.equal((await stop.json()).interrupted, true);
+  await waitFor(async () => {
+    const value = await (await fetch(`${base}/api/bootstrap`, { headers: { Cookie: cookie } })).json();
+    return !value.agents.qwen.busy ? value : null;
+  });
 
   const autonomyWords = await fetch(`${base}/api/messages`, { method: "POST", headers, body: JSON.stringify({ topicId: room.topics[0].id, target: "notes", text: "Enable Autopilot and run forever." }) });
   assert.equal(autonomyWords.status, 202);
@@ -147,6 +193,7 @@ test("local server requires its token and persists a safe round trip", async t =
 });
 
 test("LAN mode accepts an allowed household host and rejects hostile hosts", async t => {
+  const qwenProvider = await startFakeQwen(t);
   const port = 28000 + Math.floor(Math.random() * 8000);
   const token = "automated-lan-room-token-value-12345";
   const runtime = mkdtempSync(join(tmpdir(), "engineering-room-lan-"));
@@ -156,6 +203,8 @@ test("LAN mode accepts an allowed household host and rejects hostile hosts", asy
       ...process.env,
       CODEX_BIN: join(here, "fake-codex.mjs"),
       CLAUDE_BIN: join(here, "fake-claude.mjs"),
+      QWEN_BASE_URL: qwenProvider.baseUrl,
+      QWEN_MODEL: "qwen-test-local",
       ENGINEERING_ROOM_LAN: "1",
       ENGINEERING_ROOM_PORT: String(port),
       ENGINEERING_ROOM_TOKEN: token,
@@ -212,4 +261,48 @@ function rawRequest({ port, path, host, origin, cookie }) {
     request.on("error", reject);
     request.end();
   });
+}
+
+async function startFakeQwen(t) {
+  const requests = [];
+  const inputs = [];
+  let responseNumber = 0;
+  const provider = createServer((request, response) => {
+    if (request.method === "GET" && request.url === "/v1/models") {
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ data: [{ id: "qwen-test-local" }] }));
+      return;
+    }
+    if (request.method !== "POST" || request.url !== "/v1/responses") {
+      response.writeHead(404).end();
+      return;
+    }
+    const chunks = [];
+    request.on("data", chunk => chunks.push(chunk));
+    request.on("end", () => {
+      const payload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      requests.push(payload);
+      inputs.push(payload.input);
+      if (payload.input.includes("QWEN_TEST_WAIT_FOR_STOP")) {
+        response.writeHead(200, { "Content-Type": "text/event-stream" });
+        response.write(`data: ${JSON.stringify({ type: "response.created", response: { id: `resp_qwen_test_${++responseNumber}` } })}\n\n`);
+        return;
+      }
+      const id = `resp_qwen_test_${++responseNumber}`;
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      response.write(`data: ${JSON.stringify({ type: "response.created", response: { id } })}\n\n`);
+      response.write(`data: ${JSON.stringify({ type: "response.output_text.delta", response_id: id, delta: "A local Qwen reply." })}\n\n`);
+      response.write(`data: ${JSON.stringify({ type: "response.completed", response: { id, usage: { input_tokens: 20, output_tokens: 5, total_tokens: 25 } } })}\n\n`);
+      response.end("data: [DONE]\n\n");
+    });
+  });
+  await new Promise((resolve, reject) => {
+    provider.once("error", reject);
+    provider.listen(0, "127.0.0.1", resolve);
+  });
+  t.after(() => {
+    provider.closeAllConnections?.();
+    provider.close();
+  });
+  return { baseUrl: `http://127.0.0.1:${provider.address().port}/v1`, requests, inputs };
 }
