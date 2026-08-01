@@ -579,38 +579,49 @@ struct MediaFileOperationBadge: View {
 }
 
 extension MediaFileOperationKind {
+    /// Badge capsule fills. Every value is a hand-darkened variant of the
+    /// verb's original hue — dark enough to carry the badge's white
+    /// small-caps text (Rick 2026-07-31: the system colors were too light;
+    /// Verify's dark goldenrod set the legibility bar). Hue assignments
+    /// and their pairwise-distinct rationale are unchanged from the
+    /// system-color era; only luminance dropped.
     var badgeColor: Color {
         switch self {
-        case .combine: return .green
-        case .compare: return .blue
-        case .extract: return .orange
-        case .ripFrames: return .purple
-        case .reformat: return .red
-        case .analyze: return .cyan
-        // Pass C — Transcode's mint badge matches the workspaceActive
-        // tint (mint hammer icon in the catalog filename column), so
-        // the user reads "transcode → workspace" as the same
-        // visual lineage.
-        case .transcode: return .mint
+        // Forest green — Combine's original green, darkened.
+        case .combine: return Color(red: 0.10, green: 0.45, blue: 0.16)
+        // Cobalt — Compare's blue.
+        case .compare: return Color(red: 0.08, green: 0.32, blue: 0.72)
+        // Burnt orange — Extract/Faces' orange.
+        case .extract: return Color(red: 0.75, green: 0.42, blue: 0.00)
+        // Deep purple — Frames' purple.
+        case .ripFrames: return Color(red: 0.44, green: 0.22, blue: 0.65)
+        // Crimson — Reformat's red.
+        case .reformat: return Color(red: 0.70, green: 0.14, blue: 0.16)
+        // Dark cyan (blue-leaning) — Analyze. Sits between compare's
+        // cobalt and cleanup's teal; the blue cast keeps it apart.
+        case .analyze: return Color(red: 0.00, green: 0.42, blue: 0.58)
+        // Pass C — Transcode's mint matches the workspaceActive tint
+        // (mint hammer icon in the catalog filename column), so the user
+        // reads "transcode → workspace" as the same visual lineage.
+        // Dark sea-green keeps the mint family, green-leaning.
+        case .transcode: return Color(red: 0.00, green: 0.52, blue: 0.36)
         // Clean Up shares transcode's derivative-producing nature but
-        // gets its own hue so the two verbs read apart at a glance.
-        case .cleanup: return .teal
+        // gets its own hue so the two verbs read apart at a glance —
+        // balanced teal between transcode's green and analyze's blue.
+        case .cleanup: return Color(red: 0.00, green: 0.44, blue: 0.46)
         // Trim is the third derivative-producing verb — indigo keeps it
         // distinct from transcode's mint and cleanup's teal.
-        case .trim: return .indigo
-        // Balance Audio — pink keeps it distinct from the other
-        // derivative-producing verbs (mint/teal/indigo; indigo went to
-        // Trim when the branches merged). GH #116.
-        case .balanceAudio: return .pink
-        // Rebuild Audio Track (Verify Audio's repair, GH #128) — brown
-        // keeps the audio-repair pair (pink/brown) adjacent but
-        // distinguishable.
-        case .rebuildAudio: return .brown
+        case .trim: return Color(red: 0.32, green: 0.31, blue: 0.75)
+        // Balance Audio — raspberry keeps pink's identity but darker;
+        // distinct from the other derivative-producing verbs. GH #116.
+        case .balanceAudio: return Color(red: 0.72, green: 0.16, blue: 0.40)
+        // Rebuild Audio Track (Verify Audio's repair, GH #128) — dark
+        // brown keeps the audio-repair pair (raspberry/brown) adjacent
+        // but distinguishable.
+        case .rebuildAudio: return Color(red: 0.47, green: 0.32, blue: 0.20)
         // Verify Audio (the diagnosis as a job, GH #135) — dark goldenrod
-        // keeps the yellow "checking" semantics but is dark enough to carry
-        // the badge's white text (plain .yellow was illegible, Rick
-        // 2026-07-31); still reads apart from its brown repair sibling
-        // and from extract's orange.
+        // keeps the yellow "checking" semantics; reads apart from its
+        // brown repair sibling and from extract's burnt orange.
         case .verifyAudio: return Color(red: 0.72, green: 0.53, blue: 0.04)
         }
     }
