@@ -72,6 +72,65 @@ struct PeopleTagsTests {
         #expect(a.confirmedByUserPeople.map(\.name) == ["Donna"])
     }
 
+    /// The Beth case (Rick 2026-08-01): unset must mean "NOT in this
+    /// video" — an old engine detection must not keep the name visible
+    /// (and searchable) after the user un-tags it. Auto-sourced names
+    /// land in rejectedPeople so a rescan can't resurrect them.
+    @Test func unsetScrubsAutoDetectionsAndRecordsRejection() {
+        let model = VideoScanModel()
+        let a = makeRecord("/Volumes/T/a.mov")
+        a.detectedPeople = ["Beth"]                 // old auto-tagger mistake
+        model.records = [a]
+        model.searchIndex.rebuild(records: model.records)
+
+        model.setPerson("Beth", on: [a], present: true)     // Rick's first try
+        model.setPerson("Beth", on: [a], present: false)    // then unset
+        #expect(a.taggedPeople.isEmpty, "Beth still visible after unset")
+        #expect(a.detectedPeople.isEmpty)
+        #expect(a.rejectedPeople == ["Beth"])
+        #expect(model.searchIndex.filter(records: model.records, query: "people:beth").isEmpty)
+
+        // Re-confirming clears the rejection (change of mind, again).
+        model.setPerson("Beth", on: [a], present: true)
+        #expect(a.rejectedPeople.isEmpty)
+        #expect(a.taggedPeople == ["Beth"])
+    }
+
+    /// Unset of a purely-manual tag (never auto-detected) must NOT
+    /// record a rejection — undoing a misclick is not ground truth.
+    @Test func unsetOfManualOnlyTagDoesNotReject() {
+        let model = VideoScanModel()
+        let a = makeRecord("/Volumes/T/a.mov")
+        model.records = [a]
+        model.searchIndex.rebuild(records: model.records)
+
+        model.setPerson("Dan", on: [a], present: true)
+        model.setPerson("Dan", on: [a], present: false)
+        #expect(a.confirmedByUserPeople.isEmpty)
+        #expect(a.rejectedPeople.isEmpty)
+    }
+
+    /// "Remove All People" — the mistake-cleanup verb: wipes all four
+    /// lists and the index reflects it immediately.
+    @Test func removeAllPeopleClearsEveryListAndIndex() {
+        let model = VideoScanModel()
+        let a = makeRecord("/Volumes/T/a.mov")
+        a.detectedPeople = ["Beth"]
+        a.suspectedPeople = ["Donna"]
+        a.confirmedByUserPeople = [ConfirmedTag(name: "Dan", confirmedAt: Date())]
+        a.rejectedPeople = ["Mark"]
+        model.records = [a]
+        model.searchIndex.rebuild(records: model.records)
+
+        model.removeAllPeople(from: [a])
+        #expect(a.detectedPeople.isEmpty && a.suspectedPeople.isEmpty)
+        #expect(a.confirmedByUserPeople.isEmpty && a.rejectedPeople.isEmpty)
+        for q in ["people:beth", "people:donna", "people:dan"] {
+            #expect(model.searchIndex.filter(records: model.records, query: q).isEmpty,
+                    "'\(q)' still matches after Remove All People")
+        }
+    }
+
     /// Negative: whitespace-only names and no-op toggles never dirty
     /// the catalog (no changed records → no save scheduled).
     @Test func noOpTogglesAndBlankNamesChangeNothing() {

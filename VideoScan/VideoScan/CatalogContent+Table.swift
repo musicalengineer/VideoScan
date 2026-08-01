@@ -794,15 +794,29 @@ extension CatalogContent {
                                 Text("No people in the People database yet")
                             } else {
                                 ForEach(poiNames, id: \.self) { name in
+                                    // Checkmark reflects the STRONG tier
+                                    // (confirmed ∪ detected) — what the
+                                    // People column shows — so toggling
+                                    // off a wrong auto-detection reads
+                                    // checked → unchecked, not phantom.
                                     let allHave = selectedRecs.allSatisfy { rec in
-                                        rec.confirmedByUserPeople.contains {
-                                            $0.name.compare(name, options: .caseInsensitive) == .orderedSame
+                                        rec.taggedPeople.contains {
+                                            $0.compare(name, options: .caseInsensitive) == .orderedSame
                                         }
                                     }
                                     Toggle(name, isOn: Binding(
                                         get: { allHave },
                                         set: { model.setPerson(name, on: selectedRecs, present: $0) }
                                     ))
+                                }
+                            }
+                            if selectedRecs.contains(where: {
+                                !$0.taggedPeople.isEmpty || !$0.suspectedPeople.isEmpty
+                                    || !$0.rejectedPeople.isEmpty
+                            }) {
+                                Divider()
+                                Button("Remove All People") {
+                                    model.removeAllPeople(from: selectedRecs)
                                 }
                             }
                         }
@@ -1524,13 +1538,14 @@ extension CatalogContent {
     /// Tooltip lists names with tier annotations.
     @ViewBuilder
     private func peopleColumnCell(for rec: VideoRecord) -> some View {
-        if rec.detectedPeople.isEmpty && rec.suspectedPeople.isEmpty {
+        let strong = rec.taggedPeople   // confirmed ∪ detected (2026-08-01)
+        if strong.isEmpty && rec.suspectedPeople.isEmpty {
             Text("—")
                 .font(.system(size: 12))
                 .foregroundColor(.secondary)
-                .help("No family detected — junk-triage candidate")
+                .help("No family tagged or detected — junk-triage candidate")
         } else {
-            let confirmedText = Text(rec.detectedPeople.joined(separator: ", "))
+            let strongText = Text(strong.joined(separator: ", "))
                 .foregroundColor(.blue)
             let suspectedJoined = rec.suspectedPeople
                 .map { "?\($0)" }
@@ -1538,9 +1553,9 @@ extension CatalogContent {
             let suspectedText = Text(suspectedJoined)
                 .italic()
                 .foregroundColor(.secondary)
-            let separator = (!rec.detectedPeople.isEmpty
+            let separator = (!strong.isEmpty
                              && !rec.suspectedPeople.isEmpty) ? " · " : ""
-            (confirmedText + Text(separator) + suspectedText)
+            (strongText + Text(separator) + suspectedText)
                 .font(.system(size: 12))
                 .lineLimit(1)
                 .help(peopleColumnHelp(for: rec))
@@ -1549,11 +1564,15 @@ extension CatalogContent {
 
     private func peopleColumnHelp(for rec: VideoRecord) -> String {
         var lines: [String] = []
+        let confirmed = rec.confirmedByUserPeople.map(\.name)
+        if !confirmed.isEmpty {
+            lines.append("Confirmed by you: \(confirmed.joined(separator: ", "))")
+        }
         if !rec.detectedPeople.isEmpty {
             lines.append("Detected: \(rec.detectedPeople.joined(separator: ", "))")
         }
         if !rec.suspectedPeople.isEmpty {
-            lines.append("Suspected: \(rec.suspectedPeople.joined(separator: ", "))")
+            lines.append("Suspected (the leading ?): \(rec.suspectedPeople.joined(separator: ", "))")
         }
         return lines.joined(separator: "\n")
     }

@@ -137,9 +137,25 @@ extension VideoRecord {
     /// direction. Empty string would have sorted them to the top
     /// instead, which is rarely what users want when the column reads
     /// "People".
+    /// Strong-tier people for display: user-confirmed tags UNITED with
+    /// engine-detected names, deduped case-insensitively (confirmed
+    /// spelling wins), alphabetical. The People column, the preview
+    /// panel's People line, and the context-menu checkmarks all read
+    /// THIS — before 2026-08-01 the column ignored confirmedByUserPeople
+    /// entirely, so a manual tag (or a manual un-tag of a detected name)
+    /// looked like it hadn't worked.
+    public var taggedPeople: [String] {
+        var seen: Set<String> = []
+        var out: [String] = []
+        for name in confirmedByUserPeople.map(\.name) + detectedPeople {
+            let key = name.lowercased()
+            if !key.isEmpty, seen.insert(key).inserted { out.append(name) }
+        }
+        return out.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
     public var peopleSortKey: String {
-        let confirmed = detectedPeople.sorted(by: { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending })
-            .joined(separator: ", ")
+        let confirmed = taggedPeople.joined(separator: ", ")
         let suspected = suspectedPeople.sorted(by: { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending })
             .joined(separator: ", ")
         if confirmed.isEmpty && suspected.isEmpty {

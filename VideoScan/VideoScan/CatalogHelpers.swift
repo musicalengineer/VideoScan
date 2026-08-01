@@ -1117,9 +1117,11 @@ struct CatalogContent: View {
                                         .background(Color.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 3))
                                 }
                             }
-                            // Full path + codecs (replaced Volume Size /
-                            // Media Cataloged, Rick 2026-07-31: show what
-                            // the selected file IS, not where it lives).
+                            // Full path, codecs (one line), tagged people
+                            // (replaced Volume Size / Media Cataloged,
+                            // Rick 2026-07-31; layout + People line
+                            // 2026-08-01: show what the selected file IS
+                            // and WHO is in it).
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(rec.fullPath)
                                     .font(.system(size: 12, design: .monospaced))
@@ -1127,15 +1129,21 @@ struct CatalogContent: View {
                                     .lineLimit(3)
                                     .truncationMode(.middle)
                                     .textSelection(.enabled)
-                                if !rec.videoCodec.isEmpty {
-                                    Text("Video: \(rec.videoCodec)")
+                                let codecParts = [
+                                    rec.videoCodec.isEmpty ? nil : "Video: \(rec.videoCodec)",
+                                    rec.audioCodec.isEmpty ? nil : "Audio: \(rec.audioCodec)",
+                                ].compactMap { $0 }
+                                if !codecParts.isEmpty {
+                                    Text(codecParts.joined(separator: "   "))
                                         .font(.system(size: 13, design: .monospaced))
                                         .foregroundColor(.secondary)
                                 }
-                                if !rec.audioCodec.isEmpty {
-                                    Text("Audio: \(rec.audioCodec)")
+                                let people = rec.taggedPeople
+                                if !people.isEmpty {
+                                    Text("People: \(people.joined(separator: ", "))")
                                         .font(.system(size: 13, design: .monospaced))
                                         .foregroundColor(.secondary)
+                                        .lineLimit(2)
                                 }
                             }
                             if isPlaying || model.filmstripState.isActive(forPath: rec.fullPath) {
