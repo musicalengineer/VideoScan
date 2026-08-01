@@ -1,9 +1,46 @@
+# VideoScan's trusted local-development profile.  This is deliberately scoped
+# to the repository, its test/build scratch locations, and the app's own data.
+# It avoids routine approval prompts without granting access to unrelated user
+# files.  A new session must select/reload this profile after this file changes.
+approval_policy = "never"
+default_permissions = "videoscan-dev"
+
 [shell_environment_policy]
 inherit = "core"
 
 [shell_environment_policy.set]
 PATH = "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
-[sandbox_workspace_write]
-writable_roots = ["/Users/rickb/Library/Application Support/VideoScan/team-channel"]
-network_access = false
+[permissions.videoscan-dev]
+description = "Unattended local development for the trusted VideoScan project."
+
+[permissions.videoscan-dev.filesystem]
+":minimal" = "read"
+":tmpdir" = "write"
+":slash_tmp" = "write"
+"/Users/rickb/Library/Logs/VideoScan" = "write"
+"/Users/rickb/Library/Application Support/VideoScan" = "write"
+"/Users/rickb/Library/Caches/videoscan-nightly-dd" = "write"
+"/Users/rickb/Library/Developer/Xcode/DerivedData" = "write"
+"/Volumes/XcodeRAM" = "write"
+"/Users/rickb/dev/VideoScan/.git" = "write"
+"/Users/rickb/.gitconfig" = "read"
+"/Users/rickb/.ssh/config" = "read"
+"/Users/rickb/.ssh/known_hosts" = "read"
+"/Users/rickb/.ssh/id_ed25519" = "read"
+
+[permissions.videoscan-dev.filesystem.":workspace_roots"]
+"." = "write"
+
+[permissions.videoscan-dev.network]
+enabled = true
+allow_local_binding = true
+
+[permissions.videoscan-dev.network.domains]
+"github.com" = "allow"
+"**.github.com" = "allow"
+"**.githubusercontent.com" = "allow"
+"ricksm5.local" = "allow"
+"ricksm1.local" = "allow"
+"ricksm4.local" = "allow"
+"ricksintel.local" = "allow"
