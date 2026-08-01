@@ -789,6 +789,16 @@ extension CatalogContent {
                         // gallery. Multi-select toggles across the whole
                         // selection, same semantics as the Tags menu.
                         Menu("People") {
+                            // Family wildcard first: "lots of us are in
+                            // this one" — surfaces for ANY person search.
+                            let familyAllHave = selectedRecs.allSatisfy { rec in
+                                rec.taggedPeople.contains { $0.lowercased() == "family" }
+                            }
+                            Toggle("Family (everyone)", isOn: Binding(
+                                get: { familyAllHave },
+                                set: { model.setPerson("Family", on: selectedRecs, present: $0) }
+                            ))
+                            Divider()
                             let poiNames = POIProfile.listAll().map(\.name).sorted()
                             if poiNames.isEmpty {
                                 Text("No people in the People database yet")
@@ -815,7 +825,7 @@ extension CatalogContent {
                                     || !$0.rejectedPeople.isEmpty
                             }) {
                                 Divider()
-                                Button("Remove All People") {
+                                Button("Clear People Tags") {
                                     model.removeAllPeople(from: selectedRecs)
                                 }
                             }

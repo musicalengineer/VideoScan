@@ -280,6 +280,15 @@ nonisolated func pfFieldTokenMatches(_ field: SearchField, _ value: String, _ re
         if rec.detectedPeople.contains(where: { $0.lowercased().contains(n) }) { return true }
         if rec.suspectedPeople.contains(where: { $0.lowercased().contains(n) }) { return true }
         if rec.confirmedByUserPeople.contains(where: { $0.name.lowercased().contains(n) }) { return true }
+        // Family wildcard (Rick 2026-08-01): "Family" loosely means
+        // "many of the family are in this one, at various times" — a
+        // record carrying it matches EVERY people: query, so the big
+        // Christmas-morning files surface when searching for anyone.
+        // Exact name match, any tier, so a person named e.g. "Famil"
+        // can't accidentally wildcard via substring.
+        if rec.detectedPeople.contains(where: { $0.lowercased() == "family" }) { return true }
+        if rec.suspectedPeople.contains(where: { $0.lowercased() == "family" }) { return true }
+        if rec.confirmedByUserPeople.contains(where: { $0.name.lowercased() == "family" }) { return true }
         return false
     case .transcript:
         if let t = rec.audioTranscript, t.lowercased().contains(n) { return true }

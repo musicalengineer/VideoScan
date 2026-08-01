@@ -372,11 +372,16 @@ final class CatalogSearchIndex {
     /// Union the buckets of every indexed person name CONTAINING the
     /// needle — canonical substring semantics over a vocabulary small
     /// enough (family-scale) that the key scan is microseconds.
+    /// "family"-tagged records join EVERY answer (the wildcard rule —
+    /// keep in lock-step with pfFieldTokenMatches(.people)).
     private func personCandidates(needle: String) -> Set<String> {
         guard !needle.isEmpty else { return [] }
         var out: Set<String> = []
         for (name, bucket) in personIndex where name.contains(needle) {
             out.formUnion(bucket)
+        }
+        if let family = personIndex["family"] {
+            out.formUnion(family)
         }
         return out
     }

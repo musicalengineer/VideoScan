@@ -61,7 +61,7 @@ extension VideoScanModel {
     }
 
     /// Wipe every people list on `recs` — the mistake-cleanup verb for
-    /// records the old auto-tagger got wrong ("Remove All People").
+    /// records the old auto-tagger got wrong ("Clear People Tags").
     /// Clears rejections too: this is "start this file's people over",
     /// not "reject everyone".
     func removeAllPeople(from recs: [VideoRecord]) {

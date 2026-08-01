@@ -110,7 +110,7 @@ struct PeopleTagsTests {
         #expect(a.rejectedPeople.isEmpty)
     }
 
-    /// "Remove All People" — the mistake-cleanup verb: wipes all four
+    /// "Clear People Tags" — the mistake-cleanup verb: wipes all four
     /// lists and the index reflects it immediately.
     @Test func removeAllPeopleClearsEveryListAndIndex() {
         let model = VideoScanModel()
@@ -127,8 +127,24 @@ struct PeopleTagsTests {
         #expect(a.confirmedByUserPeople.isEmpty && a.rejectedPeople.isEmpty)
         for q in ["people:beth", "people:donna", "people:dan"] {
             #expect(model.searchIndex.filter(records: model.records, query: q).isEmpty,
-                    "'\(q)' still matches after Remove All People")
+                    "'\(q)' still matches after Clear People Tags")
         }
+    }
+
+    /// Family toggle: tagging "Family" via the menu makes the record a
+    /// hit for ANY person search; untoggling withdraws it.
+    @Test func familyTagSurfacesForEveryPersonSearch() {
+        let model = VideoScanModel()
+        let a = makeRecord("/Volumes/T/christmas.mov")
+        model.records = [a]
+        model.searchIndex.rebuild(records: model.records)
+
+        model.setPerson("Family", on: [a], present: true)
+        #expect(model.searchIndex.filter(records: model.records, query: "people:donna").count == 1)
+        #expect(model.searchIndex.filter(records: model.records, query: "people:anyone").count == 1)
+
+        model.setPerson("Family", on: [a], present: false)
+        #expect(model.searchIndex.filter(records: model.records, query: "people:donna").isEmpty)
     }
 
     /// Negative: whitespace-only names and no-op toggles never dirty

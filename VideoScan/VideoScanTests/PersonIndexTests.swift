@@ -131,6 +131,35 @@ struct PersonIndexTests {
         #expect(vocab.map(\.name).contains("dan"))
     }
 
+    /// Family wildcard (Rick 2026-08-01): a record tagged "Family"
+    /// matches EVERY people: query, in BOTH the canonical matcher and
+    /// the index fast path — the agreement contract extends to it.
+    @Test func familyWildcardMatchesEveryPersonQueryInBothPaths() {
+        var records = makePeopleRecords()
+        let familyRec = VideoRecord()
+        familyRec.fullPath = "/v/a/christmas-morning.mov"
+        familyRec.filename = "christmas-morning.mov"
+        familyRec.directory = "/v/a"
+        familyRec.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        familyRec.confirmedByUserPeople = [ConfirmedTag(name: "Family", confirmedAt: Date(timeIntervalSince1970: 0))]
+        records.append(familyRec)
+
+        let index = CatalogSearchIndex()
+        index.rebuild(records: records)
+
+        for query in ["people:donna", "people:dan", "people:zzz", "people:family"] {
+            let indexed = index.filter(records: records, query: query).map(\.fullPath)
+            let canonicalHits = canonical(records, query)
+            #expect(indexed == canonicalHits, "wildcard disagreement on '\(query)'")
+            #expect(indexed.contains(familyRec.fullPath),
+                    "Family-tagged record missing from '\(query)'")
+        }
+        // The wildcard is exact-name: a person merely CONTAINING the
+        // word must not wildcard, and non-people tokens are unaffected.
+        #expect(!index.filter(records: records, query: "clip1").map(\.fullPath)
+            .contains(familyRec.fullPath))
+    }
+
     /// Malformed v4 (missing "people" key — truncation/corruption) must
     /// REJECT, not load an empty person index: under QueryPlan an empty
     /// index is a provably-zero answer for every people: query, so
