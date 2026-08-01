@@ -21,10 +21,12 @@ import Foundation
 // Year-range tokens use a per-record precomputed Set<Int> of years
 // (GH #123 PR D — pfYearsFromRecord was ~9.5 µs/record/query at 100k:
 // char scan + a Calendar init + two component extractions PER RECORD,
-// ≈ 950 ms per settled keystroke for "1990s"). Field-prefix tokens
-// (people:donna) still defer to the canonical `pfCatalogTokenMatches`
-// because those need structural access (specific fields, not a flat
-// haystack).
+// ≈ 950 ms per settled keystroke for "1990s"). people: tokens use a
+// dedicated person inverted index (archivist perf pass 2026-08-01) —
+// exact canonical semantics via containment scan over the family-scale
+// name vocabulary. Remaining field-prefix tokens (transcript:, codec:,
+// …) defer to the canonical matcher as residual checks over the
+// index-narrowed candidate set (see QueryPlan).
 //
 // Memory: ~5KB per record × 16k records ≈ 80 MB. Trivial for M4-class
 // machines. The win is wall-clock: the 15k-record catalog goes from
@@ -99,12 +101,31 @@ final class CatalogSearchIndex {
     /// keep a stale "eligible" verdict.
     private var fastPathEligibility: [String: Bool] = [:]
 
+    /// Person inverted index (archivist perf pass, 2026-08-01):
+    /// lowercased person name → fullPaths carrying it in ANY of the
+    /// three lists the canonical people: matcher consults (detected,
+    /// suspected, user-confirmed). people: used to be the token that
+    /// sent every query down the linear path — O(records × names) with
+    /// a lowercase ALLOC per name per record per query.
+    ///
+    /// Unlike the word index, this needs NO eligibility gate: the key
+    /// set is the complete person vocabulary (family-scale — dozens),
+    /// so canonical SUBSTRING semantics ("people:don" matches "donna")
+    /// are answered exactly by scanning the keys for containment and
+    /// unioning their buckets — microseconds.
+    private var personIndex: [String: Set<String>] = [:]
+    /// Reverse map (fullPath → its contributed lowercased names) so a
+    /// single-record update/remove can cleanly retract old entries.
+    private var personsByPath: [String: Set<String>] = [:]
+
     /// Discard the entire cache. Called on catalog reset / full reload.
     func clear() {
         haystacks.removeAll(keepingCapacity: false)
         yearSets.removeAll(keepingCapacity: false)
         wordIndex.removeAll(keepingCapacity: false)
         fastPathEligibility.removeAll(keepingCapacity: false)
+        personIndex.removeAll(keepingCapacity: false)
+        personsByPath.removeAll(keepingCapacity: false)
     }
 
     /// Build (or rebuild) the index from a record set. Replaces any
@@ -113,6 +134,8 @@ final class CatalogSearchIndex {
         var hs: [String: String] = [:]
         var ys: [String: Set<Int>] = [:]
         var wi: [String: Set<String>] = [:]
+        var pi: [String: Set<String>] = [:]
+        var pbp: [String: Set<String>] = [:]
         hs.reserveCapacity(records.count)
         ys.reserveCapacity(records.count)
         for rec in records {
@@ -122,10 +145,17 @@ final class CatalogSearchIndex {
             for word in Self.extractWords(from: h) {
                 wi[word, default: []].insert(rec.fullPath)
             }
+            let people = Self.extractPeople(from: rec)
+            if !people.isEmpty {
+                pbp[rec.fullPath] = people
+                for name in people { pi[name, default: []].insert(rec.fullPath) }
+            }
         }
         self.haystacks = hs
         self.yearSets = ys
         self.wordIndex = wi
+        self.personIndex = pi
+        self.personsByPath = pbp
         // Word set replaced wholesale → any cached eligibility verdict is stale.
         fastPathEligibility.removeAll(keepingCapacity: false)
     }
@@ -160,6 +190,24 @@ final class CatalogSearchIndex {
         if oldWords != newWords {
             fastPathEligibility.removeAll(keepingCapacity: false)
         }
+        // Person maintenance — a fresh confirm/reject in the Inspector
+        // must be people:-searchable the moment it lands.
+        let oldPeople = personsByPath[rec.fullPath] ?? []
+        let newPeople = Self.extractPeople(from: rec)
+        for name in oldPeople.subtracting(newPeople) {
+            personIndex[name]?.remove(rec.fullPath)
+            if personIndex[name]?.isEmpty == true {
+                personIndex.removeValue(forKey: name)
+            }
+        }
+        for name in newPeople.subtracting(oldPeople) {
+            personIndex[name, default: []].insert(rec.fullPath)
+        }
+        if newPeople.isEmpty {
+            personsByPath.removeValue(forKey: rec.fullPath)
+        } else {
+            personsByPath[rec.fullPath] = newPeople
+        }
     }
 
     /// Drop a record from the index (purge, delete, rescan-removal).
@@ -176,6 +224,14 @@ final class CatalogSearchIndex {
         }
         haystacks.removeValue(forKey: fullPath)
         yearSets.removeValue(forKey: fullPath)
+        if let people = personsByPath.removeValue(forKey: fullPath) {
+            for name in people {
+                personIndex[name]?.remove(fullPath)
+                if personIndex[name]?.isEmpty == true {
+                    personIndex.removeValue(forKey: name)
+                }
+            }
+        }
         // Removing the last reference to a word drops it from the key set,
         // which could make a previously-ineligible needle eligible. Drop the
         // memo so the next query recomputes against the current word set.
@@ -214,10 +270,17 @@ final class CatalogSearchIndex {
     func filter(records: [VideoRecord], query: String) -> [VideoRecord] {
         let tokens = Self.prepareTokens(pfTokenizeSearchQuery(query))
         if tokens.isEmpty { return records }
-        if let candidatePaths = tryIndexLookup(tokens: tokens) {
-            return records.filter { candidatePaths.contains($0.fullPath) }
+        let plan = makePlan(tokens: tokens)
+        guard let candidates = plan.candidates else {
+            return records.filter { rec in matches(rec, tokens: tokens) }
         }
-        return records.filter { rec in matches(rec, tokens: tokens) }
+        if candidates.isEmpty { return [] }
+        if plan.residual.isEmpty {
+            return records.filter { candidates.contains($0.fullPath) }
+        }
+        return records.filter { rec in
+            candidates.contains(rec.fullPath) && matches(rec, tokens: plan.residual)
+        }
     }
 
     /// Count-only filter. Same semantics as `filter` but skips array
@@ -225,63 +288,105 @@ final class CatalogSearchIndex {
     func count(records: [VideoRecord], query: String) -> Int {
         let tokens = Self.prepareTokens(pfTokenizeSearchQuery(query))
         if tokens.isEmpty { return records.count }
-        if let candidatePaths = tryIndexLookup(tokens: tokens) {
-            // Intersect with the active record set (the caller may have
-            // pre-filtered before invoking us).
+        let plan = makePlan(tokens: tokens)
+        guard let candidates = plan.candidates else {
             var n = 0
-            for rec in records where candidatePaths.contains(rec.fullPath) { n += 1 }
+            for rec in records where matches(rec, tokens: tokens) { n += 1 }
             return n
         }
+        if candidates.isEmpty { return 0 }
         var n = 0
-        for rec in records where matches(rec, tokens: tokens) { n += 1 }
+        // Intersect with the active record set (the caller may have
+        // pre-filtered before invoking us).
+        for rec in records where candidates.contains(rec.fullPath) {
+            if plan.residual.isEmpty || matches(rec, tokens: plan.residual) { n += 1 }
+        }
         return n
     }
 
     // MARK: - Inverted-index fast path
 
-    /// Resolve the candidate set of fullPaths via the inverted word
-    /// index. Returns `nil` if any token can't use the index — caller
-    /// must fall back to the linear matcher to preserve substring
-    /// semantics (a token like "elev" doesn't match a complete word
-    /// but DOES match the haystack of records containing "elevator").
+    /// Query plan (archivist perf pass, 2026-08-01). Replaces the old
+    /// all-or-nothing `tryIndexLookup`: instead of bailing the WHOLE
+    /// query to the linear matcher when any one token can't use an
+    /// index, index-capable tokens narrow to a candidate set and the
+    /// rest (`residual`) are verified per-record on that (usually tiny)
+    /// subset. AND semantics are preserved exactly; the correctness
+    /// contract vs the canonical matcher is pinned by the agreement
+    /// sensors in CatalogSearchIndexTests / PersonIndexTests.
     ///
-    /// Returns an empty set if every token used the index AND the
-    /// intersection is empty — there are provably zero matches and the
-    /// caller can short-circuit.
-    private func tryIndexLookup(tokens: [SearchToken]) -> Set<String>? {
+    /// `candidates == nil` means no token could use an index — caller
+    /// runs the original full linear scan. `candidates == []` means an
+    /// indexed token PROVED zero matches; caller short-circuits.
+    private struct QueryPlan {
         var candidates: Set<String>?
-        for token in tokens {
-            // Year-range / field-prefix tokens always need structural
-            // record access — bail to linear.
-            guard case .substring(let needle) = token else { return nil }
-            // Phrase tokens (contain whitespace after tokenizer) need
-            // adjacent-word matching — index doesn't help. Bail to
-            // linear so the literalContains substring path runs.
-            if needle.contains(" ") { return nil }
-            if needle.isEmpty { return nil }
-            // Whole-word lookup. If the needle isn't a complete word in
-            // the index, the user is either typing a partial word
-            // ("elev") or a substring inside one ("apes" inside "capes")
-            // — both require the linear matcher. Bail.
-            guard let bucket = wordIndex[needle] else { return nil }
-            // Infix-safety gate (Rick 2026-06-29). Even when `needle` IS a
-            // complete word, its bucket is the COMPLETE substring-match set
-            // ONLY IF `needle` is not also an infix of some OTHER indexed
-            // word. Catalog semantics are SUBSTRING: "rick" must also match
-            // records whose only "rick" lives inside "rickb"/"ricksbackups",
-            // which live in DIFFERENT buckets. If `needle` is an infix of
-            // another word, the whole-word bucket under-returns — bail to the
-            // linear matcher for the whole query, exactly as for a non-word
-            // needle. (Eligibility is memoized; see fastPathEligibility.)
-            guard isFastPathEligible(needle) else { return nil }
-            if let existing = candidates {
-                candidates = existing.intersection(bucket)
-                if candidates?.isEmpty == true { return [] }
+        var residual: [SearchToken] = []
+    }
+
+    private func makePlan(tokens: [SearchToken]) -> QueryPlan {
+        var plan = QueryPlan()
+
+        func narrow(with bucket: Set<String>) {
+            if let existing = plan.candidates {
+                plan.candidates = existing.intersection(bucket)
             } else {
-                candidates = bucket
+                plan.candidates = bucket
             }
         }
-        return candidates
+
+        for token in tokens {
+            if case .some(true) = plan.candidates?.isEmpty {
+                // Provably zero matches — no need to classify the rest.
+                return QueryPlan(candidates: [], residual: [])
+            }
+            switch token {
+            case .field(let name, let value) where name == .people:
+                // Person index answers people: tokens EXACTLY (see the
+                // personIndex doc) — including "no such person" as a
+                // provably-empty bucket.
+                narrow(with: personCandidates(needle: value.lowercased()))
+            case .substring(let needle):
+                // Whole-word lookup with the infix-safety gate
+                // (Rick 2026-06-29): a word bucket is the COMPLETE
+                // substring-match set only if the needle is not also an
+                // infix of some OTHER indexed word ("rick" inside
+                // "rickb"). Phrases, partial words, and infix-unsafe
+                // needles go to the residual linear check instead of
+                // (as before) sinking the whole query.
+                if !needle.isEmpty, !needle.contains(" "),
+                   let bucket = wordIndex[needle], isFastPathEligible(needle) {
+                    narrow(with: bucket)
+                } else {
+                    plan.residual.append(token)
+                }
+            default:
+                // yearRange + other field tokens: cheap per-record checks
+                // (cached year sets / direct field reads) on the narrowed
+                // candidate set.
+                plan.residual.append(token)
+            }
+        }
+        return plan
+    }
+
+    /// Union the buckets of every indexed person name CONTAINING the
+    /// needle — canonical substring semantics over a vocabulary small
+    /// enough (family-scale) that the key scan is microseconds.
+    private func personCandidates(needle: String) -> Set<String> {
+        guard !needle.isEmpty else { return [] }
+        var out: Set<String> = []
+        for (name, bucket) in personIndex where name.contains(needle) {
+            out.formUnion(bucket)
+        }
+        return out
+    }
+
+    /// Person-name vocabulary with record counts, most-tagged first.
+    /// Archivist autocomplete/hints; later, translator prompt seeding.
+    func knownPeople() -> [(name: String, count: Int)] {
+        personIndex
+            .map { (name: $0.key, count: $0.value.count) }
+            .sorted { $0.count != $1.count ? $0.count > $1.count : $0.name < $1.name }
     }
 
     /// Is `needle` (which is known to be a wordIndex key) safe to answer
@@ -346,9 +451,12 @@ final class CatalogSearchIndex {
     /// userNotes joined the haystack field set — a v2 file's haystacks
     /// predate them (and predate the notes → userNotes migration that
     /// runs the same launch), so v2 is rejected → one rebuild, then
-    /// saved back as v3. NOT a semantic layout change; the bump exists
+    /// saved back as v4. v4 (2026-08-01): per-record person names
+    /// persisted so the person index (archivist perf pass) survives
+    /// relaunch without a record walk.
+    /// NOT a semantic layout change; the bump exists
     /// purely to force that one refresh.
-    nonisolated static let persistedVersion: Int = 3
+    nonisolated static let persistedVersion: Int = 4
 
     /// Default location next to the catalog:
     /// `~/Library/Application Support/VideoScan/catalog.search-index.v1.plist`
@@ -381,16 +489,20 @@ final class CatalogSearchIndex {
     /// invokes this after `rebuild` and on app quit. Failures are
     /// non-fatal — the next launch just rebuilds from records as before.
     func saveToDisk(at url: URL = defaultPersistenceURL()) throws {
-        // Plists can't hold Set<Int> — flatten to [Int] per record.
+        // Plists can't hold Set<Int>/Set<String> — flatten to arrays.
         var yearArrays: [String: [Int]] = [:]
         yearArrays.reserveCapacity(yearSets.count)
         for (path, ys) in yearSets { yearArrays[path] = Array(ys) }
+        var peopleArrays: [String: [String]] = [:]
+        peopleArrays.reserveCapacity(personsByPath.count)
+        for (path, names) in personsByPath { peopleArrays[path] = Array(names) }
         let payload: [String: Any] = [
             "version": Self.persistedVersion,
             "savedAt": Date().timeIntervalSince1970,
             "recordCount": haystacks.count,
             "haystacks": haystacks,
             "years": yearArrays,
+            "people": peopleArrays,
         ]
         let data = try PropertyListSerialization.data(
             fromPropertyList: payload, format: .binary, options: 0
@@ -451,6 +563,20 @@ final class CatalogSearchIndex {
         ys.reserveCapacity(yearArrays.count)
         for (path, arr) in yearArrays { ys[path] = Set(arr) }
         self.yearSets = ys
+        // Person index (v4). Missing key decodes as empty — a v4 file
+        // always carries it, and version gating rejects older files.
+        var pbp: [String: Set<String>] = [:]
+        var pi: [String: Set<String>] = [:]
+        if let peopleArrays = payload["people"] as? [String: [String]] {
+            pbp.reserveCapacity(peopleArrays.count)
+            for (path, names) in peopleArrays where !names.isEmpty {
+                let set = Set(names)
+                pbp[path] = set
+                for name in set { pi[name, default: []].insert(path) }
+            }
+        }
+        self.personsByPath = pbp
+        self.personIndex = pi
         // Rebuild the inverted word index from haystacks. This is the
         // ~30% of rebuild cost we DIDN'T avoid by persisting; loading
         // is still much faster than the full record-walk + haystack
@@ -465,6 +591,28 @@ final class CatalogSearchIndex {
         // Fresh word set from disk → discard any eligibility verdicts.
         fastPathEligibility.removeAll(keepingCapacity: false)
         return true
+    }
+
+    /// Lowercased person names from the THREE lists the canonical
+    /// people: matcher consults — full names kept whole ("dad breen"
+    /// stays one key; needle containment handles word-level hits),
+    /// mirroring pfFieldTokenMatches(.people)'s `$0.lowercased()
+    /// .contains(n)` comparison exactly.
+    nonisolated static func extractPeople(from rec: VideoRecord) -> Set<String> {
+        var names: Set<String> = []
+        for name in rec.detectedPeople {
+            let key = name.lowercased()
+            if !key.isEmpty { names.insert(key) }
+        }
+        for name in rec.suspectedPeople {
+            let key = name.lowercased()
+            if !key.isEmpty { names.insert(key) }
+        }
+        for tag in rec.confirmedByUserPeople {
+            let key = tag.name.lowercased()
+            if !key.isEmpty { names.insert(key) }
+        }
+        return names
     }
 
     /// Extract maximal letter/digit runs from a (presumed lowercased +
