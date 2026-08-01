@@ -77,9 +77,23 @@ final class TranscodeJob: MediaFileOperationJob {
     /// call shape.
     private weak var model: VideoScanModel?
 
-    /// Pause is OFF — same reasoning as ReformatJob (no clean
-    /// suspend/resume contract through ffmpeg's subprocess state).
-    let canPause = false
+    /// Pause via SIGSTOP/SIGCONT on the live ffmpeg child (GH #150).
+    /// JobPauseCoordinator also parks the stall watchdog so the paused
+    /// child's silence is never read as the 14 h-hang class.
+    let canPause = true
+    var isPaused: Bool { isPausedValue }
+    @Published private(set) var isPausedValue = false
+    private let pauser = JobPauseCoordinator()
+
+    func pause() {
+        guard state == .running, pauser.pause() else { return }
+        isPausedValue = true
+    }
+
+    func resume() {
+        guard pauser.resume() else { return }
+        isPausedValue = false
+    }
 
     @Published private(set) var state: MediaFileOperationState = .running {
         didSet {
@@ -247,10 +261,12 @@ final class TranscodeJob: MediaFileOperationJob {
 
         let encodeStart = Date()
         encodeMonitor.start()
+        pauser.register(encodeMonitor)
         let _ = await ProcessRunner.runStreaming(
             executable: ffmpeg,
             arguments: args,
             environment: nil,
+            control: pauser.control,
             stderrLine: progressUpdater
         )
         encodeMonitor.stop()
@@ -562,10 +578,12 @@ final class TranscodeJob: MediaFileOperationJob {
         }
 
         monitor.start()
+        pauser.register(monitor)
         let stdout = await ProcessRunner.runStreaming(
             executable: ffmpeg,
             arguments: args,
             environment: nil,
+            control: pauser.control,
             stderrLine: progressUpdater
         )
         monitor.stop()

@@ -1,6 +1,7 @@
 import Testing
 import Combine
 import SwiftUI
+import AppKit
 import Foundation
 @testable import VideoScan
 
@@ -428,11 +429,47 @@ struct MediaFileOperationKindTests {
         #expect(MediaFileOperationKind.ripFrames.badgeText == "Frames")
     }
 
-    @Test func badgeColorMapping() {
-        #expect(MediaFileOperationKind.combine.badgeColor == .green)
-        #expect(MediaFileOperationKind.compare.badgeColor == .blue)
-        #expect(MediaFileOperationKind.extract.badgeColor == .orange)
-        #expect(MediaFileOperationKind.ripFrames.badgeColor == .purple)
+    /// WCAG relative luminance of a badge fill in sRGB.
+    private func luminance(_ color: Color) -> CGFloat? {
+        guard let srgb = NSColor(color).usingColorSpace(.sRGB) else { return nil }
+        func lin(_ c: CGFloat) -> CGFloat {
+            c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * lin(srgb.redComponent)
+             + 0.7152 * lin(srgb.greenComponent)
+             + 0.0722 * lin(srgb.blueComponent)
+    }
+
+    /// Sensor for the 2026-07-31 legibility pass: every badge fill must
+    /// be dark enough to carry the badge's WHITE small-caps text. Pins
+    /// the property Rick asked for (plain .yellow read as illegible)
+    /// instead of exact hues, so future recolors stay honest without
+    /// churning this test.
+    @Test func badgeFillsCarryWhiteTextLegibly() throws {
+        for kind in MediaFileOperationKind.allCases {
+            let lum = try #require(luminance(kind.badgeColor))
+            let contrastVsWhite = 1.05 / (lum + 0.05)
+            #expect(contrastVsWhite >= 3.0,
+                    "\(kind.rawValue) badge fill too light for white text (contrast \(contrastVsWhite))")
+        }
+    }
+
+    /// Negative sensor: the darkening must not collapse hues together —
+    /// every verb keeps a visually distinct fill.
+    @Test func badgeFillsArePairwiseDistinct() throws {
+        var seen: [(MediaFileOperationKind, NSColor)] = []
+        for kind in MediaFileOperationKind.allCases {
+            let srgb = try #require(NSColor(kind.badgeColor).usingColorSpace(.sRGB))
+            for (otherKind, other) in seen {
+                let dr = srgb.redComponent - other.redComponent
+                let dg = srgb.greenComponent - other.greenComponent
+                let db = srgb.blueComponent - other.blueComponent
+                let distance = (dr * dr + dg * dg + db * db).squareRoot()
+                #expect(distance > 0.10,
+                        "\(kind.rawValue) and \(otherKind.rawValue) badge fills are near-identical (Δ\(distance))")
+            }
+            seen.append((kind, srgb))
+        }
     }
 
     // The verdict chip colors must keep matching the retired sheet's

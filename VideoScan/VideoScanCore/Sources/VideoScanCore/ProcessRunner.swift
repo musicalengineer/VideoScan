@@ -24,6 +24,77 @@ import os
 private let processRunnerLog = Logger(subsystem: "Rick-Breen.VideoScan",
                                       category: "process-runner")
 
+/// Suspend/resume handle for a live `ProcessRunner` child (GH #150 —
+/// MFO Pause All). A job creates one control, passes it to
+/// `runProcess`/`runStreaming`, and calls `suspend()`/`resume()` from its
+/// pause buttons; the runner attaches each launched child.
+///
+/// For Rick: `Process.suspend()`/`.resume()` are Foundation's counted
+/// SIGSTOP/SIGCONT wrappers. The subtleties this class owns:
+///   - Pause between phases: a job may run SEVERAL children in sequence
+///     (encode → verify). If `suspend()` lands while no child is live, the
+///     wish is remembered and `attach()` suspends the next child at birth.
+///   - Kill-while-paused: a stopped process does NOT receive SIGTERM until
+///     continued — it would just sit there "cancelling" forever. Every
+///     ProcessRunner SIGTERM site calls `resumeForKill()` first. (SIGKILL
+///     needs no such help; it destroys stopped processes directly.)
+public final class ProcessControl: @unchecked Sendable {
+    private let lock = NSLock()
+    private weak var proc: Process?
+    private var wantsSuspended = false
+    /// True while the child (or the pending wish) is suspended.
+    public var isSuspended: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return wantsSuspended
+    }
+
+    public init() {}
+
+    /// Runner-side: adopt a freshly launched child. Applies a pending
+    /// suspend wish immediately so "pause between phases" holds.
+    func attach(_ process: Process) {
+        lock.lock()
+        proc = process
+        let applyNow = wantsSuspended
+        lock.unlock()
+        if applyNow { process.suspend() }
+    }
+
+    /// Suspend the live child (or remember the wish for the next one).
+    @discardableResult
+    public func suspend() -> Bool {
+        lock.lock()
+        guard !wantsSuspended else { lock.unlock(); return false }
+        wantsSuspended = true
+        let target = proc
+        lock.unlock()
+        if let target, target.isRunning { _ = target.suspend() }
+        return true
+    }
+
+    /// Resume the live child and clear any pending wish.
+    @discardableResult
+    public func resume() -> Bool {
+        lock.lock()
+        guard wantsSuspended else { lock.unlock(); return false }
+        wantsSuspended = false
+        let target = proc
+        lock.unlock()
+        if let target, target.isRunning { _ = target.resume() }
+        return true
+    }
+
+    /// Runner-side, before any SIGTERM: continue a stopped child so the
+    /// signal can actually be delivered. Keeps `wantsSuspended` — a job
+    /// paused then cancelled must not flip its UI back to "running".
+    func resumeForKill() {
+        lock.lock()
+        let target = wantsSuspended ? proc : nil
+        lock.unlock()
+        if let target, target.isRunning { _ = target.resume() }
+    }
+}
+
 /// Cancellation-aware subprocess execution.
 /// Wraps `Process` with `withTaskCancellationHandler` so running subprocesses
 /// are terminated immediately when the parent task is cancelled.
@@ -116,7 +187,8 @@ public enum ProcessRunner {
         stdoutLimitBytes: Int? = nil,
         stderrLimitBytes: Int? = 256 * 1024,
         deadlineSeconds: Double? = nil,
-        killGraceSeconds: Double = ProcessRunner.defaultKillGraceSeconds
+        killGraceSeconds: Double = ProcessRunner.defaultKillGraceSeconds,
+        control: ProcessControl? = nil
     ) async -> Result {
         guard !Task.isCancelled else {
             return Result(stdout: nil, stderr: "cancelled", exitCode: -1)
@@ -213,12 +285,16 @@ public enum ProcessRunner {
                     deadlineSeconds: deadlineSeconds, killGraceSeconds: killGraceSeconds,
                     stdoutHandle: stdoutHandle, stderrHandle: stderrHandle,
                     completion: completion, lifecycle: lifecycle,
-                    launchState: launchState, deadlineFlag: deadlineFlag
+                    launchState: launchState, deadlineFlag: deadlineFlag,
+                    control: control
                 )
             }
         } onCancel: {
             launchState.markCancelled()
             if proc.isRunning {
+                // A SIGSTOPped child can't receive SIGTERM — continue it
+                // first so cancel-while-paused actually cancels (GH #150).
+                control?.resumeForKill()
                 proc.terminate()
                 // Escalate SIGTERM → SIGKILL (→ abandon) if the child lingers
                 // past the grace period. `isRunning` is re-checked at fire
@@ -301,10 +377,16 @@ public enum ProcessRunner {
         completion: CompletionBox<Result>,
         lifecycle: PipeLifecycle,
         launchState: ProcessLaunchState,
-        deadlineFlag: DeadlineFlag
+        deadlineFlag: DeadlineFlag,
+        control: ProcessControl? = nil
     ) {
         do {
             try proc.run()
+            // Hand the live child to the pause control. AFTER run() —
+            // suspend() on an unlaunched Process raises — and BEFORE the
+            // deadline arming, so a pause-before-launch wish is already
+            // applied by the time anything else can signal the child.
+            control?.attach(proc)
             if let deadlineSeconds {
                 scheduleDeadline(
                     afterSeconds: deadlineSeconds,
@@ -315,10 +397,12 @@ public enum ProcessRunner {
                     stderrHandle: stderrHandle,
                     completion: completion,
                     lifecycle: lifecycle,
-                    deadlineFlag: deadlineFlag
+                    deadlineFlag: deadlineFlag,
+                    control: control
                 )
             }
             if launchState.isCancelled, proc.isRunning {
+                control?.resumeForKill()
                 proc.terminate()
                 escalateAfterTerminate(
                     proc: proc, executable: executable,
@@ -354,7 +438,8 @@ public enum ProcessRunner {
         stderrHandle: FileHandle,
         completion: CompletionBox<Result>,
         lifecycle: PipeLifecycle,
-        deadlineFlag: DeadlineFlag
+        deadlineFlag: DeadlineFlag,
+        control: ProcessControl? = nil
     ) {
         let tool = (executable as NSString).lastPathComponent
         // Cancellable work item, NOT a bare asyncAfter closure: when the
@@ -367,6 +452,7 @@ public enum ProcessRunner {
             // run immediately after terminate()) always sees it (GH #136).
             deadlineFlag.markFired()
             processRunnerLog.warning("\(tool, privacy: .public) pid \(proc.processIdentifier) exceeded \(afterSeconds, format: .fixed(precision: 0), privacy: .public)s deadline — sending SIGTERM")
+            control?.resumeForKill()
             proc.terminate()
             escalateAfterTerminate(
                 proc: proc, executable: executable,
@@ -439,13 +525,15 @@ public enum ProcessRunner {
         executable: String,
         arguments: [String],
         environment: [String: String]? = nil,
+        control: ProcessControl? = nil,
         stderrLine: @escaping @Sendable (String) -> Void
     ) async -> String? {
         let result = await runProcess(
             executable: executable,
             arguments: arguments,
             environment: environment,
-            stderrLine: stderrLine
+            stderrLine: stderrLine,
+            control: control
         )
         if result.exitCode == -1, result.stdout == nil, !result.stderr.isEmpty {
             stderrLine("Could not launch: \(executable) — \(result.stderr)")

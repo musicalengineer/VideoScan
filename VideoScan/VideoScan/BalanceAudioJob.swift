@@ -337,7 +337,22 @@ final class BalanceAudioJob: MediaFileOperationJob {
 
     private weak var model: VideoScanModel?
 
-    let canPause = false
+    /// Pause via SIGSTOP/SIGCONT on the live ffmpeg child (GH #150) —
+    /// JobPauseCoordinator parks the stall watchdog while suspended.
+    let canPause = true
+    var isPaused: Bool { isPausedValue }
+    @Published private(set) var isPausedValue = false
+    private let pauser = JobPauseCoordinator()
+
+    func pause() {
+        guard state == .running, pauser.pause() else { return }
+        isPausedValue = true
+    }
+
+    func resume() {
+        guard pauser.resume() else { return }
+        isPausedValue = false
+    }
 
     @Published private(set) var state: MediaFileOperationState = .running {
         didSet {
@@ -521,9 +536,11 @@ final class BalanceAudioJob: MediaFileOperationJob {
         balanceLog.info("balance render: ffmpeg \(args.joined(separator: " "), privacy: .public)")
 
         monitor.start()
+        pauser.register(monitor)
         let renderError = await Self.renderOffMain(ffmpeg: ffmpeg,
                                                    arguments: args,
                                                    durationSeconds: durationSeconds,
+                                                   control: pauser.control,
                                                    progress: progressSink)
         if let stallReason {
             monitor.stop()
@@ -628,6 +645,7 @@ final class BalanceAudioJob: MediaFileOperationJob {
         ffmpeg: String,
         arguments: [String],
         durationSeconds: Double,
+        control: ProcessControl? = nil,
         progress: @escaping @Sendable (Double) -> Void
     ) async -> String? {
         let result = await ProcessRunner.runProcess(
@@ -641,7 +659,8 @@ final class BalanceAudioJob: MediaFileOperationJob {
                     return
                 }
                 progress(min(1.0, sec / durationSeconds))
-            }
+            },
+            control: control
         )
         if Task.isCancelled { return nil }   // caller handles cancel
         guard result.exitCode == 0 else {

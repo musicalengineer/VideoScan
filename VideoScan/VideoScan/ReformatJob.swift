@@ -74,10 +74,22 @@ final class ReformatJob: MediaFileOperationJob {
     private weak var model: VideoScanModel?
     private weak var orchestrator: CaptionOrchestrator?
 
-    /// Pause is OFF for reformat — ffmpeg has no clean
-    /// suspend/resume contract that survives the subprocess's
-    /// thread/buffer state. Cancel + restart is the right idiom.
-    let canPause = false
+    /// Pause via SIGSTOP/SIGCONT on the live ffmpeg child (GH #150) —
+    /// JobPauseCoordinator parks the stall watchdog while suspended.
+    let canPause = true
+    var isPaused: Bool { isPausedValue }
+    @Published private(set) var isPausedValue = false
+    private let pauser = JobPauseCoordinator()
+
+    func pause() {
+        guard state == .running, pauser.pause() else { return }
+        isPausedValue = true
+    }
+
+    func resume() {
+        guard pauser.resume() else { return }
+        isPausedValue = false
+    }
 
     @Published private(set) var state: MediaFileOperationState = .running {
         didSet {
@@ -252,10 +264,12 @@ final class ReformatJob: MediaFileOperationJob {
 
         let encodeStart = Date()
         monitor.start()
+        pauser.register(monitor)
         let _ = await ProcessRunner.runStreaming(
             executable: ffmpeg,
             arguments: args,
             environment: nil,
+            control: pauser.control,
             stderrLine: progressUpdater
         )
         monitor.stop()

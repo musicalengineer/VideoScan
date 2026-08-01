@@ -261,13 +261,58 @@ where ObjectWillChangePublisher == ObservableObjectPublisher, ID == UUID {
     var wasRefused: Bool { get }
 }
 
-/// Pause is opt-in; most operations can't pause mid-ffmpeg.
+/// Pause is opt-in; jobs whose work is an ffmpeg child adopt it via
+/// JobPauseCoordinator (GH #150). In-process loops (Vision extract) and
+/// multi-source engines (compare) stay unpausable for now.
 extension MediaFileOperationJob {
     var canPause: Bool { false }
     var isPaused: Bool { false }
     func pause() {}
     func resume() {}
     var wasRefused: Bool { false }
+}
+
+/// Shared pause plumbing for ffmpeg-backed jobs (GH #150 — MFO Pause All).
+///
+/// Owns the ProcessControl handed to every ProcessRunner call the job makes
+/// (SIGSTOP/SIGCONT on the live child, pause-between-phases remembered),
+/// and keeps the job's current StallMonitor honest: a suspended child emits
+/// no progress BY DESIGN, so the watchdog must be stopped on pause or it
+/// would read the silence as the 14-hour-hang class and kill the job.
+/// StallMonitor.start() resets its tick clock, so resume can't instant-fire.
+@MainActor
+final class JobPauseCoordinator {
+    let control = ProcessControl()
+    private(set) var isPaused = false
+    private weak var monitor: StallMonitor?
+
+    /// Adopt the current phase's watchdog (call right after monitor.start()).
+    /// If the user paused between phases, the fresh monitor is stopped
+    /// immediately — its child is born suspended via ProcessControl.attach.
+    func register(_ monitor: StallMonitor) {
+        self.monitor = monitor
+        if isPaused { monitor.stop() }
+    }
+
+    /// Returns false when already paused (idempotent for the UI).
+    @discardableResult
+    func pause() -> Bool {
+        guard !isPaused else { return false }
+        isPaused = true
+        control.suspend()
+        monitor?.stop()
+        return true
+    }
+
+    /// Returns false when not paused.
+    @discardableResult
+    func resume() -> Bool {
+        guard isPaused else { return false }
+        isPaused = false
+        control.resume()
+        monitor?.start()
+        return true
+    }
 }
 
 // MARK: - Per-volume gate policy (pure)

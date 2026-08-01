@@ -108,9 +108,22 @@ final class TrimJob: MediaFileOperationJob {
     var debugExtraInputArgs: [String] = []
     #endif
 
-    /// No pause — same reasoning as Reformat/Transcode (no clean
-    /// suspend/resume contract through ffmpeg's subprocess state).
-    let canPause = false
+    /// Pause via SIGSTOP/SIGCONT on the live ffmpeg child (GH #150) —
+    /// JobPauseCoordinator parks the stall watchdog while suspended.
+    let canPause = true
+    var isPaused: Bool { isPausedValue }
+    @Published private(set) var isPausedValue = false
+    private let pauser = JobPauseCoordinator()
+
+    func pause() {
+        guard state == .running, pauser.pause() else { return }
+        isPausedValue = true
+    }
+
+    func resume() {
+        guard pauser.resume() else { return }
+        isPausedValue = false
+    }
 
     @Published private(set) var state: MediaFileOperationState = .running {
         didSet {
@@ -303,10 +316,12 @@ final class TrimJob: MediaFileOperationJob {
 
         let copyStart = Date()
         monitor.start()
+        pauser.register(monitor)
         let result = await ProcessRunner.runProcess(
             executable: ffmpeg,
             arguments: args,
-            stderrLine: progressUpdater
+            stderrLine: progressUpdater,
+            control: pauser.control
         )
         monitor.stop()
         let elapsed = Date().timeIntervalSince(copyStart)
