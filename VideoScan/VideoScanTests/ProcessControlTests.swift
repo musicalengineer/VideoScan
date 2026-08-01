@@ -91,6 +91,7 @@ struct ProcessControlTests {
         }
 
         try await Task.sleep(nanoseconds: 800_000_000)
+        // swiftlint:disable:next empty_count — BeatCounter.count is an Int, not a collection
         #expect(beats.count == 0, "child born suspended must not emit (saw \(beats.count) beats)")
 
         control.resume()
