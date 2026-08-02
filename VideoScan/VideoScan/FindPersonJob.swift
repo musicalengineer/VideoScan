@@ -110,6 +110,21 @@ final class FindPersonJob: MediaFileOperationJob {
 
     private(set) var task: Task<Void, Never>?
 
+    /// Events whose main-actor Task has run (ordering seam — see
+    /// runPythonBridge). Incremented FIRST thing in each event Task so
+    /// even guarded-out events count as delivered.
+    private var handledEvents = 0
+
+    /// Lock-guarded emitted-event counter, incremented on the
+    /// ProcessRunner callback thread. Paired with `handledEvents` to
+    /// let finish wait for in-flight event Tasks.
+    final class EventCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+        func increment() { lock.lock(); count += 1; lock.unlock() }
+        var value: Int { lock.lock(); defer { lock.unlock() }; return count }
+    }
+
     // v1 constants — Rick's machine (see find-and-tag-design.md).
     static let pythonPath = "\(NSHomeDirectory())/dev/VideoScan/venv/bin/python3.12"
     static let scriptPath = "\(NSHomeDirectory())/dev/VideoScan/tools/donna-recipe/find_person_batch.py"
@@ -237,6 +252,16 @@ final class FindPersonJob: MediaFileOperationJob {
             return
         }
 
+        // Event-ordering seam (codex finding, channel #76 / QA-confirmed):
+        // stdout events hop to the main actor via unstructured Tasks, and
+        // the resumed job task can OUTRANK them on the priority-ordered
+        // main-actor executor — finish() would then flip state to
+        // terminal and the last clip's verdict(s) die on handle()'s
+        // isActive guard: scored by python, never tagged, silently. The
+        // emitted/handled counters make finish WAIT until every spawned
+        // event ran (bounded — a lost Task must not hang the job).
+        let emitted = FindPersonJob.EventCounter()
+
         let result = await ProcessRunner.runProcess(
             executable: Self.pythonPath,
             arguments: [Self.scriptPath,
@@ -249,13 +274,26 @@ final class FindPersonJob: MediaFileOperationJob {
             stdoutLine: { [weak self] line in
                 monitor.tick()
                 guard let event = FindPersonJob.parseLine(line) else { return }
+                emitted.increment()
                 Task { @MainActor [weak self] in
+                    self?.handledEvents += 1
                     self?.handle(event: event, byPath: byPath, total: total)
                 }
             },
             stderrLine: { _ in monitor.tick() },   // model-load chatter counts as life
             control: pauser.control
         )
+
+        // Drain: every emitted event's main-actor Task must have run
+        // before we judge tallies or finish. 5 s bound = pure paranoia;
+        // the Tasks were all spawned before runProcess resumed.
+        let deadline = ContinuousClock.now + .seconds(5)
+        while handledEvents < emitted.value, ContinuousClock.now < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        if handledEvents < emitted.value {
+            findLog.error("find \(self.person, privacy: .public): \(emitted.value - self.handledEvents) event(s) unhandled after drain deadline")
+        }
 
         var failure: String?
         if result.exitCode != 0 {
