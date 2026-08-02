@@ -76,6 +76,19 @@ extension VideoScanModel {
         finishPeopleMutation(changed)
     }
 
+    /// Clear ONLY rejections ("not X") on `recs` — lets the recipe judge
+    /// these files again without confirming anything (Rick 2026-08-02:
+    /// a bulk un-tag cleanup swept a true-Donna file into a rejection,
+    /// which then invisibly blocked Find & Tag).
+    func clearRejections(from recs: [VideoRecord]) {
+        var changed: [VideoRecord] = []
+        for rec in recs where !rec.rejectedPeople.isEmpty {
+            rec.rejectedPeople = []
+            changed.append(rec)
+        }
+        finishPeopleMutation(changed)
+    }
+
     /// Wipe every people list on `recs` — the mistake-cleanup verb for
     /// records the old auto-tagger got wrong ("Clear People Tags").
     /// Clears rejections too: this is "start this file's people over",

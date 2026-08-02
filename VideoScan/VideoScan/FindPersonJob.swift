@@ -241,7 +241,11 @@ final class FindPersonJob: MediaFileOperationJob {
             executable: Self.pythonPath,
             arguments: [Self.scriptPath,
                         "--gallery", Self.galleryPath,
-                        "--clips-file", clipsFile.path],
+                        "--clips-file", clipsFile.path,
+                        // GUI PATH has no Homebrew — pass the app's
+                        // known-good ffmpeg explicitly (2026-08-02: every
+                        // clip errored FileNotFoundError in ms without it).
+                        "--ffmpeg", ToolLocator.ffmpegPath],
             stdoutLine: { [weak self] line in
                 monitor.tick()
                 guard let event = FindPersonJob.parseLine(line) else { return }

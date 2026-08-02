@@ -42,13 +42,26 @@ def emit(obj) -> None:
     print(json.dumps(obj), flush=True)
 
 
+def resolve_ffmpeg(explicit: str | None) -> str:
+    """The app launches us with a GUI PATH that lacks /opt/homebrew/bin —
+    'ffmpeg' bare is a FileNotFoundError there (Rick 2026-08-02: every
+    clip errored in ms and the scan looked done in 33 s). Prefer the
+    app-provided path, then PATH, then the Homebrew default."""
+    import shutil as _shutil
+    for candidate in [explicit, _shutil.which("ffmpeg"),
+                      "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]:
+        if candidate and pathlib.Path(candidate).exists():
+            return candidate
+    raise FileNotFoundError("ffmpeg not found (pass --ffmpeg)")
+
+
 def score_clip(app, clip: pathlib.Path, centroids, scratch: pathlib.Path,
-               fps: float, top_k: int):
+               fps: float, top_k: int, ffmpeg: str = "ffmpeg"):
     frames_dir = scratch / f"fp-{clip.stem}-{abs(hash(str(clip))) % 99999}"
     frames_dir.mkdir(parents=True, exist_ok=True)
     try:
         run = subprocess.run(
-            ["ffmpeg", "-nostdin", "-v", "error", "-i", str(clip),
+            [ffmpeg, "-nostdin", "-v", "error", "-i", str(clip),
              "-vf", f"yadif,fps={fps}", "-q:v", "3",
              str(frames_dir / "f%05d.jpg")],
             capture_output=True, text=True, timeout=1800)
@@ -93,7 +106,10 @@ def main() -> int:
     ap.add_argument("--top-k", type=int, default=5)
     ap.add_argument("--model-root", type=pathlib.Path,
                     default=pathlib.Path(__file__).parents[2] / ".cache/insightface")
+    ap.add_argument("--ffmpeg", default=None,
+                    help="explicit ffmpeg path (the app passes ToolLocator's)")
     args = ap.parse_args()
+    ffmpeg = resolve_ffmpeg(args.ffmpeg)
 
     clips = [pathlib.Path(line.strip())
              for line in args.clips_file.read_text().splitlines()
@@ -120,7 +136,7 @@ def main() -> int:
             continue
         try:
             r = score_clip(app, clip, centroids, args.scratch,
-                           args.fps, args.top_k)
+                           args.fps, args.top_k, ffmpeg=ffmpeg)
         except Exception as e:  # per-clip failures are data, not crashes
             r = {"error": f"{type(e).__name__}: {e}"[:160]}
         r["event"] = "result"

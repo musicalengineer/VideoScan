@@ -834,6 +834,14 @@ extension CatalogContent {
                                         model.clearMachinePeopleTags(from: selectedRecs)
                                     }
                                 }
+                                if selectedRecs.contains(where: { !$0.rejectedPeople.isEmpty }) {
+                                    // Rejections block Find & Tag by design
+                                    // ("not X" must stick) — this is the
+                                    // explicit undo when one was a mistake.
+                                    Button("Clear Rejections (let recipes re-judge)") {
+                                        model.clearRejections(from: selectedRecs)
+                                    }
+                                }
                                 Button("Clear People Tags") {
                                     model.removeAllPeople(from: selectedRecs)
                                 }
@@ -1619,6 +1627,11 @@ extension CatalogContent {
         }
         if !rec.suspectedPeople.isEmpty {
             lines.append("Suspected (name?): \(rec.suspectedPeople.joined(separator: ", "))")
+        }
+        if !rec.rejectedPeople.isEmpty {
+            // Invisible rejections caused a "why won't it scan this file"
+            // mystery (Rick 2026-08-02) — surface them here.
+            lines.append("Rejected (recipes will NOT tag): \(rec.rejectedPeople.joined(separator: ", "))")
         }
         lines.append("Notation: plain = you confirmed · * = recipe detected · ? = recipe suspects")
         return lines.joined(separator: "\n")
