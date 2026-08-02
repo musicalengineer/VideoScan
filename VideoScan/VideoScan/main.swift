@@ -18,6 +18,7 @@ let isTestHost: Bool = {
 }()
 
 let isPersonEvaluation = CommandLine.arguments.contains("--person-eval")
+let isRecipeCalibration = CommandLine.arguments.contains("--recipe-calibrate")
 
 if isPersonEvaluation {
     // Vision/CoreML require an Aqua application context even though the
@@ -27,6 +28,19 @@ if isPersonEvaluation {
     evaluationApp.setActivationPolicy(.prohibited)
     Task {
         let code = await PersonEvaluationCLI.run(arguments: Array(CommandLine.arguments.dropFirst()))
+        fflush(stdout)
+        fflush(stderr)
+        exit(code)
+    }
+    RunLoop.main.run()
+} else if isRecipeCalibration {
+    // Native recipe threshold calibration (RecipeCalibrationCLI). Same
+    // headless-Aqua arrangement as --person-eval: Vision/CoreML need an
+    // application context; `.prohibited` keeps us out of the Dock.
+    let calibrationApp = NSApplication.shared
+    calibrationApp.setActivationPolicy(.prohibited)
+    Task {
+        let code = await RecipeCalibrationCLI.run(arguments: Array(CommandLine.arguments.dropFirst()))
         fflush(stdout)
         fflush(stderr)
         exit(code)
