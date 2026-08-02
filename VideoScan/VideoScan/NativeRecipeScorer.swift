@@ -52,11 +52,14 @@ import Vision
 private let recipeLog = Logger(subsystem: "Rick-Breen.VideoScan",
                                category: "recipe")
 
-/// Which CoreML embedding backend the scorer uses. AdaFace is the
-/// intended production seat (quality-adaptive margin — the VHS-era
-/// problem this archive has); ArcFace is kept selectable for calibration
-/// comparisons. Vectors from the two are NOT comparable (see
-/// FaceEmbeddingBackend).
+/// Which CoreML embedding backend the scorer uses. Both are selectable;
+/// vectors from the two are NOT comparable (see FaceEmbeddingBackend).
+/// MEASURED 2026-08-02 (--recipe-calibrate, DonnaTestVideos, no sex
+/// gate): ArcFace AUC 0.944 (0.954 at bar 0.65) vs AdaFace 0.856 —
+/// AdaFace's quality-adaptive margin did NOT win on this corpus despite
+/// the low-quality-face hypothesis, so the job's native arm runs ArcFace
+/// until a re-measure (e.g. after the genderage gate lands) says
+/// otherwise.
 enum RecipeEmbeddingBackend: String, Sendable, CaseIterable {
     case adaface
     case arcface

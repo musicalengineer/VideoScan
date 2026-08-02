@@ -92,9 +92,13 @@ struct RecipeParameters: Sendable, Equatable {
     /// Two-tier rule: record-tier faces (recordPx..<votePx) only count
     /// when they match STRONGLY — they may confirm a known person, never
     /// smear weak evidence into the vote (the Donna-14 lesson).
-    /// NATIVE-SPACE VALUE — measured by --recipe-calibrate on
-    /// DonnaTestVideos (AdaFace backend); NOT the python engine's 0.55.
-    /// Re-run the calibration if the backend or checkpoint changes.
+    /// MEASURED for the native space by --recipe-calibrate on
+    /// DonnaTestVideos, 2026-08-02: AUC is flat across a 0.30–0.65 bar
+    /// plateau on BOTH CoreML backends (ArcFace peaks at the 0.65 edge,
+    /// 0.954; above 0.70 real small-face confirms start dying). 0.55 sits
+    /// mid-plateau — coincidentally equal to the python engine's bar, but
+    /// that equality was measured, not assumed. Re-run the calibration if
+    /// the backend or checkpoint changes.
     var smallFaceMinCos: Double = 0.55
 
     /// Frame sampling rate. ~2 fps matches the validated python run.

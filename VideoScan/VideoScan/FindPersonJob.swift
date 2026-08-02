@@ -254,14 +254,15 @@ final class FindPersonJob: MediaFileOperationJob {
     private func runNative(actionable: [VideoRecord],
                            byPath: [String: VideoRecord],
                            total: Int, monitor: StallMonitor) async {
-        // NOTE: native scores land in the AdaFace embedding space; the
-        // recipe tier cutoffs in VideoScanModel+PeopleTags (0.55/0.38) are
-        // python-space numbers. Until those constants are recalibrated
+        // NOTE: native scores land in the app-ArcFace embedding space
+        // (backend chosen by measurement — see RecipeEmbeddingBackend);
+        // the recipe tier cutoffs in VideoScanModel+PeopleTags (0.55/0.38)
+        // are python-space numbers. Until those constants are recalibrated
         // (--recipe-calibrate output + Rick's sign-off), native runs are
         // for parity evaluation — which is why this arm is flag-gated and
         // the flag defaults OFF.
         let scorer = NativeRecipeScorer(
-            backend: .adaface,
+            backend: .arcface,
             params: RecipeParameters(),
             pauseGate: nativeGate,
             onProgress: { [weak self] event in
