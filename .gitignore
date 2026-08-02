@@ -87,3 +87,4 @@ docs/history.jsonl
 .dd-gauntlet/
 tests/fixtures/perf/
 *.local.md
+.cache/
