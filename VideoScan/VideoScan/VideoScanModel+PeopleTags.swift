@@ -60,6 +60,22 @@ extension VideoScanModel {
         finishPeopleMutation(changed)
     }
 
+    /// Wipe only the MACHINE tiers (name* / name?) on `recs` — the
+    /// recipe-pollution cleanup (Rick 2026-08-02: false positives must
+    /// be clearable WITHOUT losing manual confirms). Confirmed and
+    /// rejected are human judgments and survive untouched.
+    func clearMachinePeopleTags(from recs: [VideoRecord]) {
+        var changed: [VideoRecord] = []
+        for rec in recs {
+            guard !rec.detectedPeople.isEmpty || !rec.suspectedPeople.isEmpty
+            else { continue }
+            rec.detectedPeople = []
+            rec.suspectedPeople = []
+            changed.append(rec)
+        }
+        finishPeopleMutation(changed)
+    }
+
     /// Wipe every people list on `recs` — the mistake-cleanup verb for
     /// records the old auto-tagger got wrong ("Clear People Tags").
     /// Clears rejections too: this is "start this file's people over",

@@ -825,6 +825,15 @@ extension CatalogContent {
                                     || !$0.rejectedPeople.isEmpty
                             }) {
                                 Divider()
+                                if selectedRecs.contains(where: {
+                                    !$0.detectedPeople.isEmpty || !$0.suspectedPeople.isEmpty
+                                }) {
+                                    // Machine tiers only — your confirmed
+                                    // tags and rejections survive.
+                                    Button("Clear Machine Tags (*/?)") {
+                                        model.clearMachinePeopleTags(from: selectedRecs)
+                                    }
+                                }
                                 Button("Clear People Tags") {
                                     model.removeAllPeople(from: selectedRecs)
                                 }
@@ -835,7 +844,7 @@ extension CatalogContent {
                         // per-person recipe over the selection; results
                         // land in the machine tiers (Donna* / Donna?).
                         // v1: Donna is the only tuned recipe.
-                        Menu("Find && Tag") {
+                        Menu("Find and Tag") {
                             Button("Donna") {
                                 fileOpsCenter.startFindPerson(
                                     person: "Donna",
@@ -844,6 +853,7 @@ extension CatalogContent {
                                 openWindow(id: "combine")   // MFO window (legacy id)
                             }
                             Divider()
+                            // should not be hardwired rather lookup if recipes
                             Text("Only Donna has a tuned recipe so far")
                         }
 

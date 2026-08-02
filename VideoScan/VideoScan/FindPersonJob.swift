@@ -152,16 +152,28 @@ final class FindPersonJob: MediaFileOperationJob {
         // Records the recipe may act on — the veto/confirmed skips are
         // also enforced in applyRecipeVerdict; filtering here just saves
         // the engine the decode time.
-        let actionable = records.filter { rec in
+        let eligible = records.filter { rec in
             !rec.rejectedPeople.contains {
                 $0.compare(person, options: .caseInsensitive) == .orderedSame
             } && !rec.confirmedByUserPeople.contains {
                 $0.name.compare(person, options: .caseInsensitive) == .orderedSame
             }
         }
-        skipped = records.count - actionable.count
+        // Offline volumes produce instant per-file errors that LOOK like
+        // a completed scan (Rick 2026-08-02: 6802 files "done" in 33 s —
+        // every one was an unreachable path). Partition them out loudly.
+        let actionable = eligible.filter { VolumeReachability.isReachable(path: $0.fullPath) }
+        let offline = eligible.count - actionable.count
+        skipped = records.count - eligible.count
+        appLog.write("Find \(person) started: \(records.count) selected → \(actionable.count) to scan"
+                     + (offline > 0 ? ", \(offline) on offline volumes (skipped)" : "")
+                     + (skipped > 0 ? ", \(skipped) already confirmed/rejected" : "")
+                     + " [\(recipeID), tiers ≥\(VideoScanModel.recipeDetectedMinScore) detected / ≥\(VideoScanModel.recipeSuspectedMinScore) suspected]")
         guard !actionable.isEmpty else {
-            finish(summary: "Nothing to do — all \(records.count) file(s) already confirmed or rejected for \(person)")
+            let why = offline > 0
+                ? "all \(eligible.count) remaining file(s) are on offline volumes — mount them and re-run"
+                : "all \(records.count) file(s) already confirmed or rejected for \(person)"
+            finish(summary: "Nothing scanned — \(why)")
             return
         }
 
@@ -363,6 +375,10 @@ final class FindPersonJob: MediaFileOperationJob {
             guard let path = event.path else { return }
             if let error = event.error {
                 errors += 1
+                // Errors must move the visible status too — a frozen
+                // "Scanning…" over a stream of failures reads as
+                // progress (Rick 2026-08-02).
+                subtitleText = "\(completed)/\(total) — \(tagged) \(person)*, \(maybes) \(person)?, \(errors) error(s)"
                 findLog.warning("find \(self.person, privacy: .public) error on \((path as NSString).lastPathComponent, privacy: .public): \(error, privacy: .public)")
                 return
             }
@@ -372,9 +388,14 @@ final class FindPersonJob: MediaFileOperationJob {
             let changed = model.applyRecipeVerdict(
                 person: person, record: rec, score: score, recipeID: recipeID)
             switch tier {
-            case .detected: tagged += 1
-            case .suspected: maybes += 1
-            case .none: if !changed { skipped += 1 }
+            case .detected:
+                tagged += 1
+                findLog.info("find \(self.person, privacy: .public) HIT \((path as NSString).lastPathComponent, privacy: .public): score \(String(format: "%.3f", score), privacy: .public) → \(self.person, privacy: .public)*")
+            case .suspected:
+                maybes += 1
+                findLog.info("find \(self.person, privacy: .public) maybe \((path as NSString).lastPathComponent, privacy: .public): score \(String(format: "%.3f", score), privacy: .public) → \(self.person, privacy: .public)?")
+            case .none:
+                if !changed { skipped += 1 }
             }
             subtitleText = "\(completed)/\(total) — \(tagged) \(person)*, \(maybes) \(person)?"
         }
@@ -387,14 +408,28 @@ final class FindPersonJob: MediaFileOperationJob {
         guard state.isActive else { return }
         if cancelled {
             state = .cancelled
+            subtitleText = "Cancelled — \(completed) of \(records.count) scored"
             findLog.info("find person cancelled: \(self.person, privacy: .public) — \(self.completed) of \(self.records.count) scored")
+            appLog.write("Find \(person) cancelled — \(completed) of \(records.count) scored")
         } else if let failed {
             state = .failed(message: failed)
+            subtitleText = failed
             findLog.error("find person FAILED: \(self.person, privacy: .public) — \(failed, privacy: .public)")
+            appLog.write("Find \(person) FAILED: \(failed)")
+        } else if completed > 0, errors == completed {
+            // Every scanned file errored — a green check here reads as
+            // "all done, nothing found", which is a lie (Rick 2026-08-02).
+            let text = "no file could be scanned (\(errors) error(s) — see log)"
+            state = .failed(message: text)
+            subtitleText = text
+            findLog.error("find person FAILED: \(self.person, privacy: .public) — \(text, privacy: .public)")
+            appLog.write("Find \(person) FAILED: \(text)")
         } else {
             let text = summary ?? "done"
             state = .finished(summary: text)
+            subtitleText = text
             findLog.info("find person done: \(self.person, privacy: .public) — \(text, privacy: .public)")
+            appLog.write("Find \(person) done: \(text)")
         }
     }
 }
