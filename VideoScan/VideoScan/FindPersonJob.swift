@@ -6,18 +6,24 @@ import os
 //
 // Runs a per-person detector recipe over a batch of records and applies
 // MACHINE-tier person tags through VideoScanModel.applyRecipeVerdict
-// (docs/find-and-tag-design.md). v1 bridges to the python recipe engine
-// (tools/donna-recipe/find_person_batch.py) via ProcessRunner — ONE
-// python process per job (model prep paid once), streaming a JSONL
-// protocol: ready / beat (watchdog ticks) / result (per clip).
+// (docs/find-and-tag-design.md). Two engines behind one job, selected by
+// the internal `useNativeEngine` flag:
 //
-// Cancellation: Task.cancel → ProcessRunner SIGTERM→SIGKILL escalation.
-// Pause: JobPauseCoordinator SIGSTOPs the python child (and its ffmpeg
-// grandchildren stall naturally on the stopped parent's pipe).
+//  - python bridge (DEFAULT until parity is proven): shells out ONCE per
+//    job to tools/donna-recipe/find_person_batch.py via ProcessRunner —
+//    model prep paid once, streaming a JSONL protocol: ready / beat
+//    (watchdog ticks) / result (per clip).
+//  - native (NativeRecipeScorer): in-process Vision + AdaFace CoreML via
+//    the RecipeScoring seam. Same recipe rules; DIFFERENT embedding
+//    space, so scores are NOT tier-comparable to python's until the
+//    recipe tier constants are recalibrated (see runNative note).
+//
+// Cancellation: Task.cancel → ProcessRunner SIGTERM→SIGKILL escalation
+// (python) / cooperative between-frame checks (native).
+// Pause: JobPauseCoordinator SIGSTOPs the python child; the native
+// engine parks on a PauseGate at frame checkpoints. Both arms stop the
+// stall watchdog while paused (a suspended engine is silent by design).
 // Stall: beats arrive every ~50 frames; monitor threshold default 5 min.
-//
-// For Rick: this is the ProcessRunner-until-proven implementation; the
-// Swift-native engine replaces the bridge behind this SAME job later.
 
 private let findLog = Logger(subsystem: "Rick-Breen.VideoScan",
                              category: "fileOps")
@@ -31,25 +37,54 @@ final class FindPersonJob: MediaFileOperationJob {
 
     /// Person this job hunts (v1: "Donna" — the only tuned recipe).
     let person: String
-    let recipeID = "recipe-v1-python"
+    let recipeID: String
     let records: [VideoRecord]
 
     private weak var model: VideoScanModel?
 
-    /// Pause via SIGSTOP/SIGCONT on the python child (GH #150 plumbing).
+    // MARK: Engine selection
+    //
+    // Internal flag — the python bridge stays the DEFAULT until the native
+    // engine's calibration + G2 grading prove parity. Flip for a session
+    // via `VIDEOSCAN_NATIVE_RECIPE=1` or from test code; each job captures
+    // the flag at init so a mid-job flip can't switch engines.
+    nonisolated(unsafe) static var useNativeEngine: Bool =
+        ProcessInfo.processInfo.environment["VIDEOSCAN_NATIVE_RECIPE"] == "1"
+
+    let usesNativeEngine: Bool
+
+    /// Pause via SIGSTOP/SIGCONT on the python child (GH #150 plumbing);
+    /// the native arm additionally parks the scorer on `nativeGate`.
     let canPause = true
     var isPaused: Bool { isPausedValue }
     @Published private(set) var isPausedValue = false
     private let pauser = JobPauseCoordinator()
+    /// Auto-pause (memory pressure) is off: this gate answers ONLY to the
+    /// user's Pause button. An unattended auto-pause would look like a
+    /// stall to nobody (watchdog is stopped while paused) and hang the job
+    /// silently — the recipe's memory use is bounded per clip instead.
+    private let nativeGate: PauseGate = {
+        let gate = PauseGate()
+        Task { await gate.setAutoPause(false) }
+        return gate
+    }()
 
     func pause() {
         guard state == .running, pauser.pause() else { return }
         isPausedValue = true
+        if usesNativeEngine {
+            let gate = nativeGate
+            Task { await gate.pause() }
+        }
     }
 
     func resume() {
         guard pauser.resume() else { return }
         isPausedValue = false
+        if usesNativeEngine {
+            let gate = nativeGate
+            Task { await gate.resume() }
+        }
     }
 
     @Published private(set) var state: MediaFileOperationState = .running {
@@ -84,6 +119,9 @@ final class FindPersonJob: MediaFileOperationJob {
         self.person = person
         self.records = records
         self.model = model
+        let native = FindPersonJob.useNativeEngine
+        self.usesNativeEngine = native
+        self.recipeID = native ? "recipe-v1-native" : "recipe-v1-python"
         self.subtitleText = "Warming up the \(person) recipe…"
     }
 
@@ -100,6 +138,12 @@ final class FindPersonJob: MediaFileOperationJob {
         state = .cancelling
         subtitleText = "Cancelling…"
         task?.cancel()
+        if usesNativeEngine {
+            // A paused native scorer is parked INSIDE waitIfPaused —
+            // release it so the cancellation check after the gate runs.
+            let gate = nativeGate
+            Task { await gate.resume() }
+        }
     }
 
     // MARK: Run
@@ -107,7 +151,7 @@ final class FindPersonJob: MediaFileOperationJob {
     private func run() async {
         // Records the recipe may act on — the veto/confirmed skips are
         // also enforced in applyRecipeVerdict; filtering here just saves
-        // python the decode time.
+        // the engine the decode time.
         let actionable = records.filter { rec in
             !rec.rejectedPeople.contains {
                 $0.compare(person, options: .caseInsensitive) == .orderedSame
@@ -118,17 +162,6 @@ final class FindPersonJob: MediaFileOperationJob {
         skipped = records.count - actionable.count
         guard !actionable.isEmpty else {
             finish(summary: "Nothing to do — all \(records.count) file(s) already confirmed or rejected for \(person)")
-            return
-        }
-
-        let clipsFile = FileManager.default.temporaryDirectory
-            .appendingPathComponent("findperson-\(id.uuidString).txt")
-        defer { try? FileManager.default.removeItem(at: clipsFile) }
-        do {
-            try actionable.map(\.fullPath).joined(separator: "\n")
-                .write(to: clipsFile, atomically: true, encoding: .utf8)
-        } catch {
-            finish(failed: "couldn't write clip list: \(error.localizedDescription)")
             return
         }
 
@@ -147,7 +180,51 @@ final class FindPersonJob: MediaFileOperationJob {
         pauser.register(monitor)
         defer { monitor.stop() }
 
-        findLog.info("find person START: \(self.person, privacy: .public) over \(total) file(s)")
+        findLog.info("find person START: \(self.person, privacy: .public) over \(total) file(s) [\(self.recipeID, privacy: .public)]")
+        if usesNativeEngine {
+            await runNative(actionable: actionable, byPath: byPath,
+                            total: total, monitor: monitor)
+        } else {
+            await runPythonBridge(actionable: actionable, byPath: byPath,
+                                  total: total, monitor: monitor)
+        }
+    }
+
+    /// Shared run epilogue — the stall/cancel/success ladder both engine
+    /// arms end with. `failure` is an engine-specific setup failure (nil
+    /// on success).
+    private func finishRun(failure: String?) {
+        if let stallReason {
+            finish(failed: stallReason)
+            return
+        }
+        if Task.isCancelled || state == .cancelling {
+            finish(cancelled: true)
+            return
+        }
+        if let failure {
+            finish(failed: failure)
+            return
+        }
+        finish(summary: "\(person)*: \(tagged) tagged, \(maybes) maybe (\(person)?), \(skipped) skipped, \(errors) error(s)")
+    }
+
+    // MARK: Python bridge arm
+
+    private func runPythonBridge(actionable: [VideoRecord],
+                                 byPath: [String: VideoRecord],
+                                 total: Int, monitor: StallMonitor) async {
+        let clipsFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("findperson-\(id.uuidString).txt")
+        defer { try? FileManager.default.removeItem(at: clipsFile) }
+        do {
+            try actionable.map(\.fullPath).joined(separator: "\n")
+                .write(to: clipsFile, atomically: true, encoding: .utf8)
+        } catch {
+            finish(failed: "couldn't write clip list: \(error.localizedDescription)")
+            return
+        }
+
         let result = await ProcessRunner.runProcess(
             executable: Self.pythonPath,
             arguments: [Self.scriptPath,
@@ -164,25 +241,83 @@ final class FindPersonJob: MediaFileOperationJob {
             control: pauser.control
         )
 
-        if let stallReason {
-            finish(failed: stallReason)
-            return
-        }
-        if Task.isCancelled || state == .cancelling {
-            finish(cancelled: true)
-            return
-        }
-        guard result.exitCode == 0 else {
+        var failure: String?
+        if result.exitCode != 0 {
             let tail = result.stderr.split(separator: "\n").suffix(3).joined(separator: " · ")
-            finish(failed: "recipe engine exited \(result.exitCode)\(tail.isEmpty ? "" : " — \(tail)")")
+            failure = "recipe engine exited \(result.exitCode)\(tail.isEmpty ? "" : " — \(tail)")"
+        }
+        finishRun(failure: failure)
+    }
+
+    // MARK: Native engine arm (RecipeScoring seam)
+
+    private func runNative(actionable: [VideoRecord],
+                           byPath: [String: VideoRecord],
+                           total: Int, monitor: StallMonitor) async {
+        // NOTE: native scores land in the AdaFace embedding space; the
+        // recipe tier cutoffs in VideoScanModel+PeopleTags (0.55/0.38) are
+        // python-space numbers. Until those constants are recalibrated
+        // (--recipe-calibrate output + Rick's sign-off), native runs are
+        // for parity evaluation — which is why this arm is flag-gated and
+        // the flag defaults OFF.
+        let scorer = NativeRecipeScorer(
+            backend: .adaface,
+            params: RecipeParameters(),
+            pauseGate: nativeGate,
+            onProgress: { [weak self] event in
+                monitor.tick()
+                Task { @MainActor [weak self] in
+                    self?.handleNativeProgress(event)
+                }
+            })
+
+        do {
+            _ = try await scorer.prepare(
+                galleryRoot: URL(fileURLWithPath: Self.galleryPath))
+        } catch {
+            finishRun(failure: "native recipe setup failed: \(error.localizedDescription)")
             return
         }
-        finish(summary: "\(person)*: \(tagged) tagged, \(maybes) maybe (\(person)?), \(skipped) skipped, \(errors) error(s)")
+
+        for rec in actionable {
+            if Task.isCancelled || !state.isActive { break }
+            let clip = URL(fileURLWithPath: rec.fullPath)
+            let verdict: RecipeClipScore
+            if FileManager.default.fileExists(atPath: rec.fullPath) {
+                verdict = await scorer.score(clip: clip)
+            } else {
+                verdict = RecipeClipScore(error: "missing file")
+            }
+            if Task.isCancelled { break }
+            monitor.tick()
+            // Funnel through the same event handler as the python arm so
+            // tagging, tallies, and progress stay engine-agnostic.
+            handle(event: BridgeEvent(kind: .result, path: rec.fullPath,
+                                      score: verdict.score, error: verdict.error),
+                   byPath: byPath, total: total)
+        }
+        finishRun(failure: nil)
+    }
+
+    private func handleNativeProgress(_ event: RecipeProgressEvent) {
+        guard state.isActive else { return }
+        switch event {
+        case .preparing(let detail):
+            subtitleText = detail
+        case .ready:
+            isIndeterminateValue = false
+            subtitleText = "Scanning for \(person)…"
+        case .beat(let clip, _):
+            if isIndeterminateValue == false {
+                subtitleText = "Scanning \(clip.lastPathComponent)…"
+            }
+        }
     }
 
     // MARK: Protocol events
 
-    /// One parsed line of the python bridge's JSONL protocol.
+    /// One parsed line of the python bridge's JSONL protocol (the native
+    /// arm synthesizes the same events so downstream handling is shared).
     /// Nonisolated + pure so codex can test the parser without a job.
     struct BridgeEvent: Equatable {
         enum Kind: Equatable { case ready(clips: Int), beat, result }
