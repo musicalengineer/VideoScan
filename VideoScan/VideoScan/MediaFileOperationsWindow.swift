@@ -623,6 +623,11 @@ extension MediaFileOperationKind {
         // keeps the yellow "checking" semantics; reads apart from its
         // brown repair sibling and from extract's burnt orange.
         case .verifyAudio: return Color(red: 0.72, green: 0.53, blue: 0.04)
+        // Find & Tag (per-person recipe, 2026-08-02) — dark slate blue,
+        // distinct from trim's indigo and compare's cobalt; passes the
+        // white-text contrast sensor like the rest of the 2026-07-31
+        // legibility palette.
+        case .findPerson: return Color(red: 0.28, green: 0.24, blue: 0.50)
         }
     }
 }

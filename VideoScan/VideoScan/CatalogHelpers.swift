@@ -1138,7 +1138,14 @@ struct CatalogContent: View {
                                         .font(.system(size: 13, design: .monospaced))
                                         .foregroundColor(.secondary)
                                 }
-                                let people = rec.taggedPeople
+                                // Same notation as the People column:
+                                // plain = confirmed, * = recipe detected.
+                                let confirmed = rec.confirmedByUserPeople.map(\.name)
+                                let confirmedKeys = Set(confirmed.map { $0.lowercased() })
+                                let people = confirmed
+                                    + rec.detectedPeople
+                                        .filter { !confirmedKeys.contains($0.lowercased()) }
+                                        .map { "\($0)*" }
                                 if !people.isEmpty {
                                     Text("People: \(people.joined(separator: ", "))")
                                         .font(.system(size: 13, design: .monospaced))

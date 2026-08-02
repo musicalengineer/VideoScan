@@ -92,6 +92,13 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// these; the results sheet presents the already-computed
     /// diagnosis afterwards without re-running anything.
     case verifyAudio
+    /// "Find & Tag" — runs a per-person detector recipe (Donna Recipe,
+    /// docs/find-and-tag-design.md) over selected records and writes
+    /// MACHINE-tier person tags (detected "Donna*" / suspected
+    /// "Donna?"); confirmed stays human-only. v1 bridges to the python
+    /// recipe engine via ProcessRunner; Swift-native engine to follow
+    /// behind the same job. Rick 2026-08-02.
+    case findPerson
 
     /// Badge text — rendered in small caps by the row view.
     /// `.extract` says "Faces" (not "Extract") since the verb split:
@@ -111,6 +118,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .balanceAudio: return "Balance"
         case .rebuildAudio: return "Rebuild"
         case .verifyAudio: return "Verify"
+        case .findPerson: return "Find"
         }
     }
 
@@ -133,6 +141,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .balanceAudio: return "balance audio"
         case .rebuildAudio: return "rebuild audio"
         case .verifyAudio: return "verify audio"
+        case .findPerson: return "find person"
         }
     }
 }

@@ -88,4 +88,66 @@ extension VideoScanModel {
         saveCatalogDebounced()
         objectWillChange.send()
     }
+
+    // MARK: Recipe (machine-tier) verdicts — Find & Tag
+
+    /// Recipe score thresholds (v1, smoke-derived — see
+    /// docs/find-and-tag-design.md; C2-style calibration lands with G2).
+    /// Nonisolated statics so codex can unit-test tier mapping purely.
+    nonisolated static let recipeDetectedMinScore = 0.55
+    nonisolated static let recipeSuspectedMinScore = 0.38
+
+    /// Pure tier decision — "Donna*" vs "Donna?" vs nothing.
+    nonisolated static func recipeTier(forScore score: Double) -> RecipeTier {
+        if score >= recipeDetectedMinScore { return .detected }
+        if score >= recipeSuspectedMinScore { return .suspected }
+        return .none
+    }
+
+    enum RecipeTier: String { case detected, suspected, none }
+
+    /// Apply one FindPersonJob verdict to one record. MACHINE tiers only:
+    /// - rejectedPeople veto → untouched (the "not Donna" must stick rule)
+    /// - already user-confirmed → untouched (nothing to add)
+    /// - detected tier → detectedPeople ("Donna*"), removed from suspected
+    /// - suspected tier → suspectedPeople ("Donna?") unless already detected
+    /// - .none → REMOVES any previous machine tags for this person (a
+    ///   re-run with a better recipe may clear an old machine mistake;
+    ///   Immich rescan rule — machine replaces machine, never human)
+    /// Provenance stamp appended to machine `notes` on any change.
+    /// Returns true when the record changed.
+    @discardableResult
+    func applyRecipeVerdict(person: String, record rec: VideoRecord,
+                            score: Double, recipeID: String) -> Bool {
+        func same(_ other: String) -> Bool {
+            other.compare(person, options: .caseInsensitive) == .orderedSame
+        }
+        guard !rec.rejectedPeople.contains(where: same) else { return false }
+        guard !rec.confirmedByUserPeople.contains(where: { same($0.name) }) else { return false }
+
+        let tier = Self.recipeTier(forScore: score)
+        let hadDetected = rec.detectedPeople.contains(where: same)
+        let hadSuspected = rec.suspectedPeople.contains(where: same)
+        var changed = false
+        switch tier {
+        case .detected:
+            if !hadDetected { rec.detectedPeople.append(person); changed = true }
+            if hadSuspected { rec.suspectedPeople.removeAll(where: same); changed = true }
+        case .suspected:
+            if !hadDetected, !hadSuspected {
+                rec.suspectedPeople.append(person); changed = true
+            }
+        case .none:
+            if hadDetected { rec.detectedPeople.removeAll(where: same); changed = true }
+            if hadSuspected { rec.suspectedPeople.removeAll(where: same); changed = true }
+        }
+        if changed {
+            let stamp = ISO8601DateFormatter().string(from: Date())
+            let outcome = tier == .none ? "cleared" : "\(person)\(tier == .detected ? "*" : "?")"
+            let line = "FindPerson(\(person)) \(recipeID) \(stamp): score \(String(format: "%.3f", score)) → \(outcome)"
+            rec.notes = rec.notes.isEmpty ? line : rec.notes + "\n" + line
+            finishPeopleMutation([rec])
+        }
+        return changed
+    }
 }

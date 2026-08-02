@@ -831,6 +831,22 @@ extension CatalogContent {
                             }
                         }
 
+                        // Find & Tag (docs/find-and-tag-design.md): run a
+                        // per-person recipe over the selection; results
+                        // land in the machine tiers (Donna* / Donna?).
+                        // v1: Donna is the only tuned recipe.
+                        Menu("Find && Tag") {
+                            Button("Donna") {
+                                fileOpsCenter.startFindPerson(
+                                    person: "Donna",
+                                    records: selectedRecs,
+                                    model: model)
+                                openWindow(id: "combine")   // MFO window (legacy id)
+                            }
+                            Divider()
+                            Text("Only Donna has a tuned recipe so far")
+                        }
+
                         Button("Notes\u{2026}") {
                             notesTarget = rec
                             // userNotes split (2026-07-23): the sheet
@@ -1548,17 +1564,27 @@ extension CatalogContent {
     /// Tooltip lists names with tier annotations.
     @ViewBuilder
     private func peopleColumnCell(for rec: VideoRecord) -> some View {
-        let strong = rec.taggedPeople   // confirmed ∪ detected (2026-08-01)
-        if strong.isEmpty && rec.suspectedPeople.isEmpty {
+        // Notation (Rick 2026-08-02, deduced-vs-confirmed model):
+        //   Donna   = confirmed by Rick        (plain blue)
+        //   Donna*  = machine detected          (blue, starred)
+        //   Donna?  = machine suspected         (italic gray, ? suffix)
+        let confirmed = rec.confirmedByUserPeople.map(\.name)
+        let confirmedKeys = Set(confirmed.map { $0.lowercased() })
+        let machine = rec.detectedPeople
+            .filter { !confirmedKeys.contains($0.lowercased()) }
+        if confirmed.isEmpty && machine.isEmpty && rec.suspectedPeople.isEmpty {
             Text("—")
                 .font(.system(size: 12))
                 .foregroundColor(.secondary)
                 .help("No family tagged or detected — junk-triage candidate")
         } else {
+            let strong = confirmed.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+                + machine.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+                    .map { "\($0)*" }
             let strongText = Text(strong.joined(separator: ", "))
                 .foregroundColor(.blue)
             let suspectedJoined = rec.suspectedPeople
-                .map { "?\($0)" }
+                .map { "\($0)?" }
                 .joined(separator: ", ")
             let suspectedText = Text(suspectedJoined)
                 .italic()
@@ -1582,8 +1608,9 @@ extension CatalogContent {
             lines.append("Detected: \(rec.detectedPeople.joined(separator: ", "))")
         }
         if !rec.suspectedPeople.isEmpty {
-            lines.append("Suspected (the leading ?): \(rec.suspectedPeople.joined(separator: ", "))")
+            lines.append("Suspected (name?): \(rec.suspectedPeople.joined(separator: ", "))")
         }
+        lines.append("Notation: plain = you confirmed · * = recipe detected · ? = recipe suspects")
         return lines.joined(separator: "\n")
     }
 
