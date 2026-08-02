@@ -146,7 +146,11 @@ enum RecipeCalibrationCLI {
                   let worstPos = pos.min(), let bestNeg = neg.max() else { continue }
             let margin = worstPos - bestNeg
             print("  \(fmt(bar))  \(String(format: "%.3f", auc))  \(fmt(worstPos))        \(fmt(bestNeg))")
-            if best == nil || auc > best!.auc || (auc == best!.auc && margin > best!.margin) {
+            if let current = best {
+                if auc > current.auc || (auc == current.auc && margin > current.margin) {
+                    best = (bar, auc, margin)
+                }
+            } else {
                 best = (bar, auc, margin)
             }
         }
@@ -154,27 +158,27 @@ enum RecipeCalibrationCLI {
         if let best {
             var params = configured
             params.smallFaceMinCos = best.bar
-            var pos: [(String, Double)] = []
-            var neg: [(String, Double)] = []
+            var pos: [Double] = []
+            var neg: [Double] = []
             for row in scored {
                 guard let samples = row.verdict.faceSamples else { continue }
                 let score = RecipeMath.clipScore(fromSamples: samples, params: params).score
-                if isPositive(row.label) { pos.append((row.name, score)) } else { neg.append((row.name, score)) }
+                if isPositive(row.label) { pos.append(score) } else { neg.append(score) }
             }
             print("\nsorted scores at bar \(fmt(best.bar)) (best sweep point):")
-            print("  Donna:    " + pos.sorted { $0.1 < $1.1 }
-                .map { "\(fmt($0.1))" }.joined(separator: " "))
-            print("  NotDonna: " + neg.sorted { $0.1 > $1.1 }
-                .map { "\(fmt($0.1))" }.joined(separator: " "))
+            print("  Donna:    " + pos.sorted().map(fmt).joined(separator: " "))
+            print("  NotDonna: " + neg.sorted(by: >).map(fmt).joined(separator: " "))
         }
     }
 
     private static func printDistributions(donna: [Double], other: [Double]) {
         let ds = donna.sorted(), os = other.sorted()
-        print("Donna scores:    min \(fmt(ds.first!))  median \(fmt(ds[ds.count / 2]))  max \(fmt(ds.last!))")
-        print("NotDonna scores: min \(fmt(os.first!))  median \(fmt(os[os.count / 2]))  max \(fmt(os.last!))")
+        guard let dMin = ds.first, let dMax = ds.last,
+              let oMin = os.first, let oMax = os.last else { return }
+        print("Donna scores:    min \(fmt(dMin))  median \(fmt(ds[ds.count / 2]))  max \(fmt(dMax))")
+        print("NotDonna scores: min \(fmt(oMin))  median \(fmt(os[os.count / 2]))  max \(fmt(oMax))")
         let auc = RecipeMath.pairwiseAUC(positives: donna, negatives: other) ?? 0
-        print("separation: worst-Donna \(fmt(ds.first!)) vs best-NotDonna \(fmt(os.last!))"
+        print("separation: worst-Donna \(fmt(dMin)) vs best-NotDonna \(fmt(oMax))"
             + "  |  AUC \(String(format: "%.3f", auc))")
     }
 

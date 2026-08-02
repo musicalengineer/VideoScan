@@ -258,35 +258,9 @@ actor NativeRecipeScorer: RecipeScoring {
                 onProgress?(.beat(clip: clip, frameIndex: frameCount))
             }
 
-            // Everything transient (detect results, oriented CGImage,
-            // crop, embedding) lives and dies inside this pool — project
-            // memory rule for media loops.
-            autoreleasepool {
-                let faces = pfDetectFacesInBuffer(frame.pixelBuffer,
-                                                  orientation: ctx.orientation,
-                                                  longEdgeCap: pfDetectionLongEdgeCap)
-                let candidates = faces.filter { $0.confidence >= params.minFaceConfidence }
-                guard !candidates.isEmpty,
-                      let img = pfOrientedCGImage(from: frame.pixelBuffer,
-                                                  transform: ctx.transform),
-                      let embedder = self.embedder else { return }
-                for obs in candidates {
-                    let px = Self.faceSidePx(obs, imageWidth: img.width,
-                                             imageHeight: img.height)
-                    guard px >= params.recordPx else { continue }
-                    // Sex gate would run here (python: keep F only) —
-                    // unavailable natively until the genderage conversion
-                    // lands. See the gap note in the file header.
-                    guard let embedding = embedder(img, obs) else { continue }
-                    let cos = RecipeMath.maxCosine(embedding, centroids: centroidVectors)
-                    if params.collectFaceSamples {
-                        samples.append(RecipeFaceSample(sidePx: px, cosine: cos))
-                    }
-                    guard RecipeMath.passesTierGate(sidePx: px, cosine: cos,
-                                                    params: params) else { continue }
-                    cosines.append(cos)
-                }
-            }
+            processFrame(frame, orientation: ctx.orientation,
+                         transform: ctx.transform,
+                         cosines: &cosines, samples: &samples)
             frameCount += 1
 
             if frameCount % 5 == 0, let gate = pauseGate {
@@ -306,6 +280,42 @@ actor NativeRecipeScorer: RecipeScoring {
             frameCount: frameCount,
             gatedFaceCount: cosines.count,
             faceSamples: params.collectFaceSamples ? samples : nil)
+    }
+
+    /// One frame's detect → embed → gate pass. Everything transient
+    /// (detect results, oriented CGImage, crop, embedding) lives and dies
+    /// inside the autoreleasepool — project memory rule for media loops.
+    private func processFrame(_ frame: PrefetchedFrame,
+                              orientation: CGImagePropertyOrientation,
+                              transform: CGAffineTransform,
+                              cosines: inout [Double],
+                              samples: inout [RecipeFaceSample]) {
+        autoreleasepool {
+            let faces = pfDetectFacesInBuffer(frame.pixelBuffer,
+                                              orientation: orientation,
+                                              longEdgeCap: pfDetectionLongEdgeCap)
+            let candidates = faces.filter { $0.confidence >= params.minFaceConfidence }
+            guard !candidates.isEmpty,
+                  let img = pfOrientedCGImage(from: frame.pixelBuffer,
+                                              transform: transform),
+                  let embedder = self.embedder else { return }
+            for obs in candidates {
+                let px = Self.faceSidePx(obs, imageWidth: img.width,
+                                         imageHeight: img.height)
+                guard px >= params.recordPx else { continue }
+                // Sex gate would run here (python: keep F only) —
+                // unavailable natively until the genderage conversion
+                // lands. See the gap note in the file header.
+                guard let embedding = embedder(img, obs) else { continue }
+                let cos = RecipeMath.maxCosine(embedding, centroids: centroidVectors)
+                if params.collectFaceSamples {
+                    samples.append(RecipeFaceSample(sidePx: px, cosine: cos))
+                }
+                guard RecipeMath.passesTierGate(sidePx: px, cosine: cos,
+                                                params: params) else { continue }
+                cosines.append(cos)
+            }
+        }
     }
 
     // MARK: - Reader setup
