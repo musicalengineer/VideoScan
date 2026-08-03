@@ -7,7 +7,10 @@
 //     python (reference)                     native (this file)
 //     ─────────────────────────────────────  ─────────────────────────────
 //     ffmpeg yadif,fps=2 → jpgs              AVAssetReader via FramePrefetcher
-//                                            (SeekingFrameProvider for TS)
+//                                            (SeekingFrameProvider for TS;
+//                                            FFmpegFrameProvider rawvideo
+//                                            pipe when AVFoundation can't
+//                                            open the clip — mkv, MPEG-2)
 //     SCRFD-10G detect                       Vision VNDetectFaceRectangles r3
 //     size gates ≥25px record / ≥60px vote   identical (RecipeMath, px tiers
 //                                            are geometry, portable)
@@ -23,9 +26,10 @@
 //    genderage model arrives later as a converted CoreML attribute gate.
 //    Expected impact: male faces can contribute cosines, lifting NotDonna
 //    clip scores somewhat — the calibration AUC shows how much.
-//  - No deinterlacing. AVAssetReader decodes fields as stored (python ran
-//    yadif). Combing mainly degrades detection on interlaced sources;
-//    revisit if G3's interlaced tier underperforms.
+//  - No deinterlacing on the AVAssetReader path — it decodes fields as
+//    stored (python ran yadif). Combing mainly degrades detection on
+//    interlaced sources; revisit if G3's interlaced tier underperforms.
+//    (Clips decoded via the FFmpegFrameProvider fallback DO get yadif.)
 //  - Detector class: Vision r3 vs SCRFD-10G. SCRFD was chosen for small
 //    faces (the 17-point Hard-set gap); Vision may drop some record-tier
 //    faces SCRFD catches. Again: measured, not assumed.
@@ -205,55 +209,106 @@ actor NativeRecipeScorer: RecipeScoring {
 
     // MARK: - Score one clip
 
+    /// One clip's frame source, whichever transport opened it. `release`
+    /// returns a lent buffer slot; `postLoopError` is the source-specific
+    /// failure check after the frame loop (reader status vs ffmpeg exit),
+    /// nil when the decode ended cleanly.
+    private struct FrameSource {
+        let stream: AsyncStream<PrefetchedFrame>
+        let release: () -> Void
+        let duration: Double
+        let orientation: CGImagePropertyOrientation
+        let transform: CGAffineTransform
+        let postLoopError: () -> String?
+    }
+
+    /// Transport ladder: AVAssetReader (FramePrefetcher; SeekingFrameProvider
+    /// for MPEG-TS, where sequential demux wastes ~98% of the work), and
+    /// when AVFoundation can't open the clip at all (mkv, DNxHD/MPEG-2
+    /// QuickTime, …) an ffmpeg rawvideo pipe — the python engine's
+    /// transport. ffmpeg frames arrive pre-rotated (autorotate), so that
+    /// path's orientation/transform are identity.
+    private func openFrameSource(clip: URL, frameInterval: Double) async
+        -> Result<FrameSource, RecipeError> {
+        switch await Self.openReader(clip: clip, samplingFPS: params.samplingFPS) {
+        case .success(let ctx):
+            let stream: AsyncStream<PrefetchedFrame>
+            let release: () -> Void
+            let ext = clip.pathExtension.lowercased()
+            if ext == "mts" || ext == "m2ts" || ext == "ts" {
+                let seeker = SeekingFrameProvider(asset: ctx.asset, duration: ctx.duration,
+                                                  frameInterval: frameInterval)
+                ctx.reader.cancelReading()
+                stream = seeker.frames()
+                release = { seeker.releaseSlot() }
+            } else {
+                let prefetcher = FramePrefetcher(reader: ctx.reader,
+                                                 trackOutput: ctx.trackOutput,
+                                                 frameInterval: frameInterval)
+                stream = prefetcher.frames()
+                release = { prefetcher.releaseSlot() }
+            }
+            return .success(FrameSource(
+                stream: stream, release: release, duration: ctx.duration,
+                orientation: ctx.orientation, transform: ctx.transform,
+                postLoopError: {
+                    guard ctx.reader.status == .failed else { return nil }
+                    return "reader error: \(ctx.reader.error?.localizedDescription ?? "unknown")"
+                }))
+
+        case .failure(let openError):
+            switch await FFmpegFrameProvider.open(clip: clip, frameInterval: frameInterval) {
+            case .failure(let ffError):
+                return .failure(RecipeError(
+                    "\(openError.message); ffmpeg fallback: \(ffError.message)"))
+            case .success(let provider):
+                recipeLog.notice("ffmpeg decode fallback for \(clip.lastPathComponent, privacy: .public) (\(openError.message, privacy: .public))")
+                return .success(FrameSource(
+                    stream: provider.frames(),
+                    release: { provider.releaseSlot() },
+                    duration: provider.duration,
+                    orientation: .up, transform: .identity,
+                    postLoopError: {
+                        // A consumer-side cancel SIGTERMs ffmpeg (nonzero
+                        // exit) — that's not a decode failure, and the job
+                        // discards post-cancel results anyway.
+                        guard !Task.isCancelled else { return nil }
+                        return provider.failureMessage()
+                    }))
+            }
+        }
+    }
+
     func score(clip: URL) async -> RecipeClipScore {
         guard embedder != nil, !centroidVectors.isEmpty else {
             return RecipeClipScore(error: "scorer not prepared (no centroids)")
         }
-        let ctx: RecipeReaderContext
-        switch await Self.openReader(clip: clip, samplingFPS: params.samplingFPS) {
+        let source: FrameSource
+        switch await openFrameSource(clip: clip, frameInterval: 1.0 / params.samplingFPS) {
         case .failure(let error):
             return RecipeClipScore(error: error.message)
         case .success(let opened):
-            ctx = opened
+            source = opened
         }
-
-        // Same transport split as the person-finder pipeline: sequential
-        // demux wastes ~98% of the work on MPEG-TS, so those files go
-        // through the seek-optimized provider.
-        let frameInterval = 1.0 / params.samplingFPS
-        let ext = clip.pathExtension.lowercased()
-        let frameStream: AsyncStream<PrefetchedFrame>
-        let releaseSlot: () -> Void
-        if ext == "mts" || ext == "m2ts" || ext == "ts" {
-            let seeker = SeekingFrameProvider(asset: ctx.asset, duration: ctx.duration,
-                                              frameInterval: frameInterval)
-            ctx.reader.cancelReading()
-            frameStream = seeker.frames()
-            releaseSlot = { seeker.releaseSlot() }
-        } else {
-            let prefetcher = FramePrefetcher(reader: ctx.reader,
-                                             trackOutput: ctx.trackOutput,
-                                             frameInterval: frameInterval)
-            frameStream = prefetcher.frames()
-            releaseSlot = { prefetcher.releaseSlot() }
-        }
+        let duration = source.duration
+        let releaseSlot = source.release
 
         var cosines: [Double] = []
         var samples: [RecipeFaceSample] = []
         var frameCount = 0
         let wallStart = CFAbsoluteTimeGetCurrent()
 
-        for await frame in frameStream {
+        for await frame in source.stream {
             // Break, never cancelReading(): the consumer-side cancel races
             // the producer's in-flight copyNextSampleBuffer and crashes in
             // CoreMedia (same fix as pfProcessVideo).
             if Task.isCancelled { break }
             let elapsed = CFAbsoluteTimeGetCurrent() - wallStart
-            if pfShouldAbortForWatchdog(elapsedSecs: elapsed, mediaSecs: ctx.duration) {
+            if pfShouldAbortForWatchdog(elapsedSecs: elapsed, mediaSecs: duration) {
                 releaseSlot()
                 return RecipeClipScore(
                     frameCount: frameCount, gatedFaceCount: cosines.count,
-                    error: "watchdog abort after \(Int(elapsed))s (media \(Int(ctx.duration))s)")
+                    error: "watchdog abort after \(Int(elapsed))s (media \(Int(duration))s)")
             }
             releaseSlot()
 
@@ -261,8 +316,8 @@ actor NativeRecipeScorer: RecipeScoring {
                 onProgress?(.beat(clip: clip, frameIndex: frameCount))
             }
 
-            processFrame(frame, orientation: ctx.orientation,
-                         transform: ctx.transform,
+            processFrame(frame, orientation: source.orientation,
+                         transform: source.transform,
                          cosines: &cosines, samples: &samples)
             frameCount += 1
 
@@ -272,10 +327,10 @@ actor NativeRecipeScorer: RecipeScoring {
             }
         }
 
-        if ctx.reader.status == .failed {
+        if let decodeError = source.postLoopError() {
             return RecipeClipScore(
                 frameCount: frameCount, gatedFaceCount: cosines.count,
-                error: "reader error: \(ctx.reader.error?.localizedDescription ?? "unknown")")
+                error: decodeError)
         }
 
         return RecipeClipScore(
