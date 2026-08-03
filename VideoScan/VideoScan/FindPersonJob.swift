@@ -164,13 +164,69 @@ final class FindPersonJob: MediaFileOperationJob {
         }
     }
 
+    // MARK: Eligibility prefilter (Rick 2026-08-03: "only video files
+    // > 10 seconds — no audio-only, junk, cover art, bundle internals")
+    //
+    // Pure + nonisolated so codex pins the spec without a job. Every
+    // exclusion returns a REASON; the job logs the breakdown so a
+    // filtered run explains itself instead of silently shrinking.
+    enum SkipReason: String, CaseIterable {
+        case notVideo = "not video (audio-only / no streams / probe-failed)"
+        case junk = "marked junk"
+        case tooShort = "shorter than 10s"
+        case bundleInternal = "app-bundle internals (FCP/iMovie/Photos)"
+        case purgedOrRetired = "purged / set-aside / superseded"
+    }
+
+    /// Minimum duration a clip must have to be worth the recipe's time —
+    /// FCP/iMovie transitions and stingers live below this.
+    nonisolated static let minimumClipSeconds: Double = 10
+
+    /// nil = eligible; otherwise why the recipe skips it.
+    nonisolated static func skipReason(for rec: VideoRecord) -> SkipReason? {
+        // Structural: only real video streams reach the detector. This
+        // also drops iTunes audio + attached-pic cover art (classified
+        // audio-only since the 2026-07 fix).
+        switch rec.streamType {
+        case .videoAndAudio, .videoOnly: break
+        default: return .notVideo
+        }
+        if rec.mediaDisposition == .suspectedJunk || rec.mediaDisposition == .confirmedJunk {
+            return .junk
+        }
+        if rec.isPurged || rec.setAsideReason != nil || rec.supersededByID != nil {
+            return .purgedOrRetired
+        }
+        // Editors' bundles hold render files, transitions, and proxies —
+        // derivatives of footage that exists elsewhere in the catalog.
+        let path = rec.fullPath.lowercased()
+        for marker in [".fcpbundle/", ".imovielibrary/", ".photoslibrary/", ".fcpcache/"]
+        where path.contains(marker) {
+            return .bundleInternal
+        }
+        // Duration 0 usually means "never probed" — treat unknown as too
+        // short rather than feeding mystery files to an overnight run.
+        if rec.durationSeconds < Self.minimumClipSeconds {
+            return .tooShort
+        }
+        return nil
+    }
+
     // MARK: Run
 
     private func run() async {
-        // Records the recipe may act on — the veto/confirmed skips are
-        // also enforced in applyRecipeVerdict; filtering here just saves
-        // the engine the decode time.
-        let eligible = records.filter { rec in
+        // Recipe eligibility first (with logged breakdown)…
+        var skipCounts: [SkipReason: Int] = [:]
+        let recipeEligible = records.filter { rec in
+            if let reason = Self.skipReason(for: rec) {
+                skipCounts[reason, default: 0] += 1
+                return false
+            }
+            return true
+        }
+        // …then the veto/confirmed skips (also enforced in
+        // applyRecipeVerdict; here they save the engine the decode time).
+        let eligible = recipeEligible.filter { rec in
             !rec.rejectedPeople.contains {
                 $0.compare(person, options: .caseInsensitive) == .orderedSame
             } && !rec.confirmedByUserPeople.contains {
@@ -182,18 +238,32 @@ final class FindPersonJob: MediaFileOperationJob {
         // every one was an unreachable path). Partition them out loudly.
         let actionable = eligible.filter { VolumeReachability.isReachable(path: $0.fullPath) }
         let offline = eligible.count - actionable.count
+        let humanSkipped = recipeEligible.count - eligible.count
         skipped = records.count - eligible.count
         let tiers = VideoScanModel.recipeThresholds[recipeID]
             ?? (detected: VideoScanModel.recipeDetectedMinScore,
                 suspected: VideoScanModel.recipeSuspectedMinScore)
+        // Self-explaining start line: every excluded file is accounted
+        // for by category, so a filtered run never looks mysteriously
+        // small (the 6802→33s lesson, generalized).
+        let breakdown = SkipReason.allCases.compactMap { reason -> String? in
+            guard let n = skipCounts[reason], n > 0 else { return nil }
+            return "\(n) \(reason.rawValue)"
+        }
         appLog.write("Find \(person) started: \(records.count) selected → \(actionable.count) to scan"
-                     + (offline > 0 ? ", \(offline) on offline volumes (skipped)" : "")
-                     + (skipped > 0 ? ", \(skipped) already confirmed/rejected" : "")
-                     + " [\(recipeID), tiers ≥\(tiers.detected) detected / ≥\(tiers.suspected) suspected]")
+                     + (breakdown.isEmpty ? "" : " | filtered: " + breakdown.joined(separator: ", "))
+                     + (humanSkipped > 0 ? " | \(humanSkipped) already confirmed/rejected" : "")
+                     + (offline > 0 ? " | \(offline) on offline volumes" : "")
+                     + " [\(recipeID), tiers ≥\(tiers.detected) detected / ≥\(tiers.suspected) suspected, ≥\(Int(Self.minimumClipSeconds))s video only]")
         guard !actionable.isEmpty else {
-            let why = offline > 0
-                ? "all \(eligible.count) remaining file(s) are on offline volumes — mount them and re-run"
-                : "all \(records.count) file(s) already confirmed or rejected for \(person)"
+            let why: String
+            if recipeEligible.isEmpty {
+                why = "no eligible video files in the selection (see filter breakdown in the log)"
+            } else if offline > 0 {
+                why = "all \(eligible.count) remaining file(s) are on offline volumes — mount them and re-run"
+            } else {
+                why = "all remaining file(s) already confirmed or rejected for \(person)"
+            }
             finish(summary: "Nothing scanned — \(why)")
             return
         }
