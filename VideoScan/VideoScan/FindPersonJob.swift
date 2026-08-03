@@ -44,12 +44,15 @@ final class FindPersonJob: MediaFileOperationJob {
 
     // MARK: Engine selection
     //
-    // Internal flag — the python bridge stays the DEFAULT until the native
-    // engine's calibration + G2 grading prove parity. Flip for a session
-    // via `VIDEOSCAN_NATIVE_RECIPE=1` or from test code; each job captures
-    // the flag at init so a mid-job flip can't switch engines.
+    // NATIVE is the default as of 2026-08-02 (Rick: overnight archive
+    // run at 3.4x, per-engine thresholds now wired — native scores are
+    // tiered in native space, 0.46/0.30 from the calibration sweep).
+    // `VIDEOSCAN_NATIVE_RECIPE=0` forces the python bridge (reference
+    // engine — keeps the A/B honest until the sex gate closes the AUC
+    // gap). Each job captures the flag at init so a mid-job flip can't
+    // switch engines.
     nonisolated(unsafe) static var useNativeEngine: Bool =
-        ProcessInfo.processInfo.environment["VIDEOSCAN_NATIVE_RECIPE"] == "1"
+        ProcessInfo.processInfo.environment["VIDEOSCAN_NATIVE_RECIPE"] != "0"
 
     let usesNativeEngine: Bool
 
@@ -180,10 +183,13 @@ final class FindPersonJob: MediaFileOperationJob {
         let actionable = eligible.filter { VolumeReachability.isReachable(path: $0.fullPath) }
         let offline = eligible.count - actionable.count
         skipped = records.count - eligible.count
+        let tiers = VideoScanModel.recipeThresholds[recipeID]
+            ?? (detected: VideoScanModel.recipeDetectedMinScore,
+                suspected: VideoScanModel.recipeSuspectedMinScore)
         appLog.write("Find \(person) started: \(records.count) selected → \(actionable.count) to scan"
                      + (offline > 0 ? ", \(offline) on offline volumes (skipped)" : "")
                      + (skipped > 0 ? ", \(skipped) already confirmed/rejected" : "")
-                     + " [\(recipeID), tiers ≥\(VideoScanModel.recipeDetectedMinScore) detected / ≥\(VideoScanModel.recipeSuspectedMinScore) suspected]")
+                     + " [\(recipeID), tiers ≥\(tiers.detected) detected / ≥\(tiers.suspected) suspected]")
         guard !actionable.isEmpty else {
             let why = offline > 0
                 ? "all \(eligible.count) remaining file(s) are on offline volumes — mount them and re-run"
@@ -426,7 +432,7 @@ final class FindPersonJob: MediaFileOperationJob {
             }
             guard let score = event.score, let rec = byPath[path],
                   let model else { return }
-            let tier = VideoScanModel.recipeTier(forScore: score)
+            let tier = VideoScanModel.recipeTier(forScore: score, recipeID: recipeID)
             let changed = model.applyRecipeVerdict(
                 person: person, record: rec, score: score, recipeID: recipeID)
             switch tier {

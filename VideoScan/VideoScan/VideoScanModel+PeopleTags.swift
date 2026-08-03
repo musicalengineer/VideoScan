@@ -120,16 +120,36 @@ extension VideoScanModel {
 
     // MARK: Recipe (machine-tier) verdicts — Find & Tag
 
-    /// Recipe score thresholds (v1, smoke-derived — see
-    /// docs/find-and-tag-design.md; C2-style calibration lands with G2).
-    /// Nonisolated statics so codex can unit-test tier mapping purely.
+    /// Recipe score thresholds are PER ENGINE — cosine scores are not
+    /// comparable across embedding spaces (docs/donna-recipe-v1.md;
+    /// the 2026-08-02 native calibration sweep proved it: python-space
+    /// 0.55 ≈ native-ArcFace-space 0.46). Nonisolated statics so codex
+    /// can unit-test tier mapping purely.
+    nonisolated static let recipeThresholds: [String: (detected: Double, suspected: Double)] = [
+        // Smoke-derived on DonnaTestVideos (AUC 0.995) — w600k ArcFace
+        // via insightface, WITH sex gate.
+        "recipe-v1-python": (detected: 0.55, suspected: 0.38),
+        // Measured calibration sweep, native ArcFace CoreML path, small-
+        // face bar 0.65, NO sex gate yet (AUC 0.954): 0.46 → 12/15
+        // recall 0 FP on the dev corpus; 0.30 catches one more Donna
+        // with 3 NotDonna landing in the maybe tier.
+        "recipe-v1-native": (detected: 0.46, suspected: 0.30),
+    ]
+
+    /// Back-compat spellings (python-space) — several tests and the
+    /// benchmark reference these directly.
     nonisolated static let recipeDetectedMinScore = 0.55
     nonisolated static let recipeSuspectedMinScore = 0.38
 
-    /// Pure tier decision — "Donna*" vs "Donna?" vs nothing.
-    nonisolated static func recipeTier(forScore score: Double) -> RecipeTier {
-        if score >= recipeDetectedMinScore { return .detected }
-        if score >= recipeSuspectedMinScore { return .suspected }
+    /// Pure tier decision — "Donna*" vs "Donna?" vs nothing, in the
+    /// given engine's score space. Unknown recipe IDs fail CLOSED to
+    /// the python thresholds (strictest detected bar).
+    nonisolated static func recipeTier(forScore score: Double,
+                                       recipeID: String = "recipe-v1-python") -> RecipeTier {
+        let t = recipeThresholds[recipeID] ?? (detected: recipeDetectedMinScore,
+                                               suspected: recipeSuspectedMinScore)
+        if score >= t.detected { return .detected }
+        if score >= t.suspected { return .suspected }
         return .none
     }
 
@@ -154,7 +174,7 @@ extension VideoScanModel {
         guard !rec.rejectedPeople.contains(where: same) else { return false }
         guard !rec.confirmedByUserPeople.contains(where: { same($0.name) }) else { return false }
 
-        let tier = Self.recipeTier(forScore: score)
+        let tier = Self.recipeTier(forScore: score, recipeID: recipeID)
         let hadDetected = rec.detectedPeople.contains(where: same)
         let hadSuspected = rec.suspectedPeople.contains(where: same)
         var changed = false
