@@ -66,7 +66,25 @@ final class VerifyAudioJob: @MainActor MediaFileOperationJob {
     private weak var model: VideoScanModel?
     private let gates: [MediaVolumeGate]
 
-    let canPause = false
+    /// Pause via SIGSTOP/SIGCONT on the live ffprobe/ffmpeg child
+    /// (GH #150 pattern, wired 2026-08-03 — Rick: "pause doesn't work
+    /// for verify audio"). No StallMonitor here — these passes are
+    /// deadline-guarded, and ProcessRunner restarts a deadline that
+    /// fires while the child is suspended.
+    let canPause = true
+    var isPaused: Bool { isPausedValue }
+    @Published private(set) var isPausedValue = false
+    private let pauser = JobPauseCoordinator()
+
+    func pause() {
+        guard state == .running, pauser.pause() else { return }
+        isPausedValue = true
+    }
+
+    func resume() {
+        guard pauser.resume() else { return }
+        isPausedValue = false
+    }
 
     @Published private(set) var state: MediaFileOperationState = .running {
         didSet {
@@ -152,8 +170,9 @@ final class VerifyAudioJob: @MainActor MediaFileOperationJob {
         subtitleText = "Checking the audio track…"
         verifyLog.info("verify job START: \(self.record.filename, privacy: .public) (autoRepair=\(self.autoRepair))")
         do {
+            let control = pauser.control
             let diagnose = diagnoseOverride
-                ?? { try await VerifyAudioProbe.diagnose(path: $0) }
+                ?? { try await VerifyAudioProbe.diagnose(path: $0, control: control) }
             let result = try await diagnose(path)
             if Task.isCancelled || state == .cancelling {
                 finishCancelled()

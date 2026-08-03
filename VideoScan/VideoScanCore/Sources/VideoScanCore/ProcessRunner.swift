@@ -72,12 +72,23 @@ public final class ProcessControl: @unchecked Sendable {
         return true
     }
 
+    /// When the child was last user-resumed (nil if never). The runner's
+    /// deadline reads this so a freshly resumed child gets a FULL budget
+    /// from resume time — without it, a resume landing just before a
+    /// scheduled deadline check kills the child with near-zero runway.
+    var lastResumedAt: Date? {
+        lock.lock(); defer { lock.unlock() }
+        return lastResumedAtValue
+    }
+    private var lastResumedAtValue: Date?
+
     /// Resume the live child and clear any pending wish.
     @discardableResult
     public func resume() -> Bool {
         lock.lock()
         guard wantsSuspended else { lock.unlock(); return false }
         wantsSuspended = false
+        lastResumedAtValue = Date()
         let target = proc
         lock.unlock()
         if let target, target.isRunning { _ = target.resume() }
@@ -448,6 +459,43 @@ public enum ProcessRunner {
         // remaining deadline (walker-subtree-loss incident, 2026-07-02).
         lifecycle.schedule(on: DispatchQueue.global(qos: .utility), after: afterSeconds) {
             guard proc.isRunning else { return }
+            // A paused child is silent BY DESIGN (MFO Pause All, GH #150):
+            // its deadline must not fire while suspended, or pausing any
+            // deadline-guarded job longer than its budget kills the child
+            // and mints a bogus timed-out result. Restart the full clock
+            // and look again — the reschedule goes through the same
+            // lifecycle box, so a normal exit still cancels it. A child
+            // resumed less than a full period ago gets the remainder of
+            // a fresh budget from resume time, so a resume landing just
+            // before this check can never kill it with zero runway.
+            if let control {
+                if control.isSuspended {
+                    processRunnerLog.info("\(tool, privacy: .public) pid \(proc.processIdentifier) suspended at deadline — clock restarted")
+                    scheduleDeadline(
+                        afterSeconds: afterSeconds,
+                        killGraceSeconds: killGraceSeconds,
+                        proc: proc, executable: executable,
+                        stdoutHandle: stdoutHandle, stderrHandle: stderrHandle,
+                        completion: completion, lifecycle: lifecycle,
+                        deadlineFlag: deadlineFlag, control: control
+                    )
+                    return
+                }
+                if let resumedAt = control.lastResumedAt {
+                    let sinceResume = Date().timeIntervalSince(resumedAt)
+                    if sinceResume < afterSeconds {
+                        scheduleDeadline(
+                            afterSeconds: afterSeconds - sinceResume,
+                            killGraceSeconds: killGraceSeconds,
+                            proc: proc, executable: executable,
+                            stdoutHandle: stdoutHandle, stderrHandle: stderrHandle,
+                            completion: completion, lifecycle: lifecycle,
+                            deadlineFlag: deadlineFlag, control: control
+                        )
+                        return
+                    }
+                }
+            }
             // Mark BEFORE signalling so the terminationHandler (which can
             // run immediately after terminate()) always sees it (GH #136).
             deadlineFlag.markFired()

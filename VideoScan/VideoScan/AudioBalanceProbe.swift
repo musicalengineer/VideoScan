@@ -310,7 +310,8 @@ enum AudioBalanceProbe {
     #if compiler(>=6.2)
     @concurrent
     #endif
-    static func analyze(path: String) async throws -> AudioBalanceAnalysis {
+    static func analyze(path: String,
+                        control: ProcessControl? = nil) async throws -> AudioBalanceAnalysis {
         let ffprobe = ToolLocator.ffprobePath
         let ffmpeg = ToolLocator.ffmpegPath
         guard FileManager.default.isExecutableFile(atPath: ffprobe),
@@ -324,7 +325,8 @@ enum AudioBalanceProbe {
             executable: ffprobe,
             arguments: shapeArgs(input: path),
             stdoutLimitBytes: 1 << 20,
-            deadlineSeconds: 60)
+            deadlineSeconds: 60,
+            control: control)
         guard probeResult.exitCode == 0, let stdout = probeResult.stdout,
               let data = stdout.data(using: .utf8) else {
             // Same GH #136 rule as the astats passes below: a deadline
@@ -359,7 +361,8 @@ enum AudioBalanceProbe {
             let levelsResult = await ProcessRunner.runProcess(
                 executable: ffmpeg,
                 arguments: levelsArgs(input: path, audioStreamOrdinal: ordinal),
-                deadlineSeconds: passDeadline)
+                deadlineSeconds: passDeadline,
+                control: control)
             guard levelsResult.exitCode == 0 else {
                 if levelsResult.timedOut {
                     // OUR deadline killed ffmpeg — says nothing about the
@@ -415,7 +418,8 @@ enum AudioBalanceProbe {
             let diffResult = await ProcessRunner.runProcess(
                 executable: ffmpeg,
                 arguments: differenceArgs(input: path, audioStreamOrdinal: chosenOrdinal),
-                deadlineSeconds: passDeadline)
+                deadlineSeconds: passDeadline,
+                control: control)
             guard diffResult.exitCode == 0 else {
                 if diffResult.timedOut {
                     throw AudioBalanceProbeError.timedOut(afterSeconds: Int(passDeadline))

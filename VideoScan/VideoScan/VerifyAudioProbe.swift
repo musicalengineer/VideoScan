@@ -487,7 +487,8 @@ enum VerifyAudioProbe {
     #endif
     static func diagnose(path: String,
                          analyzeOverride: AnalyzeStep? = nil,
-                         sourceRecheckOverride: SourceRecheck? = nil
+                         sourceRecheckOverride: SourceRecheck? = nil,
+                         control: ProcessControl? = nil
     ) async throws -> AudioVerifyDiagnosis {
         let ffprobe = ToolLocator.ffprobePath
         guard FileManager.default.isExecutableFile(atPath: ffprobe) else {
@@ -500,7 +501,8 @@ enum VerifyAudioProbe {
             executable: ffprobe,
             arguments: shapeArgs(input: path),
             stdoutLimitBytes: 1 << 20,
-            deadlineSeconds: 60)
+            deadlineSeconds: 60,
+            control: control)
         guard probeResult.exitCode == 0, let stdout = probeResult.stdout,
               let data = stdout.data(using: .utf8) else {
             throw AudioVerifyProbeError.probeFailed(
@@ -523,7 +525,7 @@ enum VerifyAudioProbe {
         var analyzeFailed = false
         if referencedPaths.isEmpty, shape.audioStreams > 0 {
             let analyze = analyzeOverride
-                ?? { try await AudioBalanceProbe.analyze(path: $0) }
+                ?? { try await AudioBalanceProbe.analyze(path: $0, control: control) }
             do {
                 analysis = try await analyze(path)
             } catch is CancellationError {
