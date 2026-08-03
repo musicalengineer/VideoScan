@@ -88,3 +88,10 @@ docs/history.jsonl
 tests/fixtures/perf/
 *.local.md
 .cache/
+# Personal media that must NEVER enter git, even now that the repo is
+# private (Rick 2026-08-02): the era-banded reference galleries and the
+# labeled family-video corpora live on disk only.
+tests/fixtures/photos/Donna/
+tests/fixtures/videos/DonnaTestVideos/
+tests/fixtures/videos/*.mov
+!tests/fixtures/videos/test_*.mov
