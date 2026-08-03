@@ -32,16 +32,22 @@ PW="$(password)"
 
 for blob in "${blobs[@]}"; do
   name="$(basename "$blob")"
+  # Destination by set name (mirror of pack.sh's three sets).
+  case "$name" in
+    photos-app-collage.*)  dest="$REPO/assets" ;;
+    photos-fixture-set.*)  dest="$REPO/tests/fixtures/photos" ;;
+    *)                     dest="$GALLERY" ;;
+  esac
   if [ "$CHECK_ONLY" = "--check" ]; then
     count=$(openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass "pass:$PW" -in "$blob" \
       | tar -tzf - | grep -cv '/$') || { echo "FAILED to decrypt $name (wrong password or corrupt blob)" >&2; exit 1; }
-    echo "OK $name — $count file(s)"
+    echo "OK $name — $count file(s) → $dest"
   else
-    mkdir -p "$GALLERY"
+    mkdir -p "$dest"
     openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass "pass:$PW" -in "$blob" \
-      | tar -xzf - -C "$GALLERY" \
+      | tar -xzf - -C "$dest" \
       || { echo "FAILED to decrypt $name (wrong password or corrupt blob)" >&2; exit 1; }
-    echo "restored $name → $GALLERY/"
+    echo "restored $name → $dest/"
   fi
 done
 [ "$CHECK_ONLY" = "--check" ] || echo "Gallery restored. (It stays gitignored — plaintext never enters git.)"

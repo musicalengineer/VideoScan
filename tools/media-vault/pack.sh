@@ -1,22 +1,31 @@
 #!/bin/bash
 # media-vault pack — encrypt personal media into repo-safe AES-256 blobs.
 #
-# Design (Rick 2026-08-02): personal photos must never sit in git as
-# plaintext, but SHOULD travel with the repo so a fresh clone + password
-# restores the reference galleries. Each decade folder becomes one
-# vault/<set>.tar.gz.enc (AES-256-CBC, PBKDF2 200k iters) — per-folder
-# so every blob stays far under GitHub's 100 MB hard limit. Videos are
-# deliberately NOT vaulted (multi-GB — they ride the normal 3-2-1
-# backups, not git).
+# Design (Rick 2026-08-02/03): personal photos must never sit in git as
+# plaintext — the repo goes PUBLIC with only ciphertext. Three photo
+# sets are vaulted (each blob far under GitHub's 100 MB hard limit):
+#   photos-Donna_<era>   each decade folder of the reference gallery
+#   photos-fixture-set   the loose test-fixture photos (PersonFinder suite)
+#   photos-app-collage   assets/app_photos (About-screen collage sources)
+# Videos are deliberately NOT vaulted: every tracked video is synthetic;
+# family video corpora (DonnaTestVideos etc.) are multi-GB and live in
+# the normal 3-2-1 backups, never in git.
+#
+# Unlock is ONCE PER MACHINE (files persist gitignored in the working
+# tree; git never removes them). CI never needs the vault — verified
+# 2026-08-03: no workflow or TestDriver path reads these fixtures.
 #
 # Password: macOS Keychain item "videoscan-media-vault" (account
-# "videoscan"). First run offers to store it; later runs & unpack.sh
-# read it silently. A fork of this repo carries only ciphertext.
+# "videoscan"). First run offers to store it. A fork carries only
+# ciphertext — other developers bring their own media (see
+# tests/fixtures/README.md).
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 VAULT="$REPO/vault"
 GALLERY="$REPO/tests/fixtures/photos/Donna"
+FIXTURES="$REPO/tests/fixtures/photos"
+APP_PHOTOS="$REPO/assets/app_photos"
 KEYCHAIN_SERVICE="videoscan-media-vault"
 KEYCHAIN_ACCOUNT="videoscan"
 
@@ -35,20 +44,40 @@ password() {
   printf '%s' "$pw"
 }
 
-[ -d "$GALLERY" ] || { echo "no gallery at $GALLERY — nothing to pack" >&2; exit 1; }
+encrypt() {  # encrypt <out.enc>  (tar stream on stdin)
+  openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass "pass:$PW" -out "$1"
+  echo "packed → vault/$(basename "$1") ($(du -h "$1" | cut -f1))"
+}
+
 mkdir -p "$VAULT"
 PW="$(password)"
-
 packed=0
-for dir in "$GALLERY"/*/; do
-  set_name="$(basename "$dir")"
-  out="$VAULT/photos-$set_name.tar.gz.enc"
-  tar -czf - -C "$GALLERY" "$set_name" \
-    | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass "pass:$PW" -out "$out"
-  size=$(du -h "$out" | cut -f1)
-  echo "packed $set_name → vault/$(basename "$out") ($size)"
+
+# Donna reference gallery — one blob per decade folder.
+if [ -d "$GALLERY" ]; then
+  for dir in "$GALLERY"/*/; do
+    set_name="$(basename "$dir")"
+    tar -czf - -C "$GALLERY" "$set_name" | encrypt "$VAULT/photos-$set_name.tar.gz.enc"
+    packed=$((packed + 1))
+  done
+fi
+
+# Loose fixture photos (flat files only — Donna/ handled above).
+flat=$(find "$FIXTURES" -maxdepth 1 -type f \
+       \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.tif' -o -iname '*.tiff' \) \
+       -exec basename {} \; | sort)
+if [ -n "$flat" ]; then
+  # shellcheck disable=SC2086
+  (cd "$FIXTURES" && tar -czf - $flat) | encrypt "$VAULT/photos-fixture-set.tar.gz.enc"
   packed=$((packed + 1))
-done
+fi
+
+# About-screen collage sources.
+if [ -d "$APP_PHOTOS" ]; then
+  tar -czf - -C "$(dirname "$APP_PHOTOS")" "$(basename "$APP_PHOTOS")" \
+    | encrypt "$VAULT/photos-app-collage.tar.gz.enc"
+  packed=$((packed + 1))
+fi
 
 echo "$packed set(s) packed. Verify with: tools/media-vault/unpack.sh --check"
-echo "Reminder: git add vault/ — the .enc blobs are the ONLY media form that belongs in git."
+echo "Next: git add vault/ — the .enc blobs are the ONLY media form that belongs in git."

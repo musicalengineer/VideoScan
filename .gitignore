@@ -95,3 +95,10 @@ tests/fixtures/photos/Donna/
 tests/fixtures/videos/DonnaTestVideos/
 tests/fixtures/videos/*.mov
 !tests/fixtures/videos/test_*.mov
+# Post-vault policy (2026-08-03, go-public prep): plaintext personal
+# photos live ONLY in the working tree, restored via tools/media-vault.
+tests/fixtures/photos/*.jpg
+tests/fixtures/photos/*.jpeg
+tests/fixtures/photos/*.png
+tests/fixtures/photos/*.tif
+assets/app_photos/
