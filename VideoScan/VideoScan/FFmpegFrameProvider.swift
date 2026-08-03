@@ -28,6 +28,7 @@
 // FramePrefetcher's crash note on DispatchSemaphore disposal).
 
 import CoreVideo
+import Darwin
 import Foundation
 import os
 
@@ -67,6 +68,12 @@ final class FFmpegFrameProvider: @unchecked Sendable {
         var stderrTail = ""
     }
     private let exitState = OSAllocatedUnfairLock(initialState: ExitState())
+    /// Signaled by terminationHandler when the child is reaped. The
+    /// producer waits on this BOUNDED — never Process.waitUntilExit,
+    /// which can wedge forever after stdout EOF even with the child gone
+    /// (codex stress repro 2026-08-03: ~48 sequential scans, thread
+    /// parked in NSConcreteTask.waitUntilExit, no ffmpeg in ps).
+    private let exited = DispatchSemaphore(value: 0)
 
     /// Probe the clip and spawn ffmpeg, or explain why we can't. Async
     /// only for the ffprobe subprocess; the ffmpeg spawn is immediate.
@@ -116,9 +123,20 @@ final class FFmpegFrameProvider: @unchecked Sendable {
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
 
+        // Record the exit the moment the child is reaped — this, not
+        // waitUntilExit, is the exit-detection mechanism (see `exited`).
+        let state = exitState
+        let exitedSem = exited
+        process.terminationHandler = { proc in
+            state.withLock { s in
+                s.finished = true
+                s.status = proc.terminationStatus
+            }
+            exitedSem.signal()
+        }
+
         // Drain stderr as it arrives (ffmpeg blocks if the pipe fills),
         // keeping only a tail for the failure message.
-        let state = exitState
         stderrPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             guard !data.isEmpty else {
@@ -158,7 +176,7 @@ final class FFmpegFrameProvider: @unchecked Sendable {
         let proc = process
         let stdout = stdoutPipe.fileHandleForReading
         let stderr = stderrPipe.fileHandleForReading
-        let state = exitState
+        let exitedSem = exited
         let frameSize = width * height * 3 / 2
         let w = width, h = height
         let interval = frameInterval
@@ -220,15 +238,23 @@ final class FFmpegFrameProvider: @unchecked Sendable {
                 }
 
                 if proc.isRunning, flag.withLock({ $0 }) { proc.terminate() }
-                proc.waitUntilExit()
+                // Bounded wait for the terminationHandler, escalating
+                // SIGTERM → SIGKILL. Stdout EOF already means ffmpeg is
+                // done writing, so if the exit notification never comes
+                // (the waitUntilExit wedge this replaces) we log and
+                // finish anyway — an unrecorded exit degrades to "no
+                // failure message", never to a hung scan.
+                if exitedSem.wait(timeout: .now() + 5) == .timedOut {
+                    if proc.isRunning { proc.terminate() }
+                    if exitedSem.wait(timeout: .now() + 2) == .timedOut {
+                        if proc.isRunning { kill(proc.processIdentifier, SIGKILL) }
+                        if exitedSem.wait(timeout: .now() + 2) == .timedOut {
+                            ffFrameLog.warning("ffmpeg exit notification never arrived — finishing stream without status")
+                        }
+                    }
+                }
                 stderr.readabilityHandler = nil
                 try? stdout.close()
-                // Record the exit BEFORE finishing so the consumer's
-                // failureMessage() call after its loop sees it.
-                state.withLock { s in
-                    s.finished = true
-                    s.status = proc.terminationStatus
-                }
                 continuation.finish()
             }
         }
