@@ -1,23 +1,17 @@
 # Test fixtures — media policy
 
-This public repo contains **no plaintext personal media**. What you'll find:
+This public repo contains **no personal media, in any form** — not even
+encrypted. What you'll find:
 
 - `videos/test_*.{mp4,mov,mkv,mxf,wav,m4a}` — synthetic clips generated with
   ffmpeg. Tracked in git, free to use.
-- `../../vault/*.tar.gz.enc` — AES-256-encrypted archives of the project
-  owner's personal reference photos (family face-recognition galleries and
-  test-fixture photos). Without the password these are noise.
 
-## If you are the project owner (or a machine you provisioned)
-
-One-time per machine:
-
-    tools/media-vault/unpack.sh
-
-Enter the vault password once; it lands in the macOS Keychain and the
-restored files persist in the working tree (gitignored — they can never be
-committed). CI never needs this; only the local PersonFinder manifest suite
-(`tests/run_personfinder_tests.py`) reads real photos.
+Everything else the person-finding features need — reference photo
+galleries, labeled family video corpora, the About-screen collage sources —
+lives only on the project owner's machines and backups, restored to a new
+machine by ordinary file copy. CI needs none of it; only the local
+PersonFinder manifest suite (`tests/run_personfinder_tests.py`) reads real
+photos.
 
 ## If you are anyone else
 
@@ -29,5 +23,8 @@ reference set) and your own labeled video clips, arranged as:
     tests/fixtures/photos/<YourPerson>/<era>/*.jpg
     tests/fixtures/videos/<YourPerson>TestVideos/{<YourPerson>,Not<YourPerson>}/*.mov
 
-The synthetic `test_*` fixtures cover everything that doesn't require a
-human face.
+These paths are gitignored — your media can never be committed either.
+
+(`tools/media-vault/` is an optional owner-side tool for making
+AES-256-encrypted copies of the galleries onto backup drives; its output is
+gitignored and never pushed.)

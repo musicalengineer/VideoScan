@@ -102,3 +102,5 @@ tests/fixtures/photos/*.jpeg
 tests/fixtures/photos/*.png
 tests/fixtures/photos/*.tif
 assets/app_photos/
+# Vault blobs are LOCAL backup artifacts — never committed (2026-08-03).
+vault/
