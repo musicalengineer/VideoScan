@@ -120,6 +120,24 @@ actor NativeRecipeScorer: RecipeScoring {
         self.embedder = embedder
     }
 
+    /// Decoder/media-matrix test seam: start with already-built centroids
+    /// so tests can exercise the real AVFoundation/ffmpeg frame transport
+    /// without loading private family photos or a CoreML model. Production
+    /// still uses prepare(galleryRoot:) and never calls this initializer.
+    init(testEmbedder: @escaping RecipeFaceEmbedder,
+         centroids: [RecipeEraCentroid],
+         params: RecipeParameters = RecipeParameters(),
+         pauseGate: PauseGate? = nil,
+         onProgress: RecipeProgressHandler? = nil) {
+        self.backend = .adaface
+        self.params = params
+        self.pauseGate = pauseGate
+        self.onProgress = onProgress
+        self.embedder = testEmbedder
+        self.eraCentroids = centroids
+        self.centroidVectors = centroids.map(\.centroid)
+    }
+
     // MARK: - Prepare (model + era centroids)
 
     func prepare(galleryRoot: URL) async throws -> Int {

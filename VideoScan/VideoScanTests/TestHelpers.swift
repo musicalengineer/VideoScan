@@ -61,11 +61,21 @@ func makeDuplicateRecord(
     return record
 }
 
-/// Resolves the path to tests/fixtures/videos/ from any test file.
+/// Resolves the path to tests/fixtures/videos/ from any test file, including
+/// files in nested suites such as VideoScanTests/StressTests/. Do not count a
+/// fixed number of parents from the call site: #filePath defaults are expanded
+/// at the caller, which made every nested stress suite resolve VideoScan/tests.
 func testFixturesDir(from filePath: String = #filePath) -> String {
-    let repoRoot = URL(fileURLWithPath: filePath)
-        .deletingLastPathComponent()   // VideoScanTests/
-        .deletingLastPathComponent()   // VideoScan/
-        .deletingLastPathComponent()   // VideoScan/ (project)
+    var cursor = URL(fileURLWithPath: filePath).deletingLastPathComponent()
+    while cursor.lastPathComponent != "VideoScanTests",
+          cursor.path != "/" {
+        cursor.deleteLastPathComponent()
+    }
+    guard cursor.lastPathComponent == "VideoScanTests" else {
+        return ""
+    }
+    let repoRoot = cursor
+        .deletingLastPathComponent()   // VideoScan/ (Xcode project)
+        .deletingLastPathComponent()   // repository root
     return repoRoot.appendingPathComponent("tests/fixtures/videos").path
 }
