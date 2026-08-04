@@ -103,13 +103,59 @@ final class FindPersonJob: MediaFileOperationJob {
     var fraction: Double { fractionValue }
     var isIndeterminate: Bool { isIndeterminateValue }
 
-    /// Tallies for the completion summary.
-    private var tagged = 0          // detected tier
-    private var maybes = 0          // suspected tier
-    private var skipped = 0         // veto/confirmed/no-change
-    private var errors = 0
-    private var completed = 0
+    /// Tallies for the completion summary (private(set): the expanded
+    /// row's detail view reads them).
+    private(set) var tagged = 0     // detected tier
+    private(set) var maybes = 0     // suspected tier
+    private(set) var skipped = 0    // veto/confirmed/no-change
+    private(set) var errors = 0
+    private(set) var completed = 0
     private var stallReason: String?
+
+    // MARK: Expanded-row context (Rick 2026-08-04: like the compare row)
+
+    /// Previous / current / next clip for the detail view, with the
+    /// previous clip's outcome ("Donna* 0.84", "no match", "error").
+    struct ClipProgressContext: Equatable {
+        var previous: String?
+        var previousOutcome: String?
+        var current: String?
+        var next: String?
+    }
+    @Published private(set) var clipContext = ClipProgressContext()
+    /// Within-file fraction of the clip being scanned (native arm).
+    @Published private(set) var currentClipFraction: Double?
+    /// Bytes of completed clips — drives the MB/s summary figure.
+    private var scannedBytes: Int64 = 0
+
+    /// "Found and tagged Donna 12 times · 2 maybe · 1 error · 41.2
+    /// files/h · 87 MB/s" — the detail view's bottom line.
+    var detailSummary: String {
+        let elapsed = Date().timeIntervalSince(scanBeganAt ?? startedAt)
+        var parts = ["Found and tagged \(person) \(tagged) time\(tagged == 1 ? "" : "s")"]
+        if maybes > 0 { parts.append("\(maybes) maybe") }
+        if errors > 0 { parts.append("\(errors) error\(errors == 1 ? "" : "s")") }
+        if elapsed > 0, completed > 0 {
+            parts.append(String(format: "%.1f files/h",
+                                Double(completed) / elapsed * 3_600))
+            let mbps = Double(scannedBytes) / elapsed / 1_048_576
+            if mbps >= 0.1 { parts.append(String(format: "%.0f MB/s", mbps)) }
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    // MARK: Wedged-clip skip (GH #156 — Rick 2026-08-04: "skip it and log it")
+
+    /// Resolves the current clip's score-race when the stall watchdog
+    /// abandons it. nil while not scoring (python arm never sets it, so
+    /// that arm keeps the old whole-batch stall behavior).
+    private var clipAbandonContinuation: CheckedContinuation<RecipeClipScore?, Never>?
+    private var consecutiveAbandons = 0
+    /// This many CONSECUTIVE wedged clips means the volume, not the
+    /// file, is sick — fail the batch (the old behavior) instead of
+    /// grinding 5 minutes per file forever.
+    static let consecutiveAbandonCap = 3
+    private weak var stallMonitor: StallMonitor?
 
     // Progress-telemetry state (Rick 2026-08-04: the 2026-08-03 stalled
     // run was a post-mortem with no per-file evidence; design distilled
@@ -334,6 +380,11 @@ final class FindPersonJob: MediaFileOperationJob {
         let monitor = StallMonitor(label: "find \(person)") { [weak self] silentFor in
             Task { @MainActor [weak self] in
                 guard let self, self.state.isActive, self.stallReason == nil else { return }
+                // Wedged CLIP first (GH #156): abandon it, log it, keep
+                // the batch moving. Falls through to the batch-fail path
+                // when abandonment isn't possible (python arm) or the
+                // wedges are a pattern (consecutive cap — sick volume).
+                if self.abandonCurrentClip(silentFor: silentFor) { return }
                 self.stallReason = Self.stallDescription(
                     silentSeconds: silentFor,
                     completed: self.completed,
@@ -343,6 +394,7 @@ final class FindPersonJob: MediaFileOperationJob {
                 self.task?.cancel()
             }
         }
+        stallMonitor = monitor
         monitor.start()
         pauser.register(monitor)
         defer { monitor.stop() }
@@ -480,6 +532,11 @@ final class FindPersonJob: MediaFileOperationJob {
             currentClipName = clip.lastPathComponent
             clipQuartileLogged = 0
             lastLongRunLogAt = nil
+            currentClipFraction = nil
+            clipContext.current = clip.lastPathComponent
+            clipContext.next = index + 1 < actionable.count
+                ? (actionable[index + 1].fullPath as NSString).lastPathComponent
+                : nil
             startWarmingNextClip(after: index, in: actionable)
             let verdict: RecipeClipScore
             if FileManager.default.fileExists(atPath: rec.fullPath) {
@@ -490,7 +547,30 @@ final class FindPersonJob: MediaFileOperationJob {
                 findLog.info("find \(self.person, privacy: .public) scanning: \(clip.lastPathComponent, privacy: .public)")
                 appLog.write("Find \(person) scanning \(completed + 1)/\(total): \(clip.lastPathComponent)")
                 clipStartedAt = Date()
-                verdict = await scorer.score(clip: clip)
+                // Score races the stall watchdog: a wedged decode is
+                // ABANDONED (the task leaks — bounded by the consecutive
+                // cap — and its late verdict, if any, is discarded) so
+                // the batch continues. The scorer actor is reentrant at
+                // its awaits, so the next clip's score() proceeds while
+                // the wedged one stays suspended.
+                let scoreTask = Task { await scorer.score(clip: clip) }
+                let raced: RecipeClipScore? = await withCheckedContinuation { cont in
+                    clipAbandonContinuation = cont
+                    Task { @MainActor [weak self] in
+                        let v = await scoreTask.value
+                        guard let self, let pending = self.clipAbandonContinuation else { return }
+                        self.clipAbandonContinuation = nil
+                        pending.resume(returning: v)
+                    }
+                }
+                if let raced {
+                    consecutiveAbandons = 0
+                    verdict = raced
+                } else {
+                    scoreTask.cancel()
+                    verdict = RecipeClipScore(
+                        error: "decode wedged — no progress past the watchdog; clip skipped (GH #156)")
+                }
             } else {
                 verdict = RecipeClipScore(error: "missing file")
             }
@@ -539,6 +619,7 @@ final class FindPersonJob: MediaFileOperationJob {
             // Within-file % in the window (Rick 2026-08-04), and a
             // smooth overall bar: completed files + the live clip's
             // fraction over the actionable total.
+            currentClipFraction = clamped
             subtitleText = "Scanning \(name)… \(Int(clamped * 100))%"
             fractionValue = (Double(completed) + clamped)
                 / Double(max(actionableTotal, 1))
@@ -612,6 +693,7 @@ final class FindPersonJob: MediaFileOperationJob {
                 // progress (Rick 2026-08-02).
                 subtitleText = "\(completed)/\(total) — \(tagged) \(person)*, \(maybes) \(person)?, \(errors) error(s)"
                 findLog.warning("find \(self.person, privacy: .public) error on \((path as NSString).lastPathComponent, privacy: .public): \(error, privacy: .public)")
+                recordClipOutcome(path: path, outcome: "error", record: byPath[path])
                 writeDurableProgress(total: total, lastPath: path)
                 return
             }
@@ -622,6 +704,7 @@ final class FindPersonJob: MediaFileOperationJob {
                 // progress telemetry.
                 skipped += 1
                 subtitleText = "\(completed)/\(total) — \(tagged) \(person)*, \(maybes) \(person)?"
+                recordClipOutcome(path: path, outcome: "no match", record: byPath[path])
                 writeDurableProgress(total: total, lastPath: path)
                 return
             }
@@ -638,9 +721,28 @@ final class FindPersonJob: MediaFileOperationJob {
             case .none:
                 if !changed { skipped += 1 }
             }
+            let outcome: String
+            switch tier {
+            case .detected: outcome = String(format: "%@* %.2f", person, score)
+            case .suspected: outcome = String(format: "%@? %.2f", person, score)
+            case .none: outcome = "no match"
+            }
+            recordClipOutcome(path: path, outcome: outcome, record: rec)
             subtitleText = "\(completed)/\(total) — \(tagged) \(person)*, \(maybes) \(person)?"
             writeDurableProgress(total: total, lastPath: path)
         }
+    }
+
+    /// Detail-view context + MB/s accounting for one finished clip.
+    private func recordClipOutcome(path: String, outcome: String,
+                                   record: VideoRecord?) {
+        clipContext.previous = (path as NSString).lastPathComponent
+        clipContext.previousOutcome = outcome
+        if clipContext.current == clipContext.previous {
+            clipContext.current = nil
+            currentClipFraction = nil
+        }
+        scannedBytes += record?.sizeBytes ?? 0
     }
 
     // MARK: Progress telemetry (design distilled with codex, channel #91)
@@ -703,6 +805,26 @@ final class FindPersonJob: MediaFileOperationJob {
                                              currentFilename: String?) -> String {
         let clip = currentFilename.map { " while scanning \($0)" } ?? ""
         return "no progress for \(Int(max(silentSeconds, 0)))s — recipe engine stalled at \(max(completed, 0))/\(max(total, 0))\(clip)"
+    }
+
+    /// Abandon the clip currently being scored (stall-watchdog path).
+    /// Returns false when there is nothing to abandon (python arm, not
+    /// scoring) or the consecutive cap says the volume is sick — the
+    /// caller then fails the batch as before.
+    private func abandonCurrentClip(silentFor: Double) -> Bool {
+        guard let pending = clipAbandonContinuation else { return false }
+        consecutiveAbandons += 1
+        guard consecutiveAbandons < Self.consecutiveAbandonCap else { return false }
+        clipAbandonContinuation = nil
+        let name = currentClipName ?? "?"
+        appLog.write("Find \(person) WEDGED: skipping \(completed + 1)/\(actionableTotal): \(name) — no progress for \(Int(silentFor))s, decode abandoned (GH #156)")
+        findLog.error("find \(self.person, privacy: .public) wedged clip skipped: \(name, privacy: .public) after \(Int(silentFor), privacy: .public)s")
+        pending.resume(returning: nil)
+        // Fresh liveness clock for the next clip (the fired monitor's
+        // poll loop has exited; stop-then-start relaunches it).
+        stallMonitor?.stop()
+        stallMonitor?.start()
+        return true
     }
 
     /// Wall-clock cadence for "still scanning" lines on clips that

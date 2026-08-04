@@ -322,12 +322,19 @@ struct MediaFileOperationRow: View {
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)
             }
+
+            if isExpanded, let find = job as? FindPersonJob {
+                FindPersonDetailView(job: find)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
+            }
         }
         .background(rowBackground)
         .contentShape(Rectangle())
         .onTapGesture {
-            // Only compare rows have a detail view today.
-            if job is PairCompareJob { onToggleExpand() }
+            // Rows with a detail view expand on click (compare's
+            // pattern, extended to Find & Tag — Rick 2026-08-04).
+            if job is PairCompareJob || job is FindPersonJob { onToggleExpand() }
         }
         .onReceive(job.objectWillChange) { _ in
             heartbeat.toggle()
@@ -690,6 +697,49 @@ extension PairCompareVerdict {
 // Verdict banner + side-by-side metadata diff — lifted from the
 // retired MediaPairCompareSheet. Sourced entirely from the cataloged
 // VideoRecord fields, so it renders instantly even mid-comparison.
+
+/// Expanded Find & Tag row (Rick 2026-08-04, compare-row pattern):
+/// previous / current / next clip with the previous clip's verdict and
+/// the live clip's %, plus a summary line with tallies and throughput.
+struct FindPersonDetailView: View {
+    @ObservedObject var job: FindPersonJob
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            clipRow(label: "Previous", name: job.clipContext.previous,
+                    note: job.clipContext.previousOutcome)
+            clipRow(label: "Now", name: job.clipContext.current,
+                    note: job.currentClipFraction.map { "\(Int($0 * 100))%" })
+            clipRow(label: "Next", name: job.clipContext.next, note: nil)
+            Divider()
+            Text(job.detailSummary)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+        }
+        .padding(10)
+        .background(Color(nsColor: .windowBackgroundColor).opacity(0.5),
+                    in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func clipRow(label: String, name: String?, note: String?) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 60, alignment: .leading)
+            Text(name ?? "—")
+                .font(.system(size: 12, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer()
+            if let note {
+                Text(note)
+                    .font(.system(size: 11, design: .monospaced))
+                    .foregroundStyle(note.contains("*") ? .primary : .secondary)
+            }
+        }
+    }
+}
 
 struct PairCompareDetailView: View {
     let job: PairCompareJob
