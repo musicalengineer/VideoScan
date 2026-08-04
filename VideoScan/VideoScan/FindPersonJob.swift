@@ -129,6 +129,11 @@ final class FindPersonJob: MediaFileOperationJob {
     /// Highest quartile (1…3) already logged for the current clip —
     /// long clips log 25/50/75%, everything else stays quiet.
     private var clipQuartileLogged = 0
+    /// Last wall-clock "still scanning" line for the current clip.
+    /// Declared duration is NOT a cost proxy (codex #102: a 40 GB mp4
+    /// claiming 36.65 s suppressed every quartile line while grinding
+    /// for minutes) — long WALL time earns durable lines too.
+    private var lastLongRunLogAt: Date?
 
     /// Same-person batch queueing (Rick 2026-08-04: a second batch used
     /// to be a SILENT refusal — a dead click). Set by the Center at
@@ -474,6 +479,7 @@ final class FindPersonJob: MediaFileOperationJob {
             let clip = URL(fileURLWithPath: rec.fullPath)
             currentClipName = clip.lastPathComponent
             clipQuartileLogged = 0
+            lastLongRunLogAt = nil
             startWarmingNextClip(after: index, in: actionable)
             let verdict: RecipeClipScore
             if FileManager.default.fileExists(atPath: rec.fullPath) {
@@ -520,9 +526,11 @@ final class FindPersonJob: MediaFileOperationJob {
         case .ready:
             isIndeterminateValue = false
             subtitleText = "Scanning for \(person)…"
-        case .beat(let clip, _, let fraction, let mediaSeconds):
+        case .beat(let clip, let frameIndex, let fraction, let mediaSeconds):
             guard isIndeterminateValue == false else { return }
             let name = clip.lastPathComponent
+            logLongRunningClipIfDue(name: name, frameIndex: frameIndex,
+                                    mediaSeconds: mediaSeconds)
             guard let fraction else {
                 subtitleText = "Scanning \(name)…"
                 return
@@ -695,6 +703,26 @@ final class FindPersonJob: MediaFileOperationJob {
                                              currentFilename: String?) -> String {
         let clip = currentFilename.map { " while scanning \($0)" } ?? ""
         return "no progress for \(Int(max(silentSeconds, 0)))s — recipe engine stalled at \(max(completed, 0))/\(max(total, 0))\(clip)"
+    }
+
+    /// Wall-clock cadence for "still scanning" lines on clips that
+    /// grind past this regardless of declared duration (codex #102).
+    private static let longRunLogIntervalSeconds: Double = 120
+
+    /// Durable evidence for expensive clips whose DECLARED duration
+    /// suppressed quartile lines — pathological metadata (the 40 GB
+    /// "36-second" mp4) must not scan in operational silence.
+    private func logLongRunningClipIfDue(name: String, frameIndex: Int,
+                                         mediaSeconds: Double) {
+        guard let started = clipStartedAt else { return }
+        let wall = Date().timeIntervalSince(started)
+        guard wall > Self.longRunLogIntervalSeconds else { return }
+        if let last = lastLongRunLogAt,
+           Date().timeIntervalSince(last) < Self.longRunLogIntervalSeconds { return }
+        lastLongRunLogAt = Date()
+        let suspect = mediaSeconds < Self.longRunLogIntervalSeconds
+            ? " (declared \(Int(mediaSeconds))s — suspect metadata)" : ""
+        appLog.write("Find \(person) still scanning \(completed + 1)/\(actionableTotal): \(name) — \(Int(wall / 60))m elapsed, frame \(frameIndex)\(suspect)")
     }
 
     // MARK: Read-ahead warming (GH #157 stage 2)
