@@ -377,6 +377,13 @@ final class FindPersonJob: MediaFileOperationJob {
         actionableTotal = total
         scanBeganAt = Date()
 
+        // Physical-spindle identities for the warmer's second-reader
+        // rule (codex #108: LaCieWorkspace + MediaExpansion are one
+        // 8TB spindle wearing two mount points). ~100 ms per unique
+        // volume, cached for the app's lifetime.
+        await PhysicalStoreResolver.resolve(roots: Set(
+            actionable.map { MediaVolumeGatePolicy.volumeRoot(forPath: $0.fullPath) }))
+
         let monitor = StallMonitor(label: "find \(person)") { [weak self] silentFor in
             Task { @MainActor [weak self] in
                 guard let self, self.state.isActive, self.stallReason == nil else { return }
@@ -869,7 +876,10 @@ final class FindPersonJob: MediaFileOperationJob {
         let nextPath = actionable[index + 1].fullPath
         let currentRoot = MediaVolumeGatePolicy.volumeRoot(forPath: currentPath)
         let nextRoot = MediaVolumeGatePolicy.volumeRoot(forPath: nextPath)
-        if nextRoot == currentRoot, nextRoot != "/" {
+        // Same mount root OR same physical spindle behind different
+        // mount roots (codex #108) — either way it's one head assembly,
+        // and only SSDs tolerate the second sequential reader.
+        if PhysicalStoreResolver.sameSpindle(currentRoot, nextRoot), nextRoot != "/" {
             let tech = mediaTechForPath?(nextPath) ?? .unknown
             guard tech == .ssd else { return }
         }
