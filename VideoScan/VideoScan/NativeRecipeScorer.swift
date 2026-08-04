@@ -248,7 +248,7 @@ actor NativeRecipeScorer: RecipeScoring {
     /// path's orientation/transform are identity.
     private func openFrameSource(clip: URL, frameInterval: Double) async
         -> Result<FrameSource, RecipeError> {
-        switch await Self.openReader(clip: clip, samplingFPS: params.samplingFPS) {
+        switch await Self.openReaderTimed(clip: clip, samplingFPS: params.samplingFPS) {
         case .success(let ctx):
             let stream: AsyncStream<PrefetchedFrame>
             let release: () -> Void
@@ -396,13 +396,62 @@ actor NativeRecipeScorer: RecipeScoring {
 
     // MARK: - Reader setup
 
-    private struct RecipeReaderContext {
+    /// @unchecked Sendable: built entirely inside one task and handed
+    /// across the timed-open race exactly once; the single consumer
+    /// owns every member afterwards (openReaderTimed's abandon rule).
+    private struct RecipeReaderContext: @unchecked Sendable {
         let asset: AVURLAsset
         let reader: AVAssetReader
         let trackOutput: AVAssetReaderTrackOutput
         let duration: Double
         let orientation: CGImagePropertyOrientation
         let transform: CGAffineTransform
+    }
+
+    /// AVFoundation's open ladder has NO timeout of its own, and a
+    /// damaged file can hang `loadTracks`/`load(.duration)` forever —
+    /// silently, because a suspended await occupies no thread (the
+    /// 2026-08-03 overnight stall: one bad file, zero log lines, whole
+    /// job killed by the 315 s watchdog). Race the open against a
+    /// deadline and ABANDON the loser: the hung task can't be cancelled
+    /// (AVF ignores it), so it leaks one suspended continuation —
+    /// bounded, and vastly better than a dead batch. A late-arriving
+    /// success is closed out via cancelReading(). On timeout the caller
+    /// falls through to the ffmpeg fallback, whose ffprobe is
+    /// deadline-bounded — so the worst case per damaged file is
+    /// ~timeout + 60 s, well under the job's stall threshold.
+    private static func openReaderTimed(clip: URL, samplingFPS: Double,
+                                        timeoutSeconds: Double = 45) async
+        -> Result<RecipeReaderContext, RecipeError> {
+        await withCheckedContinuation { cont in
+            let resumed = OSAllocatedUnfairLock(initialState: false)
+            // True exactly once — the winner resumes the continuation.
+            @Sendable func claimWin() -> Bool {
+                resumed.withLock { done -> Bool in
+                    if done { return false }
+                    done = true
+                    return true
+                }
+            }
+            Task.detached {
+                let result = await openReader(clip: clip, samplingFPS: samplingFPS)
+                if claimWin() {
+                    cont.resume(returning: result)
+                } else if case .success(let ctx) = result {
+                    // Lost the race but the open eventually finished —
+                    // close the orphaned reader instead of leaking it.
+                    ctx.reader.cancelReading()
+                }
+            }
+            Task.detached {
+                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds * 1_000_000_000))
+                if claimWin() {
+                    recipeLog.error("AVFoundation open hang on \(clip.lastPathComponent, privacy: .public) — abandoned after \(Int(timeoutSeconds))s")
+                    cont.resume(returning: .failure(
+                        RecipeError("open timed out after \(Int(timeoutSeconds))s (AVFoundation hang)")))
+                }
+            }
+        }
     }
 
     /// Same setup ladder as openArcFaceVideoReader, with failures returned

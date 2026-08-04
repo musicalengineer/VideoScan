@@ -415,6 +415,10 @@ final class FindPersonJob: MediaFileOperationJob {
             let clip = URL(fileURLWithPath: rec.fullPath)
             let verdict: RecipeClipScore
             if FileManager.default.fileExists(atPath: rec.fullPath) {
+                // Logged BEFORE the score so a wedged clip is named in
+                // the log — the 2026-08-03 overnight stall died on an
+                // unidentifiable file because only completions logged.
+                findLog.info("find \(self.person, privacy: .public) scanning: \(clip.lastPathComponent, privacy: .public)")
                 verdict = await scorer.score(clip: clip)
             } else {
                 verdict = RecipeClipScore(error: "missing file")
