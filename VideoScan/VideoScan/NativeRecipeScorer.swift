@@ -95,6 +95,15 @@ actor NativeRecipeScorer: RecipeScoring {
     /// job's stall watchdog sees the same rhythm from both engines.
     private static let beatEveryFrames = 50
 
+    /// Starvation is not a stall: under heavy disk contention (the
+    /// 2026-08-04 false kill — ~20 concurrent Verify Audio probes
+    /// starved an mp4 below 50 frames per 5 min) frames still trickle,
+    /// and every trickling frame is proof of life. Any frame arriving
+    /// more than this long after the last beat emits one immediately,
+    /// so only a truly frozen decode (zero frames) can trip the 300 s
+    /// watchdog.
+    private static let beatMaxIntervalSeconds: Double = 5
+
     /// Production init: embedder comes from the CoreML backend, resolved
     /// lazily in prepare() (model load is the slow part and belongs in the
     /// job's "warming up" phase).
@@ -346,6 +355,7 @@ actor NativeRecipeScorer: RecipeScoring {
         var samples: [RecipeFaceSample] = []
         var frameCount = 0
         let wallStart = CFAbsoluteTimeGetCurrent()
+        var lastBeatAt = wallStart
 
         for await frame in source.stream {
             // Break, never cancelReading(): the consumer-side cancel races
@@ -362,7 +372,10 @@ actor NativeRecipeScorer: RecipeScoring {
             }
             releaseSlot()
 
-            if frameCount % Self.beatEveryFrames == 0 {
+            let now = CFAbsoluteTimeGetCurrent()
+            if frameCount % Self.beatEveryFrames == 0
+                || now - lastBeatAt > Self.beatMaxIntervalSeconds {
+                lastBeatAt = now
                 let fraction: Double? = duration > 0
                     ? min(frame.presentationTime / duration, 1) : nil
                 onProgress?(.beat(clip: clip, frameIndex: frameCount,
