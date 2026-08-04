@@ -779,10 +779,26 @@ struct MainWindowCapture<Content: View>: View {
 // MARK: - About View
 
 struct AboutView: View {
+    /// The REAL family filmstrip, restored 2026-08-04 (Rick: "get that
+    /// back") — loaded from LOCAL disk, never bundled: the 2026-08-03
+    /// privacy scrub keeps personal media out of git, so the repo ships
+    /// only the synthetic placeholder and machines with the family
+    /// collage on disk (hand-provisioned, like test fixtures) show the
+    /// real one.
+    private static let localCollagePath =
+        NSHomeDirectory() + "/dev/VideoScan/assets/app_photos/about_collage.png"
+
+    private var collage: Image {
+        if let local = NSImage(contentsOfFile: Self.localCollagePath) {
+            return Image(nsImage: local)
+        }
+        return Image("AboutCollage")
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Header collage — full image, nothing on top of the faces
-            Image("AboutCollage")
+            collage
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(maxWidth: .infinity)
