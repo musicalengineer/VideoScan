@@ -111,6 +111,25 @@ final class FindPersonJob: MediaFileOperationJob {
     private var completed = 0
     private var stallReason: String?
 
+    // Progress-telemetry state (Rick 2026-08-04: the 2026-08-03 stalled
+    // run was a post-mortem with no per-file evidence; design distilled
+    // with codex, channel #91).
+    /// Actionable count ≠ records.count after the eligibility, human-
+    /// verdict, and offline-volume filters. Terminal logs must never
+    /// repeat the misleading selected count (7,894 when the batch was
+    /// 2,988).
+    private var actionableTotal = 0
+    private var scanBeganAt: Date?
+    private var currentClipName: String?
+    /// Per-clip stats ("native, 823f, 41 faces, 92s") set by the native
+    /// loop after scoring; folded into the next durable progress line.
+    /// The python arm leaves it nil.
+    private var currentClipDetail: String?
+    private var clipStartedAt: Date?
+    /// Highest quartile (1…3) already logged for the current clip —
+    /// long clips log 25/50/75%, everything else stays quiet.
+    private var clipQuartileLogged = 0
+
     private(set) var task: Task<Void, Never>?
 
     /// Events whose main-actor Task has run (ordering seam — see
@@ -271,11 +290,18 @@ final class FindPersonJob: MediaFileOperationJob {
         let byPath = Dictionary(uniqueKeysWithValues:
             actionable.map { ($0.fullPath, $0) })
         let total = actionable.count
+        actionableTotal = total
+        scanBeganAt = Date()
 
         let monitor = StallMonitor(label: "find \(person)") { [weak self] silentFor in
             Task { @MainActor [weak self] in
                 guard let self, self.state.isActive, self.stallReason == nil else { return }
-                self.stallReason = "no progress for \(Int(silentFor))s — recipe engine stalled"
+                self.stallReason = Self.stallDescription(
+                    silentSeconds: silentFor,
+                    completed: self.completed,
+                    total: self.actionableTotal,
+                    currentFilename: self.currentClipName)
+                appLog.write("Find \(self.person) STALL: \(self.stallReason ?? "recipe engine stalled")")
                 self.task?.cancel()
             }
         }
@@ -413,17 +439,30 @@ final class FindPersonJob: MediaFileOperationJob {
         for rec in actionable {
             if Task.isCancelled || !state.isActive { break }
             let clip = URL(fileURLWithPath: rec.fullPath)
+            currentClipName = clip.lastPathComponent
+            clipQuartileLogged = 0
             let verdict: RecipeClipScore
             if FileManager.default.fileExists(atPath: rec.fullPath) {
-                // Logged BEFORE the score so a wedged clip is named in
-                // the log — the 2026-08-03 overnight stall died on an
-                // unidentifiable file because only completions logged.
+                // Logged BEFORE the score (durably, not just unified) so
+                // a wedged clip is named — the 2026-08-03 overnight stall
+                // died on an unidentifiable file because only completions
+                // logged.
                 findLog.info("find \(self.person, privacy: .public) scanning: \(clip.lastPathComponent, privacy: .public)")
+                appLog.write("Find \(person) scanning \(completed + 1)/\(total): \(clip.lastPathComponent)")
+                clipStartedAt = Date()
                 verdict = await scorer.score(clip: clip)
             } else {
                 verdict = RecipeClipScore(error: "missing file")
             }
             if Task.isCancelled { break }
+            let clipWall = clipStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+            // Error verdicts keep their stats too when the decode got far
+            // enough to know the transport — "ffmpeg, 210f, …" next to an
+            // error is diagnosis, not noise (codex #97). Missing-file and
+            // open-failure verdicts (no transport) stay bare.
+            currentClipDetail = verdict.decodeTransport != nil
+                ? Self.clipDetail(verdict: verdict, wallSeconds: clipWall)
+                : nil
             monitor.tick()
             // Funnel through the same event handler as the python arm so
             // tagging, tallies, and progress stay engine-agnostic.
@@ -434,6 +473,11 @@ final class FindPersonJob: MediaFileOperationJob {
         finishRun(failure: nil)
     }
 
+    /// Media length above which a clip earns quartile progress lines in
+    /// the durable log. Short clips stay silent — a 3,000-file run must
+    /// not flood videoscan.log with per-clip percentages.
+    private static let quartileLogMinimumMediaSeconds: Double = 300
+
     private func handleNativeProgress(_ event: RecipeProgressEvent) {
         guard state.isActive else { return }
         switch event {
@@ -442,9 +486,25 @@ final class FindPersonJob: MediaFileOperationJob {
         case .ready:
             isIndeterminateValue = false
             subtitleText = "Scanning for \(person)…"
-        case .beat(let clip, _):
-            if isIndeterminateValue == false {
-                subtitleText = "Scanning \(clip.lastPathComponent)…"
+        case .beat(let clip, _, let fraction, let mediaSeconds):
+            guard isIndeterminateValue == false else { return }
+            let name = clip.lastPathComponent
+            guard let fraction else {
+                subtitleText = "Scanning \(name)…"
+                return
+            }
+            let clamped = min(max(fraction, 0), 1)
+            // Within-file % in the window (Rick 2026-08-04), and a
+            // smooth overall bar: completed files + the live clip's
+            // fraction over the actionable total.
+            subtitleText = "Scanning \(name)… \(Int(clamped * 100))%"
+            fractionValue = (Double(completed) + clamped)
+                / Double(max(actionableTotal, 1))
+            if mediaSeconds >= Self.quartileLogMinimumMediaSeconds,
+               let quartile = Self.quartileToLog(fraction: clamped,
+                                                 alreadyLogged: clipQuartileLogged) {
+                clipQuartileLogged = quartile
+                appLog.write("Find \(person) scanning \(completed + 1)/\(actionableTotal): \(name) — \(quartile * 25)% of \(Self.durationText(mediaSeconds))")
             }
         }
     }
@@ -489,7 +549,15 @@ final class FindPersonJob: MediaFileOperationJob {
             subtitleText = "Scanning for \(person)…"
         case .beat:
             if let path = event.path, isIndeterminateValue == false {
-                subtitleText = "Scanning \((path as NSString).lastPathComponent)…"
+                let filename = (path as NSString).lastPathComponent
+                subtitleText = "Scanning \(filename)…"
+                // The python bridge emits beats rather than entering the
+                // native loop, so persist its first beat per new clip —
+                // both engines leave the same pre-stall evidence.
+                if currentClipName != filename {
+                    currentClipName = filename
+                    appLog.write("Find \(person) scanning \(completed + 1)/\(total): \(filename)")
+                }
             }
         case .result:
             completed += 1
@@ -502,10 +570,19 @@ final class FindPersonJob: MediaFileOperationJob {
                 // progress (Rick 2026-08-02).
                 subtitleText = "\(completed)/\(total) — \(tagged) \(person)*, \(maybes) \(person)?, \(errors) error(s)"
                 findLog.warning("find \(self.person, privacy: .public) error on \((path as NSString).lastPathComponent, privacy: .public): \(error, privacy: .public)")
+                writeDurableProgress(total: total, lastPath: path)
                 return
             }
             guard let score = event.score, let rec = byPath[path],
-                  let model else { return }
+                  let model else {
+                // A valid no-face result can carry no numeric score —
+                // keep the no-mutation behavior but never lose the
+                // progress telemetry.
+                skipped += 1
+                subtitleText = "\(completed)/\(total) — \(tagged) \(person)*, \(maybes) \(person)?"
+                writeDurableProgress(total: total, lastPath: path)
+                return
+            }
             let tier = VideoScanModel.recipeTier(forScore: score, recipeID: recipeID)
             let changed = model.applyRecipeVerdict(
                 person: person, record: rec, score: score, recipeID: recipeID)
@@ -520,7 +597,97 @@ final class FindPersonJob: MediaFileOperationJob {
                 if !changed { skipped += 1 }
             }
             subtitleText = "\(completed)/\(total) — \(tagged) \(person)*, \(maybes) \(person)?"
+            writeDurableProgress(total: total, lastPath: path)
         }
+    }
+
+    // MARK: Progress telemetry (design distilled with codex, channel #91)
+
+    /// One durable line per completed clip. At archive scale this is a
+    /// few thousand short lines, and it makes a post-mortem independent
+    /// of the UI and the volatile unified log.
+    private func writeDurableProgress(total: Int, lastPath: String) {
+        let elapsed = Date().timeIntervalSince(scanBeganAt ?? startedAt)
+        let detail = currentClipDetail
+        currentClipDetail = nil
+        appLog.write(Self.progressLine(
+            person: person,
+            completed: completed,
+            total: total,
+            tagged: tagged,
+            maybes: maybes,
+            errors: errors,
+            elapsedSeconds: elapsed,
+            lastFilename: (lastPath as NSString).lastPathComponent,
+            lastDetail: detail))
+    }
+
+    /// Pure formatting seam — logging is an operational contract, so
+    /// tests pin the completed/total, throughput, ETA, tally, and
+    /// last-file fields that were missing from the 2026-08-03 failed
+    /// run's log.
+    nonisolated static func progressLine(person: String,
+                                         completed: Int,
+                                         total: Int,
+                                         tagged: Int,
+                                         maybes: Int,
+                                         errors: Int,
+                                         elapsedSeconds: Double,
+                                         lastFilename: String,
+                                         lastDetail: String? = nil) -> String {
+        let safeTotal = max(total, 0)
+        let safeCompleted = min(max(completed, 0), safeTotal)
+        let elapsed = max(elapsedSeconds, 0)
+        let percent = safeTotal > 0 ? Double(safeCompleted) / Double(safeTotal) * 100 : 100
+        let perHour = elapsed > 0 ? Double(safeCompleted) / elapsed * 3_600 : 0
+        // "—" until a rate is measurable — an "ETA 0s" on the first
+        // completion reads as nearly-done (codex review, #97).
+        let eta = perHour > 0
+            ? durationText(Double(max(safeTotal - safeCompleted, 0)) / perHour * 3_600)
+            : "—"
+        let last = lastDetail.map { "\(lastFilename) (\($0))" } ?? lastFilename
+        return String(format:
+            "Find %@ progress: %d/%d (%.1f%%) | %.1f files/h | ETA %@ | %d %@*, %d %@?, %d error(s) | last: %@",
+            person, safeCompleted, safeTotal, percent, perHour,
+            eta, tagged, person, maybes, person,
+            errors, last)
+    }
+
+    /// Stall line with enough context to identify the wedge: progress
+    /// position AND the file being scanned when beats stopped.
+    nonisolated static func stallDescription(silentSeconds: Double,
+                                             completed: Int,
+                                             total: Int,
+                                             currentFilename: String?) -> String {
+        let clip = currentFilename.map { " while scanning \($0)" } ?? ""
+        return "no progress for \(Int(max(silentSeconds, 0)))s — recipe engine stalled at \(max(completed, 0))/\(max(total, 0))\(clip)"
+    }
+
+    /// Which quartile line (1…3 = 25/50/75%) is due for a beat at
+    /// `fraction`, given the highest already logged; nil when nothing
+    /// new. JUMP POLICY (deliberate, codex #97): a beat that crosses
+    /// several quartiles at once logs ONLY the highest one reached —
+    /// these lines are for humans tailing the log, not a complete
+    /// series.
+    nonisolated static func quartileToLog(fraction: Double,
+                                          alreadyLogged: Int) -> Int? {
+        let clamped = min(max(fraction, 0), 1)
+        let quartile = min(Int(clamped * 4), 3)
+        return quartile > alreadyLogged ? quartile : nil
+    }
+
+    /// Per-clip stats folded into the progress line's "last:" segment.
+    nonisolated static func clipDetail(verdict: RecipeClipScore,
+                                       wallSeconds: Double) -> String {
+        let transport = verdict.decodeTransport ?? "native"
+        return "\(transport), \(verdict.frameCount)f, \(verdict.gatedFaceCount) faces, \(Self.durationText(wallSeconds))"
+    }
+
+    nonisolated private static func durationText(_ seconds: Double) -> String {
+        let s = Int(max(seconds, 0))
+        if s >= 3600 { return "\(s / 3600)h \((s % 3600) / 60)m" }
+        if s >= 60 { return "\(s / 60)m \(s % 60)s" }
+        return "\(s)s"
     }
 
     // MARK: Finish
@@ -530,9 +697,12 @@ final class FindPersonJob: MediaFileOperationJob {
         guard state.isActive else { return }
         if cancelled {
             state = .cancelled
-            subtitleText = "Cancelled — \(completed) of \(records.count) scored"
-            findLog.info("find person cancelled: \(self.person, privacy: .public) — \(self.completed) of \(self.records.count) scored")
-            appLog.write("Find \(person) cancelled — \(completed) of \(records.count) scored")
+            // Actionable total, never the selected count — "19 of 7,894"
+            // reads as a barely-started run when the batch was 2,988.
+            let denom = actionableTotal > 0 ? actionableTotal : records.count
+            subtitleText = "Cancelled — \(completed) of \(denom) scored"
+            findLog.info("find person cancelled: \(self.person, privacy: .public) — \(self.completed) of \(denom) scored")
+            appLog.write("Find \(person) cancelled — \(completed) of \(denom) scored")
         } else if let failed {
             state = .failed(message: failed)
             subtitleText = failed

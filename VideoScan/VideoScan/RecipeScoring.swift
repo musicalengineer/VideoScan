@@ -40,6 +40,11 @@ struct RecipeClipScore: Sendable, Equatable {
     var frameCount: Int = 0
     var gatedFaceCount: Int = 0
     var error: String?
+    /// Which decode path produced the frames ("avfoundation",
+    /// "avfoundation-seek", "ffmpeg") — surfaced in progress telemetry
+    /// so fallback share is readable straight from the log. nil from
+    /// engines that don't report one (python bridge).
+    var decodeTransport: String?
     /// Calibration-only (params.collectFaceSamples): every record-tier
     /// face's (px, cosine) BEFORE the two-tier vote gate, so the CLI can
     /// re-score under candidate gates without re-decoding. Always nil in
@@ -63,7 +68,10 @@ struct RecipeFaceSample: Sendable, Equatable {
 enum RecipeProgressEvent: Sendable {
     case preparing(detail: String)
     case ready(eras: [String])
-    case beat(clip: URL, frameIndex: Int)
+    /// `fraction` is presentation-time position over media duration
+    /// (0…1), nil when duration is unknown; `mediaSeconds` lets the
+    /// consumer gate long-clip-only logging (quartile lines).
+    case beat(clip: URL, frameIndex: Int, fraction: Double?, mediaSeconds: Double)
 }
 
 typealias RecipeProgressHandler = @Sendable (RecipeProgressEvent) -> Void

@@ -237,6 +237,9 @@ actor NativeRecipeScorer: RecipeScoring {
         let duration: Double
         let orientation: CGImagePropertyOrientation
         let transform: CGAffineTransform
+        /// Which decode path opened the clip — carried into the verdict
+        /// so telemetry can report fallback share.
+        let transport: String
         let postLoopError: () -> String?
     }
 
@@ -252,6 +255,7 @@ actor NativeRecipeScorer: RecipeScoring {
         case .success(let ctx):
             let stream: AsyncStream<PrefetchedFrame>
             let release: () -> Void
+            let transport: String
             let ext = clip.pathExtension.lowercased()
             if ext == "mts" || ext == "m2ts" || ext == "ts" {
                 let seeker = SeekingFrameProvider(asset: ctx.asset, duration: ctx.duration,
@@ -259,16 +263,19 @@ actor NativeRecipeScorer: RecipeScoring {
                 ctx.reader.cancelReading()
                 stream = seeker.frames()
                 release = { seeker.releaseSlot() }
+                transport = "avfoundation-seek"
             } else {
                 let prefetcher = FramePrefetcher(reader: ctx.reader,
                                                  trackOutput: ctx.trackOutput,
                                                  frameInterval: frameInterval)
                 stream = prefetcher.frames()
                 release = { prefetcher.releaseSlot() }
+                transport = "avfoundation"
             }
             return .success(FrameSource(
                 stream: stream, release: release, duration: ctx.duration,
                 orientation: ctx.orientation, transform: ctx.transform,
+                transport: transport,
                 postLoopError: {
                     guard ctx.reader.status == .failed else { return nil }
                     return "reader error: \(ctx.reader.error?.localizedDescription ?? "unknown")"
@@ -286,6 +293,7 @@ actor NativeRecipeScorer: RecipeScoring {
                     release: { provider.releaseSlot() },
                     duration: provider.duration,
                     orientation: .up, transform: .identity,
+                    transport: "ffmpeg",
                     postLoopError: {
                         // A consumer-side cancel SIGTERMs ffmpeg (nonzero
                         // exit) — that's not a decode failure, and the job
@@ -326,12 +334,16 @@ actor NativeRecipeScorer: RecipeScoring {
                 releaseSlot()
                 return RecipeClipScore(
                     frameCount: frameCount, gatedFaceCount: cosines.count,
-                    error: "watchdog abort after \(Int(elapsed))s (media \(Int(duration))s)")
+                    error: "watchdog abort after \(Int(elapsed))s (media \(Int(duration))s)",
+                    decodeTransport: source.transport)
             }
             releaseSlot()
 
             if frameCount % Self.beatEveryFrames == 0 {
-                onProgress?(.beat(clip: clip, frameIndex: frameCount))
+                let fraction: Double? = duration > 0
+                    ? min(frame.presentationTime / duration, 1) : nil
+                onProgress?(.beat(clip: clip, frameIndex: frameCount,
+                                  fraction: fraction, mediaSeconds: duration))
             }
 
             processFrame(frame, orientation: source.orientation,
@@ -348,13 +360,15 @@ actor NativeRecipeScorer: RecipeScoring {
         if let decodeError = source.postLoopError() {
             return RecipeClipScore(
                 frameCount: frameCount, gatedFaceCount: cosines.count,
-                error: decodeError)
+                error: decodeError,
+                decodeTransport: source.transport)
         }
 
         return RecipeClipScore(
             score: RecipeMath.topKMean(cosines, k: params.topK),
             frameCount: frameCount,
             gatedFaceCount: cosines.count,
+            decodeTransport: source.transport,
             faceSamples: params.collectFaceSamples ? samples : nil)
     }
 
