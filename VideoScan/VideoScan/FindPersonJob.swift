@@ -130,6 +130,22 @@ final class FindPersonJob: MediaFileOperationJob {
     /// long clips log 25/50/75%, everything else stays quiet.
     private var clipQuartileLogged = 0
 
+    /// Same-person batch queueing (Rick 2026-08-04: a second batch used
+    /// to be a SILENT refusal — a dead click). Set by the Center at
+    /// dispatch; this job waits (visibly) until the predecessor leaves
+    /// its active state, then runs. Parallel same-person scans stay
+    /// disallowed — they'd fight over the serialized embedder and
+    /// interleave catalog writes.
+    weak var precededBy: FindPersonJob?
+
+    /// Center's volume-tech lookup, for the read-ahead warmer's
+    /// second-reader rule. nil ⇒ unknown tech (treated as HDD-cautious).
+    var mediaTechForPath: ((String) -> VolumeMediaTech)?
+
+    /// Read-ahead: warms the NEXT clip into the page cache while the
+    /// current one scores (GH #157 stage 2 — hides open+I/O latency).
+    private var warmTask: Task<Void, Never>?
+
     private(set) var task: Task<Void, Never>?
 
     /// Events whose main-actor Task has run (ordering seam — see
@@ -234,6 +250,23 @@ final class FindPersonJob: MediaFileOperationJob {
     // MARK: Run
 
     private func run() async {
+        // Queued behind an earlier same-person batch? Wait visibly.
+        // Eligibility is computed AFTER the wait — verdicts the
+        // predecessor writes (confirmed/rejected/auto-tags) must count
+        // when this batch finally filters.
+        if let predecessor = precededBy, predecessor.state.isActive {
+            appLog.write("Find \(person) queued: \(records.count) file(s) — waiting for the running Find \(predecessor.person) scan")
+            subtitleText = "Waiting for the current Find \(person) scan…"
+            while let p = precededBy, p.state.isActive {
+                if Task.isCancelled || state == .cancelling {
+                    finish(cancelled: true)
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            guard state.isActive else { return }
+        }
+
         // Recipe eligibility first (with logged breakdown)…
         var skipCounts: [SkipReason: Int] = [:]
         let recipeEligible = records.filter { rec in
@@ -436,11 +469,12 @@ final class FindPersonJob: MediaFileOperationJob {
             return
         }
 
-        for rec in actionable {
+        for (index, rec) in actionable.enumerated() {
             if Task.isCancelled || !state.isActive { break }
             let clip = URL(fileURLWithPath: rec.fullPath)
             currentClipName = clip.lastPathComponent
             clipQuartileLogged = 0
+            startWarmingNextClip(after: index, in: actionable)
             let verdict: RecipeClipScore
             if FileManager.default.fileExists(atPath: rec.fullPath) {
                 // Logged BEFORE the score (durably, not just unified) so
@@ -663,6 +697,45 @@ final class FindPersonJob: MediaFileOperationJob {
         return "no progress for \(Int(max(silentSeconds, 0)))s — recipe engine stalled at \(max(completed, 0))/\(max(total, 0))\(clip)"
     }
 
+    // MARK: Read-ahead warming (GH #157 stage 2)
+
+    /// Cap on bytes warmed per file — page-cache warming must help the
+    /// decoder, not evict the rest of the working set (repo RAM rule:
+    /// spend freely, but bounded).
+    private static let warmByteCap: Int64 = 6 << 30
+
+    /// Warm the NEXT clip's bytes into the page cache while the current
+    /// clip scores. Second-reader rule: never put a warming read on the
+    /// SAME volume the decoder is reading unless that volume is SSD or
+    /// the internal disk — two sequential readers thrash a spinning
+    /// disk into a crawl (the MediaVolumeGate HDD=1 rationale). Unknown
+    /// tech gets HDD caution.
+    private func startWarmingNextClip(after index: Int,
+                                      in actionable: [VideoRecord]) {
+        warmTask?.cancel()
+        warmTask = nil
+        guard index + 1 < actionable.count else { return }
+        let currentPath = actionable[index].fullPath
+        let nextPath = actionable[index + 1].fullPath
+        let currentRoot = MediaVolumeGatePolicy.volumeRoot(forPath: currentPath)
+        let nextRoot = MediaVolumeGatePolicy.volumeRoot(forPath: nextPath)
+        if nextRoot == currentRoot, nextRoot != "/" {
+            let tech = mediaTechForPath?(nextPath) ?? .unknown
+            guard tech == .ssd else { return }
+        }
+        let cap = Self.warmByteCap
+        warmTask = Task.detached(priority: .utility) {
+            guard let handle = FileHandle(forReadingAtPath: nextPath) else { return }
+            defer { try? handle.close() }
+            var warmed: Int64 = 0
+            while warmed < cap, !Task.isCancelled {
+                guard let data = try? handle.read(upToCount: 8 << 20),
+                      !data.isEmpty else { break }
+                warmed += Int64(data.count)
+            }
+        }
+    }
+
     /// Which quartile line (1…3 = 25/50/75%) is due for a beat at
     /// `fraction`, given the highest already logged; nil when nothing
     /// new. JUMP POLICY (deliberate, codex #97): a beat that crosses
@@ -695,6 +768,8 @@ final class FindPersonJob: MediaFileOperationJob {
     private func finish(summary: String? = nil, failed: String? = nil,
                         cancelled: Bool = false) {
         guard state.isActive else { return }
+        warmTask?.cancel()
+        warmTask = nil
         if cancelled {
             state = .cancelled
             // Actionable total, never the selected count — "19 of 7,894"
@@ -729,21 +804,24 @@ final class FindPersonJob: MediaFileOperationJob {
 // MARK: - Center dispatch
 
 extension MediaFileOperationsCenter {
-    /// Start a Find & Tag job over `records`. One active job per person
-    /// at a time — a second dispatch while one runs is refused (same
-    /// duplicate rule as verify).
+    /// Start a Find & Tag job over `records`. One RUNNING job per person
+    /// at a time, but a second batch no longer refuses silently (the
+    /// 2026-08-04 dead click) — it QUEUES behind the newest active job
+    /// for that person as a visible "Waiting…" row and starts when the
+    /// predecessor finishes. Chains: a third batch waits on the second.
     @discardableResult
     func startFindPerson(person: String, records: [VideoRecord],
                          model: VideoScanModel) -> FindPersonJob? {
-        let duplicate = jobs.contains { job in
+        let predecessor = jobs.first { job in
             guard job.state.isActive, let f = job as? FindPersonJob else { return false }
             return f.person.compare(person, options: .caseInsensitive) == .orderedSame
-        }
-        guard !duplicate else {
-            findLog.notice("find person REFUSED duplicate dispatch: \(person, privacy: .public) job already active")
-            return nil
-        }
+        } as? FindPersonJob
         let job = FindPersonJob(person: person, records: records, model: model)
+        job.precededBy = predecessor
+        job.mediaTechForPath = mediaTechForPath
+        if predecessor != nil {
+            findLog.notice("find person QUEUED: \(person, privacy: .public) — \(records.count) file(s) behind the active job")
+        }
         add(job)
         job.start()
         return job

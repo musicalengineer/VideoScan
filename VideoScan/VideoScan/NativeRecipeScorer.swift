@@ -249,8 +249,19 @@ actor NativeRecipeScorer: RecipeScoring {
     /// QuickTime, …) an ffmpeg rawvideo pipe — the python engine's
     /// transport. ffmpeg frames arrive pre-rotated (autorotate), so that
     /// path's orientation/transform are identity.
+    /// Containers AVFoundation cannot open at all — the doomed open
+    /// attempt (0.3–1.5 s each, 45 s worst case through the hang race)
+    /// is skipped and the clip goes straight to the ffmpeg transport.
+    private static let ffmpegOnlyExtensions: Set<String> = ["mkv", "webm", "mxf"]
+
     private func openFrameSource(clip: URL, frameInterval: Double) async
         -> Result<FrameSource, RecipeError> {
+        let ext = clip.pathExtension.lowercased()
+        if Self.ffmpegOnlyExtensions.contains(ext) {
+            return await Self.openFFmpegSource(
+                clip: clip, frameInterval: frameInterval,
+                why: "\(ext) container — AVFoundation skipped")
+        }
         switch await Self.openReaderTimed(clip: clip, samplingFPS: params.samplingFPS) {
         case .success(let ctx):
             let stream: AsyncStream<PrefetchedFrame>
@@ -282,26 +293,38 @@ actor NativeRecipeScorer: RecipeScoring {
                 }))
 
         case .failure(let openError):
-            switch await FFmpegFrameProvider.open(clip: clip, frameInterval: frameInterval) {
-            case .failure(let ffError):
-                return .failure(RecipeError(
-                    "\(openError.message); ffmpeg fallback: \(ffError.message)"))
-            case .success(let provider):
-                recipeLog.notice("ffmpeg decode fallback for \(clip.lastPathComponent, privacy: .public) (\(openError.message, privacy: .public))")
-                return .success(FrameSource(
-                    stream: provider.frames(),
-                    release: { provider.releaseSlot() },
-                    duration: provider.duration,
-                    orientation: .up, transform: .identity,
-                    transport: "ffmpeg",
-                    postLoopError: {
-                        // A consumer-side cancel SIGTERMs ffmpeg (nonzero
-                        // exit) — that's not a decode failure, and the job
-                        // discards post-cancel results anyway.
-                        guard !Task.isCancelled else { return nil }
-                        return provider.failureMessage()
-                    }))
-            }
+            return await Self.openFFmpegSource(
+                clip: clip, frameInterval: frameInterval,
+                why: openError.message)
+        }
+    }
+
+    /// The ffmpeg arm of the transport ladder — reached directly for
+    /// ffmpeg-only containers or as the fallback when AVFoundation's
+    /// open fails/times out. `why` explains the routing in the log and
+    /// in a dual-cause error message.
+    private static func openFFmpegSource(clip: URL, frameInterval: Double,
+                                         why: String) async
+        -> Result<FrameSource, RecipeError> {
+        switch await FFmpegFrameProvider.open(clip: clip, frameInterval: frameInterval) {
+        case .failure(let ffError):
+            return .failure(RecipeError(
+                "\(why); ffmpeg fallback: \(ffError.message)"))
+        case .success(let provider):
+            recipeLog.notice("ffmpeg decode fallback for \(clip.lastPathComponent, privacy: .public) (\(why, privacy: .public))")
+            return .success(FrameSource(
+                stream: provider.frames(),
+                release: { provider.releaseSlot() },
+                duration: provider.duration,
+                orientation: .up, transform: .identity,
+                transport: "ffmpeg",
+                postLoopError: {
+                    // A consumer-side cancel SIGTERMs ffmpeg (nonzero
+                    // exit) — that's not a decode failure, and the job
+                    // discards post-cancel results anyway.
+                    guard !Task.isCancelled else { return nil }
+                    return provider.failureMessage()
+                }))
         }
     }
 
