@@ -302,10 +302,17 @@ struct MediaFileOperationRow: View {
             .padding(.vertical, 6)
 
             if job.state == .running || job.state == .cancelling {
-                ProgressView(value: job.isIndeterminate ? nil : job.fraction)
+                // A paused verb must LOOK paused (Rick 2026-08-04): a
+                // suspended child emits no progress, so the bar freezes
+                // at its last fraction — never the indeterminate bounce,
+                // which reads as work happening — and dims to gray.
+                ProgressView(value: job.isPaused
+                    ? job.fraction
+                    : (job.isIndeterminate ? nil : job.fraction))
                     .progressViewStyle(.linear)
                     .controlSize(.small)
-                    .tint(job.state == .cancelling ? .orange : .blue)
+                    .tint(job.state == .cancelling ? .orange
+                          : (job.isPaused ? .gray : .blue))
                     .padding(.horizontal, 12)
                     .padding(.bottom, 4)
             }
