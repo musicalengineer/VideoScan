@@ -66,6 +66,30 @@ func catchObjCException(_ block: () -> Void) -> NSException? {
 actor ArcFaceModelLoader {
     static let shared = ArcFaceModelLoader()
 
+    /// Compute-units override for the ArcFace loads — the codex #106
+    /// microbench measured .all choosing the GPU for this ML Program
+    /// model at ~434 emb/s vs ~784 emb/s with .cpuAndNeuralEngine
+    /// (1.8×). Default stays .all until the recipe-parity gate and an
+    /// end-to-end M4 benchmark say otherwise; the env var makes the
+    /// A/B runnable from --recipe-calibrate without a rebuild.
+    ///
+    ///   VS_ARCFACE_COMPUTE_UNITS = all | cpuAndNeuralEngine |
+    ///                              cpuAndGPU | cpuOnly
+    static var configuredComputeUnits: MLComputeUnits {
+        switch ProcessInfo.processInfo.environment["VS_ARCFACE_COMPUTE_UNITS"] {
+        case "cpuAndNeuralEngine": return .cpuAndNeuralEngine
+        case "cpuAndGPU": return .cpuAndGPU
+        case "cpuOnly": return .cpuOnly
+        default: return .all
+        }
+    }
+
+    private static func makeConfiguration() -> MLModelConfiguration {
+        let config = MLModelConfiguration()
+        config.computeUnits = configuredComputeUnits
+        return config
+    }
+
     /// Cached URL of the compiled .mlmodelc — resolved on first successful
     /// load and reused across all subsequent getModel() calls.
     private var compiledURL: URL?
@@ -77,8 +101,7 @@ actor ArcFaceModelLoader {
     func getModel() -> (MLModel?, String?) {
         if let url = compiledURL {
             // Fast path: URL already resolved — just rebuild the MLModel.
-            let config = MLModelConfiguration()
-            config.computeUnits = .all
+            let config = Self.makeConfiguration()
             do {
                 let loaded = try MLModel(contentsOf: url, configuration: config)
                 return (loaded, nil)
@@ -98,8 +121,7 @@ actor ArcFaceModelLoader {
         if fm.fileExists(atPath: compiledPath) {
             do {
                 let url = URL(fileURLWithPath: compiledPath)
-                let config = MLModelConfiguration()
-                config.computeUnits = .all
+                let config = Self.makeConfiguration()
                 let loaded = try MLModel(contentsOf: url, configuration: config)
                 self.compiledURL = url
                 return (loaded, nil)
@@ -119,8 +141,7 @@ actor ArcFaceModelLoader {
                 }
                 try fm.moveItem(at: compiledTempURL, to: destURL)
 
-                let config = MLModelConfiguration()
-                config.computeUnits = .all
+                let config = Self.makeConfiguration()
                 let loaded = try MLModel(contentsOf: destURL, configuration: config)
                 self.compiledURL = destURL
                 return (loaded, nil)
@@ -133,8 +154,7 @@ actor ArcFaceModelLoader {
         if let bundlePath = Bundle.main.path(forResource: "w600k_r50", ofType: "mlmodelc") {
             do {
                 let url = URL(fileURLWithPath: bundlePath)
-                let config = MLModelConfiguration()
-                config.computeUnits = .all
+                let config = Self.makeConfiguration()
                 let loaded = try MLModel(contentsOf: url, configuration: config)
                 self.compiledURL = url
                 return (loaded, nil)
