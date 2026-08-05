@@ -132,7 +132,7 @@ final class FFmpegFrameProvider: @unchecked Sendable {
             "-i", clip.path,
             "-map", "0:v:0",
             "-vf", "yadif=deint=interlaced,fps=\(fps),"
-                 + "scale=\(width):\(height)",
+                 + "scale=\(width):\(height):out_color_matrix=bt709:out_range=tv",
             "-pix_fmt", "nv12",
             "-f", "rawvideo", "pipe:1"
         ]
@@ -334,6 +334,18 @@ final class FFmpegFrameProvider: @unchecked Sendable {
                                   kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
                                   attrs, &out) == kCVReturnSuccess,
               let buffer = out else { return nil }
+
+        // Colorimetry declaration (variant under benchmark): pipe now
+        // converts to bt709/tv and the buffer says so.
+        CVBufferSetAttachment(buffer, kCVImageBufferYCbCrMatrixKey,
+                              kCVImageBufferYCbCrMatrix_ITU_R_709_2,
+                              .shouldPropagate)
+        CVBufferSetAttachment(buffer, kCVImageBufferColorPrimariesKey,
+                              kCVImageBufferColorPrimaries_ITU_R_709_2,
+                              .shouldPropagate)
+        CVBufferSetAttachment(buffer, kCVImageBufferTransferFunctionKey,
+                              kCVImageBufferTransferFunction_ITU_R_709_2,
+                              .shouldPropagate)
 
         CVPixelBufferLockBaseAddress(buffer, [])
         defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
