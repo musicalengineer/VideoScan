@@ -90,6 +90,9 @@ actor NativeRecipeScorer: RecipeScoring {
     private var embedder: RecipeFaceEmbedder?
     private var eraCentroids: [RecipeEraCentroid] = []
     private var centroidVectors: [[Float]] = []
+    /// Loaded only when params.sexGateEnabled — a load failure logs and
+    /// disables the gate rather than failing the scan (permissive).
+    private var genderAgeModel: MLModel?
 
     /// Heartbeat cadence — matches the python bridge's BEAT_EVERY so the
     /// job's stall watchdog sees the same rhythm from both engines.
@@ -170,6 +173,16 @@ actor NativeRecipeScorer: RecipeScoring {
                                                  useLandmarkAlignment: true) else { return nil }
                 return arcfaceEmbedding(from: crop, model: model,
                                         useSharedPool: false).embedding
+            }
+        }
+
+        if params.sexGateEnabled, genderAgeModel == nil {
+            onProgress?(.preparing(detail: "Loading genderage gate…"))
+            let (gate, gateErr) = await GenderAgeModelLoader.shared.getModel()
+            if let gate {
+                genderAgeModel = gate
+            } else {
+                recipeLog.error("sex gate requested but unavailable — continuing WITHOUT it: \(gateErr ?? "unknown", privacy: .public)")
             }
         }
 
@@ -429,9 +442,15 @@ actor NativeRecipeScorer: RecipeScoring {
                 let px = Self.faceSidePx(obs, imageWidth: img.width,
                                          imageHeight: img.height)
                 guard px >= params.recordPx else { continue }
-                // Sex gate would run here (python: keep F only) —
-                // unavailable natively until the genderage conversion
-                // lands. See the gap note in the file header.
+                // Sex/age gate (python parity + the boys-veto). Vetoes
+                // only CONFIDENT male reads and child reads; a failed
+                // assessment keeps the face (permissive — never lose
+                // Donna). Thresholds are calibration-owned.
+                if let gate = genderAgeModel,
+                   let reading = genderAgeAssess(face: obs, in: img, model: gate) {
+                    if reading.age < params.sexGateMinAge { continue }
+                    if -reading.femaleMargin > params.sexGateMaleVetoMargin { continue }
+                }
                 guard let embedding = embedder(img, obs) else { continue }
                 let cos = RecipeMath.maxCosine(embedding, centroids: centroidVectors)
                 if params.collectFaceSamples {

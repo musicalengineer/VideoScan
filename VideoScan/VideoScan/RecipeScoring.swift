@@ -123,6 +123,20 @@ struct RecipeParameters: Sendable, Equatable {
     /// Calibration only: collect per-face RecipeFaceSample lists. Leave
     /// false in production (see RecipeClipScore.faceSamples).
     var collectFaceSamples: Bool = false
+
+    // MARK: Sex/age gate (Rick 2026-08-05 — restores the python
+    // reference's genderage gate; OFF until --recipe-calibrate
+    // --sex-gate measures the thresholds with Vision boxes).
+    /// Master switch for the genderage attribute gate.
+    var sexGateEnabled: Bool = false
+    /// Veto a face when maleLogit − femaleLogit exceeds this (a
+    /// CONFIDENT male read). Permissive by design: ambiguous faces
+    /// keep voting — Rick's loss function is "never lose Donna."
+    var sexGateMaleVetoMargin: Float = 1.0
+    /// Veto faces reading younger than this — Donna is never a child
+    /// in this archive, and the measured confusion class is the boys
+    /// as kids (child faces read androgynously but they DO read young).
+    var sexGateMinAge: Int = 18
 }
 
 // MARK: - Protocol

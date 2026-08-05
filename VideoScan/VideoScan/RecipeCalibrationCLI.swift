@@ -214,6 +214,7 @@ enum RecipeCalibrationCLI {
                     throw CLIError("unknown engine: \(raw) (adaface|arcface)")
                 }
                 options.engine = engine
+            case "--sex-gate": options.params.sexGateEnabled = true
             case "--fps": options.params.samplingFPS = try doubleValue(after: argument)
             case "--top-k":
                 guard let k = Int(try value(after: argument)), k > 0 else {
