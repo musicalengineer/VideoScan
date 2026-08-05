@@ -135,6 +135,7 @@ final class FindPersonJob: MediaFileOperationJob {
         var parts = ["Found and tagged \(person) \(tagged) time\(tagged == 1 ? "" : "s")"]
         if maybes > 0 { parts.append("\(maybes) maybe") }
         if errors > 0 { parts.append("\(errors) error\(errors == 1 ? "" : "s")") }
+        if duplicatesReused > 0 { parts.append("\(duplicatesReused) duplicate\(duplicatesReused == 1 ? "" : "s") reused") }
         if elapsed > 0, completed > 0 {
             parts.append(String(format: "%.1f files/h",
                                 Double(completed) / elapsed * 3_600))
@@ -145,6 +146,34 @@ final class FindPersonJob: MediaFileOperationJob {
     }
 
     // MARK: Wedged-clip skip (GH #156 — Rick 2026-08-04: "skip it and log it")
+
+    // MARK: In-run fingerprint dedup (Rick 2026-08-05: "keep a hash of
+    // files already scanned, skip and reuse"). The 2026-08-04 overnight
+    // measured ≥46m42s of duplicate scans across seven byte-identical
+    // groups in ONE sweep — same content under different names/paths.
+    // Contract from that night's evidence: group by CONTENT FINGERPRINT
+    // (size|duration|partialMD5 — never filename: same-name files
+    // scored .720 vs .381 across distinct content), scan one witness,
+    // reuse its verdict for every twin. Reusing beats rescanning even
+    // for correctness: one scan = one decode route, whereas two scans
+    // can take different routes and disagree (the .119 tier-flip pair).
+    // Error verdicts are reused too — a metadata-liar's twin repeats
+    // the same 12-minute watchdog toll for the same outcome (measured
+    // twice). "missing file" never enters the ledger (path-specific,
+    // not content-specific). In-run only; cross-run persistence awaits
+    // the journal/unscannable-marker decision.
+
+    /// verdict + witness filename per content fingerprint, this run.
+    private var verdictByFingerprint: [String: (verdict: RecipeClipScore, witness: String)] = [:]
+    private(set) var duplicatesReused = 0
+
+    /// Content-identity key, or nil when the record can't prove one
+    /// (no partial hash yet / zero size). Pure seam for tests — the
+    /// triple matches the overnight evidence audit's grouping.
+    nonisolated static func fingerprintKey(for rec: VideoRecord) -> String? {
+        guard !rec.partialMD5.isEmpty, rec.sizeBytes > 0 else { return nil }
+        return "\(rec.sizeBytes)|\(rec.durationSeconds)|\(rec.partialMD5)"
+    }
 
     /// Resolves the current clip's score-race when the stall watchdog
     /// abandons it. nil while not scoring (python arm never sets it, so
@@ -546,7 +575,21 @@ final class FindPersonJob: MediaFileOperationJob {
                 : nil
             startWarmingNextClip(after: index, in: actionable)
             let verdict: RecipeClipScore
-            if FileManager.default.fileExists(atPath: rec.fullPath) {
+            var reusedFromWitness: String?
+            let fingerprint = Self.fingerprintKey(for: rec)
+            if !FileManager.default.fileExists(atPath: rec.fullPath) {
+                verdict = RecipeClipScore(error: "missing file")
+            } else if let fingerprint,
+                      let prior = verdictByFingerprint[fingerprint] {
+                // Fingerprint-equivalent content already scanned this
+                // run — reuse the witness's verdict, skip the decode.
+                duplicatesReused += 1
+                reusedFromWitness = prior.witness
+                verdict = prior.verdict
+                clipStartedAt = Date()
+                findLog.info("find \(self.person, privacy: .public) duplicate: \(clip.lastPathComponent, privacy: .public) = \(prior.witness, privacy: .public) — verdict reused")
+                appLog.write("Find \(person) duplicate \(completed + 1)/\(total): \(clip.lastPathComponent) = \(prior.witness) — verdict reused")
+            } else {
                 // Logged BEFORE the score (durably, not just unified) so
                 // a wedged clip is named — the 2026-08-03 overnight stall
                 // died on an unidentifiable file because only completions
@@ -578,18 +621,29 @@ final class FindPersonJob: MediaFileOperationJob {
                     verdict = RecipeClipScore(
                         error: "decode wedged — no progress past the watchdog; clip skipped (GH #156)")
                 }
-            } else {
-                verdict = RecipeClipScore(error: "missing file")
+                // Every content-derived outcome enters the ledger —
+                // including errors and wedges (a byte-twin repeats the
+                // same toll for the same result, measured twice on
+                // 2026-08-04). Only path-specific outcomes stay out.
+                if let fingerprint {
+                    verdictByFingerprint[fingerprint] =
+                        (verdict, clip.lastPathComponent)
+                }
             }
             if Task.isCancelled { break }
             let clipWall = clipStartedAt.map { Date().timeIntervalSince($0) } ?? 0
             // Error verdicts keep their stats too when the decode got far
             // enough to know the transport — "ffmpeg, 210f, …" next to an
             // error is diagnosis, not noise (codex #97). Missing-file and
-            // open-failure verdicts (no transport) stay bare.
-            currentClipDetail = verdict.decodeTransport != nil
-                ? Self.clipDetail(verdict: verdict, wallSeconds: clipWall)
-                : nil
+            // open-failure verdicts (no transport) stay bare. Duplicates
+            // credit their witness instead of masquerading as fresh scans.
+            if let witness = reusedFromWitness {
+                currentClipDetail = "duplicate of \(witness)"
+            } else {
+                currentClipDetail = verdict.decodeTransport != nil
+                    ? Self.clipDetail(verdict: verdict, wallSeconds: clipWall)
+                    : nil
+            }
             monitor.tick()
             // Funnel through the same event handler as the python arm so
             // tagging, tallies, and progress stay engine-agnostic.
