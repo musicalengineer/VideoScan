@@ -107,16 +107,32 @@ final class FFmpegFrameProvider: @unchecked Sendable {
         self.frameInterval = frameInterval
         self.slots = DispatchSemaphore(value: bufferCapacity)
 
-        // yadif,fps mirrors the python engine's sampling; the explicit
-        // scale pins the emitted dimensions to the probed (evenified)
-        // ones so a frame is always exactly width*height*3/2 bytes.
+        // Filter chain (route-parity hardened 2026-08-05 — codex #255
+        // reproduced a .161 score delta from IDENTICAL pixels through
+        // the two decode routes):
+        //  - yadif=deint=interlaced: deinterlace ONLY frames flagged
+        //    interlaced. Unconditional yadif (the python-parity
+        //    original) line-averages PROGRESSIVE content and shifts
+        //    embeddings; per-frame gating keeps the VHS rescues
+        //    deinterlaced and leaves progressive renders untouched.
+        //    (Container field_order is no guide — the FFV1 rescues
+        //    probe as "unknown".)
+        //  - explicit bt709/tv-range output: without it, ffmpeg keeps
+        //    the source matrix while the Swift side's CVPixelBuffer
+        //    carries 709 attachments — a silent 601-vs-709 shift on
+        //    exactly the era material this transport serves. The
+        //    attachments set in makeNV12Buffer make the contract
+        //    explicit end to end.
+        // The explicit scale pins emitted dimensions to the probed
+        // (evenified) ones so a frame is always width*height*3/2 bytes.
         let fps = String(format: "%g", 1.0 / frameInterval)
         process.executableURL = URL(fileURLWithPath: ffmpegPath)
         process.arguments = [
             "-nostdin", "-v", "error",
             "-i", clip.path,
             "-map", "0:v:0",
-            "-vf", "yadif,fps=\(fps),scale=\(width):\(height)",
+            "-vf", "yadif=deint=interlaced,fps=\(fps),"
+                 + "scale=\(width):\(height)",
             "-pix_fmt", "nv12",
             "-f", "rawvideo", "pipe:1"
         ]
