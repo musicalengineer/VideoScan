@@ -215,6 +215,10 @@ enum RecipeCalibrationCLI {
                 }
                 options.engine = engine
             case "--sex-gate": options.params.sexGateEnabled = true
+            case "--sex-gate-min-age":
+                options.params.sexGateMinAge = Int(try value(after: argument)) ?? 18
+            case "--sex-gate-male-margin":
+                options.params.sexGateMaleVetoMargin = Float(try value(after: argument)) ?? 1.0
             case "--fps": options.params.samplingFPS = try doubleValue(after: argument)
             case "--top-k":
                 guard let k = Int(try value(after: argument)), k > 0 else {

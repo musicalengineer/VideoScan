@@ -129,11 +129,14 @@ extension VideoScanModel {
         // Smoke-derived on DonnaTestVideos (AUC 0.995) — w600k ArcFace
         // via insightface, WITH sex gate.
         "recipe-v1-python": (detected: 0.55, suspected: 0.38),
-        // Measured calibration sweep, native ArcFace CoreML path, small-
-        // face bar 0.65, NO sex gate yet (AUC 0.954): 0.46 → 12/15
-        // recall 0 FP on the dev corpus; 0.30 catches one more Donna
-        // with 3 NotDonna landing in the maybe tier.
-        "recipe-v1-native": (detected: 0.46, suspected: 0.30),
+        // Measured on Rick's GRADED ground-truth corpus (2026-08-05,
+        // 24 TP / 15 FP archive clips) WITH the margin-only sex gate:
+        // the gate shifts all distributions down, so the suspected bar
+        // follows 0.30 → 0.26 — holds 22/24 true positives (vs 18 at
+        // 0.30) while the gate still halves false positives (15 → 8).
+        // The two remaining losses are vote-pollution cameo cases.
+        // Detected 0.46 unchanged (prior sweep + overnight evidence).
+        "recipe-v1-native": (detected: 0.46, suspected: 0.26),
     ]
 
     /// Back-compat spellings (python-space) — several tests and the

@@ -79,7 +79,13 @@ struct RecipeScoringTests {
                                           recipeID: "recipe-v1-native") == .detected)
         #expect(VideoScanModel.recipeTier(forScore: 0.459,
                                           recipeID: "recipe-v1-native") == .suspected)
-        #expect(VideoScanModel.recipeTier(forScore: 0.299,
+        // Native suspected bar 0.26 — recalibrated 2026-08-05 on Rick's
+        // graded ground truth WITH the margin-only sex gate (the gate
+        // shifts distributions down; 0.26 holds 22/24 TPs vs 18 at 0.30
+        // while FPs stay halved). See recipeThresholds comment.
+        #expect(VideoScanModel.recipeTier(forScore: 0.26,
+                                          recipeID: "recipe-v1-native") == .suspected)
+        #expect(VideoScanModel.recipeTier(forScore: 0.259,
                                           recipeID: "recipe-v1-native") == .none)
 
         // Unknown recipe IDs fail closed to the stricter python-space bars.

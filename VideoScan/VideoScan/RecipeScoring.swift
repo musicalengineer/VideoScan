@@ -133,10 +133,15 @@ struct RecipeParameters: Sendable, Equatable {
     /// CONFIDENT male read). Permissive by design: ambiguous faces
     /// keep voting — Rick's loss function is "never lose Donna."
     var sexGateMaleVetoMargin: Float = 1.0
-    /// Veto faces reading younger than this — Donna is never a child
-    /// in this archive, and the measured confusion class is the boys
-    /// as kids (child faces read androgynously but they DO read young).
-    var sexGateMinAge: Int = 18
+    /// Veto faces reading younger than this. DEFAULT 0 (OFF) — the
+    /// 2026-08-05 ground-truth test measured age estimation on low-
+    /// quality VIDEO faces skewing young: minAge 18 executed marginal
+    /// Donna as a "child" (one .905 clip fell to zero votes). Gallery-
+    /// photo validation did not transfer to archive video. The male-
+    /// margin veto alone kept 60% of the FP kills without that loss;
+    /// re-enable only with a face-size/quality condition and fresh
+    /// ground-truth measurement.
+    var sexGateMinAge: Int = 0
 }
 
 // MARK: - Protocol
