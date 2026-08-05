@@ -543,9 +543,16 @@ final class FindPersonJob: MediaFileOperationJob {
         // (--recipe-calibrate output + Rick's sign-off), native runs are
         // for parity evaluation — which is why this arm is flag-gated and
         // the flag defaults OFF.
+        // Sex/age gate ON for production Find & Tag (Rick 2026-08-05,
+        // after the measured A/B: AUC .949→.969, impostor ceiling
+        // .523→.395 with Donna's distribution unchanged). Permissive
+        // vetoes only — confident-male and child reads; the gate
+        // degrades to OFF if its model is missing.
+        var recipeParams = RecipeParameters()
+        recipeParams.sexGateEnabled = true
         let scorer = NativeRecipeScorer(
             backend: .arcface,
-            params: RecipeParameters(),
+            params: recipeParams,
             pauseGate: nativeGate,
             onProgress: { [weak self] event in
                 monitor.tick()
