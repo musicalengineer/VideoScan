@@ -179,6 +179,13 @@ final class FindPersonJob: MediaFileOperationJob {
     /// abandons it. nil while not scoring (python arm never sets it, so
     /// that arm keeps the old whole-batch stall behavior).
     private var clipAbandonContinuation: CheckedContinuation<RecipeClipScore?, Never>?
+    /// Guards the race against LATE completions: an abandoned clip's
+    /// score task can finish seconds later, when the NEXT clip's
+    /// continuation is already pending — without this generation check
+    /// it would resume that continuation with the WRONG clip's verdict
+    /// (misattribution risk identified in the 2026-08-06 cascade).
+    /// Bumped at every new clip AND at every abandon.
+    private var clipGeneration = 0
     private var consecutiveAbandons = 0
     /// This many CONSECUTIVE wedged clips means the volume, not the
     /// file, is sick — fail the batch (the old behavior) instead of
@@ -610,12 +617,19 @@ final class FindPersonJob: MediaFileOperationJob {
                 // the batch continues. The scorer actor is reentrant at
                 // its awaits, so the next clip's score() proceeds while
                 // the wedged one stays suspended.
+                clipGeneration += 1
+                let generation = clipGeneration
                 let scoreTask = Task { await scorer.score(clip: clip) }
                 let raced: RecipeClipScore? = await withCheckedContinuation { cont in
                     clipAbandonContinuation = cont
                     Task { @MainActor [weak self] in
                         let v = await scoreTask.value
-                        guard let self, let pending = self.clipAbandonContinuation else { return }
+                        // Generation guard: only THIS clip's completion
+                        // may resume this continuation — a late finish
+                        // from an abandoned predecessor must never
+                        // deliver its verdict to the current clip.
+                        guard let self, self.clipGeneration == generation,
+                              let pending = self.clipAbandonContinuation else { return }
                         self.clipAbandonContinuation = nil
                         pending.resume(returning: v)
                     }
@@ -883,6 +897,7 @@ final class FindPersonJob: MediaFileOperationJob {
         guard let pending = clipAbandonContinuation else { return false }
         consecutiveAbandons += 1
         guard consecutiveAbandons < Self.consecutiveAbandonCap else { return false }
+        clipGeneration += 1   // invalidate the abandoned task's completion
         clipAbandonContinuation = nil
         let name = currentClipName ?? "?"
         appLog.write("Find \(person) WEDGED: skipping \(completed + 1)/\(actionableTotal): \(name) — no progress for \(Int(silentFor))s, decode abandoned (GH #156)")

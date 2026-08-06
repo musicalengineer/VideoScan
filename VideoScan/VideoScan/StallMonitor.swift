@@ -214,6 +214,15 @@ final class StallMonitor: @unchecked Sendable {
             return
         }
         lastTickAt = clock()
+        // A start() begins a FRESH watch: clear the fired latch. The
+        // latch guarantees onStall fires exactly once PER WATCH — but
+        // skip-and-continue consumers (FindPersonJob wedge-skip,
+        // GH #156) legitimately stop()+start() after a fire, and
+        // without this reset the latch made every subsequent poll fire
+        // instantly while recordTick was ignored — the 2026-08-06
+        // false-wedge cascade (healthy files abandoned every 15 s for
+        // the rest of the run).
+        fired = false
 
         // Power assertion — see the "Power assertion" section below for the
         // option rationale. Taken under the lock so exactly one token can

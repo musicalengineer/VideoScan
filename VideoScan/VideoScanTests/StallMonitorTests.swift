@@ -271,6 +271,69 @@ struct StallMonitorTests {
         }
     }
 
+    // MARK: Restart clears the fired latch (GH #156 skip-and-continue)
+    //
+    // Regression for the 2026-08-06 false-wedge cascade: FindPersonJob's
+    // wedge-skip legitimately stop()s + start()s the monitor after a fire
+    // to watch the NEXT clip. The latch is per-WATCH, not per-lifetime:
+    // without clearing `fired` in start(), every restarted poll loop
+    // fired instantly at its first poll while recordTick was ignored —
+    // healthy files were abandoned every ~15s for the rest of the run.
+    // RED before the fix: secondFire happens despite continuous ticking.
+
+    @Test func restartAfterFireClearsLatchAndWatchesFresh() async {
+        final class Clock: @unchecked Sendable {
+            private let lock = NSLock()
+            private var t: Double = 0
+            func set(_ v: Double) { lock.lock(); t = v; lock.unlock() }
+            func advance(_ d: Double) { lock.lock(); t += d; lock.unlock() }
+            func now() -> Double { lock.lock(); defer { lock.unlock() }; return t }
+        }
+        final class Counter: @unchecked Sendable {
+            private let lock = NSLock()
+            private var n = 0
+            func bump() { lock.lock(); n += 1; lock.unlock() }
+            var count: Int { lock.lock(); defer { lock.unlock() }; return n }
+        }
+        let clock = Clock()
+        let fires = Counter()
+        let m = StallMonitor(label: "restart-latch-test",
+                             thresholdSeconds: 1,
+                             pollIntervalSeconds: 0.02,
+                             clock: { clock.now() },
+                             onStall: { _ in fires.bump() })
+
+        // Watch #1: genuine stall — must fire exactly once.
+        m.start()
+        clock.set(1000)
+        for _ in 0..<50 where fires.count == 0 {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(fires.count == 1, "watch #1 must fire on genuine stall")
+
+        // Skip-and-continue: restart to watch the next clip.
+        m.stop()
+        m.start()
+
+        // Watch #2 is HEALTHY: advance in small steps, ticking each step.
+        // The unfixed latch fires at the first poll despite the ticks.
+        for _ in 0..<15 {
+            clock.advance(0.1)
+            m.tick()
+            try? await Task.sleep(nanoseconds: 25_000_000)
+        }
+        #expect(fires.count == 1,
+                "restarted watch false-fired on a healthy, ticking clip (latch not cleared)")
+
+        // Watch #2 must still be a REAL watchdog: go silent past threshold.
+        clock.advance(1000)
+        for _ in 0..<50 where fires.count == 1 {
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+        m.stop()
+        #expect(fires.count == 2, "restarted watch must still catch a genuine stall")
+    }
+
     @Test func restartAfterStopSpawnsFreshLoopAndToken() {
         // stop() must fully reset so a later start() works — pins that the
         // fix didn't turn "idempotent while running" into "once, ever".
