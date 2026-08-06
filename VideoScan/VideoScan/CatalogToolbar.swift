@@ -100,6 +100,9 @@ struct CatalogToolbar<Dashboard: View>: View {
     /// Search-syntax help popover toggled by the `?` button next to
     /// the catalog search field. Local UI state — no need to persist.
     @State private var showSearchHelp = false
+    /// Family Archivist ask popover (P2 front door) — plain English in,
+    /// composed search grammar out, visible in the search field.
+    @State private var showAskPopover = false
 
     /// Active (non-purged) records currently marked .confirmedJunk. This is
     /// the same query the model exposes via `confirmedJunkRecords`; we read
@@ -472,6 +475,23 @@ struct CatalogToolbar<Dashboard: View>: View {
             .help("Search syntax reference")
             .popover(isPresented: $showSearchHelp, arrowEdge: .bottom) {
                 CatalogSearchHelpPopover()
+            }
+
+            // Family Archivist "Ask" — plain-English search (P2 front
+            // door; docs/family-archivist-phase1.md). The translated
+            // query lands in the search field, visible and editable.
+            Button {
+                showAskPopover.toggle()
+            } label: {
+                Image(systemName: "sparkles")
+                    .foregroundColor(.purple)
+            }
+            .buttonStyle(.plain)
+            .help("Ask in plain English — \"show me Donna down the cape 1990 to 1995\"")
+            .accessibilityIdentifier("archivist.askButton")
+            .popover(isPresented: $showAskPopover, arrowEdge: .bottom) {
+                ArchivistAskPopover(searchText: $searchText,
+                                    isPresented: $showAskPopover)
             }
 
             // Persistent dossier progress chip — small ring + N/M label.
