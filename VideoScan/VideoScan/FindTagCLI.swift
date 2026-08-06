@@ -174,13 +174,22 @@ enum FindTagCLI {
         }
         if let limit = options.limit { plan = Array(plan.prefix(limit)) }
 
-        // Gallery provenance: verdicts are only comparable against the
-        // exact reference gallery that produced them, so the digest
-        // stamps runStart and gates cross-run reuse (codex QA #275).
+        // Scorer configuration — EXACT in-app parity (FindPersonJob):
+        // arcface backend, sex gate ON. Built HERE (before the journal)
+        // so its provenance digest can stamp runStart.
+        var recipeParams = RecipeParameters()
+        recipeParams.sexGateEnabled = true
+        let engine = "arcface"
+
+        // Provenance: verdicts are only comparable against the exact
+        // reference gallery AND scorer configuration that produced
+        // them; both digests stamp runStart and gate cross-run reuse
+        // (codex QA #275/#277).
         let galleryDigest = Self.galleryDigest(atPath: options.galleryPath)
+        let paramsDigest = Self.paramsDigest(engine: engine, params: recipeParams)
 
         // Resume index from prior journals (success verdicts only,
-        // same-gallery runs only).
+        // same-gallery same-params runs only).
         var reusable: [String: FindTagVerdict] = [:]
         if options.resume {
             let files = (try? FileManager.default.contentsOfDirectory(
@@ -188,7 +197,8 @@ enum FindTagCLI {
                 .filter { $0.pathExtension == "jsonl" } ?? []
             reusable = FindTagJournalReader.reusableVerdicts(
                 fromJournalFiles: files, person: options.person,
-                recipeID: recipeID, galleryDigest: galleryDigest)
+                recipeID: recipeID, galleryDigest: galleryDigest,
+                paramsDigest: paramsDigest)
         }
 
         // Journal for THIS run.
@@ -201,9 +211,10 @@ enum FindTagCLI {
             journal = try FindTagJournalWriter(fileURL: journalURL)
             try journal.append(.runStart(FindTagRunStart(
                 runId: runId, at: startedAt, person: options.person,
-                recipeID: recipeID, engine: "arcface",
+                recipeID: recipeID, engine: engine,
                 catalogPath: options.catalogURL.path, planned: plan.count,
-                galleryDigest: galleryDigest)))
+                galleryDigest: galleryDigest,
+                paramsDigest: paramsDigest)))
         } catch {
             err("findtagd: cannot open journal — \(error.localizedDescription)")
             return 2
@@ -214,14 +225,11 @@ enum FindTagCLI {
             + "planned=\(plan.count) (skipped \(skippedHuman) human-settled) "
             + "resume-index=\(reusable.count) journal=\(journalURL.lastPathComponent)")
 
-        // Scorer — EXACT in-app configuration (FindPersonJob parity):
-        // arcface backend, sex gate ON, no pause gate (nothing to pause
-        // for headless).
+        // Scorer — the recipeParams built above (no pause gate: nothing
+        // to pause for headless).
         let beats = BeatBox()
-        var params = RecipeParameters()
-        params.sexGateEnabled = true
         let scorer = NativeRecipeScorer(
-            backend: .arcface, params: params,
+            backend: .arcface, params: recipeParams,
             onProgress: { _ in beats.note() })
         do {
             _ = try await scorer.prepare(
@@ -360,9 +368,20 @@ enum FindTagCLI {
             : stop.isRaised ? .terminated : .completed
         heartbeatTask.cancel()
         _ = await heartbeatTask.value   // join — no heartbeat after runEnd
-        try? journal.append(.runEnd(FindTagRunEnd(
-            at: Date(), status: status, scored: scored, errors: errors,
-            reused: reused, skippedHuman: skippedHuman)))
+        do {
+            try journal.append(.runEnd(FindTagRunEnd(
+                at: Date(), status: status, scored: scored, errors: errors,
+                reused: reused, skippedHuman: skippedHuman)))
+        } catch {
+            // Verdicts above this line are all fsync'd and stand; the
+            // missing runEnd is the died-hard signature by contract.
+            // But WE know we couldn't certify — exit nonzero (codex
+            // #277 partial #1: try? here silently reported success).
+            err("findtagd: runEnd append failed — \(error.localizedDescription)")
+            out("findtagd: \(status.rawValue) (UNCERTIFIED — terminal journal write failed) "
+                + "— scored \(scored), errors \(errors), reused \(reused)")
+            return 1
+        }
         out("findtagd: \(status.rawValue) — scored \(scored), errors \(errors), "
             + "reused \(reused), skipped \(skippedHuman) human-settled")
         return journalBroken ? 1 : 0
@@ -415,28 +434,44 @@ enum FindTagCLI {
 
     // MARK: - Gallery provenance
 
-    /// Content digest of the reference-gallery tree: sorted
-    /// relativePath|size|mtime lines, SHA-256'd. Cheap (a directory
-    /// walk, no file reads) and changes whenever a reference photo is
-    /// added, removed, replaced, or retouched — which is exactly when
-    /// old scores stop being comparable. nil (unreadable gallery)
-    /// disables cross-run reuse rather than risking stale scores.
+    /// CONTENT digest of the reference-gallery tree: sorted
+    /// relativePath|SHA256(file bytes) lines, hashed again. Reads every
+    /// gallery file — acceptable because galleries are a few dozen
+    /// photos, and this runs once per daemon launch. Byte-exact by
+    /// design (codex #277 partial #3: the earlier size|mtime version
+    /// missed same-second retouches and copied-with-mtime edits). nil
+    /// (unreadable/empty gallery) disables cross-run reuse rather than
+    /// risking stale scores.
     static func galleryDigest(atPath path: String) -> String? {
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(atPath: path) else { return nil }
         var lines: [String] = []
         for case let rel as String in enumerator {
             let full = (path as NSString).appendingPathComponent(rel)
-            let attrs = try? fm.attributesOfItem(atPath: full)
-            let size = (attrs?[.size] as? Int64) ?? 0
-            let mtime = (attrs?[.modificationDate] as? Date)?
-                .timeIntervalSince1970 ?? 0
-            lines.append("\(rel)|\(size)|\(Int(mtime))")
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: full, isDirectory: &isDir),
+                  !isDir.boolValue else { continue }
+            guard let data = fm.contents(atPath: full) else { return nil }
+            let fileHash = SHA256.hash(data: data)
+                .map { String(format: "%02x", $0) }.joined()
+            lines.append("\(rel)|\(fileHash)")
         }
         guard !lines.isEmpty else { return nil }
         let digest = SHA256.hash(
             data: Data(lines.sorted().joined(separator: "\n").utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Scorer-configuration provenance: engine + every RecipeParameters
+    /// field, via its reflected description, SHA-256'd. Field additions,
+    /// removals, or value changes all change the digest — which is the
+    /// SAFE direction (over-invalidation costs a rescan; under-
+    /// invalidation reuses scores produced under different rules,
+    /// codex #277 partial #3).
+    static func paramsDigest(engine: String, params: RecipeParameters) -> String {
+        let provenance = "engine=\(engine)|\(String(describing: params))"
+        return SHA256.hash(data: Data(provenance.utf8))
+            .map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - Filters

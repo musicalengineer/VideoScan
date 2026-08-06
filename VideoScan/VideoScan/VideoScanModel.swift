@@ -667,6 +667,13 @@ final class VideoScanModel: ObservableObject {
     /// worth of parsing).
     var findTagIngestTimer: Timer?
 
+    /// Per-poll parse short-circuit: filename → (byte size at last
+    /// parse, had nothing pending). A journal whose size is unchanged
+    /// and was already exhausted is SKIPPED without re-reading — the
+    /// 30 s MainActor tick must not re-decode every historical journal
+    /// (codex QA #277 perf). In-memory only; a relaunch re-parses once.
+    var findTagIngestParseCache: [String: (size: Int64, exhausted: Bool)] = [:]
+
     /// Snapshot the current skip-directory set from scanOptions.
     /// Must be called on the main actor (returns a Sendable Set<String>
     /// that nonisolated walkers can then capture safely). The derivation
@@ -958,10 +965,12 @@ final class VideoScanModel: ObservableObject {
         // so the ~200 model-constructing tests never start a sweep.
         configurePreviewSweep()
 
-        // Detached Find and Tag daemon (2026-08-06): same launch-resume
-        // contract — respawn if the flag is ON and no live daemon holds
-        // the pidfile, and ingest any verdicts journaled while the app
-        // was away. No-op under a test host.
+        // Detached Find and Tag daemon (2026-08-06): BUILD only — the
+        // launch-resume respawn and catch-up ingest wait for
+        // activateFindTagBackground(), called by VideoScanApp after
+        // CatalogSync decides master-vs-viewer (a read-only viewer must
+        // never spawn or ingest; codex QA #277 blocker B). No-op under
+        // a test host.
         configureFindTagHelper()
     }
 
@@ -1072,8 +1081,10 @@ final class VideoScanModel: ObservableObject {
     }
 
     /// Synchronous save — call from `applicationWillTerminate` so the
-    /// snapshot is on disk before the process exits.
-    func saveCatalogNow() {
+    /// snapshot is on disk before the process exits. Returns whether the
+    /// snapshot durably reached disk (see CatalogStore.saveNow).
+    @discardableResult
+    func saveCatalogNow() -> Bool {
         catalogStore.saveNow(records: records)
     }
 

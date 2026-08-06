@@ -433,6 +433,9 @@ struct VideoScanApp: App {
                         }
                         // Apply viewer-vs-master semantics to model + store.
                         catalogModel.applyReadOnlyMode(catalogSync.isReadOnly)
+                        // NOW the daemon may activate: master spawns/
+                        // ingests, a viewer stays inert (codex #277 B).
+                        catalogModel.activateFindTagBackground()
                         // On the master, install the observer that
                         // refreshes manifest.sha256 after each save.
                         // On a viewer, kick off the initial sync.

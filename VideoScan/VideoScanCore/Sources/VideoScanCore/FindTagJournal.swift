@@ -63,17 +63,23 @@ public struct FindTagRunStart: Codable, Equatable, Sendable {
     public var catalogPath: String
     /// Files planned after filtering (video-bearing, not human-settled).
     public var planned: Int
-    /// Content digest of the reference gallery the run scored against
-    /// (filenames+sizes+mtimes hashed). Cross-run verdict REUSE requires
-    /// an exact match — a retouched Donna gallery must invalidate old
-    /// scores, or stale reuse persists forever (codex QA #275). nil
-    /// (pre-digest journals) never qualifies for reuse.
+    /// CONTENT digest of the reference gallery the run scored against
+    /// (per-file byte hashes, combined). Cross-run verdict REUSE
+    /// requires an exact match — a retouched Donna gallery must
+    /// invalidate old scores, or stale reuse persists forever (codex
+    /// QA #275). nil (pre-digest journals) never qualifies for reuse.
     public var galleryDigest: String?
+    /// Digest of the scorer configuration (engine + every
+    /// RecipeParameters field). Same exact-match reuse rule: scores
+    /// produced under different gates/thresholds/backends are not
+    /// comparable (codex QA #277).
+    public var paramsDigest: String?
 
     public init(v: Int = FindTagJournalSchema.version,
                 runId: String, at: Date, person: String, recipeID: String,
                 engine: String, catalogPath: String, planned: Int,
-                galleryDigest: String? = nil) {
+                galleryDigest: String? = nil,
+                paramsDigest: String? = nil) {
         self.v = v
         self.runId = runId
         self.at = at
@@ -83,6 +89,7 @@ public struct FindTagRunStart: Codable, Equatable, Sendable {
         self.catalogPath = catalogPath
         self.planned = planned
         self.galleryDigest = galleryDigest
+        self.paramsDigest = paramsDigest
     }
 }
 
@@ -324,17 +331,19 @@ public enum FindTagJournalReader {
     ///   - reused verdicts chain fine (their score is the witness's)
     ///   - later entries win on fingerprint collision (newest scan of
     ///     the content is the best-informed one)
-    ///   - the run's galleryDigest must EXACTLY match the caller's
-    ///     current one — scores are only comparable against the same
-    ///     reference gallery; nil on either side disqualifies (codex
-    ///     QA #275: stale-reuse-forever after a gallery change)
+    ///   - the run's galleryDigest AND paramsDigest must EXACTLY match
+    ///     the caller's current ones — scores are only comparable
+    ///     against the same reference gallery and scorer configuration;
+    ///     nil on either side disqualifies (codex QA #275/#277:
+    ///     stale-reuse-forever after a gallery or params change)
     public static func reusableVerdicts(
         fromJournalFiles files: [URL],
         person: String,
         recipeID: String,
-        galleryDigest: String?
+        galleryDigest: String?,
+        paramsDigest: String?
     ) -> [String: FindTagVerdict] {
-        guard let galleryDigest else { return [:] }
+        guard let galleryDigest, let paramsDigest else { return [:] }
         var index: [String: FindTagVerdict] = [:]
         // Filename sort ≈ chronological (files are timestamp-named);
         // later files overwrite earlier entries.
@@ -343,7 +352,8 @@ public enum FindTagJournalReader {
             guard case .runStart(let start)? = all.first,
                   start.person.compare(person, options: .caseInsensitive) == .orderedSame,
                   start.recipeID == recipeID,
-                  start.galleryDigest == galleryDigest else { continue }
+                  start.galleryDigest == galleryDigest,
+                  start.paramsDigest == paramsDigest else { continue }
             for case .verdict(let v) in all {
                 guard let fp = v.fingerprint, v.error == nil, v.score != nil else { continue }
                 index[fp] = v

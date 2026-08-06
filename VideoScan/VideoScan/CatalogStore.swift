@@ -348,11 +348,17 @@ final class CatalogStore {
     /// running — so the terminal save's (freshest) content always lands
     /// last. Any coalesced follow-up is cleared first: this save supersedes
     /// it.
-    func saveNow(records: [VideoRecord]) {
-        if Self.isRunningTests && self === CatalogStore.shared { return }
+    /// - Returns: true when the snapshot durably reached disk. Refusals
+    ///   (read-only viewer, test host) and write failures return false —
+    ///   callers whose OWN durability bookkeeping depends on this save
+    ///   (findtagd journal-ingest cursor, codex QA #277 blocker A) must
+    ///   check it; fire-and-forget callers may ignore it.
+    @discardableResult
+    func saveNow(records: [VideoRecord]) -> Bool {
+        if Self.isRunningTests && self === CatalogStore.shared { return false }
         if isReadOnly {
             NSLog("VideoScan: CatalogStore.saveNow refused — read-only viewer mode")
-            return
+            return false
         }
         debounceTask?.cancel()
         debounceTask = nil
@@ -367,7 +373,13 @@ final class CatalogStore {
         if ok {
             observer?.catalogStoreDidWrite(self)
         }
+        return ok
     }
+
+    /// The catalog file this store owns — exposed for identity checks
+    /// (findtagd ingest refuses journals produced against a DIFFERENT
+    /// catalog file, codex QA #277 blocker C).
+    var catalogFileURL: URL { fileURL }
 
     /// Schedule a save 2 seconds after the most recent call. Repeated calls
     /// reset the timer so a burst of mutations only triggers one disk write.

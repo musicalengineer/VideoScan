@@ -16,11 +16,13 @@ struct FindTagJournalTests {
 
     private func sampleStart(person: String = "Donna",
                              recipeID: String = "recipe-v1-native",
-                             galleryDigest: String? = "digest-g1") -> FindTagRunStart {
+                             galleryDigest: String? = "digest-g1",
+                             paramsDigest: String? = "digest-p1") -> FindTagRunStart {
         FindTagRunStart(runId: "RUN-1", at: Date(timeIntervalSince1970: 1_754_000_000),
                         person: person, recipeID: recipeID, engine: "arcface",
                         catalogPath: "/tmp/catalog.json", planned: 3,
-                        galleryDigest: galleryDigest)
+                        galleryDigest: galleryDigest,
+                        paramsDigest: paramsDigest)
     }
 
     private func sampleVerdict(seq: Int, fingerprint: String? = "100|1.5|abc",
@@ -143,7 +145,8 @@ struct FindTagJournalTests {
             fromJournalFiles: [f1, f2, f3],
             person: "donna",            // case-insensitive person match
             recipeID: "recipe-v1-native",
-            galleryDigest: "digest-g1")
+            galleryDigest: "digest-g1",
+            paramsDigest: "digest-p1")
 
         #expect(index.count == 1)
         #expect(index["fp-ok"]?.score == 0.55)   // later run won
@@ -171,15 +174,23 @@ struct FindTagJournalTests {
         // Current gallery differs → nothing reusable from either file.
         #expect(FindTagJournalReader.reusableVerdicts(
             fromJournalFiles: [f1, f2], person: "Donna",
-            recipeID: "recipe-v1-native", galleryDigest: "new-gallery").isEmpty)
+            recipeID: "recipe-v1-native", galleryDigest: "new-gallery",
+            paramsDigest: "digest-p1").isEmpty)
         // Unknown current gallery → no reuse at all.
         #expect(FindTagJournalReader.reusableVerdicts(
             fromJournalFiles: [f1, f2], person: "Donna",
-            recipeID: "recipe-v1-native", galleryDigest: nil).isEmpty)
-        // Matching digest still works.
+            recipeID: "recipe-v1-native", galleryDigest: nil,
+            paramsDigest: "digest-p1").isEmpty)
+        // Params changed (gate retune, backend swap) → no reuse either.
         #expect(FindTagJournalReader.reusableVerdicts(
             fromJournalFiles: [f1, f2], person: "Donna",
-            recipeID: "recipe-v1-native", galleryDigest: "old-gallery")["fp-ok"]?.score == 0.8)
+            recipeID: "recipe-v1-native", galleryDigest: "old-gallery",
+            paramsDigest: "digest-p2").isEmpty)
+        // Matching gallery AND params still works.
+        #expect(FindTagJournalReader.reusableVerdicts(
+            fromJournalFiles: [f1, f2], person: "Donna",
+            recipeID: "recipe-v1-native", galleryDigest: "old-gallery",
+            paramsDigest: "digest-p1")["fp-ok"]?.score == 0.8)
     }
 
     // MARK: Ingest cursor
