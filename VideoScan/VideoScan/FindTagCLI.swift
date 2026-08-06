@@ -1,6 +1,6 @@
 // FindTagCLI.swift — the detached find-and-tag daemon (--find-tag).
 //
-// Headless Find & Tag over the persisted catalog, modeled on the
+// Headless Find and Tag over the persisted catalog, modeled on the
 // preview-sweep helper's Stage 2 (2026-08-06). Spawned detached by the
 // app (posix_spawn + SETSID via PosixSpawnHelperLauncher) or run by
 // hand; it OUTLIVES app quit, which is the point — an 11-hour overnight
@@ -349,10 +349,13 @@ enum FindTagCLI {
     /// eventual completion hits an already-claimed OnceFlag and is
     /// dropped. Both the continuation and the flag are locals of THIS
     /// call — no daemon state a late completion could misdeliver into.
-    static func scoreWithWatchdog(scorer: NativeRecipeScorer,
+    /// Takes the RecipeScoring seam (not the concrete scorer) and an
+    /// injectable poll cadence so tests run in milliseconds.
+    static func scoreWithWatchdog(scorer: any RecipeScoring,
                                   clip: URL,
                                   beats: BeatBox,
-                                  stallSeconds: Double) async -> RecipeClipScore? {
+                                  stallSeconds: Double,
+                                  pollSeconds: Double = 5) async -> RecipeClipScore? {
         let scoreTask = Task { await scorer.score(clip: clip) }
         let once = OnceFlag()
         return await withCheckedContinuation { cont in
@@ -362,7 +365,8 @@ enum FindTagCLI {
             }
             Task {
                 while !once.isClaimed {
-                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    try? await Task.sleep(
+                        nanoseconds: UInt64(pollSeconds * 1_000_000_000))
                     if once.isClaimed { return }
                     if beats.age > stallSeconds {
                         if once.claim() { cont.resume(returning: nil) }

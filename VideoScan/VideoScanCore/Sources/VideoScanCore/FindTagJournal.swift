@@ -331,6 +331,65 @@ public enum FindTagJournalReader {
     }
 }
 
+// MARK: - Ingest state (app-side consumption cursor)
+
+/// Tracks how far the APP has applied each journal file, so ingest is
+/// idempotent across launches and polls: per filename, the highest
+/// verdict `seq` already applied. Verdicts are strictly seq-ordered
+/// within a file, so "apply everything with seq > cursor" never
+/// double-applies and never skips. Persisted as a sidecar JSON in the
+/// journal directory (it is app state ABOUT the journals, not part of
+/// any journal — a daemon crash can't tear it, and deleting it merely
+/// re-applies verdicts, which applyRecipeVerdict makes idempotent).
+public struct FindTagIngestState: Codable, Equatable, Sendable {
+
+    /// journal filename → highest verdict seq already applied.
+    public var appliedSeq: [String: Int]
+
+    public init(appliedSeq: [String: Int] = [:]) {
+        self.appliedSeq = appliedSeq
+    }
+
+    public static let filename = ".ingest-state.json"
+
+    public static func url(inJournalDirectory dir: URL) -> URL {
+        dir.appendingPathComponent(filename)
+    }
+
+    public static func restored(from url: URL) -> FindTagIngestState {
+        guard let data = try? Data(contentsOf: url),
+              let state = try? JSONDecoder().decode(FindTagIngestState.self, from: data) else {
+            return FindTagIngestState()
+        }
+        return state
+    }
+
+    public func save(to url: URL) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(self) else { return }
+        try? data.write(to: url, options: .atomic)
+    }
+
+    /// The verdicts in `entries` not yet applied for `filename`,
+    /// in seq order. Pure — the app maps these through its record
+    /// lookup + applyRecipeVerdict.
+    public func pendingVerdicts(in entries: [FindTagJournalEntry],
+                                filename: String) -> [FindTagVerdict] {
+        let cursor = appliedSeq[filename] ?? 0
+        var out: [FindTagVerdict] = []
+        for case .verdict(let v) in entries where v.seq > cursor {
+            out.append(v)
+        }
+        return out.sorted { $0.seq < $1.seq }
+    }
+
+    /// Advance the cursor after applying through `seq`.
+    public mutating func markApplied(filename: String, through seq: Int) {
+        appliedSeq[filename] = max(appliedSeq[filename] ?? 0, seq)
+    }
+}
+
 // MARK: - Standard paths
 
 /// Canonical on-disk locations for the find-tag daemon. Journals are

@@ -18,6 +18,11 @@ struct SettingsTabView: View {
     /// Constant-time liveness seam for the detached helper. Sampled only
     /// while Settings is visible.
     let isPreviewHelperRunning: () -> Bool
+    /// Detached Find and Tag daemon (2026-08-06): checkbox routes
+    /// through VideoScanModel.setFindTagBackgroundEnabled; liveness seam
+    /// same shape as the preview helper's.
+    @Binding var findTagEnabled: Bool
+    let isFindTagHelperRunning: () -> Bool
 
     private func ramDiskColor(_ gb: Int) -> Color {
         let pct = Double(gb) / Double(totalRAMGB)
@@ -143,6 +148,16 @@ struct SettingsTabView: View {
                     PreviewSweepStatusLine(sweep: sweep)
                         .padding(.top, 2)
                     PreviewHelperStatusLine(isRunning: isPreviewHelperRunning)
+                        .padding(.horizontal, 10)
+
+                    Toggle("Find people in the background", isOn: $findTagEnabled)
+                        .toggleStyle(.checkbox)
+                        .accessibilityIdentifier("settings.findTagHelper.enabled")
+                        .padding(.top, 6)
+                    Text("Runs Find and Tag over the whole catalog in a separate background process that continues after VideoScan closes. Results appear as machine tags the next time the app checks in — your own tags and rejections always win. A restarted scan reuses everything already scored.")
+                        .font(.footnote).foregroundColor(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    FindTagHelperStatusLine(isRunning: isFindTagHelperRunning)
                         .padding(.horizontal, 10)
                 }
 

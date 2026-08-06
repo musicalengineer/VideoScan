@@ -144,6 +144,43 @@ struct FindTagJournalTests {
         #expect(index["fp-tim"] == nil)          // other person ignored
     }
 
+    // MARK: Ingest cursor
+
+    @Test func ingestCursorIsIdempotentAndOrdered() throws {
+        let entries: [FindTagJournalEntry] = [
+            .runStart(sampleStart()),
+            .verdict(sampleVerdict(seq: 2)),
+            .verdict(sampleVerdict(seq: 1)),
+            .verdict(sampleVerdict(seq: 3)),
+        ]
+        var state = FindTagIngestState()
+        let first = state.pendingVerdicts(in: entries, filename: "run.jsonl")
+        #expect(first.map(\.seq) == [1, 2, 3])   // seq order regardless of file order
+
+        state.markApplied(filename: "run.jsonl", through: 2)
+        let rest = state.pendingVerdicts(in: entries, filename: "run.jsonl")
+        #expect(rest.map(\.seq) == [3])
+
+        state.markApplied(filename: "run.jsonl", through: 3)
+        #expect(state.pendingVerdicts(in: entries, filename: "run.jsonl").isEmpty)
+        // A stale lower mark never rewinds the cursor.
+        state.markApplied(filename: "run.jsonl", through: 1)
+        #expect(state.pendingVerdicts(in: entries, filename: "run.jsonl").isEmpty)
+    }
+
+    @Test func ingestStateRoundTripsAndToleratesMissingFile() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = FindTagIngestState.url(inJournalDirectory: dir)
+
+        #expect(FindTagIngestState.restored(from: url) == FindTagIngestState())
+
+        var state = FindTagIngestState()
+        state.markApplied(filename: "a.jsonl", through: 41)
+        state.save(to: url)
+        #expect(FindTagIngestState.restored(from: url).appliedSeq["a.jsonl"] == 41)
+    }
+
     @Test func journalFilenameIsSortableAndCarriesRunId() {
         let name = FindTagPaths.journalFilename(
             runId: "ABCDEF12-3456", at: Date(timeIntervalSince1970: 1_754_000_000))

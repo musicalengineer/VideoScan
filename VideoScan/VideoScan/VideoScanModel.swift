@@ -645,6 +645,28 @@ final class VideoScanModel: ObservableObject {
     /// process). See PreviewHelperSupervisor.swift for the pure lifecycle.
     var previewHelperCoordinator: PreviewHelperCoordinator?
 
+    // MARK: Detached Find and Tag daemon (2026-08-06)
+
+    /// Background Find and Tag opt-in ("survives app quit"). DEFAULT
+    /// OFF. Same explicit-save + test-host-pristine discipline as the
+    /// preview sweep above. Wiring: VideoScanModel+FindTagHelper.swift.
+    @Published var findTagBackgroundSetting: FindTagBackgroundSetting =
+        TestEnvironment.isTestHost
+            ? FindTagBackgroundSetting()
+            : FindTagBackgroundSetting.restored(from: .standard)
+
+    /// Lifecycle manager for the detached --find-tag daemon (the app
+    /// binary respawned headless via posix_spawn+SETSID). Reuses the
+    /// preview helper's generic coordinator with find-tag paths/args.
+    /// nil under a test host.
+    var findTagHelperCoordinator: PreviewHelperCoordinator?
+
+    /// Journal-ingest poll while the background scan is enabled — the
+    /// daemon writes verdicts, this timer applies them (30 s cadence;
+    /// each tick is one directory listing + at most a few appends'
+    /// worth of parsing).
+    var findTagIngestTimer: Timer?
+
     /// Snapshot the current skip-directory set from scanOptions.
     /// Must be called on the main actor (returns a Sendable Set<String>
     /// that nonisolated walkers can then capture safely). The derivation
@@ -935,6 +957,12 @@ final class VideoScanModel: ObservableObject {
         // fire inside init). Test hosts get the pristine OFF default,
         // so the ~200 model-constructing tests never start a sweep.
         configurePreviewSweep()
+
+        // Detached Find and Tag daemon (2026-08-06): same launch-resume
+        // contract — respawn if the flag is ON and no live daemon holds
+        // the pidfile, and ingest any verdicts journaled while the app
+        // was away. No-op under a test host.
+        configureFindTagHelper()
     }
 
     /// The two NotificationCenter observers installed at init. Extracted

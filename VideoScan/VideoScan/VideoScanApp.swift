@@ -653,7 +653,14 @@ struct VideoScanApp: App {
                     set: { catalogModel.setPreviewSweepEnabled($0) }
                 ),
                 sweep: catalogModel.previewSweep,
-                isPreviewHelperRunning: { catalogModel.isPreviewHelperRunning }
+                isPreviewHelperRunning: { catalogModel.isPreviewHelperRunning },
+                // Detached Find and Tag daemon (2026-08-06): same
+                // model-routed setter contract as the sweep toggle.
+                findTagEnabled: Binding(
+                    get: { catalogModel.findTagBackgroundSetting.enabled },
+                    set: { catalogModel.setFindTagBackgroundEnabled($0) }
+                ),
+                isFindTagHelperRunning: { catalogModel.isFindTagHelperRunning }
             )
             .frame(minWidth: 500, idealWidth: 620, minHeight: 400, idealHeight: 620)
         }
