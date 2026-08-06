@@ -19,8 +19,23 @@ let isTestHost: Bool = {
 
 let isPersonEvaluation = CommandLine.arguments.contains("--person-eval")
 let isRecipeCalibration = CommandLine.arguments.contains("--recipe-calibrate")
+let isFindTagDaemon = CommandLine.arguments.contains("--find-tag")
 
-if isPersonEvaluation {
+if isFindTagDaemon {
+    // Detached find-and-tag daemon (FindTagCLI). Same headless-Aqua
+    // arrangement as --person-eval / --recipe-calibrate: Vision/CoreML
+    // need an application context; `.prohibited` keeps us out of the
+    // Dock. Spawned detached by the app (survives quit) or run by hand.
+    let daemonApp = NSApplication.shared
+    daemonApp.setActivationPolicy(.prohibited)
+    Task {
+        let code = await FindTagCLI.run(arguments: Array(CommandLine.arguments.dropFirst()))
+        fflush(stdout)
+        fflush(stderr)
+        exit(code)
+    }
+    RunLoop.main.run()
+} else if isPersonEvaluation {
     // Vision/CoreML require an Aqua application context even though the
     // evaluator has no windows. `.prohibited` keeps the process out of the
     // Dock and avoids activating the normal VideoScan scenes.
