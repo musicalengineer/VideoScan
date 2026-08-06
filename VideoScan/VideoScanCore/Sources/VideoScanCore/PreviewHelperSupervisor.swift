@@ -278,7 +278,47 @@ public struct PosixSpawnHelperLauncher: PreviewHelperSpawning, PreviewHelperStop
         // ffmpeg on PATH (and honor VS_FFMPEG_PATH if the app set it).
         let rc = posix_spawn(&pid, executableURL.path, &fileActions, &attr, &cArgv, environ)
         guard rc == 0 else { throw PreviewHelperSpawnError.spawnFailed(errno: rc) }
+        Self.armReaper(pid: pid)
         return pid
+    }
+
+    // MARK: Child reaping (codex QA 2026-08-06, #274)
+    //
+    // POSIX_SPAWN_SETSID detaches the SESSION (the child survives our
+    // exit) but does NOT change parentage: while the app lives, the
+    // child is still our child, and if it exits first it lingers as a
+    // zombie until someone waits on it. A DispatchSourceProcess fires
+    // on the child's exit and waitpid clears it. If the app exits
+    // first, the child reparents to init/launchd, which reaps it —
+    // both orderings covered.
+    private static let reaperLock = NSLock()
+    nonisolated(unsafe) private static var reapers: [pid_t: DispatchSourceProcess] = [:]
+
+    private static func armReaper(pid: pid_t) {
+        let source = DispatchSource.makeProcessSource(
+            identifier: pid, eventMask: .exit,
+            queue: .global(qos: .utility))
+        source.setEventHandler {
+            var status: Int32 = 0
+            waitpid(pid, &status, 0)
+            reaperLock.lock()
+            reapers[pid] = nil
+            reaperLock.unlock()
+        }
+        reaperLock.lock()
+        reapers[pid] = source
+        reaperLock.unlock()
+        source.resume()
+        // Arm/exit race: a child that exited BEFORE the source resumed
+        // never fires it. One non-blocking waitpid closes the window;
+        // if it reaped, retire the source immediately.
+        var status: Int32 = 0
+        if waitpid(pid, &status, WNOHANG) == pid {
+            source.cancel()
+            reaperLock.lock()
+            reapers[pid] = nil
+            reaperLock.unlock()
+        }
     }
 
     /// Stop a running helper with SIGTERM → grace-poll → SIGKILL escalation.

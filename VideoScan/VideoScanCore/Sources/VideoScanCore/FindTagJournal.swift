@@ -63,10 +63,17 @@ public struct FindTagRunStart: Codable, Equatable, Sendable {
     public var catalogPath: String
     /// Files planned after filtering (video-bearing, not human-settled).
     public var planned: Int
+    /// Content digest of the reference gallery the run scored against
+    /// (filenames+sizes+mtimes hashed). Cross-run verdict REUSE requires
+    /// an exact match — a retouched Donna gallery must invalidate old
+    /// scores, or stale reuse persists forever (codex QA #275). nil
+    /// (pre-digest journals) never qualifies for reuse.
+    public var galleryDigest: String?
 
     public init(v: Int = FindTagJournalSchema.version,
                 runId: String, at: Date, person: String, recipeID: String,
-                engine: String, catalogPath: String, planned: Int) {
+                engine: String, catalogPath: String, planned: Int,
+                galleryDigest: String? = nil) {
         self.v = v
         self.runId = runId
         self.at = at
@@ -75,6 +82,7 @@ public struct FindTagRunStart: Codable, Equatable, Sendable {
         self.engine = engine
         self.catalogPath = catalogPath
         self.planned = planned
+        self.galleryDigest = galleryDigest
     }
 }
 
@@ -255,9 +263,12 @@ public final class FindTagJournalWriter: @unchecked Sendable {
     /// Append one entry as a single JSONL line. `sync` forces the line
     /// to disk before returning (default for everything but heartbeats).
     public func append(_ entry: FindTagJournalEntry, sync: Bool = true) throws {
-        let data = try encoder.encode(entry)
         lock.lock()
         defer { lock.unlock() }
+        // Encode UNDER the lock: JSONEncoder is not documented
+        // thread-safe, and the scan loop + heartbeat task both append
+        // (codex QA #275).
+        let data = try encoder.encode(entry)
         try handle.write(contentsOf: data + Data([0x0A]))
         if sync { try handle.synchronize() }
     }
@@ -285,8 +296,12 @@ public enum FindTagJournalReader {
         for line in data.split(separator: 0x0A) where !line.isEmpty {
             guard let entry = try? decoder.decode(FindTagJournalEntry.self,
                                                   from: Data(line)) else { continue }
+            // STRICT version match: a v this reader doesn't know —
+            // higher, zero, negative — skips the whole file (codex QA
+            // #274: the earlier `>` check accepted v=0/negative, which
+            // no writer ever issued).
             if case .runStart(let start) = entry,
-               start.v > FindTagJournalSchema.version {
+               start.v != FindTagJournalSchema.version {
                 return []
             }
             out.append(entry)
@@ -300,7 +315,7 @@ public enum FindTagJournalReader {
     }
 
     /// Resume/dedup index across PRIOR runs: fingerprint → verdict, for
-    /// journals whose runStart matches this person + recipeID.
+    /// journals whose runStart matches this person + recipeID + gallery.
     ///
     /// Policy (deliberate, mirrors + extends the in-run dedup):
     ///   - success verdicts are reusable (skip the decode entirely)
@@ -309,11 +324,17 @@ public enum FindTagJournalReader {
     ///   - reused verdicts chain fine (their score is the witness's)
     ///   - later entries win on fingerprint collision (newest scan of
     ///     the content is the best-informed one)
+    ///   - the run's galleryDigest must EXACTLY match the caller's
+    ///     current one — scores are only comparable against the same
+    ///     reference gallery; nil on either side disqualifies (codex
+    ///     QA #275: stale-reuse-forever after a gallery change)
     public static func reusableVerdicts(
         fromJournalFiles files: [URL],
         person: String,
-        recipeID: String
+        recipeID: String,
+        galleryDigest: String?
     ) -> [String: FindTagVerdict] {
+        guard let galleryDigest else { return [:] }
         var index: [String: FindTagVerdict] = [:]
         // Filename sort ≈ chronological (files are timestamp-named);
         // later files overwrite earlier entries.
@@ -321,7 +342,8 @@ public enum FindTagJournalReader {
             let all = entries(at: url)
             guard case .runStart(let start)? = all.first,
                   start.person.compare(person, options: .caseInsensitive) == .orderedSame,
-                  start.recipeID == recipeID else { continue }
+                  start.recipeID == recipeID,
+                  start.galleryDigest == galleryDigest else { continue }
             for case .verdict(let v) in all {
                 guard let fp = v.fingerprint, v.error == nil, v.score != nil else { continue }
                 index[fp] = v

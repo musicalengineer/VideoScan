@@ -31,6 +31,7 @@
 //       [--no-resume] [--stall-seconds 300]
 
 import AppKit
+import CryptoKit
 import Foundation
 import VideoScanCore
 
@@ -173,14 +174,21 @@ enum FindTagCLI {
         }
         if let limit = options.limit { plan = Array(plan.prefix(limit)) }
 
-        // Resume index from prior journals (success verdicts only).
+        // Gallery provenance: verdicts are only comparable against the
+        // exact reference gallery that produced them, so the digest
+        // stamps runStart and gates cross-run reuse (codex QA #275).
+        let galleryDigest = Self.galleryDigest(atPath: options.galleryPath)
+
+        // Resume index from prior journals (success verdicts only,
+        // same-gallery runs only).
         var reusable: [String: FindTagVerdict] = [:]
         if options.resume {
             let files = (try? FileManager.default.contentsOfDirectory(
                 at: options.journalDir, includingPropertiesForKeys: nil))?
                 .filter { $0.pathExtension == "jsonl" } ?? []
             reusable = FindTagJournalReader.reusableVerdicts(
-                fromJournalFiles: files, person: options.person, recipeID: recipeID)
+                fromJournalFiles: files, person: options.person,
+                recipeID: recipeID, galleryDigest: galleryDigest)
         }
 
         // Journal for THIS run.
@@ -194,7 +202,8 @@ enum FindTagCLI {
             try journal.append(.runStart(FindTagRunStart(
                 runId: runId, at: startedAt, person: options.person,
                 recipeID: recipeID, engine: "arcface",
-                catalogPath: options.catalogURL.path, planned: plan.count)))
+                catalogPath: options.catalogURL.path, planned: plan.count,
+                galleryDigest: galleryDigest)))
         } catch {
             err("findtagd: cannot open journal — \(error.localizedDescription)")
             return 2
@@ -247,6 +256,7 @@ enum FindTagCLI {
 
         var scored = 0, errors = 0, reused = 0
         var consecutiveWedges = 0
+        var journalBroken = false
         var inRunVerdicts: [String: (witness: String, verdict: RecipeClipScore)] = [:]
 
         for (index, rec) in plan.enumerated() {
@@ -296,7 +306,13 @@ enum FindTagCLI {
                     seconds: (seconds * 10).rounded() / 10,
                     reusedFrom: reusedFrom)))
             } catch {
-                err("findtagd: journal write failed — \(error.localizedDescription); stopping")
+                // A journal that can't take verdicts means every further
+                // scan would be UNRECORDED work — and worse, silently
+                // certified. Stop and report FAILURE (codex QA #274: the
+                // earlier break-then-completed path falsely certified a
+                // truncated run with exit 0).
+                err("findtagd: journal write failed — \(error.localizedDescription); failing run")
+                journalBroken = true
                 break
             }
 
@@ -321,25 +337,35 @@ enum FindTagCLI {
                 consecutiveWedges += 1
                 if consecutiveWedges >= consecutiveWedgeCap {
                     err("findtagd: \(consecutiveWedges) consecutive wedges — failing run")
+                    // JOIN the heartbeat before the terminal line — a
+                    // heartbeat mid-append (blocked on the writer lock)
+                    // must land before runEnd, never after (codex #274).
                     heartbeatTask.cancel()
+                    _ = await heartbeatTask.value
                     try? journal.append(.runEnd(FindTagRunEnd(
                         at: Date(), status: .failed, scored: scored,
                         errors: errors, reused: reused, skippedHuman: skippedHuman)))
                     return 1
                 }
-            } else if verdict.error == nil {
+            } else {
+                // ANY non-wedge outcome breaks the consecutive-wedge
+                // sequence — the loop is demonstrably moving, so this
+                // is not the sick-volume pattern the cap exists for
+                // (codex #275: errors previously left the count frozen).
                 consecutiveWedges = 0
             }
         }
 
-        let status: FindTagRunEnd.Status = stop.isRaised ? .terminated : .completed
+        let status: FindTagRunEnd.Status = journalBroken ? .failed
+            : stop.isRaised ? .terminated : .completed
         heartbeatTask.cancel()
+        _ = await heartbeatTask.value   // join — no heartbeat after runEnd
         try? journal.append(.runEnd(FindTagRunEnd(
             at: Date(), status: status, scored: scored, errors: errors,
             reused: reused, skippedHuman: skippedHuman)))
         out("findtagd: \(status.rawValue) — scored \(scored), errors \(errors), "
             + "reused \(reused), skipped \(skippedHuman) human-settled")
-        return 0
+        return journalBroken ? 1 : 0
     }
 
     // MARK: - Watchdog race (per-clip, self-contained)
@@ -369,12 +395,48 @@ enum FindTagCLI {
                         nanoseconds: UInt64(pollSeconds * 1_000_000_000))
                     if once.isClaimed { return }
                     if beats.age > stallSeconds {
-                        if once.claim() { cont.resume(returning: nil) }
+                        if once.claim() {
+                            // Cancel the wedged task before abandoning:
+                            // the scorer honors cooperative cancellation
+                            // between frames, so a merely-slow decode
+                            // stops burning CPU/IO instead of running to
+                            // completion unobserved (codex #274). A
+                            // truly wedged syscall ignores this — that's
+                            // what the process-level watchdogs are for.
+                            scoreTask.cancel()
+                            cont.resume(returning: nil)
+                        }
                         return
                     }
                 }
             }
         }
+    }
+
+    // MARK: - Gallery provenance
+
+    /// Content digest of the reference-gallery tree: sorted
+    /// relativePath|size|mtime lines, SHA-256'd. Cheap (a directory
+    /// walk, no file reads) and changes whenever a reference photo is
+    /// added, removed, replaced, or retouched — which is exactly when
+    /// old scores stop being comparable. nil (unreadable gallery)
+    /// disables cross-run reuse rather than risking stale scores.
+    static func galleryDigest(atPath path: String) -> String? {
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(atPath: path) else { return nil }
+        var lines: [String] = []
+        for case let rel as String in enumerator {
+            let full = (path as NSString).appendingPathComponent(rel)
+            let attrs = try? fm.attributesOfItem(atPath: full)
+            let size = (attrs?[.size] as? Int64) ?? 0
+            let mtime = (attrs?[.modificationDate] as? Date)?
+                .timeIntervalSince1970 ?? 0
+            lines.append("\(rel)|\(size)|\(Int(mtime))")
+        }
+        guard !lines.isEmpty else { return nil }
+        let digest = SHA256.hash(
+            data: Data(lines.sorted().joined(separator: "\n").utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - Filters

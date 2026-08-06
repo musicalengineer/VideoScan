@@ -15,10 +15,12 @@ struct FindTagJournalTests {
     }
 
     private func sampleStart(person: String = "Donna",
-                             recipeID: String = "recipe-v1-native") -> FindTagRunStart {
+                             recipeID: String = "recipe-v1-native",
+                             galleryDigest: String? = "digest-g1") -> FindTagRunStart {
         FindTagRunStart(runId: "RUN-1", at: Date(timeIntervalSince1970: 1_754_000_000),
                         person: person, recipeID: recipeID, engine: "arcface",
-                        catalogPath: "/tmp/catalog.json", planned: 3)
+                        catalogPath: "/tmp/catalog.json", planned: 3,
+                        galleryDigest: galleryDigest)
     }
 
     private func sampleVerdict(seq: Int, fingerprint: String? = "100|1.5|abc",
@@ -83,15 +85,19 @@ struct FindTagJournalTests {
     @Test func unknownSchemaVersionSkipsWholeFile() throws {
         let dir = try tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let url = dir.appendingPathComponent("future.jsonl")
-        var start = sampleStart()
-        start.v = FindTagJournalSchema.version + 1
-        let writer = try FindTagJournalWriter(fileURL: url)
-        try writer.append(.runStart(start))
-        try writer.append(.verdict(sampleVerdict(seq: 1)))
-        writer.close()
-
-        #expect(FindTagJournalReader.entries(at: url).isEmpty)
+        // ANY v this reader doesn't know skips the file — higher, zero,
+        // or negative (codex #274: `>` accepted never-issued versions).
+        for badVersion in [FindTagJournalSchema.version + 1, 0, -3] {
+            let url = dir.appendingPathComponent("v\(badVersion).jsonl")
+            var start = sampleStart()
+            start.v = badVersion
+            let writer = try FindTagJournalWriter(fileURL: url)
+            try writer.append(.runStart(start))
+            try writer.append(.verdict(sampleVerdict(seq: 1)))
+            writer.close()
+            #expect(FindTagJournalReader.entries(at: url).isEmpty,
+                    "v=\(badVersion) must skip the whole file")
+        }
     }
 
     @Test func unknownKindLineIsSkipped() {
@@ -136,12 +142,44 @@ struct FindTagJournalTests {
         let index = FindTagJournalReader.reusableVerdicts(
             fromJournalFiles: [f1, f2, f3],
             person: "donna",            // case-insensitive person match
-            recipeID: "recipe-v1-native")
+            recipeID: "recipe-v1-native",
+            galleryDigest: "digest-g1")
 
         #expect(index.count == 1)
         #expect(index["fp-ok"]?.score == 0.55)   // later run won
         #expect(index["fp-err"] == nil)          // errors retried, not reused
         #expect(index["fp-tim"] == nil)          // other person ignored
+    }
+
+    @Test func galleryChangeInvalidatesReuse() throws {
+        // codex #275: a retouched reference gallery must invalidate
+        // prior scores — reuse requires an EXACT digest match, and nil
+        // on either side disqualifies.
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let f1 = dir.appendingPathComponent("findtag-20260806-010000-aaaa.jsonl")
+        let w1 = try FindTagJournalWriter(fileURL: f1)
+        try w1.append(.runStart(sampleStart(galleryDigest: "old-gallery")))
+        try w1.append(.verdict(sampleVerdict(seq: 1, fingerprint: "fp-ok", score: 0.8)))
+        w1.close()
+        let f2 = dir.appendingPathComponent("findtag-20260806-020000-bbbb.jsonl")
+        let w2 = try FindTagJournalWriter(fileURL: f2)
+        try w2.append(.runStart(sampleStart(galleryDigest: nil)))   // pre-digest journal
+        try w2.append(.verdict(sampleVerdict(seq: 1, fingerprint: "fp-old", score: 0.9)))
+        w2.close()
+
+        // Current gallery differs → nothing reusable from either file.
+        #expect(FindTagJournalReader.reusableVerdicts(
+            fromJournalFiles: [f1, f2], person: "Donna",
+            recipeID: "recipe-v1-native", galleryDigest: "new-gallery").isEmpty)
+        // Unknown current gallery → no reuse at all.
+        #expect(FindTagJournalReader.reusableVerdicts(
+            fromJournalFiles: [f1, f2], person: "Donna",
+            recipeID: "recipe-v1-native", galleryDigest: nil).isEmpty)
+        // Matching digest still works.
+        #expect(FindTagJournalReader.reusableVerdicts(
+            fromJournalFiles: [f1, f2], person: "Donna",
+            recipeID: "recipe-v1-native", galleryDigest: "old-gallery")["fp-ok"]?.score == 0.8)
     }
 
     // MARK: Ingest cursor
