@@ -186,6 +186,28 @@ final class FindPersonJob: MediaFileOperationJob {
     /// (misattribution risk identified in the 2026-08-06 cascade).
     /// Bumped at every new clip AND at every abandon.
     private var clipGeneration = 0
+
+    // MARK: Test seams (codex GH #156 regression suite, channel #267)
+    //
+    // The multi-wedge and stale-completion tests need a SCRIPTED scorer
+    // (per-path delays and late completions, no Process/ffmpeg/media)
+    // and a fast StallMonitor (injected clock, ms polling). Production
+    // defaults construct the real objects with behavior unchanged.
+
+    /// Builds the native scorer for runNative. Default = the real
+    /// NativeRecipeScorer on the production arcface backend.
+    var nativeScorerFactory: (RecipeParameters, PauseGate?, @escaping RecipeProgressHandler)
+        -> any RecipeScoring = { params, gate, onProgress in
+        NativeRecipeScorer(backend: .arcface, params: params,
+                           pauseGate: gate, onProgress: onProgress)
+    }
+
+    /// Builds the batch stall monitor. Default = production thresholds
+    /// (300 s / 15 s poll / wall clock).
+    var stallMonitorFactory: (String, @escaping @Sendable (Double) -> Void)
+        -> StallMonitor = { label, onStall in
+        StallMonitor(label: label, onStall: onStall)
+    }
     private var consecutiveAbandons = 0
     /// This many CONSECUTIVE wedged clips means the volume, not the
     /// file, is sick — fail the batch (the old behavior) instead of
@@ -253,7 +275,7 @@ final class FindPersonJob: MediaFileOperationJob {
     // v1 constants — Rick's machine (see find-and-tag-design.md).
     static let pythonPath = "\(NSHomeDirectory())/dev/VideoScan/venv/bin/python3.12"
     static let scriptPath = "\(NSHomeDirectory())/dev/VideoScan/tools/donna-recipe/find_person_batch.py"
-    static let galleryPath = "\(NSHomeDirectory())/dev/VideoScan/tests/fixtures/photos/Donna"
+    nonisolated static let galleryPath = "\(NSHomeDirectory())/dev/VideoScan/tests/fixtures/photos/Donna"
 
     init(person: String, records: [VideoRecord], model: VideoScanModel) {
         self.person = person
@@ -420,7 +442,7 @@ final class FindPersonJob: MediaFileOperationJob {
         await PhysicalStoreResolver.resolve(roots: Set(
             actionable.map { MediaVolumeGatePolicy.volumeRoot(forPath: $0.fullPath) }))
 
-        let monitor = StallMonitor(label: "find \(person)") { [weak self] silentFor in
+        let monitor = stallMonitorFactory("find \(person)") { [weak self] silentFor in
             Task { @MainActor [weak self] in
                 guard let self, self.state.isActive, self.stallReason == nil else { return }
                 // Wedged CLIP first (GH #156): abandon it, log it, keep
@@ -557,11 +579,10 @@ final class FindPersonJob: MediaFileOperationJob {
         // degrades to OFF if its model is missing.
         var recipeParams = RecipeParameters()
         recipeParams.sexGateEnabled = true
-        let scorer = NativeRecipeScorer(
-            backend: .arcface,
-            params: recipeParams,
-            pauseGate: nativeGate,
-            onProgress: { [weak self] event in
+        let scorer = nativeScorerFactory(
+            recipeParams,
+            nativeGate,
+            { [weak self] event in
                 monitor.tick()
                 Task { @MainActor [weak self] in
                     self?.handleNativeProgress(event)

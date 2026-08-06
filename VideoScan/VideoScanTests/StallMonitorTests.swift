@@ -279,7 +279,11 @@ struct StallMonitorTests {
     // without clearing `fired` in start(), every restarted poll loop
     // fired instantly at its first poll while recordTick was ignored —
     // healthy files were abandoned every ~15s for the rest of the run.
-    // RED before the fix: secondFire happens despite continuous ticking.
+    // RED/GREEN proof (Codex, 2026-08-06, isolated M5 checkout): removing
+    // only 9c414429's `fired = false` hunk makes THIS test fail at the
+    // healthy-watch assertion; restored main passes all 15 tests in this
+    // suite. The failure therefore detects the overnight cascade itself,
+    // rather than merely exercising the corrected implementation.
 
     @Test func restartAfterFireClearsLatchAndWatchesFresh() async {
         final class Clock: @unchecked Sendable {
