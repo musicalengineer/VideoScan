@@ -155,12 +155,21 @@ enum FindTagCLI {
             err("findtagd: cannot read catalog at \(options.catalogURL.path)")
             return 2
         }
+        // Eligibility = FindPersonJob.skipReason — the SAME pure spec
+        // the in-app job uses (≥10s, no junk/bundle-internals/purged,
+        // real video streams), so the two planners cannot drift
+        // (first-night parity gap: the daemon planned 14,463 files
+        // where the in-app rules plan far fewer, including short
+        // stingers and Photos cache ghosts).
         var skippedHuman = 0
+        var skippedRecipe = 0
+        var offline = 0
         var plan = records.filter { rec in
-            guard rec.streamType == .videoOnly || rec.streamType == .videoAndAudio else {
+            if let prefix = options.pathPrefix, !rec.fullPath.hasPrefix(prefix) {
                 return false
             }
-            if let prefix = options.pathPrefix, !rec.fullPath.hasPrefix(prefix) {
+            if FindPersonJob.skipReason(for: rec) != nil {
+                skippedRecipe += 1
                 return false
             }
             // Human-settled records are never machine-scanned: a human
@@ -168,6 +177,13 @@ enum FindTagCLI {
             // would refuse anyway — skipping here saves the decode).
             if isHumanSettled(rec, person: options.person) {
                 skippedHuman += 1
+                return false
+            }
+            // Offline volumes: exclude LOUDLY (in-app parity) instead
+            // of journaling thousands of missing-file errors that every
+            // future run would retry.
+            guard VolumeReachability.isReachable(path: rec.fullPath) else {
+                offline += 1
                 return false
             }
             return true
@@ -222,7 +238,8 @@ enum FindTagCLI {
         defer { journal.close() }
 
         out("findtagd: run \(runId.prefix(8)) person=\(options.person) "
-            + "planned=\(plan.count) (skipped \(skippedHuman) human-settled) "
+            + "planned=\(plan.count) (filtered: \(skippedRecipe) recipe-ineligible, "
+            + "\(skippedHuman) human-settled, \(offline) on offline volumes) "
             + "resume-index=\(reusable.count) journal=\(journalURL.lastPathComponent)")
 
         // Scorer — the recipeParams built above (no pause gate: nothing
@@ -300,7 +317,13 @@ enum FindTagCLI {
 
             let seconds = reusedFrom == nil
                 ? CFAbsoluteTimeGetCurrent() - clipStart : 0
-            if let fp = fingerprint, reusedFrom == nil, verdict.error == nil {
+            // In-run dedup ledger — ERROR verdicts included (in-app
+            // parity: a metadata-liar's byte-twin repeats the same
+            // 45s+ toll for the same outcome; first night measured a
+            // twin .m2v pair paying it twice). "missing file" never
+            // enters — path-specific, not content-specific.
+            if let fp = fingerprint, reusedFrom == nil,
+               verdict.error != "missing file" {
                 inRunVerdicts[fp] = (witness: clipName, verdict: verdict)
             }
 

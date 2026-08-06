@@ -274,7 +274,11 @@ actor NativeRecipeScorer: RecipeScoring {
     /// Containers AVFoundation cannot open at all — the doomed open
     /// attempt (0.3–1.5 s each, 45 s worst case through the hang race)
     /// is skipped and the clip goes straight to the ffmpeg transport.
-    private static let ffmpegOnlyExtensions: Set<String> = ["mkv", "webm", "mxf"]
+    /// m2v/m1v (raw MPEG elementary streams, the DVD-rip intermediates)
+    /// HANG AVFoundation's open for the full 45 s race and then fail
+    /// ffmpeg's probe anyway (no duration) — pre-routing turns a 45 s
+    /// toll into a <1 s refusal (findtagd first night: three in a row).
+    private static let ffmpegOnlyExtensions: Set<String> = ["mkv", "webm", "mxf", "m2v", "m1v"]
 
     private func openFrameSource(clip: URL, frameInterval: Double) async
         -> Result<FrameSource, RecipeError> {
