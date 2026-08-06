@@ -306,7 +306,7 @@ struct StallMonitorTests {
         // Watch #1: genuine stall — must fire exactly once.
         m.start()
         clock.set(1000)
-        for _ in 0..<50 where fires.count == 0 {
+        for _ in 0..<50 where fires.count < 1 {
             try? await Task.sleep(nanoseconds: 20_000_000)
         }
         #expect(fires.count == 1, "watch #1 must fire on genuine stall")
