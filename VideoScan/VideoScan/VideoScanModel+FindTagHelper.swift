@@ -146,131 +146,100 @@ extension VideoScanModel {
 
     // MARK: Journal ingest (the daemon→catalog write-back)
 
-    /// Apply every not-yet-applied journaled verdict through
-    /// applyRecipeVerdict, then — only after the catalog change is
-    /// durably saved — advance the per-file cursor. Idempotent: a saved
-    /// catalog with a lost cursor merely re-applies (no-ops); the
-    /// reverse (cursor without catalog) cannot happen by construction.
-    ///
-    /// Steady-state cost: one directory listing + one stat per journal
-    /// (the parse cache skips exhausted, unchanged files entirely).
+    /// Thin adapter over FindTagIngestEngine.pass (VideoScanCore) —
+    /// the pure policy owns ALL the ordering rules (codex QA #279:
+    /// applicable-forces-save, staged cursors, incremental offsets,
+    /// sticky rejection); this wrapper only supplies the real
+    /// dependencies. Idempotent: a saved catalog with a lost cursor
+    /// merely re-applies (no-ops); the reverse cannot happen by
+    /// construction.
     func ingestFindTagJournals() {
         guard !TestEnvironment.isTestHost, !isReadOnly else { return }
         let dir = FindTagPaths.journalDirectoryURL()
-        guard let files = try? FileManager.default.contentsOfDirectory(
+        guard let urls = try? FileManager.default.contentsOfDirectory(
             at: dir, includingPropertiesForKeys: [.fileSizeKey]) else { return }
+        let journalFiles: [(url: URL, size: Int64)] = urls
+            .filter { $0.pathExtension == "jsonl" }
+            .map { ($0, Int64((try? $0.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)) }
 
         let stateURL = FindTagIngestState.url(inJournalDirectory: dir)
-        var state = FindTagIngestState.restored(from: stateURL)
-        let activeCatalogPath = catalogStore.catalogFileURL.standardizedFileURL.path
-
-        var appliedTotal = 0
-        var orphaned = 0
-        /// filename → seq to commit once (and only once) durability is
-        /// established for this pass.
-        var cursorAdvances: [String: Int] = [:]
-        /// Lazy fingerprint → record index, built only when a UUID miss
-        /// or mismatch needs the fallback (codex #277 MAJOR).
+        var cursor = FindTagIngestState.restored(from: stateURL)
+        /// Lazy fingerprint → record fallback index (re-cataloged
+        /// content), built at most once per pass.
         var fingerprintIndex: [String: VideoRecord]?
 
-        for file in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
-        where file.pathExtension == "jsonl" {
-            let name = file.lastPathComponent
-            let size = Int64((try? file.resourceValues(forKeys: [.fileSizeKey]))?
-                .fileSize ?? 0)
-            if let cached = findTagIngestParseCache[name],
-               cached.size == size, cached.exhausted {
-                continue   // unchanged + already fully applied: skip the parse
-            }
+        let result = FindTagIngestEngine.pass(
+            journalFiles: journalFiles,
+            fileStates: &findTagIngestFileStates,
+            cursor: &cursor,
+            activeCatalogPath: catalogStore.catalogFileURL.standardizedFileURL.path,
+            isKnownRecipeID: { VideoScanModel.recipeThresholds[$0] != nil },
+            currentGalleryDigest: currentFindTagGalleryDigest(),
+            currentParamsDigest: FindTagCLI.currentParamsDigest(),
+            readData: { url, offset in
+                guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+                defer { try? handle.close() }
+                if offset > 0 { try? handle.seek(toOffset: UInt64(offset)) }
+                return try? handle.readToEnd() ?? Data()
+            },
+            resolveRecord: { [weak self] recordID, fingerprint in
+                self?.resolveFindTagRecord(recordID: recordID,
+                                           fingerprint: fingerprint,
+                                           fingerprintIndex: &fingerprintIndex)
+            },
+            apply: { [weak self] person, rec, score, recipeID in
+                self?.applyRecipeVerdict(person: person, record: rec,
+                                         score: score, recipeID: recipeID) ?? false
+            },
+            saveCatalog: { [weak self] in self?.saveCatalogNow() ?? false },
+            log: { appLog.write($0) })
 
-            let entries = FindTagJournalReader.entries(at: file)
-            guard case .runStart(let start)? = entries.first else {
-                findTagIngestParseCache[name] = (size, true)
-                continue
-            }
-            // Blocker C: refuse journals produced against a different
-            // catalog file — same-UUID records in a copied/test catalog
-            // must never tag this one.
-            guard URL(fileURLWithPath: start.catalogPath).standardizedFileURL.path
-                    == activeCatalogPath else {
-                appLog.write("Find and Tag ingest: skipping \(name) — journal is for a different catalog (\(start.catalogPath))")
-                findTagIngestParseCache[name] = (size, true)
-                continue
-            }
-            // Fail CLOSED on a recipeID this build doesn't know —
-            // applying a future recipe's scores under some other
-            // recipe's thresholds would mint wrong tiers (codex #277).
-            guard VideoScanModel.recipeThresholds[start.recipeID] != nil else {
-                appLog.write("Find and Tag ingest: skipping \(name) — unknown recipeID \(start.recipeID)")
-                findTagIngestParseCache[name] = (size, true)
-                continue
-            }
-
-            let pending = state.pendingVerdicts(in: entries, filename: name)
-            guard !pending.isEmpty else {
-                findTagIngestParseCache[name] = (size, true)
-                continue
-            }
-
-            var lastSeq = 0
-            var appliedThisFile = 0
-            for verdict in pending {
-                lastSeq = verdict.seq
-                guard let score = verdict.score else { continue }   // error verdicts: nothing to apply
-
-                // Resolve the record: UUID first, VERIFIED against the
-                // content fingerprint when both sides have one — a
-                // reused UUID over different bytes must not be tagged.
-                var record = record(forID: UUID(uuidString: verdict.recordID) ?? UUID())
-                if let rec = record, let vfp = verdict.fingerprint,
-                   let rfp = FindPersonJob.fingerprintKey(for: rec), rfp != vfp {
-                    record = nil
-                }
-                // Fallback: find the same CONTENT under a new identity
-                // (re-cataloged file). Index built at most once per pass.
-                if record == nil, let vfp = verdict.fingerprint {
-                    if fingerprintIndex == nil {
-                        var idx: [String: VideoRecord] = [:]
-                        for rec in records {
-                            if let fp = FindPersonJob.fingerprintKey(for: rec) { idx[fp] = rec }
-                        }
-                        fingerprintIndex = idx
-                    }
-                    record = fingerprintIndex?[vfp]
-                }
-                guard let rec = record else {
-                    orphaned += 1
-                    continue
-                }
-                if applyRecipeVerdict(person: start.person, record: rec,
-                                      score: score, recipeID: start.recipeID) {
-                    appliedThisFile += 1
-                }
-            }
-            appliedTotal += appliedThisFile
-            cursorAdvances[name] = lastSeq
-            findTagIngestParseCache[name] = (size, false)   // exhausted set below on commit
+        if result.durable { cursor.save(to: stateURL) }
+        if result.applied > 0 || result.orphaned > 0 {
+            appLog.write("Find and Tag ingest: applied \(result.applied) journaled "
+                + "verdict(s)\(result.orphaned > 0 ? ", \(result.orphaned) orphaned record(s)" : "")"
+                + (result.durable ? "" : " [NOT durable — retrying next pass]"))
         }
+    }
 
-        // Blocker A ordering: catalog durability FIRST, cursor second.
-        // Nothing applied → nothing to lose → commit cursors directly.
-        let durable = appliedTotal == 0 ? true : saveCatalogNow()
-        if durable {
-            for (name, seq) in cursorAdvances {
-                state.markApplied(filename: name, through: seq)
-                if var cached = findTagIngestParseCache[name] {
-                    cached.exhausted = true
-                    findTagIngestParseCache[name] = cached
-                }
+    /// Trustworthy record resolution (codex #277/#279): UUID hit is
+    /// verified against the verdict's content fingerprint — full
+    /// size|duration|md5 when the record has a hash, size|duration
+    /// prefix when it doesn't (a hashless record can still refute a
+    /// wrong-content UUID reuse). Verified mismatch → fingerprint
+    /// fallback (re-cataloged content) → orphan.
+    private func resolveFindTagRecord(
+        recordID: String, fingerprint: String?,
+        fingerprintIndex: inout [String: VideoRecord]?
+    ) -> VideoRecord? {
+        var candidate = record(forID: UUID(uuidString: recordID) ?? UUID())
+        if let rec = candidate, let vfp = fingerprint {
+            if let rfp = FindPersonJob.fingerprintKey(for: rec) {
+                if rfp != vfp { candidate = nil }
+            } else if rec.sizeBytes > 0,
+                      !vfp.hasPrefix("\(rec.sizeBytes)|\(rec.durationSeconds)|") {
+                candidate = nil   // partial check refutes the UUID match
             }
-            state.save(to: stateURL)
-        } else {
-            appLog.write("Find and Tag ingest: catalog save refused/failed — cursor NOT advanced; will re-apply next pass")
         }
-        if appliedTotal > 0 || orphaned > 0 {
-            appLog.write("Find and Tag ingest: applied \(appliedTotal) journaled "
-                + "verdict(s)\(orphaned > 0 ? ", \(orphaned) orphaned record(s)" : "")"
-                + (durable ? "" : " [NOT yet durable]"))
+        if candidate == nil, let vfp = fingerprint {
+            if fingerprintIndex == nil {
+                var idx: [String: VideoRecord] = [:]
+                for rec in records {
+                    if let fp = FindPersonJob.fingerprintKey(for: rec) { idx[fp] = rec }
+                }
+                fingerprintIndex = idx
+            }
+            candidate = fingerprintIndex?[vfp]
         }
+        return candidate
+    }
+
+    /// Current gallery digest for provenance-mismatch logging —
+    /// computed once per app launch (reads the gallery files).
+    private func currentFindTagGalleryDigest() -> String? {
+        if let cached = findTagGalleryDigestCache { return cached }
+        let digest = FindTagCLI.galleryDigest(atPath: FindPersonJob.galleryPath)
+        findTagGalleryDigestCache = .some(digest)
+        return digest
     }
 }

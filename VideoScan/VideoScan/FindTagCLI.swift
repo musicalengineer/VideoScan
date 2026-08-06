@@ -463,15 +463,40 @@ enum FindTagCLI {
     }
 
     /// Scorer-configuration provenance: engine + every RecipeParameters
-    /// field, via its reflected description, SHA-256'd. Field additions,
-    /// removals, or value changes all change the digest — which is the
-    /// SAFE direction (over-invalidation costs a rescan; under-
-    /// invalidation reuses scores produced under different rules,
-    /// codex #277 partial #3).
+    /// field (reflected description) + MODEL identity (the models/
+    /// directory listing: name|size|mtime of every CoreML package the
+    /// scorers can load — a swapped checkpoint changes the digest,
+    /// codex #279) + the app build (proxy for bundled-model and
+    /// embedding-space changes). Over-invalidation is the SAFE
+    /// direction: it costs a rescan, never a stale reuse.
     static func paramsDigest(engine: String, params: RecipeParameters) -> String {
-        let provenance = "engine=\(engine)|\(String(describing: params))"
+        var provenance = "engine=\(engine)|\(String(describing: params))"
+        let bundleVersion = Bundle.main
+            .object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "dev"
+        provenance += "|build=\(bundleVersion)"
+        let modelsDir = "\(NSHomeDirectory())/dev/VideoScan/models"
+        let fm = FileManager.default
+        if let names = try? fm.contentsOfDirectory(atPath: modelsDir) {
+            for name in names.sorted() {
+                let full = (modelsDir as NSString).appendingPathComponent(name)
+                let attrs = try? fm.attributesOfItem(atPath: full)
+                let size = (attrs?[.size] as? Int64) ?? 0
+                let mtime = (attrs?[.modificationDate] as? Date)?
+                    .timeIntervalSince1970 ?? 0
+                provenance += "|\(name)|\(size)|\(Int(mtime))"
+            }
+        }
         return SHA256.hash(data: Data(provenance.utf8))
             .map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The digest for the CURRENT production configuration — shared by
+    /// the daemon (stamping runStart) and the app's ingest (provenance
+    /// mismatch logging), so the two can never drift.
+    static func currentParamsDigest() -> String {
+        var params = RecipeParameters()
+        params.sexGateEnabled = true
+        return paramsDigest(engine: "arcface", params: params)
     }
 
     // MARK: - Filters

@@ -667,12 +667,18 @@ final class VideoScanModel: ObservableObject {
     /// worth of parsing).
     var findTagIngestTimer: Timer?
 
-    /// Per-poll parse short-circuit: filename → (byte size at last
-    /// parse, had nothing pending). A journal whose size is unchanged
-    /// and was already exhausted is SKIPPED without re-reading — the
-    /// 30 s MainActor tick must not re-decode every historical journal
-    /// (codex QA #277 perf). In-memory only; a relaunch re-parses once.
-    var findTagIngestParseCache: [String: (size: Int64, exhausted: Bool)] = [:]
+    /// Per-file ingest parse state (FindTagIngestEngine): committed
+    /// byte offsets + sticky rejections, so the 30 s MainActor tick
+    /// reads only appended journal bytes and never re-evaluates
+    /// rejected files (codex QA #277/#279 perf). In-memory only; a
+    /// relaunch re-parses once.
+    var findTagIngestFileStates: [String: FindTagIngestFileState] = [:]
+
+    /// Launch-cached gallery digest for ingest provenance logging
+    /// (computing it reads every gallery photo — once is enough).
+    /// Double-optional: nil = not yet computed; .some(nil) = computed,
+    /// gallery unreadable.
+    var findTagGalleryDigestCache: String??
 
     /// Snapshot the current skip-directory set from scanOptions.
     /// Must be called on the main actor (returns a Sendable Set<String>
