@@ -396,11 +396,21 @@ public struct FindTagIngestState: Codable, Equatable, Sendable {
         return state
     }
 
-    public func save(to url: URL) {
+    /// - Returns: whether the sidecar durably reached disk. Callers
+    ///   advancing in-memory parse offsets must check (codex QA #281:
+    ///   a silently-lost sidecar with advanced offsets suppresses
+    ///   retry until relaunch).
+    @discardableResult
+    public func save(to url: URL) -> Bool {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        guard let data = try? encoder.encode(self) else { return }
-        try? data.write(to: url, options: .atomic)
+        guard let data = try? encoder.encode(self) else { return false }
+        do {
+            try data.write(to: url, options: .atomic)
+            return true
+        } catch {
+            return false
+        }
     }
 
     /// The verdicts in `entries` not yet applied for `filename`,

@@ -1,30 +1,34 @@
 // FindTagIngestEngine.swift (VideoScanCore)
 // The PURE ingest pass for find-tag journals (2026-08-06, codex QA
-// #279): every side effect — file reads, record resolution, tag
-// application, catalog persistence, logging — is an injected closure,
-// so the durability ordering that round 2/3 kept getting wrong is now
-// a testable pure policy. The app's VideoScanModel wraps this with its
-// real dependencies; codex tests it with fakes.
+// #279/#281): every side effect — file reads, record resolution, tag
+// application, catalog persistence, cursor persistence, logging — is
+// an injected closure, so the durability ordering is a testable pure
+// policy. The app's VideoScanModel wraps this with real dependencies;
+// codex tests it with fakes.
 //
-// THE durability invariant (round-3 blocker): the per-file cursor may
-// advance past a verdict batch only when EITHER
+// THE durability invariant (round-3 blocker): the per-file cursor and
+// parse offsets may advance past a verdict batch only when EITHER
 //   (a) the batch contained no APPLICABLE verdict (no resolvable
 //       record with a score — errors/orphans only), OR
-//   (b) saveCatalog() returned true THIS pass.
-// "Applicable" — not "applied": a verdict whose apply() returns false
-// may still be a memory mutation from a PRIOR pass whose save failed
-// (apply is idempotent, so the retry pass sees no change). Counting
-// applied instead of applicable is exactly the round-3 hole: the
-// retry pass would skip the save and commit the cursor over a tag
-// that never reached disk.
+//   (b) saveCatalog() returned true THIS pass,
+// AND (round 4) the advanced cursor itself durably persisted
+// (persistCursor). "Applicable" — not "applied": a verdict whose
+// apply() returns false may be a memory mutation from a PRIOR pass
+// whose save failed; the retry pass must still save.
 //
-// Incremental parsing: per-file `parsedThrough` byte offset — a poll
-// re-reads only appended bytes of the active journal (the writer
-// fsyncs whole lines, so a committed offset is always a line
-// boundary; a torn tail line is skipped by the tolerant reader and
-// re-read next pass because offsets only advance on cursor commit).
-// Rejected files (foreign catalog, unknown recipeID, unknown schema,
-// no runStart) are rejected STICKY — their header can't change.
+// CROSS-PROCESS READER RULES (round-4 blockers — the daemon writes
+// while the app reads):
+//   - Header classification needs one COMPLETE line: a file with no
+//     newline yet (writer created it but hasn't fsync'd runStart) is
+//     simply "not ready" — looked at again next poll, NEVER sticky-
+//     rejected. Sticky rejection requires a complete first line that
+//     positively fails to be a valid, same-catalog, known-recipe,
+//     known-version runStart.
+//   - Offsets advance only to the last NEWLINE boundary of what was
+//     read: a torn trailing fragment (reader raced the writer's
+//     append) stays un-consumed and is re-read whole next poll —
+//     skipping it via a size-based offset would silently drop the
+//     verdict when its remainder lands.
 
 import Foundation
 
@@ -32,11 +36,12 @@ import Foundation
 
 public struct FindTagIngestFileState: Equatable, Sendable {
     /// Byte offset of journal content already parsed AND cursor-
-    /// committed. Advances only when the pass is durable.
+    /// committed — always a line boundary. Advances only when the
+    /// pass is fully durable (catalog + cursor).
     public var parsedThrough: Int64
     /// Nothing pending at last look (skip stat-unchanged files).
     public var exhausted: Bool
-    /// Header failed validation — never look again.
+    /// Header POSITIVELY failed validation — never look again.
     public var rejected: Bool
     public var person: String
     public var recipeID: String
@@ -60,31 +65,17 @@ public enum FindTagIngestEngine {
         public var applied = 0
         public var applicable = 0
         public var orphaned = 0
+        /// Catalog + cursor both durably persisted (or nothing needed
+        /// persisting). False ⇒ nothing committed; next pass retries.
         public var durable = true
         public init() {}
     }
 
-    /// One ingest pass over the journal directory's files.
+    /// One ingest pass. See the file header for the invariants.
     ///
-    /// - Parameters:
-    ///   - journalFiles: (url, current byte size) per .jsonl file.
-    ///   - fileStates: per-file parse state (caller keeps it in memory).
-    ///   - cursor: the persistent per-file seq cursor. MUTATED only on
-    ///     a durable pass; the caller persists it iff `result.durable`.
-    ///   - activeCatalogPath: standardized path of the catalog THIS app
-    ///     owns — journals for any other catalog are rejected.
-    ///   - isKnownRecipeID: fail-closed gate for threshold mapping.
-    ///   - currentGalleryDigest/currentParamsDigest: the app's present
-    ///     scoring provenance; a mismatch with a journal's header is
-    ///     LOGGED (epoch mixing is visible) but does not block ingest —
-    ///     the verdicts were legitimate under the provenance that
-    ///     produced them, same as historical in-app tags.
-    ///   - readData: read `url` from byte offset to EOF (nil on error).
-    ///   - resolveRecord: recordID + content fingerprint → opaque
-    ///     record handle; nil when no trustworthy match exists.
-    ///   - apply: apply one verdict; true when catalog memory changed.
-    ///   - saveCatalog: durably persist catalog memory; true on disk.
-    ///   - log: human-facing ingest log line.
+    /// - Parameters mirror the app's dependencies; `persistCursor`
+    ///   durably saves the advanced cursor sidecar and reports success
+    ///   (round 4: a silent sidecar failure must not strand offsets).
     public static func pass<Record>(
         journalFiles: [(url: URL, size: Int64)],
         fileStates: inout [String: FindTagIngestFileState],
@@ -97,119 +88,164 @@ public enum FindTagIngestEngine {
         resolveRecord: (String, String?) -> Record?,
         apply: (String, Record, Double, String) -> Bool,
         saveCatalog: () -> Bool,
+        persistCursor: (FindTagIngestState) -> Bool,
         log: (String) -> Void
     ) -> PassResult {
         var result = PassResult()
-        /// filename → (seq to commit, bytes parsed, nothing left) —
-        /// staged, committed only if the pass ends durable.
+        /// filename → staged advance, committed only if the pass ends
+        /// fully durable.
         var staged: [String: (seq: Int, parsedThrough: Int64, exhausted: Bool)] = [:]
+        /// Header fields discovered THIS pass for first-encounter files
+        /// (committed to fileStates immediately — header knowledge is
+        /// not a durability concern; offsets are).
+        var newHeaders: [String: FindTagIngestFileState] = [:]
 
         for (url, size) in journalFiles.sorted(by: { $0.url.lastPathComponent < $1.url.lastPathComponent }) {
             let name = url.lastPathComponent
-            var fileState = fileStates[name] ?? FindTagIngestFileState()
-            if fileState.rejected { continue }
-            if fileState.exhausted, fileState.parsedThrough == size { continue }
+            let known = fileStates[name]
+            if let known, known.rejected { continue }
+            if let known, known.exhausted, known.parsedThrough == size { continue }
 
-            // First encounter: full read + header validation.
-            if fileStates[name] == nil {
-                guard let data = readData(url, 0) else { continue }
-                let entries = FindTagJournalReader.entries(in: data)
-                guard case .runStart(let start)? = entries.first else {
-                    fileState.rejected = true
-                    fileStates[name] = fileState
+            let offsetBase = known?.parsedThrough ?? 0
+            guard let raw = readData(url, offsetBase) else { continue }
+            // Only COMPLETE lines participate; a torn tail fragment is
+            // left for the next poll (its bytes stay above the staged
+            // offset).
+            let completeLength: Int
+            if let lastNewline = raw.lastIndex(of: 0x0A) {
+                completeLength = raw.distance(from: raw.startIndex, to: lastNewline) + 1
+            } else {
+                completeLength = 0
+            }
+            let complete = raw.prefix(completeLength)
+
+            var fileState: FindTagIngestFileState
+            if let known {
+                fileState = known
+            } else {
+                // First encounter: classify the header — but ONLY from
+                // a complete first line. No newline yet ⇒ the writer
+                // hasn't finished runStart ⇒ not ready, try next poll.
+                guard completeLength > 0 else { continue }
+                guard let classified = classifyHeader(
+                    complete: complete, name: name,
+                    activeCatalogPath: activeCatalogPath,
+                    isKnownRecipeID: isKnownRecipeID,
+                    currentGalleryDigest: currentGalleryDigest,
+                    currentParamsDigest: currentParamsDigest,
+                    log: log) else {
+                    // Positive rejection — sticky.
+                    fileStates[name] = FindTagIngestFileState(rejected: true)
                     continue
                 }
-                guard URL(fileURLWithPath: start.catalogPath).standardizedFileURL.path
-                        == activeCatalogPath else {
-                    log("Find and Tag ingest: skipping \(name) — journal is for a different catalog (\(start.catalogPath))")
-                    fileState.rejected = true
-                    fileStates[name] = fileState
-                    continue
-                }
-                guard isKnownRecipeID(start.recipeID) else {
-                    log("Find and Tag ingest: skipping \(name) — unknown recipeID \(start.recipeID)")
-                    fileState.rejected = true
-                    fileStates[name] = fileState
-                    continue
-                }
-                if let current = currentGalleryDigest, let run = start.galleryDigest,
-                   current != run {
-                    log("Find and Tag ingest: note — \(name) was scored against a different reference gallery (still ingesting; a rescan will re-score)")
-                }
-                if let current = currentParamsDigest, let run = start.paramsDigest,
-                   current != run {
-                    log("Find and Tag ingest: note — \(name) was scored under a different scorer configuration (still ingesting; a rescan will re-score)")
-                }
-                fileState.person = start.person
-                fileState.recipeID = start.recipeID
-                fileStates[name] = fileState
-                consume(entries: entries, name: name, fileState: fileState,
-                        size: size, cursor: cursor, staged: &staged,
-                        result: &result, resolveRecord: resolveRecord, apply: apply)
+                fileState = classified
+                newHeaders[name] = classified
+            }
+
+            let entries = FindTagJournalReader.entries(in: complete)
+            let pending = cursor.pendingVerdicts(in: entries, filename: name)
+            let stagedOffset = offsetBase + Int64(completeLength)
+            guard !pending.isEmpty else {
+                staged[name] = (cursor.appliedSeq[name] ?? 0, stagedOffset, true)
                 continue
             }
-
-            // Known file: read only the appended tail. Offsets advance
-            // only on durable commit, so a failed pass re-reads and
-            // re-derives the same pending set next time.
-            guard let tail = readData(url, fileState.parsedThrough) else { continue }
-            let entries = FindTagJournalReader.entries(in: tail)
-            consume(entries: entries, name: name, fileState: fileState,
-                    size: size, cursor: cursor, staged: &staged,
-                    result: &result, resolveRecord: resolveRecord, apply: apply)
-        }
-
-        // THE invariant: any applicable verdict this pass ⇒ the catalog
-        // must durably save before any cursor/offset movement. This
-        // covers both fresh applies AND retry passes whose apply()
-        // no-ops over dirty memory from an earlier failed save.
-        result.durable = result.applicable == 0 ? true : saveCatalog()
-        if result.durable {
-            for (name, stagedState) in staged {
-                cursor.markApplied(filename: name, through: stagedState.seq)
-                if var fileState = fileStates[name] {
-                    fileState.parsedThrough = stagedState.parsedThrough
-                    fileState.exhausted = stagedState.exhausted
-                    fileStates[name] = fileState
+            var lastSeq = 0
+            for verdict in pending {
+                lastSeq = verdict.seq
+                guard let score = verdict.score else { continue }
+                guard let record = resolveRecord(verdict.recordID, verdict.fingerprint) else {
+                    result.orphaned += 1
+                    continue
+                }
+                result.applicable += 1
+                if apply(fileState.person, record, score, fileState.recipeID) {
+                    result.applied += 1
                 }
             }
-        } else {
+            staged[name] = (lastSeq, stagedOffset, true)
+        }
+
+        // Header knowledge commits regardless of durability (it never
+        // changes); offsets in it start at 0 until a durable commit.
+        for (name, header) in newHeaders where fileStates[name] == nil {
+            fileStates[name] = header
+        }
+
+        // Durability gate 1: any applicable verdict ⇒ catalog must save.
+        let catalogDurable = result.applicable == 0 ? true : saveCatalog()
+        guard catalogDurable else {
+            result.durable = false
             log("Find and Tag ingest: catalog save refused/failed — nothing committed; will retry next pass")
+            return result
+        }
+        // Durability gate 2 (round 4): the advanced cursor must itself
+        // persist before offsets move — a silently-lost sidecar with
+        // advanced in-memory offsets would suppress retry until
+        // relaunch.
+        var advanced = cursor
+        for (name, stagedState) in staged {
+            advanced.markApplied(filename: name, through: stagedState.seq)
+        }
+        guard staged.isEmpty || persistCursor(advanced) else {
+            result.durable = false
+            log("Find and Tag ingest: cursor save failed — offsets held; will retry next pass")
+            return result
+        }
+        cursor = advanced
+        for (name, stagedState) in staged {
+            if var fileState = fileStates[name] {
+                fileState.parsedThrough = stagedState.parsedThrough
+                fileState.exhausted = stagedState.exhausted
+                fileStates[name] = fileState
+            }
         }
         return result
     }
 
-    /// Shared verdict-consumption half: filter by cursor, resolve,
-    /// apply, stage the file's advance.
-    private static func consume<Record>(
-        entries: [FindTagJournalEntry],
+    /// First-complete-line header classification. nil = POSITIVE
+    /// rejection (caller marks sticky). A valid runStart for this
+    /// catalog/recipe/version returns the file's header state.
+    private static func classifyHeader(
+        complete: Data.SubSequence,
         name: String,
-        fileState: FindTagIngestFileState,
-        size: Int64,
-        cursor: FindTagIngestState,
-        staged: inout [String: (seq: Int, parsedThrough: Int64, exhausted: Bool)],
-        result: inout PassResult,
-        resolveRecord: (String, String?) -> Record?,
-        apply: (String, Record, Double, String) -> Bool
-    ) {
-        let pending = cursor.pendingVerdicts(in: entries, filename: name)
-        guard !pending.isEmpty else {
-            staged[name] = (cursor.appliedSeq[name] ?? 0, size, true)
-            return
+        activeCatalogPath: String,
+        isKnownRecipeID: (String) -> Bool,
+        currentGalleryDigest: String?,
+        currentParamsDigest: String?,
+        log: (String) -> Void
+    ) -> FindTagIngestFileState? {
+        guard let newlineIndex = complete.firstIndex(of: 0x0A) else { return nil }
+        let firstLine = Data(complete[complete.startIndex..<newlineIndex])
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let entry = try? decoder.decode(FindTagJournalEntry.self, from: firstLine),
+              case .runStart(let start) = entry else {
+            log("Find and Tag ingest: skipping \(name) — first line is not a run header")
+            return nil
         }
-        var lastSeq = 0
-        for verdict in pending {
-            lastSeq = verdict.seq
-            guard let score = verdict.score else { continue }
-            guard let record = resolveRecord(verdict.recordID, verdict.fingerprint) else {
-                result.orphaned += 1
-                continue
-            }
-            result.applicable += 1
-            if apply(fileState.person, record, score, fileState.recipeID) {
-                result.applied += 1
-            }
+        guard start.v == FindTagJournalSchema.version else {
+            log("Find and Tag ingest: skipping \(name) — unknown schema v\(start.v)")
+            return nil
         }
-        staged[name] = (lastSeq, size, true)
+        guard URL(fileURLWithPath: start.catalogPath).standardizedFileURL.path
+                == activeCatalogPath else {
+            log("Find and Tag ingest: skipping \(name) — journal is for a different catalog (\(start.catalogPath))")
+            return nil
+        }
+        guard isKnownRecipeID(start.recipeID) else {
+            log("Find and Tag ingest: skipping \(name) — unknown recipeID \(start.recipeID)")
+            return nil
+        }
+        if let current = currentGalleryDigest, let run = start.galleryDigest,
+           current != run {
+            log("Find and Tag ingest: note — \(name) was scored against a different reference gallery (still ingesting; a rescan will re-score)")
+        }
+        if let current = currentParamsDigest, let run = start.paramsDigest,
+           current != run {
+            log("Find and Tag ingest: note — \(name) was scored under a different scorer configuration (still ingesting; a rescan will re-score)")
+        }
+        return FindTagIngestFileState(parsedThrough: 0, exhausted: false,
+                                      rejected: false, person: start.person,
+                                      recipeID: start.recipeID)
     }
 }

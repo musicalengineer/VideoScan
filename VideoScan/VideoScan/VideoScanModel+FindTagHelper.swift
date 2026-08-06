@@ -192,9 +192,9 @@ extension VideoScanModel {
                                          score: score, recipeID: recipeID) ?? false
             },
             saveCatalog: { [weak self] in self?.saveCatalogNow() ?? false },
+            persistCursor: { $0.save(to: stateURL) },
             log: { appLog.write($0) })
 
-        if result.durable { cursor.save(to: stateURL) }
         if result.applied > 0 || result.orphaned > 0 {
             appLog.write("Find and Tag ingest: applied \(result.applied) journaled "
                 + "verdict(s)\(result.orphaned > 0 ? ", \(result.orphaned) orphaned record(s)" : "")"
