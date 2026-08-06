@@ -186,6 +186,9 @@ final class FindPersonJob: MediaFileOperationJob {
     /// (misattribution risk identified in the 2026-08-06 cascade).
     /// Bumped at every new clip AND at every abandon.
     private var clipGeneration = 0
+    /// The clip currently being scored — held so cancel() can reach
+    /// into the unstructured score task (see cancel()).
+    private var currentScoreTask: Task<RecipeClipScore, Never>?
 
     // MARK: Test seams (codex GH #156 regression suite, channel #267)
     //
@@ -300,6 +303,15 @@ final class FindPersonJob: MediaFileOperationJob {
         state = .cancelling
         subtitleText = "Cancelling…"
         task?.cancel()
+        // The per-clip score task is UNSTRUCTURED (deliberately — the
+        // wedge-skip race must outlive abandonment), so the run-task
+        // cancel above does NOT propagate into it: without this line
+        // "Cancelling…" silently waits for the CURRENT clip to finish,
+        // which on a long compilation reads as Stop-does-nothing
+        // (Rick, 2026-08-06 evening). The scorer's cooperative
+        // between-frame checks end it within a frame or two; worst
+        // case is a hung AVF open (≤45s bounded by the open race).
+        currentScoreTask?.cancel()
         if usesNativeEngine {
             // A paused native scorer is parked INSIDE waitIfPaused —
             // release it so the cancellation check after the gate runs.
@@ -641,6 +653,8 @@ final class FindPersonJob: MediaFileOperationJob {
                 clipGeneration += 1
                 let generation = clipGeneration
                 let scoreTask = Task { await scorer.score(clip: clip) }
+                currentScoreTask = scoreTask   // cancel() reaches the clip in flight
+                defer { currentScoreTask = nil }
                 let raced: RecipeClipScore? = await withCheckedContinuation { cont in
                     clipAbandonContinuation = cont
                     Task { @MainActor [weak self] in
