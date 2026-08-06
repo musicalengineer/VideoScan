@@ -21,8 +21,7 @@ enum FindTagStatusProbe {
             at: journalDir, includingPropertiesForKeys: nil) else { return nil }
         guard let newest = files
             .filter({ $0.pathExtension == "jsonl" })
-            .sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
-            .last else { return nil }
+            .max(by: { $0.lastPathComponent < $1.lastPathComponent }) else { return nil }
 
         guard let handle = try? FileHandle(forReadingFrom: newest) else { return nil }
         defer { try? handle.close() }
