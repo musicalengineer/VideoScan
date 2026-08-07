@@ -349,6 +349,31 @@ final class RebuildAudioJob: @MainActor MediaFileOperationJob {
                 gatePermits.append((gate, permit))
                 VolumeGateBoard.shared.claim(root: gate.root, jobID: id,
                                              name: gateHolderName)
+                // codex #295: a pause that landed while we were
+                // suspended acquiring THIS gate has already lent the
+                // earlier permits — this one must join the paused set,
+                // and the loop must hold here (a paused job may not
+                // advance toward spawning new work). The lend op is
+                // chain-ordered and re-checks paused state at execution:
+                // if resume won the race it no-ops and the permit stays
+                // held, exactly matching what resume re-acquired.
+                if isPausedValue {
+                    let lentEntry = (gate: gate, permit: permit)
+                    enqueueGateOp { [weak self] in
+                        guard let self, self.isPausedValue else { return }
+                        await lentEntry.permit.releaseForPause()
+                        VolumeGateBoard.shared.clear(root: lentEntry.gate.root,
+                                                     jobID: self.id)
+                    }
+                    while isPausedValue, !Task.isCancelled {
+                        try? await Task.sleep(nanoseconds: 200_000_000)
+                    }
+                    if Task.isCancelled {
+                        await closeGatePermits()
+                        finishCancelled()
+                        return
+                    }
+                }
             } catch {
                 // Only CancellationError escapes wait() — the user
                 // cancelled while queued behind another job.

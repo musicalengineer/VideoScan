@@ -214,6 +214,15 @@ nonisolated let pfWatchdogAbsoluteCeilingSecs: Double = 7200
 /// The REAL per-clip budget — one formula, shared by the decision and
 /// every abort log line (codex #292: logs printed the uncapped 10x
 /// figure).
+///
+/// SCOPE (codex #295): this is a BETWEEN-FRAME budget — it is checked
+/// on frame delivery, so a frame producer that stops yielding entirely
+/// (blocked copyNextSampleBuffer) is outside its reach. That case is
+/// the no-progress stall watchdogs' jurisdiction: the native path has
+/// the 300s no-beat StallMonitor + the 45s open race; the legacy pf
+/// engines have narrower coverage (KNOWN GAP — an engine-level
+/// wall-clock race with safe reader teardown is designed work, not a
+/// patch; tracked with codex).
 nonisolated func pfWatchdogBudgetSecs(mediaSecs: Double) -> Double {
     min(pfWatchdogAbsoluteCeilingSecs, max(60.0, mediaSecs * 10.0))
 }
