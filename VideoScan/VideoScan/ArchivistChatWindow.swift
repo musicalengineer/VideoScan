@@ -37,6 +37,8 @@ struct ArchivistMessage: Identifiable {
             /// Send this text through the full ask pipeline (used for
             /// person-disambiguation corrections).
             case askText(String)
+            /// Play this specific record (the "▶︎ Play …" offer).
+            case playRecord(UUID)
         }
         let id = UUID()
         let label: String
@@ -259,6 +261,8 @@ struct ArchivistChatWindow: View {
             ask(text)
         case .applyQuery(let query):
             apply(query: query, announcedAs: chip.label)
+        case .playRecord(let id):
+            if let rec = model.record(forID: id) { play(rec) }
         }
     }
 
@@ -277,6 +281,7 @@ struct ArchivistChatWindow: View {
                 let spec = try await translator.translate(text)
                 respond(to: text, spec: spec)
             } catch {
+                playAfterAnswer = false   // a failed 'play X' must not arm a later answer
                 messages.append(ArchivistMessage(
                     role: .assistant,
                     text: "I couldn't reach my language brain (\(error.localizedDescription)). "
@@ -309,14 +314,14 @@ struct ArchivistChatWindow: View {
             "the first video", "the current video", "the video", "them",
         ]
         if bareReferents.contains(remainder) {
-            guard let first = lastMatches.first else {
+            guard !lastMatches.isEmpty else {
                 messages.append(ArchivistMessage(
                     role: .assistant,
                     text: "Play what? Ask me to find something first — then "
                         + "say “play the first one”."))
                 return true
             }
-            play(first)
+            play(bestOf: lastMatches)
             return true
         }
         // "play <query>": find it, then play the best match.
@@ -329,7 +334,45 @@ struct ArchivistChatWindow: View {
         return true
     }
 
+    /// Play with HONESTY (codex #300: MediaOpener silently drops
+    /// unreachable records — the old path claimed "Playing" over a
+    /// no-op when the first match sat on an unmounted volume). The
+    /// pure choice policy is the codex test seam.
+    private func play(bestOf matches: [VideoRecord]) {
+        switch ArchivistPlayPolicy.choose(
+            matches: matches,
+            isReachable: { VolumeReachability.isReachable(path: $0) },
+            fileExists: { FileManager.default.fileExists(atPath: $0) }) {
+        case .none:
+            let volume = (matches.first?.fullPath).map {
+                MediaVolumeGatePolicy.volumeRoot(forPath: $0)
+            } ?? "its volume"
+            messages.append(ArchivistMessage(
+                role: .assistant,
+                text: "I can't play any of those right now — they're on "
+                    + "an offline drive (\(volume)). Mount it and ask me again."))
+        case .play(let rec, substitutedForOffline: let substituted):
+            if substituted {
+                messages.append(ArchivistMessage(
+                    role: .assistant,
+                    text: "The first one is on an offline drive — playing the "
+                        + "first available instead."))
+            }
+            play(rec)
+        }
+    }
+
     private func play(_ rec: VideoRecord) {
+        // Same honesty at the single-record door (play chips).
+        guard VolumeReachability.isReachable(path: rec.fullPath),
+              FileManager.default.fileExists(atPath: rec.fullPath) else {
+            let volume = MediaVolumeGatePolicy.volumeRoot(forPath: rec.fullPath)
+            messages.append(ArchivistMessage(
+                role: .assistant,
+                text: "“\(rec.filename)” is on an offline drive (\(volume)) — "
+                    + "mount it and I'll play it."))
+            return
+        }
         MediaOpener.open([rec])
         messages.append(ArchivistMessage(
             role: .assistant,
@@ -417,6 +460,12 @@ struct ArchivistChatWindow: View {
 
     /// The archivist's reply policy — resolution first, then intent.
     private func respond(to question: String, spec: NLQuerySpec) {
+        // Disarm the play-after flag FIRST (codex #300: count/ambiguity/
+        // empty-compose returns left it armed, and a failed 'play X'
+        // would fire on a later unrelated answer). The local carries
+        // this answer's intent to the filter branch.
+        let wantPlayAfter = playAfterAnswer
+        playAfterAnswer = false
         // 1. PERSON RESOLUTION (never guess — Phase 1 contract). An
         // unknown or ambiguous name becomes a counter-question with
         // one-tap corrections.
@@ -498,13 +547,25 @@ struct ArchivistChatWindow: View {
         var text = matchSentence(matches.count)
         if !chips.isEmpty { text += " Which ones interest you?" }
         if matches.isEmpty { chips = [] }
+        // The occasional OFFER (Rick 2026-08-07: "ask, do you want me
+        // to play any of these… so it feels interactive, without
+        // interrupting"): small result sets get a play chip — an
+        // invitation, never a nag.
+        if !wantPlayAfter, (1...8).contains(matches.count),
+           case .play(let candidate, _) = ArchivistPlayPolicy.choose(
+               matches: matches,
+               isReachable: { VolumeReachability.isReachable(path: $0) },
+               fileExists: { FileManager.default.fileExists(atPath: $0) }) {
+            chips.append(ArchivistMessage.Chip(
+                label: "▶︎ Play “\(candidate.filename)”",
+                action: .playRecord(candidate.id)))
+        }
         messages.append(ArchivistMessage(role: .assistant, text: text,
                                          queryLine: composed, chips: chips))
 
-        // "play <something>" auto-plays the first result of its search.
-        if playAfterAnswer {
-            playAfterAnswer = false
-            if let first = matches.first { play(first) }
+        // "play <something>" auto-plays the best result of its search.
+        if wantPlayAfter, !matches.isEmpty {
+            play(bestOf: matches)
         }
     }
 
@@ -565,6 +626,39 @@ struct ArchivistChatWindow: View {
         guard top.count >= 2, let best = top.first,
               best.count < matches.count else { return [] }
         return top
+    }
+}
+
+// MARK: - Play policy (pure — the codex test seam, #300)
+
+/// Which record to actually play, honestly. MediaOpener silently
+/// drops unreachable records, so the CHOICE must happen before the
+/// success message: first reachable-and-present match wins, noting
+/// when it substituted for an offline first match; nothing playable
+/// is `.none`, never a false "Playing".
+enum ArchivistPlayPolicy {
+    enum Choice: Equatable {
+        case none
+        case play(VideoRecord, substitutedForOffline: Bool)
+
+        static func == (lhs: Choice, rhs: Choice) -> Bool {
+            switch (lhs, rhs) {
+            case (.none, .none): return true
+            case (.play(let a, let sa), .play(let b, let sb)):
+                return a.id == b.id && sa == sb
+            default: return false
+            }
+        }
+    }
+
+    static func choose(matches: [VideoRecord],
+                       isReachable: (String) -> Bool,
+                       fileExists: (String) -> Bool) -> Choice {
+        guard let playable = matches.first(where: {
+            isReachable($0.fullPath) && fileExists($0.fullPath)
+        }) else { return .none }
+        let substituted = playable.id != matches.first?.id
+        return .play(playable, substitutedForOffline: substituted)
     }
 }
 
