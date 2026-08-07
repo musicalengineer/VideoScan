@@ -72,6 +72,34 @@ struct PersonFinderWatchdogTests {
         #expect(pfShouldAbortForWatchdog(elapsedSecs: 7201, mediaSecs: 86_400))
     }
 
+    // MARK: Abort must never become a cache entry (codex #290)
+
+    @Test func watchdogAbortedResultIsNeverCacheable() {
+        // The blocker shape: a ceiling abort broke the frame loop and
+        // the partial (possibly false-no-hit) result was cached as
+        // complete — permanently. The store gate refuses aborted
+        // results; uncached files re-scan next run.
+        let aborted = pfVideoResult(
+            filename: "p216.mkv", filePath: "/v/p216.mkv",
+            durationSeconds: 7800, fps: 2, totalHits: 0, segments: [],
+            facesDetected: 12, watchdogAborted: true)
+        #expect(!PersonFinderCache.shouldStore(result: aborted))
+
+        let complete = pfVideoResult(
+            filename: "ok.mov", filePath: "/v/ok.mov",
+            durationSeconds: 60, fps: 2, totalHits: 3, segments: [],
+            facesDetected: 40)
+        #expect(PersonFinderCache.shouldStore(result: complete))
+    }
+
+    @Test func abortLogsUseTheCappedBudget() {
+        // The log line must print the REAL budget (codex #292: it
+        // printed the uncapped 10x figure — 21h40m for a 2h10m clip).
+        #expect(pfWatchdogBudgetSecs(mediaSecs: 7800) == 7200)
+        #expect(pfWatchdogBudgetSecs(mediaSecs: 71) == 710)
+        #expect(pfWatchdogBudgetSecs(mediaSecs: 0) == 60)
+    }
+
     @Test func ceilingDoesNotShortenNormalBudgets() {
         // The 10× rule still governs everything below the cap: a 10min
         // clip keeps its 100min budget untouched.

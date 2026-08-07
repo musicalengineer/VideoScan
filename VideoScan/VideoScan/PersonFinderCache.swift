@@ -10,6 +10,15 @@ private let cacheLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "cach
 /// face-recognition pass entirely and return cached segments.
 /// Stored at ~/Library/Application Support/VideoScan/personfinder_cache.sqlite.
 final class PersonFinderCache {
+
+    /// PURE store gate (codex #290 sensor seam): a watchdog-aborted
+    /// result is partial and must never enter the cache — an uncached
+    /// file is re-scanned next run, a cached partial no-hit lies
+    /// forever.
+    static func shouldStore(result: pfVideoResult) -> Bool {
+        !result.watchdogAborted
+    }
+
     private var db: OpaquePointer?
     private let lock = NSLock()
 

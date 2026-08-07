@@ -659,6 +659,8 @@ nonisolated func pfProcessVideoWithArcFace(
     }
     perf.videoOpenMs = (CFAbsoluteTimeGetCurrent() - videoOpenStart) * 1000
     let wallStart = CFAbsoluteTimeGetCurrent()
+    var pausedSecs: Double = 0
+    var watchdogAborted = false
 
     await progressFn(filename)
     await logFn("[\(index)/\(total)] \(filename)  (\(pfFormatDuration(ctx.duration)), \(String(format: "%.1f", ctx.fps)) fps)  [\(engineTag)]")
@@ -704,9 +706,13 @@ nonisolated func pfProcessVideoWithArcFace(
             // for the same fix.)
             break
         }
-        let elapsedWall = CFAbsoluteTimeGetCurrent() - wallStart
+        // Elapsed EXCLUDES paused time (codex #292: a nap must not
+        // burn the clip's budget) and the abort log prints the REAL
+        // capped budget, not the uncapped 10x figure.
+        let elapsedWall = CFAbsoluteTimeGetCurrent() - wallStart - pausedSecs
         if pfShouldAbortForWatchdog(elapsedSecs: elapsedWall, mediaSecs: ctx.duration) {
-            await logFn("[\(index)/\(total)] \(filename) — watchdog abort (wall=\(pfFormatDuration(elapsedWall)) exceeded \(pfFormatDuration(max(60, ctx.duration * 10))) budget for \(pfFormatDuration(ctx.duration)) clip)")
+            await logFn("[\(index)/\(total)] \(filename) — watchdog abort (wall=\(pfFormatDuration(elapsedWall)) exceeded \(pfFormatDuration(pfWatchdogBudgetSecs(mediaSecs: ctx.duration))) budget for \(pfFormatDuration(ctx.duration)) clip); partial result NOT cached — retried next run")
+            watchdogAborted = true
             break
         }
         releaseFrameSlot()
@@ -763,7 +769,9 @@ nonisolated func pfProcessVideoWithArcFace(
         }
 
         if sampledSoFar % 5 == 0 {
+            let pauseProbeStart = CFAbsoluteTimeGetCurrent()
             await pauseGate.waitIfPaused()
+            pausedSecs += CFAbsoluteTimeGetCurrent() - pauseProbeStart
             if Task.isCancelled { break }
         }
 
@@ -808,7 +816,8 @@ nonisolated func pfProcessVideoWithArcFace(
         await logFn("  [\(index)/\(total)] \(filename) → no match  (faces: \(totalFacesDetected), best cosine: \(cosStr), threshold: \(String(format: "%.2f", cosineThreshold)))  [\(engineTag)]")
         return pfVideoResult(filename: filename, filePath: filePath,
                              durationSeconds: ctx.duration, fps: ctx.fps, totalHits: 0,
-                             segments: [], facesDetected: totalFacesDetected)
+                             segments: [], facesDetected: totalFacesDetected,
+                             watchdogAborted: watchdogAborted)
     }
 
     let segs = arcFaceClusterSegments(hits: hits, settings: settings, fps: ctx.fps, duration: ctx.duration)
@@ -818,5 +827,6 @@ nonisolated func pfProcessVideoWithArcFace(
     return pfVideoResult(filename: filename, filePath: filePath,
                          durationSeconds: ctx.duration, fps: ctx.fps,
                          totalHits: hits.count, segments: segs,
-                         facesDetected: totalFacesDetected)
+                         facesDetected: totalFacesDetected,
+                         watchdogAborted: watchdogAborted)
 }

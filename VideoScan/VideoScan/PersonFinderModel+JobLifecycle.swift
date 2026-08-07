@@ -1097,7 +1097,14 @@ extension PersonFinderModel {
             embedVariant: embedVariant
         ) {
             if let r {
-                PersonFinderCache.shared.store(key: cacheKey, result: r)
+                // A watchdog-aborted result is PARTIAL — caching it
+                // would freeze a maybe-false no-hit forever (codex
+                // #290). Uncached = re-scanned next run.
+                if PersonFinderCache.shouldStore(result: r) {
+                    PersonFinderCache.shared.store(key: cacheKey, result: r)
+                } else {
+                    await job.appendLog("  [\(idx + 1)/\(total)] \((filePath as NSString).lastPathComponent) — watchdog abort: partial result NOT cached (retried next run)")
+                }
             } else if !Task.isCancelled {
                 let skip = pfVideoResult(
                     filename: (filePath as NSString).lastPathComponent,

@@ -211,9 +211,15 @@ nonisolated func pfClampNominalFps(_ raw: Double, max cap: Double = 240.0) -> Do
 /// "lost".
 nonisolated let pfWatchdogAbsoluteCeilingSecs: Double = 7200
 
+/// The REAL per-clip budget — one formula, shared by the decision and
+/// every abort log line (codex #292: logs printed the uncapped 10x
+/// figure).
+nonisolated func pfWatchdogBudgetSecs(mediaSecs: Double) -> Double {
+    min(pfWatchdogAbsoluteCeilingSecs, max(60.0, mediaSecs * 10.0))
+}
+
 nonisolated func pfShouldAbortForWatchdog(elapsedSecs: Double, mediaSecs: Double) -> Bool {
-    let budget = min(pfWatchdogAbsoluteCeilingSecs, max(60.0, mediaSecs * 10.0))
-    return elapsedSecs > budget
+    elapsedSecs > pfWatchdogBudgetSecs(mediaSecs: mediaSecs)
 }
 
 /// Map a track's preferredTransform to the CGImagePropertyOrientation Vision expects.
@@ -513,6 +519,8 @@ nonisolated func pfProcessVideo(
     }
     perf.videoOpenMs = (CFAbsoluteTimeGetCurrent() - videoOpenStart) * 1000
     let wallStart = CFAbsoluteTimeGetCurrent()
+    var pausedSecs: Double = 0
+    var watchdogAborted = false
 
     await progressFn(filename)
     await logFn("[\(index)/\(total)] \(filename)  (\(pfFormatDuration(ctx.duration)), \(String(format: "%.1f", ctx.fps)) fps)")
@@ -563,9 +571,13 @@ nonisolated func pfProcessVideo(
             // Same applies to the seeker path — just break.
             break
         }
-        let elapsedWall = CFAbsoluteTimeGetCurrent() - wallStart
+        // Elapsed EXCLUDES paused time (codex #292: a nap must not
+        // burn the clip's budget) and the abort log prints the REAL
+        // capped budget, not the uncapped 10x figure.
+        let elapsedWall = CFAbsoluteTimeGetCurrent() - wallStart - pausedSecs
         if pfShouldAbortForWatchdog(elapsedSecs: elapsedWall, mediaSecs: ctx.duration) {
-            await logFn("[\(index)/\(total)] \(filename) — watchdog abort (wall=\(pfFormatDuration(elapsedWall)) exceeded \(pfFormatDuration(max(60, ctx.duration * 10))) budget for \(pfFormatDuration(ctx.duration)) clip)")
+            await logFn("[\(index)/\(total)] \(filename) — watchdog abort (wall=\(pfFormatDuration(elapsedWall)) exceeded \(pfFormatDuration(pfWatchdogBudgetSecs(mediaSecs: ctx.duration))) budget for \(pfFormatDuration(ctx.duration)) clip); partial result NOT cached — retried next run")
+            watchdogAborted = true
             break
         }
         releaseSlot()
@@ -622,7 +634,9 @@ nonisolated func pfProcessVideo(
         }
 
         if sampledSoFar % 5 == 0 {
+            let pauseProbeStart = CFAbsoluteTimeGetCurrent()
             await pauseGate.waitIfPaused()
+            pausedSecs += CFAbsoluteTimeGetCurrent() - pauseProbeStart
             // See top of this for-await: don't call cancelReading() from
             // the consumer side — it races with the prefetcher's in-flight
             // copyNextSampleBuffer. Just break; the AsyncStream onTermination
@@ -663,7 +677,8 @@ nonisolated func pfProcessVideo(
         await logFn("  [\(index)/\(total)] \(filename) → no match  (faces detected: \(totalFacesDetected), best dist: \(distStr), threshold: \(String(format: "%.3f", settings.threshold)))")
         return pfVideoResult(filename: filename, filePath: filePath,
                              durationSeconds: ctx.duration, fps: ctx.fps, totalHits: 0,
-                             segments: [], facesDetected: totalFacesDetected)
+                             segments: [], facesDetected: totalFacesDetected,
+                             watchdogAborted: watchdogAborted)
     }
 
     let segs = pfVisionClusterSegments(hits: hits, settings: settings, fps: ctx.fps, duration: ctx.duration)
@@ -674,5 +689,6 @@ nonisolated func pfProcessVideo(
     return pfVideoResult(filename: filename, filePath: filePath,
                          durationSeconds: ctx.duration, fps: ctx.fps,
                          totalHits: hits.count, segments: segs,
-                         facesDetected: totalFacesDetected)
+                         facesDetected: totalFacesDetected,
+                         watchdogAborted: watchdogAborted)
 }

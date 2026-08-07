@@ -925,10 +925,16 @@ struct pfVideoResult {
     /// of identity match. Kept separate from totalHits so the evaluator can
     /// distinguish "no people" from "people, but not the target person."
     let facesDetected: Int
+    /// The wall-clock watchdog ended this scan early — the result is
+    /// PARTIAL and must NEVER be cached as complete (codex #290:
+    /// pre-flag, a ceiling abort cached a partial no-hit forever).
+    /// Retryable: the next run scans the file again.
+    var watchdogAborted: Bool = false
     var clipFiles: [String] = []
 
     init(filename: String, filePath: String, durationSeconds: Double, fps: Double,
          totalHits: Int, segments: [pfSegment], facesDetected: Int = 0,
+         watchdogAborted: Bool = false,
          clipFiles: [String] = []) {
         self.filename = filename
         self.filePath = filePath
@@ -937,6 +943,7 @@ struct pfVideoResult {
         self.totalHits = totalHits
         self.segments = segments
         self.facesDetected = facesDetected
+        self.watchdogAborted = watchdogAborted
         self.clipFiles = clipFiles
     }
 
