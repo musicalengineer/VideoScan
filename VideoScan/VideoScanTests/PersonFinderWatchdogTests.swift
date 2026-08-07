@@ -56,4 +56,26 @@ struct PersonFinderWatchdogTests {
         #expect(!pfShouldAbortForWatchdog(elapsedSecs: 30, mediaSecs: 0))
         #expect(pfShouldAbortForWatchdog(elapsedSecs: 61, mediaSecs: 0))
     }
+
+    // MARK: Absolute ceiling (2026-08-07 — the P216 incident)
+
+    @Test func absoluteCeilingCapsLongMedia() {
+        // A 2h10m FFV1 mkv earned a 21h40m budget under the bare 10×
+        // rule — P216_2.mkv legally ground 4 h in-app and again
+        // daemon-side the same day. The 2 h ceiling ends any single
+        // clip's claim on the run; error verdicts are retried next run.
+        let twoHoursTen = 7800.0
+        #expect(pfWatchdogAbsoluteCeilingSecs == 7200)
+        #expect(!pfShouldAbortForWatchdog(elapsedSecs: 7200, mediaSecs: twoHoursTen))
+        #expect(pfShouldAbortForWatchdog(elapsedSecs: 7201, mediaSecs: twoHoursTen))
+        // Even absurd metadata (a "24-hour" clip) cannot raise the cap.
+        #expect(pfShouldAbortForWatchdog(elapsedSecs: 7201, mediaSecs: 86_400))
+    }
+
+    @Test func ceilingDoesNotShortenNormalBudgets() {
+        // The 10× rule still governs everything below the cap: a 10min
+        // clip keeps its 100min budget untouched.
+        #expect(!pfShouldAbortForWatchdog(elapsedSecs: 5999, mediaSecs: 600))
+        #expect(pfShouldAbortForWatchdog(elapsedSecs: 6001, mediaSecs: 600))
+    }
 }

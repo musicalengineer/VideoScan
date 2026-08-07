@@ -199,8 +199,20 @@ nonisolated func pfClampNominalFps(_ raw: Double, max cap: Double = 240.0) -> Do
 ///
 /// Regression sensor: `PersonFinderWatchdogTests`. Same incident
 /// origin as pfClampNominalFps — see that doc for context.
+/// ABSOLUTE ceiling on any single clip's wall-clock budget. The 10×
+/// factor alone let long media earn absurd budgets (a 2 h FFV1 mkv →
+/// 20 h): P216_2.mkv legally ground 4 h in-app and was found still
+/// grinding daemon-side the same afternoon (2026-08-07, three
+/// sightings in one day). Two hours accommodates the legitimate
+/// slow-route monsters (ffmpeg-transport FFV1 ≈ 6× slower than AVF —
+/// the 2h10m MarksBday mkv finishes solo inside this) while bounding
+/// the pathological ones; a capped clip returns an error verdict and
+/// is RETRIED on the next run, so recall degrades to "later", never
+/// "lost".
+nonisolated let pfWatchdogAbsoluteCeilingSecs: Double = 7200
+
 nonisolated func pfShouldAbortForWatchdog(elapsedSecs: Double, mediaSecs: Double) -> Bool {
-    let budget = max(60.0, mediaSecs * 10.0)
+    let budget = min(pfWatchdogAbsoluteCeilingSecs, max(60.0, mediaSecs * 10.0))
     return elapsedSecs > budget
 }
 
