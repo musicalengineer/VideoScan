@@ -369,7 +369,10 @@ struct MediaFileOperationRow: View {
                     .font(.system(size: 11))
                     .buttonStyle(.bordered)
                 }
-                Button(job.state == .cancelling ? "Stopping…" : "Cancel") {
+                // One verb, one meaning (Rick 2026-08-07: hunted for
+                // "Stop" and found only Pause — the button said "Cancel"
+                // then flipped to "Stopping…", two dialects for one act).
+                Button(job.state == .cancelling ? "Stopping…" : "Stop") {
                     job.cancel()
                 }
                 .font(.system(size: 11))
