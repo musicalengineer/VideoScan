@@ -680,6 +680,12 @@ final class VideoScanModel: ObservableObject {
     /// gallery unreadable.
     var findTagGalleryDigestCache: String??
 
+    /// Cross-window search routing for the Family Archivist chat
+    /// window (2026-08-07): the archivist publishes a composed query
+    /// here; the catalog view observes it, applies it to its own
+    /// search field, and clears it. One-way, last-writer.
+    @Published var archivistSearchRequest: String?
+
     /// Snapshot the current skip-directory set from scanOptions.
     /// Must be called on the main actor (returns a Sendable Set<String>
     /// that nonisolated walkers can then capture safely). The derivation

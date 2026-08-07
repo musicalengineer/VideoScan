@@ -577,6 +577,23 @@ struct CatalogView: View {
                 if debouncedSearchText != searchText {
                     debouncedSearchText = searchText
                 }
+                // A query the Family Archivist window published while the
+                // catalog view didn't exist (tab switched away) still
+                // applies on reappear.
+                if let request = model.archivistSearchRequest {
+                    searchText = request
+                    debouncedSearchText = request
+                    model.archivistSearchRequest = nil
+                }
+            }
+            .onChange(of: model.archivistSearchRequest) {
+                // Family Archivist chat window → catalog search field
+                // (2026-08-07). Applied undebounced: the archivist
+                // speaks in complete queries, not keystrokes.
+                guard let request = model.archivistSearchRequest else { return }
+                searchText = request
+                debouncedSearchText = request
+                model.archivistSearchRequest = nil
             }
             .onChange(of: model.pendingCatalogSelection) { handlePendingCatalogNavigation() }
             // Clear the ID filter and focus when user types in search or selects a volume

@@ -677,6 +677,17 @@ struct VideoScanApp: App {
         .windowResizability(.contentMinSize)
         .defaultSize(width: 820, height: 560)
         .defaultPosition(.center)
+
+        // The Family Archivist chat (2026-08-07) — floats above the
+        // catalog and carries the conversation; the catalog stays the
+        // display surface (results route via archivistSearchRequest).
+        Window("Family Archivist", id: "archivist") {
+            ArchivistChatWindow()
+                .environmentObject(catalogModel)
+        }
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 500, height: 620)
+        .defaultPosition(.trailing)
     }
 }
 

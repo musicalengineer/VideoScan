@@ -9,6 +9,7 @@ import SwiftUI
 
 struct CatalogToolbar<Dashboard: View>: View {
     @EnvironmentObject var model: VideoScanModel
+    @Environment(\.openWindow) private var openWindow
     let isScanning: Bool
     let isCombining: Bool
     let isCorrelating: Bool
@@ -477,17 +478,22 @@ struct CatalogToolbar<Dashboard: View>: View {
                 CatalogSearchHelpPopover()
             }
 
-            // Family Archivist "Ask" — plain-English search (P2 front
-            // door; docs/family-archivist-phase1.md). The translated
-            // query lands in the search field, visible and editable.
+            // Family Archivist — opens the floating chat window
+            // (2026-08-07: outgrew the popover; the conversation lives
+            // in its own always-on-top window, the catalog stays the
+            // display surface). ⌥-click keeps the old quick popover.
             Button {
-                showAskPopover.toggle()
+                if NSEvent.modifierFlags.contains(.option) {
+                    showAskPopover.toggle()
+                } else {
+                    openWindow(id: "archivist")
+                }
             } label: {
                 Image(systemName: "sparkles")
                     .foregroundColor(.purple)
             }
             .buttonStyle(.plain)
-            .help("Ask in plain English — \"show me Donna down the cape 1990 to 1995\"")
+            .help("Ask the Family Archivist — \"show me Donna down the cape 1990 to 1995\" (⌥-click for the quick popover)")
             .accessibilityIdentifier("archivist.askButton")
             .popover(isPresented: $showAskPopover, arrowEdge: .bottom) {
                 ArchivistAskPopover(searchText: $searchText,
