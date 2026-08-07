@@ -387,25 +387,38 @@ struct MediaVolumeGate {
 /// the mystery cost an afternoon). Best-effort UI truth, NOT
 /// synchronization: multi-slot volumes overwrite last-writer, and the
 /// semaphore stays the only authority on admission.
+///
+/// codex #292 round: ObservableObject (waiting rows must actually
+/// re-render when the holder changes — gated jobs forward
+/// `objectWillChange`), and entries are keyed by JOB ID so two jobs
+/// with identical display names can't clear each other.
 @MainActor
-enum VolumeGateBoard {
+final class VolumeGateBoard: ObservableObject {
 
-    private(set) static var holders: [String: String] = [:]
+    static let shared = VolumeGateBoard()
 
-    static func claim(root: String, holder: String) {
-        holders[root] = holder
+    struct Holder: Equatable {
+        let jobID: UUID
+        let name: String
     }
 
-    /// Clears only if this holder still owns the entry (a later claim
-    /// by another job on a multi-slot volume must not be erased).
-    static func clear(root: String, holder: String) {
-        if holders[root] == holder { holders[root] = nil }
+    @Published private(set) var holders: [String: Holder] = [:]
+
+    func claim(root: String, jobID: UUID, name: String) {
+        holders[root] = Holder(jobID: jobID, name: name)
+    }
+
+    /// Clears only if THIS job still owns the entry — identity is the
+    /// job id, never the display string (two "Verify IMG_0795.MOV"
+    /// jobs are distinct).
+    func clear(root: String, jobID: UUID) {
+        if holders[root]?.jobID == jobID { holders[root] = nil }
     }
 
     /// The waiting-row sentence: names the current holder when known.
     static func describeWait(label: String, root: String) -> String {
-        if let holder = holders[root], !holder.isEmpty {
-            return "Waiting for \(label) — in use by \(holder)…"
+        if let holder = shared.holders[root], !holder.name.isEmpty {
+            return "Waiting for \(label) — in use by \(holder.name)…"
         }
         return "Waiting for \(label)…"
     }

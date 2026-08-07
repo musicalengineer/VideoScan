@@ -9,20 +9,30 @@
 // across every interleaving of pause / resume / cancel / close. The
 // naive fix (signal on pause inside a withPermit body) double-credits
 // the semaphore when the body later unwinds — permanently widening the
-// gate. This actor owns the permit's whole lifecycle instead, and its
-// phase machine makes the invariant checkable:
+// gate.
 //
-//   unacquired --acquire()--> held --releaseForPause()--> pausedReleased
-//        |                     |  ^--reacquireForResume()--/     |
-//        |                     +--close(): signal, -> closed     |
-//        +--close(): no signal owed --> closed <-- close(): no signal owed
+// REENTRANCY (codex #289/#292 round): an actor suspends at every
+// await — so a guard checked before `semaphore.wait()` can be checked
+// AGAIN by a second caller before the first resumes. Two rules close
+// every hole:
+//   1. Transitional phases (.acquiring / .reacquiring) are set BEFORE
+//      the suspension point, so concurrent callers fail the guard and
+//      no-op — at most ONE wait() is ever in flight per permit.
+//   2. closed WINS: a wait() that completes after close() returns its
+//      slot to the semaphore and leaves the phase closed — a permit
+//      can never be resurrected, and never retains a slot post-close.
 //
-//   signal happens EXACTLY when leaving `held` — via releaseForPause
-//   (slot lent to the queue) or close (done). pausedReleased owes
-//   nothing: its slot was already returned.
+//   unacquired --acquire--> acquiring --wait ok--> held
+//   held --releaseForPause (signal)--> pausedReleased
+//   pausedReleased --reacquireForResume--> reacquiring --wait ok--> held
+//   any non-held --close--> closed (owes nothing)
+//   held --close (signal)--> closed
+//   {acquiring,reacquiring} --wait completes after close--> closed (signal back)
+//   {acquiring,reacquiring} --wait cancelled--> prior phase restored
 //
-// codex owns the adversarial test matrix (interleavings, cancel-mid-
-// reacquire, double calls) against this seam.
+// Sensors: PausableGatePermitTests (RED-proven against the pre-phase
+// implementation, 2026-08-07); codex owns the fuzzed interleaving
+// matrix.
 
 import Foundation
 
@@ -30,8 +40,10 @@ public actor PausableGatePermit {
 
     public enum Phase: Sendable, Equatable {
         case unacquired
+        case acquiring
         case held
         case pausedReleased
+        case reacquiring
         case closed
     }
 
@@ -42,16 +54,28 @@ public actor PausableGatePermit {
         self.semaphore = semaphore
     }
 
-    /// Current phase — for tests and diagnostics.
+    /// Current phase — for tests, diagnostics, and the job-side
+    /// "did resume actually re-hold?" check.
     public var currentPhase: Phase { phase }
 
     /// Take the slot (queues behind other holders). Throws only
-    /// CancellationError (from AsyncSemaphore.wait); a cancelled
-    /// acquire leaves the permit unacquired — close() then owes
-    /// nothing.
+    /// CancellationError (from AsyncSemaphore.wait). Concurrent
+    /// callers no-op against the .acquiring guard; a cancelled wait
+    /// restores .unacquired; a wait that outlives close() returns its
+    /// slot and stays closed.
     public func acquire() async throws {
         guard phase == .unacquired else { return }
-        try await semaphore.wait()
+        phase = .acquiring
+        do {
+            try await semaphore.wait()
+        } catch {
+            if phase == .acquiring { phase = .unacquired }
+            throw error
+        }
+        guard phase == .acquiring else {         // closed raced the wait
+            await semaphore.signal()
+            return
+        }
         phase = .held
     }
 
@@ -64,24 +88,37 @@ public actor PausableGatePermit {
     }
 
     /// Resume re-joins the queue — and must complete BEFORE the worker
-    /// is SIGCONTed, so the disk never sees an unslotted reader. A
-    /// cancellation mid-wait leaves the permit pausedReleased (still
-    /// owing nothing).
+    /// is SIGCONTed. Concurrent callers no-op against .reacquiring;
+    /// a cancelled wait restores .pausedReleased (still owing
+    /// nothing); a wait that outlives close() returns its slot and
+    /// stays closed. Callers MUST check `currentPhase == .held`
+    /// afterward before letting the worker touch the disk.
     public func reacquireForResume() async throws {
         guard phase == .pausedReleased else { return }
-        try await semaphore.wait()
+        phase = .reacquiring
+        do {
+            try await semaphore.wait()
+        } catch {
+            if phase == .reacquiring { phase = .pausedReleased }
+            throw error
+        }
+        guard phase == .reacquiring else {       // closed raced the wait
+            await semaphore.signal()
+            return
+        }
         phase = .held
     }
 
-    /// Terminal, idempotent. Returns the slot iff one is currently
-    /// held; a permit closed while unacquired or pausedReleased owes
-    /// the semaphore nothing.
+    /// Terminal, idempotent, and it WINS: any in-flight wait that
+    /// completes later finds .closed and signals its slot straight
+    /// back. Returns a slot iff one is held right now; transitional
+    /// and lent phases owe the semaphore nothing.
     public func close() async {
         switch phase {
         case .held:
             phase = .closed
             await semaphore.signal()
-        case .unacquired, .pausedReleased:
+        case .unacquired, .acquiring, .pausedReleased, .reacquiring:
             phase = .closed
         case .closed:
             break

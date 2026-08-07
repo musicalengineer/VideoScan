@@ -146,11 +146,12 @@ final class ExtractFramesJob: MediaFileOperationJob {
         waitingForVolumeRoot = gate.root
         fileOpsLog.info("extract \(self.id, privacy: .public) waiting for \(gate.root, privacy: .public)")
         let holder = "Extract \(title)"   // capture on MainActor, before the Sendable closure
+        let jobID = id
         do {
             try await gate.semaphore.withPermit { [weak self] in
-                await MainActor.run { VolumeGateBoard.claim(root: gate.root, holder: holder) }
+                await MainActor.run { VolumeGateBoard.shared.claim(root: gate.root, jobID: jobID, name: holder) }
                 await self?.runHoldingGates(remaining.dropFirst())
-                await MainActor.run { VolumeGateBoard.clear(root: gate.root, holder: holder) }
+                await MainActor.run { VolumeGateBoard.shared.clear(root: gate.root, jobID: jobID) }
             }
         } catch {
             // Only CancellationError escapes withPermit here (the body
