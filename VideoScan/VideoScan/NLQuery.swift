@@ -106,9 +106,21 @@ enum NLQueryNormalizer {
                 .prefix(maxListItems))
 
         // Keywords keep interior spaces (the composer quotes phrases).
+        // Media-generic noise is DROPPED: the LLM routinely emits the
+        // question's carrier words ("clips", "videos", "footage") as
+        // keywords, and under AND semantics one such token zeroes the
+        // whole search — 'show me clips of Donna in the 90s' composed
+        // people:donna year:1990..1999 clips → 0 matches (Rick's demo
+        // morning, 2026-08-07). A keyword that is ONLY noise words
+        // vanishes; mixed phrases keep their meaningful words.
         query.keywords = Array(
             (spec.keywords ?? [])
                 .map { sanitizeValue($0) }
+                .map { keyword in
+                    keyword.split(separator: " ")
+                        .filter { !Self.keywordNoise.contains(String($0)) }
+                        .joined(separator: " ")
+                }
                 .filter { !$0.isEmpty }
                 .prefix(maxListItems))
 
@@ -122,6 +134,15 @@ enum NLQueryNormalizer {
         query.intent = spec.intent?.lowercased() == "count" ? .count : .filter
         return query
     }
+
+    /// The question's carrier words — media types and viewing verbs
+    /// that describe the ASK, not the content. Never useful as required
+    /// substrings; deadly under AND semantics.
+    static let keywordNoise: Set<String> = [
+        "clip", "clips", "video", "videos", "movie", "movies", "film",
+        "films", "footage", "media", "recording", "recordings", "show",
+        "shows", "watch", "see", "find", "display", "all", "any", "some",
+    ]
 
     /// Lowercase, trim, strip the two characters that could mint grammar
     /// structure (colon → field token, quote → phrase boundary), collapse
