@@ -222,11 +222,24 @@ final class RebuildAudioJob: @MainActor MediaFileOperationJob {
     func pause() {
         guard state == .running, pauser.pause() else { return }
         isPausedValue = true
+        // Step aside (2026-08-07 compare-starvation incident): the
+        // SIGSTOPped child does no IO — lend the volume slots to the
+        // queue. SIGSTOP first, then the slots return.
+        let permits = gatePermits
+        Task { for permit in permits { await permit.releaseForPause() } }
     }
 
     func resume() {
-        guard pauser.resume() else { return }
-        isPausedValue = false
+        guard isPausedValue else { return }
+        // Re-join the queue BEFORE SIGCONT — no unslotted reader ever
+        // touches the disk. Row stays "paused" while queued; a second
+        // Resume click no-ops inside the permit's phase machine.
+        let permits = gatePermits
+        Task { @MainActor [weak self] in
+            for permit in permits { try? await permit.reacquireForResume() }
+            guard let self, self.pauser.resume() else { return }
+            self.isPausedValue = false
+        }
     }
 
     @Published private(set) var state: MediaFileOperationState = .running {
@@ -280,24 +293,37 @@ final class RebuildAudioJob: @MainActor MediaFileOperationJob {
     }
 
     /// Acquire each volume gate in order, then run the rebuild while
-    /// holding all of them (PairCompareJob's recursive withPermit idiom
-    /// — release is guaranteed even on cancellation). While queued the
-    /// row reads "Waiting for <volume>…".
+    /// holding all of them. PausableGatePermit (2026-08-07) replaced
+    /// the recursive withPermit idiom so pause can lend the held slots
+    /// to the queue and resume can take them back — the permit actor
+    /// owns the exactly-one-signal-per-wait discipline. While queued
+    /// the row reads "Waiting for <volume>…".
+    private var gatePermits: [PausableGatePermit] = []
+
     private func runHoldingGates(_ remaining: ArraySlice<MediaVolumeGate>) async {
-        guard let gate = remaining.first else {
-            await runRebuild()
-            return
-        }
-        subtitleText = "Waiting for \(gate.label)…"
-        do {
-            try await gate.semaphore.withPermit { [weak self] in
-                await self?.runHoldingGates(remaining.dropFirst())
+        for gate in remaining {
+            subtitleText = "Waiting for \(gate.label)…"
+            let permit = PausableGatePermit(semaphore: gate.semaphore)
+            do {
+                try await permit.acquire()
+                gatePermits.append(permit)
+            } catch {
+                // Only CancellationError escapes wait() — the user
+                // cancelled while queued behind another job.
+                await closeGatePermits()
+                finishCancelled()
+                return
             }
-        } catch {
-            // Only CancellationError escapes withPermit here — the user
-            // cancelled while queued behind another job.
-            finishCancelled()
         }
+        await runRebuild()
+        await closeGatePermits()
+    }
+
+    /// Release every held slot, reverse order — paused (lent) and
+    /// never-acquired permits owe nothing by the phase machine.
+    private func closeGatePermits() async {
+        for permit in gatePermits.reversed() { await permit.close() }
+        gatePermits = []
     }
 
     func cancel() {
