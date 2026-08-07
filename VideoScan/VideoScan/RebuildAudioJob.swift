@@ -226,7 +226,13 @@ final class RebuildAudioJob: @MainActor MediaFileOperationJob {
         // SIGSTOPped child does no IO — lend the volume slots to the
         // queue. SIGSTOP first, then the slots return.
         let permits = gatePermits
-        Task { for permit in permits { await permit.releaseForPause() } }
+        let holder = gateHolderName
+        Task { @MainActor in
+            for entry in permits {
+                await entry.permit.releaseForPause()
+                VolumeGateBoard.clear(root: entry.gate.root, holder: holder)
+            }
+        }
     }
 
     func resume() {
@@ -235,8 +241,12 @@ final class RebuildAudioJob: @MainActor MediaFileOperationJob {
         // touches the disk. Row stays "paused" while queued; a second
         // Resume click no-ops inside the permit's phase machine.
         let permits = gatePermits
+        let holder = gateHolderName
         Task { @MainActor [weak self] in
-            for permit in permits { try? await permit.reacquireForResume() }
+            for entry in permits {
+                try? await entry.permit.reacquireForResume()
+                VolumeGateBoard.claim(root: entry.gate.root, holder: holder)
+            }
             guard let self, self.pauser.resume() else { return }
             self.isPausedValue = false
         }
@@ -298,15 +308,19 @@ final class RebuildAudioJob: @MainActor MediaFileOperationJob {
     /// to the queue and resume can take them back — the permit actor
     /// owns the exactly-one-signal-per-wait discipline. While queued
     /// the row reads "Waiting for <volume>…".
-    private var gatePermits: [PausableGatePermit] = []
+    private var gatePermits: [(gate: MediaVolumeGate, permit: PausableGatePermit)] = []
+
+    private var gateHolderName: String { "Rebuild \(record.filename)" }
 
     private func runHoldingGates(_ remaining: ArraySlice<MediaVolumeGate>) async {
         for gate in remaining {
-            subtitleText = "Waiting for \(gate.label)…"
+            subtitleText = VolumeGateBoard.describeWait(label: gate.label,
+                                                        root: gate.root)
             let permit = PausableGatePermit(semaphore: gate.semaphore)
             do {
                 try await permit.acquire()
-                gatePermits.append(permit)
+                gatePermits.append((gate, permit))
+                VolumeGateBoard.claim(root: gate.root, holder: gateHolderName)
             } catch {
                 // Only CancellationError escapes wait() — the user
                 // cancelled while queued behind another job.
@@ -322,7 +336,10 @@ final class RebuildAudioJob: @MainActor MediaFileOperationJob {
     /// Release every held slot, reverse order — paused (lent) and
     /// never-acquired permits owe nothing by the phase machine.
     private func closeGatePermits() async {
-        for permit in gatePermits.reversed() { await permit.close() }
+        for entry in gatePermits.reversed() {
+            await entry.permit.close()
+            VolumeGateBoard.clear(root: entry.gate.root, holder: gateHolderName)
+        }
         gatePermits = []
     }
 

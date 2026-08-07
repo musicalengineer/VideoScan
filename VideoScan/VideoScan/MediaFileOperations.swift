@@ -379,6 +379,38 @@ struct MediaVolumeGate {
     let semaphore: AsyncSemaphore
 }
 
+// MARK: - Gate-holder board (waiting-row honesty)
+
+/// Who currently holds each volume-gate slot — so a queued job's row
+/// can say WHAT it's waiting behind (2026-08-07: a compare waited ~3 h
+/// for the LaCie with no clue a paused Verify Audio held the slot;
+/// the mystery cost an afternoon). Best-effort UI truth, NOT
+/// synchronization: multi-slot volumes overwrite last-writer, and the
+/// semaphore stays the only authority on admission.
+@MainActor
+enum VolumeGateBoard {
+
+    private(set) static var holders: [String: String] = [:]
+
+    static func claim(root: String, holder: String) {
+        holders[root] = holder
+    }
+
+    /// Clears only if this holder still owns the entry (a later claim
+    /// by another job on a multi-slot volume must not be erased).
+    static func clear(root: String, holder: String) {
+        if holders[root] == holder { holders[root] = nil }
+    }
+
+    /// The waiting-row sentence: names the current holder when known.
+    static func describeWait(label: String, root: String) -> String {
+        if let holder = holders[root], !holder.isEmpty {
+            return "Waiting for \(label) — in use by \(holder)…"
+        }
+        return "Waiting for \(label)…"
+    }
+}
+
 // MARK: - Center (app-level registry)
 
 /// Owns every new-style operation job, newest-first. Created once in

@@ -70,6 +70,9 @@ final class RipAllFramesJob: MediaFileOperationJob {
 
     /// Non-nil while queued behind another job on a gated volume.
     @Published private(set) var waitingForVolumeLabel: String?
+    /// Root of the gate being queued on — subtitle names its holder
+    /// live via VolumeGateBoard (2026-08-07 incident).
+    private var waitingForVolumeRoot: String?
 
     /// The run Task — owned by the job (see header note). Internal so
     /// tests can `await job.task?.value` to reach the terminal state.
@@ -131,10 +134,14 @@ final class RipAllFramesJob: MediaFileOperationJob {
             return
         }
         waitingForVolumeLabel = gate.label
+        waitingForVolumeRoot = gate.root
         fileOpsLog.info("ripFrames \(self.id, privacy: .public) waiting for \(gate.root, privacy: .public)")
+        let holder = "Rip frames \(title)"   // capture on MainActor, before the Sendable closure
         do {
             try await gate.semaphore.withPermit { [weak self] in
+                await MainActor.run { VolumeGateBoard.claim(root: gate.root, holder: holder) }
                 await self?.runHoldingGates(remaining.dropFirst())
+                await MainActor.run { VolumeGateBoard.clear(root: gate.root, holder: holder) }
             }
         } catch {
             // Only CancellationError escapes withPermit here (the body
@@ -163,7 +170,8 @@ final class RipAllFramesJob: MediaFileOperationJob {
 
     var subtitle: String {
         if let label = waitingForVolumeLabel {
-            return "Waiting for \(label)…"
+            return VolumeGateBoard.describeWait(label: label,
+                                                root: waitingForVolumeRoot ?? "")
         }
         switch state {
         case .failed(let message):

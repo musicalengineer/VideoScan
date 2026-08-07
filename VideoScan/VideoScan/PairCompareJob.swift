@@ -84,6 +84,10 @@ final class PairCompareJob: MediaFileOperationJob {
 
     /// Non-nil while queued behind another compare on a gated volume.
     @Published private(set) var waitingForVolumeLabel: String?
+    /// Root of the gate being queued on — the subtitle names its
+    /// current holder live via VolumeGateBoard (2026-08-07 incident:
+    /// hours of "Waiting for LaCie" with no hint who held it).
+    private var waitingForVolumeRoot: String?
 
     /// The run Task — owned by the job (see header note). Internal so
     /// tests can `await job.task?.value` to reach the terminal state.
@@ -152,10 +156,14 @@ final class PairCompareJob: MediaFileOperationJob {
             return
         }
         waitingForVolumeLabel = gate.label
+        waitingForVolumeRoot = gate.root
         fileOpsLog.info("compare \(self.id, privacy: .public) waiting for \(gate.root, privacy: .public)")
+        let holder = "Compare \(title)"   // capture on MainActor, before the Sendable closure
         do {
             try await gate.semaphore.withPermit { [weak self] in
+                await MainActor.run { VolumeGateBoard.claim(root: gate.root, holder: holder) }
                 await self?.runHoldingGates(remaining.dropFirst())
+                await MainActor.run { VolumeGateBoard.clear(root: gate.root, holder: holder) }
             }
         } catch {
             // Only CancellationError escapes withPermit here (the body
@@ -173,7 +181,8 @@ final class PairCompareJob: MediaFileOperationJob {
 
     var subtitle: String {
         if let label = waitingForVolumeLabel {
-            return "Waiting for \(label)…"
+            return VolumeGateBoard.describeWait(label: label,
+                                                root: waitingForVolumeRoot ?? "")
         }
         switch state {
         case .failed(let message):

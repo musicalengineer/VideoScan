@@ -85,7 +85,13 @@ final class VerifyAudioJob: @MainActor MediaFileOperationJob {
         // compare for hours. SIGSTOP lands first (above), THEN the
         // slots return, so the disk never has an extra active reader.
         let permits = gatePermits
-        Task { for permit in permits { await permit.releaseForPause() } }
+        let holder = gateHolderName
+        Task { @MainActor in
+            for entry in permits {
+                await entry.permit.releaseForPause()
+                VolumeGateBoard.clear(root: entry.gate.root, holder: holder)
+            }
+        }
     }
 
     func resume() {
@@ -95,8 +101,12 @@ final class VerifyAudioJob: @MainActor MediaFileOperationJob {
         // while queued; a second Resume click is phase-guarded to a
         // no-op inside the permit.
         let permits = gatePermits
+        let holder = gateHolderName
         Task { @MainActor [weak self] in
-            for permit in permits { try? await permit.reacquireForResume() }
+            for entry in permits {
+                try? await entry.permit.reacquireForResume()
+                VolumeGateBoard.claim(root: entry.gate.root, holder: holder)
+            }
             guard let self, self.pauser.resume() else { return }
             self.isPausedValue = false
         }
@@ -117,7 +127,10 @@ final class VerifyAudioJob: @MainActor MediaFileOperationJob {
 
     var title: String { record.filename }
     var subtitle: String {
-        if let label = waitingForVolumeLabel { return "Waiting for \(label)…" }
+        if let label = waitingForVolumeLabel {
+            return VolumeGateBoard.describeWait(label: label,
+                                                root: waitingForVolumeRoot ?? "")
+        }
         return subtitleText
     }
     /// The diagnosis has no meaningful fraction — ffprobe is sub-second
@@ -168,26 +181,37 @@ final class VerifyAudioJob: @MainActor MediaFileOperationJob {
     // actor owns the exactly-one-signal-per-wait discipline
     // (PausableGatePermitTests + codex's adversarial matrix).
 
-    /// Permits currently owned by this job, acquisition order.
-    private var gatePermits: [PausableGatePermit] = []
+    /// Permits currently owned by this job, acquisition order (gate
+    /// kept alongside for holder-board bookkeeping).
+    private var gatePermits: [(gate: MediaVolumeGate, permit: PausableGatePermit)] = []
+    /// Root of the gate currently queued on — the subtitle names its
+    /// holder live via VolumeGateBoard.
+    private var waitingForVolumeRoot: String?
+
+    /// This job's name on the holder board.
+    private var gateHolderName: String { "Verify \(record.filename)" }
 
     private func runHoldingGates(_ remaining: ArraySlice<MediaVolumeGate>) async {
         for gate in remaining {
             waitingForVolumeLabel = gate.label
+            waitingForVolumeRoot = gate.root
             let permit = PausableGatePermit(semaphore: gate.semaphore)
             do {
                 try await permit.acquire()
-                gatePermits.append(permit)
+                gatePermits.append((gate, permit))
+                VolumeGateBoard.claim(root: gate.root, holder: gateHolderName)
             } catch {
                 // Only CancellationError escapes wait() — the user
                 // cancelled while queued.
                 waitingForVolumeLabel = nil
+                waitingForVolumeRoot = nil
                 await closeGatePermits()
                 finishCancelled()
                 return
             }
         }
         waitingForVolumeLabel = nil
+        waitingForVolumeRoot = nil
         await runDiagnosis()
         await closeGatePermits()
     }
@@ -196,7 +220,10 @@ final class VerifyAudioJob: @MainActor MediaFileOperationJob {
     /// slot away (paused) or never acquired owe the semaphore nothing —
     /// the permit's phase machine guarantees the balance.
     private func closeGatePermits() async {
-        for permit in gatePermits.reversed() { await permit.close() }
+        for entry in gatePermits.reversed() {
+            await entry.permit.close()
+            VolumeGateBoard.clear(root: entry.gate.root, holder: gateHolderName)
+        }
         gatePermits = []
     }
 
