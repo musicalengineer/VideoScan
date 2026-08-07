@@ -351,6 +351,72 @@ struct VerifyAudioGateTests {
         #expect(rec.audioVerifyStatus == "ok")
     }
 
+    @Test func pauseDuringLateGateAcquisitionLendsThePermitAndHoldsWork() async throws {
+        // codex #295/#297 job-level sensor (their deterministic recipe,
+        // verbatim): the regression lived OUTSIDE the permit actor — a
+        // pause landing while runHoldingGates was suspended acquiring a
+        // LATER gate lent only the permits held at that instant; the
+        // in-flight acquire then completed on a paused job, which
+        // retained the fresh slot and advanced toward diagnosis.
+        // RED at 7d05aaa0 (probe stays .acquiring; diagnosis runs while
+        // paused) — GREEN at 91323d52.
+        final class Flag: @unchecked Sendable {
+            private let lock = NSLock()
+            private var value = false
+            func set() { lock.lock(); value = true; lock.unlock() }
+            var isSet: Bool { lock.lock(); defer { lock.unlock() }; return value }
+        }
+        let s1 = AsyncSemaphore(limit: 1)
+        let s2 = AsyncSemaphore(limit: 1)
+        let g1 = MediaVolumeGate(root: "/Volumes/G1", label: "G1", semaphore: s1)
+        let g2 = MediaVolumeGate(root: "/Volumes/G2", label: "G2", semaphore: s2)
+        try await s2.wait()                    // external hold on g2
+
+        let model = VideoScanModel()
+        let rec = makeRecord(name: "tape.mov", path: "/Volumes/G1/tape.mov")
+        model.records = [rec]
+        let diagnosed = Flag()
+        let job = VerifyAudioJob(record: rec, model: model,
+                                 gates: [g1, g2],
+                                 diagnoseOverride: { _ in
+                                     diagnosed.set()
+                                     return healthyDiagnosis()
+                                 })
+        job.start()
+        try await Task.sleep(nanoseconds: 200_000_000)
+        #expect(job.subtitle.hasPrefix("Waiting for G2"),
+                "setup: job should own g1 and queue on g2")
+
+        job.pause()                            // lends g1; g2 acquire still suspended
+        try await Task.sleep(nanoseconds: 100_000_000)
+        await s2.signal()                      // the suspended acquire completes on a PAUSED job
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        // The paused job must have LENT the late permit — a probe can hold it…
+        let probe = PausableGatePermit(semaphore: s2)
+        let probeTask = Task { try? await probe.acquire() }
+        try await Task.sleep(nanoseconds: 500_000_000)
+        #expect(await probe.currentPhase == .held,
+                "paused job retained its LATE-acquired permit (codex #295)")
+        // …and must NOT have advanced to work.
+        #expect(!diagnosed.isSet, "paused job advanced to diagnosis")
+        #expect(rec.audioVerifyStatus == "", "no verdict while paused")
+
+        job.resume()                           // must queue behind the probe
+        try await Task.sleep(nanoseconds: 300_000_000)
+        #expect(!diagnosed.isSet, "resume SIGCONTed without re-holding g2")
+
+        await probe.close()
+        _ = await probeTask.value
+        await job.task?.value
+        guard case .finished = job.state else {
+            Issue.record("job did not finish after probe release: \(job.state)")
+            return
+        }
+        #expect(diagnosed.isSet)
+        #expect(rec.audioVerifyStatus == "ok")
+    }
+
     @Test func fourJobsOnAOneSlotGateAllComplete() async throws {
         // No deadlock, no starvation: everything queued behind a 1-slot
         // gate eventually runs and lands a verdict.
