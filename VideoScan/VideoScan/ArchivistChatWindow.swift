@@ -341,8 +341,7 @@ struct ArchivistChatWindow: View {
     private func play(bestOf matches: [VideoRecord]) {
         switch ArchivistPlayPolicy.choose(
             matches: matches,
-            isReachable: { VolumeReachability.isReachable(path: $0) },
-            fileExists: { FileManager.default.fileExists(atPath: $0) }) {
+            isReachable: { VolumeReachability.isReachable(path: $0) }) {
         case .none:
             let volume = (matches.first?.fullPath).map {
                 MediaVolumeGatePolicy.volumeRoot(forPath: $0)
@@ -363,9 +362,11 @@ struct ArchivistChatWindow: View {
     }
 
     private func play(_ rec: VideoRecord) {
-        // Same honesty at the single-record door (play chips).
-        guard VolumeReachability.isReachable(path: rec.fullPath),
-              FileManager.default.fileExists(atPath: rec.fullPath) else {
+        // Cached reachability gate first (nonblocking); the existence
+        // probe for the ONE chosen file runs OFF-MAIN — a synchronous
+        // fileExists here against a sleeping drive is the 60-second
+        // beachball class (codex #303/#305).
+        guard VolumeReachability.isReachable(path: rec.fullPath) else {
             let volume = MediaVolumeGatePolicy.volumeRoot(forPath: rec.fullPath)
             messages.append(ArchivistMessage(
                 role: .assistant,
@@ -373,10 +374,27 @@ struct ArchivistChatWindow: View {
                     + "mount it and I'll play it."))
             return
         }
-        MediaOpener.open([rec])
-        messages.append(ArchivistMessage(
-            role: .assistant,
-            text: "▶️ Playing “\(rec.filename)”."))
+        let path = rec.fullPath
+        let filename = rec.filename
+        Task { @MainActor in
+            let exists = await Task.detached(priority: .userInitiated) {
+                FileManager.default.fileExists(atPath: path)
+            }.value
+            guard exists else {
+                // Mounted volume, file gone — "unavailable", NOT
+                // "offline" (we know the difference here).
+                messages.append(ArchivistMessage(
+                    role: .assistant,
+                    text: "“\(filename)” is unavailable — its drive is "
+                        + "mounted but the file isn't there anymore "
+                        + "(moved or deleted since cataloging)."))
+                return
+            }
+            MediaOpener.open([rec])
+            messages.append(ArchivistMessage(
+                role: .assistant,
+                text: "▶️ Playing “\(filename)”."))
+        }
     }
 
     // MARK: Kinship (Rick 2026-08-07: "show videos of rick's father")
@@ -554,8 +572,7 @@ struct ArchivistChatWindow: View {
         if !wantPlayAfter, (1...8).contains(matches.count),
            case .play(let candidate, _) = ArchivistPlayPolicy.choose(
                matches: matches,
-               isReachable: { VolumeReachability.isReachable(path: $0) },
-               fileExists: { FileManager.default.fileExists(atPath: $0) }) {
+               isReachable: { VolumeReachability.isReachable(path: $0) }) {
             chips.append(ArchivistMessage.Chip(
                 label: "▶︎ Play “\(candidate.filename)”",
                 action: .playRecord(candidate.id)))
@@ -571,11 +588,14 @@ struct ArchivistChatWindow: View {
 
     private func apply(query: String, announcedAs label: String) {
         let matches = model.searchIndex.filter(records: model.records,
-                                               query: query).count
-        apply(composed: query, matches: matches)
+                                               query: query)
+        lastMatches = matches   // refinement chips refresh the play referent
+                                // too (codex #302: stale lastMatches let
+                                // 'play first' play the PRE-refinement set)
+        apply(composed: query, matches: matches.count)
         messages.append(ArchivistMessage(
             role: .assistant,
-            text: "\(matchSentence(matches))",
+            text: "\(matchSentence(matches.count))",
             queryLine: query))
     }
 
@@ -633,9 +653,16 @@ struct ArchivistChatWindow: View {
 
 /// Which record to actually play, honestly. MediaOpener silently
 /// drops unreachable records, so the CHOICE must happen before the
-/// success message: first reachable-and-present match wins, noting
-/// when it substituted for an offline first match; nothing playable
-/// is `.none`, never a false "Playing".
+/// success message: the first CACHED-REACHABLE match wins (catalog
+/// order preserved), noting when it substituted for an offline first
+/// match; nothing reachable is `.none`, never a false "Playing".
+///
+/// SELECTION USES CACHED REACHABILITY ONLY (codex #303/#305): a
+/// synchronous FileManager.fileExists here — on MainActor, against
+/// possibly-sleeping archive drives — is the documented 60-second
+/// beachball class (VolumeReachability's whole reason to exist).
+/// Per-file existence is probed asynchronously OFF-MAIN for the ONE
+/// chosen candidate, by the caller, after selection.
 enum ArchivistPlayPolicy {
     enum Choice: Equatable {
         case none
@@ -652,11 +679,9 @@ enum ArchivistPlayPolicy {
     }
 
     static func choose(matches: [VideoRecord],
-                       isReachable: (String) -> Bool,
-                       fileExists: (String) -> Bool) -> Choice {
-        guard let playable = matches.first(where: {
-            isReachable($0.fullPath) && fileExists($0.fullPath)
-        }) else { return .none }
+                       isReachable: (String) -> Bool) -> Choice {
+        guard let playable = matches.first(where: { isReachable($0.fullPath) })
+        else { return .none }
         let substituted = playable.id != matches.first?.id
         return .play(playable, substitutedForOffline: substituted)
     }
