@@ -489,8 +489,13 @@ struct CatalogToolbar<Dashboard: View>: View {
                     openWindow(id: "archivist")
                 }
             } label: {
+                // Rick 2026-08-07: "can you make the sparkly ai icon
+                // bigger, it is tiny" — the archivist's front door
+                // deserves door-sized signage.
                 Image(systemName: "sparkles")
+                    .font(.system(size: 18, weight: .semibold))
                     .foregroundColor(.purple)
+                    .padding(.horizontal, 2)
             }
             .buttonStyle(.plain)
             .help("Ask the Family Archivist — \"show me Donna down the cape 1990 to 1995\" (⌥-click for the quick popover)")

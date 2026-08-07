@@ -23,6 +23,7 @@
 // The catalog stays the display surface; this window is the voice.
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Messages
 
@@ -63,14 +64,33 @@ struct ArchivistChatWindow: View {
     @State private var isThinking = false
     @FocusState private var inputFocused: Bool
 
+    /// The last filter's matches — "play the first one" needs a
+    /// referent (class refs, not copies).
+    @State private var lastMatches: [VideoRecord] = []
+    /// Set by "play <something>": after the filter answer lands, the
+    /// first match auto-plays.
+    @State private var playAfterAnswer = false
+    /// Lazily-loaded kinship graph from the user's exported GEDCOM
+    /// (App Support/family-tree/originals). Double-optional: nil =
+    /// not tried; .some(nil) = tried, unavailable.
+    @State private var familyGraph: GedcomFamilyGraph??
+
     private static let starterQuestions = [
         "show me Donna down the cape in the early 90s",
         "how many videos of Donna do we have?",
         "Christmas videos from 2006",
     ]
 
+    /// The archivist's identity — name + portrait, both Rick-pickable
+    /// (2026-08-07: "make the archivist have a name a photo on the top
+    /// line, like name TBD, photo TBD (i will pick from archive)").
+    @AppStorage("archivist.name") private var archivistName = "Name TBD"
+    @AppStorage("archivist.photoPath") private var archivistPhotoPath = ""
+
     var body: some View {
         VStack(spacing: 0) {
+            identityHeader
+            Divider()
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 10) {
@@ -118,6 +138,63 @@ struct ArchivistChatWindow: View {
         .onAppear {
             inputFocused = true
             if messages.isEmpty { greet() }
+        }
+    }
+
+    // MARK: Identity header
+
+    /// Portrait + editable name. Click the portrait to pick a photo
+    /// from the archive; the name edits in place.
+    private var identityHeader: some View {
+        HStack(spacing: 10) {
+            Button(action: choosePhoto) {
+                Group {
+                    if !archivistPhotoPath.isEmpty,
+                       let image = NSImage(contentsOfFile: archivistPhotoPath) {
+                        Image(nsImage: image)
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        Image(systemName: "person.crop.circle.dashed")
+                            .resizable()
+                            .scaledToFit()
+                            .foregroundStyle(.purple.opacity(0.6))
+                            .padding(6)
+                    }
+                }
+                .frame(width: 44, height: 44)
+                .clipShape(Circle())
+                .overlay(Circle().stroke(Color.purple.opacity(0.4), lineWidth: 1.5))
+            }
+            .buttonStyle(.plain)
+            .help(archivistPhotoPath.isEmpty
+                  ? "Photo TBD — click to pick a portrait from the archive"
+                  : "Click to change the portrait")
+
+            VStack(alignment: .leading, spacing: 1) {
+                TextField("Name TBD", text: $archivistName)
+                    .textFieldStyle(.plain)
+                    .font(.headline)
+                Text("Family Archivist")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Image(systemName: "sparkles")
+                .font(.title3)
+                .foregroundStyle(.purple)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    private func choosePhoto() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+        panel.title = "Choose the Archivist's Portrait"
+        if panel.runModal() == .OK, let url = panel.url {
+            archivistPhotoPath = url.path
         }
     }
 
@@ -183,6 +260,9 @@ struct ArchivistChatWindow: View {
 
     private func ask(_ text: String) {
         messages.append(ArchivistMessage(role: .user, text: text))
+        // Local pre-passes — no LLM round-trip needed for either.
+        if handlePlayCommand(text) { return }
+        if handleKinship(text) { return }
         isThinking = true
         var translator = OllamaQueryTranslator()
         translator.host = ollamaHost
@@ -202,6 +282,133 @@ struct ArchivistChatWindow: View {
             }
             inputFocused = true
         }
+    }
+
+    // MARK: Play (Rick 2026-08-07: "at least 'play the current video'")
+
+    /// "play it / play the first one / play" plays the first match of
+    /// the LAST answer; "play <anything else>" runs the ask pipeline
+    /// on the remainder and auto-plays the first result. Smart-player
+    /// routing via MediaOpener (QuickTime vs VLC by container).
+    private func handlePlayCommand(_ text: String) -> Bool {
+        let lower = text.lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .trimmingCharacters(in: .punctuationCharacters)
+        let verbs = ["play", "watch"]
+        guard let verb = verbs.first(where: {
+            lower == $0 || lower.hasPrefix($0 + " ")
+        }) else { return false }
+        let remainder = lower.dropFirst(verb.count)
+            .trimmingCharacters(in: .whitespaces)
+        let bareReferents: Set<String> = [
+            "", "it", "that", "this", "first", "the first", "the first one",
+            "the first video", "the current video", "the video", "them",
+        ]
+        if bareReferents.contains(remainder) {
+            guard let first = lastMatches.first else {
+                messages.append(ArchivistMessage(
+                    role: .assistant,
+                    text: "Play what? Ask me to find something first — then "
+                        + "say “play the first one”."))
+                return true
+            }
+            play(first)
+            return true
+        }
+        // "play <query>": find it, then play the best match.
+        playAfterAnswer = true
+        // Re-enter with the query part only (original casing preserved
+        // by slicing the raw text).
+        let query = String(text.dropFirst(verb.count))
+            .trimmingCharacters(in: .whitespaces)
+        ask(query)
+        return true
+    }
+
+    private func play(_ rec: VideoRecord) {
+        MediaOpener.open([rec])
+        messages.append(ArchivistMessage(
+            role: .assistant,
+            text: "▶️ Playing “\(rec.filename)”."))
+    }
+
+    // MARK: Kinship (Rick 2026-08-07: "show videos of rick's father")
+
+    /// "<name>'s <relation> …" resolved against the family GEDCOM —
+    /// announces the lineage fact, then re-asks with the real name.
+    /// Ambiguous possessors counter-ask; unknown facts answer honestly.
+    private func handleKinship(_ text: String) -> Bool {
+        guard let graph = loadFamilyGraph() else { return false }
+        let pattern = /([A-Za-z][A-Za-z .]*?)['’]s\s+([A-Za-z]+)/
+        guard let match = text.firstMatch(of: pattern),
+              let relation = GedcomFamilyGraph.relation(
+                fromWord: String(match.2)) else { return false }
+        let possessorTyped = String(match.1)
+            .trimmingCharacters(in: .whitespaces)
+
+        let candidates = graph.people(matching: possessorTyped)
+        switch candidates.count {
+        case 0:
+            messages.append(ArchivistMessage(
+                role: .assistant,
+                text: "I don't find “\(possessorTyped)” in the family tree — "
+                    + "try a fuller name."))
+            return true
+        case 1:
+            break
+        default:
+            messages.append(ArchivistMessage(
+                role: .assistant,
+                text: "Which \(possessorTyped) do you mean?",
+                chips: candidates.prefix(4).map { candidate in
+                    ArchivistMessage.Chip(
+                        label: candidate.name,
+                        action: .askText(text.replacingOccurrences(
+                            of: possessorTyped, with: candidate.name,
+                            options: .caseInsensitive)))
+                }))
+            return true
+        }
+
+        let possessor = candidates[0]
+        let relatives = graph.relatives(relation, of: possessor)
+        guard !relatives.isEmpty else {
+            messages.append(ArchivistMessage(
+                role: .assistant,
+                text: "The family tree doesn't record a \(match.2) for "
+                    + "\(possessor.name)."))
+            return true
+        }
+        let names = relatives.map(\.name)
+        messages.append(ArchivistMessage(
+            role: .assistant,
+            text: "\(possessor.name)'s \(match.2): \(names.joined(separator: ", ")) "
+                + "— searching the catalog…"))
+        // Re-ask with the resolved name(s) substituted for the phrase.
+        let phrase = "\(match.1)'s \(match.2)"
+        let rewritten = text.replacingOccurrences(
+            of: phrase, with: names.joined(separator: " and "),
+            options: .caseInsensitive)
+        ask(rewritten)
+        return true
+    }
+
+    /// Load the newest .ged from App Support/family-tree/originals.
+    private func loadFamilyGraph() -> GedcomFamilyGraph? {
+        if let cached = familyGraph { return cached }
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory,
+                                           in: .userDomainMask).first?
+            .appendingPathComponent("VideoScan/family-tree/originals")
+        let gedcom = dir.flatMap {
+            try? FileManager.default.contentsOfDirectory(
+                at: $0, includingPropertiesForKeys: nil)
+        }?
+        .filter { $0.pathExtension.lowercased() == "ged" }
+        .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        .last
+        let graph = gedcom.flatMap { GedcomFamilyGraph(fileURL: $0) }
+        familyGraph = .some(graph)
+        return graph
     }
 
     /// The archivist's reply policy — resolution first, then intent.
@@ -260,6 +467,7 @@ struct ArchivistChatWindow: View {
 
         let matches = model.searchIndex.filter(records: model.records,
                                                query: composed)
+        lastMatches = matches   // "play the first one" referent
 
         // 2. COUNT questions get an ANSWER, not a filter.
         if spec.intent?.lowercased() == "count" {
@@ -288,6 +496,12 @@ struct ArchivistChatWindow: View {
         if matches.isEmpty { chips = [] }
         messages.append(ArchivistMessage(role: .assistant, text: text,
                                          queryLine: composed, chips: chips))
+
+        // "play <something>" auto-plays the first result of its search.
+        if playAfterAnswer {
+            playAfterAnswer = false
+            if let first = matches.first { play(first) }
+        }
     }
 
     private func apply(query: String, announcedAs label: String) {
