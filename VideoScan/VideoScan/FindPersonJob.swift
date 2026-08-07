@@ -190,6 +190,23 @@ final class FindPersonJob: MediaFileOperationJob {
     /// into the unstructured score task (see cancel()).
     private var currentScoreTask: Task<RecipeClipScore, Never>?
 
+    /// User-cancel teardown of the in-flight score race (codex #285
+    /// shape): invalidate the generation (any late completion becomes
+    /// a no-op), cancel the scorer task (cooperative paths end fast),
+    /// and resume the pending continuation with nil so the loop is
+    /// released IMMEDIATELY — even when the scorer is wedged in a hung
+    /// AVF open and will never return on its own. MainActor-serialized
+    /// with the completion closure and the stall watchdog's abandon
+    /// path, so exactly one resumer can ever claim the continuation.
+    private func cancelCurrentNativeScore() {
+        clipGeneration += 1
+        currentScoreTask?.cancel()
+        if let pending = clipAbandonContinuation {
+            clipAbandonContinuation = nil
+            pending.resume(returning: nil)
+        }
+    }
+
     // MARK: Test seams (codex GH #156 regression suite, channel #267)
     //
     // The multi-wedge and stale-completion tests need a SCRIPTED scorer
@@ -302,16 +319,20 @@ final class FindPersonJob: MediaFileOperationJob {
         guard state.isActive else { return }
         state = .cancelling
         subtitleText = "Cancelling…"
+        // Durable trace FIRST — a cancel that then wedges must be
+        // attributable from the log alone (codex #284).
+        appLog.write("Find \(person) cancel requested (\(completed)/\(actionableTotal) done)")
+        findLog.info("find \(self.person, privacy: .public) cancel requested")
         task?.cancel()
         // The per-clip score task is UNSTRUCTURED (deliberately — the
         // wedge-skip race must outlive abandonment), so the run-task
-        // cancel above does NOT propagate into it: without this line
-        // "Cancelling…" silently waits for the CURRENT clip to finish,
-        // which on a long compilation reads as Stop-does-nothing
-        // (Rick, 2026-08-06 evening). The scorer's cooperative
-        // between-frame checks end it within a frame or two; worst
-        // case is a hung AVF open (≤45s bounded by the open race).
-        currentScoreTask?.cancel()
+        // cancel above does NOT propagate into it, and a hung AVF open
+        // or non-cooperative decode can leave the score-race
+        // continuation blocked regardless (codex #283/#284: Stop
+        // waited out Westford_1994-1995.mkv for 12+ minutes). Release
+        // the race NOW: the loop observes cancellation at the next
+        // check and exits without recording anything for this clip.
+        cancelCurrentNativeScore()
         if usesNativeEngine {
             // A paused native scorer is parked INSIDE waitIfPaused —
             // release it so the cancellation check after the gate runs.
@@ -456,7 +477,10 @@ final class FindPersonJob: MediaFileOperationJob {
 
         let monitor = stallMonitorFactory("find \(person)") { [weak self] silentFor in
             Task { @MainActor [weak self] in
-                guard let self, self.state.isActive, self.stallReason == nil else { return }
+                // .running ONLY (not .cancelling): a stall firing after
+                // the user's cancel must not wedge-log or abandon —
+                // cancel already released the race (codex #285).
+                guard let self, self.state == .running, self.stallReason == nil else { return }
                 // Wedged CLIP first (GH #156): abandon it, log it, keep
                 // the batch moving. Falls through to the batch-fail path
                 // when abandonment isn't possible (python arm) or the
@@ -656,6 +680,15 @@ final class FindPersonJob: MediaFileOperationJob {
                 currentScoreTask = scoreTask   // cancel() reaches the clip in flight
                 defer { currentScoreTask = nil }
                 let raced: RecipeClipScore? = await withCheckedContinuation { cont in
+                    // Cancel-before-install race (codex #285): a cancel
+                    // that lands between scoreTask creation and this
+                    // install would strand the continuation — nothing
+                    // would ever resume it. Refuse the install instead.
+                    guard state == .running, !Task.isCancelled else {
+                        scoreTask.cancel()
+                        cont.resume(returning: nil)
+                        return
+                    }
                     clipAbandonContinuation = cont
                     Task { @MainActor [weak self] in
                         let v = await scoreTask.value
@@ -669,6 +702,11 @@ final class FindPersonJob: MediaFileOperationJob {
                         pending.resume(returning: v)
                     }
                 }
+                // Cancellation exits BEFORE any verdict is synthesized,
+                // recorded, or ledgered: a cancel-released nil must not
+                // mint a wedge entry, and a cancelled scorer's partial
+                // verdict must not mint a tag (codex #284 point 3).
+                if Task.isCancelled || state == .cancelling { break }
                 if let raced {
                     consecutiveAbandons = 0
                     verdict = raced
