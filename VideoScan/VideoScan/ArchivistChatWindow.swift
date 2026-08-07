@@ -84,7 +84,7 @@ struct ArchivistChatWindow: View {
     /// The archivist's identity — name + portrait, both Rick-pickable
     /// (2026-08-07: "make the archivist have a name a photo on the top
     /// line, like name TBD, photo TBD (i will pick from archive)").
-    @AppStorage("archivist.name") private var archivistName = "Name TBD"
+    @AppStorage("archivist.name") private var archivistName = "Hallie Mae"
     @AppStorage("archivist.photoPath") private var archivistPhotoPath = ""
 
     var body: some View {
@@ -137,6 +137,9 @@ struct ArchivistChatWindow: View {
         .background(ArchivistWindowConfigurator())
         .onAppear {
             inputFocused = true
+            // A pre-avatar launch may have persisted the placeholder —
+            // she has a name now (Rick's great-grandmother's).
+            if archivistName == "Name TBD" { archivistName = "Hallie Mae" }
             if messages.isEmpty { greet() }
         }
     }
@@ -155,20 +158,21 @@ struct ArchivistChatWindow: View {
                             .resizable()
                             .scaledToFill()
                     } else {
-                        Image(systemName: "person.crop.circle.dashed")
-                            .resizable()
-                            .scaledToFit()
-                            .foregroundStyle(.purple.opacity(0.6))
-                            .padding(6)
+                        // Hallie Mae — the drawn librarian (Rick
+                        // 2026-08-07). She bobs while composing a
+                        // reply and blinks while idle; a real photo
+                        // from the archive overrides her.
+                        HallieMaeAvatar(isTalking: isThinking)
+                            .background(Circle().fill(Color(red: 0.96, green: 0.93, blue: 0.86)))
                     }
                 }
-                .frame(width: 44, height: 44)
+                .frame(width: 48, height: 48)
                 .clipShape(Circle())
                 .overlay(Circle().stroke(Color.purple.opacity(0.4), lineWidth: 1.5))
             }
             .buttonStyle(.plain)
             .help(archivistPhotoPath.isEmpty
-                  ? "Photo TBD — click to pick a portrait from the archive"
+                  ? "Hallie Mae — click to replace her with a portrait from the archive"
                   : "Click to change the portrait")
 
             VStack(alignment: .leading, spacing: 1) {
