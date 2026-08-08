@@ -408,10 +408,19 @@ struct ArchivistChatWindow: View {
                         + "(moved or deleted since cataloging)."))
                 return
             }
+            // Say WHERE it plays (Rick: "it plays but where?") and
+            // STEP ASIDE — this window's floating level otherwise sits
+            // ABOVE the player, hiding the video behind the chat. The
+            // window re-floats when clicked back into.
+            let player = MediaOpener.preferredPlayer(
+                for: rec, hasVLC: MediaOpener.hasVLC) == .quickTime
+                ? "QuickTime Player" : "VLC"
             MediaOpener.open([rec])
+            ArchivistWindowFloat.stepAsideForPlayback()
             messages.append(ArchivistMessage(
                 role: .assistant,
-                text: "▶️ Playing “\(filename)”."))
+                text: "▶️ Playing “\(filename)” in \(player) — it's front "
+                    + "and center; click me to bring this chat back on top."))
         }
     }
 
@@ -739,6 +748,25 @@ private struct FlowChips: View {
 /// Sets the hosting NSWindow to float above the catalog (Rick: "floats
 /// on top"). NSViewRepresentable is the reliable way to reach the
 /// window from SwiftUI on macOS 13+.
+///
+/// Playback etiquette (Rick: "it plays but where?"): a floating window
+/// sits above EVERY normal window including the video player it just
+/// launched — the movie played invisibly behind the chat. stepAside
+/// drops to .normal so the player lands in front; becoming key again
+/// (clicking the chat) restores the float.
+@MainActor
+enum ArchivistWindowFloat {
+    fileprivate(set) static weak var window: NSWindow?
+
+    static func stepAsideForPlayback() {
+        window?.level = .normal
+    }
+
+    fileprivate static func restoreFloat() {
+        window?.level = .floating
+    }
+}
+
 private struct ArchivistWindowConfigurator: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
@@ -746,6 +774,12 @@ private struct ArchivistWindowConfigurator: NSViewRepresentable {
             guard let window = view.window else { return }
             window.level = .floating
             window.collectionBehavior.insert(.fullScreenAuxiliary)
+            ArchivistWindowFloat.window = window
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.didBecomeKeyNotification,
+                object: window, queue: .main) { _ in
+                MainActor.assumeIsolated { ArchivistWindowFloat.restoreFloat() }
+            }
         }
         return view
     }
