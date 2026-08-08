@@ -328,6 +328,7 @@ struct ArchivistChatWindow: View {
         messages.append(ArchivistMessage(role: .user, text: text))
         // Local pre-passes — no LLM round-trip needed for either.
         if handlePlayCommand(text) { return }
+        if handleGeneralQuestion(text) { return }
         if handleKinship(text) { return }
         isThinking = true
         var translator = OllamaQueryTranslator()
@@ -462,6 +463,158 @@ struct ArchivistChatWindow: View {
                 text: "▶️ Playing “\(filename)” in \(player) — it's front "
                     + "and center; click me to bring this chat back on top."))
         }
+    }
+
+    // MARK: General questions (Rick 2026-08-07: "who is hallie mae
+    // mcgill", "when was rick born", "the family ancestry")
+
+    /// Tree-answerable questions, handled locally: who-is biographies,
+    /// birth/death dates, and the family-ancestry view. Grounded in
+    /// the GEDCOM; unknowns answered honestly.
+    private func handleGeneralQuestion(_ text: String) -> Bool {
+        let lower = text.lowercased()
+
+        // "family ancestry" / "family tree" → open the rendered tree.
+        if lower.contains("family tree") || lower.contains("ancestry")
+            || lower.contains("family history") {
+            let report = FileManager.default
+                .urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+                .appendingPathComponent("VideoScan/family-tree/reports/breen-family-tree.html")
+            let peopleCount = loadFamilyGraph()?.people.count
+            if let report, FileManager.default.fileExists(atPath: report.path) {
+                NSWorkspace.shared.open(report)
+                ArchivistWindowFloat.stepAsideForPlayback()
+                messages.append(ArchivistMessage(
+                    role: .assistant,
+                    text: "Opening the family tree — \(peopleCount.map { "\($0) relatives" } ?? "the family") "
+                        + "across the generations, in your browser."))
+            } else if let count = peopleCount {
+                messages.append(ArchivistMessage(
+                    role: .assistant,
+                    text: "The family tree records \(count) people. Ask me about "
+                        + "any of them — \"who is …\" or \"when was … born\"."))
+            } else {
+                messages.append(ArchivistMessage(
+                    role: .assistant,
+                    text: "I don't have the family tree loaded yet — export a "
+                        + "GEDCOM into the archive and I'll learn it."))
+            }
+            return true
+        }
+
+        // "when was X born" / "when did X die"
+        if let match = text.firstMatch(
+            of: /when (?:was|did)\s+(.+?)\s+(born|die|died)/.ignoresCase()) {
+            return answerDate(personText: String(match.1),
+                              wantsBirth: String(match.2).lowercased() == "born",
+                              original: text)
+        }
+
+        // "who is X" / "who was X" / "tell me about X"
+        if let match = text.firstMatch(
+            of: /(?:who is|who was|tell me about)\s+([A-Za-z][A-Za-z .']+)/.ignoresCase()) {
+            return answerWhoIs(personText: String(match.1)
+                .trimmingCharacters(in: CharacterSet(charactersIn: " ?.!")),
+                original: text)
+        }
+        return false
+    }
+
+    private func answerDate(personText: String, wantsBirth: Bool,
+                            original: String) -> Bool {
+        guard let graph = loadFamilyGraph() else { return false }
+        let candidates = graph.people(matching: personText)
+        switch candidates.count {
+        case 0:
+            messages.append(ArchivistMessage(
+                role: .assistant,
+                text: "I don't find “\(personText)” in the family tree — try a fuller name."))
+        case 1:
+            let person = candidates[0]
+            let date = wantsBirth ? person.birthDate : person.deathDate
+            if let date {
+                // Rick 2026-08-07: the departed are spoken of gently.
+                let pronoun = person.sex == "M" ? "he"
+                    : person.sex == "F" ? "she" : "they"
+                let has = pronoun == "they" ? "have" : "has"
+                messages.append(ArchivistMessage(
+                    role: .assistant,
+                    text: wantsBirth
+                        ? "\(person.name) was born \(date)."
+                        : "\(person.name) is no longer with us — \(pronoun) \(has) "
+                            + "been resting in peace since \(date)."))
+            } else {
+                messages.append(ArchivistMessage(
+                    role: .assistant,
+                    text: "The family tree doesn't record "
+                        + (wantsBirth ? "a birth date" : "a death date")
+                        + " for \(person.name)."))
+            }
+        default:
+            messages.append(ArchivistMessage(
+                role: .assistant,
+                text: "Which \(personText) do you mean?",
+                chips: candidates.prefix(4).map { candidate in
+                    ArchivistMessage.Chip(
+                        label: candidate.name,
+                        action: .askText(original.replacingOccurrences(
+                            of: personText, with: candidate.name,
+                            options: .caseInsensitive)))
+                }))
+        }
+        return true
+    }
+
+    private func answerWhoIs(personText: String, original: String) -> Bool {
+        guard let graph = loadFamilyGraph() else { return false }
+        let candidates = graph.people(matching: personText)
+        switch candidates.count {
+        case 0:
+            return false   // not a tree person — let the LLM try it as a search
+        case 1:
+            let person = candidates[0]
+            var facts: [String] = []
+            if let born = person.birthDate { facts.append("born \(born)") }
+            if let died = person.deathDate {
+                facts.append("resting in peace since \(died)")
+            }
+            let parents = graph.relatives(.parents, of: person).map(\.name)
+            if !parents.isEmpty {
+                facts.append("child of \(parents.joined(separator: " and "))")
+            }
+            let spouses = graph.relatives(.spouse, of: person).map(\.name)
+            if !spouses.isEmpty {
+                facts.append("married to \(spouses.joined(separator: ", "))")
+            }
+            let kids = graph.relatives(.children, of: person).map(\.name)
+            if !kids.isEmpty {
+                facts.append("parent of \(kids.joined(separator: ", "))")
+            }
+            let sentence = facts.isEmpty
+                ? "\(person.name) is in the family tree, but it records no further details."
+                : "\(person.name) — \(facts.joined(separator: "; "))."
+            // Offer the catalog angle via the given name.
+            var chips: [ArchivistMessage.Chip] = []
+            if let given = person.name.split(separator: " ").first {
+                chips.append(ArchivistMessage.Chip(
+                    label: "Videos of \(given)",
+                    action: .applyQuery("people:\(given.lowercased())")))
+            }
+            messages.append(ArchivistMessage(role: .assistant, text: sentence,
+                                             chips: chips))
+        default:
+            messages.append(ArchivistMessage(
+                role: .assistant,
+                text: "Which \(personText) do you mean?",
+                chips: candidates.prefix(4).map { candidate in
+                    ArchivistMessage.Chip(
+                        label: candidate.name,
+                        action: .askText(original.replacingOccurrences(
+                            of: personText, with: candidate.name,
+                            options: .caseInsensitive)))
+                }))
+        }
+        return true
     }
 
     // MARK: Kinship (Rick 2026-08-07: "show videos of rick's father")

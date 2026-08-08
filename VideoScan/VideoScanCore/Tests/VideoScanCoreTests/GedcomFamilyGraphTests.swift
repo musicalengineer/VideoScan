@@ -15,6 +15,10 @@ struct GedcomFamilyGraphTests {
     0 @I1@ INDI
     1 NAME Arthur /Stone/ Sr
     1 SEX M
+    1 BIRT
+    2 DATE 4 Mar 1901
+    1 DEAT
+    2 DATE 12 Jun 1980
     1 FAMS @F1@
     0 @I2@ INDI
     1 NAME Betty /Stone/
@@ -79,6 +83,15 @@ struct GedcomFamilyGraphTests {
                 == ["Arthur Stone Jr", "Dora Hill"])
         // Honest emptiness: Edwin has no recorded children.
         #expect(g.relatives(.children, of: edwin).isEmpty)
+    }
+
+    @Test func birthAndDeathDatesParse() {
+        let g = graph
+        let senior = g.people["@I1@"]
+        #expect(senior?.birthDate == "4 Mar 1901")
+        #expect(senior?.deathDate == "12 Jun 1980")
+        // No recorded dates stays honestly nil.
+        #expect(g.people["@I6@"]?.birthDate == nil)
     }
 
     @Test func colloquialRelationWords() {

@@ -24,10 +24,14 @@ public struct GedcomFamilyGraph: Sendable {
         public let id: String
         /// Display name with the GEDCOM slashes stripped:
         /// "Richard Harding /Breen/ Jr" → "Richard Harding Breen Jr".
-        public let name: String
-        public let sex: String          // "M" / "F" / ""
+        public var name: String
+        public var sex: String          // "M" / "F" / ""
         public var childOfFamily: String?
         public var spouseOfFamilies: [String] = []
+        /// Raw GEDCOM date strings ("4 Mar 1959") — displayed verbatim,
+        /// never reinterpreted (honesty over formatting).
+        public var birthDate: String?
+        public var deathDate: String?
     }
 
     struct Family: Sendable {
@@ -44,6 +48,8 @@ public struct GedcomFamilyGraph: Sendable {
     public init(gedcomText: String) {
         var currentIndi: Person?
         var currentFam: (id: String, family: Family)?
+        /// Which level-1 event (BIRT/DEAT) a level-2 DATE belongs to.
+        var pendingEvent: String?
 
         func flush() {
             if let person = currentIndi { people[person.id] = person }
@@ -80,19 +86,19 @@ public struct GedcomFamilyGraph: Sendable {
             let value = parts.count == 3 ? String(parts[2]) : ""
 
             if var person = currentIndi {
+                if level == 1 { pendingEvent = (tag == "BIRT" || tag == "DEAT") ? tag : nil }
+                if level == 2, tag == "DATE", let event = pendingEvent {
+                    if event == "BIRT", person.birthDate == nil { person.birthDate = value }
+                    if event == "DEAT", person.deathDate == nil { person.deathDate = value }
+                    currentIndi = person
+                    continue
+                }
                 switch (level, tag) {
                 case (1, "NAME") where person.name.isEmpty:
-                    let cleaned = value.replacingOccurrences(of: "/", with: " ")
+                    person.name = value.replacingOccurrences(of: "/", with: " ")
                         .split(separator: " ").joined(separator: " ")
-                    person = Person(id: person.id, name: cleaned,
-                                    sex: person.sex,
-                                    childOfFamily: person.childOfFamily,
-                                    spouseOfFamilies: person.spouseOfFamilies)
                 case (1, "SEX"):
-                    person = Person(id: person.id, name: person.name,
-                                    sex: value,
-                                    childOfFamily: person.childOfFamily,
-                                    spouseOfFamilies: person.spouseOfFamilies)
+                    person.sex = value
                 case (1, "FAMC"):
                     person.childOfFamily = value
                 case (1, "FAMS"):
