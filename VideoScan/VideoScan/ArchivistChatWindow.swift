@@ -146,6 +146,16 @@ struct ArchivistChatWindow: View {
             // A pre-avatar launch may have persisted the placeholder —
             // she has a name now (Rick's great-grandmother's).
             if archivistName == "Name TBD" { archivistName = "Hallie Mae" }
+            // Default portrait (Rick 2026-08-07: the drawn avatars
+            // "just aren't working for me"): first staged portrait —
+            // the brunette librarian cartoon — unless he's already
+            // picked something.
+            if archivistPhotoPath.isEmpty,
+               let first = Self.stockPortraits.first(where: {
+                   FileManager.default.fileExists(atPath: $0.path)
+               }) {
+                archivistPhotoPath = first.path
+            }
             if messages.isEmpty { greet() }
         }
     }
@@ -159,17 +169,14 @@ struct ArchivistChatWindow: View {
             Button(action: choosePhoto) {
                 Group {
                     if !archivistPhotoPath.isEmpty,
-                       let image = NSImage(contentsOfFile: archivistPhotoPath) {
-                        Image(nsImage: image)
-                            .resizable()
-                            .scaledToFill()
+                       FileManager.default.fileExists(atPath: archivistPhotoPath) {
+                        // GIF-capable: NSImageView animates GIFs;
+                        // Image(nsImage:) shows only the first frame.
+                        AnimatablePortrait(path: archivistPhotoPath)
                     } else if archivistAvatar == "hallie" {
                         HallieMaeAvatar(isTalking: isThinking)
                             .background(Circle().fill(Color(red: 0.96, green: 0.93, blue: 0.86)))
                     } else {
-                        // The Donna caricature (drawn from Rick's
-                        // photo, 2026-08-07) — big blonde curls, the
-                        // radiant smile, the striped tank.
                         DonnaAvatar(isTalking: isThinking)
                             .background(Circle().fill(Color(red: 0.93, green: 0.95, blue: 0.97)))
                     }
@@ -180,20 +187,27 @@ struct ArchivistChatWindow: View {
             }
             .buttonStyle(.plain)
             .contextMenu {
-                Button("Donna avatar") {
+                // Rick's picked portraits (copied to App Support/
+                // VideoScan/archivist by Claude, 2026-08-07) + the
+                // drawn fallbacks. Quick switches, no file dialog.
+                ForEach(Self.stockPortraits, id: \.path) { portrait in
+                    if FileManager.default.fileExists(atPath: portrait.path) {
+                        Button(portrait.label) { archivistPhotoPath = portrait.path }
+                    }
+                }
+                Divider()
+                Button("Donna caricature (drawn)") {
                     archivistAvatar = "donna"
                     archivistPhotoPath = ""
                 }
-                Button("Hallie Mae avatar") {
+                Button("Hallie Mae (drawn)") {
                     archivistAvatar = "hallie"
                     archivistPhotoPath = ""
                 }
                 Divider()
-                Button("Choose a photo from the archive…", action: choosePhoto)
+                Button("Choose a photo or GIF…", action: choosePhoto)
             }
-            .help(archivistPhotoPath.isEmpty
-                  ? "Click to pick a portrait — right-click to switch avatars"
-                  : "Click to change the portrait — right-click to switch avatars")
+            .help("Click to pick a portrait or GIF — right-click for quick switches")
 
             VStack(alignment: .leading, spacing: 1) {
                 TextField("Name TBD", text: $archivistName)
@@ -212,11 +226,24 @@ struct ArchivistChatWindow: View {
         .padding(.vertical, 8)
     }
 
+    /// Rick's chosen portraits, staged in App Support (Downloads is
+    /// volatile). First existing one is the default on first launch.
+    static let stockPortraits: [(label: String, path: String)] = {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory,
+                                            in: .userDomainMask).first?
+            .appendingPathComponent("VideoScan/archivist").path ?? ""
+        return [
+            ("Librarian cartoon", base + "/librarian-cartoon.png"),
+            ("Donna photo", base + "/donna-photo.jpeg"),
+            ("Flat librarian", base + "/librarian-flat.png"),
+        ]
+    }()
+
     private func choosePhoto() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.image]
+        panel.allowedContentTypes = [.image, .gif]
         panel.allowsMultipleSelection = false
-        panel.title = "Choose the Archivist's Portrait"
+        panel.title = "Choose the Archivist's Portrait (photo or GIF)"
         if panel.runModal() == .OK, let url = panel.url {
             archivistPhotoPath = url.path
         }
@@ -673,6 +700,29 @@ struct ArchivistChatWindow: View {
         guard top.count >= 2, let best = top.first,
               best.count < matches.count else { return [] }
         return top
+    }
+}
+
+// MARK: - Animatable portrait (photo or GIF)
+
+/// NSImageView-backed portrait: unlike SwiftUI's Image(nsImage:), an
+/// NSImageView with `animates` plays animated GIFs — so Rick can drop
+/// in "my own gif" and it moves (2026-08-07).
+private struct AnimatablePortrait: NSViewRepresentable {
+    let path: String
+
+    func makeNSView(context: Context) -> NSImageView {
+        let view = NSImageView()
+        view.animates = true
+        view.imageScaling = .scaleProportionallyUpOrDown
+        view.image = NSImage(contentsOfFile: path)
+        return view
+    }
+
+    func updateNSView(_ view: NSImageView, context: Context) {
+        if view.image?.name() != path {
+            view.image = NSImage(contentsOfFile: path)
+        }
     }
 }
 
