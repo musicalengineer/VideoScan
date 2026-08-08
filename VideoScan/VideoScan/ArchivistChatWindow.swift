@@ -128,6 +128,8 @@ struct ArchivistChatWindow: View {
             HStack(spacing: 8) {
                 TextField("Ask about the family catalog…", text: $input)
                     .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 15))
+                    .controlSize(.large)
                     .focused($inputFocused)
                     .onSubmit(send)
                     .disabled(isThinking)
@@ -139,7 +141,7 @@ struct ArchivistChatWindow: View {
             }
             .padding(10)
         }
-        .frame(minWidth: 440, idealWidth: 500, minHeight: 420, idealHeight: 620)
+        .frame(minWidth: 480, idealWidth: 540, minHeight: 480, idealHeight: 680)
         .background(ArchivistWindowConfigurator())
         .onAppear {
             inputFocused = true
@@ -181,9 +183,10 @@ struct ArchivistChatWindow: View {
                             .background(Circle().fill(Color(red: 0.93, green: 0.95, blue: 0.97)))
                     }
                 }
-                .frame(width: 48, height: 48)
+                .frame(width: 84, height: 84)
+                .background(Circle().fill(Color.white))
                 .clipShape(Circle())
-                .overlay(Circle().stroke(Color.purple.opacity(0.4), lineWidth: 1.5))
+                .overlay(Circle().stroke(Color.purple.opacity(0.4), lineWidth: 2))
             }
             .buttonStyle(.plain)
             .contextMenu {
@@ -209,12 +212,12 @@ struct ArchivistChatWindow: View {
             }
             .help("Click to pick a portrait or GIF — right-click for quick switches")
 
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 TextField("Name TBD", text: $archivistName)
                     .textFieldStyle(.plain)
-                    .font(.headline)
+                    .font(.title2.weight(.semibold))
                 Text("Family Archivist")
-                    .font(.caption)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -257,10 +260,11 @@ struct ArchivistChatWindow: View {
             if message.role == .user { Spacer(minLength: 40) }
             VStack(alignment: .leading, spacing: 5) {
                 Text(message.text)
+                    .font(.system(size: 15))
                     .textSelection(.enabled)
                 if let query = message.queryLine {
                     Text(query)
-                        .font(.caption.monospaced())
+                        .font(.footnote.monospaced())
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
@@ -781,10 +785,10 @@ private struct FlowChips: View {
                     onTap(chip)
                 } label: {
                     Text(chip.label)
-                        .font(.caption)
+                        .font(.callout)
                         .lineLimit(1)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
                         .background(Capsule().fill(Color.accentColor.opacity(0.14)))
                 }
                 .buttonStyle(.plain)
