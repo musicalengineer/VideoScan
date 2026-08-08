@@ -172,9 +172,18 @@ struct ArchivistChatWindow: View {
                 Group {
                     if !archivistPhotoPath.isEmpty,
                        FileManager.default.fileExists(atPath: archivistPhotoPath) {
-                        // GIF-capable: NSImageView animates GIFs;
-                        // Image(nsImage:) shows only the first frame.
-                        AnimatablePortrait(path: archivistPhotoPath)
+                        // Photos auto-fill-crop to the circle (Rick:
+                        // "where do I edit the photos to fit?" —
+                        // nowhere, that's the computer's job). GIFs go
+                        // through NSImageView, the only view that
+                        // animates them, and keep proportional fit.
+                        if archivistPhotoPath.lowercased().hasSuffix(".gif") {
+                            AnimatablePortrait(path: archivistPhotoPath)
+                        } else if let image = NSImage(contentsOfFile: archivistPhotoPath) {
+                            Image(nsImage: image)
+                                .resizable()
+                                .scaledToFill()
+                        }
                     } else if archivistAvatar == "hallie" {
                         HallieMaeAvatar(isTalking: isThinking)
                             .background(Circle().fill(Color(red: 0.96, green: 0.93, blue: 0.86)))
