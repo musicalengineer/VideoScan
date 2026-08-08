@@ -88,6 +88,10 @@ struct ArchivistChatWindow: View {
     /// line, like name TBD, photo TBD (i will pick from archive)").
     @AppStorage("archivist.name") private var archivistName = "Hallie Mae"
     @AppStorage("archivist.photoPath") private var archivistPhotoPath = ""
+    /// Which drawn avatar fronts the archivist when no photo is set:
+    /// "donna" (the caricature from Rick's photo) or "hallie" (the
+    /// original librarian). Right-click the portrait to switch.
+    @AppStorage("archivist.avatar") private var archivistAvatar = "donna"
 
     var body: some View {
         VStack(spacing: 0) {
@@ -159,13 +163,15 @@ struct ArchivistChatWindow: View {
                         Image(nsImage: image)
                             .resizable()
                             .scaledToFill()
-                    } else {
-                        // Hallie Mae — the drawn librarian (Rick
-                        // 2026-08-07). She bobs while composing a
-                        // reply and blinks while idle; a real photo
-                        // from the archive overrides her.
+                    } else if archivistAvatar == "hallie" {
                         HallieMaeAvatar(isTalking: isThinking)
                             .background(Circle().fill(Color(red: 0.96, green: 0.93, blue: 0.86)))
+                    } else {
+                        // The Donna caricature (drawn from Rick's
+                        // photo, 2026-08-07) — big blonde curls, the
+                        // radiant smile, the striped tank.
+                        DonnaAvatar(isTalking: isThinking)
+                            .background(Circle().fill(Color(red: 0.93, green: 0.95, blue: 0.97)))
                     }
                 }
                 .frame(width: 48, height: 48)
@@ -173,9 +179,21 @@ struct ArchivistChatWindow: View {
                 .overlay(Circle().stroke(Color.purple.opacity(0.4), lineWidth: 1.5))
             }
             .buttonStyle(.plain)
+            .contextMenu {
+                Button("Donna avatar") {
+                    archivistAvatar = "donna"
+                    archivistPhotoPath = ""
+                }
+                Button("Hallie Mae avatar") {
+                    archivistAvatar = "hallie"
+                    archivistPhotoPath = ""
+                }
+                Divider()
+                Button("Choose a photo from the archive…", action: choosePhoto)
+            }
             .help(archivistPhotoPath.isEmpty
-                  ? "Hallie Mae — click to replace her with a portrait from the archive"
-                  : "Click to change the portrait")
+                  ? "Click to pick a portrait — right-click to switch avatars"
+                  : "Click to change the portrait — right-click to switch avatars")
 
             VStack(alignment: .leading, spacing: 1) {
                 TextField("Name TBD", text: $archivistName)
