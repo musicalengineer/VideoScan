@@ -334,6 +334,17 @@ struct CatalogView: View {
     /// recomputeVolumeAggregates(), which is already wired to every
     /// records-change trigger — same pattern as volumeAggregateCache.
     @State var streamTypeCounts = CatalogStreamTypeCounts()
+    /// Catalog-wide storage totals for the "TOTAL MEDIA" footer pinned
+    /// under the volume table (Rick 2026-08-09). Same cache discipline
+    /// as `volumeAggregateCache` above and recomputed on the same
+    /// triggers: the calculation is O(records), so it must never run
+    /// from a view body.
+    @State var storageTotals = CatalogStorageTotals()
+    /// Measured frame of the volume table's Media Size column, reported
+    /// by the cell itself via MediaSizeColumnFrameKey. The TOTAL MEDIA
+    /// footer aligns its figures to this instead of assuming fixed
+    /// column widths — see VolumeTableMetrics for why measuring won.
+    @State var mediaSizeColumnFrame: CGRect = .zero
     /// Sort order for the Scan Volumes table. Defaults to volume-name
     /// ascending, which matches the historical implicit ordering. Bound
     /// to the Table via `Table(_:selection:sortOrder:)` so column-header

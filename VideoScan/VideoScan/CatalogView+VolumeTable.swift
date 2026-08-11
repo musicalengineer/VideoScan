@@ -9,6 +9,63 @@
 
 import SwiftUI
 
+// MARK: - Column geometry
+
+/// Where the footer's figures sit, and how that position is found.
+///
+/// HISTORY (worth knowing before "simplifying" this). The first cut of
+/// the TOTAL MEDIA footer pinned all six leading columns to fixed widths
+/// so a sibling footer could align to constants. That worked
+/// arithmetically but wrecked the table's proportions — the flexible
+/// trailing columns swallowed every spare point and the data columns
+/// bunched up at the left. Rick asked for the original justification
+/// back (2026-08-10), so the columns are resizable `min:ideal:` again
+/// exactly as they were.
+///
+/// Which leaves the original problem: a footer OUTSIDE the `Table`
+/// cannot know where a flexible column landed. So it no longer guesses —
+/// the Media Size cell MEASURES itself and publishes its frame up
+/// through `MediaSizeColumnFrameKey`, and the footer positions against
+/// that. Self-correcting: window resizes, column drags, and SDK changes
+/// to table chrome all just work, because nothing is assumed.
+enum VolumeTableMetrics {
+
+    /// Fallback used for the first frame, before the measurement
+    /// arrives, and if a future SDK ever stops propagating preferences
+    /// out of table rows (in which case the footer is merely
+    /// approximately placed rather than wrong-looking or crashed).
+    ///
+    /// Fitted against Rick's 2026-08-09 screenshot of the real table:
+    /// measured header origins were Files 305, Media Size 447, Scanned
+    /// 553. Ideal column widths are 150/110/60/60/90/95, which with a
+    /// ~20pt table leading inset and a ~7pt inter-column gap reproduces
+    /// those origins closely.
+    static let fallbackMediaSizeX: CGFloat = 447
+    static let fallbackMediaSizeWidth: CGFloat = 106
+
+    /// Breathing room between the "TOTAL MEDIA" label and the figure.
+    static let labelGutter: CGFloat = 12
+    /// Gap between the gross figure and the UNIQUE figure, used only
+    /// when the measured column width is unavailable.
+    static let figureGap: CGFloat = 18
+}
+
+/// Publishes the Media Size cell's frame (in the scan-targets pane's
+/// coordinate space) so the footer can line its totals up under the
+/// column they total. Every visible row reports; `reduce` keeps the
+/// first non-empty, since all rows in a column share one x-origin.
+struct MediaSizeColumnFrameKey: PreferenceKey {
+    static let defaultValue: CGRect = .zero
+    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
+        let next = nextValue()
+        if value == .zero && next != .zero { value = next }
+    }
+}
+
+/// Name of the coordinate space the pane establishes, shared by the
+/// measuring cell and the footer that consumes the measurement.
+let volumeTableCoordinateSpace = "volumeTablePane"
+
 extension CatalogView {
 
     // MARK: - Volume Table
@@ -92,6 +149,21 @@ extension CatalogView {
                     .font(.system(size: 15, design: .monospaced))
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    // The footer's alignment anchor. This cell is the
+                    // only thing that actually knows where a flexible
+                    // column landed, so it reports its own frame rather
+                    // than letting the footer guess (see
+                    // VolumeTableMetrics). Cost is one CGRect per
+                    // visible row per layout — trivial, and it makes
+                    // column drags and window resizes self-correcting.
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear.preference(
+                                key: MediaSizeColumnFrameKey.self,
+                                value: geo.frame(in: .named(volumeTableCoordinateSpace))
+                            )
+                        }
+                    )
             }
             .width(min: 70, ideal: 90)
 

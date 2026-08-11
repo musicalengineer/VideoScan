@@ -90,6 +90,20 @@ extension CatalogView {
         // Toolbar badge counts ride the same triggers — one extra O(n)
         // pass here instead of two per render.
         streamTypeCounts = CatalogStreamTypeCounts.compute(model.records)
+        // Catalog-wide storage totals for the pinned TOTAL MEDIA footer.
+        // Folded into this existing refresh (rather than getting its own
+        // .onChange set) so the two caches can never disagree about
+        // which catalog revision they describe.
+        //
+        // NOTE — deliberate divergence from the Media Size COLUMN: the
+        // per-volume aggregates below double-count a migrated record on
+        // both its current and its origin volume (see this function's
+        // doc comment). The footer counts each record ONCE, because it
+        // answers "how many bytes exist", not "what does each volume
+        // hold". So on a catalog with migrations the column can sum to
+        // slightly MORE than the footer's total. That is correct; the
+        // footer is the number to plan a drive purchase against.
+        storageTotals = CatalogStorageTotalsCalculator.compute(records: model.records)
         let targets = model.scanTargets
         guard !targets.isEmpty else {
             volumeAggregateCache = [:]
@@ -391,6 +405,26 @@ extension CatalogView {
             } else {
                 volumeTable
             }
+
+            // TOTAL MEDIA — pinned OUTSIDE the table so it never
+            // scrolls away (Rick 2026-08-09). Shown even when the
+            // filtered table is empty: the totals cover the whole
+            // catalog, not the filtered view, so hiding them behind a
+            // volume filter would be misleading.
+            VolumeTableTotalsFooter(totals: storageTotals,
+                                    mediaSizeFrame: mediaSizeColumnFrame)
+        }
+        // Shared coordinate space: the Media Size cell measures itself
+        // in it, the footer positions itself in it. Both must name the
+        // SAME space or the footer's offsets are relative to nothing.
+        .coordinateSpace(name: volumeTableCoordinateSpace)
+        .onPreferenceChange(MediaSizeColumnFrameKey.self) { frame in
+            // Guard the assignment: SwiftUI republishes preferences on
+            // every layout pass, and an unconditional write would
+            // re-render the pane forever.
+            if frame != .zero && frame != mediaSizeColumnFrame {
+                mediaSizeColumnFrame = frame
+            }
         }
         .background(Color(NSColor.controlBackgroundColor))
         .background(
@@ -432,6 +466,9 @@ extension CatalogView {
         let displayRowCount = max(CGFloat(volumeTableRows.count), 3)
         let needed = toolbarHeight + tableHeaderHeight
                    + (displayRowCount * perRowHeight) + bottomMargin
-        return min(400, needed)
+                   + VolumeTableTotalsFooter.height
+        // Cap raised by the footer's height so pinning TOTAL MEDIA
+        // doesn't cost a row of visible volumes at the 400pt ceiling.
+        return min(400 + VolumeTableTotalsFooter.height, needed)
     }
 }
