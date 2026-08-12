@@ -13,14 +13,22 @@
 // it is not; further hosts (the M1, a future Studio) can be appended
 // without touching code.
 //
-// MIGRATION RULE, and why it is not the obvious one. The old default was
-// `ricksm5.local`, and `@AppStorage` does not persist a default until
-// the user changes it — so the mere PRESENCE of `archivist.ollamaHost`
-// means someone deliberately set that host. A deliberate choice must not
-// be silently demoted by a new default, so a legacy host is migrated to
-// the FRONT of the list rather than dropped or appended. Absence of the
-// key means "never configured", which the new default order can claim
-// freely.
+// MIGRATION RULE. A first cut promoted any legacy `archivist.ollamaHost`
+// to the FRONT, reasoning that its presence implied a deliberate choice.
+// codex caught two holes in that (#313) and was right on both:
+//
+//   * No UI has ever written that key, so presence implies nothing — it
+//     could be the old default persisted by any code path that touched
+//     the binding.
+//   * Even a genuinely deliberate old value has been SUPERSEDED: Rick
+//     designated the M4 as master on 2026-08-12. A stale preference must
+//     not outrank the instruction that replaced it.
+//
+// So the defaults lead, always. A legacy host that merely names a
+// default is folded in (deduped, M4 still first). A legacy host naming
+// something ELSE is a machine we would otherwise forget about, so it is
+// preserved — APPENDED after the defaults, available as a fallback
+// without displacing the designated primary.
 //
 // Pure and injectable: every function takes its `UserDefaults`, so tests
 // never touch the real preferences plist (the settings-pollution class).
@@ -78,10 +86,9 @@ enum OllamaEndpoints {
 
     /// The list to try, in order.
     ///
-    /// 1. An explicit list wins outright.
-    /// 2. Otherwise, a legacy single host goes FIRST (it was a
-    ///    deliberate choice — see the header), followed by any default
-    ///    hosts it does not already name.
+    /// 1. An explicit list wins outright — that IS the user's order.
+    /// 2. Otherwise the defaults lead (M4 primary), with a legacy host
+    ///    APPENDED only if it names a machine the defaults do not.
     /// 3. Otherwise the defaults.
     ///
     /// Never returns an empty array: an empty list would leave the
@@ -92,15 +99,15 @@ enum OllamaEndpoints {
             let hosts = parse(raw)
             if !hosts.isEmpty { return hosts }
         }
+        var out = defaultHosts
         if let legacy = defaults.string(forKey: legacyHostKey),
-           let host = normalize(legacy) {
-            var out = [host]
-            for d in defaultHosts where d.lowercased() != host.lowercased() {
-                out.append(d)
-            }
-            return out
+           let host = normalize(legacy),
+           !out.contains(where: { $0.lowercased() == host.lowercased() }) {
+            // A machine we would otherwise forget — kept as a fallback,
+            // never ahead of the designated primary.
+            out.append(host)
         }
-        return defaultHosts
+        return out
     }
 
     /// Persist an explicit order. Writing an empty list clears the

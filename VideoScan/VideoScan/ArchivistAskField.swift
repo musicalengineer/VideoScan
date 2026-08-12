@@ -33,6 +33,16 @@ struct ArchivistAskPopover: View {
     /// Brain endpoint knobs — editable without a rebuild. Defaults match
     /// OllamaQueryTranslator (Jim's qwen on the M5).
     @AppStorage("archivist.ollamaHost") private var ollamaHost = "ricksm5.local"
+    /// Host that answered the most recent ask, once one has.
+    @State private var lastResponder: String?
+
+    /// Never claims a host we are not actually talking to: the fleet's
+    /// first entry while in flight, the real responder once it answers.
+    private var askStatusText: String {
+        let hosts = OllamaEndpoints.resolved(from: .standard)
+        let where_ = lastResponder ?? hosts.first ?? "the fleet"
+        return "Asking \(ollamaModel) @ \(where_)…"
+    }
     @AppStorage("archivist.ollamaModel") private var ollamaModel = "qwen3.6:35b-a3b-nvfp4"
 
     /// One asked-and-answered turn in this session's conversation.
@@ -107,7 +117,12 @@ struct ArchivistAskPopover: View {
             if isThinking {
                 HStack(spacing: 6) {
                     ProgressView().controlSize(.small)
-                    Text("Asking \(ollamaModel) @ \(ollamaHost)…")
+                    // Was `ollamaHost` — the OLD single-host preference,
+                    // which the field stopped using when it moved to the
+                    // fleet. It would have named ricksm5 while actually
+                    // asking the M4 (codex #313). Report the responder
+                    // once known, the fleet's head while in flight.
+                    Text(askStatusText)
                         .font(.caption).foregroundStyle(.secondary)
                 }
             } else if let errorText {
@@ -200,7 +215,10 @@ struct ArchivistAskPopover: View {
         template.model = ollamaModel
         let translator = OllamaFailoverTranslator(
             hosts: OllamaEndpoints.resolved(from: .standard),
-            template: template
+            template: template,
+            onResponder: { host in
+                Task { @MainActor in lastResponder = host }
+            }
         )
         Task { @MainActor in
             defer { isThinking = false }

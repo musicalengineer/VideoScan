@@ -81,12 +81,12 @@ struct OllamaFailoverTests {
             responses: ["RicksM4.local": .ok(goodReply),
                         "ricksm5.local": .ok(goodReply)],
             dialled: dialled,
-            onResponder: { host in Task { await responder.set(host) } }
+            onResponder: { host in responder.set(host) }
         )
         _ = try await t.translate("donna 1990s")
 
         #expect(await dialled.all() == ["RicksM4.local"], "must not dial the fallback")
-        #expect(await responder.get() == "RicksM4.local")
+        #expect(responder.get() == "RicksM4.local")
     }
 
     /// The whole point: the Studio is asleep, so the laptop answers.
@@ -98,12 +98,12 @@ struct OllamaFailoverTests {
             responses: ["RicksM4.local": .down("host is down"),
                         "ricksm5.local": .ok(goodReply)],
             dialled: dialled,
-            onResponder: { host in Task { await responder.set(host) } }
+            onResponder: { host in responder.set(host) }
         )
         _ = try await t.translate("donna 1990s")
 
         #expect(await dialled.all() == ["RicksM4.local", "ricksm5.local"])
-        #expect(await responder.get() == "ricksm5.local",
+        #expect(responder.get() == "ricksm5.local",
                 "the reported responder must be the host that actually answered")
     }
 
@@ -187,11 +187,18 @@ struct OllamaFailoverTests {
     }
 }
 
-/// Box for the responder callback, which fires off-actor.
-private actor ResponderBox {
+/// Box for the responder callback.
+///
+/// Lock-protected rather than an actor: `onResponder` is SYNCHRONOUS, so
+/// hopping into an actor via `Task { }` to record it left the value
+/// unset when the test read it a moment later — the assertion raced the
+/// hop, not the code under test. A synchronous callback deserves a
+/// synchronous sink.
+private final class ResponderBox: @unchecked Sendable {
+    private let lock = NSLock()
     private var value: String?
-    func set(_ v: String) { value = v }
-    func get() -> String? { value }
+    func set(_ v: String) { lock.lock(); value = v; lock.unlock() }
+    func get() -> String? { lock.lock(); defer { lock.unlock() }; return value }
 }
 
 // MARK: - Endpoint list + legacy migration
@@ -209,22 +216,31 @@ struct OllamaEndpointsTests {
         #expect(OllamaEndpoints.resolved(from: d) == ["RicksM4.local", "ricksm5.local"])
     }
 
-    /// THE migration rule. `@AppStorage` does not persist a default until
-    /// the user changes it, so the presence of the legacy key means
-    /// someone deliberately chose that host. A deliberate choice must
-    /// not be demoted by a new default — it goes to the FRONT.
-    @Test func legacyHostMigratesToTheFrontNotTheBack() {
+    /// THE migration rule, corrected after codex #313. A first cut
+    /// promoted any legacy host to the front. But no UI ever wrote that
+    /// key, so its presence implies nothing — and Rick's 2026-08-12
+    /// directive making the M4 master SUPERSEDES whatever it holds. A
+    /// custom legacy host is still worth keeping (it names a machine we
+    /// would otherwise forget), so it is appended, never promoted.
+    @Test func legacyCustomHostIsAppendedNeverPromoted() {
         let d = suite()
         d.set("ricksm1.local", forKey: OllamaEndpoints.legacyHostKey)
         #expect(OllamaEndpoints.resolved(from: d)
-                == ["ricksm1.local", "RicksM4.local", "ricksm5.local"])
+                == ["RicksM4.local", "ricksm5.local", "ricksm1.local"])
     }
 
-    /// A legacy host that is already a default must not appear twice.
-    @Test func legacyHostAlreadyInDefaultsIsNotDuplicated() {
+    /// SENSOR — the regression codex caught. The old default was
+    /// ricksm5.local; if that value lingers in the legacy key it must
+    /// NOT put the laptop ahead of the Studio, which is the exact
+    /// outcome Rick moved the model to avoid.
+    @Test func lingeringLegacyM5NeverOutranksTheM4() {
         let d = suite()
         d.set("ricksm5.local", forKey: OllamaEndpoints.legacyHostKey)
-        #expect(OllamaEndpoints.resolved(from: d) == ["ricksm5.local", "RicksM4.local"])
+        let resolved = OllamaEndpoints.resolved(from: d)
+        #expect(resolved == ["RicksM4.local", "ricksm5.local"])
+        #expect(resolved.first == "RicksM4.local", "the designated primary must lead")
+        #expect(resolved.filter { $0.lowercased() == "ricksm5.local" }.count == 1,
+                "no duplicate laptop entry")
     }
 
     @Test func explicitListWinsOutright() {
