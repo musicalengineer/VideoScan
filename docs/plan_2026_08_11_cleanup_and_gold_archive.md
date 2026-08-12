@@ -26,18 +26,19 @@ larger than 3.0 TB, not smaller.
 
 ---
 
-## P0 — Full-content hashing (blocker for everything else)
+## P0 — Full-content hashing — ✅ DONE 2026-08-11 (commit f7946624)
 
-**`FileHasher` today implements only `partialMD5` — a 64 KB head hash.**
-That is fine for the footer's estimate and for *suggesting* duplicates. It
-is NOT sufficient to authorize deleting a family video, and everything
-below depends on fixing it first.
+### Why it was the blocker
+
+`FileHasher` implemented only `partialMD5` — a 64 KB head hash. Fine for
+the footer's estimate and for *suggesting* duplicates; NOT sufficient to
+authorize deleting a family video.
 
 Failure mode: two distinct Avid MXF essence files from the same session
 share a wrapper header and can be padded to the same length. Head hash +
 size says "identical". Delete the wrong one and the footage is gone.
 
-Proposal — **segmented hash**, not full-file:
+The fix — **segmented hash**, not full-file:
 
 ```
 segmentHash = SHA256( head 1MB ‖ middle 1MB ‖ tail 1MB ‖ sizeBytes )
@@ -49,13 +50,52 @@ negligible — the tail segment alone defeats the padded-MXF case. Full-file
 hashing stays available as an explicit "verify before delete" step on the
 surviving copy only.
 
-- New: `FileHasher.segmentHash(path:)`, persisted on `VideoRecord`
-  (new field, additive — no schema migration issues).
-- Backfill job over the catalog, resumable, volume-gated (reuse
-  `MediaVolumeGate`).
-- Tests: identical-content/different-name, same-head-different-tail,
-  same-head-and-size-different-middle (the padded-MXF case), files
-  smaller than 3 MB (segments overlap — must still be correct).
+### What shipped, and the two traps found on the way
+
+`FileHasher.segmentedHash` → `v1:<sha256>` over version ‖ size ‖ head ‖
+middle ‖ tail. `fullHash` for verifying a survivor before deletion.
+`contentHash` is a new additive field beside `partialMD5`, which is
+untouched.
+
+Two gaps surfaced while wiring it, both of which would have wasted a
+night:
+
+1. **A rescan cannot populate it.** `probeFile` consults the SQLite probe
+   cache first and returns early on a hit, before any hashing. A full
+   rescan of a catalogued volume would burn hours of ffprobe and produce
+   zero hashes.
+2. **A rescan could ERASE it.** A cache hit returned `contentHash = ""`,
+   which would overwrite hashes a backfill had just computed. Fixed by
+   making `content_hash` a probe-cache column with an additive
+   ALTER TABLE migration — the same reason `partial_md5` has always
+   survived rescans.
+
+So there is now a dedicated **hash-only backfill**:
+`VideoScanModel.runContentHashBackfill()`, with
+`planContentHashBackfill()` as its dry run. Skips ffprobe entirely,
+resumable, only ever writes a hash onto a record that has none.
+
+### Running it — first thing tomorrow, ~20 minutes
+
+Cost is flat per FILE (3 seeks + 3 MiB), not per byte, so a 12 GB master
+costs the same as a 200 MB clip.
+
+| | |
+|---|---|
+| Reachable records | ~8,760 of 18,142 |
+| Estimate | **15–25 min**, not overnight |
+| Offline | ~9,400 records need their drives mounted |
+
+Order of operations:
+
+1. **Click `Backup Catalog` first.** The badge was yellow at 9 days — do
+   not run the first bulk-mutation pass against a stale restore point.
+2. Spot-check on **CrucialX10** (50 files) and confirm hashes appear.
+3. Let it run across the rest of the connected volumes.
+
+Not yet built: a UI entry point. The pass is callable but has no button —
+worth deciding whether it belongs in Catalog Options or as a step inside
+the Cleanup Queue itself.
 
 ---
 
