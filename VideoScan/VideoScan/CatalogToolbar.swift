@@ -350,14 +350,6 @@ struct CatalogToolbar<Dashboard: View>: View {
             // — they're presented from this view when invoked from any
             // future entry point in the catalog row context menu.
 
-            Button {
-                CatalogScanWindowController.shared.show(dashboard: dashboard, model: model)
-            } label: {
-                Label("Realtime Scan", systemImage: "waveform.path.ecg.rectangle")
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.cyan)
-
             Menu {
                 // Media kind, merged in from the old standalone "All
                 // Kinds" chip (Rick 2026-08-11: the two menus overlapped).
@@ -365,7 +357,7 @@ struct CatalogToolbar<Dashboard: View>: View {
                 // belongs in the same menu — and the label below still
                 // names the active facet, so the default-off state stays
                 // visible without its own button.
-                Section("Media kind") {
+                Section("Show files — media kind") {
                     Picker("Media kind", selection: kindFacetBinding) {
                         ForEach(CatalogKindFacet.allCases) { facet in
                             Label(facet.label, systemImage: facet.icon)
@@ -392,7 +384,7 @@ struct CatalogToolbar<Dashboard: View>: View {
                           ? "Showing media on disconnected volumes too. Turn off to show only reachable media (the default)."
                           : "Only media on connected volumes is shown (the default). Turn on to also list files on disconnected drives.")
                 }
-                Section("View filters") {
+                Section("Show files — filters") {
                     ForEach(CatalogViewFilter.allCases, id: \.self) { filter in
                         Toggle(isOn: Binding(
                             get: { viewFilters.contains(filter) },
@@ -417,7 +409,7 @@ struct CatalogToolbar<Dashboard: View>: View {
                 // in when any of them is on — otherwise you could leave
                 // "Show removed" enabled, see italic orange rows, and
                 // have nothing on screen explaining why.
-                Section("Show hidden records") {
+                Section("Show files — hidden records") {
                     Toggle(isOn: $showRemoved) {
                         Label("Removed", systemImage: showRemoved
                               ? "eye.trianglebadge.exclamationmark"
@@ -465,14 +457,14 @@ struct CatalogToolbar<Dashboard: View>: View {
                     // how you end up staring at orange rows wondering
                     // what changed.
                     Image(systemName: "line.3.horizontal.decrease.circle\(viewIsModified ? ".fill" : "")")
-                    Text("View…")
+                    Text("Show")
                 }
                 .foregroundColor(model.kindFacetSetting.facet == .videoBearing
                                  ? .primary : .teal)
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .help("Filter catalog results, media kind, and hidden records")
+            .help("Choose which files are shown — media kind, filters, and hidden records")
 
             if !outputCSVPath.isEmpty {
                 Button(action: {
@@ -607,7 +599,7 @@ struct CatalogToolbar<Dashboard: View>: View {
             // the difference between a decoration and a door (Rick
             // 2026-08-11). Truncates before the search field does.
             Text("Chat with Family Archivist")
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 14, weight: .medium))
                 .foregroundColor(.purple)
                 .lineLimit(1)
                 .truncationMode(.tail)

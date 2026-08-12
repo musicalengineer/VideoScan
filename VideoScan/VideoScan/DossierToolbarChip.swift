@@ -59,11 +59,13 @@ struct DossierToolbarChip: View {
         }
     }
 
-    /// "Analyze Catalog" once everything is analyzed; otherwise carries
-    /// the percentage, which is the one number worth a glance.
-    private var buttonTitle: String {
-        progress >= 1.0 ? "Analyze Catalog" : "Analyze Catalog · \(percentLabel)"
-    }
+    /// Just the verb. The percentage lived here for a day after the ring
+    /// was retired, on the theory that the row should still show
+    /// outstanding work — but Rick's point stands: you see progress the
+    /// moment you click, and a number that changes on its own draws the
+    /// eye away from the catalog for no decision it can inform.
+    /// It remains in the tooltip.
+    private var buttonTitle: String { "Analyze Catalog" }
 
     private var rateHelp: String {
         rate.hasEnoughSamples ? ". Rate \(rate.displayText)." : ""

@@ -366,6 +366,22 @@ extension CatalogView {
 
                 ScanOptionsMenu(model: model)
 
+                // Scan Monitor — formerly "Realtime Scan", and formerly
+                // in the catalog row where it was the loudest control on
+                // screen. It WATCHES volume scanning, so it belongs with
+                // the scanning verbs, next to the options that configure
+                // them (Rick 2026-08-12). It also now houses Pause/Stop
+                // All, which makes its placement here doubly right.
+                Button {
+                    CatalogScanWindowController.shared.show(
+                        dashboard: model.dashboard, model: model)
+                } label: {
+                    Label("Scan Monitor", systemImage: "waveform.path.ecg.rectangle")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .help("Watch scanning as it happens — progress per volume, throughput, and the pause/stop controls.")
+
                 Button(action: { openWindow(id: "compare") }) {
                     Label("Compare Volumes", systemImage: "arrow.triangle.2.circlepath")
                 }
@@ -407,11 +423,11 @@ extension CatalogView {
                         }
                     }
                 } label: {
-                    Label("Volumes", systemImage: "line.3.horizontal.decrease.circle")
+                    Label("Show", systemImage: "line.3.horizontal.decrease.circle")
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
-                .help("Filter which volumes appear in the list below")
+                .help("Choose which volumes are listed below")
 
                 // Scan All / Pause All / Stop All moved OUT of this row
                 // (Rick 2026-08-12). Starting a scan is now a selection
