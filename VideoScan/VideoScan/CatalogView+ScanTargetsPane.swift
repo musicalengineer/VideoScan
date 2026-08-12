@@ -86,6 +86,20 @@ extension CatalogView {
     /// matches the historical filter semantics — the Volumes table
     /// counted those records on the source volume even after migration
     /// — so we preserve the double-count.
+    /// Where the catalog-ops group starts: the Phase column's measured
+    /// origin, minus this row's 16pt horizontal padding so the button's
+    /// leading edge — not its container — lands on the column.
+    ///
+    /// Falls back to a constant derived from the footer's own fallback
+    /// until the table publishes a measurement (first frame only).
+    var catalogGroupOriginX: CGFloat {
+        let phase = volumeColumnFrames[VolumeColumnID.phase] ?? .zero
+        let x = phase.width > 0
+            ? phase.minX
+            : VolumeTableMetrics.fallbackMediaSizeX + 210
+        return max(0, x - 16)
+    }
+
     private func recomputeVolumeAggregates() {
         // Toolbar badge counts ride the same triggers — one extra O(n)
         // pass here instead of two per render.
@@ -266,6 +280,13 @@ extension CatalogView {
     var scanTargetsPane: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
+                // ── VOLUME OPS ─────────────────────────────────────────
+                // This sub-stack reserves the width up to the Phase column,
+                // which is what starts the catalog group ON that column
+                // (Rick 2026-08-12). minWidth, not a hard width: if the
+                // volume verbs ever need more room they push the catalog
+                // group right rather than getting clipped.
+                HStack(spacing: 10) {
                 // Icon only — the words "Volume Scanner" were a title for
                 // a row that already reads as one, and the button beside
                 // it now carries the verb (Rick 2026-08-11).
@@ -373,7 +394,8 @@ extension CatalogView {
                 .controlSize(.large)
                 .disabled(!model.hasActiveTargets)
 
-                Spacer(minLength: 20)
+                }
+                .frame(minWidth: catalogGroupOriginX, alignment: .leading)
 
                 // ── CATALOG OPS ────────────────────────────────
                 // Everything past the spacer acts on the CATALOG; everything
@@ -484,6 +506,12 @@ extension CatalogView {
                 .help("Update or delete catalog data")
 
 
+                // Analyze · Tidy · Backup — three catalog verbs in the
+                // order Rick uses them: understand it, prune it, protect
+                // it. Analyze now renders as a bordered button like the
+                // other two rather than a ring chip.
+                DossierToolbarChip(model: model)
+
                 Button {
                     showTidySheet = true
                 } label: {
@@ -495,11 +523,7 @@ extension CatalogView {
 
                 backupStatusBadge
 
-                // Analysis progress ring, moved up from the catalog row
-                // (Rick 2026-08-11 — right-justifying it down there
-                // crowded the media-kind label into being clipped).
-                DossierToolbarChip(model: model)
-
+                Spacer(minLength: 8)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
