@@ -105,7 +105,10 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     var displayName: String { "\(model) @ \(host)" }
 
     func translate(_ text: String) async throws -> NLQuerySpec {
-        let urlString = "http://\(host):\(port)/api/chat"
+        // `host` may be a bare name ("RicksM4.local"), a name with a
+        // port, or a full URL ("https://ollama.example.com") now that
+        // Rick wants cloud endpoints alongside the local fleet.
+        let urlString = OllamaEndpoints.chatURLString(for: host, defaultPort: port)
         guard let url = URL(string: urlString) else {
             throw NLTranslatorError.unreachable("bad URL for host \(host)")
         }
@@ -178,7 +181,20 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             let message: Message?
             let error: String?
         }
-        let response = try JSONDecoder().decode(ChatResponse.self, from: data)
+        // Wrapped, not a bare `try`. An unwrapped DecodingError escapes
+        // as a non-NLTranslatorError, and the failover walker cannot
+        // classify what it cannot recognise — so a malformed HTTP-200
+        // body (an HTML error page, a truncated reply, a proxy's
+        // apology) would have been retried against every host in the
+        // fleet. The envelope being garbage is a property of the reply,
+        // not of the host. codex #315.
+        let response: ChatResponse
+        do {
+            response = try JSONDecoder().decode(ChatResponse.self, from: data)
+        } catch {
+            throw NLTranslatorError.badResponse(
+                "unparseable response envelope: \(String(decoding: data.prefix(160), as: UTF8.self))")
+        }
         if let error = response.error {
             // ollama answers "model not found" with HTTP 200 and an
             // error string in the body, so the status tells us nothing

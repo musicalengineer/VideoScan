@@ -77,14 +77,24 @@ struct OllamaFailoverTranslator: NLQueryTranslating {
                 onAttemptFailed?(host, error)
                 lastError = error
 
+                // A cancelled task must not keep dialling the fleet.
+                if error is CancellationError || Task.isCancelled {
+                    throw CancellationError()
+                }
                 // Stop the walk on anything that would fail identically
                 // everywhere — see the header.
-                if let nl = error as? NLTranslatorError, !nl.isRetryableOnAnotherHost {
-                    throw nl
+                guard let nl = error as? NLTranslatorError else {
+                    // UNCLASSIFIED errors do not fail over. An error we
+                    // could not label is far more likely a bug in our own
+                    // decoding than a sleeping machine, and spending one
+                    // timeout per host to rediscover the same bug is the
+                    // expensive wrong guess. Fail fast and loudly instead
+                    // (defence in depth behind codex #315, which was
+                    // exactly this hole: a raw DecodingError walking the
+                    // whole fleet).
+                    throw error
                 }
-                // Also stop if the caller cancelled: a cancelled task
-                // must not keep dialling the rest of the fleet.
-                if Task.isCancelled { throw CancellationError() }
+                if !nl.isRetryableOnAnotherHost { throw nl }
             }
         }
 

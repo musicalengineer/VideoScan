@@ -163,6 +163,12 @@ struct SettingsTabView: View {
 
                 Divider()
 
+                // Where the Archivist thinks. Local fleet or cloud, in
+                // the order they are tried (Rick 2026-08-12).
+                ArchivistEndpointSettings()
+
+                Divider()
+
                 HStack {
                     Button("Reset All to Defaults") {
                         settings = ScanPerformanceSettings()

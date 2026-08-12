@@ -117,6 +117,16 @@ struct ArchivistChatWindow: View {
                                     .foregroundStyle(.secondary)
                             }
                             .id("thinking")
+                        } else if let responder = lastResponder {
+                            // RENDER the responder, don't just record it
+                            // (codex #315). With a fallback list, "the
+                            // Archivist feels slow" and "the primary is
+                            // asleep so you are on the laptop" look
+                            // identical without this line.
+                            Text("answered by \(OllamaEndpoints.displayLabel(for: responder))")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
                         }
                     }
                     .padding(12)

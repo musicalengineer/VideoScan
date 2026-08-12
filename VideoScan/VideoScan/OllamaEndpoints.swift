@@ -47,22 +47,62 @@ enum OllamaEndpoints {
     /// Pre-2026-08-12 single-host key. Read for migration, never written.
     static let legacyHostKey = "archivist.ollamaHost"
 
-    /// Normalize one user-entered host: trim, drop any scheme or port a
-    /// user pasted in, and discard empties. Returns nil if nothing
-    /// usable survives.
+    /// Normalize one user-entered endpoint.
+    ///
+    /// An earlier version STRIPPED any scheme and port, on the assumption
+    /// that every endpoint was a bare `.local` box on plain http at
+    /// 11434. Rick then asked for cloud endpoints too (2026-08-12), and
+    /// a cloud endpoint is exactly the case that assumption destroys:
+    /// `https://ollama.example.com` would have been mangled to
+    /// `ollama.example.com` and then dialled over http on port 11434.
+    ///
+    /// So scheme and port are PRESERVED when the user supplies them, and
+    /// defaulted only when they do not. All this function does is trim,
+    /// drop a trailing slash, and reject empties — `chatURLString` owns
+    /// the defaulting.
     static func normalize(_ raw: String) -> String? {
         var h = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !h.isEmpty else { return nil }
-        for scheme in ["http://", "https://"] where h.lowercased().hasPrefix(scheme) {
-            h = String(h.dropFirst(scheme.count))
-        }
-        // A pasted "host:11434" would otherwise become part of the
-        // hostname and fail to resolve; the port is configured
-        // separately on the translator.
-        if let colon = h.firstIndex(of: ":") { h = String(h[h.startIndex..<colon]) }
-        if h.hasSuffix("/") { h.removeLast() }
+        while h.hasSuffix("/") { h.removeLast() }
         h = h.trimmingCharacters(in: .whitespaces)
         return h.isEmpty ? nil : h
+    }
+
+    /// True when the endpoint names its own scheme, and is therefore a
+    /// full URL we must not second-guess.
+    static func hasScheme(_ endpoint: String) -> Bool {
+        let lower = endpoint.lowercased()
+        return lower.hasPrefix("http://") || lower.hasPrefix("https://")
+    }
+
+    /// Full chat URL for one endpoint.
+    ///
+    ///   `RicksM4.local`               → http://RicksM4.local:11434/api/chat
+    ///   `RicksM4.local:1234`          → http://RicksM4.local:1234/api/chat
+    ///   `https://ollama.example.com`  → https://ollama.example.com/api/chat
+    ///
+    /// A schemed endpoint keeps whatever port it was given, or none —
+    /// appending :11434 to an https cloud host would break it, since TLS
+    /// endpoints answer on 443 through their own front door.
+    static func chatURLString(for endpoint: String, defaultPort: Int) -> String {
+        guard let e = normalize(endpoint) else { return "" }
+        if hasScheme(e) { return e + "/api/chat" }
+        // Bare host: add http and the default port unless a port is
+        // already spelled out. IPv6 literals in brackets keep their
+        // colons, so only a colon AFTER a closing bracket counts.
+        let portSeparator = e.hasPrefix("[")
+            ? e.range(of: "]:").map { e.index(after: $0.lowerBound) }
+            : e.lastIndex(of: ":")
+        let hasPort = portSeparator != nil
+        return hasPort
+            ? "http://\(e)/api/chat"
+            : "http://\(e):\(defaultPort)/api/chat"
+    }
+
+    /// Short label for the UI — the bit a human recognises.
+    static func displayLabel(for endpoint: String) -> String {
+        guard let e = normalize(endpoint) else { return endpoint }
+        guard hasScheme(e), let url = URL(string: e), let host = url.host else { return e }
+        return host
     }
 
     /// Parse a stored list. Accepts commas or newlines so the value can

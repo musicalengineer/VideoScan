@@ -155,6 +155,25 @@ struct OllamaFailoverTests {
                 "a model-shaped failure must not become N host timeouts")
     }
 
+    /// SENSOR for codex #315. A malformed HTTP-200 envelope — an HTML
+    /// error page from a proxy, a truncated reply — used to escape as a
+    /// raw DecodingError, which the walker could not classify and
+    /// therefore retried against every host. The envelope being garbage
+    /// is a property of the REPLY, not the host.
+    @Test func malformedEnvelopeDoesNotWalkTheFleet() async throws {
+        let dialled = Dialled()
+        let t = fakeTranslator(
+            hosts: ["a.local", "b.local", "c.local"],
+            responses: ["a.local": .ok("<html>502 Bad Gateway</html>"),
+                        "b.local": .ok(goodReply),
+                        "c.local": .ok(goodReply)],
+            dialled: dialled)
+
+        await #expect(throws: (any Error).self) { try await t.translate("x") }
+        #expect(await dialled.all() == ["a.local"],
+                "an unparseable envelope must not become N host timeouts")
+    }
+
     /// When everything is down, the error must name the whole walk — an
     /// error mentioning only the last host hides that the primary was
     /// asleep, which is the thing worth knowing.
@@ -261,15 +280,35 @@ struct OllamaEndpointsTests {
         #expect(OllamaEndpoints.resolved(from: d) == OllamaEndpoints.defaultHosts)
     }
 
-    /// Hand-edited values are forgiving: schemes, ports, trailing
-    /// slashes, newlines, and duplicates all get cleaned up. A pasted
-    /// "http://host:11434" would otherwise become part of the hostname
-    /// and never resolve.
-    @Test func hostStringsAreNormalized() {
-        #expect(OllamaEndpoints.normalize("  http://RicksM4.local:11434/ ") == "RicksM4.local")
-        #expect(OllamaEndpoints.normalize("https://x.local") == "x.local")
+    /// Normalization trims and de-duplicates but PRESERVES scheme and
+    /// port. An earlier version stripped both, which quietly destroyed
+    /// the cloud case Rick asked for: `https://ollama.example.com`
+    /// became `ollama.example.com` and was then dialled over plain http
+    /// on port 11434.
+    @Test func normalizationPreservesSchemeAndPort() {
+        #expect(OllamaEndpoints.normalize("  RicksM4.local/ ") == "RicksM4.local")
+        #expect(OllamaEndpoints.normalize("https://ollama.example.com/")
+                == "https://ollama.example.com")
         #expect(OllamaEndpoints.normalize("   ") == nil)
         #expect(OllamaEndpoints.parse("a.local\nb.local, a.local") == ["a.local", "b.local"])
+    }
+
+    /// The URL rules that make one list serve both local boxes and cloud
+    /// servers.
+    @Test func chatURLsCoverLocalAndCloud() {
+        let url = { OllamaEndpoints.chatURLString(for: $0, defaultPort: 11434) }
+        #expect(url("RicksM4.local") == "http://RicksM4.local:11434/api/chat")
+        #expect(url("RicksM4.local:1234") == "http://RicksM4.local:1234/api/chat")
+        // A TLS endpoint answers on its own front door — appending
+        // :11434 to it would break the request.
+        #expect(url("https://ollama.example.com") == "https://ollama.example.com/api/chat")
+        #expect(url("http://box.lan:9000") == "http://box.lan:9000/api/chat")
+    }
+
+    @Test func displayLabelShortensCloudURLs() {
+        #expect(OllamaEndpoints.displayLabel(for: "https://ollama.example.com")
+                == "ollama.example.com")
+        #expect(OllamaEndpoints.displayLabel(for: "RicksM4.local") == "RicksM4.local")
     }
 
     @Test func saveRoundTripsThroughResolve() {
