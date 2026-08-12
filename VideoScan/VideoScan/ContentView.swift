@@ -195,7 +195,13 @@ struct CatalogView: View {
     @AppStorage("selectedTab") private var selectedTab: Int = 0
     @State private var selectedIDs: Set<UUID> = []
     @State private var showCombineSheet = false
-    @State private var showRelocateSheet = false
+    /// Migrate sheet. Internal (not private): the Volume Scanner pane in
+    /// CatalogView+ScanTargetsPane.swift presents it now that Migrate
+    /// lives beside Compare (2026-08-11).
+    @State var showRelocateSheet = false
+    /// Tidy Catalog dry-run sheet. Moved here from CatalogToolbar on
+    /// 2026-08-11 when the button moved up to the Volume Scanner row.
+    @State var showTidySheet = false
     @State private var showDashboard = false
     @State private var showInspector = true
     @State private var sortOrder = [KeyPathComparator(\VideoRecord.filename)]
@@ -340,11 +346,12 @@ struct CatalogView: View {
     /// triggers: the calculation is O(records), so it must never run
     /// from a view body.
     @State var storageTotals = CatalogStorageTotals()
-    /// Measured frame of the volume table's Media Size column, reported
-    /// by the cell itself via MediaSizeColumnFrameKey. The TOTAL MEDIA
-    /// footer aligns its figures to this instead of assuming fixed
-    /// column widths — see VolumeTableMetrics for why measuring won.
-    @State var mediaSizeColumnFrame: CGRect = .zero
+    /// Measured frames of the volume table's Media Size / Scanned /
+    /// Phase columns, reported by the cells themselves via
+    /// VolumeColumnFramesKey. The TOTAL MEDIA footer puts one figure on
+    /// each instead of assuming fixed column widths — see
+    /// VolumeTableMetrics for why measuring won.
+    @State var volumeColumnFrames: [String: CGRect] = [:]
     /// Sort order for the Scan Volumes table. Defaults to volume-name
     /// ascending, which matches the historical implicit ordering. Bound
     /// to the Table via `Table(_:selection:sortOrder:)` so column-header
@@ -645,6 +652,10 @@ struct CatalogView: View {
         )
         .sheet(isPresented: $showCombineSheet) {
             CombineSheet(selectedIDs: selectedIDs)
+        }
+        // Tidy Catalog — dry-run summary first, applies on confirm.
+        .sheet(isPresented: $showTidySheet) {
+            TidyCatalogSheet(model: model)
         }
         .sheet(isPresented: $showRelocateSheet) {
             RelocateSheet()

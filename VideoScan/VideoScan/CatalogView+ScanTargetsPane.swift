@@ -103,7 +103,21 @@ extension CatalogView {
         // hold". So on a catalog with migrations the column can sum to
         // slightly MORE than the footer's total. That is correct; the
         // footer is the number to plan a drive purchase against.
-        storageTotals = CatalogStorageTotalsCalculator.compute(records: model.records)
+        //
+        // Reachability comes from the scan targets' already-cached
+        // `isReachable` flag — a @Published Bool, NOT a filesystem probe.
+        // Deriving it here rather than inside the calculator keeps that
+        // function pure (its tests depend on it) and keeps disk I/O out
+        // of an O(records) loop.
+        let onlineVolumes = Set(
+            model.scanTargets
+                .filter { $0.isReachable && !$0.searchPath.isEmpty }
+                .map { VolumeReachability.volumeName(forPath: $0.searchPath) }
+        )
+        storageTotals = CatalogStorageTotalsCalculator.compute(
+            records: model.records,
+            onlineVolumes: onlineVolumes
+        )
         let targets = model.scanTargets
         guard !targets.isEmpty else {
             volumeAggregateCache = [:]
@@ -246,14 +260,16 @@ extension CatalogView {
     var scanTargetsPane: some View {
         VStack(spacing: 0) {
             HStack(spacing: 10) {
+                // Icon only — the words "Volume Scanner" were a title for
+                // a row that already reads as one, and the button beside
+                // it now carries the verb (Rick 2026-08-11).
                 Image(systemName: "externaldrive.connected.to.line.below")
                     .font(.title3).foregroundColor(.secondary)
-                Text("Volume Scanner")
-                    .font(.title3.weight(.semibold))
-                    .padding(.trailing, 12)
+                    .padding(.trailing, 4)
+                    .help("Volume Scanner")
 
                 Button(action: { model.addScanTarget() }) {
-                    Label("Choose Volume…", systemImage: "externaldrive.badge.plus")
+                    Label("Scan Volume…", systemImage: "externaldrive.badge.plus")
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
@@ -307,6 +323,24 @@ extension CatalogView {
                         }
                     }
 
+                    // Avid bin scanning moved off the catalog toolbar
+                    // 2026-08-11. Rick: "I'm not even sure how it works
+                    // anymore… if needed, use it, user need not know
+                    // unless they go digging." The parser already runs
+                    // automatically where it is needed; this stays as the
+                    // explicit re-scan for when you DO go digging.
+                    Section("Avid bins") {
+                        Button(action: { model.scanAvidBins() }) {
+                            let clips = model.avidBinResults.reduce(0) { $0 + $1.clips.count }
+                            Label(clips > 0
+                                  ? "Re-scan Avid Bins (\(model.avidBinResults.count) bins · \(clips) clips)"
+                                  : "Scan for Avid Bins",
+                                  systemImage: "film.stack")
+                        }
+                        .disabled(model.isScanning)
+                        .help("Scan for Avid .avb bin files and extract clip metadata.")
+                    }
+
                     Section("Delete") {
                         ForEach(model.scanTargets.filter { target in
                             model.records.contains { $0.fullPath.hasPrefix(target.searchPath) || ($0.originalFullPath?.hasPrefix(target.searchPath) ?? false) }
@@ -344,6 +378,22 @@ extension CatalogView {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.large)
+
+                // Migrate moved up here from the catalog toolbar
+                // (Rick 2026-08-11): it is a VOLUME operation — copy off a
+                // flaky drive onto a healthier one — so it belongs beside
+                // Compare in the Volume Scanner, not down among the
+                // per-record catalog actions.
+                Button(action: { showRelocateSheet = true }) {
+                    Label("Migrate…", systemImage: "externaldrive.badge.checkmark")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .disabled(model.records.isEmpty)
+                .accessibilityIdentifier("catalog.relocate.openSheet")
+                .help("Copy catalogued files from a flaky source volume onto a healthier destination and rewrite catalog paths.")
+
+
                 .help("Compare two volumes — show what's unique to the source volume (would be lost if it died). Opens in its own window so a multi-hour rescue copy doesn't block the main UI.")
 
                 // Persistent rescue progress chip — only visible when
@@ -356,7 +406,25 @@ extension CatalogView {
 
                 Spacer().frame(minWidth: 20)
 
+                // Tidy sits immediately left of Backup: both are whole-
+                // CATALOG housekeeping verbs, as against Compare/Migrate
+                // which act on volumes. Adjacency is the grouping (Rick
+                // 2026-08-11).
+                Button {
+                    showTidySheet = true
+                } label: {
+                    Label("Tidy Catalog", systemImage: "sparkles")
+                }
+                .buttonStyle(.bordered)
+                .disabled(model.records.isEmpty || model.isScanning)
+                .help("Find photos, music, and unmatched audio in the catalog and set them aside (hidden, never deleted). Shows a summary first — nothing happens until you confirm.")
+
                 backupStatusBadge
+
+                // Analysis progress ring, moved up from the catalog row
+                // (Rick 2026-08-11 — right-justifying it down there
+                // crowded the media-kind label into being clipped).
+                DossierToolbarChip(model: model)
 
                 Spacer().frame(minWidth: 8)
 
@@ -412,18 +480,18 @@ extension CatalogView {
             // catalog, not the filtered view, so hiding them behind a
             // volume filter would be misleading.
             VolumeTableTotalsFooter(totals: storageTotals,
-                                    mediaSizeFrame: mediaSizeColumnFrame)
+                                    columnFrames: volumeColumnFrames)
         }
         // Shared coordinate space: the Media Size cell measures itself
         // in it, the footer positions itself in it. Both must name the
         // SAME space or the footer's offsets are relative to nothing.
         .coordinateSpace(name: volumeTableCoordinateSpace)
-        .onPreferenceChange(MediaSizeColumnFrameKey.self) { frame in
+        .onPreferenceChange(VolumeColumnFramesKey.self) { frames in
             // Guard the assignment: SwiftUI republishes preferences on
             // every layout pass, and an unconditional write would
             // re-render the pane forever.
-            if frame != .zero && frame != mediaSizeColumnFrame {
-                mediaSizeColumnFrame = frame
+            if !frames.isEmpty && frames != volumeColumnFrames {
+                volumeColumnFrames = frames
             }
         }
         .background(Color(NSColor.controlBackgroundColor))

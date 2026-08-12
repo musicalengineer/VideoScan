@@ -65,6 +65,15 @@ struct CatalogStorageTotals: Equatable, Sendable {
 
     /// Every active byte on every volume. The big number.
     var grossBytes: Int64 = 0
+    /// Bytes on volumes that are reachable RIGHT NOW.
+    ///
+    /// Added 2026-08-11 because the footer confused its own author: the
+    /// volume table defaults to a Connected filter, so Rick added up the
+    /// visible rows, got 4.9 TB against a 6.8 TB total, and reasonably
+    /// asked which number was wrong. Neither was — the gap is the
+    /// offline drives. This is the figure the eye can actually verify
+    /// against the rows above it.
+    var onlineBytes: Int64 = 0
     /// Bytes of material believed to be one-of-a-kind A/V. The
     /// parenthetical. An UPPER BOUND when `unanalyzedFiles > 0`.
     var uniqueBytes: Int64 = 0
@@ -75,6 +84,8 @@ struct CatalogStorageTotals: Equatable, Sendable {
     var fileCount: Int = 0
     /// Active records counted into `uniqueBytes`.
     var uniqueFileCount: Int = 0
+    /// Active records on reachable volumes.
+    var onlineFileCount: Int = 0
 
     // The waterfall. These four sum EXACTLY to grossBytes - uniqueBytes.
     var duplicateBytes: Int64 = 0
@@ -245,7 +256,17 @@ enum CatalogStorageTotalsCalculator {
     /// MUST NOT be called from a SwiftUI view body: it is O(records).
     /// Callers cache the result and refresh it on catalog-change
     /// triggers (the VolumeStatusCache pattern).
-    static func compute(records: [VideoRecord]) -> CatalogStorageTotals {
+    /// - Parameter onlineVolumes: names of volumes reachable right now,
+    ///   derived by the CALLER from already-cached scan-target state.
+    ///   Passed in rather than probed here so this stays a pure function
+    ///   of its inputs — reachability is filesystem I/O, and it must
+    ///   never run inside an O(records) loop. `nil` means "don't know",
+    ///   which reports onlineBytes == grossBytes rather than zero: an
+    ///   unknown reachability should not make the catalog look empty.
+    static func compute(
+        records: [VideoRecord],
+        onlineVolumes: Set<String>? = nil
+    ) -> CatalogStorageTotals {
         let active = pfActiveRecords(records)
         guard !active.isEmpty else { return CatalogStorageTotals() }
 
@@ -261,7 +282,15 @@ enum CatalogStorageTotalsCalculator {
             let bytes = max(0, rec.sizeBytes)   // a negative size is corrupt metadata, not a credit
             t.grossBytes += bytes
             t.fileCount += 1
-            volumes.insert(VolumeReachability.volumeName(forPath: rec.fullPath))
+            let volume = VolumeReachability.volumeName(forPath: rec.fullPath)
+            volumes.insert(volume)
+
+            // Online tally rides the SAME pass — a second walk just to
+            // sum reachable bytes would double the cost of the footer.
+            if onlineVolumes == nil || onlineVolumes!.contains(volume) {
+                t.onlineBytes += bytes
+                t.onlineFileCount += 1
+            }
 
             if !hasDuplicateEvidence(rec) { t.unanalyzedFiles += 1 }
 
@@ -321,6 +350,7 @@ extension CatalogStorageTotals {
     }
 
     var grossDisplay: String { Self.displaySize(grossBytes) }
+    var onlineDisplay: String { Self.displaySize(onlineBytes) }
     var uniqueDisplay: String { Self.displaySize(uniqueBytes) }
 
     /// The parenthetical beside the unique figure.
@@ -354,7 +384,9 @@ extension CatalogStorageTotals {
         var lines: [String] = [
             "TOTAL MEDIA — \(fileCount) files across \(volumeCount) volume\(volumeCount == 1 ? "" : "s")",
             "",
-            "Gross (all volumes, retired included):  \(Self.displaySize(grossBytes))",
+            "In catalog (all volumes, retired included):  \(Self.displaySize(grossBytes))",
+            "Online now (reachable volumes):              \(Self.displaySize(onlineBytes))",
+            "Offline (drives not connected):              \(Self.displaySize(grossBytes - onlineBytes))",
             "",
             "Removed:",
             "  Duplicate copies  \(Self.displaySize(duplicateBytes))  (\(duplicateFiles) files)",

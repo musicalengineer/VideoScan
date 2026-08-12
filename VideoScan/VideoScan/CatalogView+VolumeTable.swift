@@ -50,15 +50,46 @@ enum VolumeTableMetrics {
     static let figureGap: CGFloat = 18
 }
 
-/// Publishes the Media Size cell's frame (in the scan-targets pane's
-/// coordinate space) so the footer can line its totals up under the
-/// column they total. Every visible row reports; `reduce` keeps the
-/// first non-empty, since all rows in a column share one x-origin.
-struct MediaSizeColumnFrameKey: PreferenceKey {
-    static let defaultValue: CGRect = .zero
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
-        let next = nextValue()
-        if value == .zero && next != .zero { value = next }
+/// Publishes measured column frames (in the scan-targets pane's
+/// coordinate space) so the footer can line each total up under the
+/// column it belongs to. Keyed by column id — Media Size, Scanned, and
+/// Phase each report, and the footer places one figure on each.
+///
+/// Every visible row publishes, so `reduce` keeps the FIRST real frame
+/// per column: all rows of a column share one x-origin, and letting
+/// later rows overwrite would make the anchor depend on row count.
+struct VolumeColumnFramesKey: PreferenceKey {
+    static let defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        for (key, frame) in nextValue() where frame != .zero {
+            if value[key] == nil || value[key] == .zero { value[key] = frame }
+        }
+    }
+}
+
+/// Column ids used by `VolumeColumnFramesKey`. Shared between the cells
+/// that measure and the footer that consumes, so a typo can't silently
+/// leave a figure on its fallback.
+enum VolumeColumnID {
+    static let mediaSize = "mediaSize"
+    static let scanned = "scanned"
+    static let phase = "phase"
+}
+
+extension View {
+    /// Report this cell's frame under `id`. Attached to one cell in each
+    /// column the footer aligns to. Cost is a CGRect per visible row per
+    /// layout pass — trivial, and it makes column drags and window
+    /// resizes self-correcting.
+    func measuresVolumeColumn(_ id: String) -> some View {
+        background(
+            GeometryReader { geo in
+                Color.clear.preference(
+                    key: VolumeColumnFramesKey.self,
+                    value: [id: geo.frame(in: .named(volumeTableCoordinateSpace))]
+                )
+            }
+        )
     }
 }
 
@@ -149,21 +180,9 @@ extension CatalogView {
                     .font(.system(size: 15, design: .monospaced))
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    // The footer's alignment anchor. This cell is the
-                    // only thing that actually knows where a flexible
-                    // column landed, so it reports its own frame rather
-                    // than letting the footer guess (see
-                    // VolumeTableMetrics). Cost is one CGRect per
-                    // visible row per layout — trivial, and it makes
-                    // column drags and window resizes self-correcting.
-                    .background(
-                        GeometryReader { geo in
-                            Color.clear.preference(
-                                key: MediaSizeColumnFrameKey.self,
-                                value: geo.frame(in: .named(volumeTableCoordinateSpace))
-                            )
-                        }
-                    )
+                    // Footer alignment anchor — these cells are the only
+                    // things that know where a flexible column landed.
+                    .measuresVolumeColumn(VolumeColumnID.mediaSize)
             }
             .width(min: 70, ideal: 90)
 
@@ -180,6 +199,7 @@ extension CatalogView {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .measuresVolumeColumn(VolumeColumnID.scanned)
             }
             .width(min: 75, ideal: 95)
 
@@ -222,6 +242,7 @@ extension CatalogView {
                            : row.phase.color)
                 )
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .measuresVolumeColumn(VolumeColumnID.phase)
             }
             .width(min: 95, ideal: 115)
 
@@ -607,28 +628,24 @@ extension CatalogView {
     var backupStatusBadge: some View {
         let now = Date()
         let last = model.lastBackupAt
-        let path = model.lastBackupPath
         let dayCount = last.map { Int(now.timeIntervalSince($0) / 86_400) }
+        // SHORT label, COLOUR carries the urgency, HOVER carries the
+        // detail (Rick 2026-08-11). The old label spelled out
+        // "Backed up 9d ago → VideoScan_Catalog_Archives /…", which ate
+        // a third of the row to say what a yellow tint says instantly.
+        // Green = fresh, yellow = worth considering, orange = overdue,
+        // red = never. Exact date and destination live in the tooltip
+        // (backupBadgeTooltip) and the context menu.
         let (label, color, icon): (String, Color, String) = {
-            guard let last, let dayCount else {
-                return ("Never backed up", .red, "externaldrive.badge.exclamationmark")
+            guard last != nil, let dayCount else {
+                return ("Backup Catalog", .red, "externaldrive.badge.exclamationmark")
             }
-            let where_ = path.map { Self.shortBackupDest($0) } ?? "?"
-            if dayCount < 1 {
-                let fmt = DateFormatter()
-                fmt.timeStyle = .short
-                fmt.dateStyle = .none
-                return ("Backed up \(fmt.string(from: last)) → \(where_)",
-                        .green, "externaldrive.badge.checkmark")
-            } else if dayCount < 7 {
-                return ("Backed up \(dayCount)d ago → \(where_)",
-                        .green, "externaldrive.badge.checkmark")
+            if dayCount < 7 {
+                return ("Backup Catalog", .green, "externaldrive.badge.checkmark")
             } else if dayCount < 30 {
-                return ("Backed up \(dayCount)d ago → \(where_)",
-                        .yellow, "externaldrive.badge.checkmark")
+                return ("Backup Catalog", .yellow, "externaldrive.badge.checkmark")
             } else {
-                return ("Backed up \(dayCount)d ago → \(where_)",
-                        .orange, "externaldrive.badge.exclamationmark")
+                return ("Backup Catalog", .orange, "externaldrive.badge.exclamationmark")
             }
         }()
         Button(action: backupBadgeAction) {

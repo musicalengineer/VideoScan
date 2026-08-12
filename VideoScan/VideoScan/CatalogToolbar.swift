@@ -73,11 +73,15 @@ struct CatalogToolbar<Dashboard: View>: View {
     /// GH #132) render alongside active rows (italic + brown). Session-
     /// scoped @State in the parent — deliberately NOT persisted.
     @Binding var showSuperseded: Bool
-    @ViewBuilder let dashboardContent: () -> Dashboard
 
-    /// Tidy Catalog dry-run sheet (catalog scope, 2026-07-15). Owned here
-    /// like the junk sheets — the parent doesn't need to know about it.
-    @State private var showTidySheet = false
+    /// True when the View menu holds any non-default state — an active
+    /// filter, or one of the hidden-record reveals that moved into the
+    /// menu on 2026-08-11. Drives the menu's filled icon so a toggle
+    /// buried one click deep still announces itself.
+    private var viewIsModified: Bool {
+        !viewFilters.isEmpty || showRemoved || showSetAside || showSuperseded
+    }
+    @ViewBuilder let dashboardContent: () -> Dashboard
 
     // MARK: Delete-Confirmed-Junk sheet state
     //
@@ -252,6 +256,18 @@ struct CatalogToolbar<Dashboard: View>: View {
                     Divider()
                     Toggle("Show Pairs Only", isOn: $showPairsOnly)
                         .disabled(!hasCorrelatedPairs)
+                    Divider()
+                    // BATCH combine. Moved off the toolbar row 2026-08-11
+                    // (Rick: the centre was too busy) but deliberately NOT
+                    // deleted: the row's right-click only offers "Combine
+                    // This Pair…", so removing this would have left no way
+                    // to mux thousands of MXF pairs in one pass — the app's
+                    // whole A/V-stitching mission. The Correlate menu is
+                    // arguably its right home anyway: combining is the step
+                    // AFTER correlating.
+                    Button("Combine All Correlated Pairs…") { showCombineSheet = true }
+                        .disabled(!canCombine && !isCombining)
+                        .accessibilityIdentifier("catalog.combine.openSheet")
                 } label: {
                     if isCorrelating {
                         HStack(spacing: 4) {
@@ -320,47 +336,6 @@ struct CatalogToolbar<Dashboard: View>: View {
             }
             .frame(minWidth: 120)
 
-            VStack(spacing: 2) {
-                Button(action: onScanAvidBins) {
-                    HStack(spacing: 4) {
-                        Label("Avid Bins", systemImage: "film.stack")
-                        if avidBinCount > 0 {
-                            Text("\(avidBinCount) clips")
-                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                                .padding(.horizontal, 5)
-                                .padding(.vertical, 1)
-                                .background(Capsule().fill(Color.accentColor.opacity(0.2)))
-                        }
-                    }
-                }
-                .buttonStyle(.bordered)
-                .disabled(isScanning)
-                .help("Scan for Avid .avb bin files and extract clip metadata — badge shows total clips found across all bins")
-
-                if avidBinFiles > 0 {
-                    Text("\(avidBinFiles) bins · \(avidBinCount) clips")
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundColor(.cyan)
-                        .lineLimit(1)
-                }
-            }
-
-            Button(action: { showCombineSheet = true }) {
-                Label("Combine", systemImage: "rectangle.stack.badge.plus")
-            }
-            .buttonStyle(.bordered)
-            .disabled(!canCombine && !isCombining)
-            .accessibilityIdentifier("catalog.combine.openSheet")
-            .help("Mux correlated video + audio pairs into combined files using ffmpeg (no re-encode)")
-
-            Button(action: { showRelocateSheet = true }) {
-                Label("Migrate…", systemImage: "externaldrive.badge.checkmark")
-            }
-            .buttonStyle(.bordered)
-            .disabled(!hasRecords)
-            .accessibilityIdentifier("catalog.relocate.openSheet")
-            .help("Copy catalogued files from a flaky source volume onto a healthier destination and rewrite catalog paths.")
-
             if isCombining {
                 Button(action: onStopCombine) {
                     Label("Stop Combine", systemImage: "stop.fill")
@@ -383,6 +358,122 @@ struct CatalogToolbar<Dashboard: View>: View {
             .buttonStyle(.borderedProminent)
             .tint(.cyan)
 
+            Menu {
+                // Media kind, merged in from the old standalone "All
+                // Kinds" chip (Rick 2026-08-11: the two menus overlapped).
+                // It is a view narrowing like everything else here, so it
+                // belongs in the same menu — and the label below still
+                // names the active facet, so the default-off state stays
+                // visible without its own button.
+                Section("Media kind") {
+                    Picker("Media kind", selection: kindFacetBinding) {
+                        ForEach(CatalogKindFacet.allCases) { facet in
+                            Label(facet.label, systemImage: facet.icon)
+                                .tag(facet)
+                                .help(facet.help)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                }
+                // Baseline reachability opt-out (2026-07-20). Reachable-only
+                // is the DEFAULT; this toggle lifts that baseline. Kept in its
+                // own section ABOVE the additive filters — and deliberately
+                // NOT reset by "Clear All Filters" (it's a preference, not a
+                // filter). Same VolumeReachability the Volumes view uses.
+                Section {
+                    Toggle(isOn: $showDisconnectedMedia) {
+                        Label("Show disconnected media",
+                              systemImage: showDisconnectedMedia
+                              ? "externaldrive.badge.xmark"
+                              : "externaldrive.fill.badge.checkmark")
+                    }
+                    .help(showDisconnectedMedia
+                          ? "Showing media on disconnected volumes too. Turn off to show only reachable media (the default)."
+                          : "Only media on connected volumes is shown (the default). Turn on to also list files on disconnected drives.")
+                }
+                Section("View filters") {
+                    ForEach(CatalogViewFilter.allCases, id: \.self) { filter in
+                        Toggle(isOn: Binding(
+                            get: { viewFilters.contains(filter) },
+                            set: { on in
+                                if on { viewFilters.insert(filter) }
+                                else  { viewFilters.remove(filter) }
+                            }
+                        )) {
+                            Label(filter.rawValue, systemImage: filter.icon)
+                        }
+                    }
+                }
+                // Hidden-record reveals, moved off the toolbar row into
+                // this menu (Rick 2026-08-11 — the middle of the window
+                // was too busy for a new user). They are view state, so
+                // the View menu is their natural home; Tidy Catalog
+                // stayed a button because it PERFORMS an action rather
+                // than toggling what you can see.
+                //
+                // Moving them costs the at-a-glance colour cue the
+                // toolbar buttons gave, so the menu's own icon now fills
+                // in when any of them is on — otherwise you could leave
+                // "Show removed" enabled, see italic orange rows, and
+                // have nothing on screen explaining why.
+                Section("Show hidden records") {
+                    Toggle(isOn: $showRemoved) {
+                        Label("Removed", systemImage: showRemoved
+                              ? "eye.trianglebadge.exclamationmark"
+                              : "eye.slash")
+                    }
+                    .help(showRemoved
+                          ? "Removed (purged) records are visible — italic + orange. Click to hide."
+                          : "Click to show removed records alongside active ones.")
+
+                    Toggle(isOn: $showSetAside) {
+                        Label("Set aside", systemImage: "archivebox")
+                    }
+                    .help(showSetAside
+                          ? "Set-aside files are visible — italic + purple. Right-click one to put it back. Click to hide."
+                          : "Click to show the files Tidy Catalog set aside (photos, music, audio with no matching video).")
+
+                    Toggle(isOn: $showSuperseded) {
+                        Label("Superseded originals", systemImage: "arrow.triangle.swap")
+                    }
+                    .help(showSuperseded
+                          ? "Superseded originals (replaced by a confirmed repair) are visible — italic + brown. Right-click one to restore it. Click to hide."
+                          : "Click to show originals that a confirmed repair has replaced. Their files are never touched.")
+                }
+                if !viewFilters.isEmpty {
+                    Divider()
+                    Button("Clear All Filters") { viewFilters.removeAll() }
+                }
+                // Maintenance: one-click reversible removal of the extensionless
+                // files ffprobe can't read (caches/previews/app data) that the
+                // "Scan Files With No Extension" pass can sweep in. Soft-delete —
+                // files on disk untouched, recoverable via Show Removed.
+                let junkCount = VideoScanModel.unreadableExtensionlessIDs(in: model.records).count
+                if junkCount > 0 {
+                    Divider()
+                    Button("Remove \(junkCount) Unreadable Extensionless File\(junkCount == 1 ? "" : "s")") {
+                        _ = model.softDeleteUnreadableExtensionless()
+                    }
+                    .help("Hide non-media files with no extension that ffprobe can't read (caches, previews, app data). Files on disk are not deleted; toggle Show Removed to restore.")
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    // Filled whenever ANY view state is non-default —
+                    // filters or the hidden-record reveals above. A
+                    // toggle hidden in a menu with no outward sign is
+                    // how you end up staring at orange rows wondering
+                    // what changed.
+                    Image(systemName: "line.3.horizontal.decrease.circle\(viewIsModified ? ".fill" : "")")
+                    Text("View…")
+                }
+                .foregroundColor(model.kindFacetSetting.facet == .videoBearing
+                                 ? .primary : .teal)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Filter catalog results, media kind, and hidden records")
+
             if !outputCSVPath.isEmpty {
                 Button(action: {
                     NSWorkspace.shared.selectFile(outputCSVPath, inFileViewerRootedAtPath: "")
@@ -392,14 +483,25 @@ struct CatalogToolbar<Dashboard: View>: View {
                 .buttonStyle(.bordered)
             }
 
-            Divider().frame(height: 22)
+            // Centre the search group: a Spacer on each side pins it to
+            // the middle of the row (Rick 2026-08-11 — which lands it
+            // between the Media Size and Scanned columns above). Search
+            // is the thing you reach for most, so it gets the middle
+            // rather than whatever width was left over.
+            Spacer(minLength: 12)
 
-            HStack(spacing: 4) {
+            HStack(spacing: 6) {
+                // Deliberately oversized (18pt semibold vs the old 13pt
+                // secondary): the magnifier IS the affordance, and at
+                // body size it disappeared into a row of same-weight
+                // glyphs. Accent-tinted for the same reason.
                 Image(systemName: "magnifyingglass")
-                    .foregroundColor(.secondary)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(.accentColor)
                 TextField("Try: donna 1990s · mark dan grampa · cape cod beach",
                           text: $searchText)
                     .textFieldStyle(.plain)
+                    .font(.system(size: 14))
                     .frame(width: 320)
                     .accessibilityIdentifier("catalog.searchField")
                     // No debouncer and no recompute chain here anymore
@@ -421,10 +523,10 @@ struct CatalogToolbar<Dashboard: View>: View {
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
             .background(Color(NSColor.textBackgroundColor))
-            .cornerRadius(6)
+            .cornerRadius(7)
             // Searching... indicator. Shows while the user is mid-typing
             // and the 250 ms debounce window hasn't yet propagated
             // searchText → debouncedSearchText. Distinguishes the "still
@@ -500,162 +602,24 @@ struct CatalogToolbar<Dashboard: View>: View {
             .buttonStyle(.plain)
             .help("Ask the Family Archivist — \"show me Donna down the cape 1990 to 1995\" (⌥-click for the quick popover)")
             .accessibilityIdentifier("archivist.askButton")
+
+            // The sparkle alone never said what it did. Labelling it is
+            // the difference between a decoration and a door (Rick
+            // 2026-08-11). Truncates before the search field does.
+            Text("Chat with Family Archivist")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(.purple)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .layoutPriority(-1)
+                .allowsHitTesting(false)
             .popover(isPresented: $showAskPopover, arrowEdge: .bottom) {
                 ArchivistAskPopover(searchText: $searchText,
                                     isPresented: $showAskPopover)
             }
 
-            // Persistent dossier progress chip — small ring + N/M label.
-            // Click opens the full Dossier Dashboard (⌘⇧O). Always
-            // visible while in the catalog tab so Rick can monitor
-            // fleet progress without keeping the dashboard window open.
-            DossierToolbarChip(model: model)
 
-            // Media-kind facet chip (GH #124 layer 1). Default = Videos so
-            // the table opens on video-bearing records; Audio Only / All
-            // Kinds are one click away. Teal when off-default so a
-            // non-video view is visible at a glance. Persisted preference
-            // (explicit save via kindFacetBinding). Correlate/Combine are
-            // untouched — they read model.records, not the view filter.
-            Menu {
-                Picker("Media kind", selection: kindFacetBinding) {
-                    ForEach(CatalogKindFacet.allCases) { facet in
-                        Label(facet.label, systemImage: facet.icon)
-                            .tag(facet)
-                            .help(facet.help)
-                    }
-                }
-                .pickerStyle(.inline)
-                .labelsHidden()
-            } label: {
-                HStack(spacing: 3) {
-                    Image(systemName: model.kindFacetSetting.facet.icon)
-                    Text(model.kindFacetSetting.facet.label)
-                }
-                .foregroundColor(model.kindFacetSetting.facet == .videoBearing
-                                 ? .primary : .teal)
-            }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .accessibilityIdentifier("catalog.kindFacet.menu")
-            .help(model.kindFacetSetting.facet.help)
-            // No badge recompute here anymore (GH #123 PR B): the badge
-            // derives from CatalogContent's filter pass, which already
-            // re-runs via its own .onChange(of: kindFacet) when the chip
-            // flips — one scan keeps the count honest.
-
-            Menu {
-                // Baseline reachability opt-out (2026-07-20). Reachable-only
-                // is the DEFAULT; this toggle lifts that baseline. Kept in its
-                // own section ABOVE the additive filters — and deliberately
-                // NOT reset by "Clear All Filters" (it's a preference, not a
-                // filter). Same VolumeReachability the Volumes view uses.
-                Section {
-                    Toggle(isOn: $showDisconnectedMedia) {
-                        Label("Show disconnected media",
-                              systemImage: showDisconnectedMedia
-                              ? "externaldrive.badge.xmark"
-                              : "externaldrive.fill.badge.checkmark")
-                    }
-                    .help(showDisconnectedMedia
-                          ? "Showing media on disconnected volumes too. Turn off to show only reachable media (the default)."
-                          : "Only media on connected volumes is shown (the default). Turn on to also list files on disconnected drives.")
-                }
-                Section("View filters") {
-                    ForEach(CatalogViewFilter.allCases, id: \.self) { filter in
-                        Toggle(isOn: Binding(
-                            get: { viewFilters.contains(filter) },
-                            set: { on in
-                                if on { viewFilters.insert(filter) }
-                                else  { viewFilters.remove(filter) }
-                            }
-                        )) {
-                            Label(filter.rawValue, systemImage: filter.icon)
-                        }
-                    }
-                }
-                if !viewFilters.isEmpty {
-                    Divider()
-                    Button("Clear All Filters") { viewFilters.removeAll() }
-                }
-                // Maintenance: one-click reversible removal of the extensionless
-                // files ffprobe can't read (caches/previews/app data) that the
-                // "Scan Files With No Extension" pass can sweep in. Soft-delete —
-                // files on disk untouched, recoverable via Show Removed.
-                let junkCount = VideoScanModel.unreadableExtensionlessIDs(in: model.records).count
-                if junkCount > 0 {
-                    Divider()
-                    Button("Remove \(junkCount) Unreadable Extensionless File\(junkCount == 1 ? "" : "s")") {
-                        _ = model.softDeleteUnreadableExtensionless()
-                    }
-                    .help("Hide non-media files with no extension that ffprobe can't read (caches, previews, app data). Files on disk are not deleted; toggle Show Removed to restore.")
-                }
-            } label: {
-                HStack(spacing: 3) {
-                    Image(systemName: "line.3.horizontal.decrease.circle\(viewFilters.isEmpty ? "" : ".fill")")
-                    Text("View")
-                }
-            }
-            .menuStyle(.borderlessButton)
-            .frame(width: 70)
-            .help("Filter catalog results")
-
-            // Show-removed toggle — composes with online/View filters above.
-            // Purged rows render italic + orange in the table when on.
-            // Persisted in @AppStorage by CatalogView.
-            Toggle(isOn: $showRemoved) {
-                Label("Show removed", systemImage: showRemoved
-                      ? "eye.trianglebadge.exclamationmark"
-                      : "eye.slash")
-                    .labelStyle(.titleAndIcon)
-                    .foregroundColor(showRemoved ? .orange : .secondary)
-            }
-            .toggleStyle(.button)
-            .controlSize(.small)
-            .help(showRemoved
-                  ? "Removed (purged) records are visible — italic + orange. Click to hide."
-                  : "Click to show removed records alongside active ones.")
-
-            // Show set-aside toggle — reveals the files Tidy Catalog set
-            // aside (photos / music / audio with no matching video) so
-            // Rick can browse and put any of them back.
-            Toggle(isOn: $showSetAside) {
-                Label("Show set-aside", systemImage: "archivebox")
-                    .labelStyle(.titleAndIcon)
-                    .foregroundColor(showSetAside ? .purple : .secondary)
-            }
-            .toggleStyle(.button)
-            .controlSize(.small)
-            .help(showSetAside
-                  ? "Set-aside files are visible — italic + purple. Right-click one to put it back. Click to hide."
-                  : "Click to show the files Tidy Catalog set aside (photos, music, audio with no matching video).")
-
-            // Show superseded toggle (GH #132) — reveals originals that a
-            // confirmed repair replaced, so Rick can inspect or restore
-            // them. Files on disk are never touched by the app.
-            Toggle(isOn: $showSuperseded) {
-                Label("Show superseded", systemImage: "arrow.triangle.swap")
-                    .labelStyle(.titleAndIcon)
-                    .foregroundColor(showSuperseded ? .brown : .secondary)
-            }
-            .toggleStyle(.button)
-            .controlSize(.small)
-            .help(showSuperseded
-                  ? "Superseded originals (replaced by a confirmed repair) are visible — italic + brown. Right-click one to restore it. Click to hide."
-                  : "Click to show originals that a confirmed repair has replaced. Their files are never touched.")
-
-            // Tidy Catalog — dry-run first, apply on confirm (nag-button
-            // pattern: the button performs the fix, starting with a report).
-            Button {
-                showTidySheet = true
-            } label: {
-                Label("Tidy Catalog…", systemImage: "sparkles")
-            }
-            .controlSize(.small)
-            .disabled(!hasRecords || isScanning)
-            .help("Find photos, music, and unmatched audio in the catalog and set them aside (hidden, never deleted). Shows a summary first — nothing happens until you confirm.")
-
-            Spacer()
+            Spacer(minLength: 12)
 
             Button {
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -705,10 +669,6 @@ struct CatalogToolbar<Dashboard: View>: View {
                     bytesSucceeded: junkResultBytesSucceeded
                 )
             }
-        }
-        // Tidy Catalog — dry-run summary first, applies on confirm.
-        .sheet(isPresented: $showTidySheet) {
-            TidyCatalogSheet(model: model)
         }
     }
 

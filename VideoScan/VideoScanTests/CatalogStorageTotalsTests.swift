@@ -101,6 +101,44 @@ struct CatalogStorageWaterfallTests {
         #expect(t.uniqueBytes == 10 * GB)
     }
 
+    /// The ONLINE figure exists to explain the gap Rick hit: the table
+    /// filters to Connected, so the visible rows sum to less than the
+    /// catalog total. ONLINE is what those rows actually add up to.
+    @Test func onlineBytesCountOnlyReachableVolumes() {
+        let recs = [
+            stRec("a.mov", bytes: 3 * GB, dir: "/Volumes/LaCie8TB/Family"),
+            stRec("b.mov", bytes: 2 * GB, dir: "/Volumes/MyBook3T/Old"),
+        ]
+        let t = CatalogStorageTotalsCalculator.compute(
+            records: recs, onlineVolumes: ["LaCie8TB"]
+        )
+        #expect(t.grossBytes == 5 * GB)
+        #expect(t.onlineBytes == 3 * GB)
+        #expect(t.onlineFileCount == 1)
+        // Online is a SLICE of gross, never larger — a footer showing
+        // more online than catalogued would be nonsense.
+        #expect(t.onlineBytes <= t.grossBytes)
+    }
+
+    /// Unknown reachability must report everything as online, not
+    /// nothing. Defaulting to zero would flash "ONLINE 0 GB" on a
+    /// perfectly healthy catalog during startup.
+    @Test func unknownReachabilityReportsEverythingOnline() {
+        let recs = [stRec("a.mov", bytes: 4 * GB)]
+        let t = CatalogStorageTotalsCalculator.compute(records: recs, onlineVolumes: nil)
+        #expect(t.onlineBytes == t.grossBytes)
+    }
+
+    /// Offline volumes still count toward the catalog total — Rick's
+    /// explicit call, and the reason the two figures differ at all.
+    @Test func offlineVolumesStillCountInCatalogTotal() {
+        let recs = [stRec("gone.mov", bytes: 9 * GB, dir: "/Volumes/Unplugged/x")]
+        let t = CatalogStorageTotalsCalculator.compute(records: recs, onlineVolumes: [])
+        #expect(t.grossBytes == 9 * GB)
+        #expect(t.onlineBytes == 0)
+        #expect(t.waterfallBalances, "the online split must not disturb the waterfall")
+    }
+
     @Test func emptyCatalogIsAllZeroAndBalanced() {
         let t = CatalogStorageTotalsCalculator.compute(records: [])
         #expect(t.grossBytes == 0)
@@ -437,34 +475,46 @@ struct CatalogStorageScaleTests {
 @Suite("TOTAL MEDIA footer geometry")
 struct VolumeTableTotalsFooterTests {
 
-    /// The footer positions itself from a MEASURED Media Size frame, so
-    /// the contract to pin is the reduce rule that delivers it: every
-    /// visible row publishes, and the first real frame must win. A
-    /// `reduce` that let later rows overwrite would make the anchor
+    /// The footer positions itself from MEASURED column frames, so the
+    /// contract to pin is the reduce rule that delivers them: every
+    /// visible row publishes, and the FIRST real frame per column must
+    /// win. A rule that let later rows overwrite would make each anchor
     /// depend on row count; one that never accepted a value would leave
-    /// the footer stuck on its fallback forever.
-    @Test func mediaSizeFramePreferenceKeepsFirstRealFrame() {
-        let real = CGRect(x: 447, y: 0, width: 106, height: 28)
-        let other = CGRect(x: 999, y: 28, width: 106, height: 28)
+    /// all three figures stuck on their fallbacks.
+    @Test func columnFramesKeepFirstRealFramePerColumn() {
+        let media = CGRect(x: 915, y: 0, width: 106, height: 28)
+        let scanned = CGRect(x: 1123, y: 0, width: 100, height: 28)
+        let laterRow = CGRect(x: 915, y: 28, width: 106, height: 28)
 
-        var v = MediaSizeColumnFrameKey.defaultValue
-        #expect(v == .zero)
+        var v = VolumeColumnFramesKey.defaultValue
+        #expect(v.isEmpty)
 
-        v = .zero
-        MediaSizeColumnFrameKey.reduce(value: &v) { real }
-        #expect(v == real, "first real frame must be adopted")
+        VolumeColumnFramesKey.reduce(value: &v) {
+            [VolumeColumnID.mediaSize: media, VolumeColumnID.scanned: scanned]
+        }
+        #expect(v[VolumeColumnID.mediaSize] == media)
+        #expect(v[VolumeColumnID.scanned] == scanned)
 
-        MediaSizeColumnFrameKey.reduce(value: &v) { other }
-        #expect(v == real, "later rows must not move the anchor")
+        // A second row reports the same columns — must not move anchors.
+        VolumeColumnFramesKey.reduce(value: &v) { [VolumeColumnID.mediaSize: laterRow] }
+        #expect(v[VolumeColumnID.mediaSize] == media, "later rows must not move the anchor")
     }
 
     /// Zero frames are what an off-screen or not-yet-laid-out row
-    /// reports. They must never displace a real measurement, or the
-    /// footer would snap back to its fallback mid-scroll.
+    /// reports. They must never displace a real measurement, or a figure
+    /// would snap back to its fallback mid-scroll.
     @Test func zeroFramesNeverDisplaceAMeasurement() {
-        var v = CGRect(x: 447, y: 0, width: 106, height: 28)
-        MediaSizeColumnFrameKey.reduce(value: &v) { .zero }
-        #expect(v.minX == 447)
+        let real = CGRect(x: 915, y: 0, width: 106, height: 28)
+        var v = [VolumeColumnID.mediaSize: real]
+        VolumeColumnFramesKey.reduce(value: &v) { [VolumeColumnID.mediaSize: .zero] }
+        #expect(v[VolumeColumnID.mediaSize] == real)
+    }
+
+    /// All three columns the footer anchors to must have distinct ids —
+    /// a duplicated id would silently stack two figures on one column.
+    @Test func columnIDsAreDistinct() {
+        let ids = [VolumeColumnID.mediaSize, VolumeColumnID.scanned, VolumeColumnID.phase]
+        #expect(Set(ids).count == 3)
     }
 
     /// The fallback covers the first frame before any measurement

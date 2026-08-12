@@ -36,9 +36,31 @@ struct VolumeTableTotalsFooter: View {
 
     let totals: CatalogStorageTotals
 
-    /// Measured frame of the Media Size column, in the pane's coordinate
-    /// space. `.zero` until the first layout pass reports it.
-    var mediaSizeFrame: CGRect = .zero
+    /// Measured column frames, keyed by `VolumeColumnID`, in the pane's
+    /// coordinate space. Empty until the first layout pass reports.
+    var columnFrames: [String: CGRect] = [:]
+
+    // MARK: Type scale
+    //
+    // The LABELS match the volume-name cell exactly — 15pt medium SF
+    // Mono, the style every data cell in the table above uses (Rick
+    // 2026-08-11: "the text I am talking about… not the sum totals").
+    // At 10pt they read as chrome bolted under the table; at the table's
+    // own size they read as part of it.
+    //
+    // Figures stay the same family and size but go one weight heavier,
+    // which is the whole hierarchy: identical typeface keeps the footer
+    // in the table's optical register, while semibold + `.primary`
+    // against the labels' `.secondary` keeps the numbers the thing your
+    // eye lands on. SF Mono's fixed advance also holds the three figures
+    // aligned under their columns for free.
+    //
+    // The trailing parenthetical is the exception — deliberately left
+    // small. At 15pt mono it is ~380pt of text and would push the row
+    // past the window on anything but a maximized display.
+    private static let figureFont = Font.system(size: 15, weight: .semibold, design: .monospaced)
+    private static let labelFont = Font.system(size: 15, weight: .medium, design: .monospaced)
+    private static let captionFont = Font.system(size: 11, weight: .regular)
 
     /// Set while the catalog is still being recomputed after a scan, so
     /// the numbers can visibly mark themselves stale rather than
@@ -47,94 +69,104 @@ struct VolumeTableTotalsFooter: View {
 
     // MARK: Derived geometry
 
-    private var columnX: CGFloat {
-        mediaSizeFrame.width > 0 ? mediaSizeFrame.minX : VolumeTableMetrics.fallbackMediaSizeX
+    /// Content origin of a measured column, falling back to the
+    /// screenshot-fitted constant only until the first layout arrives.
+    private func columnX(_ id: String, fallback: CGFloat) -> CGFloat {
+        let f = columnFrames[id] ?? .zero
+        return f.width > 0 ? f.minX : fallback
     }
 
-    private var columnWidth: CGFloat {
-        mediaSizeFrame.width > 0 ? mediaSizeFrame.width : VolumeTableMetrics.fallbackMediaSizeWidth
+    private var mediaSizeX: CGFloat {
+        columnX(VolumeColumnID.mediaSize, fallback: VolumeTableMetrics.fallbackMediaSizeX)
+    }
+    /// Scanned/Phase fallbacks are derived from the Media Size anchor so
+    /// that even the unmeasured first frame keeps the figures in order
+    /// and non-overlapping.
+    private var scannedX: CGFloat {
+        max(columnX(VolumeColumnID.scanned,
+                    fallback: mediaSizeX + VolumeTableMetrics.fallbackMediaSizeWidth),
+            mediaSizeX + 60)
+    }
+    private var phaseX: CGFloat {
+        max(columnX(VolumeColumnID.phase, fallback: scannedX + 100), scannedX + 60)
     }
 
-    /// Gross figure starts exactly at the Media Size column's content
-    /// origin, so it reads as the sum of the numbers directly above it.
-    /// UNIQUE follows one column-width later — i.e. at the next column
-    /// boundary — which keeps the two figures from crowding each other
-    /// no matter how wide the numbers get.
-    private var uniqueOffset: CGFloat {
-        max(columnWidth, VolumeTableMetrics.figureGap)
-    }
-
+    /// One figure per column: gross under Media Size, online under
+    /// Scanned, unique under Phase (Rick 2026-08-11). Each cell spans
+    /// exactly to the next anchor, so the three figures line up with the
+    /// data above them and read as a column rather than a sentence.
     var body: some View {
         VStack(spacing: 0) {
             Divider()
 
             HStack(alignment: .firstTextBaseline, spacing: 0) {
 
-                // "TOTAL MEDIA IN CATALOG:" — Rick's wording, and a
-                // better label than the "TOTAL MEDIA" it replaced: the
-                // figure covers every catalogued volume while the table
-                // above defaults to a Connected filter, so the rows
-                // routinely sum to LESS. "IN CATALOG" is what explains
-                // that gap without a second line of chrome.
-                //
-                // Trailing-aligned so it butts up against the figure it
-                // introduces, wherever measurement puts that figure.
-                // Truncates rather than overlapping: no `fixedSize` here
-                // — at narrow window widths the frame shrinks, and a
-                // fixed-size single line would have drawn straight over
-                // the gross number instead of ellipsizing.
-                Text("TOTAL MEDIA IN CATALOG:")
-                    .font(.system(size: 13, weight: .heavy))
-                    .kerning(0.5)
+                // "TOTAL MEDIA IN CATALOG:" — trailing-aligned against
+                // the figure it introduces. Truncates rather than
+                // overlapping when the window narrows.
+                Text("TOTAL CATALOG")
+                    .font(Self.labelFont)
                     .foregroundColor(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .frame(width: max(0, columnX - VolumeTableMetrics.labelGutter),
+                    .frame(width: max(0, mediaSizeX - VolumeTableMetrics.labelGutter),
                            alignment: .trailing)
                     .padding(.trailing, VolumeTableMetrics.labelGutter)
 
-                // Gross — sitting on the Media Size column origin.
-                // `fixedSize` + `minWidth` (not a hard width): a figure
-                // must never truncate, so if the number is wider than
-                // the column it pushes UNIQUE right rather than being
-                // clipped or overlapped.
+                // Gross — on the Media Size origin, totalling the column
+                // directly above it. `fixedSize` + `minWidth`: a figure
+                // must never truncate, so an unusually wide number
+                // pushes the next cell right instead of being clipped.
                 Text(totals.grossDisplay)
-                    .font(.system(size: 19, weight: .bold, design: .monospaced))
+                    .font(Self.figureFont)
                     .foregroundColor(.primary)
                     .lineLimit(1)
                     .fixedSize()
-                    .frame(minWidth: uniqueOffset, alignment: .leading)
+                    .frame(minWidth: max(0, scannedX - mediaSizeX), alignment: .leading)
 
-                // Unique. Same white as the gross figure (Rick
-                // 2026-08-10) — the accent color read as a link.
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                // ONLINE NOW — on the Scanned origin. Shown only when it
+                // differs from the catalog total; on a day when every
+                // drive is plugged in, a third identical number is noise.
+                if totals.onlineBytes != totals.grossBytes {
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        Text("ONLINE")
+                            .font(Self.labelFont)
+                                    .foregroundColor(.secondary)
+                            .fixedSize()
+                        Text(totals.onlineDisplay)
+                            .font(Self.figureFont)
+                            .foregroundColor(.primary)
+                            .fixedSize()
+                    }
+                    .frame(minWidth: max(0, phaseX - scannedX), alignment: .leading)
+                }
+
+                // UNIQUE — on the Phase origin (Rick's request).
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text(totals.uniqueDisplay)
-                        .font(.system(size: 19, weight: .bold, design: .monospaced))
+                        .font(Self.figureFont)
                         .foregroundColor(.primary)
                         .fixedSize()
-                    Text("UNIQUE MEDIA")
-                        .font(.system(size: 13, weight: .heavy))
-                        .kerning(0.5)
-                        .foregroundColor(.secondary)
+                    Text("UNIQUE")
+                        .font(Self.labelFont)
+                            .foregroundColor(.secondary)
                         .fixedSize()
-                    // Regular weight, smaller: heavy across the full
-                    // parenthetical shouted over the numbers. This is
-                    // also the ONE element allowed to truncate — it is
-                    // the least load-bearing text in the row.
+                    // The one element allowed to truncate — least
+                    // load-bearing text in the row.
                     Text("(\(totals.uniqueCaption))")
-                        .font(.system(size: 11))
+                        .font(Self.captionFont)
                         .foregroundColor(.secondary)
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .layoutPriority(-1)
-                    // The only signpost that a full waterfall exists.
-                    // With the captions gone the tooltip is the sole
+                    // The only signpost that a full waterfall exists —
+                    // with the captions gone the tooltip is the sole
                     // disclosure of what "unique" subtracted, and an
-                    // invisible tooltip is no disclosure at all. Turns
-                    // into a warning when the figure is an upper bound.
+                    // invisible tooltip is no disclosure at all. Becomes
+                    // a warning when the figure is an upper bound.
                     Image(systemName: totals.uniqueIsUpperBound
                           ? "exclamationmark.circle" : "info.circle")
-                        .font(.system(size: 11))
+                        .font(.system(size: 10))
                         .foregroundColor(totals.uniqueIsUpperBound ? .orange : .secondary)
                         .fixedSize()
                 }
@@ -144,18 +176,12 @@ struct VolumeTableTotalsFooter: View {
 
                 if isStale {
                     Text("updating…")
-                        .font(.system(size: 11))
+                        .font(Self.captionFont)
                         .foregroundColor(.secondary)
                         .padding(.trailing, 12)
                 }
             }
-            .padding(.vertical, 9)
-            // The explanatory captions under both figures are gone at
-            // Rick's request (2026-08-10) — they made the row busy. The
-            // full waterfall still lives one hover away in the tooltip,
-            // which is also where the "upper bound" caveat now surfaces
-            // when duplicate coverage is thin, so removing the captions
-            // costs disclosure but not honesty.
+            .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color(NSColor.underPageBackgroundColor).opacity(0.5))
             .contentShape(Rectangle())
@@ -164,13 +190,19 @@ struct VolumeTableTotalsFooter: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel(
                 "Total media in catalog \(totals.grossDisplay). "
+                + "Online now \(totals.onlineDisplay). "
                 + "\(totals.uniqueDisplay) unique media, \(totals.uniqueCaption)."
             )
             .accessibilityIdentifier("catalog.totalMediaFooter")
+            // Gap between the summary band and the catalog toolbar
+            // below it (Rick 2026-08-11: the middle of the window reads
+            // as crammed). Applied OUTSIDE the background so it is real
+            // whitespace, not a taller tinted band.
+            .padding(.bottom, 10)
         }
     }
 
     /// Height the pane's auto-sizing math must reserve. Kept next to the
     /// layout it describes so the two stay in step.
-    static let height: CGFloat = 40
+    static let height: CGFloat = 48
 }
