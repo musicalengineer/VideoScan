@@ -382,25 +382,21 @@ extension CatalogView {
                 // into one of these categories"). Menu first, then the two
                 // housekeeping verbs, then the status chips.
                 Menu {
-                    Section("Scan") {
-                        Button(action: { model.startAllTargets() }) {
-                            Label("Scan All Volumes", systemImage: "arrow.clockwise")
-                        }
-                        .disabled(model.scanTargets.isEmpty)
-
-                        ForEach(model.scanTargets.filter { $0.status.isIdle && $0.isReachable && !$0.isScratchVolume && !$0.isRetired }) { target in
-                            Button(action: {
-                                if target.status == .resumable {
-                                    model.resumeTarget(target)
-                                } else {
-                                    model.startTarget(target)
-                                }
-                            }) {
-                                Label(VolumeReachability.displayLabel(forPath: target.searchPath),
-                                      systemImage: target.status == .resumable ? "arrow.clockwise" : "play.fill")
-                            }
-                        }
-                    }
+                    // The "Scan" section that used to head this menu is
+                    // GONE (Rick 2026-08-12: "the top part of catalog
+                    // options is Scan-related"). It was not moved to Scan
+                    // Options — that menu is pure SETTINGS (every entry a
+                    // Toggle), and dropping verbs into a settings menu is
+                    // the same category error we just spent the morning
+                    // removing.
+                    //
+                    // It was deleted because both entries already exist,
+                    // closer to hand than this menu ever was:
+                    //   * "Scan All Volumes" → the Scan All button, now a
+                    //     few inches left in the volume group.
+                    //   * per-volume scan   → the ▶ button on each table
+                    //     row, which also knows resume-vs-start.
+                    // What is left here is genuinely catalog-scoped.
 
                     // Content-hash backfill (2026-08-11). Deliberately a
                     // menu item rather than a toolbar button: it is a
