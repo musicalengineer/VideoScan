@@ -213,6 +213,10 @@ struct FileJourney: Identifiable, Equatable {
     /// other than the current `fullPath`. Includes witness paths parsed
     /// out of Bucket E notes.
     let otherKnownCopies: [KnownCopy]
+    /// Scored preservation steps (2026-08-12). Computed when the journey
+    /// is built so the sheet stays a pure function of one value, and so
+    /// the checklist can never disagree with the history beneath it.
+    var preservation: [PreservationStep] = []
 }
 
 // MARK: - Migration Overview (View 3)

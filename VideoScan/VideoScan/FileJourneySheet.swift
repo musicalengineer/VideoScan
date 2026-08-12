@@ -19,6 +19,12 @@ struct FileJourneySheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             header
+            // The checklist sits ABOVE the timeline on purpose: history
+            // is what happened, this is what is still missing, and the
+            // second is the reason you opened the sheet.
+            if !journey.preservation.isEmpty {
+                PreservationChecklistStrip(steps: journey.preservation)
+            }
             hashLine
             Divider()
             timeline

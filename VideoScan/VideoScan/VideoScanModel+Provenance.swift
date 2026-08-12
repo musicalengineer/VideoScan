@@ -521,7 +521,8 @@ extension VideoScanModel {
             hashStatusLine: hashLine,
             isMarkedDeleted: isMarkedDeleted,
             events: ordered,
-            otherKnownCopies: copies
+            otherKnownCopies: copies,
+            preservation: PreservationChecklist.steps(for: rec)
         )
     }
 
