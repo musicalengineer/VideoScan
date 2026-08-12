@@ -59,6 +59,11 @@ struct ArchivistChatWindow: View {
     @EnvironmentObject var model: VideoScanModel
 
     @AppStorage("archivist.ollamaHost") private var ollamaHost = "ricksm5.local"
+    /// Which host actually answered the last question. Worth surfacing:
+    /// with a fallback list, "the Archivist is slow" and "the primary is
+    /// asleep and you are talking to the laptop" look identical
+    /// otherwise (Rick 2026-08-12).
+    @State private var lastResponder: String?
     @AppStorage("archivist.ollamaModel") private var ollamaModel = "qwen3.6:35b-a3b-nvfp4"
 
     @State private var messages: [ArchivistMessage] = []
@@ -331,9 +336,19 @@ struct ArchivistChatWindow: View {
         if handleGeneralQuestion(text) { return }
         if handleKinship(text) { return }
         isThinking = true
-        var translator = OllamaQueryTranslator()
-        translator.host = ollamaHost
-        translator.model = ollamaModel
+        // Ordered fleet, not one host: the M5 is a laptop and the
+        // Archivist used to hang whenever it slept (Rick 2026-08-12).
+        // `resolved` migrates a legacy single-host preference to the
+        // front of the list — see OllamaEndpoints.
+        var template = OllamaQueryTranslator()
+        template.model = ollamaModel
+        let translator = OllamaFailoverTranslator(
+            hosts: OllamaEndpoints.resolved(from: .standard),
+            template: template,
+            onResponder: { host in
+                Task { @MainActor in lastResponder = host }
+            }
+        )
         Task { @MainActor in
             defer { isThinking = false }
             do {

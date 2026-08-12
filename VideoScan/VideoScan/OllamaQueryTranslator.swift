@@ -15,14 +15,59 @@ protocol NLQueryTranslating: Sendable {
     func translate(_ text: String) async throws -> NLQuerySpec
 }
 
+/// One transport round-trip: either a response (with its HTTP status)
+/// or a transport-level failure. Used by the `.fake` transport seam.
+struct OllamaTransportResult: Sendable {
+    var data: Data?
+    var statusCode: Int?
+    var transportError: String?
+
+    static func ok(_ json: String) -> OllamaTransportResult {
+        .init(data: Data(json.utf8), statusCode: 200)
+    }
+    static func status(_ code: Int, _ body: String = "") -> OllamaTransportResult {
+        .init(data: Data(body.utf8), statusCode: code)
+    }
+    static func down(_ reason: String = "connection refused") -> OllamaTransportResult {
+        .init(transportError: reason)
+    }
+}
+
 enum NLTranslatorError: LocalizedError {
     case badResponse(String)
     case unreachable(String)
+    /// The host answered, but with an HTTP error status.
+    case serverError(status: Int, detail: String)
+    /// The host is up and serving, but does not have the model loaded.
+    case modelUnavailable(String)
 
     var errorDescription: String? {
         switch self {
         case .badResponse(let detail): return "translator returned unusable output: \(detail)"
         case .unreachable(let detail): return "translator unreachable: \(detail)"
+        case .serverError(let status, let detail): return "translator HTTP \(status): \(detail)"
+        case .modelUnavailable(let detail): return "model not available on host: \(detail)"
+        }
+    }
+
+    /// Whether trying the NEXT host in the list could plausibly succeed.
+    ///
+    /// The distinction matters: `.badResponse` means the model replied
+    /// with something unusable, which is a property of the MODEL, not
+    /// the host — every other host runs the same model and would return
+    /// the same garbage. Retrying it would turn one bad answer into a
+    /// walk down the whole fleet, N timeouts deep, for nothing. Only
+    /// failures that are about THIS HOST are worth failing over:
+    /// transport (asleep, off-network), 5xx (server sick), and
+    /// model-unavailable (this host has not pulled the model).
+    ///
+    /// 4xx is deliberately NOT retryable — a malformed request is
+    /// malformed everywhere.
+    var isRetryableOnAnotherHost: Bool {
+        switch self {
+        case .unreachable, .modelUnavailable: return true
+        case .serverError(let status, _): return (500...599).contains(status)
+        case .badResponse: return false
         }
     }
 }
@@ -41,7 +86,15 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     /// real app). `.curl` shells out via ProcessRunner — used by the
     /// live-eval tests, whose headless test host never gets a TCC
     /// prompt and would otherwise time out against any `.local` host.
-    enum Transport: Sendable { case urlSession, curl }
+    enum Transport: Sendable {
+        case urlSession
+        case curl
+        /// Test seam. Takes (urlString, requestBody) and returns the
+        /// response the fleet would have given, so failover order and
+        /// retry policy can be exercised with no network, no `.local`
+        /// resolution, and no TCC prompt.
+        case fake(@Sendable (String, Data) async -> OllamaTransportResult)
+    }
 
     var host: String = "ricksm5.local"
     var port: Int = 11434
@@ -76,10 +129,33 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = body
             do {
-                (data, _) = try await URLSession.shared.data(for: request)
+                let (payload, response) = try await URLSession.shared.data(for: request)
+                // The status used to be discarded, so a 500 fell through
+                // to JSON decoding and surfaced as "unusable output" —
+                // which reads as the model's fault and, worse, is NOT
+                // retryable. Classify it properly so failover can act.
+                if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+                    throw NLTranslatorError.serverError(
+                        status: http.statusCode,
+                        detail: String(decoding: payload.prefix(200), as: UTF8.self))
+                }
+                data = payload
+            } catch let error as NLTranslatorError {
+                throw error
             } catch {
                 throw NLTranslatorError.unreachable(error.localizedDescription)
             }
+        case .fake(let handler):
+            let result = await handler(urlString, body)
+            if let transportError = result.transportError {
+                throw NLTranslatorError.unreachable(transportError)
+            }
+            if let status = result.statusCode, status != 200 {
+                throw NLTranslatorError.serverError(
+                    status: status,
+                    detail: String(decoding: (result.data ?? Data()).prefix(200), as: UTF8.self))
+            }
+            data = result.data ?? Data()
         case .curl:
             guard let bodyString = String(data: body, encoding: .utf8) else {
                 throw NLTranslatorError.badResponse("request body not UTF-8")
@@ -104,6 +180,15 @@ struct OllamaQueryTranslator: NLQueryTranslating {
         }
         let response = try JSONDecoder().decode(ChatResponse.self, from: data)
         if let error = response.error {
+            // ollama answers "model not found" with HTTP 200 and an
+            // error string in the body, so the status tells us nothing
+            // and the text is the only signal. A host that has not
+            // pulled the model is a HOST problem — worth failing over.
+            let lowered = error.lowercased()
+            if lowered.contains("not found") || lowered.contains("no such model")
+                || lowered.contains("try pulling") || lowered.contains("model") && lowered.contains("unavailable") {
+                throw NLTranslatorError.modelUnavailable(error)
+            }
             throw NLTranslatorError.badResponse(error)
         }
         guard let content = response.message?.content,

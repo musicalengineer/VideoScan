@@ -195,9 +195,13 @@ struct ArchivistAskPopover: View {
         guard !text.isEmpty, !isThinking else { return }
         errorText = nil
         isThinking = true
-        var translator = OllamaQueryTranslator()
-        translator.host = ollamaHost
-        translator.model = ollamaModel
+        // Ordered fleet — see OllamaEndpoints / OllamaFailoverTranslator.
+        var template = OllamaQueryTranslator()
+        template.model = ollamaModel
+        let translator = OllamaFailoverTranslator(
+            hosts: OllamaEndpoints.resolved(from: .standard),
+            template: template
+        )
         Task { @MainActor in
             defer { isThinking = false }
             do {
