@@ -50,6 +50,7 @@ public struct ProbeOutcome: Sendable {
     public var dateModifiedRaw: Date?
     public var partialMD5: String = ""
     public var contentHash: String = ""
+    public var contentHashAt: Date?
     public var notes: String = ""
 
     /// The 19 ffprobe-derived metadata fields (container, codecs, resolution,
@@ -106,6 +107,7 @@ extension ProbeOutcome {
         dateModifiedRaw = rec.dateModifiedRaw
         partialMD5      = rec.partialMD5
         contentHash     = rec.contentHash
+        contentHashAt   = rec.contentHashAt
         notes           = rec.notes
         probe           = ProbeResult(scanDerivedFrom: rec)
         wasCacheHit     = rec.wasCacheHit
@@ -134,6 +136,7 @@ extension VideoRecord {
         dateModifiedRaw = o.dateModifiedRaw
         partialMD5      = o.partialMD5
         contentHash     = o.contentHash
+        contentHashAt   = o.contentHashAt
         notes           = o.notes
         apply(o.probe)              // the 19 ffprobe metadata fields
         wasCacheHit     = o.wasCacheHit

@@ -58,6 +58,10 @@ public class VideoRecord: Identifiable, Decodable {
     /// populated at scan time and by the backfill pass, and an empty
     /// value must never be treated as matching anything.
     public var contentHash: String = ""
+    /// When `contentHash` was computed. Lets the UI answer "are this
+    /// volume's signatures current?" — a volume signed months ago and
+    /// written to since is not the same as one signed this morning.
+    public var contentHashAt: Date?
     public var fullPath: String = ""
     public var directory: String = ""
     public var notes: String = ""
@@ -488,6 +492,7 @@ public class VideoRecord: Identifiable, Decodable {
         isPlayable                  = try c.decodeIfPresent(String.self, forKey: .isPlayable) ?? ""
         partialMD5                  = try c.decodeIfPresent(String.self, forKey: .partialMD5) ?? ""
         contentHash                 = try c.decodeIfPresent(String.self, forKey: .contentHash) ?? ""
+        contentHashAt               = try c.decodeIfPresent(Date.self, forKey: .contentHashAt)
         fullPath                    = try c.decodeIfPresent(String.self, forKey: .fullPath) ?? ""
         directory                   = try c.decodeIfPresent(String.self, forKey: .directory) ?? ""
         notes                       = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""

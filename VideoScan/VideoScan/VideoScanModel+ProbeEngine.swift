@@ -694,6 +694,7 @@ extension VideoScanModel {
             // skipHashing gate: it is three 1 MiB reads, negligible on
             // local SSD and deliberately skippable over SMB.
             o.contentHash = skipHashing ? "" : FileHasher.segmentedHash(path: path)
+            o.contentHashAt = o.contentHash.isEmpty ? nil : Date()
             return o
         }
 

@@ -239,7 +239,10 @@ extension VideoScanModel {
                 guard let signature = byID[rec.id] else { continue }
                 // Never overwrite: a signature may have arrived from a
                 // scan while this pass was running.
-                if rec.contentHash.isEmpty { rec.contentHash = signature }
+                if rec.contentHash.isEmpty {
+                    rec.contentHash = signature
+                    rec.contentHashAt = Date()
+                }
             }
             applied += pending.count
             pending.removeAll(keepingCapacity: true)

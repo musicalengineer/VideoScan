@@ -214,6 +214,44 @@ struct MetadataCacheContentHashTests {
 // was never scanned has no records, and a signature has nowhere to live
 // without one.
 
+@Suite("File signatures — timestamp")
+struct ContentHashDateTests {
+
+    /// The date round-trips, so "when were these signed?" survives a
+    /// relaunch. Without it the Catalog Info line and the checklist's
+    /// Signed step would reset to blank on every launch.
+    @Test func contentHashDateRoundTrips() throws {
+        let rec = VideoRecord()
+        rec.contentHash = "v1:" + String(repeating: "c", count: 64)
+        rec.contentHashAt = Date(timeIntervalSince1970: 1_760_000_000)
+
+        let data = try JSONEncoder().encode(VideoRecordDTO(rec))
+        let back = try JSONDecoder().decode(VideoRecord.self, from: data)
+        #expect(back.contentHashAt == rec.contentHashAt)
+    }
+
+    /// SENSOR. The field is encodeIfPresent, so a record without a date
+    /// emits NO key — which is what keeps the frozen catalog goldens
+    /// byte-identical and lets months-old catalogs decode untouched. An
+    /// unconditional encode would have rewritten every golden for a
+    /// field that is usually absent.
+    @Test func absentDateEmitsNoKeyAtAll() throws {
+        let rec = VideoRecord()
+        rec.contentHash = "v1:x"
+        let json = String(decoding: try JSONEncoder().encode(VideoRecordDTO(rec)), as: UTF8.self)
+        #expect(!json.contains("contentHashAt"))
+    }
+
+    /// A catalog written before the field existed decodes to nil, not a
+    /// throw — the same additive contract contentHash itself follows.
+    @Test func legacyRecordsDecodeWithoutTheDate() throws {
+        let json = "{\"id\":\"\(UUID().uuidString)\",\"filename\":\"old.mov\",\"contentHash\":\"v1:y\"}"
+        let rec = try JSONDecoder().decode(VideoRecord.self, from: Data(json.utf8))
+        #expect(rec.contentHashAt == nil)
+        #expect(rec.contentHash == "v1:y")
+    }
+}
+
 @Suite("File signatures — scope")
 struct ContentHashScopeTests {
 

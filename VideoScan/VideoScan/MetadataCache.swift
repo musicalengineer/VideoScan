@@ -99,10 +99,12 @@ final class MetadataCache {
                 directory TEXT,
                 notes TEXT,
                 content_hash TEXT,
+                content_hash_at REAL,
                 PRIMARY KEY (path, file_size, mod_date)
             )
         """)
-        migrateAddContentHashColumn()
+        migrateAddColumn("content_hash", type: "TEXT")
+        migrateAddColumn("content_hash_at", type: "REAL")
     }
 
     /// Additive migration for databases created before 2026-08-11.
@@ -119,7 +121,12 @@ final class MetadataCache {
     /// column as NULL → "" and simply re-hash on next touch. Additive
     /// only: no data is rewritten, no column is dropped or reordered
     /// (the positional `SELECT *` decoding depends on that).
-    private func migrateAddContentHashColumn() {
+    /// Additive column migration for databases created before a field
+    /// existed. `ALTER TABLE ADD COLUMN` appends, so existing rows read
+    /// the new column as NULL and simply refresh on next touch. Additive
+    /// only: nothing is rewritten, dropped, or reordered — the
+    /// positional `SELECT *` decoding depends on that.
+    private func migrateAddColumn(_ name: String, type: String) {
         guard let db = db else { return }
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, "PRAGMA table_info(probe_cache)", -1, &stmt, nil) == SQLITE_OK
@@ -127,12 +134,10 @@ final class MetadataCache {
         var hasColumn = false
         while sqlite3_step(stmt) == SQLITE_ROW {
             if let c = sqlite3_column_text(stmt, 1),
-               String(cString: c) == "content_hash" { hasColumn = true; break }
+               String(cString: c) == name { hasColumn = true; break }
         }
         sqlite3_finalize(stmt)
-        if !hasColumn {
-            exec("ALTER TABLE probe_cache ADD COLUMN content_hash TEXT")
-        }
+        if !hasColumn { exec("ALTER TABLE probe_cache ADD COLUMN \(name) \(type)") }
     }
 
     deinit {
@@ -195,6 +200,8 @@ final class MetadataCache {
         o.probe.isPlayable      = col(stmt, 27)
         o.partialMD5            = col(stmt, 28)
         o.contentHash           = col(stmt, 31)
+        let chAt                = sqlite3_column_double(stmt, 32)
+        o.contentHashAt         = chAt > 0 ? Date(timeIntervalSince1970: chAt) : nil
         o.directory             = col(stmt, 29)
         o.notes                 = col(stmt, 30)
         return o
@@ -208,7 +215,7 @@ final class MetadataCache {
         guard let db = db else { return }
         let sql = """
             INSERT OR REPLACE INTO probe_cache VALUES (
-                ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+                ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
             )
         """
         var stmt: OpaquePointer?
@@ -247,6 +254,7 @@ final class MetadataCache {
         bind(stmt, 30, o.directory)
         bind(stmt, 31, o.notes)
         bind(stmt, 32, o.contentHash)
+        sqlite3_bind_double(stmt, 33, o.contentHashAt?.timeIntervalSince1970 ?? 0)
 
         sqlite3_step(stmt)
     }
@@ -354,6 +362,8 @@ final class MetadataCache {
             rec.isPlayable      = col(stmt, 27)
             rec.partialMD5      = col(stmt, 28)
             rec.contentHash     = col(stmt, 31)
+            let chAt2           = sqlite3_column_double(stmt, 32)
+            rec.contentHashAt   = chAt2 > 0 ? Date(timeIntervalSince1970: chAt2) : nil
             rec.directory       = col(stmt, 29)
             rec.notes           = col(stmt, 30)
             out.append(rec)

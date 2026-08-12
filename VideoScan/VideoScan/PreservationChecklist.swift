@@ -85,7 +85,7 @@ enum PreservationChecklist {
             PreservationStep(
                 kind: .signed,
                 done: rec.hasContentSignature,
-                date: nil,
+                date: rec.contentHashAt,
                 todo: "Compute a file signature so copies can be verified "
                     + "and duplicates found."),
             PreservationStep(

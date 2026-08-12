@@ -1160,6 +1160,44 @@ struct CatalogView: View {
             lines.append("Last Scanned: \(fmt.string(from: date))")
         }
 
+        // File signatures — coverage AND currency. Rick 2026-08-12:
+        // "catalog info for a volume should also show file sigs
+        // date-time." Coverage alone answers "did it run"; the dates
+        // answer the question that actually matters before a migration
+        // — "are these signatures describing the volume as it is NOW, or
+        // as it was months ago?"
+        let signable = records.filter { $0.purgedAt == nil && $0.sizeBytes > 0 }
+        let signed = signable.filter { !$0.contentHash.isEmpty }
+        lines.append("")
+        lines.append("— File Signatures —")
+        if signable.isEmpty {
+            lines.append("No signable files")
+        } else {
+            let pct = Int((Double(signed.count) / Double(signable.count) * 100).rounded())
+            lines.append("Signed: \(signed.count) of \(signable.count) (\(pct)%)")
+            if signed.count < signable.count {
+                lines.append("Missing: \(signable.count - signed.count) "
+                             + "— Catalog Options ▸ File Signatures")
+            }
+            let stamps = signed.compactMap { $0.contentHashAt }
+            if let first = stamps.min(), let last = stamps.max() {
+                let fmt = DateFormatter()
+                fmt.dateStyle = .medium
+                fmt.timeStyle = .short
+                if Calendar.current.isDate(first, inSameDayAs: last) {
+                    lines.append("Computed: \(fmt.string(from: last))")
+                } else {
+                    lines.append("First computed: \(fmt.string(from: first))")
+                    lines.append("Last computed:  \(fmt.string(from: last))")
+                }
+            }
+            if !stamps.isEmpty && stamps.count < signed.count {
+                // Signatures written before the timestamp existed, or
+                // restored from a cache that predates it.
+                lines.append("(\(signed.count - stamps.count) signed before dates were recorded)")
+            }
+        }
+
         lines.append("")
         lines.append("— Stream Types —")
         lines.append("Video + Audio: \(va)")
