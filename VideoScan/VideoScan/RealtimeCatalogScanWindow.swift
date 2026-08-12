@@ -115,6 +115,35 @@ struct RealtimeCatalogScanContent: View {
                 }
             }
             Spacer()
+
+            // Run controls live HERE now, not on the Volume Scanner row
+            // (Rick 2026-08-12). They belong with the thing they act on:
+            // this window is where you watch a scan, so it is where you
+            // pause or stop one — the same arrangement as the MFO window.
+            // The catalog row keeps only per-volume ▶ and right-click
+            // "Scan Selected", which is how a scan gets STARTED.
+            HStack(spacing: 8) {
+                Button {
+                    if model.hasPausedTargets {
+                        model.resumeAllTargets()
+                    } else {
+                        model.pauseAllTargets()
+                    }
+                } label: {
+                    Label(model.hasPausedTargets ? "Resume All" : "Pause All",
+                          systemImage: model.hasPausedTargets ? "play.fill" : "pause.fill")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .disabled(!model.hasActiveTargets && !model.hasPausedTargets)
+
+                Button { model.stopAllTargets() } label: {
+                    Label("Stop All", systemImage: "stop.fill")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .disabled(!model.hasActiveTargets)
+            }
         }
         .padding(.bottom, 2)
     }

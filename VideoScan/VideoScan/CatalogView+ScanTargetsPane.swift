@@ -362,38 +362,12 @@ extension CatalogView {
                 .fixedSize()
                 .help("Filter which volumes appear in the list below")
 
-                // Volume run controls. These are volume-scanning VERBS, so
-                // they belong in the volume group rather than stranded on
-                // the far right (Rick 2026-08-12). Divider marks "settings
-                // above, execution here" inside the same group.
-                Divider().frame(height: 22)
-
-                Button(action: { model.startAllTargets() }) {
-                    Label("Scan All", systemImage: "play.fill")
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(model.scanTargets.isEmpty || model.scanTargets.allSatisfy { $0.status.isActive })
-                // Gauntlet flows 2/3/4 kick off the fixture scan here. Test-only.
-                .accessibilityIdentifier("catalog.scanAll")
-
-                Button(action: {
-                    if model.hasPausedTargets { model.resumeAllTargets() } else { model.pauseAllTargets() }
-                }) {
-                    Label(model.hasPausedTargets ? "Resume All" : "Pause All",
-                          systemImage: model.hasPausedTargets ? "play.fill" : "pause.fill")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .disabled(!model.hasActiveTargets && !model.hasPausedTargets)
-
-                Button(action: { model.stopAllTargets() }) {
-                    Label("Stop All", systemImage: "stop.fill")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .disabled(!model.hasActiveTargets)
-
+                // Scan All / Pause All / Stop All moved OUT of this row
+                // (Rick 2026-08-12). Starting a scan is now a selection
+                // act — the per-row ▶ button, or multi-select plus
+                // right-click "Scan Selected" — and the pause/stop
+                // controls live in the Realtime Scan window beside the
+                // progress they govern, matching the MFO window.
                 }
                 .frame(minWidth: catalogGroupOriginX, alignment: .leading)
 
