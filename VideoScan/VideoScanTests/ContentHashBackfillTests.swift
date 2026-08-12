@@ -201,3 +201,86 @@ struct MetadataCacheContentHashTests {
                 == "v1:reopened")
     }
 }
+
+
+// MARK: - Scoping (2026-08-12)
+//
+// Rick: "it should allow us to select one or more volumes… or navigate
+// to a folder or individual file." Scoping matters for more than
+// convenience — it is what makes "try it on one volume first" possible
+// on a pass that mutates thousands of records.
+//
+// The scope is over CATALOG RECORDS, not the filesystem: a folder that
+// was never scanned has no records, and a signature has nowhere to live
+// without one.
+
+@Suite("File signatures — scope")
+struct ContentHashScopeTests {
+
+    private let reachable: (String) -> Bool = { _ in true }
+
+    /// The load-bearing prefix bug: "/Volumes/X" must not also claim
+    /// "/Volumes/X2". Signature work scoped to one drive silently
+    /// spilling onto a similarly-named one would be a nasty surprise on
+    /// a fleet with CrucialX9 and CrucialX10 sitting side by side.
+    @Test func siblingVolumesWithSharedPrefixDoNotOverlap() {
+        let recs = [
+            bfRec(path: "/Volumes/CrucialX1/a.mov"),
+            bfRec(path: "/Volumes/CrucialX10/b.mov"),
+        ]
+        let plan = VideoScanModel.planContentHashBackfill(
+            records: recs, isReachable: reachable, pathPrefix: "/Volumes/CrucialX1")
+        #expect(plan.candidates == 1)
+    }
+
+    @Test func folderScopeSelectsOnlyThatSubtree() {
+        let recs = [
+            bfRec(path: "/Volumes/V/Family/a.mov"),
+            bfRec(path: "/Volumes/V/Family/1994/b.mov"),
+            bfRec(path: "/Volumes/V/Music/c.mov"),
+        ]
+        let plan = VideoScanModel.planContentHashBackfill(
+            records: recs, isReachable: reachable, pathPrefix: "/Volumes/V/Family")
+        #expect(plan.candidates == 2)
+    }
+
+    /// A single file is a legitimate scope — the narrowest useful test
+    /// before turning a pass loose on a whole drive.
+    @Test func singleFileScopeSelectsExactlyIt() {
+        let recs = [
+            bfRec(path: "/Volumes/V/a.mov"),
+            bfRec(path: "/Volumes/V/b.mov"),
+        ]
+        let plan = VideoScanModel.planContentHashBackfill(
+            records: recs, isReachable: reachable, pathPrefix: "/Volumes/V/a.mov")
+        #expect(plan.candidates == 1)
+    }
+
+    /// A migrated file is still its origin volume's history. Scoping by
+    /// the drive in your hand should find what came off it.
+    @Test func scopeMatchesOriginPathToo() {
+        let rec = bfRec(path: "/Volumes/New/a.mov")
+        rec.originalFullPath = "/Volumes/OldDrive/a.mov"
+        let plan = VideoScanModel.planContentHashBackfill(
+            records: [rec], isReachable: reachable, pathPrefix: "/Volumes/OldDrive")
+        #expect(plan.candidates == 1)
+    }
+
+    /// An unscanned folder yields nothing — the case the UI must report
+    /// rather than silently no-op.
+    @Test func unknownFolderYieldsAnEmptyPlan() {
+        let plan = VideoScanModel.planContentHashBackfill(
+            records: [bfRec(path: "/Volumes/V/a.mov")],
+            isReachable: reachable,
+            pathPrefix: "/Volumes/NeverScanned")
+        #expect(plan.isEmpty)
+        #expect(plan.candidates == 0)
+    }
+
+    @Test func nilScopeCoversTheWholeCatalog() {
+        let recs = (0..<5).map { bfRec(path: "/Volumes/V\($0)/a.mov") }
+        let plan = VideoScanModel.planContentHashBackfill(
+            records: recs, isReachable: reachable, pathPrefix: nil)
+        #expect(plan.candidates == 5)
+    }
+}

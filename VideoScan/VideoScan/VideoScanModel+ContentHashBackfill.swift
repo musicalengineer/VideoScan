@@ -91,14 +91,25 @@ extension VideoScanModel {
     /// Build the plan. `isReachable` is injected so tests never touch a
     /// real filesystem and the caller can reuse its cached volume state
     /// rather than re-probing mounts.
+    /// - Parameter pathPrefix: restrict to records under this path — a
+    ///   volume root, a folder, or one file. `nil` means the whole
+    ///   catalog.
+    ///
+    ///   NOTE the scope is over CATALOG RECORDS, not the filesystem.
+    ///   Pointing this at a folder that was never scanned yields zero
+    ///   candidates, because a content ID has nowhere to live without a
+    ///   record to hold it. Callers surface that as "nothing catalogued
+    ///   here" rather than a silent no-op.
     nonisolated static func planContentHashBackfill(
         records: [VideoRecord],
-        isReachable: (String) -> Bool
+        isReachable: (String) -> Bool,
+        pathPrefix: String? = nil
     ) -> ContentHashBackfillPlan {
         var plan = ContentHashBackfillPlan()
         for rec in records {
             guard rec.purgedAt == nil, !rec.isSetAside, !rec.isSuperseded else { continue }
             guard rec.sizeBytes > 0, !rec.fullPath.isEmpty else { continue }
+            if let prefix = pathPrefix, !Self.isUnder(rec, prefix: prefix) { continue }
             if !rec.contentHash.isEmpty {
                 plan.alreadyHashed += 1
             } else if isReachable(rec.fullPath) {
@@ -108,6 +119,20 @@ extension VideoScanModel {
             }
         }
         return plan
+    }
+
+    /// Scope test. Compares against the record's CURRENT path and its
+    /// origin path: a file migrated off a volume is still that volume's
+    /// history, and scoping by the drive you are holding should find it.
+    nonisolated static func isUnder(_ rec: VideoRecord, prefix: String) -> Bool {
+        guard !prefix.isEmpty else { return true }
+        // Normalize so "/Volumes/X" does not also match "/Volumes/X2".
+        let dir = prefix.hasSuffix("/") ? prefix : prefix + "/"
+        if rec.fullPath == prefix || rec.fullPath.hasPrefix(dir) { return true }
+        if let origin = rec.originalFullPath {
+            if origin == prefix || origin.hasPrefix(dir) { return true }
+        }
+        return false
     }
 
     // MARK: - Run
@@ -125,15 +150,21 @@ extension VideoScanModel {
     ///   - progress: called on the main actor with (done, total).
     @discardableResult
     func runContentHashBackfill(
+        pathPrefix: String? = nil,
         batchSize: Int = 200,
         progress: (@MainActor (Int, Int) -> Void)? = nil
     ) async -> ContentHashBackfillResult {
         let started = Date()
 
         // Snapshot the work as Sendable pairs. VideoRecord itself never
-        // crosses the boundary.
+        // crosses the boundary. Same scope predicate the PLAN uses, so a
+        // dry run can never promise different work than the pass does.
         let work: [(id: UUID, path: String)] = records
             .filter { Self.needsContentHash($0) }
+            .filter { rec in
+                guard let prefix = pathPrefix else { return true }
+                return Self.isUnder(rec, prefix: prefix)
+            }
             .filter { VolumeReachability.isReachable(path: $0.fullPath) }
             .map { ($0.id, $0.fullPath) }
 
@@ -142,7 +173,7 @@ extension VideoScanModel {
         }
 
         let total = work.count
-        log("Content-hash backfill: \(total) file\(total == 1 ? "" : "s") to hash "
+        log("File signatures: computing for \(total) file\(total == 1 ? "" : "s") to hash "
             + "(≈\(Int(Double(total) * 0.07 / 60) + 1) min, reading 3 MiB each)")
 
         var result = ContentHashBackfillResult()
@@ -188,7 +219,7 @@ extension VideoScanModel {
         // and 18k records is one save, not one save per batch.
         _ = saveCatalogNow()
 
-        log("Content-hash backfill: hashed \(result.hashed), failed \(result.failed)"
+        log("File signatures: computed \(result.hashed), failed \(result.failed)"
             + (result.cancelled ? ", CANCELLED" : "")
             + String(format: ", %.1fs", result.elapsed))
         return result

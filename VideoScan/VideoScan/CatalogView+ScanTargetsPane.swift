@@ -100,6 +100,38 @@ extension CatalogView {
         return max(0, x - 16)
     }
 
+    /// Pick any folder or single file and compute file signatures
+    /// for the catalog records under it.
+    ///
+    /// The scope is over RECORDS, not the filesystem: a folder that was
+    /// never scanned has no records, and an ID has nowhere to live
+    /// without one. That case is reported rather than silently doing
+    /// nothing — "I clicked it and it did nothing" is the worst possible
+    /// answer.
+    func chooseFolderForSignatures() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.message = "Compute file signatures for catalogued media in this folder"
+        panel.prompt = "Compute"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let prefix = url.path
+        let scoped = VideoScanModel.planContentHashBackfill(
+            records: model.records,
+            isReachable: { VolumeReachability.isReachable(path: $0) },
+            pathPrefix: prefix)
+
+        guard !scoped.isEmpty else {
+            model.log(scoped.alreadyHashed > 0
+                      ? "File signatures: everything under \(url.lastPathComponent) already has one."
+                      : "File signatures: nothing catalogued under \(url.lastPathComponent) — scan it first.")
+            return
+        }
+        Task { await model.runContentHashBackfill(pathPrefix: prefix) }
+    }
+
     private func recomputeVolumeAggregates() {
         // Toolbar badge counts ride the same triggers — one extra O(n)
         // pass here instead of two per render.
@@ -404,29 +436,69 @@ extension CatalogView {
                     // be the alternative, but this pass is additive and
                     // interruptible (it only ever writes a hash onto a
                     // record that has none), so the label is enough.
-                    Section("Content hashes") {
-                        // Read the CACHED plan. Computing it here would be
-                        // O(records) inside a view body — and worse, the
-                        // reachability probe is filesystem I/O, so it would
-                        // stat once per record every time this menu built.
+                    // "File Signatures", not "content hashes" (Rick
+                    // 2026-08-12). This app is family-facing and "hash"
+                    // is developer jargon. "Signature" also carries the
+                    // RULE for free: two files with the same signature
+                    // are the same file. The first attempt, "Unique ID",
+                    // implied the opposite — that each file gets its own
+                    // — when duplicates SHARING one is the entire point.
+                    //
+                    // Scoped, because "try it on one volume first" is the
+                    // right instinct for a pass that mutates thousands of
+                    // records — and until now the only option was all of
+                    // them at once.
+                    Section("File Signatures") {
                         let plan = hashBackfillPlan
                         Button {
                             Task { await model.runContentHashBackfill() }
                         } label: {
                             Label(plan.isEmpty
-                                  ? "All reachable files hashed"
-                                  : "Compute Content Hashes — \(plan.candidates) files, ≈\(Int(plan.estimatedSeconds / 60) + 1) min",
+                                  ? "All online files have signatures"
+                                  : "All Online Volumes — \(plan.candidates) files, ≈\(Int(plan.estimatedSeconds / 60) + 1) min",
                                   systemImage: "number.square")
                         }
                         .disabled(plan.isEmpty || model.isScanning)
-                        .help("Compute the segmented content hash used for safe duplicate detection. Reads 3 MiB per file — no ffprobe, no file is modified. Safe to interrupt and re-run.")
+                        .help("Give each file a signature computed from its contents. Two files with the SAME signature are the same file — that is how duplicates are found. Reads 3 MB per file, changes nothing on disk, and is safe to stop and re-run.")
+
+                        // One entry per reachable volume, each carrying
+                        // its own count so the cost is visible BEFORE the
+                        // click rather than discovered during it.
+                        Menu("One Volume…") {
+                            ForEach(model.scanTargets.filter {
+                                $0.isReachable && !$0.searchPath.isEmpty
+                            }) { target in
+                                let scoped = VideoScanModel.planContentHashBackfill(
+                                    records: model.records,
+                                    isReachable: { _ in true },
+                                    pathPrefix: target.searchPath)
+                                Button {
+                                    Task {
+                                        await model.runContentHashBackfill(
+                                            pathPrefix: target.searchPath)
+                                    }
+                                } label: {
+                                    Label("\(VolumeReachability.displayLabel(forPath: target.searchPath)) — \(scoped.candidates) files",
+                                          systemImage: "externaldrive")
+                                }
+                                .disabled(scoped.isEmpty || model.isScanning)
+                            }
+                        }
+                        .disabled(model.isScanning)
+
+                        Button {
+                            chooseFolderForSignatures()
+                        } label: {
+                            Label("Choose Folder or File…", systemImage: "folder")
+                        }
+                        .disabled(model.isScanning)
 
                         if plan.unreachable > 0 {
                             Text("\(plan.unreachable) more need their drives mounted")
                                 .font(.caption)
                         }
                         if plan.alreadyHashed > 0 {
-                            Text("\(plan.alreadyHashed) already hashed")
+                            Text("\(plan.alreadyHashed) already have signatures")
                                 .font(.caption)
                         }
                     }
