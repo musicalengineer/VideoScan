@@ -118,6 +118,12 @@ extension CatalogView {
             records: model.records,
             onlineVolumes: onlineVolumes
         )
+        // Content-hash backfill plan for the Catalog Options menu. Reuses
+        // the SAME cached volume set rather than stat()-ing per record.
+        hashBackfillPlan = VideoScanModel.planContentHashBackfill(
+            records: model.records,
+            isReachable: { onlineVolumes.contains(VolumeReachability.volumeName(forPath: $0)) }
+        )
         let targets = model.scanTargets
         guard !targets.isEmpty else {
             volumeAggregateCache = [:]
@@ -320,6 +326,43 @@ extension CatalogView {
                                 Label(VolumeReachability.displayLabel(forPath: target.searchPath),
                                       systemImage: target.status == .resumable ? "arrow.clockwise" : "play.fill")
                             }
+                        }
+                    }
+
+                    // Content-hash backfill (2026-08-11). Deliberately a
+                    // menu item rather than a toolbar button: it is a
+                    // once-per-catalog maintenance pass, not a daily verb.
+                    //
+                    // The LABEL carries the cost — file count and a time
+                    // estimate — so clicking is an informed decision rather
+                    // than a surprise 20-minute job. A confirm sheet would
+                    // be the alternative, but this pass is additive and
+                    // interruptible (it only ever writes a hash onto a
+                    // record that has none), so the label is enough.
+                    Section("Content hashes") {
+                        // Read the CACHED plan. Computing it here would be
+                        // O(records) inside a view body — and worse, the
+                        // reachability probe is filesystem I/O, so it would
+                        // stat once per record every time this menu built.
+                        let plan = hashBackfillPlan
+                        Button {
+                            Task { await model.runContentHashBackfill() }
+                        } label: {
+                            Label(plan.isEmpty
+                                  ? "All reachable files hashed"
+                                  : "Compute Content Hashes — \(plan.candidates) files, ≈\(Int(plan.estimatedSeconds / 60) + 1) min",
+                                  systemImage: "number.square")
+                        }
+                        .disabled(plan.isEmpty || model.isScanning)
+                        .help("Compute the segmented content hash used for safe duplicate detection. Reads 3 MiB per file — no ffprobe, no file is modified. Safe to interrupt and re-run.")
+
+                        if plan.unreachable > 0 {
+                            Text("\(plan.unreachable) more need their drives mounted")
+                                .font(.caption)
+                        }
+                        if plan.alreadyHashed > 0 {
+                            Text("\(plan.alreadyHashed) already hashed")
+                                .font(.caption)
                         }
                     }
 

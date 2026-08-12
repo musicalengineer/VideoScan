@@ -202,6 +202,10 @@ struct CatalogView: View {
     /// Tidy Catalog dry-run sheet. Moved here from CatalogToolbar on
     /// 2026-08-11 when the button moved up to the Volume Scanner row.
     @State var showTidySheet = false
+    /// Cached content-hash backfill plan for the Catalog Options menu.
+    /// Same discipline as `storageTotals`: the computation is O(records)
+    /// and must never run from a view body.
+    @State var hashBackfillPlan = VideoScanModel.ContentHashBackfillPlan()
     @State private var showDashboard = false
     @State private var showInspector = true
     @State private var sortOrder = [KeyPathComparator(\VideoRecord.filename)]
