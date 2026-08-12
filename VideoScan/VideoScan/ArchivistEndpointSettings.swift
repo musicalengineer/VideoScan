@@ -27,6 +27,36 @@ struct ArchivistEndpointSettings: View {
     @State private var hosts: [String] = []
     @State private var newHost: String = ""
     @State private var loaded = false
+    /// Liveness per host, keyed by host string. Same probe the failover
+    /// walker uses, so the light cannot disagree with routing: if it is
+    /// green here, that host is the one that will answer.
+    @State private var status: [String: Liveness] = [:]
+    @State private var checking = false
+
+    enum Liveness: Equatable {
+        case unknown, online, offline(String)
+
+        var color: Color {
+            switch self {
+            case .online:  return .green
+            case .offline: return .yellow   // Rick: yellow, not red — a
+                                            // sleeping laptop is normal,
+                                            // not an error state.
+            case .unknown: return .secondary
+            }
+        }
+        var label: String {
+            switch self {
+            case .online:  return "online"
+            case .offline: return "offline"
+            case .unknown: return "—"
+            }
+        }
+        var detail: String {
+            if case .offline(let why) = self { return why }
+            return ""
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -60,6 +90,18 @@ struct ArchivistEndpointSettings: View {
                         .truncationMode(.middle)
                         .help(OllamaEndpoints.chatURLString(for: host, defaultPort: 11434))
 
+                    // Liveness light. Answers "is my Archivist's brain
+                    // awake?" without asking it a question and waiting.
+                    let state = status[host] ?? .unknown
+                    Circle()
+                        .fill(state.color)
+                        .frame(width: 8, height: 8)
+                    Text(state.label)
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                        .frame(width: 46, alignment: .leading)
+                        .help(state.detail.isEmpty ? state.label : state.detail)
+
                     Spacer()
 
                     Button { move(index, by: -1) } label: { Image(systemName: "arrow.up") }
@@ -85,21 +127,33 @@ struct ArchivistEndpointSettings: View {
                     .disabled(OllamaEndpoints.normalize(newHost) == nil)
             }
 
-            HStack {
+            HStack(spacing: 10) {
                 Button("Restore Defaults") {
                     hosts = OllamaEndpoints.defaultHosts
                     persist()
+                    Task { await refreshLiveness() }
                 }
                 .controlSize(.small)
+
+                Button(checking ? "Checking…" : "Check Servers") {
+                    Task { await refreshLiveness() }
+                }
+                .controlSize(.small)
+                .disabled(checking || hosts.isEmpty)
+
                 Spacer()
             }
         }
         .onAppear {
             // Load once. Re-reading on every appearance would discard an
             // in-progress edit if the pane redrew.
-            guard !loaded else { return }
-            hosts = OllamaEndpoints.resolved(from: defaultsStore)
-            loaded = true
+            if !loaded {
+                hosts = OllamaEndpoints.resolved(from: defaultsStore)
+                loaded = true
+            }
+            // Lights refresh every time the pane appears — a stale green
+            // is worse than no light at all.
+            Task { await refreshLiveness() }
         }
     }
 
@@ -136,5 +190,37 @@ struct ArchivistEndpointSettings: View {
 
     private func persist() {
         OllamaEndpoints.save(hosts, to: defaultsStore)
+    }
+
+    /// Probe every host concurrently. Uses the SAME `probeLiveness` the
+    /// failover walker uses, so a green light is a promise about routing
+    /// rather than a second, separately-drifting opinion.
+    ///
+    /// Concurrent, not sequential: with three hosts and a 3s timeout,
+    /// checking them one at a time would leave the pane sitting on
+    /// "Checking…" for nine seconds.
+    @MainActor
+    private func refreshLiveness() async {
+        guard !checking, !hosts.isEmpty else { return }
+        checking = true
+        defer { checking = false }
+
+        let snapshot = hosts
+        let results = await withTaskGroup(of: (String, Liveness).self) { group in
+            for host in snapshot {
+                group.addTask {
+                    var probe = OllamaQueryTranslator()
+                    probe.host = host
+                    if let down = await probe.probeLiveness() {
+                        return (host, .offline(down.errorDescription ?? "offline"))
+                    }
+                    return (host, .online)
+                }
+            }
+            var out: [String: Liveness] = [:]
+            for await (host, state) in group { out[host] = state }
+            return out
+        }
+        status = results
     }
 }

@@ -99,10 +99,61 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     var host: String = "ricksm5.local"
     var port: Int = 11434
     var model: String = "qwen3.6:35b-a3b-nvfp4"
+    /// Generation budget. Deliberately generous: a cold 35B model can
+    /// take tens of seconds to produce its first byte, and ollama's
+    /// non-streaming reply sends nothing until it is done — so this
+    /// ceiling binds on THINKING, which we do not want to abort.
     var timeoutSeconds: Double = 20
+
+    /// Liveness budget, and the reason the one above can stay generous.
+    /// Answering "is this host up?" is a round trip, not a computation,
+    /// so a host that has not replied in three seconds is not busy — it
+    /// is asleep, off-network, or gone. Separating the two is what stops
+    /// a sleeping primary from costing a full generation timeout before
+    /// the fallback is even tried (codex #314).
+    var probeTimeoutSeconds: Double = 3
     var transport: Transport = .urlSession
 
     var displayName: String { "\(model) @ \(host)" }
+
+    /// Cheap liveness check against `/api/tags`.
+    ///
+    /// Returns nil when the host is serving, or the reason it is not.
+    /// Never throws: callers treat "no answer" as a routing fact, not an
+    /// exception.
+    func probeLiveness() async -> NLTranslatorError? {
+        let urlString = OllamaEndpoints.tagsURLString(for: host, defaultPort: port)
+        guard let url = URL(string: urlString) else {
+            return .unreachable("bad URL for host \(host)")
+        }
+        switch transport {
+        case .urlSession:
+            var request = URLRequest(url: url, timeoutInterval: probeTimeoutSeconds)
+            request.httpMethod = "GET"
+            do {
+                let (_, response) = try await URLSession.shared.data(for: request)
+                if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+                    return .serverError(status: http.statusCode, detail: "probe")
+                }
+                return nil
+            } catch {
+                return .unreachable(error.localizedDescription)
+            }
+        case .fake(let handler):
+            let result = await handler(urlString, Data())
+            if let transportError = result.transportError { return .unreachable(transportError) }
+            if let status = result.statusCode, status != 200 {
+                return .serverError(status: status, detail: "probe")
+            }
+            return nil
+        case .curl:
+            let result = await ProcessRunner.runProcess(
+                executable: "/usr/bin/curl",
+                arguments: ["-sS", "-m", "\(Int(probeTimeoutSeconds))", urlString],
+                stdoutLimitBytes: 1 << 16)
+            return result.exitCode == 0 ? nil : .unreachable("curl exit \(result.exitCode)")
+        }
+    }
 
     func translate(_ text: String) async throws -> NLQuerySpec {
         // `host` may be a bare name ("RicksM4.local"), a name with a

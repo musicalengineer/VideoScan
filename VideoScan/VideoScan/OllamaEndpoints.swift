@@ -98,6 +98,15 @@ enum OllamaEndpoints {
             : "http://\(e):\(defaultPort)/api/chat"
     }
 
+    /// Liveness URL for one endpoint. `/api/tags` is ollama's cheapest
+    /// honest endpoint: it answers only if the server is actually up and
+    /// serving, and it returns immediately rather than generating.
+    static func tagsURLString(for endpoint: String, defaultPort: Int) -> String {
+        let chat = chatURLString(for: endpoint, defaultPort: defaultPort)
+        guard chat.hasSuffix("/api/chat") else { return chat }
+        return String(chat.dropLast("chat".count)) + "tags"
+    }
+
     /// Short label for the UI — the bit a human recognises.
     static func displayLabel(for endpoint: String) -> String {
         guard let e = normalize(endpoint) else { return endpoint }

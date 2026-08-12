@@ -53,12 +53,22 @@ private func fakeTranslator(
 ) -> OllamaFailoverTranslator {
     var template = OllamaQueryTranslator()
     template.transport = .fake { urlString, _ in
-        // urlString is "http://<host>:11434/api/chat"
+        // urlString is "http://<host>:11434/api/{chat,tags}". Failover
+        // probes /api/tags first, so the stub answers both: a host whose
+        // stubbed CHAT reply is a transport failure is treated as down
+        // for the probe too, which is what a sleeping machine looks
+        // like. Only the chat call counts as "dialled" — the probe is
+        // plumbing, and asserting on it would make every ordering test
+        // about probes instead of routing.
         let host = urlString
             .replacingOccurrences(of: "http://", with: "")
             .split(separator: ":").first.map(String.init) ?? ""
+        let stub = responses[host] ?? .down("no stub for \(host)")
+        if urlString.hasSuffix("/api/tags") {
+            return stub.transportError == nil ? .ok("{\"models\":[]}") : stub
+        }
         await dialled.record(host)
-        return responses[host] ?? .down("no stub for \(host)")
+        return stub
     }
     return OllamaFailoverTranslator(hosts: hosts, template: template, onResponder: onResponder)
 }
@@ -102,7 +112,11 @@ struct OllamaFailoverTests {
         )
         _ = try await t.translate("donna 1990s")
 
-        #expect(await dialled.all() == ["RicksM4.local", "ricksm5.local"])
+        // Only the LAPTOP is dialled for generation: the Studio is
+        // eliminated by the 3s liveness probe and never costs a 20s
+        // generation timeout (codex #314). `dialled` records chat calls
+        // only, so a skipped host correctly leaves no entry.
+        #expect(await dialled.all() == ["ricksm5.local"])
         #expect(responder.get() == "ricksm5.local",
                 "the reported responder must be the host that actually answered")
     }
@@ -193,7 +207,8 @@ struct OllamaFailoverTests {
             #expect(text.contains("RicksM4.local"))
             #expect(text.contains("ricksm5.local"))
         }
-        #expect(await dialled.all().count == 2)
+        // Both eliminated at the probe, so neither reached generation.
+        #expect(await dialled.all().isEmpty)
     }
 
     @Test func retryClassificationTruthTable() {
@@ -315,5 +330,87 @@ struct OllamaEndpointsTests {
         let d = suite()
         OllamaEndpoints.save(["one.local", "two.local", "three.local"], to: d)
         #expect(OllamaEndpoints.resolved(from: d) == ["one.local", "two.local", "three.local"])
+    }
+}
+
+
+// MARK: - Liveness probe (codex #314)
+
+@Suite("Archivist liveness — probe before generate")
+struct OllamaLivenessProbeTests {
+
+    /// THE point of the probe. codex asked for a shorter per-host
+    /// timeout so a sleeping primary stops making the app look hung.
+    /// Shrinking the single timeout would have been the wrong fix — it
+    /// would abort a HEALTHY M4 cold-loading a 21.9 GB model. Two
+    /// budgets instead: liveness is a round trip (3s), generation is a
+    /// computation (20s), and they are checked separately.
+    @Test func probeAndGenerationHaveSeparateBudgets() {
+        let t = OllamaQueryTranslator()
+        #expect(t.probeTimeoutSeconds < t.timeoutSeconds,
+                "liveness must be cheaper than generation")
+        #expect(t.probeTimeoutSeconds <= 5, "a dead host must be cheap to discover")
+        #expect(t.timeoutSeconds >= 20, "a cold 35B load must not be cut off")
+    }
+
+    /// A down host must be skipped on the PROBE — never reaching the
+    /// generation request, which is where the long timeout lives.
+    @Test func deadPrimaryIsSkippedWithoutASlowGenerationCall() async throws {
+        let chatCalls = Dialled()
+        var template = OllamaQueryTranslator()
+        template.transport = .fake { urlString, _ in
+            if urlString.contains("dead.local") { return .down("asleep") }
+            if urlString.hasSuffix("/api/tags") { return .ok("{\"models\":[]}") }
+            await chatCalls.record("live.local")
+            return .ok(goodReply)
+        }
+        let t = OllamaFailoverTranslator(hosts: ["dead.local", "live.local"], template: template)
+        _ = try await t.translate("x")
+
+        #expect(await chatCalls.all() == ["live.local"],
+                "the dead host must never reach the generation call")
+    }
+
+    /// A host that is UP but whose probe endpoint 500s is still a host
+    /// problem — fail over rather than asking it to generate.
+    @Test func probeServerErrorFailsOver() async throws {
+        let chatCalls = Dialled()
+        var template = OllamaQueryTranslator()
+        template.transport = .fake { urlString, _ in
+            if urlString.contains("sick.local") {
+                return urlString.hasSuffix("/api/tags") ? .status(503) : .ok(goodReply)
+            }
+            if urlString.hasSuffix("/api/tags") { return .ok("{\"models\":[]}") }
+            await chatCalls.record("ok.local")
+            return .ok(goodReply)
+        }
+        let t = OllamaFailoverTranslator(hosts: ["sick.local", "ok.local"], template: template)
+        _ = try await t.translate("x")
+        #expect(await chatCalls.all() == ["ok.local"])
+    }
+
+    /// The probe must be skippable: with one host and no fallback the
+    /// extra round trip buys nothing.
+    @Test func probeCanBeDisabled() async throws {
+        let chatCalls = Dialled()
+        var template = OllamaQueryTranslator()
+        template.transport = .fake { urlString, _ in
+            if urlString.hasSuffix("/api/tags") { return .down("probe should not run") }
+            await chatCalls.record("solo.local")
+            return .ok(goodReply)
+        }
+        var t = OllamaFailoverTranslator(hosts: ["solo.local"], template: template)
+        t.probeBeforeRequest = false
+        _ = try await t.translate("x")
+        #expect(await chatCalls.all() == ["solo.local"])
+    }
+
+    /// The settings light and the router must not drift: both ask the
+    /// same `/api/tags` question of the same endpoint.
+    @Test func probeURLMatchesTheChatEndpointsHost() {
+        let tags = { OllamaEndpoints.tagsURLString(for: $0, defaultPort: 11434) }
+        #expect(tags("RicksM4.local") == "http://RicksM4.local:11434/api/tags")
+        #expect(tags("https://ollama.example.com") == "https://ollama.example.com/api/tags")
+        #expect(tags("box.lan:9000") == "http://box.lan:9000/api/tags")
     }
 }

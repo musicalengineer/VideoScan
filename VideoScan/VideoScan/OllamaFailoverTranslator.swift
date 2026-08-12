@@ -21,6 +21,14 @@
 // answered me?" is exactly what Rick needs to know when the Archivist
 // feels slow.
 //
+// TWO TIMEOUTS, NOT ONE. Each host is probed for liveness (3s) before
+// being asked to generate (20s). codex flagged that a sleeping primary
+// otherwise costs a full generation timeout per host before the fallback
+// is reached — and that simply shrinking the one timeout would abort a
+// HEALTHY M4 cold-loading a 21.9 GB model, reintroducing the very
+// failure this file exists to prevent. Liveness is a round trip;
+// generation is a computation; they deserve different budgets.
+//
 // Errors: if every host fails, the LAST error is thrown, with all the
 // attempts summarized in its text — a bare "unreachable" naming only the
 // final host would hide that the primary was asleep.
@@ -42,6 +50,11 @@ struct OllamaFailoverTranslator: NLQueryTranslating {
     /// Called for each failed host, so the console can show the walk
     /// rather than a silent pause while timeouts elapse.
     var onAttemptFailed: (@Sendable (String, Error) -> Void)?
+
+    /// Probe each host's liveness before spending a generation timeout
+    /// on it. ON by default — see the header. Disable only for a
+    /// single-host setup where the extra round trip buys nothing.
+    var probeBeforeRequest: Bool = true
 
     init(hosts: [String],
          template: OllamaQueryTranslator = OllamaQueryTranslator(),
@@ -68,6 +81,21 @@ struct OllamaFailoverTranslator: NLQueryTranslating {
         for host in order {
             var attempt = template
             attempt.host = host
+
+            // Liveness first. This is the whole answer to "an asleep
+            // primary makes the app look hung": a dead host costs one
+            // 3-second probe instead of a full 20-second generation
+            // budget, while a LIVE but slow host — a cold 35B load — is
+            // never cut off, because the probe passes and the long
+            // timeout then applies to thinking only.
+            if probeBeforeRequest, let down = await attempt.probeLiveness() {
+                attempts.append("\(host): \(Self.shortReason(down))")
+                onAttemptFailed?(host, down)
+                lastError = down
+                if Task.isCancelled { throw CancellationError() }
+                continue
+            }
+
             do {
                 let spec = try await attempt.translate(text)
                 onResponder?(host)
