@@ -37,26 +37,31 @@ struct DossierToolbarChip: View {
         Button {
             DossierWindowOpener.open(using: openWindow, source: "chip")
         } label: {
+            // Geometry matched to backupStatusBadge, its immediate
+            // neighbour on the Volume Scanner row (Rick 2026-08-12: the
+            // chip "doesn't blend in with the theme on this row"). The
+            // old version stacked two lines of text beside a 22pt ring,
+            // which made it noticeably taller and heavier than every
+            // bordered button around it — it read as pasted on rather
+            // than part of the row. One line, a smaller ring, and the
+            // badge's stroke/fill treatment put it in the same register.
             HStack(spacing: 6) {
                 MiniRing(progress: progress, active: rate.perMinute >= 1)
-                    .frame(width: 22, height: 22)
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(headlineCount)
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                    Text(subText)
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
-                }
+                    .frame(width: 14, height: 14)
+                Text(headlineCount)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
+            .foregroundColor(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
             .background(
                 RoundedRectangle(cornerRadius: 6)
-                    .fill(Color.secondary.opacity(0.10))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color.secondary.opacity(0.18), lineWidth: 0.5)
+                    .stroke(Color.secondary.opacity(0.4), lineWidth: 1)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6)
+                            .fill(Color.secondary.opacity(0.08))
+                    )
             )
         }
         .buttonStyle(.plain)

@@ -280,6 +280,49 @@ extension CatalogView {
                 .buttonStyle(.bordered)
                 .controlSize(.large)
 
+
+                // "Show unscanned" toggle and "Clean up unscanned" button
+                // both removed from the toolbar 2026-06-07 per Rick's
+                // 14" M5 cleanup pass — they were eating toolbar width
+                // for actions Rick doesn't take daily. View → Online is
+                // his preferred filter; the underlying `showUnscannedTargets`
+                // AppStorage stays so the strict-catalog view persists
+                // (off by default), and `cleanupUnscannedTargets()` on
+                // the model is still callable from other surfaces if we
+                // ever want a "Tools" menu entry.
+
+
+                ScanOptionsMenu(model: model)
+
+                Button(action: { openWindow(id: "compare") }) {
+                    Label("Compare Volumes", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .help("Compare two volumes — show what's unique to the source volume (would be lost if it died). Opens in its own window so a multi-hour rescue copy doesn't block the main UI.")
+
+                // Migrate moved up here from the catalog toolbar
+                // (Rick 2026-08-11): it is a VOLUME operation — copy off a
+                // flaky drive onto a healthier one — so it belongs beside
+                // Compare in the Volume Scanner, not down among the
+                // per-record catalog actions.
+                Button(action: { showRelocateSheet = true }) {
+                    Label("Migrate Volume…", systemImage: "externaldrive.badge.checkmark")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .disabled(model.records.isEmpty)
+                .accessibilityIdentifier("catalog.relocate.openSheet")
+                .help("Copy catalogued files from a flaky source volume onto a healthier destination and rewrite catalog paths.")
+
+                // Persistent rescue progress chip — only visible when
+                // a copy is in flight (or just finished, awaiting ack).
+                // Click opens the Compare window. Chip subscribes to
+                // VolumeRescueOperation via @EnvironmentObject on its
+                // own scope so a rescue tick doesn't re-render
+                // ContentView's body.
+                RescueToolbarChip()
+
                 Menu {
                     ForEach(VolumeFilter.allCases, id: \.self) { filter in
                         Button(action: { toggleVolumeFilter(filter) }) {
@@ -292,22 +335,52 @@ extension CatalogView {
                         }
                     }
                 } label: {
-                    Label("View", systemImage: "line.3.horizontal.decrease.circle")
+                    Label("Volumes", systemImage: "line.3.horizontal.decrease.circle")
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
-                .help("Filter which volumes appear in the list")
+                .help("Filter which volumes appear in the list below")
 
-                // "Show unscanned" toggle and "Clean up unscanned" button
-                // both removed from the toolbar 2026-06-07 per Rick's
-                // 14" M5 cleanup pass — they were eating toolbar width
-                // for actions Rick doesn't take daily. View → Online is
-                // his preferred filter; the underlying `showUnscannedTargets`
-                // AppStorage stays so the strict-catalog view persists
-                // (off by default), and `cleanupUnscannedTargets()` on
-                // the model is still callable from other surfaces if we
-                // ever want a "Tools" menu entry.
+                // Volume run controls. These are volume-scanning VERBS, so
+                // they belong in the volume group rather than stranded on
+                // the far right (Rick 2026-08-12). Divider marks "settings
+                // above, execution here" inside the same group.
+                Divider().frame(height: 22)
 
+                Button(action: { model.startAllTargets() }) {
+                    Label("Scan All", systemImage: "play.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(model.scanTargets.isEmpty || model.scanTargets.allSatisfy { $0.status.isActive })
+                // Gauntlet flows 2/3/4 kick off the fixture scan here. Test-only.
+                .accessibilityIdentifier("catalog.scanAll")
+
+                Button(action: {
+                    if model.hasPausedTargets { model.resumeAllTargets() } else { model.pauseAllTargets() }
+                }) {
+                    Label(model.hasPausedTargets ? "Resume All" : "Pause All",
+                          systemImage: model.hasPausedTargets ? "play.fill" : "pause.fill")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .disabled(!model.hasActiveTargets && !model.hasPausedTargets)
+
+                Button(action: { model.stopAllTargets() }) {
+                    Label("Stop All", systemImage: "stop.fill")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .disabled(!model.hasActiveTargets)
+
+                Spacer(minLength: 20)
+
+                // ── CATALOG OPS ────────────────────────────────
+                // Everything past the spacer acts on the CATALOG; everything
+                // before it acts on VOLUMES (Rick 2026-08-12: "Volume stuff
+                // on left, Catalog stuff to the right… things have to fall
+                // into one of these categories"). Menu first, then the two
+                // housekeeping verbs, then the status chips.
                 Menu {
                     Section("Scan") {
                         Button(action: { model.startAllTargets() }) {
@@ -414,45 +487,7 @@ extension CatalogView {
                 .fixedSize()
                 .help("Update or delete catalog data")
 
-                ScanOptionsMenu(model: model)
 
-                Button(action: { openWindow(id: "compare") }) {
-                    Label("Compare", systemImage: "arrow.triangle.2.circlepath")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-
-                // Migrate moved up here from the catalog toolbar
-                // (Rick 2026-08-11): it is a VOLUME operation — copy off a
-                // flaky drive onto a healthier one — so it belongs beside
-                // Compare in the Volume Scanner, not down among the
-                // per-record catalog actions.
-                Button(action: { showRelocateSheet = true }) {
-                    Label("Migrate…", systemImage: "externaldrive.badge.checkmark")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .disabled(model.records.isEmpty)
-                .accessibilityIdentifier("catalog.relocate.openSheet")
-                .help("Copy catalogued files from a flaky source volume onto a healthier destination and rewrite catalog paths.")
-
-
-                .help("Compare two volumes — show what's unique to the source volume (would be lost if it died). Opens in its own window so a multi-hour rescue copy doesn't block the main UI.")
-
-                // Persistent rescue progress chip — only visible when
-                // a copy is in flight (or just finished, awaiting ack).
-                // Click opens the Compare window. Chip subscribes to
-                // VolumeRescueOperation via @EnvironmentObject on its
-                // own scope so a rescue tick doesn't re-render
-                // ContentView's body.
-                RescueToolbarChip()
-
-                Spacer().frame(minWidth: 20)
-
-                // Tidy sits immediately left of Backup: both are whole-
-                // CATALOG housekeeping verbs, as against Compare/Migrate
-                // which act on volumes. Adjacency is the grouping (Rick
-                // 2026-08-11).
                 Button {
                     showTidySheet = true
                 } label: {
@@ -469,33 +504,6 @@ extension CatalogView {
                 // crowded the media-kind label into being clipped).
                 DossierToolbarChip(model: model)
 
-                Spacer().frame(minWidth: 8)
-
-                Button(action: { model.startAllTargets() }) {
-                    Label("Scan All", systemImage: "play.fill")
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(model.scanTargets.isEmpty || model.scanTargets.allSatisfy { $0.status.isActive })
-                // Gauntlet flows 2/3/4 kick off the fixture scan here. Test-only.
-                .accessibilityIdentifier("catalog.scanAll")
-
-                Button(action: {
-                    if model.hasPausedTargets { model.resumeAllTargets() } else { model.pauseAllTargets() }
-                }) {
-                    Label(model.hasPausedTargets ? "Resume All" : "Pause All",
-                          systemImage: model.hasPausedTargets ? "play.fill" : "pause.fill")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .disabled(!model.hasActiveTargets && !model.hasPausedTargets)
-
-                Button(action: { model.stopAllTargets() }) {
-                    Label("Stop All Scanning", systemImage: "stop.fill")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .disabled(!model.hasActiveTargets)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
