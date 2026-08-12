@@ -64,6 +64,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let tapeName: String
     public let isPlayable: String
     public let partialMD5: String
+    public let contentHash: String
     public let fullPath: String
     public let directory: String
     public let notes: String
@@ -175,6 +176,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
         tapeName                    = r.tapeName
         isPlayable                  = r.isPlayable
         partialMD5                  = r.partialMD5
+        contentHash                 = r.contentHash
         fullPath                    = r.fullPath
         directory                   = r.directory
         notes                       = r.notes
@@ -286,6 +288,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
         try c.encode(tapeName, forKey: .tapeName)
         try c.encode(isPlayable, forKey: .isPlayable)
         try c.encode(partialMD5, forKey: .partialMD5)
+        try c.encode(contentHash, forKey: .contentHash)
         try c.encode(fullPath, forKey: .fullPath)
         try c.encode(directory, forKey: .directory)
         try c.encode(notes, forKey: .notes)

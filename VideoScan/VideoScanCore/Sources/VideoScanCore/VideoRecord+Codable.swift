@@ -37,6 +37,7 @@ extension VideoRecord {
         case container, videoCodec, resolution, frameRate, videoBitrate, totalBitrate
         case colorSpace, bitDepth, scanType, audioCodec, audioChannels, audioSampleRate
         case timecode, tapeName, isPlayable, partialMD5, fullPath, directory, notes
+        case contentHash
         case originalFullPath, originVolume
         case avidClipName, avidMobID, avidMaterialUUID, avidBinFile, avidMobType
         case avidMediaPath, avidTapeName, avidEditRate, avidTracks

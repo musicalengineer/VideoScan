@@ -69,6 +69,7 @@ extension VideoRecord {
         c.tapeName = tapeName
         c.isPlayable = isPlayable
         c.partialMD5 = partialMD5
+        c.contentHash = contentHash
         c.fullPath = fullPath
         c.directory = directory
         c.notes = notes

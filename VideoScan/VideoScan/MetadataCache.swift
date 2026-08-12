@@ -98,9 +98,41 @@ final class MetadataCache {
                 partial_md5 TEXT,
                 directory TEXT,
                 notes TEXT,
+                content_hash TEXT,
                 PRIMARY KEY (path, file_size, mod_date)
             )
         """)
+        migrateAddContentHashColumn()
+    }
+
+    /// Additive migration for databases created before 2026-08-11.
+    ///
+    /// WHY THIS IS LOAD-BEARING. `probeFile` consults this cache BEFORE it
+    /// hashes anything and returns early on a hit. Without the column, a
+    /// cache hit would hand back an outcome whose `contentHash` is "" —
+    /// so a rescan of an already-catalogued volume would not merely fail
+    /// to populate the hash, it would ERASE hashes a backfill had just
+    /// spent an hour computing. `partial_md5` has always survived rescans
+    /// for exactly this reason: it lives here. The new hash must too.
+    ///
+    /// `ALTER TABLE ADD COLUMN` appends, so existing rows read the new
+    /// column as NULL → "" and simply re-hash on next touch. Additive
+    /// only: no data is rewritten, no column is dropped or reordered
+    /// (the positional `SELECT *` decoding depends on that).
+    private func migrateAddContentHashColumn() {
+        guard let db = db else { return }
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, "PRAGMA table_info(probe_cache)", -1, &stmt, nil) == SQLITE_OK
+        else { return }
+        var hasColumn = false
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let c = sqlite3_column_text(stmt, 1),
+               String(cString: c) == "content_hash" { hasColumn = true; break }
+        }
+        sqlite3_finalize(stmt)
+        if !hasColumn {
+            exec("ALTER TABLE probe_cache ADD COLUMN content_hash TEXT")
+        }
     }
 
     deinit {
@@ -162,6 +194,7 @@ final class MetadataCache {
         o.probe.tapeName        = col(stmt, 26)
         o.probe.isPlayable      = col(stmt, 27)
         o.partialMD5            = col(stmt, 28)
+        o.contentHash           = col(stmt, 31)
         o.directory             = col(stmt, 29)
         o.notes                 = col(stmt, 30)
         return o
@@ -175,7 +208,7 @@ final class MetadataCache {
         guard let db = db else { return }
         let sql = """
             INSERT OR REPLACE INTO probe_cache VALUES (
-                ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+                ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
             )
         """
         var stmt: OpaquePointer?
@@ -213,6 +246,7 @@ final class MetadataCache {
         bind(stmt, 29, o.partialMD5)
         bind(stmt, 30, o.directory)
         bind(stmt, 31, o.notes)
+        bind(stmt, 32, o.contentHash)
 
         sqlite3_step(stmt)
     }
@@ -319,6 +353,7 @@ final class MetadataCache {
             rec.tapeName        = col(stmt, 26)
             rec.isPlayable      = col(stmt, 27)
             rec.partialMD5      = col(stmt, 28)
+            rec.contentHash     = col(stmt, 31)
             rec.directory       = col(stmt, 29)
             rec.notes           = col(stmt, 30)
             out.append(rec)

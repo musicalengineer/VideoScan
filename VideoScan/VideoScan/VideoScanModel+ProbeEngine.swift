@@ -689,6 +689,11 @@ extension VideoScanModel {
             // dup detection for a faster pass — user can run "Analyze
             // Duplicates" later if they change their mind.
             o.partialMD5 = skipHashing ? "" : FileHasher.partialMD5(path: path)
+            // Segmented content hash — the identity strong enough to
+            // authorize deletion (see FileHasher). Rides the SAME
+            // skipHashing gate: it is three 1 MiB reads, negligible on
+            // local SSD and deliberately skippable over SMB.
+            o.contentHash = skipHashing ? "" : FileHasher.segmentedHash(path: path)
             return o
         }
 

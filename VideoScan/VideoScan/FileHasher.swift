@@ -3,9 +3,47 @@ import Darwin
 import Foundation
 
 // MARK: - FileHasher
+//
+// Two hashes, deliberately kept separate, for two jobs with very
+// different consequences.
+//
+//   partialMD5     — head+tail MD5, 64 KB chunks. The catalog's long-
+//                    standing identity key. Six subsystems key off it
+//                    (relocate reconcile, dossier propagation, catalog
+//                    import/export dedup, review sessions, duplicate
+//                    detection, training candidates). UNCHANGED.
+//
+//   segmentedHash  — head‖middle‖tail‖size SHA-256. Added 2026-08-11 for
+//                    the cleanup arc, where a hash decides whether a
+//                    family video gets DELETED.
+//
+// WHY A SECOND HASH RATHER THAN A BETTER FIRST ONE. partialMD5 reads the
+// first 64 KB and the last 64 KB and, critically, SKIPS THE TAIL
+// ENTIRELY for any file under 128 KB — but the real problem is what it
+// never looks at: the middle. Two distinct Avid MXF essence files from
+// one session share a wrapper header, and operational padding can leave
+// them the same length. Head + tail + size then say "identical" for two
+// files whose PICTURE CONTENT differs. That is a perfectly acceptable
+// risk for "suggest these might be duplicates" and an unacceptable one
+// for "delete five of these eight copies" — the failure is silent and
+// the footage is unrecoverable.
+//
+// WHY SEGMENTED RATHER THAN FULL-FILE. Rick's catalog holds 12 GB+ files
+// on spinning insurance drives. Streaming every byte of a duplicate
+// cluster would take minutes per file and hours per sweep; three 1 MB
+// reads take milliseconds. Binding sizeBytes INTO the digest means a
+// length difference alone changes the hash, so the only surviving
+// collision risk is two files that differ ONLY outside all three
+// sampled windows — which for real media means differing only in a
+// region that carries no container structure, no index, and no frame
+// data. For the deletion decision this is paired with an explicit
+// full-file verification of the SURVIVOR (see the cleanup plan), so the
+// segmented hash narrows the field and the full hash closes it.
+//
+// NO mmap ANYWHERE. mmap on a network file SIGBUSes (KERN_MEMORY_ERROR)
+// if the remote volume drops mid-read, and this code runs across SMB
+// against drives that sleep. Plain read()/lseek() only.
 
-/// Partial MD5 hashing for duplicate detection. Reads the first and last
-/// chunks of a file (no mmap — safe for network volumes).
 enum FileHasher {
 
     /// Compute a partial MD5 of the file at `path` by hashing the first and
@@ -42,5 +80,152 @@ enum FileHasher {
         }
 
         return md5.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    // MARK: - Segmented content hash
+
+    /// Bytes sampled from each of the three windows. 1 MiB is far past
+    /// any container header and deep enough into an essence stream to
+    /// carry real frame data.
+    static let segmentSize = 1 << 20   // 1 MiB
+
+    /// Version tag baked into the digest. If the sampling geometry ever
+    /// changes, bump this: stored hashes from the old geometry then
+    /// compare unequal to new ones instead of silently pairing files
+    /// that were never compared the same way. A silent geometry change
+    /// is how a dedup index quietly starts lying.
+    static let segmentedHashVersion = "v1"
+
+    /// Content hash for identity decisions, formatted `v1:<64 hex>`.
+    ///
+    /// Digest input is, in order: the version tag, the file's byte
+    /// length, then the head, middle, and tail windows. Length is bound
+    /// into the digest so two files of different size can never collide
+    /// no matter how their sampled bytes line up.
+    ///
+    /// Files at or under `3 × segmentSize` are hashed IN FULL — at that
+    /// size the three windows would overlap, and hashing everything is
+    /// both cheaper to reason about and strictly stronger. That makes
+    /// the function exact for anything ≤ 3 MiB and sampled above it.
+    ///
+    /// Returns "" on any I/O error, matching `partialMD5`'s contract:
+    /// callers already treat an empty hash as "no identity evidence",
+    /// and an empty string can never compare equal to a real digest.
+    static func segmentedHash(path: String, segmentSize: Int = FileHasher.segmentSize) -> String {
+        guard segmentSize > 0 else { return "" }
+
+        let fd = open(path, O_RDONLY)
+        guard fd >= 0 else { return "" }
+        defer { close(fd) }
+
+        var sb = stat()
+        guard fstat(fd, &sb) == 0 else { return "" }
+        // Directories, devices, and FIFOs are not content to hash. A
+        // FIFO in particular would BLOCK the scan thread forever.
+        guard (sb.st_mode & S_IFMT) == S_IFREG else { return "" }
+
+        let fileSize = Int(sb.st_size)
+        guard fileSize > 0 else { return "" }
+
+        var sha = SHA256()
+
+        // Bind version + length into the digest before any file bytes.
+        sha.update(data: Data("\(segmentedHashVersion):\(fileSize):".utf8))
+
+        let buf = UnsafeMutableRawPointer.allocate(byteCount: segmentSize, alignment: 16)
+        defer { buf.deallocate() }
+
+        /// Read exactly `count` bytes at `offset` into the digest.
+        /// read() is allowed to return short (signals, network
+        /// filesystems, large requests), so loop until satisfied — a
+        /// short read treated as complete would make the digest depend
+        /// on transport timing rather than on content.
+        func absorb(offset: Int, count: Int) -> Bool {
+            guard count > 0 else { return true }
+            guard lseek(fd, off_t(offset), SEEK_SET) == off_t(offset) else { return false }
+            var got = 0
+            while got < count {
+                let n = read(fd, buf.advanced(by: got), count - got)
+                if n > 0 {
+                    got += n
+                } else if n == 0 {
+                    break                       // EOF — file shrank under us
+                } else if errno == EINTR {
+                    continue                    // interrupted, retry
+                } else {
+                    return false                // real I/O error
+                }
+            }
+            guard got > 0 else { return false }
+            sha.update(bufferPointer: UnsafeRawBufferPointer(start: buf, count: got))
+            return true
+        }
+
+        if fileSize <= segmentSize * 3 {
+            // Small enough that sampling would overlap — hash it all.
+            var offset = 0
+            while offset < fileSize {
+                let chunk = min(segmentSize, fileSize - offset)
+                guard absorb(offset: offset, count: chunk) else { return "" }
+                offset += chunk
+            }
+        } else {
+            let midOffset = (fileSize - segmentSize) / 2
+            let tailOffset = fileSize - segmentSize
+            guard absorb(offset: 0, count: segmentSize),
+                  absorb(offset: midOffset, count: segmentSize),
+                  absorb(offset: tailOffset, count: segmentSize)
+            else { return "" }
+        }
+
+        let hex = sha.finalize().map { String(format: "%02x", $0) }.joined()
+        return "\(segmentedHashVersion):\(hex)"
+    }
+
+    /// Full-file SHA-256, for the final verification of a copy that is
+    /// about to become the SURVIVOR of a duplicate collapse. Streams in
+    /// `segmentSize` blocks — bounded memory regardless of file size.
+    ///
+    /// Deliberately NOT used for bulk indexing: on a 12 GB file over USB
+    /// this is minutes, not milliseconds. It exists so an irreversible
+    /// delete can be gated on certainty rather than on sampling.
+    static func fullHash(path: String, blockSize: Int = FileHasher.segmentSize) -> String {
+        guard blockSize > 0 else { return "" }
+        let fd = open(path, O_RDONLY)
+        guard fd >= 0 else { return "" }
+        defer { close(fd) }
+
+        var sb = stat()
+        guard fstat(fd, &sb) == 0 else { return "" }
+        guard (sb.st_mode & S_IFMT) == S_IFREG else { return "" }
+        let fileSize = Int(sb.st_size)
+        guard fileSize > 0 else { return "" }
+
+        var sha = SHA256()
+        sha.update(data: Data("full:\(fileSize):".utf8))
+
+        let buf = UnsafeMutableRawPointer.allocate(byteCount: blockSize, alignment: 16)
+        defer { buf.deallocate() }
+
+        var total = 0
+        while true {
+            let n = read(fd, buf, blockSize)
+            if n > 0 {
+                sha.update(bufferPointer: UnsafeRawBufferPointer(start: buf, count: n))
+                total += n
+            } else if n == 0 {
+                break
+            } else if errno == EINTR {
+                continue
+            } else {
+                return ""
+            }
+        }
+        // The file changed size mid-read: the digest describes bytes
+        // that no longer form the file. Refuse rather than return a
+        // hash nobody can reproduce.
+        guard total == fileSize else { return "" }
+
+        return "full:" + sha.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }

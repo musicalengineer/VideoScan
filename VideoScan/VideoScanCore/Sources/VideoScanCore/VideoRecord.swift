@@ -50,6 +50,14 @@ public class VideoRecord: Identifiable, Decodable {
     public var tapeName: String = ""
     public var isPlayable: String = ""
     public var partialMD5: String = ""
+    /// Segmented content hash (`v1:<sha256>` over head‖middle‖tail‖size).
+    /// Added 2026-08-11 as the identity key strong enough to authorize
+    /// DELETION — `partialMD5` never looks at the middle of a file, so it
+    /// cannot distinguish two Avid essence files that share a wrapper
+    /// header and a padded length. Empty means "not hashed yet"; it is
+    /// populated at scan time and by the backfill pass, and an empty
+    /// value must never be treated as matching anything.
+    public var contentHash: String = ""
     public var fullPath: String = ""
     public var directory: String = ""
     public var notes: String = ""
@@ -479,6 +487,7 @@ public class VideoRecord: Identifiable, Decodable {
         tapeName                    = try c.decodeIfPresent(String.self, forKey: .tapeName) ?? ""
         isPlayable                  = try c.decodeIfPresent(String.self, forKey: .isPlayable) ?? ""
         partialMD5                  = try c.decodeIfPresent(String.self, forKey: .partialMD5) ?? ""
+        contentHash                 = try c.decodeIfPresent(String.self, forKey: .contentHash) ?? ""
         fullPath                    = try c.decodeIfPresent(String.self, forKey: .fullPath) ?? ""
         directory                   = try c.decodeIfPresent(String.self, forKey: .directory) ?? ""
         notes                       = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""

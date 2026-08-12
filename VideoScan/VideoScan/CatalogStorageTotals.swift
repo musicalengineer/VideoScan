@@ -287,7 +287,7 @@ enum CatalogStorageTotalsCalculator {
 
             // Online tally rides the SAME pass — a second walk just to
             // sum reachable bytes would double the cost of the footer.
-            if onlineVolumes == nil || onlineVolumes!.contains(volume) {
+            if onlineVolumes.map({ $0.contains(volume) }) ?? true {
                 t.onlineBytes += bytes
                 t.onlineFileCount += 1
             }
