@@ -377,6 +377,32 @@ extension CatalogView {
                 Label(hasResumable ? "Resume Scan" : (single ? "Scan / Update Catalog" : "Scan Selected"),
                       systemImage: hasResumable ? "arrow.clockwise" : "arrow.clockwise")
             }
+            // File signatures for this volume — coverage first, then the
+            // action. Showing "1,204 of 1,513 files have signatures"
+            // BEFORE the button turns a blind command into an informed
+            // one, and answers "did that finish?" without a second trip
+            // (Rick 2026-08-12).
+            if single {
+                let coverage = signatureCoverage(for: first)
+                Section("File Signatures") {
+                    Text(coverage.total == 0
+                         ? "No catalogued files"
+                         : "\(coverage.signed) of \(coverage.total) files have signatures")
+                    if coverage.missing > 0 {
+                        Button {
+                            Task {
+                                await model.runContentHashBackfill(
+                                    pathPrefix: first.searchPath)
+                            }
+                        } label: {
+                            Label("Compute File Signatures (\(coverage.missing))",
+                                  systemImage: "number.square")
+                        }
+                        .disabled(model.isScanning || !first.isReachable)
+                    }
+                }
+            }
+
             if single {
                 Button(action: { model.verifyCatalog(for: first) }) {
                     Label("Verify Catalog", systemImage: "checkmark.shield")

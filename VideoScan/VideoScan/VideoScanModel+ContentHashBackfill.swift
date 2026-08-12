@@ -173,46 +173,88 @@ extension VideoScanModel {
         }
 
         let total = work.count
-        log("File signatures: computing for \(total) file\(total == 1 ? "" : "s") to hash "
-            + "(≈\(Int(Double(total) * 0.07 / 60) + 1) min, reading 3 MiB each)")
+
+        // Lane plan: concurrency per volume, from the hardware each
+        // volume actually is. SSDs get many readers, a spinning platter
+        // gets one (parallel seeks make a single head SLOWER), and every
+        // volume gets at least one — so four volumes means at least four
+        // lanes running at once. See SignatureConcurrencyPlan.
+        let techByVolume: [String: VolumeMediaTech] = Dictionary(
+            scanTargets.map {
+                (VolumeReachability.volumeName(forPath: $0.searchPath), $0.mediaTech)
+            },
+            uniquingKeysWith: { a, _ in a }
+        )
+        let lanes = SignatureConcurrency.partition(
+            items: work.map { SignatureWorkItem(id: $0.id, path: $0.path) },
+            volumeOf: { VolumeReachability.volumeName(forPath: $0) },
+            lanesFor: { SignatureConcurrency.lanes(for: techByVolume[$0] ?? .unknown) }
+        )
+
+        log("File signatures: computing for \(total) file\(total == 1 ? "" : "s") "
+            + "across \(lanes.count) lane\(lanes.count == 1 ? "" : "s") "
+            + "(≈\(Int(Double(total) * 0.07 / 60) + 1) min at 3 MB each)")
 
         var result = ContentHashBackfillResult()
-        var index = 0
 
-        while index < total {
-            if Task.isCancelled { result.cancelled = true; break }
-
-            let slice = Array(work[index ..< min(index + batchSize, total)])
-            index += slice.count
-
-            // Hash OFF the main actor. `Task.detached` (not a plain
-            // `nonisolated async` call) is the documented requirement in
-            // this repo — see the file header.
-            let hashed: [(UUID, String)] = await Task.detached(priority: .utility) {
-                var out: [(UUID, String)] = []
-                out.reserveCapacity(slice.count)
-                for item in slice {
-                    if Task.isCancelled { break }
-                    autoreleasepool {
-                        let h = FileHasher.segmentedHash(path: item.path)
-                        if !h.isEmpty { out.append((item.id, h)) }
+        // Producers hash; this actor consumes. An AsyncStream is the
+        // seam: lanes never touch `records`, and only Sendable value
+        // pairs cross the boundary. VideoRecord stays main-actor-bound
+        // throughout — the repo has three separate incidents from
+        // getting that wrong.
+        let stream = AsyncStream<(UUID, String)> { continuation in
+            let task = Task.detached(priority: .utility) {
+                await withTaskGroup(of: Void.self) { group in
+                    for lane in lanes {
+                        group.addTask {
+                            // Lanes are DISJOINT by construction, so this
+                            // loop needs no lock, no cursor, and no actor.
+                            for item in lane {
+                                if Task.isCancelled { return }
+                                autoreleasepool {
+                                    let signature = FileHasher.segmentedHash(path: item.path)
+                                    if !signature.isEmpty {
+                                        continuation.yield((item.id, signature))
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
-                return out
-            }.value
-
-            // Apply on the main actor, where the records live.
-            let byID = Dictionary(hashed, uniquingKeysWith: { a, _ in a })
-            for rec in records {
-                guard let h = byID[rec.id] else { continue }
-                // Never overwrite: a hash could have arrived from a scan
-                // while this pass was running.
-                if rec.contentHash.isEmpty { rec.contentHash = h }
+                continuation.finish()
             }
-            result.hashed += hashed.count
-            result.failed += slice.count - hashed.count
-            progress?(index, total)
+            continuation.onTermination = { _ in task.cancel() }
         }
+
+        // Apply in batches. One actor hop per file would cost more than
+        // the hashing does; one hop per 200 is free.
+        var pending: [(UUID, String)] = []
+        pending.reserveCapacity(batchSize)
+        var applied = 0
+
+        func flush() {
+            guard !pending.isEmpty else { return }
+            let byID = Dictionary(pending, uniquingKeysWith: { a, _ in a })
+            for rec in records {
+                guard let signature = byID[rec.id] else { continue }
+                // Never overwrite: a signature may have arrived from a
+                // scan while this pass was running.
+                if rec.contentHash.isEmpty { rec.contentHash = signature }
+            }
+            applied += pending.count
+            pending.removeAll(keepingCapacity: true)
+            progress?(applied, total)
+        }
+
+        for await pair in stream {
+            pending.append(pair)
+            if pending.count >= batchSize { flush() }
+            if Task.isCancelled { result.cancelled = true; break }
+        }
+        flush()
+
+        result.hashed = applied
+        result.failed = result.cancelled ? 0 : max(0, total - applied)
 
         result.elapsed = Date().timeIntervalSince(started)
         // Persist once at the end — the catalog writer is single-writer,

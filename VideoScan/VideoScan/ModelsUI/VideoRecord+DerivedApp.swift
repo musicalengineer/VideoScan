@@ -64,3 +64,23 @@ extension VideoRecord {
         return "\(vol) > \(root)"
     }
 }
+
+
+// MARK: - File signature presentation (2026-08-12)
+
+extension VideoRecord {
+
+    /// How the file signature reads in the inspector.
+    ///
+    /// An absent signature is reported as "not computed yet", never as
+    /// an empty row. The distinction is the whole point: blank reads as
+    /// "this file has no signature", when the truth is "nobody has
+    /// computed one" — and the second is a to-do, not a fact about the
+    /// file. Rick 2026-08-12.
+    var contentHashDisplay: String {
+        contentHash.isEmpty ? "not computed yet" : contentHash
+    }
+
+    /// True when this record carries a usable file signature.
+    var hasContentSignature: Bool { !contentHash.isEmpty }
+}

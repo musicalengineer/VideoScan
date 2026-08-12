@@ -132,6 +132,25 @@ extension CatalogView {
         Task { await model.runContentHashBackfill(pathPrefix: prefix) }
     }
 
+    /// Signature coverage for one volume: how many of its catalogued
+    /// files already carry a file signature.
+    ///
+    /// Computed on demand from a CONTEXT MENU, which only builds when
+    /// the user right-clicks — so this O(records) pass runs on an
+    /// explicit gesture, not on every render. That is the same reason
+    /// the Delete section next to it can afford its own scan.
+    func signatureCoverage(for target: CatalogScanTarget)
+        -> (signed: Int, missing: Int, total: Int) {
+        var signed = 0, missing = 0
+        for rec in model.records {
+            guard rec.purgedAt == nil, !rec.isSetAside, !rec.isSuperseded else { continue }
+            guard rec.sizeBytes > 0 else { continue }
+            guard VideoScanModel.isUnder(rec, prefix: target.searchPath) else { continue }
+            if rec.hasContentSignature { signed += 1 } else { missing += 1 }
+        }
+        return (signed, missing, signed + missing)
+    }
+
     private func recomputeVolumeAggregates() {
         // Toolbar badge counts ride the same triggers — one extra O(n)
         // pass here instead of two per render.

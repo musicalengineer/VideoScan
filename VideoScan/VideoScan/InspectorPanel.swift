@@ -426,6 +426,13 @@ struct InspectorPanel: View {
                         inspectorCopyableRow("Path", rec.fullPath)
                         inspectorRow("Directory", rec.directory)
                         inspectorRow("MD5 (partial)", rec.partialMD5)
+                        // File signature — the identity duplicate
+                        // detection runs on. Says "not computed yet"
+                        // rather than showing blank: an empty row reads
+                        // as "no signature exists for this file", when
+                        // the truth is "nobody has looked" (Rick
+                        // 2026-08-12).
+                        inspectorCopyableRow("File Signature", rec.contentHashDisplay)
                     }
 
                     Spacer(minLength: 16)
@@ -621,6 +628,7 @@ struct InspectorPanel: View {
         add("Path", rec.fullPath)
         add("Directory", rec.directory)
         add("MD5 (partial)", rec.partialMD5)
+        add("File Signature", rec.contentHashDisplay)
 
         return lines.joined(separator: "\n")
     }
