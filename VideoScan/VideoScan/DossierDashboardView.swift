@@ -132,7 +132,7 @@ struct DossierDashboardView: View {
         VStack(alignment: .center, spacing: 14) {
 
             // Title
-            Text("Catalog Analyze")
+            Text("Analyze Catalog")
                 .font(.title)
                 .fontWeight(.semibold)
                 .frame(maxWidth: .infinity, alignment: .leading)
