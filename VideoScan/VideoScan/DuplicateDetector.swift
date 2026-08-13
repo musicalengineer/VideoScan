@@ -336,7 +336,14 @@ enum DuplicateDetector {
     // VideoRecord is a class). The table is built once at type-init and
     // never mutated thereafter.
     nonisolated(unsafe) private static let scoringRules: [ScoringRule] = [
-        // Byte-identical content: same hash AND same size. Strongest signal.
+        // Strongest available SIGNAL — but not proof, and the comment
+        // here used to claim "byte-identical content", which is false
+        // and was load-bearing in the wrong direction (codex #333).
+        // partialMD5 hashes the first and last 64 KB only: two files
+        // sharing a container header and padded to the same length match
+        // here while differing everywhere in between. Enough to PROPOSE
+        // a duplicate; never enough to delete one. See
+        // SignatureVerification, which every destructive path must call.
         ScoringRule(reason: "hash") { l, r in
             guard !l.partialMD5.isEmpty,
                   l.partialMD5 == r.partialMD5,

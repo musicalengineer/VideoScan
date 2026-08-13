@@ -150,21 +150,64 @@ extension VideoScanModel {
 
         var deleted = 0
         var failed = 0
+        var refused = 0
         var bytesFreed: Int64 = 0
         let fm = FileManager.default
 
+        // EVERY deletion is gated on a full byte-for-byte comparison,
+        // performed HERE, immediately before the remove.
+        //
+        // WHY THIS GATE EXISTS (codex #333, 2026-08-12). Until tonight
+        // this loop deleted whatever the scorer marked `.extraCopy`, and
+        // the scorer's strongest signal is `partialMD5` + size — a
+        // 64 KB HEAD-AND-TAIL hash that never looks at the middle of a
+        // file. Two Avid MXF essence files from one session share a
+        // wrapper header and can be padded to the same length; add a
+        // matching filename stem (3) and duration (3) to the hash's 8
+        // and they reach 14, past the high-confidence threshold of 12.
+        // Two DISTINCT family videos, permanently removed, silently.
+        //
+        // The comparison is deliberately fresh rather than trusting any
+        // stored signature: a hash computed last month says nothing
+        // about the bytes on disk now, and the gap between "decided to
+        // delete" and "deleted" is exactly the window that matters.
+        //
+        // This is slow — it reads both files in full — and that is
+        // correct. Deletion is the one operation that can never be
+        // undone, so it is the one that earns the I/O.
         for record in targets {
             let path = record.fullPath
-            do {
-                let attrs = try fm.attributesOfItem(atPath: path)
-                let size = (attrs[.size] as? Int64) ?? 0
-                try fm.removeItem(atPath: path)
-                bytesFreed += size
-                deleted += 1
-                log("  Deleted: \(record.filename)")
-            } catch {
-                failed += 1
-                log("  FAILED to delete \(record.filename): \(error.localizedDescription)")
+            guard let groupID = record.duplicateGroupID,
+                  let keeper = keepers[groupID] else {
+                refused += 1
+                log("  REFUSED \(record.filename): no keeper to verify against")
+                continue
+            }
+
+            switch SignatureVerification.verify(keeperPath: keeper.fullPath,
+                                                duplicatePath: path) {
+            case .failure(let why):
+                refused += 1
+                // A refusal is INFORMATION, not an error: the scorer
+                // proposed a pair the bytes disagree with, which is the
+                // whole reason for verifying. Record it so the pair is
+                // not proposed again as if nothing happened.
+                record.duplicateDisposition = .review
+                record.duplicateReasons = Self.refusalNote(why, keeper: keeper.filename)
+                log("  REFUSED \(record.filename): \(Self.refusalNote(why, keeper: keeper.filename))")
+
+            case .success:
+                do {
+                    let attrs = try fm.attributesOfItem(atPath: path)
+                    let size = (attrs[.size] as? Int64) ?? 0
+                    try fm.removeItem(atPath: path)
+                    bytesFreed += size
+                    deleted += 1
+                    log("  Deleted (verified identical to \(keeper.filename)): \(record.filename)")
+                } catch {
+                    failed += 1
+                    log("  FAILED to delete \(record.filename): \(error.localizedDescription)")
+                }
             }
         }
 
@@ -173,10 +216,28 @@ extension VideoScanModel {
         records.removeAll { deletedPaths.contains($0.fullPath) }
 
         let freed = ByteCountFormatter.string(fromByteCount: bytesFreed, countStyle: .file)
-        log("\nDuplicate deletion complete: \(deleted) deleted, \(failed) failed, \(skippedCount) skipped (cross-volume), \(freed) freed")
+        log("\nDuplicate deletion complete: \(deleted) deleted, \(failed) failed, "
+            + "\(refused) refused by verification, \(skippedCount) skipped (cross-volume), \(freed) freed")
+        if refused > 0 {
+            log("  \(refused) file(s) were NOT identical to their keeper despite matching "
+                + "on hash/name/duration — they are marked Review and left on disk.")
+        }
         duplicateStatus = "\(deleted) deleted, \(freed) freed"
 
         return (deleted, failed, skippedCount, bytesFreed)
+    }
+
+    /// Human-readable reason a verified deletion was refused.
+    static func refusalNote(_ failure: SignatureVerification.Failure,
+                            keeper: String) -> String {
+        switch failure {
+        case .contentDiffers:
+            return "content differs from keeper \(keeper) — NOT a duplicate"
+        case .unreadable(let path):
+            return "could not read \(URL(fileURLWithPath: path).lastPathComponent) to verify"
+        case .samePath:
+            return "keeper and copy are the same file"
+        }
     }
 
     /// Returns the distinct volume root paths that have high-confidence duplicate
