@@ -240,8 +240,8 @@ struct CatalogToolbar<Dashboard: View>: View {
 
             VStack(spacing: 2) {
                 Menu {
-                    Button("Correlate All", action: onCorrelateAll)
-                    Button("Correlate Selected", action: onCorrelateSelected)
+                    Button("Correlate A/V", action: onCorrelateAll)
+                    Button("Correlate A/V for Selected", action: onCorrelateSelected)
                         .disabled(selectedIDs.isEmpty)
                     Divider()
                     Button("Find A/V Pairs Across Volumes", action: onCorrelateAcrossVolumes)
@@ -275,7 +275,7 @@ struct CatalogToolbar<Dashboard: View>: View {
                             Text("Correlating…")
                         }
                     } else {
-                        Label("Correlate", systemImage: "arrow.triangle.2.circlepath")
+                        Label("Correlate A/V Pairs", systemImage: "arrow.triangle.2.circlepath")
                     }
                 }
                 .menuStyle(.borderlessButton)
@@ -299,8 +299,8 @@ struct CatalogToolbar<Dashboard: View>: View {
 
             VStack(spacing: 2) {
                 Menu {
-                    Button("Analyze All", action: onAnalyzeDuplicatesAll)
-                    Button("Analyze Selected", action: onAnalyzeDuplicatesSelected)
+                    Button("Find Duplicates", action: onAnalyzeDuplicatesAll)
+                    Button("Find Duplicates of Selected", action: onAnalyzeDuplicatesSelected)
                         .disabled(selectedIDs.isEmpty)
 
                     if !volumesWithDeletableDups.isEmpty {
