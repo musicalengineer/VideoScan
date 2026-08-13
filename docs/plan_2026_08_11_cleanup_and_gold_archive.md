@@ -44,11 +44,27 @@ The fix — **segmented hash**, not full-file:
 segmentHash = SHA256( head 1MB ‖ middle 1MB ‖ tail 1MB ‖ sizeBytes )
 ```
 
-Three seeks instead of streaming 12 GB. On a 12 GB file that's
-milliseconds versus ~2 minutes, and collision risk for *real* media is
-negligible — the tail segment alone defeats the padded-MXF case. Full-file
-hashing stays available as an explicit "verify before delete" step on the
-surviving copy only.
+Three seeks instead of streaming 12 GB — milliseconds versus ~2 minutes
+on a 12 GB file, which is what makes a whole-catalog pass take minutes.
+
+**CORRECTED 2026-08-12** (codex #320, #338). This paragraph originally
+called the collision risk "negligible" and proposed full-hashing the
+survivor ONLY. Both were wrong, and this document was still saying so
+after the code had been fixed — which is worse than never having written
+it, because a plan is what someone reads before doing something
+irreversible.
+
+Sampling three 1 MiB windows cannot prove two files identical: they can
+differ anywhere in the unsampled remainder, which on a 12 GB file is
+essentially all of it. The contract is one-directional:
+
+    different segmented hash  ⇒  DEFINITELY different
+    same segmented hash       ⇒  CANDIDATES, nothing more
+
+So EVERY candidate/keeper PAIR is full-hashed at the destructive
+boundary — not the survivor alone, which would prove nothing about the
+file being deleted. Enforced in code by `SignatureVerification`, whose
+`VerifiedDuplicate` has no accessible initializer.
 
 ### What shipped, and the two traps found on the way
 
@@ -205,8 +221,11 @@ archive it and delete 5 of the 8."*
 
 ### Two tiers — they need different UX because they carry different risk
 
-**Tier A — exact copies.** Same segment hash + size. Byte-identical.
-Safe to auto-propose a keep/delete split.
+**Tier A — exact-copy CANDIDATES.** Same segment hash + size. NOT
+byte-identical — that word was wrong here (codex #338); a matching
+signature makes two files candidates and nothing more. Safe to
+auto-PROPOSE a keep/delete split, never to auto-execute one: each pair
+is full-hashed at the moment of deletion.
 
 **Tier B — near duplicates.** Same content, different encode (a transcode,
 a trimmed version, a different resolution). Byte hashing will never find
@@ -227,8 +246,10 @@ bitrate × resolution × duration) and require an eyeball.
 4. Never delete from a volume whose role is `.archive` / `.lta` / Gold.
 5. Deletion preference order: scratch (X9/X10) → retired insurance →
    backup → never original/archive.
-6. **Verify the survivor's hash immediately before** deleting the others.
-   Not at scan time — at delete time. Drives fail between the two.
+6. **Full-hash EVERY keeper/candidate pair immediately before** each
+   deletion — not the survivor alone, which says nothing about the file
+   being removed, and not at scan time, because drives change between
+   scan and delete. Implemented; see `SignatureVerification.verify`.
 7. First runs: soft-delete the record (`purgedAt`) and move the file to
    **Trash**, never permanent. Undo banner arms.
 
@@ -296,6 +317,22 @@ double-counts records migrated between volumes, so the column can exceed
 even the ONLINE figure on a migrated catalog.
 
 ---
+
+## Not yet safe to automate (codex #338, 2026-08-13)
+
+Manual, deliberate duplicate cleanup is accepted. UNATTENDED or
+automated deletion is not, for two reasons still open:
+
+* **A narrow TOCTOU window.** The two files are hashed sequentially and
+  then removed; nothing revalidates identity between the last read and
+  the `removeItem`. A human clicking through a review queue is not
+  meaningfully exposed; a loop deleting thousands unattended is. The fix
+  is fd/inode/ctime revalidation at the boundary — hold the descriptor
+  used for hashing and confirm it still refers to the same inode with an
+  unchanged ctime immediately before removing.
+* **Other destructive callers are unaudited.** `deleteConfirmedJunk` is
+  Trash-backed and soft-delete-backed, so it is believed safer, but
+  "believed" is exactly the word that failed on 2026-08-12.
 
 ## Open questions — need Rick's answer before P2 ships
 
