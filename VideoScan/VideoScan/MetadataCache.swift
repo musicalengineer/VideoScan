@@ -259,6 +259,32 @@ final class MetadataCache {
         sqlite3_step(stmt)
     }
 
+    /// Write a computed signature back onto an existing cache row.
+    ///
+    /// THE BUG THIS CLOSES (codex #320.1): the backfill wrote signatures
+    /// to catalog RECORDS only. The probe cache still held an empty
+    /// content_hash for those paths, and `probeFile` returns a cached
+    /// outcome BEFORE it hashes — so the next rescan of an unchanged
+    /// file would hand back "" and erase twenty minutes of work. Adding
+    /// the column was necessary but not sufficient; the backfill has to
+    /// write through it too.
+    ///
+    /// Updates only — never inserts. A path with no cached probe has
+    /// nothing to preserve, and inventing a row here would fabricate a
+    /// cache entry with no ffprobe data behind it.
+    func updateContentHash(path: String, hash: String, at date: Date) {
+        lock.lock(); defer { lock.unlock() }
+        guard let db = db, !hash.isEmpty else { return }
+        let sql = "UPDATE probe_cache SET content_hash = ?, content_hash_at = ? WHERE path = ?"
+        var stmt: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        defer { sqlite3_finalize(stmt) }
+        bind(stmt, 1, hash)
+        sqlite3_bind_double(stmt, 2, date.timeIntervalSince1970)
+        bind(stmt, 3, path)
+        sqlite3_step(stmt)
+    }
+
     /// Delete all cached records.
     func clearAll() {
         lock.lock(); defer { lock.unlock() }

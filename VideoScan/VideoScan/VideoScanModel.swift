@@ -725,6 +725,10 @@ final class VideoScanModel: ObservableObject {
     // Internal so VideoScanModel+ProbeEngine.probeFile can read/write the
     // SQLite cache; spine helpers (clearCache, cacheCount) also use it.
     nonisolated let metadataCache = MetadataCache()
+    /// True while a file-signature pass is running. Guards against two
+    /// overlapping fleets (each would honour the lane cap alone and
+    /// together exceed it) and drives the UI's disabled state.
+    @Published var isComputingSignatures = false
 
     /// Cooperative pause gate for combine tasks
     let combinePauseGate = PauseGate()

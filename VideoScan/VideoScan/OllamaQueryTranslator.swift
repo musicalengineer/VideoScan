@@ -116,6 +116,32 @@ struct OllamaQueryTranslator: NLQueryTranslating {
 
     var displayName: String { "\(model) @ \(host)" }
 
+    /// Classify a non-200 reply.
+    ///
+    /// ollama answers "model not found" with HTTP **404** and a JSON
+    /// error body — not, as I first assumed, always with a 200 carrying
+    /// an error string. The 200 case exists too, but the 404 path was
+    /// reaching `serverError`, which is non-retryable for 4xx, so a host
+    /// that had simply never pulled the model would NOT fail over
+    /// (codex #320.2). A missing model is a property of the HOST, and
+    /// the next host may well have it.
+    static func classify(status: Int, body: Data) -> NLTranslatorError {
+        let text = String(decoding: body.prefix(400), as: UTF8.self)
+        if status == 404 || Self.readsAsMissingModel(text) {
+            return .modelUnavailable("HTTP \(status): \(text.prefix(160))")
+        }
+        return .serverError(status: status, detail: String(text.prefix(200)))
+    }
+
+    /// Shared wording test, so the 200-with-error path and the non-200
+    /// path cannot drift into disagreeing about what "missing" looks like.
+    static func readsAsMissingModel(_ message: String) -> Bool {
+        let lowered = message.lowercased()
+        if lowered.contains("not found") || lowered.contains("no such model")
+            || lowered.contains("try pulling") { return true }
+        return lowered.contains("model") && lowered.contains("unavailable")
+    }
+
     /// Cheap liveness check against `/api/tags`.
     ///
     /// Returns nil when the host is serving, or the reason it is not.
@@ -189,9 +215,7 @@ struct OllamaQueryTranslator: NLQueryTranslating {
                 // which reads as the model's fault and, worse, is NOT
                 // retryable. Classify it properly so failover can act.
                 if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                    throw NLTranslatorError.serverError(
-                        status: http.statusCode,
-                        detail: String(decoding: payload.prefix(200), as: UTF8.self))
+                    throw Self.classify(status: http.statusCode, body: payload)
                 }
                 data = payload
             } catch let error as NLTranslatorError {
@@ -205,9 +229,7 @@ struct OllamaQueryTranslator: NLQueryTranslating {
                 throw NLTranslatorError.unreachable(transportError)
             }
             if let status = result.statusCode, status != 200 {
-                throw NLTranslatorError.serverError(
-                    status: status,
-                    detail: String(decoding: (result.data ?? Data()).prefix(200), as: UTF8.self))
+                throw Self.classify(status: status, body: result.data ?? Data())
             }
             data = result.data ?? Data()
         case .curl:
@@ -251,9 +273,7 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             // error string in the body, so the status tells us nothing
             // and the text is the only signal. A host that has not
             // pulled the model is a HOST problem — worth failing over.
-            let lowered = error.lowercased()
-            if lowered.contains("not found") || lowered.contains("no such model")
-                || lowered.contains("try pulling") || lowered.contains("model") && lowered.contains("unavailable") {
+            if Self.readsAsMissingModel(error) {
                 throw NLTranslatorError.modelUnavailable(error)
             }
             throw NLTranslatorError.badResponse(error)

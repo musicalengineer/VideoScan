@@ -156,6 +156,19 @@ extension VideoScanModel {
     ) async -> ContentHashBackfillResult {
         let started = Date()
 
+        // One pass at a time. Every menu entry is repeatable and the
+        // Tasks were unretained, so two clicks meant two fleets — each
+        // honouring the lane cap alone and together doubling it, both
+        // racing on the same records (codex #320.4). Reentrancy is
+        // pointless here anyway: the second pass would find the first
+        // one's candidates already signed.
+        guard !isComputingSignatures else {
+            log("File signatures: already running — ignoring duplicate request.")
+            return ContentHashBackfillResult()
+        }
+        isComputingSignatures = true
+        defer { isComputingSignatures = false }
+
         // Snapshot the work as Sendable pairs. VideoRecord itself never
         // crosses the boundary. Same scope predicate the PLAN uses, so a
         // dry run can never promise different work than the pass does.
@@ -228,25 +241,43 @@ extension VideoScanModel {
 
         // Apply in batches. One actor hop per file would cost more than
         // the hashing does; one hop per 200 is free.
+        //
+        // The index is built ONCE. Scanning all `records` per batch —
+        // which is what this did — cost ~50M visits on a 100k catalog,
+        // measured by codex at 264x slower than an indexed pass (#322).
+        // The lookup, not the hashing, was the bottleneck.
+        var index: [UUID: VideoRecord] = [:]
+        index.reserveCapacity(records.count)
+        for rec in records { index[rec.id] = rec }
+
         var pending: [(UUID, String)] = []
         pending.reserveCapacity(batchSize)
-        var applied = 0
+        var processed = 0   // signatures computed and handed back
+        var applied = 0     // records this pass actually changed
 
         func flush() {
             guard !pending.isEmpty else { return }
-            let byID = Dictionary(pending, uniquingKeysWith: { a, _ in a })
-            for rec in records {
-                guard let signature = byID[rec.id] else { continue }
+            let now = Date()
+            for (id, signature) in pending {
+                guard let rec = index[id] else { continue }
                 // Never overwrite: a signature may have arrived from a
                 // scan while this pass was running.
-                if rec.contentHash.isEmpty {
-                    rec.contentHash = signature
-                    rec.contentHashAt = Date()
-                }
+                guard rec.contentHash.isEmpty else { continue }
+                rec.contentHash = signature
+                rec.contentHashAt = now
+                applied += 1
+                // WRITE THROUGH to the probe cache. Records alone are
+                // not enough: probeFile consults the cache first and
+                // returns before hashing, so a rescan of an unchanged
+                // file would hand back an empty signature and erase this
+                // work. Adding the column was necessary; writing to it
+                // is what makes it count (codex #320.1).
+                metadataCache.updateContentHash(
+                    path: rec.fullPath, hash: signature, at: now)
             }
-            applied += pending.count
+            processed += pending.count
             pending.removeAll(keepingCapacity: true)
-            progress?(applied, total)
+            progress?(processed, total)
         }
 
         for await pair in stream {
@@ -256,8 +287,12 @@ extension VideoScanModel {
         }
         flush()
 
+        // `applied` counts records THIS pass changed; `processed` counts
+        // signatures computed. They differ when a concurrent scan filled
+        // one in first — reporting `processed` as work done would
+        // over-claim mutations we did not make (codex #323).
         result.hashed = applied
-        result.failed = result.cancelled ? 0 : max(0, total - applied)
+        result.failed = result.cancelled ? 0 : max(0, total - processed)
 
         result.elapsed = Date().timeIntervalSince(started)
         // Persist once at the end — the catalog writer is single-writer,

@@ -13,9 +13,11 @@ import Foundation
 //                    import/export dedup, review sessions, duplicate
 //                    detection, training candidates). UNCHANGED.
 //
-//   segmentedHash  — head‖middle‖tail‖size SHA-256. Added 2026-08-11 for
-//                    the cleanup arc, where a hash decides whether a
-//                    family video gets DELETED.
+//   segmentedHash  — head‖middle‖tail‖size SHA-256. A fast CANDIDATE
+//                    filter. It can prove two files DIFFERENT; it can
+//                    never prove them the same.
+//   fullHash       — every byte. The only thing that may authorise a
+//                    deletion.
 //
 // WHY A SECOND HASH RATHER THAN A BETTER FIRST ONE. partialMD5 reads the
 // first 64 KB and the last 64 KB and, critically, SKIPS THE TAIL
@@ -28,17 +30,28 @@ import Foundation
 // for "delete five of these eight copies" — the failure is silent and
 // the footage is unrecoverable.
 //
-// WHY SEGMENTED RATHER THAN FULL-FILE. Rick's catalog holds 12 GB+ files
-// on spinning insurance drives. Streaming every byte of a duplicate
-// cluster would take minutes per file and hours per sweep; three 1 MB
-// reads take milliseconds. Binding sizeBytes INTO the digest means a
-// length difference alone changes the hash, so the only surviving
-// collision risk is two files that differ ONLY outside all three
-// sampled windows — which for real media means differing only in a
-// region that carries no container structure, no index, and no frame
-// data. For the deletion decision this is paired with an explicit
-// full-file verification of the SURVIVOR (see the cleanup plan), so the
-// segmented hash narrows the field and the full hash closes it.
+// WHAT SEGMENTED HASHING CAN AND CANNOT DO — read this before using it
+// for anything destructive.
+//
+// It samples three 1 MiB windows out of a file that may be 12 GB. Two
+// files sharing a size and all three windows can still differ across
+// the ~11.997 GB nobody looked at. Rare for real media; NOT impossible,
+// and "rare" is not a basis for deleting irreplaceable footage.
+//
+// So the contract is deliberately one-directional:
+//
+//     different segmented hash  ⇒  DEFINITELY different files
+//     same segmented hash       ⇒  CANDIDATES, nothing more
+//
+// An earlier version of this header called it "identity strong enough
+// to delete on". That was wrong, and codex was right to stop-ship it
+// (#320). The speed argument still holds — three seeks beat streaming
+// 12 GB, and that is what makes a whole-catalog pass take minutes — but
+// speed buys CANDIDATE GENERATION, not proof.
+//
+// Anything destructive must call `fullHash` (or a byte compare) on the
+// actual pair first. `SignatureVerification` exists to make that
+// unmissable rather than a convention someone forgets.
 //
 // NO mmap ANYWHERE. mmap on a network file SIGBUSes (KERN_MEMORY_ERROR)
 // if the remote volume drops mid-read, and this code runs across SMB
@@ -149,14 +162,20 @@ enum FileHasher {
                 if n > 0 {
                     got += n
                 } else if n == 0 {
-                    break                       // EOF — file shrank under us
+                    // EOF before we read what fstat promised: the file
+                    // SHRANK mid-hash. Hashing the short read would mix
+                    // fewer bytes with the ORIGINAL length already baked
+                    // into the digest, producing a signature nobody —
+                    // including a later verification pass — could ever
+                    // reproduce. Refuse; the next run picks it up.
+                    // codex #320.7.
+                    return false
                 } else if errno == EINTR {
                     continue                    // interrupted, retry
                 } else {
                     return false                // real I/O error
                 }
             }
-            guard got > 0 else { return false }
             sha.update(bufferPointer: UnsafeRawBufferPointer(start: buf, count: got))
             return true
         }
