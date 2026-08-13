@@ -99,6 +99,60 @@ the Cleanup Queue itself.
 
 ---
 
+## Storage plan — Pegasus R4 + SanDisk PRO-G40 (2026-08-13)
+
+Decided with Rick 2026-08-12.
+
+**RAID-5, 12 TB usable**, HDD-populated. Not RAID-0 (one drive loses
+everything) and not RAID-10 (8 TB is tight, and its advantages —
+rebuild speed, second-drive tolerance — matter less when the array is
+not the only copy). For large sequential video, RAID-5 writes are
+typically as fast or faster than RAID-10, because a full-stripe write
+computes parity once instead of writing every block twice.
+
+**Two partitions, roles fixed:**
+
+| Partition | Size | Role | Media tooling |
+|---|---|---|---|
+| Gold Archive | ~8 TB | promoted keepers only | `role = .lta` |
+| Home/Misc | ~4 TB | photos, projects, personal data | **never scanned** |
+
+The second partition is a SAFETY BOUNDARY, not tidiness: VideoScan never
+scans it, never catalogs it, never offers to purge from it. Rick's
+non-media data sits outside the blast radius of any media-tool bug or
+mis-click — including the junk deletion still to be built.
+
+**Tiering by how files are used**, not by size:
+
+* **SanDisk PRO-G40 4 TB** — the working set. Cleaning, transcoding,
+  combining, analysing. Scratch by definition: everything on it exists
+  elsewhere, so a failure costs time, not footage. Signature and dossier
+  passes want to run here — they are seek-bound and it has no seek
+  penalty.
+* **RAID Gold** — write-rarely, verify-often. 3-star (Gold) material.
+* **LaCie** — demote to secondary once its content is on the RAID.
+
+**A RAID is not a backup.** RAID-5 survives a dead drive; it does not
+survive fire, theft, a controller scribbling the array, or deleting the
+wrong folder. The preservation checklist encodes this — the RAID can
+only ever tick "archived locally".
+
+**Sequencing, and the one thing not to rush:** do not copy anything to
+Gold before the junk purge and duplicate collapse. Migrating 6.8 TB when
+3.0 TB of it is duplicates, junk, and photos pays for the copy twice and
+pollutes a brand-new archive on day one. Clean, then promote.
+
+**Rating scale:** use the EXISTING `starRating` (0–3), do not invent a
+parallel gold/silver/bronze enum. ★★★ Gold · ★★ Silver · ★ Bronze ·
+unrated. Three stars becomes the promotion trigger for the Gold
+partition.
+
+**Open:** migrating a folder that used to be a volume (Rick's question)
+— Relocate currently thinks in volumes; a former-volume folder needs its
+provenance carried across so the journey stays intact.
+
+---
+
 ## P1 — Cleanup Queue (assisted junk detection → review → delete)
 
 Rick: *"scan for likely junk, music, non-av files, etc, and then this gets
