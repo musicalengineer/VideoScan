@@ -474,10 +474,18 @@ extension CatalogView {
                     // "File Signatures", not "content hashes" (Rick
                     // 2026-08-12). This app is family-facing and "hash"
                     // is developer jargon. "Signature" also carries the
-                    // RULE for free: two files with the same signature
-                    // are the same file. The first attempt, "Unique ID",
-                    // implied the opposite — that each file gets its own
-                    // — when duplicates SHARING one is the entire point.
+                    // RULE for free: matching signatures mean matching
+                    // files. The first attempt, "Unique ID", implied the
+                    // opposite — that each file gets its own — when
+                    // duplicates SHARING one is the entire point.
+                    //
+                    // Careful with that word in USER-FACING copy though:
+                    // a matching signature makes two files CANDIDATES,
+                    // not proven identical (see FileHasher and
+                    // SignatureVerification). The help text says
+                    // "almost certainly" and promises a byte compare
+                    // before deletion, because the UI must not repeat
+                    // the overclaim the code made (codex #330).
                     //
                     // Scoped, because "try it on one volume first" is the
                     // right instinct for a pass that mutates thousands of
@@ -494,7 +502,7 @@ extension CatalogView {
                                   systemImage: "number.square")
                         }
                         .disabled(plan.isEmpty || model.isScanning)
-                        .help("Give each file a signature computed from its contents. Two files with the SAME signature are the same file — that is how duplicates are found. Reads 3 MB per file, changes nothing on disk, and is safe to stop and re-run.")
+                        .help("Give each file a signature computed from its contents. Files with the same signature are almost certainly identical — that is how duplicate CANDIDATES are found, and every byte is compared before anything is deleted. Reads 3 MB per file, changes nothing on disk, and is safe to stop and re-run.")
 
                         // One entry per reachable volume, each carrying
                         // its own count so the cost is visible BEFORE the
