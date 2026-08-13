@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import Testing
 @testable import VideoScan
 
@@ -320,5 +321,135 @@ struct ContentHashScopeTests {
         let plan = VideoScanModel.planContentHashBackfill(
             records: recs, isReachable: reachable, pathPrefix: nil)
         #expect(plan.candidates == 5)
+    }
+}
+
+
+// MARK: - Cache write-through + real legacy migration (codex #320.1, #330)
+
+@Suite("File signatures — surviving a rescan")
+struct SignatureRescueSurvivalTests {
+
+    private func tempPath() -> String {
+        URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("mc-\(UUID().uuidString).sqlite").path
+    }
+
+    /// THE sensor for the bug that would have destroyed a completed run.
+    ///
+    /// `probeFile` consults the probe cache BEFORE it hashes and returns
+    /// early on a hit. The backfill used to write signatures onto catalog
+    /// RECORDS only, leaving the cache row empty — so the next rescan of
+    /// an unchanged file handed back "" and erased twenty minutes of
+    /// work. Adding the column was necessary; WRITING THROUGH it is what
+    /// made it count.
+    @Test func signatureWrittenByBackfillSurvivesACacheHit() {
+        let cache = MetadataCache(path: tempPath())
+        let path = "/Volumes/V/clip.mov"
+        let mod = Date(timeIntervalSince1970: 1_700_000_000)
+
+        // A scan ran BEFORE signatures existed: cached probe, no hash.
+        var probed = ProbeOutcome()
+        probed.fullPath = path
+        probed.filename = "clip.mov"
+        probed.sizeBytes = 4_096
+        probed.probe.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        cache.store(outcome: probed, fileSize: 4_096, modDate: mod)
+        #expect(cache.lookup(path: path, fileSize: 4_096, modDate: mod)?.contentHash == "")
+
+        // The backfill computes one and writes it through.
+        let signature = "v1:" + String(repeating: "e", count: 64)
+        let stamped = Date(timeIntervalSince1970: 1_760_000_000)
+        cache.updateContentHash(path: path, hash: signature, at: stamped)
+
+        // A later rescan of the unchanged file hits the cache. It must
+        // hand back the signature, not blank it.
+        let onRescan = cache.lookup(path: path, fileSize: 4_096, modDate: mod)
+        #expect(onRescan?.contentHash == signature,
+                "a cache hit erased a backfilled signature — the whole run would be lost")
+        #expect(onRescan?.contentHashAt == stamped)
+    }
+
+    /// Never invents a row. A path with no cached probe has nothing to
+    /// preserve, and writing one would fabricate a cache entry with no
+    /// ffprobe data behind it — which a later lookup would trust.
+    @Test func writeThroughNeverInsertsARowForAnUnprobedPath() {
+        let cache = MetadataCache(path: tempPath())
+        cache.updateContentHash(path: "/Volumes/V/never-probed.mov",
+                                hash: "v1:x", at: Date())
+        #expect(cache.lookup(path: "/Volumes/V/never-probed.mov",
+                             fileSize: 10, modDate: Date()) == nil)
+    }
+
+    @Test func emptySignatureIsNeverWrittenThrough() {
+        let cache = MetadataCache(path: tempPath())
+        let path = "/Volumes/V/a.mov"
+        let mod = Date(timeIntervalSince1970: 1)
+        var probed = ProbeOutcome()
+        probed.fullPath = path
+        probed.sizeBytes = 10
+        probed.contentHash = "v1:keepme"
+        cache.store(outcome: probed, fileSize: 10, modDate: mod)
+
+        cache.updateContentHash(path: path, hash: "", at: Date())
+        #expect(cache.lookup(path: path, fileSize: 10, modDate: mod)?.contentHash == "v1:keepme",
+                "an empty signature must never overwrite a real one")
+    }
+
+    /// REAL legacy-schema migration. codex #330 correctly called my
+    /// earlier test false coverage: it created a MODERN database and
+    /// reopened it, so ALTER TABLE never ran and the positional decode
+    /// was never exercised against a genuinely older row layout.
+    ///
+    /// This builds the pre-2026-08-11 schema by hand — 31 columns, no
+    /// content_hash, no content_hash_at — inserts a row through it, then
+    /// opens it with MetadataCache and checks both that the migration
+    /// ran and that the OLD row still decodes correctly afterwards.
+    @Test func legacySchemaMigratesAndOldRowsStillDecode() throws {
+        let path = tempPath()
+
+        // Pre-migration schema, verbatim in column order.
+        let legacyColumns = """
+            path TEXT NOT NULL, file_size INTEGER NOT NULL, mod_date REAL NOT NULL,
+            filename TEXT, ext TEXT, stream_type TEXT, size_display TEXT, duration TEXT,
+            duration_seconds REAL, date_created TEXT, date_modified TEXT,
+            date_created_raw REAL, date_modified_raw REAL, container TEXT,
+            video_codec TEXT, resolution TEXT, frame_rate TEXT, video_bitrate TEXT,
+            total_bitrate TEXT, color_space TEXT, bit_depth TEXT, scan_type TEXT,
+            audio_codec TEXT, audio_channels TEXT, audio_sample_rate TEXT,
+            timecode TEXT, tape_name TEXT, is_playable TEXT, partial_md5 TEXT,
+            directory TEXT, notes TEXT, PRIMARY KEY (path, file_size, mod_date)
+            """
+        var raw: OpaquePointer?
+        #expect(sqlite3_open(path, &raw) == SQLITE_OK)
+        sqlite3_exec(raw, "CREATE TABLE probe_cache (\(legacyColumns))", nil, nil, nil)
+        sqlite3_exec(raw, """
+            INSERT INTO probe_cache VALUES ('/Volumes/Old/legacy.mov', 2048, 1000.0,
+            'legacy.mov','MOV','Video+Audio','2.0 KB','00:00:10',10.0,'','',0,0,
+            'mov','h264','1920x1080','29.97','','','','','','aac','2','48000',
+            '','','Yes','legacyMD5','/Volumes/Old','')
+            """, nil, nil, nil)
+        sqlite3_close(raw)
+
+        // Opening through MetadataCache must migrate in place.
+        let cache = MetadataCache(path: path)
+        let hit = cache.lookup(path: "/Volumes/Old/legacy.mov",
+                               fileSize: 2048,
+                               modDate: Date(timeIntervalSince1970: 1000.0))
+
+        #expect(hit != nil, "a legacy row must still be readable after migration")
+        #expect(hit?.partialMD5 == "legacyMD5",
+                "positional decoding drifted — the appended columns shifted an old field")
+        #expect(hit?.contentHash == "", "the new column reads empty on legacy rows")
+        #expect(hit?.contentHashAt == nil)
+
+        // And the migrated database must accept a write-through.
+        let signature = "v1:" + String(repeating: "f", count: 64)
+        cache.updateContentHash(path: "/Volumes/Old/legacy.mov",
+                                hash: signature,
+                                at: Date(timeIntervalSince1970: 2000))
+        #expect(cache.lookup(path: "/Volumes/Old/legacy.mov", fileSize: 2048,
+                             modDate: Date(timeIntervalSince1970: 1000.0))?.contentHash
+                == signature)
     }
 }

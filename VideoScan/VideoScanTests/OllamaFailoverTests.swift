@@ -414,3 +414,68 @@ struct OllamaLivenessProbeTests {
         #expect(tags("box.lan:9000") == "http://box.lan:9000/api/tags")
     }
 }
+
+
+// MARK: - HTTP 404 model-unavailable (codex #320.2)
+
+@Suite("Archivist — real ollama missing-model shapes")
+struct OllamaMissingModelTests {
+
+    /// THE bug codex caught. Real ollama answers a missing model with
+    /// HTTP **404** plus a JSON error body. My classifier only ran on
+    /// the 200 path, so 404 fell into the generic non-200 branch, became
+    /// `serverError`, and 4xx is deliberately NOT retryable — meaning a
+    /// host that had simply never pulled the model would end the walk
+    /// instead of handing off. Failover failing on the case failover
+    /// exists for.
+    @Test func fourOhFourIsModelUnavailableNotADeadEnd() {
+        let err = OllamaQueryTranslator.classify(
+            status: 404,
+            body: Data(#"{"error":"model 'qwen3.6:35b' not found"}"#.utf8))
+        #expect(err.isRetryableOnAnotherHost,
+                "404 must fail over — the next host may have the model")
+        if case .modelUnavailable = err {} else {
+            Issue.record("expected modelUnavailable, got \(err)")
+        }
+    }
+
+    /// Other 4xx stays non-retryable: a malformed request is malformed
+    /// everywhere, and walking the fleet would just repeat it.
+    @Test func otherFourXXStillDoesNotFailOver() {
+        let err = OllamaQueryTranslator.classify(status: 400, body: Data("bad".utf8))
+        #expect(!err.isRetryableOnAnotherHost)
+    }
+
+    @Test func fiveXXStillFailsOver() {
+        #expect(OllamaQueryTranslator.classify(status: 503, body: Data())
+            .isRetryableOnAnotherHost)
+    }
+
+    /// End to end: a 404 primary must hand off to a healthy secondary.
+    @Test func fourOhFourPrimaryFailsOverToHealthySecondary() async throws {
+        let chat = Dialled()
+        var template = OllamaQueryTranslator()
+        template.transport = .fake { urlString, _ in
+            if urlString.hasSuffix("/api/tags") { return .ok("{\"models\":[]}") }
+            if urlString.contains("bare.local") {
+                return .status(404, #"{"error":"model not found, try pulling it first"}"#)
+            }
+            await chat.record("loaded.local")
+            return .ok(goodReply)
+        }
+        let t = OllamaFailoverTranslator(hosts: ["bare.local", "loaded.local"],
+                                         template: template)
+        _ = try await t.translate("x")
+        #expect(await chat.all() == ["loaded.local"])
+    }
+
+    /// The 200-with-error shape still works, and both paths share one
+    /// wording test so they cannot drift into disagreeing about what
+    /// "missing" looks like.
+    @Test func bothMissingModelShapesAgree() {
+        #expect(OllamaQueryTranslator.readsAsMissingModel("model 'x' not found"))
+        #expect(OllamaQueryTranslator.readsAsMissingModel("no such model"))
+        #expect(OllamaQueryTranslator.readsAsMissingModel("try pulling it first"))
+        #expect(!OllamaQueryTranslator.readsAsMissingModel("context length exceeded"))
+    }
+}

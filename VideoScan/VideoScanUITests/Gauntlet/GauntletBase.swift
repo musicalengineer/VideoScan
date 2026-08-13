@@ -125,12 +125,18 @@ class GauntletTestCase: XCTestCase {
                                  waitForFilename filename: String,
                                  timeout: TimeInterval = 120) {
         openTab(app, "Catalog")
-        let scanAll = app.buttons["catalog.scanAll"]
-        XCTAssertTrue(scanAll.waitForExistence(timeout: 30),
-                      "Scan All button never appeared on the Catalog tab.")
-        XCTAssertTrue(scanAll.isEnabled,
-                      "Scan All is disabled — the -gauntletScanTarget seam didn't register a scan target.")
-        scanAll.click()
+        // Scan All moved off the toolbar into Catalog Options on
+        // 2026-08-12: run controls now live in the Scan Monitor window
+        // and scanning is driven by selection (per-volume ▶ or
+        // right-click "Scan Selected"), with this as the deliberate
+        // whole-fleet verb. Menu items do not carry
+        // accessibilityIdentifier, so it is title-matched like every
+        // other menu action here.
+        let options = app.buttons["Catalog Options"]
+        XCTAssertTrue(options.waitForExistence(timeout: 30),
+                      "Catalog Options menu never appeared on the Catalog tab.")
+        options.click()
+        clickMenuItem(app, titled: "Scan All Volumes")
         let row = app.staticTexts[filename]
         XCTAssertTrue(row.waitForExistence(timeout: timeout),
                       "Fixture \(filename) never appeared in the catalog table after Scan All — check ffprobe availability and the seam path.")

@@ -215,6 +215,22 @@ extension VideoScanModel {
         // pairs cross the boundary. VideoRecord stays main-actor-bound
         // throughout — the repo has three separate incidents from
         // getting that wrong.
+        // BACKPRESSURE, not a dropping buffer. codex flagged the stream
+        // as unbounded (#320.5). The obvious fix — AsyncStream's
+        // `.bufferingOldest/.bufferingNewest` — would be WORSE than the
+        // problem: a full buffer would silently discard computed
+        // signatures, so files would come back unsigned with no error
+        // anywhere. Losing work quietly is exactly the failure class
+        // this whole feature is trying to avoid.
+        //
+        // So producers take a permit before yielding and the consumer
+        // returns it after applying. Lanes throttle themselves to the
+        // consumer's pace; nothing is ever dropped. In practice the
+        // consumer (a dictionary lookup) far outruns the producers
+        // (three seeks), so the permits are rarely exhausted — this
+        // bounds the worst case rather than changing the normal one.
+        let permits = AsyncSemaphore(limit: max(batchSize * 4, 64))
+
         let stream = AsyncStream<(UUID, String)> { continuation in
             let task = Task.detached(priority: .utility) {
                 await withTaskGroup(of: Void.self) { group in
@@ -224,12 +240,13 @@ extension VideoScanModel {
                             // loop needs no lock, no cursor, and no actor.
                             for item in lane {
                                 if Task.isCancelled { return }
-                                autoreleasepool {
-                                    let signature = FileHasher.segmentedHash(path: item.path)
-                                    if !signature.isEmpty {
-                                        continuation.yield((item.id, signature))
-                                    }
+                                let signature = autoreleasepool {
+                                    FileHasher.segmentedHash(path: item.path)
                                 }
+                                guard !signature.isEmpty else { continue }
+                                // Blocks only when the consumer is behind.
+                                do { try await permits.wait() } catch { return }
+                                continuation.yield((item.id, signature))
                             }
                         }
                     }
@@ -255,7 +272,7 @@ extension VideoScanModel {
         var processed = 0   // signatures computed and handed back
         var applied = 0     // records this pass actually changed
 
-        func flush() {
+        func flush() async {
             guard !pending.isEmpty else { return }
             let now = Date()
             for (id, signature) in pending {
@@ -276,16 +293,20 @@ extension VideoScanModel {
                     path: rec.fullPath, hash: signature, at: now)
             }
             processed += pending.count
+            let returned = pending.count
             pending.removeAll(keepingCapacity: true)
+            // Release permits for everything drained, whether or not it
+            // changed a record — a skipped item still consumed one.
+            for _ in 0..<returned { await permits.signal() }
             progress?(processed, total)
         }
 
         for await pair in stream {
             pending.append(pair)
-            if pending.count >= batchSize { flush() }
+            if pending.count >= batchSize { await flush() }
             if Task.isCancelled { result.cancelled = true; break }
         }
-        flush()
+        await flush()
 
         // `applied` counts records THIS pass changed; `processed` counts
         // signatures computed. They differ when a concurrent scan filled

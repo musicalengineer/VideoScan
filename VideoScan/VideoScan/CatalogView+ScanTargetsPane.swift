@@ -461,6 +461,30 @@ extension CatalogView {
                     //     row, which also knows resume-vs-start.
                     // What is left here is genuinely catalog-scoped.
 
+                    // Scan All Volumes. Removed on 2026-08-12 as a
+                    // duplicate of the toolbar's Scan All button — and
+                    // then the button itself was removed hours later
+                    // when run controls moved to the Scan Monitor,
+                    // leaving NO way to scan everything in one action
+                    // and breaking the Gauntlet flows that depend on one
+                    // (codex #320.3). The deletion was right only while
+                    // the button existed.
+                    //
+                    // A menu entry is the correct home under Rick's rule
+                    // that scanning is a selection act: per-volume ▶ and
+                    // right-click "Scan Selected" stay the everyday
+                    // path, and this is the deliberate whole-fleet verb,
+                    // one level down rather than on the row.
+                    Section("Scan") {
+                        Button(action: { model.startAllTargets() }) {
+                            Label("Scan All Volumes", systemImage: "play.fill")
+                        }
+                        .disabled(model.scanTargets.isEmpty
+                                  || model.scanTargets.allSatisfy { $0.status.isActive })
+                        .accessibilityIdentifier("catalog.scanAll")
+                        .help("Start or resume a scan on every listed volume.")
+                    }
+
                     // Content-hash backfill (2026-08-11). Deliberately a
                     // menu item rather than a toolbar button: it is a
                     // once-per-catalog maintenance pass, not a daily verb.
