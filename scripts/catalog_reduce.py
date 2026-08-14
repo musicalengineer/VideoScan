@@ -179,13 +179,42 @@ def main():
               "Nothing written.")
         return
 
-    shutil.copy2(CATALOG, CATALOG + ".prev")
-    doc["records"] = keep
-    tmp = CATALOG + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(doc, f)
-    os.replace(tmp, CATALOG)
-    print(f"\nWRITTEN. {len(keep):,} records remain. Previous saved to catalog.json.prev")
+    # --- external-writer contract (docs/catalog_write_safety_design.md §5) ---
+    # This script is the REFERENCE IMPLEMENTATION for scripts that write
+    # catalog.json:
+    #   1. take the advisory flock on catalog.lock (refuse, don't wait --
+    #      maintenance is human-run; "quit the app first" is fine)
+    #   2. bump `generation` so the app's OCC check sees our write and
+    #      reconciles instead of clobbering us with its stale copy
+    #   3. atomic replace, then release
+    import fcntl
+    lock_path = os.path.join(os.path.dirname(CATALOG), "catalog.lock")
+    lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            owner = ""
+            try:
+                owner = open(lock_path).read().strip()
+            except OSError:
+                pass
+            print(f"\nABORTED: catalog.lock is held{' by ' + owner if owner else ''}. "
+                  "Quit VideoScan (or wait for the other writer) and re-run.")
+            return
+
+        doc["generation"] = int(doc.get("generation", 0)) + 1
+        shutil.copy2(CATALOG, CATALOG + ".prev")
+        doc["records"] = keep
+        tmp = CATALOG + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(doc, f)
+        os.replace(tmp, CATALOG)
+        print(f"\nWRITTEN generation {doc['generation']}. {len(keep):,} records remain. "
+              "Previous saved to catalog.json.prev")
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
 
 
 if __name__ == "__main__":
