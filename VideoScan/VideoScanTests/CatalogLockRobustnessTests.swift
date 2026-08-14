@@ -229,10 +229,11 @@ final class CatalogLockRobustnessTests: XCTestCase {
 
     // MARK: - Isolation
 
-    func testTestsNeverTouchTheRealCatalog() {
-        let real = FileManager.default.urls(for: .applicationSupportDirectory,
-                                            in: .userDomainMask).first!
-            .appendingPathComponent("VideoScan/catalog.json")
+    func testTestsNeverTouchTheRealCatalog() throws {
+        let appSupport = try XCTUnwrap(
+            FileManager.default.urls(for: .applicationSupportDirectory,
+                                     in: .userDomainMask).first)
+        let real = appSupport.appendingPathComponent("VideoScan/catalog.json")
         XCTAssertNotEqual(catalogURL.standardizedFileURL, real.standardizedFileURL)
         XCTAssertTrue(catalogURL.path.contains(NSTemporaryDirectory()))
     }
