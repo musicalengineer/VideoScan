@@ -427,6 +427,52 @@ final class CatalogLockRobustnessTests: XCTestCase {
         XCTAssertEqual(store.lastLoadOutcome, .loaded(fromBackup: false))
     }
 
+    /// END-TO-END: the ACTUAL reducer script against the REAL backup, full
+    /// output, decoded by the app. The [:500]-sample sensor above passed
+    /// while the app rejected the reducer's real output TWICE (clobbers 3
+    /// and 4) — because the sample round-tripped the backup without the
+    /// reducer's MUTATIONS, and truncated before the poison. This test
+    /// runs the real transform on all 18,142 records and, on failure,
+    /// surfaces the decoder's actual error via lastLoadOutcome + NSLog.
+    @MainActor
+    func testActualReducerOutputDecodes_endToEnd() throws {
+        let python = "/usr/bin/python3"
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: python))
+        let backup = FileManager.default.urls(for: .applicationSupportDirectory,
+                                              in: .userDomainMask)[0]
+            .appendingPathComponent("VideoScan/catalog.pre-triage-20260814.json")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: backup.path))
+        // The reducer script lives in the repo; find it relative to this
+        // test file's known location at compile time.
+        let script = URL(fileURLWithPath: #filePath)          // …/VideoScan/VideoScanTests/…
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent()                       // repo root
+            .appendingPathComponent("scripts/catalog_reduce.py")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: script.path))
+
+        try FileManager.default.copyItem(at: backup, to: catalogURL)
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: python)
+        proc.arguments = [script.path, "--catalog", catalogURL.path, "--apply"]
+        let out = Pipe()
+        proc.standardOutput = out
+        proc.standardError = out
+        try proc.run()
+        proc.waitUntilExit()
+        let scriptOut = String(data: out.fileHandleForReading.readDataToEndOfFile(),
+                               encoding: .utf8) ?? ""
+        XCTAssertEqual(proc.terminationStatus, 0, "reducer failed:\n\(scriptOut.suffix(500))")
+        XCTAssertTrue(scriptOut.contains("WRITTEN"), "reducer must have applied:\n\(scriptOut.suffix(500))")
+
+        let store = CatalogStore(directory: dir)
+        let loaded = store.load()
+        XCTAssertEqual(store.lastLoadOutcome, .loaded(fromBackup: false),
+                       "the app REJECTED the reducer's real output — outcome \(store.lastLoadOutcome). "
+                       + "The decoder's error is in this test run's NSLog output; read it.")
+        XCTAssertEqual(loaded.count, 8_760, "expected the reduced record count")
+    }
+
     // MARK: - Isolation
 
     func testTestsNeverTouchTheRealCatalog() throws {

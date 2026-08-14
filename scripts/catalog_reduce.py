@@ -22,7 +22,11 @@ import shutil
 import sys
 from collections import defaultdict
 
-CATALOG = os.path.expanduser("~/Library/Application Support/VideoScan/catalog.json")
+# --catalog PATH overrides the target (testing / offline forensics).
+if "--catalog" in sys.argv:
+    CATALOG = sys.argv[sys.argv.index("--catalog") + 1]
+else:
+    CATALOG = os.path.expanduser("~/Library/Application Support/VideoScan/catalog.json")
 
 REDUNDANT = {"FamilyArchive", "Projects"}
 MASTER = {"LaCieWorkspace", "MediaExpansion"}
@@ -133,10 +137,20 @@ def main():
     for g, members in groups.items():
         if len(members) == 1:
             # Group lost its siblings to Pass A -- it is no longer a duplicate.
+            #
+            # DELETE the keys rather than writing "" (the clobber-3/4 bug):
+            # duplicateGroupID decodes as a Swift UUID, and "" is not a valid
+            # UUID string -- ONE such field in ONE record failed the entire
+            # 41 MB decode, and load() silently fell back to .prev, reverting
+            # the whole reduction. Key-absence is what the Swift encoder
+            # itself emits for these, and decodeIfPresent handles it.
             m = members[0]
-            if (m.get("duplicateDisposition") or "") != "":
-                m["duplicateDisposition"] = ""
-                m["duplicateGroupID"] = ""
+            if (m.get("duplicateDisposition") or m.get("duplicateGroupID")):
+                m.pop("duplicateDisposition", None)
+                m.pop("duplicateGroupID", None)
+                m.pop("duplicateBestMatchFilename", None)
+                m.pop("duplicateConfidence", None)
+                m.pop("duplicateReasons", None)
                 m["duplicateGroupCount"] = 0
                 orphaned_singletons += 1
             continue
