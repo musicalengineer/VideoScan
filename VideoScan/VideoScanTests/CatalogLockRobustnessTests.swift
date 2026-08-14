@@ -323,6 +323,110 @@ final class CatalogLockRobustnessTests: XCTestCase {
         // CatalogStore.writePrecondition.
     }
 
+    // MARK: - Python round-trip sensor (the fourth-clobber gate)
+    //
+    // On 8/14 the catalog reduction was reverted three times. The third
+    // reversion's mechanism, established by log-timeline elimination: the
+    // app FAILED TO DECODE the python-written catalog.json and silently
+    // fell back to .prev, resurrecting the pre-reduction file. Every
+    // maintenance script writes via python json.dump, so "the app can
+    // decode python-round-tripped JSON" is a load-bearing assumption that
+    // was never tested. This sensor either proves it or reproduces the
+    // failure with a diffable artifact. DO NOT re-run catalog_reduce.py
+    // --apply while this test is red.
+
+    @MainActor
+    func testPythonRoundTrippedCatalogStillDecodes() throws {
+        let python = "/usr/bin/python3"
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: python),
+                          "python3 required for this sensor")
+
+        // Synthetic records exercising the field shapes the real catalog
+        // uses: dates, floats, nested arrays, unicode, pair references.
+        let store = CatalogStore(directory: dir)
+        let a = VideoRecord()
+        a.filename = "Donna-Cape-1991 — été.mov"      // unicode: ensure_ascii path
+        a.fullPath = "/Volumes/Test/Donna-Cape-1991 — été.mov"
+        a.durationSeconds = 3808.271133                // float precision
+        a.sizeBytes = 69_189_370_465                   // > Int32
+        a.notes = "line1\nline2\t\"quoted\" \\ slash/" // escapes
+        let b = VideoRecord()
+        b.filename = "pair-half.mxf"
+        b.fullPath = "/Volumes/Test/pair-half.mxf"
+        // NOTE deliberately NOT paired: revalidateExistingPairs correctly
+        // clears pairs whose endpoints aren't valid A/V halves, so a
+        // synthetic pair here tests the validator, not the round-trip.
+        // (First version of this test made that mistake.)
+        XCTAssertTrue(store.saveNow(records: [a, b]), "seed save must succeed")
+
+        // Round-trip through python exactly the way the maintenance
+        // scripts do: json.load -> json.dump. No compact separators, no
+        // sort -- the defaults catalog_reduce.py uses.
+        let script = """
+        import json, sys
+        p = sys.argv[1]
+        d = json.load(open(p))
+        json.dump(d, open(p, "w"))
+        """
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: python)
+        proc.arguments = ["-c", script, catalogURL.path]
+        try proc.run()
+        proc.waitUntilExit()
+        XCTAssertEqual(proc.terminationStatus, 0, "python round-trip must succeed")
+
+        // The app must still decode it -- and must NOT have fallen back.
+        let store2 = CatalogStore(directory: dir)
+        let loaded = store2.load()
+        XCTAssertEqual(loaded.count, 2,
+                       "python-round-tripped catalog must decode; falling back or "
+                       + "returning [] here is exactly the third-clobber mechanism")
+        XCTAssertEqual(store2.lastLoadOutcome, .loaded(fromBackup: false),
+                       "must load the PRIMARY, not fall back to .prev")
+        let names = Set(loaded.map(\.filename))
+        XCTAssertTrue(names.contains("Donna-Cape-1991 — été.mov"), "unicode filename must survive")
+        XCTAssertEqual(loaded.first(where: { $0.filename.hasPrefix("Donna") })?.sizeBytes,
+                       69_189_370_465, "large integers must survive")
+    }
+
+    /// Same sensor against the REAL pre-reduction backup when it exists on
+    /// this machine (skips elsewhere). Read-only on the backup: it is
+    /// COPIED to the test's temp dir first, so the isolation contract
+    /// holds. This is the test that answers "would re-running the
+    /// reduction clobber a fourth time?" with production data.
+    @MainActor
+    func testPythonRoundTripOfRealBackupDecodes() throws {
+        let python = "/usr/bin/python3"
+        try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: python))
+        let backup = FileManager.default.urls(for: .applicationSupportDirectory,
+                                              in: .userDomainMask)[0]
+            .appendingPathComponent("VideoScan/catalog.pre-triage-20260814.json")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: backup.path),
+                          "real backup only exists on Rick's M4")
+
+        try FileManager.default.copyItem(at: backup, to: catalogURL)
+
+        let script = """
+        import json, sys
+        p = sys.argv[1]
+        d = json.load(open(p))
+        d["records"] = d["records"][:500]   # decode failure is per-record; 500 is plenty
+        json.dump(d, open(p, "w"))
+        """
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: python)
+        proc.arguments = ["-c", script, catalogURL.path]
+        try proc.run()
+        proc.waitUntilExit()
+        XCTAssertEqual(proc.terminationStatus, 0)
+
+        let store = CatalogStore(directory: dir)
+        let loaded = store.load()
+        XCTAssertEqual(loaded.count, 500,
+                       "python-round-tripped REAL records must decode")
+        XCTAssertEqual(store.lastLoadOutcome, .loaded(fromBackup: false))
+    }
+
     // MARK: - Isolation
 
     func testTestsNeverTouchTheRealCatalog() throws {
