@@ -307,8 +307,14 @@ extension CatalogView {
             let hasBadFiles = (agg?.errors ?? 0) > 0
             let isNetwork = VolumeReachability.isNetworkVolume(path: path)
 
+            // Row filters only — column-visibility toggles must not decide
+            // membership. If the user's ONLY active entry is a column
+            // toggle, fall back to the .connected default rather than
+            // filtering every volume out.
+            let rowFilters = volumeFilters.filter { $0 != .showErrorsColumn }
+            if rowFilters.isEmpty { return target.isReachable }
             // Target passes if ANY active filter matches
-            for filter in volumeFilters {
+            for filter in rowFilters {
                 switch filter {
                 case .connected:
                     if target.isReachable { return true }
@@ -320,6 +326,11 @@ extension CatalogView {
                     if !hasRecords && target.isReachable { return true }
                 case .withErrors:
                     if hasBadFiles { return true }
+                case .showErrorsColumn:
+                    // Column-visibility toggle, never a row matcher: a
+                    // volume must not appear/disappear because the user
+                    // showed a column.
+                    continue
                 }
             }
             return false

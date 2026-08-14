@@ -103,6 +103,12 @@ extension CatalogView {
 
     // Internal (not private): CatalogView's scanTargetsPane in
     // ContentView.swift embeds this table (and backupStatusBadge below).
+    /// Column-visibility toggle riding the Show menu (see VolumeFilter).
+    /// TableColumn count must be static, so the hidden state renders an
+    /// empty header + EmptyView cells at ~1pt — visually gone, macOS-13
+    /// compatible.
+    private var showErrorsCol: Bool { volumeFilters.contains(.showErrorsColumn) }
+
     var volumeTable: some View {
         Table(volumeTableRows, selection: $selectedVolumeIDs, sortOrder: $volumeTableSortOrder) {
             // Cells are now plain — no per-cell tap gestures. Double-
@@ -159,9 +165,15 @@ extension CatalogView {
             }
             .width(min: 50, ideal: 60)
 
-            TableColumn("Errors") { row in
+            // Errors column is opt-in via Show → "Show Errors Column"
+            // (Rick 2026-08-14: cleaner display; the count is diagnostic,
+            // not daily-driver information). The "With Errors" ROW filter
+            // still exists independently for finding troubled volumes.
+            TableColumn(showErrorsCol ? "Errors" : "") { row in
                 Group {
-                    if row.errors > 0 {
+                    if !showErrorsCol {
+                        EmptyView()
+                    } else if row.errors > 0 {
                         Text("\(row.errors)")
                             .font(.system(size: 15, design: .monospaced))
                             .foregroundColor(.red)
@@ -173,7 +185,7 @@ extension CatalogView {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .width(min: 50, ideal: 60)
+            .width(min: showErrorsCol ? 50 : 1, ideal: showErrorsCol ? 60 : 1)
 
             TableColumn("Media Size", value: \VolumeRow.mediaBytes) { row in
                 Text(row.mediaBytes > 0 ? Self.formatBytesStatic(row.mediaBytes) : "—")
@@ -203,7 +215,7 @@ extension CatalogView {
             }
             .width(min: 75, ideal: 95)
 
-            TableColumn("Phase") { row in
+            TableColumn("Workflow") { row in    // "Workflow" everywhere user-facing (Rick 2026-08-14); code enum stays VolumePhase
                 HStack(spacing: 4) {
                     if row.status.isActive {
                         ProgressView()
@@ -531,7 +543,7 @@ extension CatalogView {
     private func volumeContextPhaseSection(
         targets: [CatalogScanTarget], first: CatalogScanTarget, single: Bool
     ) -> some View {
-        Section("Phase") {
+        Section("Workflow") {
             ForEach(VolumePhase.allCases, id: \.self) { phase in
                 Button(action: {
                     for t in targets { model.setPhase(phase, for: t) }

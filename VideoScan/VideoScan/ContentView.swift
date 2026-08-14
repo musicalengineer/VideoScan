@@ -176,6 +176,11 @@ enum VolumeFilter: String, CaseIterable, Hashable {
     case allScanned     = "All Ever Scanned"
     case uncataloged    = "Uncataloged"
     case withErrors     = "With Errors"
+    /// COLUMN visibility, not a row filter (Rick 2026-08-14: "let's NOT
+    /// show Errors from Scan unless Show includes 'Show Errors' — cleaner
+    /// display"). Lives in VolumeFilter so it rides the existing Show
+    /// menu + persistence; the row-matching switch treats it as neutral.
+    case showErrorsColumn = "Show Errors Column"
 
     var icon: String {
         switch self {
@@ -184,6 +189,7 @@ enum VolumeFilter: String, CaseIterable, Hashable {
         case .allScanned:  return "clock.arrow.circlepath"
         case .uncataloged: return "questionmark.folder"
         case .withErrors:  return "exclamationmark.triangle"
+        case .showErrorsColumn: return "tablecells.badge.ellipsis"
         }
     }
 }
@@ -575,6 +581,9 @@ struct CatalogView: View {
                 }
             )
             .onChange(of: selectedIDs) {
+                model.hallieCurrentSelectionID = selectedIDs.count == 1
+                    ? selectedIDs.first
+                    : nil
                 // Update volume highlight when table selection changes.
                 // O(1) index lookup — runs per arrow-key step.
                 if let id = selectedIDs.first,
@@ -590,6 +599,9 @@ struct CatalogView: View {
             .onAppear {
                 handlePendingCatalogNavigation()
                 restoreFocusedMedia()
+                model.hallieCurrentSelectionID = selectedIDs.count == 1
+                    ? selectedIDs.first
+                    : nil
                 // Re-seed the debounced filter from the restored search term.
                 // `searchText` is SceneStorage so it survives a tab switch,
                 // but `debouncedSearchText` is plain @State and resets to ""
@@ -607,6 +619,11 @@ struct CatalogView: View {
                     debouncedSearchText = request
                     model.archivistSearchRequest = nil
                 }
+            }
+            .onDisappear {
+                // CatalogView's @State selection ceases to be a visible
+                // current row when this tab leaves the hierarchy.
+                model.hallieCurrentSelectionID = nil
             }
             .onChange(of: model.archivistSearchRequest) {
                 // Family Archivist chat window → catalog search field
@@ -745,8 +762,9 @@ struct CatalogView: View {
         }
         .alert("Delete Duplicates", isPresented: $showDeleteDuplicatesConfirm) {
             Button("Delete \(deleteTargetCount) Files", role: .destructive) {
-                model.deleteDuplicates(onVolume: deleteTargetVolume)
+                Task { await model.deleteDuplicates(onVolume: deleteTargetVolume) }
             }
+            .disabled(model.isReadOnly || model.isDeletingDuplicates)
             Button("Cancel", role: .cancel) { }
         } message: {
             Text("This will permanently delete \(deleteTargetCount) high-confidence duplicate(s) on:\n\n\(deleteTargetVolume)\n\nOnly duplicates whose keeper is also on this same volume will be deleted. Cross-volume duplicates are never touched.\n\nAre you sure? Do you have backups and/or are these really junk or duplicates?")
