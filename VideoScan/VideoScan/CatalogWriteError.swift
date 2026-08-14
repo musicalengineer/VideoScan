@@ -29,11 +29,17 @@ enum CatalogWriteError: Error, Equatable, Sendable {
     /// in use."
     case lockedByAnotherProcess(owner: CatalogLockOwner?)
 
-    /// The file on disk changed since we loaded it, so writing our copy
-    /// would silently discard whatever the other writer did. This is the
-    /// LOST-UPDATE guard, and it is the one that would have caught 8/14 —
-    /// a lock alone would not have, because both writes were well-formed.
-    case staleGeneration(loadedAt: Date, onDiskAt: Date)
+    /// The on-disk generation moved past what this session loaded, so
+    /// writing our copy would silently discard the other writer's work.
+    /// This is the LOST-UPDATE guard, the one that would have caught 8/14
+    /// — a lock alone would not have, because both writes were well-formed.
+    /// Recovery is reconcile-then-retry, never blind retry.
+    case staleGeneration(loaded: Int, onDisk: Int)
+
+    /// load() refused the on-disk catalog (e.g. written by a newer build)
+    /// and writing would destroy it — the quit-time save would replace a
+    /// future-schema catalog with an empty current-schema one.
+    case writesDisabled(String)
 
     /// Viewer-mode host; writes were never permitted here.
     case readOnlyViewer
@@ -56,10 +62,9 @@ enum CatalogWriteError: Error, Equatable, Sendable {
             let who = owner?.describedBriefly ?? "another process"
             return "The catalog is in use by \(who). Your changes were not saved."
         case .staleGeneration(let loaded, let onDisk):
-            let f = DateFormatter()
-            f.dateStyle = .none
-            f.timeStyle = .medium
-            return "The catalog changed on disk at \(f.string(from: onDisk)) after this session loaded it at \(f.string(from: loaded)). Saving would discard those changes."
+            return "The catalog on disk is at generation \(onDisk) but this session loaded generation \(loaded). Another writer changed it; saving now would discard their work. Reload/reconcile, then save."
+        case .writesDisabled(let reason):
+            return "Catalog saving is disabled for this session: \(reason)"
         case .readOnlyViewer:
             return "This machine is a viewer. The catalog is read-only here."
         case .writeFailed(let detail):
@@ -80,6 +85,7 @@ enum CatalogWriteError: Error, Equatable, Sendable {
         case .writeFailed:            return "writeFailed"
         case .lockUnavailable:        return "lockUnavailable"
         case .verificationFailed:     return "verificationFailed"
+        case .writesDisabled:         return "writesDisabled"
         }
     }
 
@@ -93,6 +99,7 @@ enum CatalogWriteError: Error, Equatable, Sendable {
         case .lockUnavailable:         return 4
         case .writeFailed:             return 5
         case .verificationFailed:      return 6
+        case .writesDisabled:          return 7
         }
     }
 
@@ -104,7 +111,8 @@ enum CatalogWriteError: Error, Equatable, Sendable {
         switch self {
         case .lockedByAnotherProcess, .lockUnavailable: return true
         case .readOnlyViewer, .staleGeneration,
-             .writeFailed, .verificationFailed:         return false
+             .writeFailed, .verificationFailed,
+             .writesDisabled:                           return false
         }
     }
 }

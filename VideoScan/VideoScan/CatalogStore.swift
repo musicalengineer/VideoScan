@@ -79,19 +79,27 @@ struct CatalogSnapshot: Decodable {
     static let currentVersion = 6
 
     var version: Int = Self.currentVersion
+    /// Monotonic write counter — the optimistic-concurrency stamp
+    /// (design doc §4.1). Every successful save writes generation+1;
+    /// a writer whose loaded generation no longer matches disk must
+    /// reconcile before writing. Additive + optional: absent (old
+    /// catalogs) decodes as 0, so no version bump and no migration.
+    var generation: Int = 0
     var savedAt: Date = Date()
     var records: [VideoRecord] = []
     var savedFromHost: String = ""
 
     private enum CodingKeys: String, CodingKey {
-        case version, savedAt, records, savedFromHost
+        case version, generation, savedAt, records, savedFromHost
     }
 
     init(version: Int = Self.currentVersion,
+         generation: Int = 0,
          savedAt: Date = Date(),
          records: [VideoRecord] = [],
          savedFromHost: String = "") {
         self.version = version
+        self.generation = generation
         self.savedAt = savedAt
         self.records = records
         self.savedFromHost = savedFromHost
@@ -100,9 +108,37 @@ struct CatalogSnapshot: Decodable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         version       = try c.decodeIfPresent(Int.self, forKey: .version)       ?? 1
+        generation    = try c.decodeIfPresent(Int.self, forKey: .generation)    ?? 0
         savedAt       = try c.decodeIfPresent(Date.self, forKey: .savedAt)       ?? Date()
         records       = try c.decodeIfPresent([VideoRecord].self, forKey: .records) ?? []
         savedFromHost = try c.decodeIfPresent(String.self, forKey: .savedFromHost) ?? ""
+    }
+
+    /// Cheap header read: extract version + generation from the first few
+    /// KB of the file WITHOUT decoding 41 MB of records. Works because the
+    /// encoder emits these keys first (see CatalogSnapshotDTO.CodingKeys).
+    /// Falls back to nil (not 0) when the file is missing or unparseable so
+    /// callers can distinguish "no file" from "generation 0".
+    static func headerProbe(at url: URL) -> (version: Int, generation: Int)? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let head = try? handle.read(upToCount: 4096),
+              let text = String(data: head, encoding: .utf8) else { return nil }
+        func intAfter(_ key: String) -> Int? {
+            guard let r = text.range(of: "\"\(key)\":") else { return nil }
+            let tail = text[r.upperBound...].drop(while: { $0 == " " })
+            let digits = tail.prefix(while: { $0.isNumber })
+            return Int(digits)
+        }
+        // EITHER key in the head is enough. A sorted-keys encoder puts
+        // "version" alphabetically LAST — after 41 MB of records — while
+        // "generation" still lands in the head (g < r). Requiring version
+        // here would silently disable OCC for any sorted-keys writer.
+        // Only a file with NEITHER key in its head reads as "no header".
+        let v = intAfter("version")
+        let g = intAfter("generation")
+        guard v != nil || g != nil else { return nil }
+        return (v ?? 0, g ?? 0)
     }
 }
 
@@ -199,33 +235,48 @@ final class CatalogStore {
     /// which write — never contend for it.
     private lazy var lock = CatalogLock(besideCatalogAt: fileURL)
 
-    /// catalog.json's mtime as of our last successful load or write. If the
-    /// on-disk mtime has moved past this, somebody else wrote the file and
-    /// our in-memory copy is stale. This is the LOST-UPDATE guard; the lock
-    /// alone does not catch it, because each writer's write is individually
-    /// well-formed and correctly serialised.
-    private var knownOnDiskMtime: Date?
+    /// The generation this session last loaded or successfully wrote. If
+    /// the on-disk header carries a HIGHER generation, somebody else wrote
+    /// the file and our in-memory copy is stale. This is the LOST-UPDATE
+    /// guard; the lock alone does not catch it, because each writer's
+    /// write is individually well-formed and correctly serialised.
+    ///
+    /// Generation, NOT mtime (design doc §4.1). mtime failed open on stat
+    /// nil, coarse timestamps, equal-or-older replacements, and preserved
+    /// timestamps — `shutil.copy2`, used by the very script that caused
+    /// the 8/14 incident, preserves mtime BY DESIGN, so the old guard
+    /// could never have caught the incident it was written for.
+    private(set) var loadedGeneration: Int = 0
+
+    /// Non-nil when load() refused the on-disk catalog (written by a NEWER
+    /// build). While set, EVERY write path refuses — otherwise the
+    /// unconditional quit-time save overwrites a future-schema catalog
+    /// with an empty current-schema one. Codex blocker 3 (#377): a live
+    /// data-loss path independent of concurrency, present on main.
+    private(set) var writesDisabledReason: String?
 
     /// Most recent refusal or failure, for UI surfacing. Cleared on success.
     private(set) var lastWriteError: CatalogWriteError?
 
-    /// Current mtime of catalog.json, or nil when it does not exist yet.
-    private func onDiskMtime() -> Date? {
-        let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path)
-        return attrs?[.modificationDate] as? Date
-    }
-
     /// Gate for every write path. Returns nil when it is safe to proceed,
-    /// otherwise the error — already journalled — to hand back to the caller.
+    /// otherwise the error — already journalled — to hand back to the
+    /// caller. On success the LOCK IS HELD: the caller must release via
+    /// finishWrite(...) whether the write succeeds or fails. Per-write
+    /// lock, not process-lifetime (design doc §4.2) — a session-long hold
+    /// would block the supported live dossier-merge workflow.
     ///
-    /// Order matters: ownership before staleness. If another process owns the
-    /// catalog, "your copy is stale" is a confusing way to say "you are not
-    /// the writer".
+    /// Order: latch → ownership → staleness. If another process owns the
+    /// catalog, "your copy is stale" is a confusing way to say "you are
+    /// not the writer".
     private func writePrecondition() -> CatalogWriteError? {
         func fail(_ e: CatalogWriteError) -> CatalogWriteError {
             lastWriteError = e
             CatalogWriteJournal.record(e, catalogURL: fileURL)
             return e
+        }
+
+        if let reason = writesDisabledReason {
+            return fail(.writesDisabled(reason))
         }
 
         switch lock.acquire() {
@@ -234,25 +285,40 @@ final class CatalogStore {
         case .heldByAnother(let owner):
             return fail(.lockedByAnotherProcess(owner: owner))
         case .unavailable(let reason):
-            return fail(.lockUnavailable(reason))
+            // FAIL OPEN, deliberately. If the lock file cannot even be
+            // created (permissions, missing dir, read-only volume) then
+            // refusing every save turns an unlikely filesystem hiccup into
+            // guaranteed total data loss — far worse than the rare clobber
+            // the lock exists to prevent. Journal loudly and proceed: an
+            // ADVISORY mechanism that bricks saving when it malfunctions
+            // is a worse bug than the one it fixes.
+            lastWriteError = .lockUnavailable(reason)
+            CatalogWriteJournal.record(.lockUnavailable(reason), catalogURL: fileURL)
         }
 
-        // A file that does not exist yet cannot be stale.
-        if let known = knownOnDiskMtime, let current = onDiskMtime(),
-           current > known.addingTimeInterval(0.5) {
-            // 0.5s slack: HFS+ and some network filesystems store coarse
-            // timestamps, and our own atomic rename can land a hair later
-            // than the Date we recorded.
-            return fail(.staleGeneration(loadedAt: known, onDiskAt: current))
+        // OCC check, from the file's first 4 KB — no 41 MB decode. A file
+        // that does not exist yet cannot be stale; a header we cannot
+        // parse is treated as generation 0 rather than a refusal, because
+        // pre-generation catalogs are legitimate.
+        let onDisk = CatalogSnapshot.headerProbe(at: fileURL)?.generation ?? 0
+        if onDisk > loadedGeneration {
+            lock.release()   // we will not be writing; do not squat on it
+            return fail(.staleGeneration(loaded: loadedGeneration, onDisk: onDisk))
         }
         return nil
     }
 
-    /// Called after any successful write so the next staleness check
-    /// compares against what we just produced.
-    private func noteWriteSucceeded() {
-        knownOnDiskMtime = onDiskMtime()
-        lastWriteError = nil
+    /// Balances a successful writePrecondition(). Releases the per-write
+    /// lock and, on success, advances the session generation to what the
+    /// write stamped on disk.
+    private func finishWrite(success: Bool, wroteGeneration: Int) {
+        if success {
+            loadedGeneration = wroteGeneration
+            lastWriteError = nil
+        } else if lastWriteError == nil {
+            lastWriteError = .writeFailed("encode or atomic write failed")
+        }
+        lock.release()
     }
 
     /// Release ownership on orderly shutdown. The kernel releases it anyway
@@ -320,10 +386,11 @@ final class CatalogStore {
             lastLoadOutcome = .missing
             return []
         }
-        // Baseline for the lost-update guard: the mtime of the file we are
-        // about to read. Captured BEFORE decoding so a slow decode cannot
-        // let another writer slip in unnoticed.
-        knownOnDiskMtime = onDiskMtime()
+        // Baseline for the lost-update guard: the generation of the file we
+        // are about to read (design doc §4.1). Captured BEFORE decoding so
+        // a slow decode cannot let another writer slip in unnoticed. Absent
+        // header (pre-generation catalog) baselines at 0.
+        loadedGeneration = CatalogSnapshot.headerProbe(at: fileURL)?.generation ?? 0
 
         // Try primary first.
         if let (records, version) = decode(url: fileURL) {
@@ -331,6 +398,12 @@ final class CatalogStore {
                 NSLog("VideoScan: catalog.json version %d is newer than this build (v%d) — refusing to load; not overwriting on next save",
                       version, CatalogSnapshot.currentVersion)
                 lastLoadOutcome = .refusedNewerVersion(found: version)
+                // LATCH writes off (codex #377 blocker 3). The old comment
+                // said "not overwriting on next save" but nothing enforced
+                // it — the quit-time save would replace the future-schema
+                // catalog with an empty current-schema one. Now enforced by
+                // writePrecondition.
+                writesDisabledReason = "catalog.json was written by a newer build (v\(version) > v\(CatalogSnapshot.currentVersion))"
                 return []
             }
             // Rotate primary → .prev on every successful load. Copy (not move)
@@ -450,18 +523,17 @@ final class CatalogStore {
         pendingRecords = nil  // superseded by this synchronous save
         // Build the Sendable DTO payload ON the main actor (the only place
         // VideoRecord is read), then encode it off-thread on the write queue.
-        let payload = Self.makePayload(records: records)
+        // CAS stamp: this write claims generation N+1 (design doc §4.1).
+        let nextGeneration = loadedGeneration + 1
+        let payload = Self.makePayload(records: records, generation: nextGeneration)
         var ok = false
         writeQueue.sync {
             ok = Self.encodeAndWrite(payload: payload, to: fileURL)
         }
+        // Releases the per-write lock in both outcomes.
+        finishWrite(success: ok, wroteGeneration: nextGeneration)
         if ok {
-            noteWriteSucceeded()
             observer?.catalogStoreDidWrite(self)
-        } else if lastWriteError == nil {
-            // encodeAndWrite journals verification failures itself; anything
-            // else that got here is an encode/IO failure.
-            lastWriteError = .writeFailed("encode or atomic write failed")
         }
         return ok
     }
@@ -517,7 +589,9 @@ final class CatalogStore {
         // yielding a fully-independent Sendable payload that crosses the actor
         // boundary with no @unchecked hatch and no live VideoRecord.
         let t0 = CFAbsoluteTimeGetCurrent()
-        let payload = Self.makePayload(records: records)
+        // CAS stamp: this write claims generation N+1 (design doc §4.1).
+        let nextGeneration = loadedGeneration + 1
+        let payload = Self.makePayload(records: records, generation: nextGeneration)
         let snapshotMs = (CFAbsoluteTimeGetCurrent() - t0) * 1000
         catalogStoreLog.debug("catalog save: snapshot of \(records.count) records took \(snapshotMs, format: .fixed(precision: 1)) ms")
 
@@ -527,17 +601,17 @@ final class CatalogStore {
             if delay > 0 { Thread.sleep(forTimeInterval: delay) }
             let ok = Self.encodeAndWrite(payload: payload, to: dest)
             Task { @MainActor [weak self] in
-                self?.asyncSaveDidFinish(success: ok)
+                self?.asyncSaveDidFinish(success: ok, wroteGeneration: nextGeneration)
             }
         }
     }
 
-    /// Back on the main actor after a background write. Fires the observer
-    /// and, if anything went dirty while we were writing, starts the
-    /// follow-up save.
-    private func asyncSaveDidFinish(success: Bool) {
+    /// Back on the main actor after a background write. Releases the
+    /// per-write lock, fires the observer, and, if anything went dirty
+    /// while we were writing, starts the follow-up save.
+    private func asyncSaveDidFinish(success: Bool, wroteGeneration: Int) {
         saveInFlight = false
-        if success { noteWriteSucceeded() }
+        finishWrite(success: success, wroteGeneration: wroteGeneration)
         if success {
             // Notify the observer (CatalogSync on the master) so it can
             // refresh manifest.sha256. Skipped for the test singleton —
@@ -584,9 +658,11 @@ final class CatalogStore {
     /// outright. This supersedes the old deepCopySnapshot-then-encode dance:
     /// the DTO construction IS the race-free copy, and ships across the actor
     /// boundary as a true value type (no @unchecked Sendable box).
-    private static func makePayload(records: [VideoRecord]) -> CatalogSnapshotDTO {
+    private static func makePayload(records: [VideoRecord],
+                                    generation: Int = 0) -> CatalogSnapshotDTO {
         CatalogSnapshotDTO(
             version: CatalogSnapshot.currentVersion,
+            generation: generation,
             savedAt: Date(),
             records: records.map(VideoRecordDTO.init),
             savedFromHost: CatalogHost.currentName
@@ -697,12 +773,16 @@ final class CatalogStore {
 /// actor (see `CatalogStore.decode(url:)`), so there is no DTO decoder.
 struct CatalogSnapshotDTO: Sendable, Encodable {
     var version: Int = CatalogSnapshot.currentVersion
+    /// OCC stamp (design doc §4.1). Encoded SECOND, before the 41 MB of
+    /// records, so `CatalogSnapshot.headerProbe` can read it from the
+    /// file's first 4 KB. JSONEncoder emits keys in CodingKeys order.
+    var generation: Int = 0
     var savedAt: Date = Date()
     var records: [VideoRecordDTO] = []
     var savedFromHost: String = ""
 
     private enum CodingKeys: String, CodingKey {
-        case version, savedAt, records, savedFromHost
+        case version, generation, savedAt, records, savedFromHost
     }
 }
 
@@ -720,6 +800,7 @@ extension CatalogSnapshotDTO {
     /// the main-actor-isolated VideoRecord.
     init(_ snapshot: CatalogSnapshot) {
         self.init(version: snapshot.version,
+                  generation: snapshot.generation,
                   savedAt: snapshot.savedAt,
                   records: snapshot.records.map(VideoRecordDTO.init),
                   savedFromHost: snapshot.savedFromHost)

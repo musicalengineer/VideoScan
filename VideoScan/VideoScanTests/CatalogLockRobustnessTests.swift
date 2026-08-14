@@ -133,24 +133,25 @@ final class CatalogLockRobustnessTests: XCTestCase {
         let all: [CatalogWriteError] = [
             .readOnlyViewer,
             .lockedByAnotherProcess(owner: nil),
-            .staleGeneration(loadedAt: Date(), onDiskAt: Date()),
+            .staleGeneration(loaded: 1, onDisk: 2),
             .lockUnavailable("x"),
             .writeFailed("x"),
             .verificationFailed(expectedSHA256: "a", actualSHA256: "b", bytes: 1),
+            .writesDisabled("newer build"),
         ]
         XCTAssertEqual(Set(all.map(\.code)).count, all.count, "codes must be distinct")
         // Frozen values -- renumbering breaks logs and support requests.
         XCTAssertEqual(CatalogWriteError.readOnlyViewer.code, 1)
         XCTAssertEqual(CatalogWriteError.lockedByAnotherProcess(owner: nil).code, 2)
-        XCTAssertEqual(CatalogWriteError.staleGeneration(loadedAt: Date(),
-                                                         onDiskAt: Date()).code, 3)
+        XCTAssertEqual(CatalogWriteError.staleGeneration(loaded: 1, onDisk: 2).code, 3)
+        XCTAssertEqual(CatalogWriteError.writesDisabled("x").code, 7)
     }
 
     func testStaleGenerationIsNotTreatedAsTransient() {
         // A blind retry after a stale-generation refusal would reintroduce
         // the very lost update the guard exists to prevent.
-        XCTAssertFalse(CatalogWriteError.staleGeneration(loadedAt: Date(),
-                                                         onDiskAt: Date()).isTransient)
+        XCTAssertFalse(CatalogWriteError.staleGeneration(loaded: 1, onDisk: 2).isTransient)
+        XCTAssertFalse(CatalogWriteError.writesDisabled("newer build").isTransient)
         XCTAssertTrue(CatalogWriteError.lockedByAnotherProcess(owner: nil).isTransient)
     }
 
@@ -159,7 +160,7 @@ final class CatalogLockRobustnessTests: XCTestCase {
     func testJournalRecordsAndReadsBackRefusals() throws {
         CatalogWriteJournal.record(.lockedByAnotherProcess(owner: nil),
                                    catalogURL: catalogURL)
-        CatalogWriteJournal.record(.staleGeneration(loadedAt: Date(), onDiskAt: Date()),
+        CatalogWriteJournal.record(.staleGeneration(loaded: 1, onDisk: 2),
                                    catalogURL: catalogURL)
 
         let entries = CatalogWriteJournal.recent(10, catalogURL: catalogURL)
@@ -225,6 +226,101 @@ final class CatalogLockRobustnessTests: XCTestCase {
         lock.release()
         XCTAssertLessThan(elapsed, 1.0,
                           "1000 re-entrant acquires took \(elapsed)s; budget is 1s")
+    }
+
+    // MARK: - The August 14 regression sensor
+    //
+    // This is the one that matters. The header used to CLAIM this test
+    // existed while it did not -- caught by codex review (#376). The
+    // incident it pins: an external writer reduced the catalog, the app
+    // was launched mid-operation, loaded the pre-reduction file, and wrote
+    // its stale in-memory copy back over the result. Both writes were
+    // well-formed and correctly serialised, so a lock alone would NOT have
+    // caught it. Only a staleness check does.
+
+    @MainActor
+    func testStaleWriteIsRefused_theAugust14Regression() throws {
+        let store = CatalogStore(directory: dir)
+
+        // A writer loads the catalog. No generation key -- a pre-OCC
+        // catalog -- baselines the session at generation 0.
+        try Data("{\"version\":6,\"records\":[]}".utf8).write(to: catalogURL)
+        _ = store.load()
+        XCTAssertEqual(store.loadedGeneration, 0)
+
+        // ...then somebody else writes generation 1 underneath it. Note:
+        // NO sleep. mtime needed a 1.1s nap to defeat timestamp slack;
+        // generations are exact. (shutil.copy2 preserves mtime, which is
+        // why the old guard could never have caught the real incident.)
+        try Data("{\"version\":6,\"generation\":1,\"records\":[]}".utf8)
+            .write(to: catalogURL)
+
+        // The stale writer must now be refused, not silently allowed to win.
+        let refused = store.saveNow(records: [])
+        XCTAssertFalse(refused, "a stale write must be refused, not silently win")
+        XCTAssertEqual(store.lastWriteError?.kind, "stale",
+                       "refusal must be attributed to staleness, got \(String(describing: store.lastWriteError))")
+
+        // And it must be RECORDED, not merely returned -- the incident was
+        // invisible precisely because nothing was written down.
+        let journal = CatalogWriteJournal.recent(10, catalogURL: catalogURL)
+        XCTAssertTrue(journal.contains { $0.kind == "stale" },
+                      "the refusal must appear in the journal")
+    }
+
+    @MainActor
+    func testSuccessfulSaveBumpsGenerationAndHeaderProbeReadsIt() throws {
+        let store = CatalogStore(directory: dir)
+        try Data("{\"version\":6,\"generation\":41,\"records\":[]}".utf8)
+            .write(to: catalogURL)
+        _ = store.load()
+        XCTAssertEqual(store.loadedGeneration, 41)
+
+        XCTAssertTrue(store.saveNow(records: []), "non-stale save must succeed")
+        XCTAssertEqual(store.loadedGeneration, 42, "save must claim generation+1")
+
+        // The stamp must be on disk AND readable from the first 4 KB --
+        // that cheap probe is what makes the OCC check affordable on a
+        // 41 MB catalog.
+        let probe = try XCTUnwrap(CatalogSnapshot.headerProbe(at: catalogURL))
+        XCTAssertEqual(probe.generation, 42)
+        XCTAssertEqual(probe.version, CatalogSnapshot.currentVersion)
+    }
+
+    @MainActor
+    func testFutureSchemaLoadLatchesWritesOff() throws {
+        // Codex #377 blocker 3: load() of a NEWER-build catalog returned []
+        // but left writes enabled, so the quit-time save would replace a
+        // future-schema catalog with an empty current-schema one.
+        let store = CatalogStore(directory: dir)
+        let future = CatalogSnapshot.currentVersion + 1
+        try Data("{\"version\":\(future),\"generation\":7,\"records\":[]}".utf8)
+            .write(to: catalogURL)
+
+        XCTAssertTrue(store.load().isEmpty, "future-schema catalog must refuse to load")
+        XCTAssertNotNil(store.writesDisabledReason, "refusing to load must latch writes off")
+
+        XCTAssertFalse(store.saveNow(records: []),
+                       "no write may proceed while the latch is set")
+        XCTAssertEqual(store.lastWriteError?.kind, "writesDisabled")
+
+        // The future catalog must be byte-for-byte untouched.
+        let survived = try XCTUnwrap(CatalogSnapshot.headerProbe(at: catalogURL))
+        XCTAssertEqual(survived.version, future)
+        XCTAssertEqual(survived.generation, 7)
+    }
+
+    func testLockUnavailableFailsOpenRatherThanBrickingSaves() {
+        // An advisory lock that cannot be created must NOT block writing.
+        // Refusing every save because a lock file could not be made turns
+        // an unlikely filesystem problem into guaranteed data loss.
+        let lock = CatalogLock(lockURL: URL(fileURLWithPath:
+            "/nonexistent-\(UUID().uuidString)/catalog.lock"))
+        guard case .unavailable = lock.acquire() else {
+            return XCTFail("expected .unavailable for an uncreatable lock file")
+        }
+        // The store's precondition treats this as fail-open; see
+        // CatalogStore.writePrecondition.
     }
 
     // MARK: - Isolation
