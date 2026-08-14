@@ -66,11 +66,24 @@ def gb(n):
 
 
 def app_running():
-    """True if VideoScan is up. It is the catalog's single writer."""
+    """True if the VideoScan GUI app — the catalog's writer — is up.
+
+    Matching by process NAME alone is too coarse: the same binary also
+    runs headless as `--find-tag` (findtagd) and `--hallie`, and neither
+    writes catalog.json by design (FindTagCLI.swift:10; the app ingests
+    the daemon's journals). Blocking on those would refuse maintenance
+    whenever a daemon happens to be scanning.
+    """
     try:
-        r = subprocess.run(["pgrep", "-x", "VideoScan"],
+        r = subprocess.run(["pgrep", "-x", "-l", "-f", "VideoScan"],
                            capture_output=True, text=True, timeout=10)
-        return r.returncode == 0
+        for line in r.stdout.splitlines():
+            if "VideoScan.app/Contents/MacOS/VideoScan" not in line:
+                continue
+            if "--find-tag" in line or "--hallie" in line:
+                continue           # headless non-writers
+            return True            # the GUI app: the actual writer
+        return False
     except (subprocess.SubprocessError, OSError):
         return True   # fail closed: if we cannot tell, do not write
 
