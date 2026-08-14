@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""Privileged drive-temperature reader. Emits JSON on stdout.
+
+Installed root-owned at /usr/local/sbin/vs-drive-temps and allowed via a
+sudoers.d NOPASSWD rule so an unprivileged menu-bar app can read SMART
+data from USB-bridged disks and the Promise RAID members.
+
+SECURITY: takes NO arguments and performs a FIXED set of read-only
+queries. That is the whole point -- a sudoers rule pointing at this exact
+path cannot be turned into arbitrary root execution the way allowing
+`smartctl *` could (smartctl also has -t self-test and --set writes).
+The file must be root:wheel and NOT user-writable, or it becomes a
+privilege-escalation vector.
+
+Output:
+  {"drives":[{"label":..., "celsius":int|null, "medium":"ssd"|"hdd",
+              "note":str}], ...}
+"""
+import json
+import re
+import subprocess
+
+SMARTCTL = "/opt/homebrew/bin/smartctl"
+PROMISEUTIL = "/usr/local/bin/promiseutil"
+DISKUTIL = "/usr/sbin/diskutil"
+
+# Product name -> (friendly label, medium). Matched against
+# diskutil's "Device / Media Name" so it survives identifier churn:
+# external disks get renumbered on every reconnect.
+KNOWN = {
+    "APPLE SSD":               ("Internal SSD",   "ssd"),
+    "WD_BLACK SN850XE":        ("PRO-G40 NVMe",   "ssd"),
+    "d2 Professional":         ("LaCie d2",       "hdd"),
+    "CT2000X9SSD9":            ("Crucial X9",     "ssd"),
+    "CT2000X10SSD9":           ("Crucial X10",    "ssd"),
+}
+
+# Bridges that need an explicit transport hint.
+SAT_HINT = ("d2 Professional", "CT2000X9SSD9", "CT2000X10SSD9")
+
+
+def run(cmd, timeout=25):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return r.stdout
+    except (subprocess.SubprocessError, OSError):
+        return ""
+
+
+def parse_temp(text):
+    m = re.search(r"^Temperature:\s+(\d+)\s+Celsius", text, re.M)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"^\s*19[04]\s+\S*Temperature\S*.*?(\d+)\s*$", text, re.M)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"Current Drive Temperature:\s+(\d+)", text)
+    if m:
+        return int(m.group(1))
+    return None
+
+
+def discover():
+    """Map live device nodes to known products, by name not by number."""
+    out = run([DISKUTIL, "list", "-plist", "physical"])
+    nodes = re.findall(r"<string>(disk\d+)</string>", out)
+    seen, found = set(), []
+    for n in nodes:
+        if n in seen:
+            continue
+        seen.add(n)
+        info = run([DISKUTIL, "info", n])
+        m = re.search(r"Device / Media Name:\s+(.+)", info)
+        if not m:
+            continue
+        product = m.group(1).strip()
+        for key, (label, medium) in KNOWN.items():
+            if key.lower() in product.lower():
+                found.append((f"/dev/{n}", label, medium, product))
+                break
+    return found
+
+
+def read_smart():
+    results = []
+    for dev, label, medium, product in discover():
+        args = [SMARTCTL, "-A"]
+        if any(h.lower() in product.lower() for h in SAT_HINT):
+            args += ["-d", "sat"]
+        args.append(dev)
+        text = run(args)
+        t = parse_temp(text)
+        if t is None:
+            # Some USB bridges need scsi rather than sat.
+            text = run([SMARTCTL, "-A", "-d", "scsi", dev])
+            t = parse_temp(text)
+        results.append({
+            "label": label,
+            "celsius": t,
+            "medium": medium,
+            "note": "" if t is not None else "bridge does not expose SMART",
+        })
+    return results
+
+
+def read_pegasus():
+    """Per-member temperatures from the Promise RAID enclosure."""
+    out = run([PROMISEUTIL, "-C", "phydrv", "-a", "list", "-v"], timeout=40)
+    if not out.strip():
+        out = run([PROMISEUTIL, "-C", "phydrv"], timeout=40)
+    drives = []
+    current = None
+    for line in out.splitlines():
+        m = re.match(r"\s*PdId:?\s*(\d+)", line, re.I)
+        if m:
+            current = m.group(1)
+        m = re.search(r"Temperature:?\s*(\d+)", line, re.I)
+        if m and current is not None:
+            drives.append({
+                "label": f"Pegasus bay {current}",
+                "celsius": int(m.group(1)),
+                "medium": "hdd",
+                "note": "",
+            })
+            current = None
+    if not drives and out.strip():
+        # Enclosure responded but exposed no temperature field.
+        drives.append({"label": "Pegasus members", "celsius": None,
+                       "medium": "hdd", "note": "no temperature field reported"})
+    return drives
+
+
+def main():
+    drives = read_smart() + read_pegasus()
+    print(json.dumps({"drives": drives}))
+
+
+if __name__ == "__main__":
+    main()
