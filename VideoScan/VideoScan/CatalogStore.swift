@@ -27,6 +27,7 @@
 // primary can fall back one generation. See docs (issue tracker) and
 // CatalogStoreHardeningTests for the locked-down contract.
 
+import CryptoKit
 import Foundation
 import os
 
@@ -186,6 +187,80 @@ final class CatalogStore {
     /// signature.
     private(set) var lastLoadOutcome: CatalogLoadOutcome = .missing
 
+    // MARK: - Cross-process write safety
+    //
+    // Added 2026-08-14 after an external maintenance script's 52% catalog
+    // reduction was silently reverted: the app was launched mid-operation,
+    // loaded the pre-reduction file, and wrote its stale copy back over the
+    // result. Nothing errored. See CatalogLock / CatalogWriteError.
+
+    /// Ownership lock over catalog.json. Acquired lazily on the first write
+    /// attempt rather than in `init` so viewers and test hosts — neither of
+    /// which write — never contend for it.
+    private lazy var lock = CatalogLock(besideCatalogAt: fileURL)
+
+    /// catalog.json's mtime as of our last successful load or write. If the
+    /// on-disk mtime has moved past this, somebody else wrote the file and
+    /// our in-memory copy is stale. This is the LOST-UPDATE guard; the lock
+    /// alone does not catch it, because each writer's write is individually
+    /// well-formed and correctly serialised.
+    private var knownOnDiskMtime: Date?
+
+    /// Most recent refusal or failure, for UI surfacing. Cleared on success.
+    private(set) var lastWriteError: CatalogWriteError?
+
+    /// Current mtime of catalog.json, or nil when it does not exist yet.
+    private func onDiskMtime() -> Date? {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path)
+        return attrs?[.modificationDate] as? Date
+    }
+
+    /// Gate for every write path. Returns nil when it is safe to proceed,
+    /// otherwise the error — already journalled — to hand back to the caller.
+    ///
+    /// Order matters: ownership before staleness. If another process owns the
+    /// catalog, "your copy is stale" is a confusing way to say "you are not
+    /// the writer".
+    private func writePrecondition() -> CatalogWriteError? {
+        func fail(_ e: CatalogWriteError) -> CatalogWriteError {
+            lastWriteError = e
+            CatalogWriteJournal.record(e, catalogURL: fileURL)
+            return e
+        }
+
+        switch lock.acquire() {
+        case .acquired:
+            break
+        case .heldByAnother(let owner):
+            return fail(.lockedByAnotherProcess(owner: owner))
+        case .unavailable(let reason):
+            return fail(.lockUnavailable(reason))
+        }
+
+        // A file that does not exist yet cannot be stale.
+        if let known = knownOnDiskMtime, let current = onDiskMtime(),
+           current > known.addingTimeInterval(0.5) {
+            // 0.5s slack: HFS+ and some network filesystems store coarse
+            // timestamps, and our own atomic rename can land a hair later
+            // than the Date we recorded.
+            return fail(.staleGeneration(loadedAt: known, onDiskAt: current))
+        }
+        return nil
+    }
+
+    /// Called after any successful write so the next staleness check
+    /// compares against what we just produced.
+    private func noteWriteSucceeded() {
+        knownOnDiskMtime = onDiskMtime()
+        lastWriteError = nil
+    }
+
+    /// Release ownership on orderly shutdown. The kernel releases it anyway
+    /// if we die without getting here — that is the point of flock.
+    func relinquishLock() {
+        lock.release()
+    }
+
     init() {
         let appSupport = FileManager.default.urls(
             for: .applicationSupportDirectory,
@@ -245,6 +320,11 @@ final class CatalogStore {
             lastLoadOutcome = .missing
             return []
         }
+        // Baseline for the lost-update guard: the mtime of the file we are
+        // about to read. Captured BEFORE decoding so a slow decode cannot
+        // let another writer slip in unnoticed.
+        knownOnDiskMtime = onDiskMtime()
+
         // Try primary first.
         if let (records, version) = decode(url: fileURL) {
             if version > CatalogSnapshot.currentVersion {
@@ -358,8 +438,13 @@ final class CatalogStore {
         if Self.isRunningTests && self === CatalogStore.shared { return false }
         if isReadOnly {
             NSLog("VideoScan: CatalogStore.saveNow refused — read-only viewer mode")
+            lastWriteError = .readOnlyViewer
+            CatalogWriteJournal.record(.readOnlyViewer, catalogURL: fileURL)
             return false
         }
+        // Ownership + staleness. Refusals are journalled by the precondition
+        // and left in `lastWriteError` for the UI to surface.
+        if writePrecondition() != nil { return false }
         debounceTask?.cancel()
         debounceTask = nil
         pendingRecords = nil  // superseded by this synchronous save
@@ -371,7 +456,12 @@ final class CatalogStore {
             ok = Self.encodeAndWrite(payload: payload, to: fileURL)
         }
         if ok {
+            noteWriteSucceeded()
             observer?.catalogStoreDidWrite(self)
+        } else if lastWriteError == nil {
+            // encodeAndWrite journals verification failures itself; anything
+            // else that got here is an encode/IO failure.
+            lastWriteError = .writeFailed("encode or atomic write failed")
         }
         return ok
     }
@@ -409,8 +499,13 @@ final class CatalogStore {
         if Self.isRunningTests && self === CatalogStore.shared { return }
         if isReadOnly {
             NSLog("VideoScan: CatalogStore.saveAsync refused — read-only viewer mode")
+            lastWriteError = .readOnlyViewer
+            CatalogWriteJournal.record(.readOnlyViewer, catalogURL: fileURL)
             return
         }
+        // Same ownership + staleness gate as saveNow. Checked before taking
+        // the in-flight slot so a refusal cannot strand `saveInFlight`.
+        if writePrecondition() != nil { return }
         if saveInFlight {
             pendingRecords = records
             return
@@ -442,6 +537,7 @@ final class CatalogStore {
     /// follow-up save.
     private func asyncSaveDidFinish(success: Bool) {
         saveInFlight = false
+        if success { noteWriteSucceeded() }
         if success {
             // Notify the observer (CatalogSync on the master) so it can
             // refresh manifest.sha256. Skipped for the test singleton —
@@ -535,6 +631,11 @@ final class CatalogStore {
     /// pretty-printed, indentation alone was ~30-40% of the file; every
     /// downstream consumer (Python merge/dossier scripts, LiveReload,
     /// CatalogSync) parses JSON and never diffs the text form.
+    /// SHA-256 as lowercase hex. Used to prove a write landed intact.
+    nonisolated static func sha256Hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
     nonisolated private static func encodeAndWrite(payload: CatalogSnapshotDTO, to fileURL: URL) -> Bool {
         let t0 = CFAbsoluteTimeGetCurrent()
         do {
@@ -547,8 +648,27 @@ final class CatalogStore {
             // within a filesystem, so readers see either the old file or
             // the new file, never a partial.
             try data.write(to: fileURL, options: Data.WritingOptions.atomic)
+
+            // Read-back verification. The atomic rename guarantees readers
+            // never see a partial file, but it does NOT guarantee the bytes
+            // that landed are the bytes we produced -- truncation, a media
+            // error, or a filesystem that lied about durability all survive
+            // an atomic write. For the one file that is the entire catalog,
+            // paying one re-read to prove it is cheap insurance.
+            let written = try Data(contentsOf: fileURL)
+            let expected = Self.sha256Hex(data)
+            let actual = Self.sha256Hex(written)
+            guard expected == actual else {
+                let err = CatalogWriteError.verificationFailed(
+                    expectedSHA256: expected, actualSHA256: actual, bytes: data.count)
+                CatalogWriteJournal.record(err, catalogURL: fileURL)
+                NSLog("VideoScan: CATALOG VERIFICATION FAILED — %@", err.userFacingDescription)
+                catalogStoreLog.fault("catalog verification failed: expected \(expected, privacy: .public) got \(actual, privacy: .public)")
+                return false
+            }
+
             let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000
-            catalogStoreLog.debug("catalog save: encode+write of \(data.count) bytes took \(ms, format: .fixed(precision: 1)) ms")
+            catalogStoreLog.debug("catalog save: encode+write+verify of \(data.count) bytes took \(ms, format: .fixed(precision: 1)) ms, sha256 \(expected.prefix(12), privacy: .public)")
             return true
         } catch {
             NSLog("VideoScan: failed to save catalog snapshot: %@", String(describing: error))

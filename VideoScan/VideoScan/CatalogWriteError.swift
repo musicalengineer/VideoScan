@@ -1,0 +1,180 @@
+//
+//  CatalogWriteError.swift
+//  VideoScan
+//
+//  Typed failures for catalog persistence, plus a durable journal of them.
+//
+//  Before this, every catalog save returned a bare `Bool` and the reason for
+//  a refusal existed only as an NSLog line. That is how the 2026-08-14
+//  clobber went unnoticed: the losing write was not even a failure — it
+//  "succeeded" and silently destroyed 9,382 records of work.
+//
+//  Two requirements drive this file:
+//    RETURNED  — callers get a typed reason, not just false.
+//    RECORDED  — refusals and failures are appended to a journal on disk so
+//                a clobber attempt is discoverable after the fact, by a human
+//                or by a support bundle, without a debugger attached.
+//
+
+import Foundation
+import os
+
+private let writeErrorLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "CatalogWrite")
+
+/// Why a catalog write did not happen, or did not happen safely.
+enum CatalogWriteError: Error, Equatable, Sendable {
+
+    /// Another process owns the catalog lock. This is the case Rick asked to
+    /// be reported rather than swallowed: "someone tries to write but it is
+    /// in use."
+    case lockedByAnotherProcess(owner: CatalogLockOwner?)
+
+    /// The file on disk changed since we loaded it, so writing our copy
+    /// would silently discard whatever the other writer did. This is the
+    /// LOST-UPDATE guard, and it is the one that would have caught 8/14 —
+    /// a lock alone would not have, because both writes were well-formed.
+    case staleGeneration(loadedAt: Date, onDiskAt: Date)
+
+    /// Viewer-mode host; writes were never permitted here.
+    case readOnlyViewer
+
+    /// Encoding or the atomic write itself failed.
+    case writeFailed(String)
+
+    /// The file read back after writing does not match what we wrote.
+    /// Catches truncation, a filesystem that lied about durability, and
+    /// media errors that surface between write and read. The previous
+    /// generation is still in catalog.json.prev when this fires.
+    case verificationFailed(expectedSHA256: String, actualSHA256: String, bytes: Int)
+
+    /// The lock file could not even be opened (permissions, missing dir).
+    case lockUnavailable(String)
+
+    var userFacingDescription: String {
+        switch self {
+        case .lockedByAnotherProcess(let owner):
+            let who = owner?.describedBriefly ?? "another process"
+            return "The catalog is in use by \(who). Your changes were not saved."
+        case .staleGeneration(let loaded, let onDisk):
+            let f = DateFormatter()
+            f.dateStyle = .none
+            f.timeStyle = .medium
+            return "The catalog changed on disk at \(f.string(from: onDisk)) after this session loaded it at \(f.string(from: loaded)). Saving would discard those changes."
+        case .readOnlyViewer:
+            return "This machine is a viewer. The catalog is read-only here."
+        case .writeFailed(let detail):
+            return "Saving the catalog failed: \(detail)"
+        case .lockUnavailable(let detail):
+            return "Could not obtain the catalog lock: \(detail)"
+        case .verificationFailed(let expected, let actual, let bytes):
+            return "The catalog failed verification after writing \(bytes) bytes (expected SHA-256 \(expected.prefix(12))…, read back \(actual.prefix(12))…). The previous copy is intact in catalog.json.prev."
+        }
+    }
+
+    /// Short stable tag for the journal and for metrics.
+    var kind: String {
+        switch self {
+        case .lockedByAnotherProcess: return "locked"
+        case .staleGeneration:        return "stale"
+        case .readOnlyViewer:         return "readonly"
+        case .writeFailed:            return "writeFailed"
+        case .lockUnavailable:        return "lockUnavailable"
+        case .verificationFailed:     return "verificationFailed"
+        }
+    }
+
+    /// Stable numeric code for logs, metrics, and support requests. Values
+    /// are frozen — append new cases, never renumber existing ones.
+    var code: Int {
+        switch self {
+        case .readOnlyViewer:          return 1
+        case .lockedByAnotherProcess:  return 2
+        case .staleGeneration:         return 3
+        case .lockUnavailable:         return 4
+        case .writeFailed:             return 5
+        case .verificationFailed:      return 6
+        }
+    }
+
+    /// True when retrying later could plausibly succeed. `.staleGeneration`
+    /// is deliberately NOT retryable: the in-memory copy must be reconciled
+    /// against the newer file first, and a blind retry would reintroduce the
+    /// very lost update this guard exists to prevent.
+    var isTransient: Bool {
+        switch self {
+        case .lockedByAnotherProcess, .lockUnavailable: return true
+        case .readOnlyViewer, .staleGeneration,
+             .writeFailed, .verificationFailed:         return false
+        }
+    }
+}
+
+/// Append-only record of write refusals and failures.
+///
+/// Deliberately dumb: one JSON object per line, opened and closed per append,
+/// no in-memory buffering. A clobber attempt is exactly the moment you cannot
+/// assume the process will survive to flush anything.
+enum CatalogWriteJournal {
+
+    struct Entry: Codable, Sendable {
+        var at: Date
+        var code: Int
+        var kind: String
+        var detail: String
+        var pid: Int32
+        var processName: String
+        var hostname: String
+    }
+
+    /// Sits beside catalog.json so it travels with the catalog it describes.
+    static func journalURL(besideCatalogAt catalogURL: URL) -> URL {
+        catalogURL.deletingLastPathComponent()
+                  .appendingPathComponent("catalog-write-errors.jsonl")
+    }
+
+    /// Record a refusal. Never throws — a journal that can fail loudly during
+    /// error handling just replaces one problem with another.
+    static func record(_ error: CatalogWriteError, catalogURL: URL) {
+        let entry = Entry(
+            at: Date(),
+            code: error.code,
+            kind: error.kind,
+            detail: error.userFacingDescription,
+            pid: getpid(),
+            processName: ProcessInfo.processInfo.processName,
+            hostname: ProcessInfo.processInfo.hostName
+        )
+
+        writeErrorLog.error("catalog write refused [code \(error.code, privacy: .public) \(error.kind, privacy: .public)]: \(error.userFacingDescription, privacy: .public)")
+
+        let url = journalURL(besideCatalogAt: catalogURL)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard var data = try? encoder.encode(entry) else { return }
+        data.append(0x0A)   // newline — one object per line
+
+        if let handle = try? FileHandle(forWritingTo: url) {
+            defer { try? handle.close() }
+            _ = try? handle.seekToEnd()
+            try? handle.write(contentsOf: data)
+        } else {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    /// Most recent entries, newest first. For a diagnostics panel or a
+    /// support bundle.
+    static func recent(_ limit: Int = 50, catalogURL: URL) -> [Entry] {
+        let url = journalURL(besideCatalogAt: catalogURL)
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return text.split(separator: "\n")
+            .reversed()
+            .prefix(limit)
+            .compactMap { line in
+                guard let d = line.data(using: .utf8) else { return nil }
+                return try? decoder.decode(Entry.self, from: d)
+            }
+    }
+}
