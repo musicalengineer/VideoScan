@@ -145,6 +145,10 @@ extension VideoScanModel {
             """
             alert.addButton(withTitle: "OK")
             alert.runModal()
+            // Backup is when the user is already caring for the catalog —
+            // the right moment to nag about retired volumes still carrying
+            // records (Rick 2026-08-14; the prompt performs the deletion).
+            promptRetiredCatalogCleanup()
         } catch {
             log("Bundle export failed: \(error.localizedDescription)")
             Self.showErrorAlert(title: "Export Failed", message: error.localizedDescription)

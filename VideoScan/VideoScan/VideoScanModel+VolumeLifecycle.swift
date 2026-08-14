@@ -277,4 +277,80 @@ extension VideoScanModel {
             log("Export failed: \(error.localizedDescription)")
         }
     }
+
+    // MARK: - Retired-volume catalog cleanup nag (Rick 2026-08-14)
+    //
+    // A retired volume whose records linger is a trap: the 8/14 incident
+    // resurrected 72,503 ancient records for a volume that no longer even
+    // exists, because its target still looked live to the launch-time
+    // backfill. Rick's design: humans defer cleanup ("drive in a drawer
+    // for a while"), so the app nags at BACKUP time — the moment the user
+    // is already caring for the catalog — and the prompt PERFORMS the
+    // deletion (nag-button pattern: the badge does the fix).
+
+    /// Retired targets that still hold catalog records. One pass over
+    /// `records` regardless of target count (checklist: no O(records ×
+    /// targets) scans).
+    func retiredCatalogCleanupCandidates() -> [(target: CatalogScanTarget, recordCount: Int)] {
+        let retired = scanTargets.filter { $0.isRetired && $0.phase != .noCatalog
+                                           && !$0.searchPath.isEmpty }
+        guard !retired.isEmpty else { return [] }
+        var counts: [ObjectIdentifier: Int] = [:]
+        for r in records {
+            for t in retired where r.fullPath.hasPrefix(t.searchPath) {
+                counts[ObjectIdentifier(t), default: 0] += 1
+                break
+            }
+        }
+        return retired.compactMap { t in
+            guard let n = counts[ObjectIdentifier(t)], n > 0 else { return nil }
+            return (t, n)
+        }
+    }
+
+    /// Post-backup nag: list retired volumes still carrying records and
+    /// offer to delete their catalogs right here. Recurs at every backup
+    /// until the list is empty — deliberate; see header comment.
+    func promptRetiredCatalogCleanup() {
+        let candidates = retiredCatalogCleanupCandidates()
+        guard !candidates.isEmpty else { return }
+
+        let lines = candidates.map { c -> String in
+            let name = VolumeReachability.volumeName(forPath: c.target.searchPath)
+            let age: String
+            if let r = c.target.retiredAt {
+                let days = max(0, Int(Date().timeIntervalSince(r) / 86_400))
+                age = days == 0 ? "retired today" : "retired \(days) day\(days == 1 ? "" : "s") ago"
+            } else {
+                age = "retired"
+            }
+            return "• \(name) — \(c.recordCount.formatted()) record\(c.recordCount == 1 ? "" : "s"), \(age)"
+        }.joined(separator: "\n")
+
+        let alert = NSAlert()
+        alert.messageText = "Retired volumes still have catalog entries"
+        alert.informativeText = """
+        These volumes are retired — their media has moved on — but their \
+        old catalog entries are still being counted and can be resurrected \
+        by rescans:
+
+        \(lines)
+
+        Deleting their catalogs keeps the numbers honest. This removes \
+        records only; the drives themselves are untouched.
+        """
+        // "Not Yet" is the DEFAULT (first) button: a destructive action
+        // should never be one accidental Return away. The nag returning at
+        // every backup is what applies the pressure, not button order.
+        alert.addButton(withTitle: "Not Yet")
+        alert.addButton(withTitle: "Delete \(candidates.count == 1 ? "Catalog" : "\(candidates.count) Catalogs")")
+        if alert.runModal() == .alertSecondButtonReturn {
+            for c in candidates {
+                deleteCatalogForTarget(c.target)
+            }
+            log("Retired-volume cleanup: deleted catalogs for \(candidates.count) volume(s) at backup prompt.")
+        } else {
+            log("Retired-volume cleanup deferred — will ask again at next backup (\(candidates.count) volume(s) pending).")
+        }
+    }
 }
