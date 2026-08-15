@@ -254,7 +254,7 @@ struct VerifyAudioCenterDispatchTests {
                 record: rec,
                 diagnosis: cached,
                 onFindMatchingAudio: {})
-            #expect(request.diagnosis.isHealthy)
+            #expect(request.diagnosis?.isHealthy == true)
         }
     }
 

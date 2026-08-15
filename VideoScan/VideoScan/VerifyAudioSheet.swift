@@ -41,7 +41,11 @@ import SwiftUI
 struct VerifyAudioRequest: Identifiable {
     let id = UUID()
     let record: VideoRecord
-    let diagnosis: AudioVerifyDiagnosis
+    /// nil = no Verify Audio pass has run yet. The sheet then shows the
+    /// catalog's ffprobe-known basics (codec, channels, sample rate, bit
+    /// depth) instead of findings — Rick 2026-08-14: "Audio Info… should
+    /// always be there and always show the audio status."
+    let diagnosis: AudioVerifyDiagnosis?
     let onFindMatchingAudio: () -> Void
 }
 
@@ -95,10 +99,14 @@ struct VerifyAudioSheet: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
 
-            if request.diagnosis.isHealthy {
-                healthyView(request.diagnosis)
+            if let diagnosis = request.diagnosis {
+                if diagnosis.isHealthy {
+                    healthyView(diagnosis)
+                } else {
+                    findingsView(diagnosis)
+                }
             } else {
-                findingsView(request.diagnosis)
+                basicsView(request.record)
             }
 
             HStack {
@@ -112,14 +120,66 @@ struct VerifyAudioSheet: View {
         .frame(width: 600)
         .task {
             // Only the actionable imbalance path shows a destination.
-            guard let analysis = request.diagnosis.balanceAnalysis,
-                  request.diagnosis.findings.contains(where: {
+            guard let diagnosis = request.diagnosis,
+                  let analysis = diagnosis.balanceAnalysis,
+                  diagnosis.findings.contains(where: {
                       if case .channelImbalance = $0 { return true }
                       return false
                   }) else { return }
             plannedBalanceDestination = BalanceAudioFix.balancedOutputURL(
                 forSourcePath: request.record.fullPath,
                 containerFormat: analysis.shape.containerFormat)
+        }
+    }
+
+    // MARK: Basics — catalog-known properties, no verify pass needed
+
+    /// What ffprobe recorded at scan time. Instant, no media I/O, and
+    /// available for every record — the deep levels analysis stays on
+    /// the Verify Audio action.
+    @ViewBuilder
+    private func basicsView(_ rec: VideoRecord) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            basicsRow("Codec", rec.audioCodec.isEmpty ? "—" : rec.audioCodec)
+            basicsRow("Channels", channelsLabel(rec.audioChannels))
+            basicsRow("Sample rate", rec.audioSampleRate.isEmpty ? "—" : rec.audioSampleRate)
+            basicsRow("Bit depth", rec.bitDepth.isEmpty ? "—" : rec.bitDepth)
+            basicsRow("Duration", rec.duration.isEmpty ? "—" : rec.duration)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(NSColor.textBackgroundColor),
+                    in: RoundedRectangle(cornerRadius: 8))
+
+        Label {
+            Text("From the catalog scan. Run Verify Audio for level analysis, balance, and damage checks.")
+                .font(.callout)
+                .foregroundColor(.secondary)
+        } icon: {
+            Image(systemName: "info.circle")
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private func basicsRow(_ label: String, _ value: String) -> some View {
+        HStack {
+            Text(label)
+                .foregroundColor(.secondary)
+                .frame(width: 110, alignment: .leading)
+            Text(value)
+                .font(.body.monospaced())
+        }
+        .font(.callout)
+    }
+
+    /// "2" → "2 (stereo)", "1" → "1 (mono)" — the human word is the part
+    /// people actually want.
+    private func channelsLabel(_ raw: String) -> String {
+        switch raw {
+        case "":  return "—"
+        case "1": return "1 (mono)"
+        case "2": return "2 (stereo)"
+        default:  return "\(raw) channels"
         }
     }
 

@@ -1120,18 +1120,21 @@ extension CatalogContent {
         .help("Check the sound track — levels, format, and whether the audio really belongs to the picture. Runs in the operations window; the catalog stays usable.")
         .accessibilityIdentifier("catalog.row.verifyAudio")
 
-        if activeRecs.count == 1,
-           let cached = fileOpsCenter.verifyDiagnosis(forRecordID: rec.id) {
+        // Always available for a single row (Rick 2026-08-14): with a
+        // cached Verify Audio diagnosis the sheet shows findings; without
+        // one it shows the catalog's ffprobe basics (codec, channels,
+        // sample rate, bit depth) — instant either way, no media I/O.
+        if activeRecs.count == 1 {
             Button("Audio Info…") {
                 verifyAudioRequest = VerifyAudioRequest(
                     record: rec,
-                    diagnosis: cached,
+                    diagnosis: fileOpsCenter.verifyDiagnosis(forRecordID: rec.id),
                     onFindMatchingAudio: {
                         repairAudio(for: rec)
                         openWindow(id: "combine")
                     })
             }
-            .help("Show what Verify Audio found for this file — instantly, without checking it again — plus any repair offer.")
+            .help("Audio properties from the catalog — plus Verify Audio findings and any repair offer when a check has run.")
             .accessibilityIdentifier("catalog.row.verifyResults")
         }
 
